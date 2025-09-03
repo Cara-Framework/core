@@ -20,6 +20,7 @@ from ..casts.security import EncryptedCast, HashCast
 from ..casts.validation import EmailCast, URLCast, UUIDCast
 
 # Import concerns for clean architecture
+from ..concerns.HasRelationships import HasRelationships
 from ..concerns.HasTimestamps import HasTimestamps
 from ..observers import ObservesEvents
 from ..query import QueryBuilder
@@ -87,7 +88,7 @@ class ModelMeta(type):
                 )
 
 
-class Model(TimeStampsMixin, ObservesEvents, HasTimestamps, metaclass=ModelMeta):
+class Model(HasRelationships, TimeStampsMixin, ObservesEvents, HasTimestamps, metaclass=ModelMeta):
     """
     The ORM Model class.
 
@@ -255,6 +256,9 @@ class Model(TimeStampsMixin, ObservesEvents, HasTimestamps, metaclass=ModelMeta)
     }
 
     def __init__(self, **kwargs):
+        # Call parent constructors (including HasRelationships)
+        super().__init__(**kwargs)
+
         self.__attributes__ = {}
         self.__original_attributes__ = {}
         self.__dirty_attributes__ = {}
@@ -594,9 +598,7 @@ class Model(TimeStampsMixin, ObservesEvents, HasTimestamps, metaclass=ModelMeta)
     def is_created(self):
         return self.get_primary_key() in self.__attributes__
 
-    def add_relation(self, relations):
-        self._relationships.update(relations)
-        return self
+
 
     @classmethod
     def hydrate(cls, result, relations=None):
@@ -811,7 +813,9 @@ class Model(TimeStampsMixin, ObservesEvents, HasTimestamps, metaclass=ModelMeta)
                         data[key] = float(final_value)
 
         # Add relationships - RECURSIVE CALL WILL USE THIS SAME METHOD
-        for relation_name, relation_value in self._relationships.items():
+        # Use _relations (from eager loading) instead of _relationships
+        relations_dict = getattr(self, '_relations', {})
+        for relation_name, relation_value in relations_dict.items():
             if relation_value is None:
                 data[relation_name] = None
             elif isinstance(relation_value, list):

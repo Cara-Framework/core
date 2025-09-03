@@ -8,9 +8,9 @@ class HasOne(BaseRelationship):
 
     def __init__(self, fn, foreign_key=None, local_key=None):
         if isinstance(fn, str):
-            # When called as @has_one("local_key", "foreign_key")
-            self.local_key = fn
-            self.foreign_key = foreign_key
+            # When called as @has_one("foreign_key", "local_key")
+            self.foreign_key = fn
+            self.local_key = foreign_key
         else:
             self.fn = fn
             self.local_key = local_key or "id"

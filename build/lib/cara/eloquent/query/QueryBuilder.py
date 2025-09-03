@@ -2299,7 +2299,7 @@ class QueryBuilder(ObservesEvents):
 
     def with_(self, *eagers):
         try:
-            self._eager_relation.register(eagers)
+            self._eager_relation.register(*eagers)
         except Exception as e:
             from cara.facades import Log
 

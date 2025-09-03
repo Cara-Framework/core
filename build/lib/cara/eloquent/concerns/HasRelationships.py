@@ -118,7 +118,8 @@ class HasRelationships:
     @classmethod
     def with_(cls, *relations):
         """Laravel-style with() for eager loading relationships."""
-        return cls.query().with_(*relations)
+        instance = cls()
+        return instance.query().with_(*relations)
 
     @classmethod
     def with_and_load(cls, *relations):

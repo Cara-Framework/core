@@ -2,8 +2,8 @@ class BaseRelationship:
     def __init__(self, fn, local_key=None, foreign_key=None):
         if isinstance(fn, str):
             self.fn = None
-            self.local_key = fn
-            self.foreign_key = local_key
+            self.foreign_key = fn
+            self.local_key = local_key
         else:
             self.fn = fn
             self.local_key = local_key

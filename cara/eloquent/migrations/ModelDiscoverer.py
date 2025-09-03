@@ -18,24 +18,68 @@ class ModelDiscoverer:
         self.models_dir = None
 
     def discover_models(self) -> List[Dict]:
-        """Discover all model files by following imports from app/models/__init__.py"""
+        """Discover all model files by scanning for classes that inherit from Model"""
         models = []
         
-        # First try to discover models through app/models/__init__.py imports
-        models_init_path = Path(paths("models")) / "__init__.py"
-        if models_init_path.exists():
-            models.extend(self._discover_models_from_imports(models_init_path))
+        # Get project root
+        project_root = Path(paths("")).parent if paths("") else Path.cwd()
         
-        # Also scan packages/providers for marketplace models
-        packages_dir = Path(paths("packages.providers"))
-        if packages_dir.exists():
-            models.extend(self._discover_models_from_packages(packages_dir))
+        # Scan project root with max 5 levels deep
+        models.extend(self._scan_path_for_models(project_root, max_depth=5))
+        
+        # Deduplicate by model name - keep first occurrence
+        seen_names = set()
+        unique_models = []
+        for model in models:
+            if model['name'] not in seen_names:
+                # Exclude models from within Cara framework
+                model_file = model.get('file', '')
+                if '/cara/' in model_file and ('eloquent' in model_file or 'queues' in model_file):
+                    continue
+                    
+                seen_names.add(model['name'])
+                unique_models.append(model)
+        
+        return unique_models
+        
+    def _scan_path_for_models(self, path: Path, max_depth: int = 5, current_depth: int = 0) -> List[Dict]:
+        """Recursively scan a path for model files with depth limit"""
+        models = []
+        
+        # Stop if we've reached max depth
+        if current_depth >= max_depth:
+            return models
             
-        # Fallback: scan app/models directory directly (production mode)
-        models_dir = Path(paths("models"))
-        if models_dir.exists():
-            models.extend(self._scan_directory_for_models(models_dir))
-
+        try:
+            for item in path.iterdir():
+                # Skip hidden directories, venv, __pycache__, .git, etc.
+                if (item.name.startswith('.') or 
+                    item.name in ['venv', '__pycache__', 'node_modules', 'build', 'dist', '.git']):
+                    continue
+                    
+                if item.is_dir():
+                    # Recursively scan subdirectories
+                    models.extend(self._scan_path_for_models(item, max_depth, current_depth + 1))
+                elif item.is_file() and item.suffix == '.py':
+                    # Skip __init__.py and test files
+                    if (item.name.startswith('__') or 
+                        item.name.startswith('test_') or
+                        item.name.endswith('_test.py')):
+                        continue
+                        
+                    try:
+                        model_info = self._parse_model_file(item)
+                        if model_info:
+                            # Add file path to model info
+                            model_info['file'] = str(item)
+                            models.append(model_info)
+                    except Exception:
+                        # Skip files that can't be parsed
+                        continue
+        except PermissionError:
+            # Skip directories we can't read
+            pass
+                
         return models
         
     def _discover_models_from_imports(self, init_file: Path) -> List[Dict]:
@@ -73,7 +117,9 @@ class ModelDiscoverer:
         if module_path.startswith('commons.models.'):
             # Development mode: resolve to commons directory
             parts = module_path.split('.')
-            commons_path = Path(paths("commons")) / "/".join(parts[1:])  # Skip 'commons' prefix
+            # Get project root and navigate to commons
+            project_root = Path(paths("")).parent  # Go up from api/ to project root
+            commons_path = project_root / "commons" / "/".join(parts[1:])  # Skip 'commons' prefix
             
             for name_node in names:
                 model_name = name_node.name
