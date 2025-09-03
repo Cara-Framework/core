@@ -91,6 +91,7 @@ cara/commands/stubs/Middleware.stub
 cara/commands/stubs/Notification.stub
 cara/commands/stubs/Policy.stub
 cara/commands/stubs/UpdateMigration.stub
+cara/commands/stubs/__init__.py
 cara/conductors/__init__.py
 cara/conductors/http/HttpConductor.py
 cara/conductors/http/HttpConductorProvider.py

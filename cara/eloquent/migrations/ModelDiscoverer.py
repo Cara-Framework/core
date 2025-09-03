@@ -18,16 +18,99 @@ class ModelDiscoverer:
         self.models_dir = None
 
     def discover_models(self) -> List[Dict]:
-        """Discover all model files and extract Field.* definitions."""
-        # Use paths() helper instead of hardcoded path construction
-        self.models_dir = Path(paths("models"))
-
+        """Discover all model files by following imports from app/models/__init__.py"""
         models = []
+        
+        # First try to discover models through app/models/__init__.py imports
+        models_init_path = Path(paths("models")) / "__init__.py"
+        if models_init_path.exists():
+            models.extend(self._discover_models_from_imports(models_init_path))
+        
+        # Also scan packages/providers for marketplace models
+        packages_dir = Path(paths("packages.providers"))
+        if packages_dir.exists():
+            models.extend(self._discover_models_from_packages(packages_dir))
+            
+        # Fallback: scan app/models directory directly (production mode)
+        models_dir = Path(paths("models"))
+        if models_dir.exists():
+            models.extend(self._scan_directory_for_models(models_dir))
 
-        if not self.models_dir.exists():
-            return models
-
-        for py_file in self.models_dir.glob("*.py"):
+        return models
+        
+    def _discover_models_from_imports(self, init_file: Path) -> List[Dict]:
+        """Discover models by parsing imports from __init__.py"""
+        models = []
+        
+        try:
+            with open(init_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            tree = ast.parse(content)
+            
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    # Handle: from commons.models.core import User, Category
+                    if node.module:
+                        models.extend(self._resolve_import_models(node.module, node.names))
+                elif isinstance(node, ast.Import):
+                    # Handle: import commons.models.core.User
+                    for alias in node.names:
+                        if 'models' in alias.name:
+                            models.extend(self._resolve_direct_import_models(alias.name))
+                            
+        except Exception as e:
+            print(f"Warning: Could not parse {init_file}: {e}")
+            
+        return models
+        
+    def _resolve_import_models(self, module_path: str, names: List[ast.alias]) -> List[Dict]:
+        """Resolve model files from import statements"""
+        models = []
+        
+        # Convert module path to filesystem path
+        # commons.models.core -> commons/models/core
+        if module_path.startswith('commons.models.'):
+            # Development mode: resolve to commons directory
+            parts = module_path.split('.')
+            commons_path = Path(paths("commons")) / "/".join(parts[1:])  # Skip 'commons' prefix
+            
+            for name_node in names:
+                model_name = name_node.name
+                model_file = commons_path / f"{model_name}.py"
+                if model_file.exists():
+                    model_info = self._parse_model_file(model_file)
+                    if model_info:
+                        models.append(model_info)
+        else:
+            # Production mode or local imports: resolve relative to app
+            # Handle relative imports like: from .User import User
+            pass  # Will be handled by directory scan fallback
+            
+        return models
+        
+    def _resolve_direct_import_models(self, import_path: str) -> List[Dict]:
+        """Handle direct imports like: import commons.models.core.User"""
+        # Similar logic to _resolve_import_models but for direct imports
+        return []
+        
+    def _discover_models_from_packages(self, packages_dir: Path) -> List[Dict]:
+        """Discover models from packages/providers structure"""
+        models = []
+        
+        # Scan packages/providers/*/models/__init__.py files
+        for provider_dir in packages_dir.glob("*/models"):
+            init_file = provider_dir / "__init__.py"
+            if init_file.exists():
+                models.extend(self._discover_models_from_imports(init_file))
+                
+        return models
+        
+    def _scan_directory_for_models(self, directory: Path) -> List[Dict]:
+        """Scan a directory for model files."""
+        models = []
+        
+        for py_file in directory.glob("*.py"):
             if py_file.name.startswith("__"):
                 continue
 
@@ -38,7 +121,7 @@ class ModelDiscoverer:
             except Exception:
                 # Skip files that can't be parsed
                 continue
-
+                
         return models
 
     def resolve_dependency_order(self, models: List[Dict]) -> List[Dict]:
