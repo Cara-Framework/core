@@ -1,0 +1,19 @@
+"""{{ class }} Migration."""
+
+from cara.eloquent.migrations import Migration
+
+
+class {{ class }}(Migration):
+    def up(self):
+        """
+        Run the migrations.
+        """
+        with self.schema.table("{{ table }}") as table:
+{{ fields }}
+
+    def down(self):
+        """
+        Revert the migrations.
+        """
+        with self.schema.table("{{ table }}") as table:
+{{ drop_fields }} 
