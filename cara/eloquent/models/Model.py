@@ -1018,6 +1018,31 @@ class Model(HasRelationships, TimeStampsMixin, ObservesEvents, HasTimestamps, me
 
         return self.where(wheres).update(total)
 
+    @classmethod
+    def truncate(cls, foreign_keys=False):
+        """
+        Laravel-style truncate method.
+        Truncate the table associated with the model.
+        
+        Arguments:
+            foreign_keys {bool} -- Whether to disable foreign key constraints (default: {False})
+            
+        Returns:
+            int -- Number of affected rows
+        """
+        return cls().get_builder().truncate(foreign_keys)
+    
+    @classmethod
+    def query(cls):
+        """
+        Laravel-style query method.
+        Begin querying the model.
+        
+        Returns:
+            QueryBuilder -- A new query builder instance
+        """
+        return cls().get_builder()
+
     def relations_to_dict(self):
         """
         Converts a models relationships to a dictionary.
