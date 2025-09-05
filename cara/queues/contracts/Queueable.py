@@ -19,6 +19,7 @@ class PendingDispatch:
     Laravel-style PendingDispatch for method chaining.
     
     Allows chaining like: MyJob.dispatch().onQueue('high').delay(30)
+    Enhanced with routing key support for topic exchange.
     """
     
     def __init__(self, job_instance):
@@ -27,6 +28,8 @@ class PendingDispatch:
         self._queue_name = getattr(job_instance, 'queue', 'default')
         self._delay = None
         self._connection = None
+        self._routing_key = None
+        self._use_exchange = False
         
     def onQueue(self, queue: str) -> "PendingDispatch":
         """Set the queue name (Laravel naming convention)."""
@@ -48,6 +51,31 @@ class PendingDispatch:
         """Set connection (Laravel naming)."""
         self._connection = connection
         return self
+    
+    def withRoutingKey(self, routing_key: str) -> "PendingDispatch":
+        """
+        Set routing key for topic exchange dispatch.
+        
+        Args:
+            routing_key: Routing key (e.g., "enrichment.product.high")
+            
+        Usage:
+            MyJob.dispatch().withRoutingKey("enrichment.product.high")
+        """
+        self._routing_key = routing_key
+        self._use_exchange = True
+        return self
+    
+    def toExchange(self, exchange_name: str = "cheapa.events") -> "PendingDispatch":
+        """
+        Force dispatch to specific exchange.
+        
+        Args:
+            exchange_name: Name of the exchange
+        """
+        self._exchange_name = exchange_name
+        self._use_exchange = True
+        return self
         
     def __del__(self):
         """Auto-dispatch when PendingDispatch is garbage collected (Laravel pattern)."""
@@ -56,6 +84,11 @@ class PendingDispatch:
     def _dispatch_now(self):
         """Actually dispatch the job to the queue."""
         try:
+            # Check if we should use exchange routing
+            if self._use_exchange and self._routing_key:
+                return self._dispatch_via_exchange()
+            
+            # Standard queue dispatch
             from cara.facades import Queue
 
             # Set final queue properties
@@ -84,6 +117,40 @@ class PendingDispatch:
                 
             if hasattr(self.job, 'handle'):
                 return self.job.handle()
+    
+    def _dispatch_via_exchange(self):
+        """Dispatch job via topic exchange with routing key."""
+        try:
+            from cara.queues.exchanges import TopicExchange
+
+            # Get or create exchange
+            exchange_name = getattr(self, '_exchange_name', 'cheapa.events')
+            exchange = TopicExchange(exchange_name)
+            
+            # Set job properties
+            if self._delay and hasattr(self.job, 'delay'):
+                self.job.delay = self._delay
+            
+            # Dispatch via exchange
+            job_id = exchange.dispatch_job(
+                routing_key=self._routing_key,
+                job_instance=self.job
+            )
+            
+            # Set tracking ID
+            if hasattr(self.job, 'set_tracking_id'):
+                self.job.set_tracking_id(str(job_id))
+                
+            return job_id
+            
+        except Exception as e:
+            # Fallback to standard dispatch
+            from cara.facades import Log
+            Log.warning(f"Exchange dispatch failed, using standard queue: {str(e)}", category="cara.queue.exchange")
+            
+            # Remove exchange flags and retry standard dispatch
+            self._use_exchange = False
+            return self._dispatch_now()
 
 
 class Queueable(SerializesModels, CancellableJob):
