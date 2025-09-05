@@ -1,0 +1,22 @@
+"""Create {{ model_name }} Migration."""
+
+from cara.eloquent.migrations import Migration
+from {{ model_import_path }} import {{ model_name }}
+
+
+class Create{{ model_name }}(Migration):
+    """Create {{ model_name }}."""
+
+    def up(self):
+        """Run the migrations."""
+        model = {{ model_name }}()
+        fields = model.fields
+        if fields and "up" in fields:
+            fields["up"]()
+
+    def down(self):
+        """Reverse the migrations."""
+        model = {{ model_name }}()
+        fields = model.fields
+        if fields and "down" in fields:
+            fields["down"]() 

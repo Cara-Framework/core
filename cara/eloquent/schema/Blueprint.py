@@ -48,6 +48,11 @@ class Blueprint:
         self._last_column = self.column_factory.string(column, length, nullable)
         return self
 
+    def integer(self, column, length=11, nullable=False):
+        """Create integer column - delegates to ColumnFactory"""
+        self._last_column = self.column_factory.integer(column, length, nullable)
+        return self
+
     def tiny_integer(self, column, length=1, nullable=False):
         """Create tiny integer column - delegates to ColumnFactory"""
         self._last_column = self.column_factory.tiny_integer(column, length, nullable)
@@ -63,21 +68,14 @@ class Blueprint:
         self._last_column = self.column_factory.medium_integer(column, length, nullable)
         return self
 
-    def integer(self, column, length=11, nullable=False):
-        """Create integer column - delegates to ColumnFactory"""
-        self._last_column = self.column_factory.integer(column, length, nullable)
-        return self
-
     def big_integer(self, column, length=32, nullable=False):
         """Create big integer column - delegates to ColumnFactory"""
         self._last_column = self.column_factory.big_integer(column, length, nullable)
         return self
 
-    def unsigned_big_integer(self, column, length=32, nullable=False):
-        """Create unsigned big integer column - delegates to ColumnFactory"""
-        self._last_column = self.column_factory.unsigned_big_integer(
-            column, length, nullable
-        )
+    def unsigned_integer(self, column, nullable=False):
+        """Create unsigned integer column - delegates to ColumnFactory"""
+        self._last_column = self.column_factory.unsigned_integer(column, nullable)
         return self
 
     def increments(self, column, nullable=False):
@@ -103,6 +101,11 @@ class Blueprint:
     def big_increments(self, column, nullable=False):
         """Create big auto-incrementing column - delegates to ColumnFactory"""
         self._last_column = self.column_factory.big_increments(column, nullable)
+        return self
+
+    def unsigned_big_integer(self, column, length=32, nullable=False):
+        """Create unsigned big integer column - delegates to ColumnFactory"""
+        self._last_column = self.column_factory.unsigned_big_integer(column, length, nullable)
         return self
 
     def binary(self, column, nullable=False):
@@ -237,11 +240,6 @@ class Blueprint:
             ).unsigned()
         elif self._last_column:
             self._last_column.unsigned()
-        return self
-
-    def unsigned_integer(self, column, nullable=False):
-        """Create unsigned integer column - delegates to ColumnFactory"""
-        self._last_column = self.column_factory.unsigned_integer(column, nullable)
         return self
 
     def morphs(self, column, nullable=False, indexes=True):

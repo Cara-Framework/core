@@ -20,10 +20,12 @@ class Schema:
         "char": str,
         "big_increments": int,
         "integer": int,
-        "big_integer": int,
         "tiny_integer": int,
         "small_integer": int,
         "medium_integer": int,
+        "big_integer": int,
+        "unsigned_integer": int,
+        "unsigned_big_integer": int,
         "integer_unsigned": int,
         "big_integer_unsigned": int,
         "tiny_integer_unsigned": int,
@@ -312,6 +314,24 @@ class FieldBuilder:
     def integer(self, name):
         return FieldDefinition("integer", name)
 
+    def tiny_integer(self, name):
+        return FieldDefinition("tiny_integer", name)
+
+    def small_integer(self, name):
+        return FieldDefinition("small_integer", name)
+
+    def medium_integer(self, name):
+        return FieldDefinition("medium_integer", name)
+
+    def big_integer(self, name):
+        return FieldDefinition("big_integer", name)
+
+    def unsigned_integer(self, name):
+        return FieldDefinition("unsigned_integer", name)
+
+    def unsigned_big_integer(self, name):
+        return FieldDefinition("unsigned_big_integer", name)
+
     def decimal(self, name, precision=10, scale=2):
         return FieldDefinition("decimal", name, precision=precision, scale=scale)
 
@@ -320,12 +340,6 @@ class FieldBuilder:
 
     def enum(self, name, options):
         return FieldDefinition("enum", name, options=options)
-
-    def small_integer(self, name):
-        return FieldDefinition("small_integer", name)
-
-    def big_integer(self, name):
-        return FieldDefinition("big_integer", name)
 
     def uuid(self, name):
         return FieldDefinition("uuid", name)

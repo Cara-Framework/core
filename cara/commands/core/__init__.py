@@ -6,6 +6,7 @@ from .ListCommandsCommand import ListCommandsCommand
 from .MakeControllerCommand import MakeControllerCommand
 from .MakeEventCommand import MakeEventCommand
 from .MakeJobCommand import MakeJobCommand
+from .MakeJobLogCommand import MakeJobLogCommand
 from .MakeListenerCommand import MakeListenerCommand
 from .MakeMailCommand import MakeMailCommand
 from .MakeMiddlewareCommand import MakeMiddlewareCommand
@@ -35,6 +36,7 @@ __all__ = [
     "MakeControllerCommand",
     "MakeEventCommand",
     "MakeJobCommand",
+    "MakeJobLogCommand",
     "MakeListenerCommand",
     "MakeMailCommand",
     "MakeMiddlewareCommand",

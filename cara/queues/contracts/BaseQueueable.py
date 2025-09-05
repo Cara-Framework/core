@@ -32,6 +32,7 @@ class BaseQueueable(Queueable, ShouldQueue):
         super().__init__()  # Initialize SerializesModels through Queueable
         self._setup_queueable_properties()
         self._initialize_data(*args, **kwargs)
+        self._chained = False  # Track if this is a chained job
 
     def _setup_queueable_properties(self):
         """Initialize queueable-specific properties."""
@@ -56,17 +57,48 @@ class BaseQueueable(Queueable, ShouldQueue):
     def delay(self, seconds: int) -> "BaseQueueable":
         """Delay the job execution by specified seconds."""
         self._delay = seconds
+        self._chained = True
         return self
 
     def attempts(self, count: int) -> "BaseQueueable":
         """Set the number of retry attempts."""
         self._retry_attempts = count
+        self._chained = True
         return self
 
     def on_queue(self, queue: str) -> "BaseQueueable":
-        """Set the queue for this job."""
+        """
+        Set the queue for this job and auto-dispatch (Laravel pattern).
+        
+        In Laravel, method chaining automatically queues the job.
+        This maintains the same behavior.
+        """
         self.queue_name = queue
+        self._chained = True
+        
+        # Auto-dispatch when chaining is used (Laravel pattern)
+        self._auto_dispatch()
         return self
+        
+    def _auto_dispatch(self):
+        """Auto-dispatch job when method chaining is used (Laravel pattern)."""
+        if not self._chained:
+            return
+            
+        try:
+            from cara.facades import Queue
+            Queue.push(self)
+        except Exception as e:
+            # Fallback to sync execution if queue fails
+            try:
+                from cara.facades import Log
+                Log.warning(f"Queue failed, running synchronously: {str(e)}")
+            except:
+                pass
+            
+            # Run synchronously as fallback
+            if hasattr(self, 'handle'):
+                self.handle()
 
     def display_name(self) -> str:
         """

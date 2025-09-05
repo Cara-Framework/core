@@ -1,0 +1,122 @@
+"""
+{{ docstring }}
+"""
+
+import pendulum
+from cara.eloquent.models import Model
+from cara.eloquent.schema import Schema
+
+
+class {{ class_name }}(Model):
+    """
+    Job Log Model for tracking job lifecycle.
+    
+    Tracks all jobs through their lifecycle from creation to completion/failure
+    with retry support and performance analytics.
+    """
+    
+    __table__ = '{{ table_name }}'
+    __primary_key__ = "id"
+    
+    __fillable__ = [
+        'job_name',
+        'job_id',  # FK to job.id (unsigned_big_integer)
+        'job_uid',  # UUID for job tracking (string)
+        'entity_id',  # Generic entity ID (optional for apps)
+        'status',
+        'attempt',
+        'error',
+        'processed_at',
+        'finished_at',
+        'queue',
+        'metadata'
+    ]
+    
+    __casts__ = {
+        'metadata': 'json',
+        'processed_at': 'datetime',
+        'finished_at': 'datetime'
+    }
+    
+    # Status constants
+    STATUS_PENDING = 'pending'
+    STATUS_PROCESSING = 'processing' 
+    STATUS_SUCCESS = 'success'
+    STATUS_FAILED = 'failed'
+    STATUS_RETRYING = 'retrying'
+    STATUS_CANCELLED = 'cancelled'
+    
+    @property
+    def fields(self):
+        """Define table fields for migration auto-generation."""
+        return Schema.build(
+            lambda field: (
+                field.big_increments("id"),
+                field.string("job_name", 100),  # Job class name
+                field.unsigned_big_integer("job_id"),  # FK to job.id
+                field.string("job_uid", 50).index(),  # UUID for job tracking
+                field.string("entity_id", 50).nullable().index(),  # Generic entity ID
+                field.enum("status", [
+                    "pending", "processing", "success", "failed", "retrying", "cancelled"
+                ]).default("pending").index(),
+                field.integer("attempt").default(1),  # Retry attempt number
+                field.text("error").nullable(),  # Error message if failed
+                field.timestamp("processed_at").nullable(),  # When job started processing
+                field.timestamp("finished_at").nullable(),  # When job completed
+                field.string("queue", 50).default("default").index(),  # Queue name
+                field.json("metadata").nullable(),  # Additional job data
+                field.timestamps(),  # created_at, updated_at
+                
+                field.foreign("job_id").references("id").on("job").on_delete("cascade"),
+            )
+        )
+    
+    @classmethod
+    def create_job_log(cls, job_name: str, job_id: int, job_uid: str, queue: str = 'default', 
+                      entity_id: str = None, attempt: int = 1, metadata: dict = None):
+        """Create new job log entry."""
+        return cls.create({
+            'job_name': job_name,
+            'job_id': job_id,  # job.id (integer FK)
+            'job_uid': job_uid,  # UUID for tracking
+            'entity_id': entity_id,
+            'status': cls.STATUS_PENDING,
+            'attempt': attempt,
+            'queue': queue,
+            'metadata': metadata or {}
+        })
+    
+    @classmethod
+    def mark_processing(cls, job_uid: str):
+        """Mark job as processing."""
+        return cls.where('job_uid', job_uid).where('status', cls.STATUS_PENDING).update({
+            'status': cls.STATUS_PROCESSING,
+            'processed_at': pendulum.now()
+        })
+    
+    @classmethod
+    def mark_success(cls, job_uid: str):
+        """Mark job as successful."""
+        return cls.where('job_uid', job_uid).where('status', cls.STATUS_PROCESSING).update({
+            'status': cls.STATUS_SUCCESS,
+            'finished_at': pendulum.now()
+        })
+    
+    @classmethod
+    def mark_failed(cls, job_uid: str, error: str):
+        """Mark job as failed."""
+        return cls.where('job_uid', job_uid).update({
+            'status': cls.STATUS_FAILED,
+            'error': error,
+            'finished_at': pendulum.now()
+        })
+    
+    @classmethod
+    def get_failed_jobs_for_retry(cls, max_attempts: int = 3):
+        """Get failed jobs that can be retried."""
+        return cls.where('status', cls.STATUS_FAILED).where('attempt', '<', max_attempts).get()
+    
+    @classmethod
+    def get_job_history(cls, entity_id: str):
+        """Get all job history for an entity."""
+        return cls.where('entity_id', entity_id).order_by('created_at', 'desc').get() 

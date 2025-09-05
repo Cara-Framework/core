@@ -61,6 +61,10 @@ class MigrationGenerator:
                 f"       )\n"
             )
 
+        # Check if fields returns raw SQL (includes materialized views)
+        if model_info.get("has_raw_sql", False):
+            return self._generate_raw_sql_migration(model_info)
+
         if style == "sql":
             return self._generate_sql_create_migration(model_info)
         else:
@@ -143,7 +147,7 @@ class MigrationGenerator:
         # Add primary key if not already present - check if any field contains increments
         has_primary_key = False
         for field in fields_code:
-            if "table.increments(" in field:
+            if "table.increments(" in field or "table.big_increments(" in field:
                 has_primary_key = True
                 break
 
@@ -489,9 +493,7 @@ class {class_name}(Migration):
         params = field_info.get("params", {})
 
         # Handle special field types that don't take field names
-        if field_method == "increments":
-            return f'table.increments("{field_name}")'
-        elif field_method == "timestamps":
+        if field_method == "timestamps":
             return "table.timestamps()"
         elif field_method == "soft_deletes":
             return "table.soft_deletes()"
@@ -524,6 +526,12 @@ class {class_name}(Migration):
             blueprint_call = f'table.{field_method}("{field_name}")'
         elif field_method in [
             "integer",
+            "tiny_integer",
+            "small_integer", 
+            "medium_integer",
+            "big_integer",
+            "unsigned_integer",
+            "unsigned_big_integer",
             "text",
             "boolean",
             "datetime",
@@ -608,6 +616,49 @@ class {class_name}(Migration):
             / "stubs"
             / "UpdateMigration.stub"
         )
+
+
+    def _get_raw_sql_stub_path(self) -> Path:
+        """Get path to raw SQL migration stub."""
+        return (
+            Path(__file__).parent.parent.parent
+            / "commands"
+            / "stubs"
+            / "RawSqlMigration.stub"
+        )
+
+    def _get_raw_sql_stub_content(self) -> str:
+        """Read raw SQL migration stub content."""
+        stub_path = self._get_raw_sql_stub_path()
+        return stub_path.read_text(encoding="utf-8")
+
+
+
+    def _generate_raw_sql_migration(self, model_info: Dict) -> str:
+        """Generate migration using stub template."""
+        model_name = model_info["name"]
+        
+        # Determine import path dynamically from file location
+        model_file = model_info.get('file', '')
+        model_import_path = self._generate_import_path(model_file, model_name)
+        
+        # Read stub template
+        stub_content = self._get_raw_sql_stub_content()
+        
+        # Replace placeholders
+        migration_content = stub_content.replace("{{ model_name }}", model_name)
+        migration_content = migration_content.replace("{{ model_import_path }}", model_import_path)
+        
+        return migration_content
+
+    def _generate_import_path(self, model_file: str, model_name: str) -> str:
+        """Generate Python import path from file path dynamically using Cara's module system."""
+        from cara.support import modules
+
+        # Use Cara's dynamic module system to get the models location
+        models_location = modules("models")
+        return models_location
+
 
     def _generate_migration_filename(self, name: str) -> str:
         """Generate timestamped migration filename."""
