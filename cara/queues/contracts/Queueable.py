@@ -166,7 +166,7 @@ class Queueable(SerializesModels, CancellableJob):
 
     def __init__(self, *args, **kwargs):
         """Initialize queueable job."""
-        super().__init__(*args, **kwargs)
+        super().__init__()  # CancellableJob.__init__() handles its own initialization
         self.job_tracking_id: Optional[str] = None
         self._job_state_manager = get_job_state_manager()
         self._job_tracker = get_job_tracker()

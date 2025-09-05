@@ -18,7 +18,7 @@ class CancellableJob(ABC):
 
     def __init__(self, *args, **kwargs):
         """Initialize cancellable job with tracking ID."""
-        super().__init__(*args, **kwargs)
+        super().__init__()  # object.__init__() takes no arguments
         self.job_tracking_id: Optional[str] = None
         self.is_cancelled: bool = False
 
