@@ -87,6 +87,33 @@ class FileCacheDriver(Cache):
                 full_path = os.path.join(self.cache_directory, filename)
                 self._delete_file(full_path)
 
+    def has(self, key: str) -> bool:
+        """Check if a key exists in cache."""
+        file_path = self._file_path(key)
+        if not os.path.exists(file_path):
+            return False
+
+        expires_at, _ = self._read_file(file_path)
+        if expires_at is None or expires_at >= time.time():
+            return True
+
+        # Entry expired: delete and return False
+        self._delete_file(file_path)
+        return False
+
+    def add(
+        self,
+        key: str,
+        value: Any,
+        ttl: Optional[int] = None,
+    ) -> bool:
+        """Add a value only if key doesn't exist. Returns True if added."""
+        if self.has(key):
+            return False
+        
+        self.put(key, value, ttl)
+        return True
+
     # --- Private Helper Methods ---
 
     def _file_path(self, key: str) -> str:

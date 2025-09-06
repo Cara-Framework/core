@@ -18,6 +18,8 @@ class Cache:
     - forever(key, value)
     - forget(key)
     - flush()
+    - has(key)
+    - add(key, value, ttl=None)
     """
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -38,4 +40,17 @@ class Cache:
         raise NotImplementedError
 
     def flush(self) -> None:
+        raise NotImplementedError
+
+    def has(self, key: str) -> bool:
+        """Check if a key exists in cache."""
+        raise NotImplementedError
+
+    def add(
+        self,
+        key: str,
+        value: Any,
+        ttl: Optional[int] = None,
+    ) -> bool:
+        """Add a value only if key doesn't exist. Returns True if added."""
         raise NotImplementedError

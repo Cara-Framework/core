@@ -81,3 +81,17 @@ class Cache:
     def flush(self, driver_name: Optional[str] = None) -> None:
         """Flush (clear) all entries from the given driver."""
         self.driver(driver_name).flush()
+
+    def has(self, key: str, driver_name: Optional[str] = None) -> bool:
+        """Check if a key exists in cache via the given driver."""
+        return self.driver(driver_name).has(key)
+
+    def add(
+        self,
+        key: str,
+        value: Any,
+        ttl: Optional[int] = None,
+        driver_name: Optional[str] = None,
+    ) -> bool:
+        """Add a value only if key doesn't exist via the given driver."""
+        return self.driver(driver_name).add(key, value, ttl)

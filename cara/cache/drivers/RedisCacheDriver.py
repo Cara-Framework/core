@@ -108,3 +108,35 @@ class RedisCacheDriver(Cache):
             self._client.flushdb()
         except Exception:
             pass
+
+    def has(self, key: str) -> bool:
+        """Check if a key exists in cache."""
+        redis_key = f"{self._prefix}{key}"
+        try:
+            return self._client.exists(redis_key) > 0
+        except Exception:
+            return False
+
+    def add(
+        self,
+        key: str,
+        value: Any,
+        ttl: Optional[int] = None,
+    ) -> bool:
+        """Add a value only if key doesn't exist. Returns True if added."""
+        redis_key = f"{self._prefix}{key}"
+        try:
+            payload = pickle.dumps(value)
+        except Exception:
+            return False
+
+        ttl_seconds = ttl if (ttl is not None) else self._default_ttl
+        try:
+            # Use Redis SET with NX (only if not exists)
+            if ttl_seconds > 0:
+                result = self._client.set(redis_key, payload, ex=ttl_seconds, nx=True)
+            else:
+                result = self._client.set(redis_key, payload, nx=True)
+            return result is not None
+        except Exception:
+            return False

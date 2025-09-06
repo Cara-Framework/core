@@ -72,13 +72,14 @@ class TopicExchange:
     
     _instances = {}  # Class-level instances cache
     
-    def __new__(cls, exchange_name: str = "default.events"):
+    def __new__(cls, exchange_name: str = "cheapa.events"):
         """Singleton pattern to prevent multiple instances."""
         if exchange_name not in cls._instances:
-            cls._instances[exchange_name] = super().__new__(cls)
+            instance = super().__new__(cls)
+            cls._instances[exchange_name] = instance
         return cls._instances[exchange_name]
     
-    def __init__(self, exchange_name: str = "default.events"):
+    def __init__(self, exchange_name: str = "cheapa.events"):
         """
         Initialize TopicExchange.
         
@@ -98,11 +99,7 @@ class TopicExchange:
         # Auto-bind standard queues
         self._setup_default_bindings()
         
-        Log.info(
-            f"TopicExchange initialized: {exchange_name}",
-            category="cara.queue.exchange"
-        )
-        
+        # Initialization complete - no logging to reduce spam
         self._initialized = True
     
     def _setup_default_bindings(self):
@@ -135,19 +132,14 @@ class TopicExchange:
         
         if routing_pattern not in self.queue_bindings[queue_name]:
             self.queue_bindings[queue_name].append(routing_pattern)
-            # Only log once when binding is first created
-            if not hasattr(self, '_logged_bindings'):
-                self._logged_bindings = set()
             
+            # Only log once when binding is first created
             binding_key = f"{queue_name}->{routing_pattern}"
             if binding_key not in self._logged_bindings:
-                # Only log in debug mode to reduce spam
-                from cara.configuration import config
-                if config("app.debug", False):
-                    Log.info(
-                        f"Queue bound: {queue_name} -> {routing_pattern}",
-                        category="cara.queue.exchange"
-                    )
+                Log.info(
+                    f"Queue bound: {queue_name} -> {routing_pattern}",
+                    category="cara.queue.exchange"
+                )
                 self._logged_bindings.add(binding_key)
     
     def get_matching_queues(self, routing_key: str) -> List[str]:
@@ -230,12 +222,10 @@ class TopicExchange:
             job_id = Queue.push(job_instance)
             
             # Log successful dispatch
-            from cara.configuration import config
-            if config("app.debug", False):
-                Log.info(
-                    f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
-                    category="cara.queue.exchange"
-                )
+            Log.info(
+                f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
+                category="cara.queue.exchange"
+            )
             
             return str(job_id)
             

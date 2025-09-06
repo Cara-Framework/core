@@ -18,7 +18,7 @@ from watchdog.observers import Observer
 class AutoReloadHandler(FileSystemEventHandler):
     """Enhanced file watcher for universal auto-reload."""
 
-    def __init__(self, command, debounce_delay: float = 1.0):
+    def __init__(self, command, debounce_delay: float = 0.3):
         self.command = command
         self.last_reload = 0
         self.debounce_delay = debounce_delay
@@ -53,7 +53,7 @@ class AutoReloadHandler(FileSystemEventHandler):
 
     def _should_watch_file(self, file_path: str) -> bool:
         """Check if file should trigger reload."""
-        watch_extensions = ['.py', '.yaml', '.yml', '.json', '.toml', '.env']
+        watch_extensions = ['.py', '.yaml', '.yml', '.json', '.toml', '.env', '.txt']
         return any(file_path.endswith(ext) for ext in watch_extensions)
 
     def _is_temp_file(self, file_path: str) -> bool:
