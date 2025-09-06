@@ -9,7 +9,6 @@ import inspect
 import pickle
 import uuid
 from typing import Any, Dict, List, Union
-from urllib import parse
 
 import pendulum
 
@@ -46,6 +45,9 @@ class AMQPDriver(HasColoredOutput, Queue):
             job_id = str(uuid.uuid4())
             job_ids.append(job_id)
 
+            # Create job record in database (like DatabaseDriver)
+            db_job_id = self._create_job_record(job, job_id, merged_opts)
+
             # We store the object itself (instance or class) and any init args if provided in options
             payload = {
                 # job may be an instance or a class; we'll handle in consume
@@ -57,6 +59,8 @@ class AMQPDriver(HasColoredOutput, Queue):
                 "created": pendulum.now(tz=merged_opts.get("tz", "UTC")),
                 # Add job ID for tracking
                 "job_id": job_id,
+                # Add database job ID for JobTracker
+                "db_job_id": db_job_id,
             }
             try:
                 self._connect_and_publish(payload, merged_opts)
@@ -71,6 +75,37 @@ class AMQPDriver(HasColoredOutput, Queue):
         # Return single job ID if only one job, otherwise return list
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
+    def _create_job_record(self, job, job_id: str, opts: Dict[str, Any]) -> int:
+        """Create job record in database for tracking (like DatabaseDriver)."""
+        try:
+            import pendulum
+
+            from commons.models.core import Job
+
+            # Get job queue
+            if hasattr(job, 'queue') and job.queue:
+                queue_name = job.queue
+            else:
+                queue_name = opts.get("queue", "default")
+            
+            # Create job record
+            job_record = Job.create({
+                'name': str(job),
+                'payload': {'job_id': job_id, 'driver': 'amqp'},
+                'queue': queue_name,
+                'available_at': pendulum.now(),
+                'status': Job.STATUS_PENDING,
+                'job_class': job.__class__.__name__,
+                'metadata': {'job_id': job_id, 'driver': 'amqp'}
+            })
+            
+            return job_record.id
+            
+        except Exception as e:
+            # Log error but don't fail job dispatch
+            print(f"⚠️ Failed to create job record: {e}")
+            return None
+
     def consume(self, options: Dict[str, Any]) -> None:
         merged_opts = {**self.options, **options}
         queue_name = merged_opts.get("queue")
@@ -78,6 +113,10 @@ class AMQPDriver(HasColoredOutput, Queue):
             f'[*] Waiting to process jobs on queue "{queue_name}". To exit press CTRL+C'
         )
         self._connect(merged_opts)
+        
+        # Declare queue (durable=True for persistence)
+        self.channel.queue_declare(queue=queue_name, durable=True)
+        
         # prefetch_count=1 for fair dispatch
         self.channel.basic_qos(prefetch_count=1)
         self.channel.basic_consume(queue_name, self._work_callback)
@@ -155,17 +194,33 @@ class AMQPDriver(HasColoredOutput, Queue):
 
     def _connect_and_publish(self, payload: Any, opts: Dict[str, Any]) -> None:
         self._connect(opts)
-        queue_name = opts.get("queue")
-        # publish the pickled payload
+        
+        # Use job's queue if available, otherwise use config queue
+        job = payload.get("obj")
+        if hasattr(job, 'queue') and job.queue:
+            queue_name = job.queue
+        else:
+            queue_name = opts.get("queue", "default")
+            
+        # Declare queue (durable=True for persistence)
+        self.channel.queue_declare(queue=queue_name, durable=True)
+            
+        # publish the pickled payload with persistence
         self.channel.basic_publish(
             exchange=opts.get("exchange", ""),
             routing_key=queue_name,
             body=pickle.dumps(payload),
             properties=self.pika.BasicProperties(
-                delivery_mode=2,
+                delivery_mode=2,  # Make message persistent
                 headers=opts.get("connection_options"),
-            ),
+            )
         )
+        
+        # Wait for confirmation
+        if self.channel.is_open:
+            self.channel.confirm_delivery()
+        
+        # Close connection after confirmation
         try:
             self.channel.close()
             self.connection.close()
@@ -190,19 +245,49 @@ class AMQPDriver(HasColoredOutput, Queue):
         connection_url = self._build_url(opts)
         self.connection = pika.BlockingConnection(pika.URLParameters(connection_url))
         self.channel = self.connection.channel()
+        
+        # Enable publisher confirms for reliability
+        self.channel.confirm_delivery()
+        
         # declare durable queue
         self.channel.queue_declare(opts.get("queue"), durable=True)
 
     def _build_url(self, opts: Dict[str, Any]) -> str:
-        username = opts.get("username", "")
-        password = opts.get("password", "")
-        host = opts.get("host", "localhost")
-        port = opts.get("port", 5672)
-        vhost = opts.get("vhost", "%2F")
-        url = f"amqp://{username}:{password}@{host}:{port}/{vhost}"
-        if opts.get("connection_options"):
-            url += "?" + parse.urlencode(opts["connection_options"])
-        return url
+        """Build AMQP connection URL with proper encoding."""
+        
+        connection_params = self._extract_connection_params(opts)
+        encoded_vhost = self._encode_vhost(connection_params['vhost'])
+        
+        base_url = (
+            f"amqp://{connection_params['username']}:{connection_params['password']}"
+            f"@{connection_params['host']}:{connection_params['port']}/{encoded_vhost}"
+        )
+        
+        return self._append_connection_options(base_url, opts.get("connection_options"))
+    
+    def _extract_connection_params(self, opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract and validate connection parameters."""
+        return {
+            'username': opts.get("username", ""),
+            'password': opts.get("password", ""),
+            'host': opts.get("host", "localhost"),
+            'port': opts.get("port", 5672),
+            'vhost': opts.get("vhost", "/")
+        }
+    
+    def _encode_vhost(self, vhost: str) -> str:
+        """Encode vhost for URL (/ becomes %2F)."""
+        if not vhost or vhost == "/":
+            return "%2F"
+        return vhost.replace("/", "%2F")
+    
+    def _append_connection_options(self, base_url: str, options: Dict[str, Any]) -> str:
+        """Append connection options to URL if present."""
+        if not options:
+            return base_url
+            
+        from urllib.parse import urlencode
+        return f"{base_url}?{urlencode(options)}"
 
     def _work_callback(self, ch, method, properties, body):
         """
@@ -252,6 +337,12 @@ class AMQPDriver(HasColoredOutput, Queue):
             if hasattr(instance, "set_tracking_id"):
                 instance.set_tracking_id(job_id)
 
+            # Set database job ID for JobTracker
+            if hasattr(instance, '_db_job_id') or hasattr(instance, '__dict__'):
+                db_job_id = msg.get("db_job_id")
+                if db_job_id:
+                    instance._db_job_id = db_job_id
+
             # Call the callback method on instance
             method_to_call = getattr(instance, callback, None)
             if not callable(method_to_call):
@@ -275,7 +366,13 @@ class AMQPDriver(HasColoredOutput, Queue):
             self._log_failure(method.delivery_tag, job_id)
             try:
                 if hasattr(instance, "failed"):
-                    instance.failed(msg, str(e))
+                    failed_method = getattr(instance, "failed")
+                    if inspect.iscoroutinefunction(failed_method):
+                        # Run async failed method
+                        asyncio.run(failed_method(msg, str(e)))
+                    else:
+                        # Run sync failed method
+                        failed_method(msg, str(e))
             except Exception as inner:
                 self.danger(f"Exception in failed(): {inner}")
 

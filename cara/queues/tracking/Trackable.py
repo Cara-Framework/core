@@ -44,7 +44,11 @@ class Trackable:
         self._job_uid: Optional[str] = None
         self._tracking_metadata: Dict[str, Any] = {}
         self._tracking_enabled: bool = True
-        self._job_tracker = None
+        self._job_tracker: Optional[Any] = None
+        
+        # Ensure priority attribute exists for queue system
+        if not hasattr(self, 'priority'):
+            self.priority = "default"
         
     def with_tracking(self, enabled: bool = True) -> "Trackable":
         """Enable/disable job tracking (Laravel-style fluent method)."""
@@ -80,7 +84,10 @@ class Trackable:
             # Get job information
             job_name = self.__class__.__name__
             entity_id = self._get_entity_id()
-            queue = getattr(self, 'queue', 'default')
+            queue = self.queue if hasattr(self, 'queue') else 'default'
+            
+            # Get database job ID if available (from AMQP driver)
+            db_job_id = getattr(self, '_db_job_id', None)
             
             # Get JobTracker instance
             job_tracker = self._get_job_tracker()
@@ -88,7 +95,7 @@ class Trackable:
                 job_tracker.track_job_started(
                     job_uid=self._job_uid,
                     job_name=job_name,
-                    job_id=None,  # No specific job.id from Cara queue system
+                    job_id=db_job_id,  # Pass database job ID for FK
                     entity_id=entity_id,
                     queue=queue,
                     metadata=self._tracking_metadata
@@ -166,8 +173,8 @@ class Trackable:
                 entity_id = self._get_entity_id()
                 job_tracker.validate_job_or_cancel(self._job_uid, entity_id, operation)
         except Exception as e:
-            # Re-raise JobCancelledException but log others
-            if "JobCancelledException" in str(type(e)):
+            # Re-raise specific exceptions but log others
+            if e.__class__.__name__ == "JobCancelledException":
                 raise
             Log.warning(f"Failed to validate job continuation: {str(e)}")
     

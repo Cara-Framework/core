@@ -8,7 +8,7 @@ failure handling. Includes automatic serialization support and job cancellation.
 from typing import Optional
 
 from cara.queues.JobStateManager import get_job_state_manager
-from cara.queues.JobTracker import get_job_tracker
+from cara.queues.tracking import JobTracker
 
 from .CancellableJob import CancellableJob, JobCancelledException
 from .SerializesModels import SerializesModels
@@ -169,7 +169,7 @@ class Queueable(SerializesModels, CancellableJob):
         super().__init__()  # CancellableJob.__init__() handles its own initialization
         self.job_tracking_id: Optional[str] = None
         self._job_state_manager = get_job_state_manager()
-        self._job_tracker = get_job_tracker()
+        self._job_tracker = JobTracker()
         self._db_record_id: Optional[str] = None  # Database tracking record ID
         
         # Laravel-style properties

@@ -1,3 +1,5 @@
+from .AutoReloadMixin import AutoReloadMixin
+from .BlockingCommandMixin import BlockingCommandMixin
 from .Command import Command
 from .CommandBase import CommandBase
 from .CommandLoader import CommandLoader
@@ -14,4 +16,6 @@ __all__ = [
     "CommandRegistry",
     "CommandBase",
     "ReloadableMixin",
+    "AutoReloadMixin",
+    "BlockingCommandMixin",
 ]

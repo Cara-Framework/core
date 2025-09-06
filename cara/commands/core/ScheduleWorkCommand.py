@@ -10,6 +10,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from cara.commands import CommandBase
+from cara.commands.AutoReloadMixin import AutoReloadMixin
 from cara.configuration import config
 from cara.decorators import command
 from cara.facades import Queue, Schedule
@@ -26,32 +27,54 @@ from cara.scheduling.contracts import ShouldSchedule
         "--reload": "Enable auto-reload on file changes",
     },
 )
-class ScheduleWorkCommand(CommandBase):
+class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
     """Run schedule worker with enhanced monitoring and task registration."""
+
+    def __init__(self, application=None):
+        super().__init__(application)
+        self.start_time = None
 
     def handle(self, driver: Optional[str] = None):
         """Handle schedule worker execution with enhanced monitoring."""
-        self.info("⏰ Schedule Worker Starting")
+        self.console.print()  # Empty line for spacing
+        self.console.print("[bold #e5c07b]╭─ Schedule Worker ─╮[/bold #e5c07b]")
+        self.console.print()
 
-        # Setup file watching if reload is enabled
-        if self.option("reload"):
-            self._setup_file_watching()
+        # Store parameters for restart
+        self.store_restart_params(driver)
 
-        # Determine driver
-        driver_name = driver or config("scheduling.default")
-        if not driver_name:
-            self.error("❌ No scheduler driver specified and no default configured")
+        # Setup auto-reload if enabled (default: true for development)
+        if self.option("reload") or config("app.debug", True):
+            self.enable_auto_reload()
+
+        # Start main scheduler loop
+        try:
+            self._run_main_loop(driver)
+        except Exception as e:
+            import traceback
+            self.error(f"× Scheduler error: {e}")
+            self.error(f"× Stack trace: {traceback.format_exc()}")
+        finally:
+            self.cleanup_auto_reload()
+            self._show_final_stats()
+
+    def _run_main_loop(self, *args, **kwargs):
+        """Main scheduler loop - called by AutoReloadMixin on restart."""
+        # Use stored parameters from store_restart_params
+        if hasattr(self, '_restart_params') and self._restart_params:
+            driver = self._restart_params[0] if self._restart_params else None
+        else:
+            driver = args[0] if args else None
+
+        # Prepare configuration
+        try:
+            scheduler_config = self._prepare_config(driver)
+        except Exception as e:
+            self.error(f"× Configuration error: {e}")
             return
 
-        # Show configuration
-        self.info("🔧 Scheduler Configuration:")
-        self.info(f"   Driver: {driver_name}")
-        self.info(f"   Run Mode: {'Once' if self.option('once') else 'Continuous'}")
-        self.info(f"   Statistics: {'✅' if self.option('stats') else '❌'}")
-        if self.option("reload"):
-            self.info("   Auto-reload: ✅ Enabled")
-        else:
-            self.info("   Auto-reload: ❌ Disabled")
+        # Show scheduler configuration
+        self._show_config(scheduler_config)
 
         # Register and run scheduled jobs
         try:
@@ -61,16 +84,58 @@ class ScheduleWorkCommand(CommandBase):
                 return
 
             self._show_jobs(job_entries)
-            self._start_scheduler(driver_name)
+            self._start_scheduler(scheduler_config)
 
         except KeyboardInterrupt:
             self.info("\n⏸️  Schedule worker stopped by user")
         except Exception as e:
-            self.error(f"❌ Scheduler error: {e}")
+            self.error(f"× Scheduler error: {e}")
             if config("app.debug", False):
                 self.error(f"Stack trace: {traceback.format_exc()}")
-        finally:
-            self._cleanup_watching()
+
+    def _prepare_config(self, driver: Optional[str]) -> Dict[str, Any]:
+        """Prepare and validate scheduler configuration."""
+        driver_name = driver or config("scheduling.default")
+        if not driver_name:
+            raise Exception("No scheduler driver specified and no default configured")
+
+        return {
+            "driver_name": driver_name,
+            "run_once": self.option("once"),
+            "show_stats": self.option("stats"),
+            "debug": config("app.debug", False),
+        }
+
+    def _show_config(self, scheduler_config: Dict[str, Any]):
+        """Display scheduler configuration in ServeCommand style."""
+        self.console.print("[bold #e5c07b]┌─ Configuration[/bold #e5c07b]")
+        
+        # Driver info
+        self.console.print(
+            f"[#e5c07b]│[/#e5c07b] [white]Driver:[/white] [bold white]{scheduler_config['driver_name'].upper()}[/bold white]"
+        )
+        
+        # Run mode
+        run_mode = "Once" if scheduler_config['run_once'] else "Continuous"
+        mode_color = "#e5c07b" if scheduler_config['run_once'] else "#30e047"
+        self.console.print(
+            f"[#e5c07b]│[/#e5c07b] [white]Run Mode:[/white] [{mode_color}]{run_mode}[/{mode_color}]"
+        )
+        
+        # Statistics
+        self.console.print(
+            f"[#e5c07b]│[/#e5c07b] [white]Statistics:[/white] [{'#30e047' if scheduler_config['show_stats'] else '#E21102'}]{'✓' if scheduler_config['show_stats'] else '×'}[/{'#30e047' if scheduler_config['show_stats'] else '#E21102'}]"
+        )
+        
+        # Auto-reload status (default: enabled in development)
+        from cara.configuration import config as global_config
+        auto_reload = self.option("reload") or global_config("app.debug", True)
+        self.console.print(
+            f"[#e5c07b]│[/#e5c07b] [white]Auto-reload:[/white] [{'#30e047' if auto_reload else '#E21102'}]{'✓' if auto_reload else '×'}[/{'#30e047' if auto_reload else '#E21102'}]"
+        )
+        
+        self.console.print("[#e5c07b]└─[/#e5c07b]")
+        self.console.print()
 
     def _register_jobs(self) -> List[Dict[str, Any]]:
         """Register all scheduled jobs and return summary."""
@@ -229,33 +294,43 @@ class ScheduleWorkCommand(CommandBase):
             return schedule_type
 
     def _show_jobs(self, job_entries: List[Dict[str, Any]]):
-        """Display registered jobs."""
-        headers = ["Job Name", "ID", "Type", "Schedule"]
-        rows = [
-            [entry["name"], entry["id"], entry["type"], entry["schedule"]]
-            for entry in job_entries
-        ]
+        """Display registered jobs in ServeCommand style."""
+        self.console.print("[bold #e5c07b]┌─ Scheduled Jobs[/bold #e5c07b]")
+        
+        for i, job in enumerate(job_entries[:5], 1):  # Show first 5
+            job_type_color = "#30e047" if job['type'] == 'command' else "#e5c07b"
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b]   [white]{i}.[/white] [{job_type_color}]{job['name']}[/{job_type_color}] [dim]({job['schedule']})[/dim]"
+            )
+            
+        if len(job_entries) > 5:
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b]   [dim]... and {len(job_entries) - 5} more jobs[/dim]"
+            )
+            
+        self.console.print("[#e5c07b]└─[/#e5c07b]")
+        self.console.print()
 
-        self.info(f"✅ Registered {len(job_entries)} scheduled job(s):")
-        self.table(headers, rows)
+    def _show_scheduler_status(self):
+        """Display scheduler status in ServeCommand style."""
+        self.console.print("[bold #e5c07b]┌─ Scheduler Status[/bold #e5c07b]")
+        self.console.print(
+            "[#e5c07b]│[/#e5c07b] [white]Status:[/white] [#30e047]✓ Active - Processing scheduled tasks[/#30e047]"
+        )
+        self.console.print("[#e5c07b]└─[/#e5c07b]")
+        self.console.print()
+        
+        # Simple ready message
+        self.console.print("[dim]Press Ctrl+C to stop the scheduler[/dim]")
+        self.console.print()
 
-        if self.option("stats"):
-            type_counts = {}
-            for entry in job_entries:
-                job_type = entry["type"]
-                type_counts[job_type] = type_counts.get(job_type, 0) + 1
-
-            self.info("\n📊 Job Statistics:")
-            self.info(f"   Total jobs: {len(job_entries)}")
-            for job_type, count in sorted(type_counts.items()):
-                self.info(f"   {job_type}: {count} job(s)")
-
-    def _start_scheduler(self, driver_name: str):
-        """Start the scheduler with the specified driver."""
-        self.info("🚀 Starting scheduler...")
+    def _start_scheduler(self, scheduler_config: Dict[str, Any]):
+        """Start the scheduler with the specified configuration."""
+        self._show_scheduler_status()
+        self.start_time = time.time()
 
         try:
-            driver = Schedule.driver(driver_name)
+            driver = Schedule.driver(scheduler_config["driver_name"])
 
             # Start scheduler
             try:
@@ -264,59 +339,28 @@ class ScheduleWorkCommand(CommandBase):
                 if "already running" not in str(e).lower():
                     raise
 
-            if self.option("once"):
-                self.info("✅ Scheduled tasks executed once")
+            if scheduler_config["run_once"]:
+                self.console.print("[#30e047]✅ Scheduled tasks executed once[/#30e047]")
             else:
-                self.info("✅ Scheduler started successfully")
-                self.info("📝 Press Ctrl+C to stop the scheduler")
+                # Keep running until interrupted
+                while not self.shutdown_requested:
+                    time.sleep(1)
 
         except Exception as e:
             raise Exception(f"Failed to start scheduler: {e}")
 
-    def _setup_file_watching(self):
-        """Setup file watching for auto-reload using existing Command system."""
-        self.info("🔄 Auto-reload enabled - watching for file changes...")
-
-        # Import the existing Command class with file watching
-        from cara.commands.Command import Command
-
-        # Create a Command instance with watch=True
-        self.command_watcher = Command(self.application, watch=True)
-
-        # Override the reload method to restart the scheduler
-        original_reload = self.command_watcher.reload
-
-        def scheduler_reload():
-            self.info("🔄 File change detected, restarting scheduler...")
-            # Give scheduler time to finish current tasks
-            time.sleep(0.5)
-            # Restart the scheduler instead of exiting
-            self._restart_scheduler()
-
-        self.command_watcher.reload = scheduler_reload
-
-    def _restart_scheduler(self):
-        """Restart the scheduler internally without exiting the process."""
-        try:
-            self.info("🔄 Scheduler restarted successfully")
-
-            # Re-register and restart jobs
-            job_entries = self._register_jobs()
-            if job_entries:
-                self._show_jobs(job_entries)
-
-                # Determine driver again (in case config changed)
-                driver_name = config("scheduling.default")
-                if driver_name:
-                    self._start_scheduler(driver_name)
-
-        except Exception as e:
-            self.error(f"❌ Failed to restart scheduler: {e}")
-
-    def _cleanup_watching(self):
-        """Cleanup file watching resources."""
-        if hasattr(self, "command_watcher") and self.command_watcher:
-            try:
-                self.command_watcher.shutdown()
-            except Exception:
-                pass
+    def _show_final_stats(self):
+        """Show final scheduler statistics."""
+        if not hasattr(self, 'start_time') or not self.start_time:
+            return
+            
+        runtime_seconds = int(time.time() - self.start_time)
+        hours, remainder = divmod(runtime_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        runtime = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        
+        self.console.print()
+        self.console.print("[bold #e5c07b]📊 Final Scheduler Statistics:[/bold #e5c07b]")
+        self.console.print(f"   Runtime: {runtime}")
+        self.console.print(f"   Tasks Executed: {getattr(self, 'tasks_executed', 0)}")
+        self.console.print()

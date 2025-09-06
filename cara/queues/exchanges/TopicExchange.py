@@ -52,6 +52,7 @@ class TopicExchange:
     - Routing key pattern matching
     - Domain-based job categorization
     - Priority-based message routing
+    - Singleton pattern to prevent re-initialization
     
     Usage:
         exchange = TopicExchange("cheapa.events")
@@ -69,98 +70,89 @@ class TopicExchange:
         )
     """
     
-    def __init__(self, exchange_name: str = "cheapa.events"):
-        """Initialize topic exchange."""
+    _instances = {}  # Class-level instances cache
+    
+    def __new__(cls, exchange_name: str = "default.events"):
+        """Singleton pattern to prevent multiple instances."""
+        if exchange_name not in cls._instances:
+            cls._instances[exchange_name] = super().__new__(cls)
+        return cls._instances[exchange_name]
+    
+    def __init__(self, exchange_name: str = "default.events"):
+        """
+        Initialize TopicExchange.
+        
+        Args:
+            exchange_name: Name of the RabbitMQ topic exchange
+        """
+        # Prevent re-initialization
+        if hasattr(self, '_initialized'):
+            return
+            
         self.exchange_name = exchange_name
         self.bindings: Dict[str, QueueBinding] = {}
+        self.queue_bindings: Dict[str, List[str]] = {}
         self._queue_patterns: Dict[str, List[str]] = {}
+        self._logged_bindings = set()
         
-        # Pre-defined domain priorities
-        self.priority_levels = {
-            'critical': 0,
-            'high': 1,
-            'default': 2,
-            'low': 3,
-            'bulk': 4
-        }
-        
-        # Initialize with default bindings
+        # Auto-bind standard queues
         self._setup_default_bindings()
         
-        Log.info(f"TopicExchange initialized: {exchange_name}", category="cara.queue.exchange")
+        Log.info(
+            f"TopicExchange initialized: {exchange_name}",
+            category="cara.queue.exchange"
+        )
+        
+        self._initialized = True
     
     def _setup_default_bindings(self):
-        """Setup default queue bindings for common patterns."""
-        default_bindings = [
-            # Enrichment queues
-            ("enrichment.critical", "enrichment.*.critical"),
-            ("enrichment.high", "enrichment.*.high"),
-            ("enrichment.default", "enrichment.*.default"),
-            ("enrichment.low", "enrichment.*.low"),
-            
-            # Validation queues
-            ("validation.critical", "validation.*.critical"),
-            ("validation.high", "validation.*.high"),
-            ("validation.default", "validation.*.default"),
-            ("validation.low", "validation.*.low"),
-            
-            # Notification queues
-            ("notification.email", "notification.email.*"),
-            ("notification.sms", "notification.sms.*"),
-            ("notification.push", "notification.push.*"),
-            
-            # Reporting queues
-            ("reporting.default", "reporting.*.default"),
-            ("reporting.low", "reporting.*.low"),
-            ("reporting.bulk", "reporting.*.bulk"),
-            
-            # System queues
-            ("system.critical", "system.*.critical"),
-            ("system.maintenance", "system.maintenance.*"),
-        ]
+        """Setup queue bindings from app configuration."""
+        # Load app-specific bindings from config (required)
+        from cara.configuration import config
+        app_bindings = config("queue.topic_exchange_bindings", None)
+        
+        if not app_bindings:
+            raise ValueError(
+                "TOPIC_EXCHANGE_BINDINGS not found in queue config. "
+                "Please define your queue bindings in config/queue.py"
+            )
+        
+        default_bindings = app_bindings
         
         for queue_name, pattern in default_bindings:
             self.bind_queue(queue_name, pattern)
     
     def bind_queue(self, queue_name: str, routing_pattern: str) -> None:
         """
-        Bind a queue to the exchange with routing pattern.
+        Bind a queue to a routing pattern.
         
         Args:
-            queue_name: Name of the queue (e.g., "enrichment.high")
-            routing_pattern: Routing key pattern (e.g., "enrichment.*.high")
+            queue_name: Name of the queue to bind
+            routing_pattern: Routing pattern (e.g., "enrichment.*.high")
         """
-        # Parse queue name components
-        parts = queue_name.split('.')
-        if len(parts) != 2:
-            raise ValueError(f"Queue name must follow domain.priority format: {queue_name}")
+        if queue_name not in self.queue_bindings:
+            self.queue_bindings[queue_name] = []
         
-        domain, priority = parts[0], parts[1]
-        
-        # Create binding
-        binding = QueueBinding(
-            queue_name=queue_name,
-            routing_pattern=routing_pattern,
-            domain=domain,
-            subtype="*",  # Wildcard for pattern matching
-            priority=priority
-        )
-        
-        self.bindings[queue_name] = binding
-        
-        # Store pattern for matching
-        if domain not in self._queue_patterns:
-            self._queue_patterns[domain] = []
-        self._queue_patterns[domain].append(routing_pattern)
-        
-        Log.info(
-            f"Queue bound: {queue_name} -> {routing_pattern}", 
-            category="cara.queue.exchange"
-        )
+        if routing_pattern not in self.queue_bindings[queue_name]:
+            self.queue_bindings[queue_name].append(routing_pattern)
+            # Only log once when binding is first created
+            if not hasattr(self, '_logged_bindings'):
+                self._logged_bindings = set()
+            
+            binding_key = f"{queue_name}->{routing_pattern}"
+            if binding_key not in self._logged_bindings:
+                # Only log in debug mode to reduce spam
+                from cara.configuration import config
+                if config("app.debug", False):
+                    Log.info(
+                        f"Queue bound: {queue_name} -> {routing_pattern}",
+                        category="cara.queue.exchange"
+                    )
+                self._logged_bindings.add(binding_key)
     
     def get_matching_queues(self, routing_key: str) -> List[str]:
         """
-        Get all queues that match the given routing key.
+        Get queues that match the routing key.
         
         Args:
             routing_key: Full routing key (e.g., "enrichment.product.high")
@@ -170,9 +162,11 @@ class TopicExchange:
         """
         matching_queues = []
         
-        for queue_name, binding in self.bindings.items():
-            if self._matches_pattern(routing_key, binding.routing_pattern):
-                matching_queues.append(queue_name)
+        for queue_name, patterns in self.queue_bindings.items():
+            for pattern in patterns:
+                if self._matches_pattern(routing_key, pattern):
+                    matching_queues.append(queue_name)
+                    break  # Don't add same queue multiple times
         
         return matching_queues
     
@@ -235,10 +229,13 @@ class TopicExchange:
             from cara.facades import Queue
             job_id = Queue.push(job_instance)
             
-            Log.info(
-                f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
-                category="cara.queue.exchange"
-            )
+            # Log successful dispatch
+            from cara.configuration import config
+            if config("app.debug", False):
+                Log.info(
+                    f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
+                    category="cara.queue.exchange"
+                )
             
             return str(job_id)
             

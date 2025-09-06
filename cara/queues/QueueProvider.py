@@ -11,12 +11,7 @@ from cara.configuration import config
 from cara.exceptions import QueueConfigurationException
 from cara.foundation import DeferredProvider
 from cara.queues import Queue
-from cara.queues.drivers import (
-    AMQPDriver,
-    AsyncDriver,
-    DatabaseDriver,
-    RedisDriver,
-)
+from cara.queues.drivers import AMQPDriver, AsyncDriver, DatabaseDriver, RedisDriver
 
 
 class QueueProvider(DeferredProvider):
@@ -92,7 +87,7 @@ class QueueProvider(DeferredProvider):
         password = settings.get("password")
         host = settings.get("host", "localhost")
         port = settings.get("port", 5672)
-        vhost = settings.get("vhost", "")
+        vhost = settings.get("vhost", "/")
         exchange = settings.get("exchange", "")
         connection_options = settings.get("connection_options", {})
         queue_name = settings.get("queue")

@@ -10,8 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import pendulum
 
-from cara.facades import Log, Queue
-from cara.queues.contracts import JobCancelledException
+from cara.facades import Log
 
 
 class JobTracker:
@@ -70,7 +69,7 @@ class JobTracker:
         Args:
             job_uid: Unique job UUID identifier for tracking
             job_name: Job class name
-            job_id: Optional job.id (integer FK) - if None, will be 0 for tracking-only jobs
+            job_id: Job.id (integer FK) from driver - required for job_logs FK
             entity_id: Optional entity ID (product_id, user_id, etc.)
             queue: Queue name
             metadata: Additional metadata
@@ -83,23 +82,25 @@ class JobTracker:
             if entity_id:
                 self._cancel_conflicting_jobs(job_name, entity_id, job_uid)
             
-            # Create job log entry if model available
-            if self.job_log_model:
+            # Create job log entry if model available and job_id provided
+            if self.job_log_model and job_id:
                 self.job_log_model.create_job_log(
                     job_name=job_name,
-                    job_id=job_id or 0,  # Use 0 if no job.id provided
+                    job_id=job_id,  # Required FK to job.id
                     job_uid=job_uid,
                     queue=queue,
-                    entity_id=entity_id,  # Generic field name
+                    entity_id=entity_id,
                     metadata=metadata or {}
                 )
+            elif self.job_log_model and not job_id:
+                Log.warning(f"JobTracker: No job_id provided for {job_name}, skipping job_logs entry")
             
             Log.info(f"🚀 Job started: {job_name}[{job_uid}] for entity {entity_id}", category="cara.queue.jobs")
             return job_uid
             
         except Exception as e:
             Log.warning(f"Failed to track job start: {str(e)}")
-            return job_id
+            return job_uid
     
     def track_job_processing(self, job_uid: str) -> None:
         """Mark job as actively processing."""
@@ -169,12 +170,12 @@ class JobTracker:
             Log.warning(f"Failed to track job failure: {str(e)}")
             return None
     
-    def should_job_continue(self, job_id: str, entity_id: str = None) -> bool:
+    def should_job_continue(self, job_uid: str, entity_id: str = None) -> bool:
         """
-        Check if job should continue processing (not cancelled/superseded).
+        Check if job should continue processing based on job_uid.
         
         Args:
-            job_id: Current job ID
+            job_uid: Current job UID (UUID string)
             entity_id: Optional entity ID for conflict checking
             
         Returns:
@@ -184,50 +185,36 @@ class JobTracker:
             if not self.job_log_model:
                 return True
                 
-            job_log = self.job_log_model.where('job_id', job_id).first()
+            job_log = self.job_log_model.where('job_uid', job_uid).first()
             if not job_log:
-                Log.warning(f"Job log not found: {job_id}")
-                return False
-            
-            # Check if job was cancelled
-            if hasattr(job_log, 'status') and job_log.status == getattr(self.job_log_model, 'STATUS_CANCELLED', 'cancelled'):
-                Log.info(f"Job cancelled: {job_id}")
-                return False
-            
-            # If entity_id provided, check for newer jobs
-            if entity_id and hasattr(job_log, 'product_id') and job_log.product_id == entity_id:
-                newer_jobs = self.job_log_model.where('product_id', entity_id)\
-                                              .where('job_name', job_log.job_name)\
-                                              .where('created_at', '>', job_log.created_at)\
-                                              .where_in('status', ['pending', 'processing'])\
-                                              .count()
+                return True
                 
-                if newer_jobs > 0:
-                    Log.info(f"Job superseded by newer job: {job_id} for entity {entity_id}")
-                    return False
-            
+            # Check if job was cancelled or failed
+            if job_log.status in [self.job_log_model.STATUS_CANCELLED]:
+                return False
+                
             return True
             
         except Exception as e:
-            Log.error(f"Error checking job status {job_id}: {e}")
-            return False
+            Log.warning(f"Error checking job status {job_uid}: {str(e)}")
+            return True
     
-    def validate_job_or_cancel(self, job_id: str, entity_id: str = None, operation: str = "operation") -> None:
+    def validate_job_or_cancel(self, job_uid: str, entity_id: str = None, operation: str = "operation") -> None:
         """
         Validate job should continue or raise JobCancelledException.
         
         Args:
-            job_id: Current job ID
+            job_uid: Current job UID (UUID string)
             entity_id: Optional entity ID
-            operation: Current operation name for error message
+            operation: Operation name for logging
             
         Raises:
-            JobCancelledException: If job should be cancelled
+            JobCancelledException: If job should not continue
         """
-        if not self.should_job_continue(job_id, entity_id):
-            raise JobCancelledException(
-                f"Job {job_id} cancelled during {operation} for entity {entity_id}"
-            )
+        if not self.should_job_continue(job_uid, entity_id):
+            # Lazy import to avoid circular dependency
+            from cara.queues.contracts.CancellableJob import JobCancelledException
+            raise JobCancelledException(f"Job {job_uid} cancelled during {operation} for entity {entity_id}")
     
     def get_job_analytics(self, entity_id: str = None, job_name: str = None, 
                          hours: int = 24) -> Dict[str, Any]:
@@ -295,35 +282,34 @@ class JobTracker:
             Log.error(f"Failed to get job analytics: {str(e)}")
             return {'error': str(e)}
     
-    def _cancel_conflicting_jobs(self, job_name: str, entity_id: str, new_job_uid: str) -> int:
-        """Cancel existing jobs for same entity to prevent conflicts."""
+    def _cancel_conflicting_jobs(self, job_name: str, entity_id: str, current_job_uid: str) -> int:
+        """
+        Cancel conflicting jobs for same entity.
+        
+        Args:
+            job_name: Job class name
+            entity_id: Entity ID to check conflicts for
+            current_job_uid: Current job UID to exclude
+            
+        Returns:
+            int: Number of jobs cancelled
+        """
         try:
-            def should_cancel_job(context: dict) -> bool:
-                return (
-                    context.get("entity_id") == entity_id
-                    and context.get("job_name") == job_name
-                    and context.get("job_uid") != new_job_uid
-                )
+            if not self.job_log_model:
+                return 0
+                
+            # Find pending/processing jobs for same entity and job type
+            conflicting_jobs = self.job_log_model.where('job_name', job_name)\
+                                                 .where('entity_id', entity_id)\
+                                                 .where('job_uid', '!=', current_job_uid)\
+                                                 .where_in('status', ['pending', 'processing'])\
+                                                 .get()
             
-            # Cancel in queue system
-            cancelled_count = Queue.cancel_jobs_by_context(
-                should_cancel_job, f"Superseded by new job {new_job_uid}"
-            )
-            
-            # Update database records if model available
-            if self.job_log_model:
-                self.job_log_model.where('entity_id', entity_id)\
-                                  .where('job_name', job_name)\
-                                  .where('job_uid', '!=', new_job_uid)\
-                                  .where_in('status', ['pending', 'processing'])\
-                                  .update({
-                                      'status': 'cancelled',
-                                      'error': f'Superseded by job {new_job_uid}',
-                                      'finished_at': pendulum.now()
-                                  })
-            
-            if cancelled_count > 0:
-                Log.info(f"🚫 Cancelled {cancelled_count} conflicting {job_name} jobs for entity {entity_id}", category="cara.queue.jobs")
+            cancelled_count = 0
+            for job_log in conflicting_jobs:
+                job_log.update({'status': self.job_log_model.STATUS_CANCELLED})
+                cancelled_count += 1
+                Log.info(f"Cancelled conflicting job: {job_log.job_uid} for entity {entity_id}")
             
             return cancelled_count
             
@@ -338,25 +324,26 @@ class JobTracker:
             delay_seconds = self.retry_delays[min(next_attempt - 1, len(self.retry_delays) - 1)]
             
             # Create new job log for retry
-            retry_job_id = str(uuid.uuid4())
+            retry_job_uid = str(uuid.uuid4())
             
             metadata = getattr(job_log, 'metadata', {}) or {}
             metadata['retry_reason'] = error
-            metadata['original_job_id'] = job_log.job_id
+            metadata['original_job_uid'] = job_log.job_uid
             metadata['scheduled_for'] = pendulum.now().add(seconds=delay_seconds).to_iso8601_string()
             
             self.job_log_model.create({
                 'job_name': job_log.job_name,
-                'job_id': retry_job_id,
-                'product_id': getattr(job_log, 'product_id', None),
+                'job_id': job_log.job_id,  # Use same job_id (FK to job table)
+                'job_uid': retry_job_uid,  # New UUID for retry tracking
+                'entity_id': getattr(job_log, 'entity_id', None),
                 'status': 'retrying',
                 'attempt': next_attempt,
                 'queue': getattr(job_log, 'queue', 'default'),
                 'metadata': metadata
             })
             
-            Log.info(f"🔄 Retry scheduled: {job_log.job_name}[{retry_job_id}] attempt {next_attempt} in {delay_seconds}s")
-            return retry_job_id
+            Log.info(f"🔄 Retry scheduled: {job_log.job_name}[{retry_job_uid}] attempt {next_attempt} in {delay_seconds}s")
+            return retry_job_uid
             
         except Exception as e:
             Log.error(f"Failed to schedule retry: {str(e)}")
@@ -371,7 +358,7 @@ class JobTracker:
                 metadata['moved_to_dlq_at'] = pendulum.now().to_iso8601_string()
                 job_log.update({'metadata': metadata})
             
-            Log.error(f"💀 Job moved to dead letter: {job_log.job_name}[{job_log.job_id}] - {final_error}")
+            Log.error(f"💀 Job moved to dead letter: {job_log.job_name}[{job_log.job_uid}] - {final_error}")
             
         except Exception as e:
             Log.warning(f"Failed to move job to dead letter: {str(e)}")

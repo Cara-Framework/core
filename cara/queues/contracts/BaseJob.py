@@ -142,9 +142,9 @@ class BaseJob(BaseQueueable):
                 f"Job {self.__class__.__name__} progress: {progress_data['percentage']}% - {message}"
             )
         except ImportError:
-            print(f"Job progress: {progress_data['percentage']}% - {message}")
+            # Silently fail if Log facade not available - this is a framework component
+            pass
 
-        # TODO: Store progress in cache/database for monitoring
         return progress_data
 
     def get_payload_value(self, key: str, default=None):
@@ -168,12 +168,8 @@ class BaseJob(BaseQueueable):
             Log.error(f"Job payload: {self.payload}")
             Log.error(f"Job tags: {self.tags}")
         except ImportError:
-            print(f"Job {self.__class__.__name__} failed: {str(error)}")
+            # Silently fail if Log facade not available - this is a framework component
+            pass
 
         # Call parent failed method
         super().failed(job_data, error)
-
-        # TODO: Add job-specific failure handling
-        # - Store failure details for debugging
-        # - Send alerts for critical jobs
-        # - Clean up any resources

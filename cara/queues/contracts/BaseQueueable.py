@@ -154,5 +154,5 @@ class BaseQueueable(Queueable, ShouldQueue):
             if hasattr(self, "payload"):
                 Log.error(f"Job payload: {self.payload}")
         except ImportError:
-            # Fallback if Log facade not available
-            print(f"Job {self.__class__.__name__} failed: {str(error)}")
+            # Silently fail if Log facade not available - this is a framework component
+            pass

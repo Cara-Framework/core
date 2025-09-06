@@ -4,15 +4,122 @@ Queue Worker Command for the Cara framework.
 This module provides a CLI command to process jobs from the queue with enhanced UX.
 """
 
-import importlib
-import sys
 import time
 from typing import Any, Dict, Optional
 
 from cara.commands import CommandBase
-from cara.commands.ReloadableMixin import ReloadableMixin
+from cara.commands.AutoReloadMixin import AutoReloadMixin
 from cara.configuration import config
 from cara.decorators import command
+
+
+class AMQPConnectionManager:
+    """Manages AMQP connections for queue workers (Single Responsibility)."""
+    
+    def __init__(self, config_func):
+        self.config = config_func
+        self.connection = None
+    
+    def ensure_connection(self) -> bool:
+        """Ensure AMQP connection is alive."""
+        try:
+            if self.connection is None or self.connection.is_closed:
+                self.connection = self._create_connection()
+            return True
+        except Exception as e:
+            try:
+                from cara.facades import Log
+                Log.error(f"Failed to connect to RabbitMQ: {e}")
+            except ImportError:
+                pass
+            return False
+    
+    def _create_connection(self):
+        """Create new AMQP connection."""
+        import pika
+        
+        credentials = pika.PlainCredentials(
+            self.config("queue.drivers.amqp.username"),
+            self.config("queue.drivers.amqp.password")
+        )
+        parameters = pika.ConnectionParameters(
+            host=self.config("queue.drivers.amqp.host"),
+            port=self.config("queue.drivers.amqp.port", 5672),
+            virtual_host=self.config("queue.drivers.amqp.vhost", "/"),
+            credentials=credentials
+        )
+        return pika.BlockingConnection(parameters)
+    
+    def create_channel(self):
+        """Create fresh channel for queue operations."""
+        if not self.ensure_connection():
+            return None
+        return self.connection.channel()
+    
+    def close(self):
+        """Clean up connection."""
+        if self.connection and not self.connection.is_closed:
+            try:
+                self.connection.close()
+            except:
+                pass
+
+
+class JobProcessor:
+    """Processes individual jobs from queue messages (Single Responsibility)."""
+    
+    @staticmethod
+    def process_message(channel, method_frame, body) -> bool:
+        """Process a single queue message and return success status."""
+        try:
+            import asyncio
+            import inspect
+            import pickle
+
+            # Unpickle message
+            msg = pickle.loads(body)
+            instance = msg.get("obj")
+            callback = msg.get("callback", "handle")
+            init_args = msg.get("args", ())
+            
+            # Set up job tracking
+            job_id = msg.get("job_id")
+            if hasattr(instance, "set_tracking_id") and job_id:
+                instance.set_tracking_id(job_id)
+            
+            db_job_id = msg.get("db_job_id")
+            if db_job_id and hasattr(instance, '__dict__'):
+                instance._db_job_id = db_job_id
+            
+            # Execute job
+            method_to_call = getattr(instance, callback, None)
+            if callable(method_to_call):
+                if inspect.iscoroutinefunction(method_to_call):
+                    asyncio.run(method_to_call(*init_args))
+                else:
+                    method_to_call(*init_args)
+            
+            # Acknowledge message
+            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            return True
+            
+        except Exception as job_error:
+            # Job failed, still ack to avoid redelivery loop
+            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            
+            # Try to call failed method
+            try:
+                if hasattr(instance, "failed"):
+                    failed_method = getattr(instance, "failed")
+                    if inspect.iscoroutinefunction(failed_method):
+                        asyncio.run(failed_method(msg, str(job_error)))
+                    else:
+                        failed_method(msg, str(job_error))
+            except:
+                pass
+            
+            print(f"Job processing failed: {job_error}")
+            return True  # Still processed (failed gracefully)
 
 
 @command(
@@ -20,14 +127,14 @@ from cara.decorators import command
     help="Run the queue worker to consume jobs with enhanced UX.",
     options={
         "--driver=?": "Queue driver to use (overrides default configuration)",
-        "--queue=?": "Specific queue name to process",
+        "--queue=?": "Queue name(s) to process (comma-separated for priority: high,default,low)",
         "--timeout=?": "Poll timeout in seconds (default: 5)",
         "--max-jobs=?": "Maximum number of jobs to process before stopping",
         "--max-time=?": "Maximum runtime in seconds before stopping",
         "--reload": "Enable auto-reload on file changes",
     },
 )
-class QueueWorkCommand(ReloadableMixin, CommandBase):
+class QueueWorkCommand(AutoReloadMixin, CommandBase):
     """Run queue worker with enhanced monitoring and graceful shutdown."""
 
     def __init__(self, application=None):
@@ -45,34 +152,26 @@ class QueueWorkCommand(ReloadableMixin, CommandBase):
         max_time: Optional[str] = None,
     ):
         """Handle queue worker execution with enhanced monitoring."""
-        self.info("⚡ Queue Worker Starting")
+        self.console.print()  # Empty line for spacing
+        self.console.print("[bold #e5c07b]╭─ Queue Worker ─╮[/bold #e5c07b]")
+        self.console.print()
 
         # Store parameters for restart
-        self._store_restart_params(driver, queue, timeout, max_jobs, max_time)
+        self.store_restart_params(driver, queue, timeout, max_jobs, max_time)
 
-        # Setup file watching if reload is enabled
-        if self.option("reload"):
-            self._setup_file_watching()
-
-        # Validate and prepare configuration
-        try:
-            worker_config = self._prepare_config(
-                driver, queue, timeout, max_jobs, max_time
-            )
-        except Exception as e:
-            self.error(f"❌ Configuration error: {e}")
-            return
-
-        # Show worker configuration
-        self._show_config(worker_config)
+        # Setup auto-reload if enabled (default: true for development)
+        if self.option("reload") or config("app.debug", True):
+            self.enable_auto_reload()
 
         # Start main worker loop
         try:
-            self._run_main_loop(worker_config)
+            self._run_main_loop(driver, queue, timeout, max_jobs, max_time)
         except Exception as e:
-            self.error(f"❌ Worker error: {e}")
+            import traceback
+            self.error(f"× Worker error: {e}")
+            self.error(f"× Stack trace: {traceback.format_exc()}")
         finally:
-            self._cleanup_watching()
+            self.cleanup_auto_reload()
             self._show_final_stats()
 
     def _prepare_config(
@@ -130,181 +229,219 @@ class QueueWorkCommand(ReloadableMixin, CommandBase):
 
         return {
             "driver_name": driver_name,
-            "queue_name": queue,
+            "queue_names": self._parse_queue_names(queue),
             "timeout": timeout_val,
             "max_jobs": max_jobs_val,
             "max_time": max_time_val,
         }
 
-    def _show_config(self, config: Dict[str, Any]):
-        """Display worker configuration."""
-        self.info("🔧 Worker Configuration:")
-        self.info(f"   Driver: {config['driver_name']}")
-        self.info(f"   Queue: {config['queue_name'] or 'default'}")
-        self.info(f"   Poll Timeout: {config['timeout']} seconds")
-
-        if self.option("reload"):
-            self.info("   Auto-reload: ✅ Enabled")
+    def _parse_queue_names(self, queue: Optional[str]) -> list:
+        """Parse queue names from comma-separated string with wildcard support."""
+        if not queue:
+            return ["default"]
+        
+        # Split by comma and clean up
+        queue_patterns = [q.strip() for q in queue.split(",")]
+        queue_patterns = [q for q in queue_patterns if q]  # Remove empty strings
+        
+        if not queue_patterns:
+            return ["default"]
+        
+        # Expand wildcard patterns
+        expanded_queues = []
+        for pattern in queue_patterns:
+            if '*' in pattern:
+                expanded_queues.extend(self._expand_wildcard_pattern(pattern))
+            else:
+                expanded_queues.append(pattern)
+        
+        return expanded_queues if expanded_queues else ["default"]
+    
+    def _expand_wildcard_pattern(self, pattern: str) -> list:
+        """Expand wildcard pattern to actual queue names."""
+        # Standard priority levels for all queue types
+        priority_levels = ['critical', 'high', 'default', 'low']
+        
+        if pattern.endswith('.*'):
+            # Pattern like "enrichment.*" or "discovery.*"
+            prefix = pattern[:-2]  # Remove ".*"
+            return [f"{prefix}.{level}" for level in priority_levels]
+        elif pattern.endswith('*'):
+            # Pattern like "enrichment*" 
+            prefix = pattern[:-1]  # Remove "*"
+            return [f"{prefix}.{level}" for level in priority_levels]
         else:
-            self.info("   Auto-reload: ❌ Disabled")
+            # No wildcard, return as-is
+            return [pattern]
 
-        if config["max_jobs"]:
-            self.info(f"   Max Jobs: {config['max_jobs']}")
-        if config["max_time"]:
-            self.info(f"   Max Runtime: {config['max_time']} seconds")
+    def _show_config(self, config: Dict[str, Any]):
+        """Display worker configuration in ServeCommand style."""
+        self.console.print("[bold #e5c07b]┌─ Configuration[/bold #e5c07b]")
+        
+        # Driver info
+        self.console.print(
+            f"[#e5c07b]│[/#e5c07b] [white]Driver:[/white] [bold white]{config['driver_name'].upper()}[/bold white]"
+        )
+        
+        # Queue info
+        queue_names = config['queue_names']
+        if len(queue_names) > 1:
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b] [white]Queues:[/white] [dim]{len(queue_names)} queues in priority order[/dim]"
+            )
+            for i, queue in enumerate(queue_names, 1):  # Show all queues
+                priority_color = "#E21102" if "critical" in queue else "#e5c07b" if "high" in queue else "#30e047" if "default" in queue else "dim"
+                self.console.print(
+                    f"[#e5c07b]│[/#e5c07b]   [white]{i}.[/white] [{priority_color}]{queue}[/{priority_color}]"
+                )
+        else:
+            queue_color = "#E21102" if "critical" in queue_names[0] else "#e5c07b" if "high" in queue_names[0] else "#30e047"
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b] [white]Queue:[/white] [{queue_color}]{queue_names[0]}[/{queue_color}]"
+            )
+            
+        # Timing and limits
+        self.console.print(
+            f"[#e5c07b]│[/#e5c07b] [white]Poll Timeout:[/white] [dim]{config['timeout']}s[/dim]"
+        )
+        
+        if config.get("max_jobs"):
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b] [white]Max Jobs:[/white] [dim]{config['max_jobs']}[/dim]"
+            )
+        if config.get("max_time"):
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b] [white]Max Runtime:[/white] [dim]{config['max_time']}s[/dim]"
+            )
 
-    def _run_main_loop(self, worker_config: Dict[str, Any]):
-        """Main worker loop - called by ReloadableMixin on restart."""
-        # Clean up connections before starting
-        self._cleanup_connections_for_restart()
+        # Auto-reload status (default: enabled in development)
+        from cara.configuration import config as global_config
+        auto_reload = self.option("reload") or global_config("app.debug", True)
+        self.console.print(
+            f"[#e5c07b]│[/#e5c07b] [white]Auto-reload:[/white] [{'#30e047' if auto_reload else '#E21102'}]{'✓' if auto_reload else '×'}[/{'#30e047' if auto_reload else '#E21102'}]"
+        )
+        
+        self.console.print("[#e5c07b]└─[/#e5c07b]")
+        self.console.print()
 
-        # Reset counters for fresh start
-        self.jobs_processed = 0
-        self.jobs_failed = 0
 
-        # Run the worker
-        self._run_worker(worker_config)
 
-    def _run_worker(self, config: Dict[str, Any]):
-        """Run the queue worker with monitoring."""
-        self.info("🚀 Worker started - Press Ctrl+C for graceful shutdown")
-
-        # Create custom work callback that shows job names
-        self._create_custom_callback()
-
-        consume_opts = {"poll": config["timeout"]}
-        if config["queue_name"]:
-            consume_opts["queue"] = config["queue_name"]
-
+    def _run_worker(self, config: Dict[str, Any]) -> None:
+        """Run the queue worker with multiple queue priority support."""
+        queue_names = config["queue_names"]
+        
+        self._show_worker_startup_info(queue_names)
         self.start_time = time.time()
-
+        
+        # Initialize connection manager and job processor
+        from cara.configuration import config as global_config
+        connection_manager = AMQPConnectionManager(global_config)
+        job_processor = JobProcessor()
+        
         try:
             while not self.shutdown_requested:
-                # Check limits
-                if self._should_stop(config):
-                    break
-
-                    # Process jobs using actual queue consume with timeout
-                try:
-                    from cara.facades.Queue import Queue
-
-                    # Use shorter timeout to allow Ctrl+C to work
-                    consume_opts_with_timeout = {**consume_opts, "poll": 1}
-
-                    # Try to consume one job
-                    driver = Queue.driver(config["driver_name"])
-
-                    if hasattr(driver, "channel") and driver.channel:
-                        # AMQP specific: check if there are messages
-                        method_frame, header_frame, body = driver.channel.basic_get(
-                            queue=consume_opts.get("queue", "cara_default")
-                        )
-
-                        if method_frame:
-                            # Process the message
-                            driver._work_callback(
-                                driver.channel, method_frame, header_frame, body
-                            )
-                        else:
-                            # No jobs, short sleep
-                            time.sleep(0.5)
-                    else:
-                        # Fallback: start connection and try consume with timeout
-                        Queue.consume(
-                            driver_name=config["driver_name"], **consume_opts_with_timeout
-                        )
-
-                except KeyboardInterrupt:
-                    raise  # Re-raise to be caught by outer handler
-                except Exception as e:
-                    self.jobs_failed += 1
-                    self.warning(f"⚠️  Queue processing error: {str(e)}")
-                    # Also print the full traceback for debugging
-                    import traceback
-
-                    self.error(f"Full error details: {traceback.format_exc()}")
-                    time.sleep(1)  # Wait before retrying
-
-        except KeyboardInterrupt:
-            self.info("\n🛑 Graceful shutdown initiated by user")
-
-        # Close any open connections
-        self._cleanup_connections(config)
-        self.info("✅ Worker stopped gracefully")
-
-    def _cleanup_connections(self, config: Dict[str, Any]):
-        """Clean up any open queue connections."""
+                job_processed = self._process_queue_cycle(
+                    queue_names, connection_manager, job_processor, config
+                )
+                
+                # Sleep if no jobs found
+                if not job_processed:
+                    time.sleep(config["timeout"])
+                    
+        finally:
+            connection_manager.close()
+    
+    def _show_worker_startup_info(self, queue_names: list) -> None:
+        """Display worker startup information in ServeCommand style."""
+        self.console.print("[bold #e5c07b]┌─ Worker Status[/bold #e5c07b]")
+        
+        if len(queue_names) > 1:
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b] [white]Processing:[/white] [dim]{len(queue_names)} queues in priority order[/dim]"
+            )
+        else:
+            queue_color = "#E21102" if "critical" in queue_names[0] else "#e5c07b" if "high" in queue_names[0] else "#30e047"
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b] [white]Monitoring:[/white] [{queue_color}]{queue_names[0]}[/{queue_color}]"
+            )
+        
+        self.console.print(
+            "[#e5c07b]│[/#e5c07b] [white]Status:[/white] [#30e047]✓ Active - Waiting for jobs[/#30e047]"
+        )
+        
+        self.console.print("[#e5c07b]└─[/#e5c07b]")
+        self.console.print()
+        
+        # Simple ready message
+        self.console.print("[dim]Press Ctrl+C to stop the worker[/dim]")
+        self.console.print()
+    
+    def _process_queue_cycle(
+        self, 
+        queue_names: list, 
+        connection_manager: AMQPConnectionManager,
+        job_processor: JobProcessor,
+        config: Dict[str, Any]
+    ) -> bool:
+        """Process one cycle through all queues in priority order."""
+        for queue_name in queue_names:
+            if self.shutdown_requested:
+                break
+                
+            try:
+                if self._process_single_queue(queue_name, connection_manager, job_processor):
+                    return True  # Job processed, restart from highest priority
+                    
+            except Exception as e:
+                self._handle_queue_error(queue_name, e, connection_manager)
+                continue
+        
+        return False  # No jobs processed
+    
+    def _process_single_queue(
+        self, 
+        queue_name: str, 
+        connection_manager: AMQPConnectionManager,
+        job_processor: JobProcessor
+    ) -> bool:
+        """Process a single queue and return True if job was processed."""
+        channel = connection_manager.create_channel()
+        if not channel:
+            return False
+            
         try:
-            from cara.facades.Queue import Queue
-
-            driver = Queue.driver(config["driver_name"])
-
-            # Close AMQP connections if they exist
-            if hasattr(driver, "channel") and driver.channel:
-                try:
-                    driver.channel.stop_consuming()
-                    driver.channel.close()
-                except Exception:
-                    pass
-
-            if hasattr(driver, "connection") and driver.connection:
-                try:
-                    driver.connection.close()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    def _create_custom_callback(self):
-        """Create a custom callback for the AMQP driver to track job names."""
-        try:
-            from cara.facades.Queue import Queue
-
-            # Get the queue driver
-            driver = Queue.driver()
-
-            if hasattr(driver, "_work_callback"):
-                # Store original callback
-                original_callback = driver._work_callback
-
-                def enhanced_callback(ch, method, properties, body):
-                    """Enhanced callback that shows job names."""
-                    try:
-                        import pickle
-
-                        msg = pickle.loads(body)
-                        raw = msg.get("obj")
-
-                        # Extract job name
-                        job_name = "UnknownJob"
-                        if hasattr(raw, "__name__"):  # Class
-                            job_name = raw.__name__
-                        elif hasattr(raw, "__class__"):  # Instance
-                            job_name = raw.__class__.__name__
-
-                        self.jobs_processed += 1
-                        self.line(f"  ✓ {job_name}")
-
-                        # Call original processing
-                        original_callback(ch, method, properties, body)
-
-                        # Show stats every 10 jobs
-                        if self.jobs_processed % 10 == 0:
-                            self.info(
-                                f"📊 Processed {self.jobs_processed} jobs, {self._get_runtime()}"
-                            )
-
-                    except Exception:
-                        # If our enhancement fails, fallback to original
-                        self.jobs_failed += 1
-                        original_callback(ch, method, properties, body)
-
-                # Replace the callback
-                driver._work_callback = enhanced_callback
-
-        except Exception:
-            # If we can't enhance the callback, just proceed normally
-            pass
+            # Non-blocking message retrieval
+            method_frame, header_frame, body = channel.basic_get(queue=queue_name)
+            
+            if method_frame:
+                # Process the job
+                return job_processor.process_message(channel, method_frame, body)
+            
+            return False  # No message
+            
+        finally:
+            # Always close channel
+            try:
+                channel.close()
+            except:
+                pass
+    
+    def _handle_queue_error(
+        self, 
+        queue_name: str, 
+        error: Exception, 
+        connection_manager: AMQPConnectionManager
+    ) -> None:
+        """Handle queue processing errors."""
+        error_msg = str(error)
+        
+        # Skip queues that don't exist
+        if "NOT_FOUND" not in error_msg:
+            if "connection" in error_msg.lower() or "closed" in error_msg.lower():
+                # Connection issue, reset connection
+                connection_manager.connection = None
+            else:
+                self.error(f"Error checking queue {queue_name}: {error_msg}")
 
     def _should_stop(self, config: Dict[str, Any]) -> bool:
         """Check if worker should stop due to configured limits."""
@@ -356,60 +493,33 @@ class QueueWorkCommand(ReloadableMixin, CommandBase):
             # If Job model not available or DB error, skip enhanced stats
             pass
 
-    def _setup_file_watching(self):
-        """Setup file watching for auto-reload using existing Command system."""
-        self.info("🔄 Auto-reload enabled - watching for file changes...")
-
-        # Import the existing Command class with file watching
-        from cara.commands.Command import Command
-
-        # Create a Command instance with watch=True
-        self.command_watcher = Command(self.application, watch=True)
-
-        # Override the reload method to restart the worker
-        original_reload = self.command_watcher.reload
-
-        def worker_reload():
-            self.info("🔄 File change detected, restarting worker...")
-            self.shutdown_requested = True
-            # Give worker time to finish current job gracefully
-            time.sleep(0.5)
-            # Purge loaded app.* modules so new code loads on next import
-            self._purge_code_modules()
-            # Restart the worker loop instead of exiting
-            self._restart_worker()
-
-        self.command_watcher.reload = worker_reload
-
-    def _restart_worker(self):
-        """Restart the worker internally without exiting the process."""
+    def _run_main_loop(self, *args, **kwargs):
+        """Main worker loop - called by AutoReloadMixin on restart."""
+        # Use stored parameters from store_restart_params
+        if hasattr(self, '_restart_params') and self._restart_params:
+            driver, queue, timeout, max_jobs, max_time = self._restart_params
+        else:
+            driver, queue, timeout, max_jobs, max_time = args if args else (None, None, None, None, None)
+            
+        # Prepare config with current parameters
         try:
-            # Clean up any existing connections first
-            self._cleanup_connections_for_restart()
-
-            # Clean up old file watchers before setting up new ones
-            self._cleanup_watching()
-
-            # Reset counters
-            self.jobs_processed = 0
-            self.jobs_failed = 0
-            self.shutdown_requested = False
-
-            # Re-prepare config (in case config files changed)
-            worker_config = self._prepare_config(None, None, None, None, None)
-
-            self.info("🔄 Worker restarted successfully")
-
-            # Re-setup file watching for next restart
-            if self.option("reload"):
-                self._setup_file_watching()
-
-            # Restart the worker loop
-            self._run_worker(worker_config)
-
+            worker_config = self._prepare_config(driver, queue, timeout, max_jobs, max_time)
         except Exception as e:
-            self.error(f"❌ Failed to restart worker: {e}")
-            self.shutdown_requested = True
+            self.error(f"❌ Configuration error: {e}")
+            return
+
+        # Show worker configuration
+        self._show_config(worker_config)
+
+        # Clean up connections before starting
+        self._cleanup_connections_for_restart()
+
+        # Reset counters for fresh start
+        self.jobs_processed = 0
+        self.jobs_failed = 0
+
+        # Run the worker
+        self._run_worker(worker_config)
 
     def _cleanup_connections_for_restart(self):
         """Clean up connections specifically for restart - simple and effective."""
@@ -452,22 +562,6 @@ class QueueWorkCommand(ReloadableMixin, CommandBase):
             except Exception:
                 pass
 
-    def _get_reload_message(self):
-        """Custom reload message for queue worker."""
-        return "🔄 File change detected, restarting worker..."
 
-    def _purge_code_modules(self):
-        """Force-reload app code by purging app.* modules from sys.modules and invalidating caches."""
-        try:
-            importlib.invalidate_caches()
-            to_delete = []
-            for name in list(sys.modules.keys()):
-                if name == "app" or name.startswith("app."):
-                    to_delete.append(name)
-            for name in to_delete:
-                try:
-                    del sys.modules[name]
-                except Exception:
-                    pass
-        except Exception:
-            pass
+
+

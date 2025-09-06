@@ -197,12 +197,13 @@ class Pipeline:
             Log.info(f"🔄 Executing step {i}/{total_steps}: {step.step_class.__name__}", category="cara.pipeline")
             
             try:
-                # Execute command
-                instance = step.step_class()
+                # Execute command - instantiate with constructor args/kwargs
+                instance = step.step_class(*step.args, **step.kwargs)
+                
                 if hasattr(instance, 'handle'):
-                    result = await self._safe_call(instance.handle, *step.args, **step.kwargs)
+                    result = await self._safe_call(instance.handle)
                 else:
-                    result = await self._safe_call(instance, *step.args, **step.kwargs)
+                    result = await self._safe_call(instance)
                 
                 # Store result
                 step_result = {

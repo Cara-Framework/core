@@ -75,6 +75,9 @@ class ReloadableMixin:
     def _restart_command(self):
         """Restart the command internally without exiting the process."""
         try:
+            # Purge loaded modules for hot reload
+            self._purge_code_modules()
+            
             # Reset shutdown flag
             self.shutdown_requested = False
 
@@ -89,6 +92,35 @@ class ReloadableMixin:
         except Exception as e:
             self.error(f"❌ Failed to restart command: {e}")
             self.shutdown_requested = True
+            
+    def _purge_code_modules(self):
+        """Purge loaded application modules for hot reload."""
+        import sys
+
+        # Modules to purge for hot reload
+        purge_patterns = [
+            'app.',           # Application modules
+            'packages.',      # Package modules
+            'config.',        # Config modules
+            'routes.',        # Route modules
+            'database.',      # Database modules
+        ]
+        
+        modules_to_remove = []
+        for module_name in sys.modules.keys():
+            for pattern in purge_patterns:
+                if module_name.startswith(pattern):
+                    modules_to_remove.append(module_name)
+                    break
+        
+        for module_name in modules_to_remove:
+            try:
+                del sys.modules[module_name]
+            except KeyError:
+                pass
+                
+        if modules_to_remove:
+            self.info(f"🔄 Purged {len(modules_to_remove)} modules for hot reload")
 
     def _cleanup_watching(self):
         """Cleanup file watching resources."""
