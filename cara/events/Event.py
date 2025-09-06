@@ -4,6 +4,8 @@ Event Base for the Cara framework.
 This module provides the base Event class for defining and dispatching events in the application.
 """
 
+import asyncio
+import inspect
 from threading import Lock
 from typing import Dict, List, Type
 
@@ -29,28 +31,41 @@ class Event:
         self._registered_events: Dict[str, Type[Event]] = {}
         self._lock = Lock()
 
-    def register_event(self, event_cls: Type[Event]) -> None:
+    def register_event(self, event_class: Type[Event]) -> None:
         """
-        Register an Event class so its name() is known.
+        Register an Event class by its name() method.
 
-        If two Event classes return the same name(), raise EventNameConflictException.
+        Args:
+            event_class: The Event class to register
+
+        Raises:
+            EventNameConflictException: If another event class has the same name
         """
-        event_name = event_cls.name()
-        with self._lock:
-            if event_name in self._registered_events:
-                existing = self._registered_events[event_name]
-                if existing is not event_cls:
-                    raise EventNameConflictException(
-                        f"Event name conflict: '{event_name}' already registered by {existing}."
-                    )
-            self._registered_events[event_name] = event_cls
+        # Get event name - support both property and method
+        if hasattr(event_class, 'name'):
+            if isinstance(event_class.name, str):
+                event_name = event_class.name
+            else:
+                event_name = event_class.name()
+        else:
+            event_name = event_class.__name__.lower()
+
+        if event_name in self._registered_events:
+            existing_class = self._registered_events[event_name]
+            if existing_class != event_class:
+                raise EventNameConflictException(
+                    f"Event name '{event_name}' is already registered by {existing_class.__name__}."
+                )
+
+        self._registered_events[event_name] = event_class
 
     def subscribe(self, event_name: str, listener: Listener) -> None:
         """
-        Subscribe a Listener instance to a given event_name.
+        Subscribe a Listener instance to an event name.
 
-        If the event_name was not previously registered via register_event(), listeners can still be
-        added; dispatch() will raise if no listeners found.
+        Args:
+            event_name: Name of the event to listen for
+            listener: The Listener instance
         """
         with self._lock:
             if event_name not in self._listeners:
@@ -66,7 +81,12 @@ class Event:
 
         If no listeners are registered for this event's name(), raise ListenerNotFoundException.
         """
-        event_name = event.name()
+        # Get event name - support both property and method
+        if hasattr(event, 'name'):
+            event_name = event.name if isinstance(event.name, str) else event.name()
+        else:
+            event_name = event.__class__.__name__.lower()
+
         listeners = self._listeners.get(event_name, [])
         if not listeners:
             raise ListenerNotFoundException(
@@ -78,8 +98,18 @@ class Event:
             if self._should_queue(listener):
                 self._queue_listener(listener, event)
             else:
-                # Execute immediately
-                listener.handle(event)
+                # Execute immediately - handle both sync and async listeners
+                if inspect.iscoroutinefunction(listener.handle):
+                    # Async listener - schedule and run in background
+                    try:
+                        # Create and schedule the coroutine
+                        asyncio.ensure_future(listener.handle(event))
+                    except RuntimeError:
+                        # No event loop, run directly
+                        asyncio.run(listener.handle(event))
+                else:
+                    # Sync listener - call directly
+                    listener.handle(event)
 
     def _should_queue(self, listener: Listener) -> bool:
         """
@@ -98,39 +128,41 @@ class Event:
         Queue a listener for background processing.
 
         Args:
-            listener: The listener to queue
-            event: The event that triggered the listener
+            listener: The listener instance to queue
+            event: The event instance
 
         Returns:
-            True if queued successfully, False otherwise
+            True if successfully queued, False otherwise
         """
+        # Queue the listener using the queue facade
+        queue_name = getattr(listener, 'queue', 'default')
+        routing_key = getattr(listener, 'routing_key', f'listener.{event.__class__.__name__.lower()}')
+
         try:
-            # Create a job to handle the listener
+            # Create a HandleListenerJob
             from cara.events.jobs import HandleListenerJob
 
-            job = HandleListenerJob(listener, event)
+            job = HandleListenerJob(
+                listener_class=listener.__class__.__name__,
+                event_data=event.to_dict() if hasattr(event, 'to_dict') else event.__dict__,
+                event_class=event.__class__.__name__
+            )
 
-            # Dispatch to queue using facade
-            Queue.dispatch(job)
+            # Dispatch to queue
+            Queue.withQueue(queue_name).withRoutingKey(routing_key).dispatch(job)
             return True
 
         except Exception as e:
-            # Log error using facade
-            Log.error(f"Failed to queue listener: {e}")
+            Log.error(f"Failed to queue listener: {str(e)}")
             return False
 
-    def listen(
-        self,
-        event_cls: Type[Event],
-        listener_cls: Type[Listener],
-    ) -> None:
+    @staticmethod
+    def fire(event: Event) -> None:
         """
-        Laravel-style helper: Listener for event_cls ⇒ listener_cls.
-        1) Registers the event class, if not already registered.
-        2) Subscribes a new instance of listener_cls() to the event's name().
+        Static method to fire an event (alias for dispatch).
+
+        Args:
+            event: The event instance to fire
         """
-        # 1) Register the event class
-        self.register_event(event_cls)
-        # 2) Subscribe the listener instance
-        listener_instance = listener_cls()
-        self.subscribe(event_cls.name(), listener_instance)
+        instance = Event()
+        instance.dispatch(event)
