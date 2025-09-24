@@ -20,6 +20,7 @@ from ..casts.security import EncryptedCast, HashCast
 from ..casts.validation import EmailCast, URLCast, UUIDCast
 
 # Import concerns for clean architecture
+from ..concerns.HasAttributes import HasAttributes
 from ..concerns.HasRelationships import HasRelationships
 from ..concerns.HasTimestamps import HasTimestamps
 from ..observers import ObservesEvents
@@ -88,7 +89,7 @@ class ModelMeta(type):
                 )
 
 
-class Model(HasRelationships, TimeStampsMixin, ObservesEvents, HasTimestamps, metaclass=ModelMeta):
+class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, HasTimestamps, metaclass=ModelMeta):
     """
     The ORM Model class.
 
@@ -1333,35 +1334,7 @@ class Model(HasRelationships, TimeStampsMixin, ObservesEvents, HasTimestamps, me
 
         return cast_method(value)
 
-    def _set_cast_attribute(self, attribute, value):
-        cast_method = self.__casts__[attribute]
-        cast_map = self.get_cast_map()
 
-        if isinstance(cast_method, str):
-            # Handle parametrized casts
-            if ":" in cast_method:
-                cast_type, cast_params = cast_method.split(":", 1)
-
-                if cast_type in cast_map:
-                    if cast_type == "datetime":
-                        parts = cast_params.split(",")
-                        format_str = parts[0] if parts else None
-                        timezone = parts[1].strip() if len(parts) > 1 else "UTC"
-                        return cast_map[cast_type](format_str, timezone).set(value)
-                    elif cast_type == "decimal":
-                        precision = int(cast_params) if cast_params.isdigit() else 2
-                        return cast_map[cast_type](precision).set(value)
-                    elif cast_type == "array":
-                        return cast_map[cast_type](cast_params).set(value)
-                    elif cast_type == "hash":
-                        return cast_map[cast_type](cast_params).set(value)
-                    else:
-                        return cast_map[cast_type](cast_params).set(value)
-
-            elif cast_method in cast_map:
-                return cast_map[cast_method]().set(value)
-
-        return cast_method(value)
 
     @classmethod
     def load(cls, *loads):
