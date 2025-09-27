@@ -16,9 +16,8 @@ from cara.logging.channels import ConsoleChannel, FileChannel, SlackChannel
 class ChannelConfigurator:
     """Reads `config("logging")` and adds Loguru handlers for each channel in the active stack."""
 
-    def __init__(self, loguru_logger: Any, colorize_format: Any = None) -> None:
+    def __init__(self, loguru_logger: Any) -> None:
         self._logger = loguru_logger
-        self._colorize_format = colorize_format
 
     def configure(self) -> None:
         """
@@ -37,7 +36,9 @@ class ChannelConfigurator:
         else:
             # Fallback: enable any channel whose config.ENABLED=True
             enabled_channels = [
-                name for name, opts in channels_cfg.items() if opts.get("ENABLED", False)
+                name
+                for name, opts in channels_cfg.items()
+                if opts.get("ENABLED", False)
             ]
 
         # 2) If "slack" is in that stack, register a Slack sink first (ERROR+)
@@ -88,9 +89,12 @@ class ChannelConfigurator:
             # Build add_kwargs for logger.add(...)
             add_kwargs: Dict[str, Any] = {"level": level}
 
-            # Always use our custom formatter for console to ensure style system works
-            if channel_name == "console":
-                add_kwargs["format"] = "{message}"  # Just use our pre-formatted message
+            # Use config format for console if available
+            if channel_name == "console" and fmt:
+                add_kwargs["format"] = fmt
+                add_kwargs["colorize"] = True  # Let Loguru handle colors
+            elif channel_name == "console":
+                add_kwargs["format"] = "{message}"  # Fallback to pre-formatted message
                 add_kwargs["colorize"] = False  # We handle colors ourselves
 
             # If a custom FORMAT string was provided in config, use it for non-console

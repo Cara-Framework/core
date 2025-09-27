@@ -1,2 +1,0 @@
-[console_scripts]
-cara = cara.commands.cli:main

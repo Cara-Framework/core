@@ -5,7 +5,7 @@ Handles basic data types like bool, int, float, decimal.
 """
 
 import json
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from .base import BaseCast
 
@@ -84,9 +84,13 @@ class DecimalCast(BaseCast):
 
     def set(self, value):
         """Set as Decimal."""
+        # Handle None and empty values
+        if value is None or str(value).strip() == "":
+            return None
+
         try:
             return Decimal(str(value))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, InvalidOperation):
             return Decimal("0")
 
 

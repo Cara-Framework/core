@@ -10,7 +10,6 @@ import logging
 from typing import Any, Dict, Optional
 
 from cara.facades import Log
-from cara.logging.LogStyle import LogStyle
 
 
 class CaraPythonLoggerAdapter(logging.Logger):
@@ -120,7 +119,6 @@ class CaraPythonLoggerAdapter(logging.Logger):
         getattr(self.cara_logger, cara_level)(
             clean_message,
             category=self.category,
-            style=LogStyle.NORMAL,
             exc_info=exc_info,
         )
 

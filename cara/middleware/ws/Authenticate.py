@@ -1,4 +1,4 @@
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 from cara.exceptions.types.websocket import WebSocketException
 from cara.facades import Log
@@ -66,7 +66,7 @@ class Authenticate(Middleware):
                 continue
         return False
 
-    def _extract_token(self, socket: Socket) -> str | None:
+    def _extract_token(self, socket: Socket) -> Optional[str]:
         """Extract JWT token from Authorization header or subprotocol."""
         headers = {k.decode(): v.decode() for k, v in socket.scope.get("headers", [])}
         token_val: str | None = None

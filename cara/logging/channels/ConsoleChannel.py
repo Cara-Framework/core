@@ -20,12 +20,16 @@ class ConsoleChannel:
 
     def write(self, message: Any) -> None:
         """Called by Loguru—simply write to the selected stream."""
-        if self._target == "stderr":
-            sys.stderr.write(message)
-            sys.stderr.flush()
-        else:
-            sys.stdout.write(message)
-            sys.stdout.flush()
+        try:
+            if self._target == "stderr":
+                sys.stderr.write(message)
+                sys.stderr.flush()
+            else:
+                sys.stdout.write(message)
+                sys.stdout.flush()
+        except BrokenPipeError:
+            # Ignore broken pipe errors (e.g., when output is piped to head/tail)
+            pass
 
     def flush(self) -> None:
         """No special flush logic needed."""

@@ -14,7 +14,7 @@ from loguru import logger as _loguru_logger
 
 from cara.logging import CategoryFilter
 from cara.logging.contracts import Logger
-from cara.logging.LogStyle import ColorTheme, LogStyle
+from cara.logging.LogStyle import HttpColorizer
 
 
 class Logger(Logger):
@@ -62,7 +62,7 @@ class Logger(Logger):
         # Setup channels using ChannelConfigurator
         from cara.logging.ChannelConfigurator import ChannelConfigurator
 
-        configurator = ChannelConfigurator(_loguru_logger, None)
+        configurator = ChannelConfigurator(_loguru_logger)
         configurator.configure()
 
         Logger._initialized = True
@@ -163,7 +163,9 @@ class Logger(Logger):
         except:
             return str(uuid.uuid4())[:8]
 
-    def _format_exception(self, exc_info: Union[bool, Exception, tuple]) -> Optional[str]:
+    def _format_exception(
+        self, exc_info: Union[bool, Exception, tuple]
+    ) -> Optional[str]:
         """Format exception information."""
         if not exc_info:
             return None
@@ -188,7 +190,6 @@ class Logger(Logger):
         self,
         level: str,
         message: str,
-        style: LogStyle = LogStyle.NORMAL,
         category: Optional[str] = None,
         exception: Optional[Exception] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
@@ -205,23 +206,34 @@ class Logger(Logger):
         # Get caller info
         module, line = self._get_caller_info()
         request_id = self._get_request_id()
-        service = self._config.get("service_name", "Library")
+        service = self._config.get("service_name", "")
 
-        # Format the message ourselves using our ColorTheme
-        import time
-
-        time_str = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        line_info = f"line:{line}"
-        formatted_message = ColorTheme.format_log(
-            style, level, time_str, service, module, message, line_info
-        )
+        # Apply HTTP coloring if this is an HTTP request log
+        if category in ("http.requests", "cara.http.requests"):
+            formatted_message = HttpColorizer.colorize_http_message(message)
+        else:
+            formatted_message = message
 
         # Get log method and execute with our pre-formatted message
         log_method = getattr(_loguru_logger, level.lower())
 
+        # Get level short form
+        level_short = self._get_level_short(level)
+
+        # Get message color based on level
+        message_color = self._get_message_color(level)
+
+        # Get level color (for level labels and brackets)
+        level_color = self._get_level_color(level)
+
         # Bind context for format strings that might use it
         bound_logger = _loguru_logger.bind(
-            module=module, service_name=service, request_id=request_id
+            module=module,
+            service_name=service,
+            request_id=request_id,
+            level_short=level_short,
+            message_color=message_color,
+            level_color=level_color,
         )
         bound_log_method = getattr(bound_logger, level.lower())
 
@@ -236,62 +248,90 @@ class Logger(Logger):
 
         bound_log_method(formatted_message.strip())
 
+    def _get_level_short(self, level: str) -> str:
+        """Convert level to short format."""
+        level_map = {
+            "DEBUG": "D",
+            "INFO": "I",
+            "WARNING": "W",
+            "ERROR": "E",
+            "CRITICAL": "C",
+        }
+        return level_map.get(level, level[0])
+
+    def _get_message_color(self, level: str) -> str:
+        """Get ANSI color code based on level."""
+        color_map = {
+            "DEBUG": "\x1b[38;2;102;102;102m",  # #666666 - Gray for debug
+            "INFO": "\x1b[38;2;219;169;88m",  # #dba958 - Orange for info
+            "WARNING": "\x1b[38;2;255;255;0m",  # #ffff00 - Yellow for warning
+            "ERROR": "\x1b[38;2;255;0;0m",  # #ff0000 - Red for error
+            "CRITICAL": "\x1b[38;2;255;255;255m",  # #ffffff - White for critical
+        }
+        return color_map.get(level, "\x1b[38;2;219;169;88m")
+
+    def _get_level_color(self, level: str) -> str:
+        """Get ANSI color code for level labels and brackets."""
+        color_map = {
+            "DEBUG": "\x1b[38;2;102;102;102m",  # #666666 - Gray for debug
+            "INFO": "\x1b[38;2;219;169;88m",  # #dba958 - Orange for info
+            "WARNING": "\x1b[38;2;255;255;0m",  # #ffff00 - Yellow for warning
+            "ERROR": "\x1b[38;2;255;0;0m",  # #ff0000 - Red for error
+            "CRITICAL": "\x1b[38;2;255;255;255m",  # #ffffff - White for critical
+        }
+        return color_map.get(level, "\x1b[38;2;219;169;88m")
+
     # Public API methods
     def debug(
         self,
         message: str,
         *args: Any,
-        style: LogStyle = LogStyle.NORMAL,
         category: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
     ) -> None:
         """Log debug message."""
-        self._log("DEBUG", message, style, category, exc_info=exc_info)
+        self._log("DEBUG", message, category, exc_info=exc_info)
 
     def info(
         self,
         message: str,
         *args: Any,
-        style: LogStyle = LogStyle.NORMAL,
         category: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
     ) -> None:
         """Log info message."""
-        self._log("INFO", message, style, category, exc_info=exc_info)
+        self._log("INFO", message, category, exc_info=exc_info)
 
     def warning(
         self,
         message: str,
         *args: Any,
-        style: LogStyle = LogStyle.NORMAL,
         category: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
     ) -> None:
         """Log warning message."""
-        self._log("WARNING", message, style, category, exc_info=exc_info)
+        self._log("WARNING", message, category, exc_info=exc_info)
 
     def error(
         self,
         message: str,
         *args: Any,
-        style: LogStyle = LogStyle.ERROR,
         category: Optional[str] = None,
         exception: Optional[Exception] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
     ) -> None:
         """Log error message."""
-        self._log("ERROR", message, style, category, exception, exc_info)
+        self._log("ERROR", message, category, exception, exc_info)
 
     def critical(
         self,
         message: str,
         *args: Any,
-        style: LogStyle = LogStyle.ERROR,
         category: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
     ) -> None:
         """Log critical message."""
-        self._log("CRITICAL", message, style, category, exc_info=exc_info)
+        self._log("CRITICAL", message, category, exc_info=exc_info)
 
     def exception(
         self,
@@ -301,21 +341,9 @@ class Logger(Logger):
         exc_info: Union[bool, Exception, tuple, None] = True,
     ) -> None:
         """Log an exception message with backtrace."""
-        self._log("ERROR", message, LogStyle.ERROR, category, exc_info=exc_info)
+        self._log("ERROR", message, category, exc_info=exc_info)
 
     # Convenience methods for different styles
-    def silent(self, message: str, level: str = "DEBUG") -> None:
-        """Log a silent/muted message."""
-        self._log(level.upper(), message, LogStyle.SILENT)
-
     def database(self, message: str, level: str = "DEBUG") -> None:
         """Log a database query (muted style)."""
-        self._log(level.upper(), message, LogStyle.DATABASE, "db.queries")
-
-    def http(self, message: str, level: str = "INFO") -> None:
-        """Log an HTTP request."""
-        self._log(level.upper(), message, LogStyle.HTTP, "http.requests")
-
-    def system(self, message: str, level: str = "INFO") -> None:
-        """Log a system message."""
-        self._log(level.upper(), message, LogStyle.SYSTEM, "system")
+        self._log(level.upper(), message, "db.queries")
