@@ -243,10 +243,13 @@ class Logger(Logger):
             if exc_str:
                 formatted_message = f"{formatted_message.strip()}\n{exc_str}"
         elif exception:
-            bound_log_method(formatted_message.strip(), exception=exception)
+            bound_logger.opt(depth=2).log(
+                level, formatted_message.strip(), exception=exception
+            )
             return
 
-        bound_log_method(formatted_message.strip())
+        # Use depth=2 to show the actual caller's line number, not Logger._log line
+        bound_logger.opt(depth=2).log(level, formatted_message.strip())
 
     def _get_level_short(self, level: str) -> str:
         """Convert level to short format."""

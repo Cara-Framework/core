@@ -94,8 +94,8 @@ class ChannelConfigurator:
                 add_kwargs["format"] = fmt
                 add_kwargs["colorize"] = True  # Let Loguru handle colors
             elif channel_name == "console":
-                add_kwargs["format"] = "{message}"  # Fallback to pre-formatted message
-                add_kwargs["colorize"] = False  # We handle colors ourselves
+                # No custom format - use Loguru's default format
+                add_kwargs["colorize"] = True  # Let Loguru handle colors and formatting
 
             # If a custom FORMAT string was provided in config, use it for non-console
             elif fmt and "format" in add_sig.parameters:
