@@ -12,24 +12,40 @@ from typing import Any, Dict
 class Validation(ABC):
     """Contract that any Validator must satisfy."""
 
+    @staticmethod
     @abstractmethod
-    def make(self, data: Dict[str, Any], rules: Dict[str, str]) -> None:
+    def make(
+        data: Dict[str, Any],
+        rules: Dict[str, str],
+        messages: Dict[str, str] = None,
+    ) -> "Validation":
         """
-        Run validation on `data` according to `rules`.
+        Run validation on `data` according to `rules` (Laravel-style).
+
+        Returns a new Validation instance for chaining .fails() or .passes() checks.
 
         :param data: e.g. {"username": "alice", "email": "alice@example.com"}
         :param rules: e.g. {"username": "required|min:3", "email": "required|email"}
-        :raises ValidationException: if any rule fails
+        :param messages: Optional custom error messages
+        :return: Validation instance (for method chaining)
+
+        Usage:
+        - validator = Validation.make(data, rules)
+        - if validator.fails(): ...
         """
 
     @abstractmethod
     def fails(self) -> bool:
-        """Return True if last call to `make()` found any errors."""
+        """Return True if validation failed."""
 
     @abstractmethod
-    def errors(self) -> Dict[str, list[str]]:
+    def passes(self) -> bool:
+        """Return True if validation passed."""
+
+    @abstractmethod
+    def errors(self):
         """
-        Return a mapping: field → list of error_messages.
+        Return ValidationErrors object with all errors.
         """
 
     @abstractmethod

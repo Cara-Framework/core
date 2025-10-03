@@ -8,7 +8,7 @@ checks.
 import importlib
 import inspect
 import os
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Type
 
 from cara.exceptions import (
     InvalidRuleFormatException,
@@ -17,11 +17,11 @@ from cara.exceptions import (
 from cara.validation import ValidationErrors
 from cara.validation.contracts import (
     Rule,
-    Validation,
+    Validation as ValidationContract,
 )
 
 
-class Validation(Validation):
+class Validation(ValidationContract):
     """
     Core validator that applies string‐based rules to a data payload.
 
@@ -65,22 +65,30 @@ class Validation(Validation):
                         classes[key] = obj
         return classes
 
+    @staticmethod
     def make(
-        self, data: Dict[str, Any], rules: Dict[str, str], messages: Dict[str, str] = None
-    ) -> Optional[ValidationErrors]:
+        data: Dict[str, Any],
+        rules: Dict[str, str],
+        messages: Dict[str, str] = None,
+    ) -> "Validation":
         """
         Laravel-style validation method with custom message support.
 
-        Returns ValidationErrors object if validation fails, None if passes.
+        Returns a new Validation instance so you can chain .fails() or .passes() checks.
         Usage:
-        - if errors := validation.make(data, rules):
-        - if errors := validation.make(data, rules, custom_messages):
+        - validator = Validation.make(data, rules)
+        - if validator.fails():
+        - if validator.passes():
         """
         if not isinstance(rules, dict):
-            raise InvalidRuleFormatException("Rules must be a dict of field→rule_string.")
+            raise InvalidRuleFormatException(
+                "Rules must be a dict of field→rule_string."
+            )
 
-        self._errors.clear()
-        self._validated.clear()
+        # Create new instance for this validation
+        instance = Validation()
+        instance._errors.clear()
+        instance._validated.clear()
 
         # Prepare custom messages if provided
         custom_messages = messages or {}
@@ -93,14 +101,16 @@ class Validation(Validation):
             if "nullable" in rule_string and (
                 value is None or (isinstance(value, str) and value.strip() == "")
             ):
-                self._validated[field] = value
+                instance._validated[field] = value
                 continue
 
             for token in rule_string.split("|"):
-                rule_name, params = self._split_token(token)
-                rule_cls = self.__rule_classes.get(rule_name)
+                rule_name, params = instance._split_token(token)
+                rule_cls = instance._Validation__rule_classes.get(rule_name)
                 if not rule_cls:
-                    raise RuleNotFoundException(f"Rule '{rule_name}' is not registered.")
+                    raise RuleNotFoundException(
+                        f"Rule '{rule_name}' is not registered."
+                    )
                 rule_instance = rule_cls()
                 # Pass the full data for rules that need access to other fields (like confirmed)
                 params["_data"] = data
@@ -130,25 +140,28 @@ class Validation(Validation):
                         params["_value"] = value
 
                 if not rule_instance.validate(field, value, params):
-                    if field not in self._errors:
-                        self._errors[field] = []
-                    self._errors[field].append(rule_instance.message(field, params))
+                    if field not in instance._errors:
+                        instance._errors[field] = []
+                    instance._errors[field].append(rule_instance.message(field, params))
                     field_passed = False
 
             if field_passed:
                 # All rules for this field passed
-                self._validated[field] = value
+                instance._validated[field] = value
 
-        # Return ValidationErrors if failed, None if passed
-        if self.fails():
-            return ValidationErrors(self._errors)
-        return None
+        return instance
 
     def fails(self) -> bool:
+        """Returns True if validation failed."""
         return bool(self._errors)
 
-    def errors(self) -> Dict[str, list[str]]:
-        return self._errors.copy()
+    def passes(self) -> bool:
+        """Returns True if validation passed."""
+        return not bool(self._errors)
+
+    def errors(self) -> ValidationErrors:
+        """Returns ValidationErrors object with all errors."""
+        return ValidationErrors(self._errors)
 
     def first_error(self, field: str = None) -> str:
         """Get the first error message for a field, or the first error overall."""
