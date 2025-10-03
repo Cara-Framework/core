@@ -64,21 +64,47 @@ class DatabaseManager:
         return self._queue_config
 
     @classmethod
-    def set_instance(cls, instance):
-        """Set the global DatabaseManager instance"""
-        cls._instance = instance
-
-    @classmethod
     def get_instance(cls):
-        """Get the global DatabaseManager instance"""
+        """
+        Get the global DatabaseManager singleton instance.
+
+        Configuration strategy (hybrid approach):
+        1. Primary: EloquentProvider explicitly injects config (clear, testable)
+        2. Fallback: Auto-configure from config module if not yet configured
+
+        This hybrid approach provides both clarity and convenience:
+        - Provider injection = explicit, professional
+        - Auto-configure fallback = works everywhere, zero boilerplate
+        """
         if cls._instance is None:
-            # Create new instance directly without app dependency
             cls._instance = cls()
+            cls._instance._auto_configure()
         return cls._instance
 
-    def configure(self, default_connection, connection_details):
-        """Configure database connections"""
-        return self.set_database_config(default_connection, connection_details)
+    def _auto_configure(self):
+        """
+        Auto-configure from config module as fallback.
+
+        Only runs if instance not yet configured (empty connections).
+        Allows DatabaseManager to work even if called before Provider runs.
+        """
+        # Skip if already configured by Provider
+        if self._connections:
+            return
+
+        try:
+            # Try to load config module
+            from cara.configuration import config
+
+            default_connection = config("database.default", "app")
+            connection_details = config("database.drivers", {})
+
+            if connection_details:
+                self.set_database_config(default_connection, connection_details)
+        except Exception:
+            # Config not available yet (early bootstrap)
+            # Provider will configure later - this is OK
+            pass
 
     def _resolve_connection_name(self, name=None):
         """Resolves connection name - simple logic"""

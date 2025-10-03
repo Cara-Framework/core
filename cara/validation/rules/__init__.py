@@ -1,4 +1,5 @@
 # Export only these modules in this package:
+from .ArrayRule import ArrayRule
 from .BaseRule import BaseRule
 from .BetweenRule import BetweenRule
 from .BooleanRule import BooleanRule
@@ -16,9 +17,10 @@ from .StringRule import StringRule
 from .URLRule import URLRule
 
 __all__ = [
+    "ArrayRule",
     "BaseRule",
     "BetweenRule",
-    "BooleanRule", 
+    "BooleanRule",
     "ConfirmedRule",
     "EmailRule",
     "ExistsRule",
