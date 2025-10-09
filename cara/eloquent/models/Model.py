@@ -47,7 +47,9 @@ class ModelMeta(type):
 
         # Find all scope_ methods and create corresponding class methods
         for attr_name in dir(cls):
-            if attr_name.startswith("scope_") and callable(getattr(cls, attr_name, None)):
+            if attr_name.startswith("scope_") and callable(
+                getattr(cls, attr_name, None)
+            ):
                 scope_method = getattr(cls, attr_name)
 
                 # Extract scope name (remove 'scope_' prefix)
@@ -89,7 +91,14 @@ class ModelMeta(type):
                 )
 
 
-class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, HasTimestamps, metaclass=ModelMeta):
+class Model(
+    HasAttributes,
+    HasRelationships,
+    TimeStampsMixin,
+    ObservesEvents,
+    HasTimestamps,
+    metaclass=ModelMeta,
+):
     """
     The ORM Model class.
 
@@ -329,6 +338,42 @@ class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, Ha
 
     def query(self):
         return self.get_builder()
+
+    def __getattr__(self, attribute):
+        """
+        Laravel-style relationship access.
+
+        When accessing a relationship as a property (not method):
+        - model.relationship → Lazy loads and returns Collection
+        - model.relationship() → Returns Query Builder (already works via descriptor)
+
+        Examples:
+            product.images → Collection (lazy loaded)
+            product.images() → QueryBuilder
+            product.images().where('is_active', True).get() → Filtered Collection
+        """
+        # Check if this is a relationship method defined on the class
+        if hasattr(self.__class__, attribute):
+            class_attr = getattr(self.__class__, attribute)
+
+            # If it's a relationship (has 'get_related' method), lazy load it
+            if hasattr(class_attr, "get_related"):
+                # Check if already loaded in _relations
+                if self.is_relation_loaded(attribute):
+                    return self.get_related(attribute)
+
+                # Lazy load: call the relationship method and execute get()
+                relationship_query = class_attr(self, self.__class__)
+                result = relationship_query.get_related(self.query(), self)
+
+                # Cache the result
+                self.add_relation({attribute: result})
+                return result
+
+        # Fallback to normal attribute error
+        raise AttributeError(
+            f"'{self.__class__.__name__}' object has no attribute '{attribute}'"
+        )
 
     def get_builder(self):
         if hasattr(self, "builder"):
@@ -599,8 +644,6 @@ class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, Ha
     def is_created(self):
         return self.get_primary_key() in self.__attributes__
 
-
-
     @classmethod
     def hydrate(cls, result, relations=None):
         """
@@ -636,7 +679,9 @@ class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, Ha
             # TEST: Hydration logging for debugging
             from cara.facades import Log
 
-            Log.debug(f"Hydrating Model {cls.__name__}", category="cara.eloquent.hydrate")
+            Log.debug(
+                f"Hydrating Model {cls.__name__}", category="cara.eloquent.hydrate"
+            )
 
             model.observe_events(model, "hydrating")
             model.__attributes__.update(dic or {})
@@ -815,7 +860,7 @@ class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, Ha
 
         # Add relationships - RECURSIVE CALL WILL USE THIS SAME METHOD
         # Use _relations (from eager loading) instead of _relationships
-        relations_dict = getattr(self, '_relations', {})
+        relations_dict = getattr(self, "_relations", {})
         for relation_name, relation_value in relations_dict.items():
             if relation_value is None:
                 data[relation_name] = None
@@ -1024,21 +1069,21 @@ class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, Ha
         """
         Laravel-style truncate method.
         Truncate the table associated with the model.
-        
+
         Arguments:
             foreign_keys {bool} -- Whether to disable foreign key constraints (default: {False})
-            
+
         Returns:
             int -- Number of affected rows
         """
         return cls().get_builder().truncate(foreign_keys)
-    
+
     @classmethod
     def query(cls):
         """
         Laravel-style query method.
         Begin querying the model.
-        
+
         Returns:
             QueryBuilder -- A new query builder instance
         """
@@ -1275,7 +1320,9 @@ class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, Ha
             # Import the enhanced registry that has registered casts
             from ..casts import cast_registry as enhanced_registry
 
-            cast_instance = enhanced_registry.get_cast_instance(self.__casts__[attribute])
+            cast_instance = enhanced_registry.get_cast_instance(
+                self.__casts__[attribute]
+            )
             if cast_instance:
                 return cast_instance.get(value)
         return value
@@ -1333,8 +1380,6 @@ class Model(HasAttributes, HasRelationships, TimeStampsMixin, ObservesEvents, Ha
                 return cast_map[cast_method]().get(value)
 
         return cast_method(value)
-
-
 
     @classmethod
     def load(cls, *loads):

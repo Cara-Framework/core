@@ -42,7 +42,7 @@ class Event:
             EventNameConflictException: If another event class has the same name
         """
         # Get event name - support both property and method
-        if hasattr(event_class, 'name'):
+        if hasattr(event_class, "name"):
             if isinstance(event_class.name, str):
                 event_name = event_class.name
             else:
@@ -72,7 +72,7 @@ class Event:
                 self._listeners[event_name] = []
             self._listeners[event_name].append(listener)
 
-    def dispatch(self, event: Event) -> None:
+    async def dispatch(self, event: Event) -> None:
         """
         Dispatch an Event instance to all subscribed listeners.
 
@@ -80,9 +80,11 @@ class Event:
         Otherwise, it gets executed immediately.
 
         If no listeners are registered for this event's name(), raise ListenerNotFoundException.
+
+        Note: This is async to properly handle async listeners in sync mode.
         """
         # Get event name - support both property and method
-        if hasattr(event, 'name'):
+        if hasattr(event, "name"):
             event_name = event.name if isinstance(event.name, str) else event.name()
         else:
             event_name = event.__class__.__name__.lower()
@@ -93,6 +95,11 @@ class Event:
                 f"No listeners registered for event '{event_name}'."
             )
 
+        # Check if we're in sync mode
+        from cara.context import ExecutionContext
+
+        is_sync = ExecutionContext.is_sync()
+
         for listener in listeners:
             # Laravel-style queue check: If listener implements ShouldQueue, queue it
             if self._should_queue(listener):
@@ -100,13 +107,13 @@ class Event:
             else:
                 # Execute immediately - handle both sync and async listeners
                 if inspect.iscoroutinefunction(listener.handle):
-                    # Async listener - schedule and run in background
-                    try:
-                        # Create and schedule the coroutine
-                        asyncio.ensure_future(listener.handle(event))
-                    except RuntimeError:
-                        # No event loop, run directly
-                        asyncio.run(listener.handle(event))
+                    # Async listener
+                    if is_sync:
+                        # Sync mode - await for completion (blocking)
+                        await listener.handle(event)
+                    else:
+                        # Async mode - fire and forget (non-blocking)
+                        asyncio.create_task(listener.handle(event))
                 else:
                     # Sync listener - call directly
                     listener.handle(event)
@@ -135,8 +142,10 @@ class Event:
             True if successfully queued, False otherwise
         """
         # Queue the listener using the queue facade
-        queue_name = getattr(listener, 'queue', 'default')
-        routing_key = getattr(listener, 'routing_key', f'listener.{event.__class__.__name__.lower()}')
+        queue_name = getattr(listener, "queue", "default")
+        routing_key = getattr(
+            listener, "routing_key", f"listener.{event.__class__.__name__.lower()}"
+        )
 
         try:
             # Create a HandleListenerJob
@@ -144,8 +153,10 @@ class Event:
 
             job = HandleListenerJob(
                 listener_class=listener.__class__.__name__,
-                event_data=event.to_dict() if hasattr(event, 'to_dict') else event.__dict__,
-                event_class=event.__class__.__name__
+                event_data=event.to_dict()
+                if hasattr(event, "to_dict")
+                else event.__dict__,
+                event_class=event.__class__.__name__,
             )
 
             # Dispatch to queue
