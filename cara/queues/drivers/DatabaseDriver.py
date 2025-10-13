@@ -1,11 +1,12 @@
 """
 Database Queue Driver for the Cara framework.
 
-This module implements a queue driver that uses a database backend for job queue management and
-processing.
+Modern, clean implementation for database-backed job queue management.
 """
 
+import base64
 import inspect
+import json
 import pickle
 import time
 import uuid
@@ -14,7 +15,8 @@ from typing import Any, Dict, List, Union
 import pendulum
 
 from cara.exceptions import QueueException
-from cara.queues.contracts import Queue
+from cara.queues.contracts import JobCancelledException, Queue
+from cara.queues.JobStateManager import get_job_state_manager
 from cara.support.Console import HasColoredOutput
 from cara.support.Time import parse_human_time
 
@@ -23,7 +25,11 @@ class DatabaseDriver(HasColoredOutput, Queue):
     """
     Database-based queue driver.
 
-    Persists jobs in a database table.
+    Features:
+    - Persistent job storage in database
+    - Job state tracking and cancellation
+    - Automatic retry with failure handling
+    - Schedule support with delay parsing
     """
 
     driver_name = "database"
@@ -46,35 +52,33 @@ class DatabaseDriver(HasColoredOutput, Queue):
             job_id = str(uuid.uuid4())
             job_ids.append(job_id)
 
-            # Store the raw object (instance or class) pickled, plus callback name
-            import base64
-
+            # Serialize payload
             payload = base64.b64encode(
                 pickle.dumps(
                     {
                         "obj": job,
                         "callback": merged.get("callback", "handle"),
-                        "args": merged.get(
-                            "args", ()
-                        ),  # optionally support args for class instantiation
-                        "job_id": job_id,  # Add job ID for tracking
+                        "args": merged.get("args", ()),
+                        "job_id": job_id,
                     }
                 )
             ).decode("utf-8")
+
+            # Create database record
             record = {
                 "name": str(job),
                 "payload": payload,
                 "available_at": available_at.to_datetime_string(),
                 "attempts": 0,
                 "queue": merged.get("queue", "default"),
-                "job_id": job_id,  # Store job ID in database for tracking
+                "job_id": job_id,
             }
             builder.create(record)
 
-        # Return single job ID if only one job, otherwise return list
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
     def consume(self, options: Dict[str, Any]) -> None:
+        """Continuously fetch and process jobs from database."""
         merged = {**self.options, **options}
         table = merged.get("table")
         failed_table = merged.get("failed_table")
@@ -86,6 +90,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         while True:
             time.sleep(poll_interval)
             self.info(f"Checking for available jobs on '{table}'...")
+
             now = pendulum.now(tz=tz).to_datetime_string()
             jobs = (
                 builder.where("queue", merged.get("queue", "default"))
@@ -94,52 +99,57 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 .order_by("id")
                 .get()
             )
+
             if not jobs:
                 continue
 
+            # Reserve jobs
             ids = [job["id"] for job in jobs]
             builder.where_in("id", ids).update({"reserved_at": now})
 
+            # Process each job
             for job in jobs:
                 try:
                     self._process_job(job, merged)
-                    # Extract job_id from payload for logging
                     job_id = self._extract_job_id(job)
                     self._log_success(job["id"], tz, job_id)
                     builder.where("id", job["id"]).delete()
+
                 except Exception as e:
                     self._handle_failed_job(job, merged, e)
                     attempts_done = int(job.get("attempts", 0))
+
                     if attempts_done + 1 < attempts and not failed_table:
+                        # Retry
                         builder.where("id", job["id"]).update(
                             {"attempts": attempts_done + 1}
                         )
                     elif failed_table:
-                        self._move_to_failed(
-                            builder.new(),
-                            job,
-                            merged,
-                            str(e),
-                            tz,
-                        )
+                        # Move to failed table
+                        self._move_to_failed(builder.new(), job, merged, str(e), tz)
                         builder.where("id", job["id"]).delete()
                     else:
+                        # Max retries reached
                         builder.where("id", job["id"]).update(
                             {"attempts": attempts_done + 1}
                         )
 
     def retry(self, options: Dict[str, Any]) -> None:
+        """Move failed jobs back to main queue for retry."""
         merged = {**self.options, **options}
         failed_table = merged.get("failed_table")
         queue_name = merged.get("queue", "default")
         builder = self._get_builder(merged, failed_table)
+
         jobs = builder.where("queue", queue_name).get()
         if not jobs:
             self.info("No failed jobs found.")
             return
 
+        # Move jobs back to main queue
         main_table = merged.get("table")
         main_builder = self._get_builder(merged, main_table)
+
         for job in jobs:
             record = {
                 "name": job["name"],
@@ -156,30 +166,27 @@ class DatabaseDriver(HasColoredOutput, Queue):
         builder.where_in("id", [j["id"] for j in jobs]).delete()
 
     def chain(self, jobs: list, options: Dict[str, Any]) -> None:
-        """
-        Simple chain in DB: schedule each job sequentially by incrementing delay.
-        """
+        """Chain jobs by scheduling sequentially with incremental delay."""
         if not jobs:
             return
+
         delay_seconds = 0
         for job in jobs:
             self.push(
                 job,
-                options={
-                    **options,
-                    "delay": f"{delay_seconds} seconds",
-                },
+                options={**options, "delay": f"{delay_seconds} seconds"},
             )
             delay_seconds += 1
 
     def batch(self, *jobs: Any, options: Dict[str, Any]) -> None:
+        """Batch push: push all jobs at once."""
         self.push(*jobs, options=options)
 
     def schedule(self, job: Any, when: Any, options: Dict[str, Any]) -> None:
+        """Schedule job for future execution."""
         merged = {**self.options, **options}
         available_at = parse_human_time(when)
         builder = self._get_builder(merged)
-        import base64
 
         payload = base64.b64encode(
             pickle.dumps(
@@ -190,6 +197,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 }
             )
         ).decode("utf-8")
+
         record = {
             "name": str(job),
             "payload": payload,
@@ -200,27 +208,24 @@ class DatabaseDriver(HasColoredOutput, Queue):
         builder.create(record)
 
     def _get_builder(self, opts: Dict[str, Any], table: str = None):
+        """Get database query builder for specified table."""
         tbl = table or opts.get("table")
         return self.application.make("DB").query(opts.get("connection")).table(tbl)
 
     def _process_job(self, job: Dict[str, Any], opts: Dict[str, Any]):
-        """Unpickle payload, instantiate or use instance, and call callback."""
-        import pendulum
-
-        from cara.queues.contracts import JobCancelledException
-        from cara.queues.JobStateManager import get_job_state_manager
-
+        """Unpickle payload, instantiate job, and execute callback."""
         job_state_manager = get_job_state_manager()
         job_db_id = str(job["id"])
 
         # Update job status to processing
         self._update_job_status(
-            job_db_id, "processing", {"started_at": pendulum.now().to_datetime_string()}
+            job_db_id,
+            "processing",
+            {"started_at": pendulum.now().to_datetime_string()},
         )
 
+        # Unpickle payload
         try:
-            import base64
-
             decoded_payload = base64.b64decode(job["payload"])
             data = pickle.loads(decoded_payload)
         except Exception as e:
@@ -243,27 +248,27 @@ class DatabaseDriver(HasColoredOutput, Queue):
         else:
             instance = raw
 
-        # Update job_class in database for tracking
+        # Update job_class in database
         job_class_name = instance.__class__.__name__ if instance else raw.__name__
         self._update_job_status(job_db_id, "processing", {"job_class": job_class_name})
 
-        # Set up job tracking if instance supports it
+        # Set up job tracking
         if hasattr(instance, "set_tracking_id"):
             instance.set_tracking_id(job_db_id)
 
-            # Register job context if instance provides it
+            # Register job context for cancellation
             if hasattr(instance, "get_cancellation_context"):
                 try:
                     context = instance.get_cancellation_context()
                     job_state_manager.register_job(job_db_id, context)
-                    # Store context in DB metadata
-                    self._update_job_status(job_db_id, "processing", {"context": context})
+                    self._update_job_status(
+                        job_db_id, "processing", {"context": context}
+                    )
                 except Exception:
-                    # Don't fail job if context registration fails
                     pass
 
         try:
-            # Call the callback method
+            # Execute job callback
             method_to_call = getattr(instance, callback, None)
             if not callable(method_to_call):
                 raise QueueException(
@@ -286,7 +291,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             return result
 
         except JobCancelledException as e:
-            # Job was cancelled - track in DB but don't fail
+            # Job was cancelled
             self._update_job_status(
                 job_db_id,
                 "cancelled",
@@ -301,11 +306,14 @@ class DatabaseDriver(HasColoredOutput, Queue):
             return
 
         except Exception as e:
-            # Job failed - track in DB
+            # Job failed
             self._update_job_status(
                 job_db_id,
                 "failed",
-                {"failed_at": pendulum.now().to_datetime_string(), "error": str(e)},
+                {
+                    "failed_at": pendulum.now().to_datetime_string(),
+                    "error": str(e),
+                },
             )
             if hasattr(instance, "unregister_job"):
                 instance.unregister_job()
@@ -322,8 +330,6 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 if current_job:
                     current_metadata = current_job.get("metadata", {})
                     if isinstance(current_metadata, str):
-                        import json
-
                         try:
                             current_metadata = json.loads(current_metadata)
                         except:
@@ -337,11 +343,11 @@ class DatabaseDriver(HasColoredOutput, Queue):
                     update_data["metadata"] = metadata
 
             # Add timestamp updates
-            if status == "processing" and "started_at" in (metadata or {}):
+            if status == "processing" and metadata and "started_at" in metadata:
                 update_data["started_at"] = metadata["started_at"]
-            elif status == "completed" and "completed_at" in (metadata or {}):
+            elif status == "completed" and metadata and "completed_at" in metadata:
                 update_data["completed_at"] = metadata["completed_at"]
-            elif status == "cancelled" and "cancelled_at" in (metadata or {}):
+            elif status == "cancelled" and metadata and "cancelled_at" in metadata:
                 update_data["cancelled_at"] = metadata["cancelled_at"]
 
             # Update job_class if provided
@@ -360,21 +366,23 @@ class DatabaseDriver(HasColoredOutput, Queue):
         opts: Dict[str, Any],
         exception: Exception,
     ):
-        """Called when a job raised in _process_job."""
+        """Handle failed job execution."""
         self.danger(
-            f"[{job['id']}][{pendulum.now(tz=opts.get('tz', 'UTC')).to_datetime_string()}] Job Failed: {exception}"
+            f"[{job['id']}][{pendulum.now(tz=opts.get('tz', 'UTC')).to_datetime_string()}] "
+            f"Job Failed: {exception}"
         )
+
         # Attempt to call failed() on the instance
         try:
-            import base64
-
             decoded_payload = base64.b64decode(job["payload"])
             data = pickle.loads(decoded_payload)
         except Exception:
             return
+
         raw = data.get("obj")
         init_args = data.get("args", ())
-        # Instantiate again or use instance
+
+        # Instantiate again
         if inspect.isclass(raw):
             if hasattr(self.application, "make") and not init_args:
                 try:
@@ -385,6 +393,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 instance = raw(*init_args)
         else:
             instance = raw
+
         if hasattr(instance, "failed"):
             try:
                 instance.failed(job, str(exception))
@@ -399,6 +408,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         exception: str,
         tz: str,
     ):
+        """Move failed job to failed table."""
         builder.table(opts.get("failed_table")).create(
             {
                 "driver": DatabaseDriver.driver_name,
@@ -413,13 +423,14 @@ class DatabaseDriver(HasColoredOutput, Queue):
         )
 
     def _log_success(self, job_id: int, tz: str, job_id_from_payload: str) -> None:
+        """Log successful job completion."""
         self.success(
-            f"[{job_id}][{pendulum.now(tz=tz).to_datetime_string()}] Job Successfully Processed (Job ID from payload: {job_id_from_payload})"
+            f"[{job_id}][{pendulum.now(tz=tz).to_datetime_string()}] "
+            f"Job Successfully Processed (Job ID: {job_id_from_payload})"
         )
 
     def _extract_job_id(self, job: Dict[str, Any]) -> str:
-        import base64
-
+        """Extract job ID from payload."""
         decoded_payload = base64.b64decode(job["payload"])
         data = pickle.loads(decoded_payload)
         return data.get("job_id", "unknown")

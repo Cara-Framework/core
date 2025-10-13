@@ -60,12 +60,16 @@ class MakeJobLogCommand(CommandBase):
         if not class_name:
             class_name = "JobLog"
         else:
-            class_name = f"{class_name}JobLog" if not class_name.endswith("JobLog") else class_name
+            class_name = (
+                f"{class_name}JobLog"
+                if not class_name.endswith("JobLog")
+                else class_name
+            )
 
         # Determine paths
         models_dir = Path(paths("app")) / "models"
         file_path = models_dir / f"{class_name}.py"
-        
+
         # Table name
         table_name = self.option("table") or "job_logs"
 
@@ -141,13 +145,29 @@ class MakeJobLogCommand(CommandBase):
         class_name = joblog_info["class_name"]
 
         self.info("\n💡 Usage Tips:")
-        self.info(f"   Import: from app.models import {class_name}")
-        self.info("   Use with Trackable trait in jobs:")
-        self.info("     from cara.queues.tracking import Trackable")
-        self.info("     class MyJob(Trackable, Queueable, ShouldQueue): ...")
+        self.info(f"   Import: from app.models import {class_name}, Job")
         self.info("")
-        self.info("📋 Next Steps:")
-        self.info("1. Run: python craft make:migration  # Auto-generate migration")
-        self.info("2. Run: python craft migrate         # Create tables")
-        self.info("3. Add JobLog to app/models/__init__.py exports")
-        self.info("4. Use Trackable trait in your job classes") 
+        self.info("📋 Setup Steps:")
+        self.info("1. Add to app/models/__init__.py:")
+        self.info(f"   from .{class_name} import {class_name}")
+        self.info(f"   __all__ = [..., '{class_name}']")
+        self.info("")
+        self.info("2. Register JobTracker in ApplicationProvider:")
+        self.info("   def register_job_tracker(self):")
+        self.info(f"       from app.models import Job, {class_name}")
+        self.info("       from cara.queues.tracking import JobTracker")
+        self.info("       self.application.singleton(")
+        self.info('           "JobTracker",')
+        self.info(
+            f"           lambda: JobTracker(job_log_model={class_name}, job_model=Job)"
+        )
+        self.info("       )")
+        self.info("")
+        self.info("3. Run: python craft make:migration  # Auto-generate migration")
+        self.info("4. Run: python craft migrate         # Create tables")
+        self.info("")
+        self.info("✅ Jobs with Trackable trait will now:")
+        self.info("   - Auto-track to job + job_logs tables")
+        self.info("   - Handle conflicts (prevent duplicate jobs)")
+        self.info("   - Support smart retry with exponential backoff")
+        self.info("   - Provide performance analytics")

@@ -1,8 +1,7 @@
 """
 Redis Queue Driver for the Cara framework.
 
-This module implements a queue driver that uses Redis as the backend for job queue management
-and processing, with support for delayed jobs and job failures.
+Modern, clean implementation for Redis-backed job queue management.
 """
 
 import inspect
@@ -22,59 +21,54 @@ class RedisDriver(HasColoredOutput, Queue):
     """
     Redis-based queue driver.
 
-    - push: pickle the job payload and push to a Redis list.
-    - consume: continuously fetch jobs (with blocking BLPOP) and process them.
-               Handles delayed jobs via a sorted set.
-    - retry: move failed jobs back to the main queue.
-    - chain, batch: simple push logic.
-    - schedule: if scheduled time > now, add to delayed sorted set; otherwise push immediately.
+    Features:
+    - Fast, in-memory job queuing
+    - Delayed job execution with sorted sets
+    - Blocking pop for efficient polling
+    - Failed job handling with retry support
     """
 
     driver_name = "redis"
 
     def __init__(self, application, options: Dict[str, Any]):
         """
-        Expected options:
-        {
-            "host": "localhost",
-            "port": 6379,
-            "db": 0,
-            "password": None,            # No AUTH if None or empty
-            "queue_prefix": "queue:",    # optional prefix
-            "failed_prefix": "failed:",  # optional prefix
-            "delayed_prefix": "delayed:",# optional prefix
-            "poll_interval": 1,          # seconds to sleep when none
-            "blocking_timeout": 5,       # BLPOP timeout in seconds
-            "tz": "UTC",                 # timezone for pendulum
-        }
+        Initialize Redis driver.
+
+        Options:
+            host: Redis host (default: localhost)
+            port: Redis port (default: 6379)
+            db: Redis database (default: 0)
+            password: Redis password (optional)
+            queue_prefix: Prefix for queue keys (default: queue:)
+            failed_prefix: Prefix for failed queue keys (default: failed:)
+            delayed_prefix: Prefix for delayed queue keys (default: delayed:)
+            poll_interval: Sleep seconds when no jobs (default: 1)
+            blocking_timeout: BLPOP timeout in seconds (default: 5)
+            tz: Timezone for timestamps (default: UTC)
         """
         try:
             import redis as _redis
         except ImportError:
             raise DriverLibraryNotFoundException(
-                "RedisDriver requires 'redis'. Install with 'pip install redis'."
+                "RedisDriver requires 'redis'. Install with: pip install redis"
             )
 
         self.application = application
         self.options = options or {}
 
+        # Connection parameters
         host = self.options.get("host", "localhost")
         port = int(self.options.get("port", 6379))
         db = int(self.options.get("db", 0))
         password = self.options.get("password") or None
 
-        # Create Redis client; pass password only if provided
+        # Create Redis client
         if password:
-            self._redis = _redis.Redis(
-                host=host,
-                port=port,
-                db=db,
-                password=password,
-            )
+            self._redis = _redis.Redis(host=host, port=port, db=db, password=password)
         else:
             self._redis = _redis.Redis(host=host, port=port, db=db)
 
-        # Test connection immediately
+        # Test connection
         try:
             self._redis.ping()
         except Exception as e:
@@ -86,27 +80,14 @@ class RedisDriver(HasColoredOutput, Queue):
         self.queue_prefix = self.options.get("queue_prefix", "queue:")
         self.failed_prefix = self.options.get("failed_prefix", "failed:")
         self.delayed_prefix = self.options.get("delayed_prefix", "delayed:")
-        # Consume loop settings
+
+        # Consume settings
         self.poll_interval = float(self.options.get("poll_interval", 1))
         self.blocking_timeout = int(self.options.get("blocking_timeout", 5))
-        # Timezone for parsing and timestamps
         self.tz = self.options.get("tz", "UTC")
 
-    def _queue_key(self, queue_name: str) -> str:
-        return f"{self.queue_prefix}{queue_name}"
-
-    def _failed_key(self, queue_name: str) -> str:
-        return f"{self.failed_prefix}{queue_name}"
-
-    def _delayed_key(self, queue_name: str) -> str:
-        return f"{self.delayed_prefix}{queue_name}"
-
     def push(self, *jobs: Any, options: Dict[str, Any]) -> Union[str, List[str]]:
-        """
-        Push jobs immediately to the Redis list and return job ID(s) for tracking.
-
-        If scheduling/delay is needed, schedule() should be called instead.
-        """
+        """Push jobs immediately to Redis list and return job ID(s)."""
         merged = {**self.options, **(options or {})}
         queue_name = merged.get("queue", "default")
         callback = merged.get("callback", "handle")
@@ -115,51 +96,56 @@ class RedisDriver(HasColoredOutput, Queue):
         job_ids = []
 
         for job in jobs:
-            # Generate unique job ID for tracking
+            # Generate unique job ID
             job_id = str(uuid.uuid4())
             job_ids.append(job_id)
 
+            # Prepare payload
             payload_obj = {
                 "obj": job,
                 "callback": callback,
                 "args": args,
-                "job_id": job_id,  # Add job ID for tracking
+                "job_id": job_id,
                 "created_at": pendulum.now(
                     tz=merged.get("tz", self.tz)
                 ).to_datetime_string(),
             }
+
             try:
                 data = pickle.dumps(payload_obj)
             except Exception as e:
                 raise QueueException(f"RedisDriver: could not pickle payload: {e}")
+
             try:
-                # RPUSH to append job to the queue list
+                # RPUSH to append job to queue
                 self._redis.rpush(key, data)
             except Exception as e:
                 raise QueueException(f"RedisDriver: error pushing to Redis: {e}")
 
-        # Return single job ID if only one job, otherwise return list
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
     def consume(self, options: Dict[str, Any]) -> None:
         """
-        Continuously consume jobs from the queue:
-        1) Move due delayed jobs from sorted set to the list.
-        2) BLPOP from the list with a timeout; if none, sleep poll_interval.
-        3) Process the popped payload.
+        Continuously consume jobs from Redis queue.
+
+        Process:
+        1. Move due delayed jobs from sorted set to list
+        2. BLPOP from list with timeout
+        3. Process the popped payload
         """
         merged = {**self.options, **(options or {})}
         queue_name = merged.get("queue", "default")
         key = self._queue_key(queue_name)
-        failed_key = self._failed_key(queue_name)
         delayed_key = self._delayed_key(queue_name)
 
         self.info(f"RedisDriver: starting consume on queue='{queue_name}'")
+
         while True:
             try:
-                # 1) Check delayed sorted set for due jobs
+                # 1. Check delayed sorted set for due jobs
                 now_ts = pendulum.now(tz=merged.get("tz", self.tz)).int_timestamp
                 due_items = self._redis.zrangebyscore(delayed_key, 0, now_ts)
+
                 if due_items:
                     for item in due_items:
                         try:
@@ -168,22 +154,26 @@ class RedisDriver(HasColoredOutput, Queue):
                             self._redis.rpush(key, item)
                         except Exception as e:
                             self.danger(f"RedisDriver: error moving delayed job: {e}")
-                # 2) Blocking pop from main queue
+
+                # 2. Blocking pop from main queue
                 popped = self._redis.blpop(key, timeout=self.blocking_timeout)
+
                 if not popped:
-                    # Timeout: no job; sleep then continue
+                    # Timeout: no job available
                     time.sleep(self.poll_interval)
                     continue
+
                 _, data = popped
-                # 3) Process the payload
+
+                # 3. Process the payload
                 self._process_payload(data, queue_name)
+
             except Exception as e:
-                # Log and sleep before retrying
                 self.danger(f"RedisDriver.consume encountered error: {e}")
                 time.sleep(self.poll_interval)
 
     def retry(self, options: Dict[str, Any]) -> None:
-        """Move all jobs from the failed list back to the main queue."""
+        """Move all jobs from failed list back to main queue."""
         merged = {**self.options, **(options or {})}
         queue_name = merged.get("queue", "default")
         key = self._queue_key(queue_name)
@@ -194,31 +184,30 @@ class RedisDriver(HasColoredOutput, Queue):
             data = self._redis.lpop(failed_key)
             if data is None:
                 break
+
             try:
                 self._redis.rpush(key, data)
                 count += 1
             except Exception as e:
                 self.danger(f"RedisDriver.retry error pushing job: {e}")
+
         self.info(f"RedisDriver.retry: {count} jobs re-enqueued")
 
     def chain(self, jobs: list, options: Dict[str, Any]) -> None:
-        """
-        Simple chain: push each job in sequence.
-        """
+        """Chain jobs: push each job in sequence."""
         for job in jobs:
             self.push(job, options=options)
 
     def batch(self, *jobs: Any, options: Dict[str, Any]) -> None:
-        """
-        Batch push: push all jobs at once.
-        """
+        """Batch push: push all jobs at once."""
         self.push(*jobs, options=options)
 
     def schedule(self, job: Any, when: Any, options: Dict[str, Any]) -> None:
         """
-        Schedule a job for a future time:
-        - when can be datetime, ISO string, timestamp, or parseable string.
-        - If run_time <= now: push immediately; otherwise add to delayed sorted set.
+        Schedule job for future execution.
+
+        - If run_time <= now: push immediately
+        - Otherwise: add to delayed sorted set
         """
         merged = {**self.options, **(options or {})}
         queue_name = merged.get("queue", "default")
@@ -237,6 +226,7 @@ class RedisDriver(HasColoredOutput, Queue):
             except Exception as e:
                 raise QueueException(f"RedisDriver.schedule: invalid time: {e}")
 
+        # Prepare payload
         payload_obj = {
             "obj": job,
             "callback": callback,
@@ -245,6 +235,7 @@ class RedisDriver(HasColoredOutput, Queue):
                 tz=merged.get("tz", self.tz)
             ).to_datetime_string(),
         }
+
         try:
             data = pickle.dumps(payload_obj)
         except Exception as e:
@@ -262,13 +253,26 @@ class RedisDriver(HasColoredOutput, Queue):
                     f"RedisDriver.schedule: error adding to delayed set: {e}"
                 )
 
+    def _queue_key(self, queue_name: str) -> str:
+        """Get queue key with prefix."""
+        return f"{self.queue_prefix}{queue_name}"
+
+    def _failed_key(self, queue_name: str) -> str:
+        """Get failed queue key with prefix."""
+        return f"{self.failed_prefix}{queue_name}"
+
+    def _delayed_key(self, queue_name: str) -> str:
+        """Get delayed queue key with prefix."""
+        return f"{self.delayed_prefix}{queue_name}"
+
     def _process_payload(self, data: bytes, queue_name: str) -> None:
         """
-        Unpickle payload, instantiate or use the object, call callback.
+        Unpickle payload, instantiate job, and execute callback.
 
-        On exception, push the payload to the failed list and call failed().
+        On exception, push to failed list and call failed() if available.
         """
         failed_key = self._failed_key(queue_name)
+
         try:
             msg = pickle.loads(data)
         except Exception as e:
@@ -279,7 +283,7 @@ class RedisDriver(HasColoredOutput, Queue):
         callback = msg.get("callback", "handle")
         args = msg.get("args", ())
 
-        # Instantiate the job if raw is a class
+        # Instantiate job if it's a class
         try:
             if inspect.isclass(raw):
                 if hasattr(self.application, "make") and not args:
@@ -295,26 +299,31 @@ class RedisDriver(HasColoredOutput, Queue):
             self.danger(f"RedisDriver: could not instantiate job: {e}")
             return
 
-        # Call the callback method
+        # Execute callback
         try:
             method = getattr(instance, callback, None)
             if not callable(method):
                 raise AttributeError(
                     f"Callback '{callback}' not found on instance {instance!r}"
                 )
-            # If handle expects payload, adjust here (e.g., method(msg) or method(*args))
+
             if args:
                 method(*args)
             else:
                 method()
+
             self.info(f"RedisDriver: job processed successfully, queue={queue_name}")
+
         except Exception as e:
             self.danger(f"RedisDriver: job processing failed: {e}")
+
             try:
                 # Push to failed list
                 self._redis.rpush(failed_key, data)
-                # Call failed() if exists; pass original message and error string
+
+                # Call failed() if exists
                 if hasattr(instance, "failed"):
                     instance.failed(msg, str(e))
+
             except Exception as inner:
                 self.danger(f"RedisDriver: error handling failure: {inner}")

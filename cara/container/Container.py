@@ -108,10 +108,25 @@ class Container:
 
     def singleton(self, name: Any, class_obj: Any) -> None:
         """
-        Register a singleton binding: resolve class_obj immediately and bind its instance.
+        Register a singleton binding (Laravel-style).
+
+        If class_obj is a factory (callable), it's wrapped so the result is cached.
+        First make() calls the factory and caches. Subsequent make() return cached instance.
         """
-        instance = self.resolve(class_obj)
-        self.bind(name, instance)
+        if inspect.isfunction(class_obj) or inspect.ismethod(class_obj):
+            # Lazy singleton: wrap factory to cache result
+            cached = {"instance": None}
+
+            def singleton_factory():
+                if cached["instance"] is None:
+                    cached["instance"] = class_obj()
+                return cached["instance"]
+
+            self.bind(name, singleton_factory)
+        else:
+            # Immediate singleton: resolve now and bind instance
+            instance = self.resolve(class_obj)
+            self.bind(name, instance)
 
     def unbind(self, name: Any) -> bool:
         """

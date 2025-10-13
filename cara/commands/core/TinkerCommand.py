@@ -193,11 +193,13 @@ class TinkerCommand(CommandBase):
         def db_info():
             """Show database information."""
             try:
-                # Test connection using User model
-                from app.models import User
-
-                user_count = User.count()
-                connection_status = f"✅ Connected ({user_count} users)"
+                # Test connection using User model from container
+                User = self._resolve_user_model()
+                if User:
+                    user_count = User.count()
+                    connection_status = f"✅ Connected ({user_count} users)"
+                else:
+                    connection_status = "⚠️ User model not registered"
             except Exception as e:
                 connection_status = f"❌ Error: {str(e)}"
 
@@ -322,9 +324,7 @@ class TinkerCommand(CommandBase):
                             table.add_row(*[str(v) for v in row.values()])
 
                         console.print(table)
-                        return (
-                            f"✅ Displayed {len(data)} {model_class_name.lower()} records"
-                        )
+                        return f"✅ Displayed {len(data)} {model_class_name.lower()} records"
                     else:
                         console.print(f"Results: {data}")
                         return data
@@ -516,7 +516,9 @@ class TinkerCommand(CommandBase):
                 # Test notification configuration
                 console.print("🔔 Testing notification configuration...")
 
-                notification_driver = str(Config.get("notification.default", "database"))
+                notification_driver = str(
+                    Config.get("notification.default", "database")
+                )
 
                 table = Table(title="🔔 Notification Configuration")
                 table.add_column("Setting", style="cyan")
@@ -706,7 +708,9 @@ class TinkerCommand(CommandBase):
         self.info("  🗄️  Database: query('users', 10), model_stats()")
         self.info("  💾 Cache: clear_cache(), test_cache()")
         self.info("  🔧 Config: show_config('app.name'), config_get(...)")
-        self.info("  📋 Development: logs(20), benchmark(func), craft('migrate:status')")
+        self.info(
+            "  📋 Development: logs(20), benchmark(func), craft('migrate:status')"
+        )
         self.info("  📧 Mail: test_mail(), send_test_mail(...)")
         self.info("  ⚡ Queue: test_queue(), queue_test_job(...)")
         self.info("  🔔 Notification: test_notification(), send_test_notification(...)")
@@ -761,8 +765,23 @@ class TinkerCommand(CommandBase):
 
         self.info("   • Quick model queries: query('users', 10), model_stats()")
         self.info("   • Application info: app_info(), db_info()")
-        self.info("   • Performance testing: benchmark(lambda: User.all())")
+        self.info("   • Performance testing: benchmark(lambda: YourModel.all())")
         self.info("   • Run commands: craft('routes:list')")
         self.info("   • Mail testing: test_mail(), send_test_mail('user@example.com')")
         self.info("   • Queue testing: test_queue(), queue_test_job('MyJob')")
         self.info("   • Notifications: test_notification(), send_test_notification(1)")
+
+    def _resolve_user_model(self):
+        """
+        Resolve User model from container (dependency injection).
+
+        App must register User model in ApplicationProvider:
+        self.application.bind("User", User)
+        """
+        import builtins
+
+        if hasattr(builtins, "app"):
+            app_instance = builtins.app()
+            if app_instance and app_instance.has("User"):
+                return app_instance.make("User")
+        return None

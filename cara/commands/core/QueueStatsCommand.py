@@ -4,7 +4,6 @@ Shows comprehensive job tracking information from the enhanced job management sy
 """
 
 import time
-from datetime import datetime, timedelta
 
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -112,46 +111,54 @@ class QueueStatsCommand(CommandBase):
     def _show_database_stats(self, queue_name: str, recent_hours: int):
         """Show database job statistics if available."""
         try:
-            # Try universal job tracker first (Cara framework)
-            from cara.queues.JobTracker import get_job_tracker
+            # Get Job model from JobTracker (dependency injection)
+            job_model = self._resolve_job_model()
+            if not job_model:
+                self.info("💾 Database Stats: Job model not available")
+                return
 
-            job_tracker = get_job_tracker()
-            if job_tracker.is_enabled():
-                stats = job_tracker.get_job_stats(queue_name)
-                if stats:
-                    self._display_stats(stats, queue_name, "Universal Job Tracker")
-                    return
+            # Get overall stats from database
+            total_jobs = job_model.where("queue", queue_name).count()
+            pending = (
+                job_model.where("queue", queue_name).where("status", "pending").count()
+            )
+            processing = (
+                job_model.where("queue", queue_name)
+                .where("status", "processing")
+                .count()
+            )
+            completed = (
+                job_model.where("queue", queue_name)
+                .where("status", "completed")
+                .count()
+            )
+            failed = (
+                job_model.where("queue", queue_name).where("status", "failed").count()
+            )
 
-            # Fallback to app-level Job model
-            from app.models import Job
-
-            # Get overall stats
-            stats = Job.get_queue_stats(queue_name)
-
-            self._display_stats(stats, queue_name, "App Job Model")
-
-            # Recent activity
-            cutoff_time = datetime.now() - timedelta(hours=recent_hours)
-            recent_jobs = Job.where("created_at", ">=", cutoff_time.isoformat()).get()
-
-            if recent_jobs:
-                self.info(
-                    f"\n📈 Recent Activity (Last {recent_hours}h): {len(recent_jobs)} jobs"
-                )
-
-                # Group by status
-                status_counts = {}
-                for job in recent_jobs:
-                    status = getattr(job, "status", "unknown")
-                    status_counts[status] = status_counts.get(status, 0) + 1
-
-                for status, count in status_counts.items():
-                    self.info(f"   {status.title()}: {count}")
+            self.info(f"💾 Database Job Stats (Queue: {queue_name})")
+            self.info("-" * 60)
+            self.info(f"   Total: {total_jobs}")
+            self.info(f"   Pending: {pending}")
+            self.info(f"   Processing: {processing}")
+            self.info(f"   Completed: {completed}")
+            self.info(f"   Failed: {failed}")
 
         except ImportError:
             self.info("💾 Database Stats: Job model not available")
         except Exception as e:
             self.error(f"Failed to get database stats: {e}")
+
+    def _resolve_job_model(self):
+        """Resolve Job model from JobTracker."""
+        import builtins
+
+        if hasattr(builtins, "app"):
+            app_instance = builtins.app()
+            if app_instance and app_instance.has("JobTracker"):
+                tracker = app_instance.make("JobTracker")
+                return getattr(tracker, "job_model", None)
+        return None
 
     def _display_stats(self, stats: dict, queue_name: str, source: str):
         """Display job statistics in a formatted way."""

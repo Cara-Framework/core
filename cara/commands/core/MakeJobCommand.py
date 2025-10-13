@@ -157,10 +157,16 @@ class MakeJobCommand(CommandBase):
 
         # Modify for sync jobs if needed
         if is_sync:
-            code = code.replace(", ShouldQueue", "")
+            code = code.replace("Trackable, ShouldQueue, Queueable", "Queueable")
+            code = code.replace("ShouldQueue, Queueable", "Queueable")
             code = code.replace(
-                "from cara.queues.contracts import Queueable, ShouldQueue",
+                "from cara.queues.contracts import Queueable, ShouldQueue\nfrom cara.queues.tracking import Trackable",
                 "from cara.queues.contracts import Queueable",
+            )
+            code = code.replace("async def handle", "def handle")
+            code = code.replace(
+                "    async def handle(self):",
+                "    def handle(self):",
             )
 
         return code
@@ -173,10 +179,25 @@ class MakeJobCommand(CommandBase):
         self.info(f"   Import: from app.jobs import {class_name}")
 
         if not job_info["is_sync"]:
-            self.info("   Dispatch to queue:")
-            self.info(f"     queue.push({class_name}().handle)")
-            self.info("   Dispatch now:")
-            self.info(f"     {class_name}().handle()")
+            self.info("   Context-aware dispatch (recommended):")
+            self.info("     from cara.queues import Bus")
+            self.info(
+                f"     await Bus.dispatch({class_name}(), routing_key='processing.high')"
+            )
+            self.info("")
+            self.info("   Traditional queue dispatch:")
+            self.info(f"     {class_name}.dispatch().withRoutingKey('processing.high')")
+            self.info("")
+            self.info("   Explicit sync (testing/debugging):")
+            self.info("     from cara.context import ExecutionContext")
+            self.info("     with ExecutionContext.sync():")
+            self.info(f"         await Bus.dispatch({class_name}())")
+            self.info("")
+            self.info("📋 Features:")
+            self.info("   ✅ Automatic job tracking (job + job_logs tables)")
+            self.info("   ✅ Conflict resolution (prevents duplicate jobs)")
+            self.info("   ✅ Smart retry with exponential backoff")
+            self.info("   ✅ Performance analytics")
         else:
             self.info("   Execute:")
             self.info(f"     {class_name}().handle()")

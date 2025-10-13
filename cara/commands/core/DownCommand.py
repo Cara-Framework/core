@@ -5,10 +5,10 @@ This module provides a CLI command to enable maintenance mode with enhanced UX.
 """
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import pendulum
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.support import paths
@@ -95,7 +95,7 @@ class DownCommand(CommandBase):
         """Build maintenance configuration with validation."""
         config = {
             "enabled": True,
-            "created_at": datetime.now().isoformat(),
+            "created_at": pendulum.now().to_iso8601_string(),
             "message": message
             or "Application is temporarily unavailable for maintenance.",
             "retry_after": 3600,  # 1 hour default

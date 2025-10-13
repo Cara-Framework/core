@@ -14,25 +14,39 @@ _debug_mode: ContextVar[bool] = ContextVar("debug_mode", default=False)
 
 class ExecutionContext:
     """
-    Global execution context manager.
+    Thread-safe execution context manager.
 
-    Provides thread-safe access to execution mode flags without
-    passing them through every function call.
+    Manages global execution flags using context variables.
+    Used by Bus to determine sync vs async job dispatch.
 
     Example:
+        >>> # Sync mode (CLI with --sync, testing)
         >>> with ExecutionContext.sync():
-        ...     # All jobs will run synchronously in this context
-        ...     job.handle()
+        ...     await Bus.dispatch(job)  # Runs immediately
+
+        >>> # Queue mode (default, workers)
+        >>> with ExecutionContext.queue():
+        ...     await Bus.dispatch(job)  # Dispatches to RabbitMQ
     """
 
     @staticmethod
     def is_sync() -> bool:
-        """Check if currently in sync execution mode."""
+        """
+        Check if currently in sync execution mode.
+
+        Returns:
+            True if jobs should run immediately, False if they should queue
+        """
         return _sync_mode.get()
 
     @staticmethod
     def is_debug() -> bool:
-        """Check if currently in debug mode."""
+        """
+        Check if currently in debug mode.
+
+        Returns:
+            True if debug logging is enabled
+        """
         return _debug_mode.get()
 
     @staticmethod
@@ -40,34 +54,61 @@ class ExecutionContext:
         """
         Context manager for synchronous execution.
 
+        Jobs will run immediately instead of being queued.
+        Useful for:
+        - CLI commands with --sync flag
+        - Unit tests
+        - Debugging
+
         Args:
-            debug: Enable debug mode
+            debug: Enable debug logging
 
         Example:
             >>> with ExecutionContext.sync(debug=True):
-            ...     # Code runs in sync mode with debug enabled
-            ...     process_data()
+            ...     await Bus.dispatch(CollectProductJob(asin="B089DR29T6"))
+            ...     # Job runs immediately with debug logs
         """
         return _ExecutionContextManager(sync=True, debug=debug)
 
     @staticmethod
-    def async_mode(debug: bool = False):
+    def queue(debug: bool = False):
         """
-        Context manager for asynchronous execution.
+        Context manager for queue execution (explicit).
+
+        Jobs will be dispatched to queue (RabbitMQ/Redis/Database).
+        This is the default behavior, use this for clarity.
 
         Args:
-            debug: Enable debug mode
+            debug: Enable debug logging
+
+        Example:
+            >>> with ExecutionContext.queue():
+            ...     await Bus.dispatch(job)  # Explicitly queue
         """
         return _ExecutionContextManager(sync=False, debug=debug)
 
     @staticmethod
     def set_sync(value: bool):
-        """Set sync mode (use context manager instead when possible)."""
+        """
+        Set sync mode directly (not recommended).
+
+        Prefer using context managers (sync() or queue()) instead.
+
+        Args:
+            value: True for sync mode, False for queue mode
+        """
         _sync_mode.set(value)
 
     @staticmethod
     def set_debug(value: bool):
-        """Set debug mode (use context manager instead when possible)."""
+        """
+        Set debug mode directly (not recommended).
+
+        Prefer using context managers with debug parameter.
+
+        Args:
+            value: True to enable debug logging
+        """
         _debug_mode.set(value)
 
 

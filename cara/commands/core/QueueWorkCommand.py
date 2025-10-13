@@ -4,6 +4,10 @@ Queue Worker Command for the Cara framework.
 This module provides a CLI command to process jobs from the queue with enhanced UX.
 """
 
+import asyncio
+import builtins
+import inspect
+import pickle
 import time
 from typing import Any, Dict, Optional
 
@@ -11,15 +15,16 @@ from cara.commands import CommandBase
 from cara.commands.AutoReloadMixin import AutoReloadMixin
 from cara.configuration import config
 from cara.decorators import command
+from cara.facades import Log
 
 
 class AMQPConnectionManager:
     """Manages AMQP connections for queue workers (Single Responsibility)."""
-    
+
     def __init__(self, config_func):
         self.config = config_func
         self.connection = None
-    
+
     def ensure_connection(self) -> bool:
         """Ensure AMQP connection is alive."""
         try:
@@ -29,33 +34,34 @@ class AMQPConnectionManager:
         except Exception as e:
             try:
                 from cara.facades import Log
+
                 Log.error(f"Failed to connect to RabbitMQ: {e}")
             except ImportError:
                 pass
             return False
-    
+
     def _create_connection(self):
         """Create new AMQP connection."""
         import pika
-        
+
         credentials = pika.PlainCredentials(
             self.config("queue.drivers.amqp.username"),
-            self.config("queue.drivers.amqp.password")
+            self.config("queue.drivers.amqp.password"),
         )
         parameters = pika.ConnectionParameters(
             host=self.config("queue.drivers.amqp.host"),
             port=self.config("queue.drivers.amqp.port", 5672),
             virtual_host=self.config("queue.drivers.amqp.vhost", "/"),
-            credentials=credentials
+            credentials=credentials,
         )
         return pika.BlockingConnection(parameters)
-    
+
     def create_channel(self):
         """Create fresh channel for queue operations."""
         if not self.ensure_connection():
             return None
         return self.connection.channel()
-    
+
     def close(self):
         """Clean up connection."""
         if self.connection and not self.connection.is_closed:
@@ -67,30 +73,48 @@ class AMQPConnectionManager:
 
 class JobProcessor:
     """Processes individual jobs from queue messages (Single Responsibility)."""
-    
+
     @staticmethod
     def process_message(channel, method_frame, body) -> bool:
         """Process a single queue message and return success status."""
-        try:
-            import asyncio
-            import inspect
-            import pickle
+        # Resolve app and tracker outside try block for exception handler access
+        app_instance = builtins.app() if hasattr(builtins, "app") else None
+        tracker = None
+        if app_instance and app_instance.has("JobTracker"):
+            tracker = app_instance.make("JobTracker")
 
+        msg = None
+        instance = None
+        db_job_id = None
+
+        try:
             # Unpickle message
             msg = pickle.loads(body)
             instance = msg.get("obj")
             callback = msg.get("callback", "handle")
             init_args = msg.get("args", ())
-            
+            db_job_id = msg.get("db_job_id")
+
             # Set up job tracking
             job_id = msg.get("job_id")
             if hasattr(instance, "set_tracking_id") and job_id:
                 instance.set_tracking_id(job_id)
-            
-            db_job_id = msg.get("db_job_id")
-            if db_job_id and hasattr(instance, '__dict__'):
+
+            if db_job_id and hasattr(instance, "__dict__"):
                 instance._db_job_id = db_job_id
-            
+
+            # Start tracking (Trackable trait creates job_logs entry)
+            if hasattr(instance, "_start_tracking"):
+                instance._start_tracking()
+
+            # Update job table status to processing
+            if tracker and db_job_id:
+                tracker.update_job_status(db_job_id, "processing")
+
+            # Mark as processing in job_logs
+            if hasattr(instance, "_mark_processing"):
+                instance._mark_processing()
+
             # Execute job
             method_to_call = getattr(instance, callback, None)
             if callable(method_to_call):
@@ -98,15 +122,33 @@ class JobProcessor:
                     asyncio.run(method_to_call(*init_args))
                 else:
                     method_to_call(*init_args)
-            
+
+            # Mark success in job_logs
+            if hasattr(instance, "_mark_success"):
+                instance._mark_success()
+
+            # Update job table status to completed
+            if tracker and db_job_id:
+                tracker.update_job_status(db_job_id, "completed")
+
             # Acknowledge message
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
             return True
-            
+
         except Exception as job_error:
+            Log.error(f"❌ Job failed: {str(job_error)}")
+
+            # Mark as failed in job_logs
+            if instance and hasattr(instance, "_mark_failed"):
+                instance._mark_failed(str(job_error), should_retry=False)
+
+            # Update job table status to failed
+            if tracker and db_job_id:
+                tracker.update_job_status(db_job_id, "failed")
+
             # Job failed, still ack to avoid redelivery loop
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-            
+
             # Try to call failed method
             try:
                 if hasattr(instance, "failed"):
@@ -117,8 +159,7 @@ class JobProcessor:
                         failed_method(msg, str(job_error))
             except:
                 pass
-            
-            print(f"Job processing failed: {job_error}")
+
             return True  # Still processed (failed gracefully)
 
 
@@ -168,6 +209,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             self._run_main_loop(driver, queue, timeout, max_jobs, max_time)
         except Exception as e:
             import traceback
+
             self.error(f"× Worker error: {e}")
             self.error(f"× Stack trace: {traceback.format_exc()}")
         finally:
@@ -239,35 +281,35 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         """Parse queue names from comma-separated string with wildcard support."""
         if not queue:
             return ["default"]
-        
+
         # Split by comma and clean up
         queue_patterns = [q.strip() for q in queue.split(",")]
         queue_patterns = [q for q in queue_patterns if q]  # Remove empty strings
-        
+
         if not queue_patterns:
             return ["default"]
-        
+
         # Expand wildcard patterns
         expanded_queues = []
         for pattern in queue_patterns:
-            if '*' in pattern:
+            if "*" in pattern:
                 expanded_queues.extend(self._expand_wildcard_pattern(pattern))
             else:
                 expanded_queues.append(pattern)
-        
+
         return expanded_queues if expanded_queues else ["default"]
-    
+
     def _expand_wildcard_pattern(self, pattern: str) -> list:
         """Expand wildcard pattern to actual queue names."""
         # Standard priority levels for all queue types
-        priority_levels = ['critical', 'high', 'default', 'low']
-        
-        if pattern.endswith('.*'):
+        priority_levels = ["critical", "high", "default", "low"]
+
+        if pattern.endswith(".*"):
             # Pattern like "enrichment.*" or "discovery.*"
             prefix = pattern[:-2]  # Remove ".*"
             return [f"{prefix}.{level}" for level in priority_levels]
-        elif pattern.endswith('*'):
-            # Pattern like "enrichment*" 
+        elif pattern.endswith("*"):
+            # Pattern like "enrichment*"
             prefix = pattern[:-1]  # Remove "*"
             return [f"{prefix}.{level}" for level in priority_levels]
         else:
@@ -277,34 +319,48 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
     def _show_config(self, config: Dict[str, Any]):
         """Display worker configuration in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Configuration[/bold #e5c07b]")
-        
+
         # Driver info
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Driver:[/white] [bold white]{config['driver_name'].upper()}[/bold white]"
         )
-        
+
         # Queue info
-        queue_names = config['queue_names']
+        queue_names = config["queue_names"]
         if len(queue_names) > 1:
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b] [white]Queues:[/white] [dim]{len(queue_names)} queues in priority order[/dim]"
             )
             for i, queue in enumerate(queue_names, 1):  # Show all queues
-                priority_color = "#E21102" if "critical" in queue else "#e5c07b" if "high" in queue else "#30e047" if "default" in queue else "dim"
+                priority_color = (
+                    "#E21102"
+                    if "critical" in queue
+                    else "#e5c07b"
+                    if "high" in queue
+                    else "#30e047"
+                    if "default" in queue
+                    else "dim"
+                )
                 self.console.print(
                     f"[#e5c07b]│[/#e5c07b]   [white]{i}.[/white] [{priority_color}]{queue}[/{priority_color}]"
                 )
         else:
-            queue_color = "#E21102" if "critical" in queue_names[0] else "#e5c07b" if "high" in queue_names[0] else "#30e047"
+            queue_color = (
+                "#E21102"
+                if "critical" in queue_names[0]
+                else "#e5c07b"
+                if "high" in queue_names[0]
+                else "#30e047"
+            )
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b] [white]Queue:[/white] [{queue_color}]{queue_names[0]}[/{queue_color}]"
             )
-            
+
         # Timing and limits
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Poll Timeout:[/white] [dim]{config['timeout']}s[/dim]"
         )
-        
+
         if config.get("max_jobs"):
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b] [white]Max Jobs:[/white] [dim]{config['max_jobs']}[/dim]"
@@ -316,125 +372,133 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
         # Auto-reload status (default: enabled in development)
         from cara.configuration import config as global_config
+
         auto_reload = self.option("reload") or global_config("app.debug", True)
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Auto-reload:[/white] [{'#30e047' if auto_reload else '#E21102'}]{'✓' if auto_reload else '×'}[/{'#30e047' if auto_reload else '#E21102'}]"
         )
-        
+
         self.console.print("[#e5c07b]└─[/#e5c07b]")
         self.console.print()
-
-
 
     def _run_worker(self, config: Dict[str, Any]) -> None:
         """Run the queue worker with multiple queue priority support."""
         queue_names = config["queue_names"]
-        
+
         self._show_worker_startup_info(queue_names)
         self.start_time = time.time()
-        
+
         # Initialize connection manager and job processor
         from cara.configuration import config as global_config
+
         connection_manager = AMQPConnectionManager(global_config)
         job_processor = JobProcessor()
-        
+
         try:
             while not self.shutdown_requested:
                 job_processed = self._process_queue_cycle(
                     queue_names, connection_manager, job_processor, config
                 )
-                
+
                 # Sleep if no jobs found
                 if not job_processed:
                     time.sleep(config["timeout"])
-                    
+
         finally:
             connection_manager.close()
-    
+
     def _show_worker_startup_info(self, queue_names: list) -> None:
         """Display worker startup information in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Worker Status[/bold #e5c07b]")
-        
+
         if len(queue_names) > 1:
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b] [white]Processing:[/white] [dim]{len(queue_names)} queues in priority order[/dim]"
             )
         else:
-            queue_color = "#E21102" if "critical" in queue_names[0] else "#e5c07b" if "high" in queue_names[0] else "#30e047"
+            queue_color = (
+                "#E21102"
+                if "critical" in queue_names[0]
+                else "#e5c07b"
+                if "high" in queue_names[0]
+                else "#30e047"
+            )
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b] [white]Monitoring:[/white] [{queue_color}]{queue_names[0]}[/{queue_color}]"
             )
-        
+
         self.console.print(
             "[#e5c07b]│[/#e5c07b] [white]Status:[/white] [#30e047]✓ Active - Waiting for jobs[/#30e047]"
         )
-        
+
         self.console.print("[#e5c07b]└─[/#e5c07b]")
         self.console.print()
-        
+
         # Simple ready message
         self.console.print("[dim]Press Ctrl+C to stop the worker[/dim]")
         self.console.print()
-    
+
     def _process_queue_cycle(
-        self, 
-        queue_names: list, 
+        self,
+        queue_names: list,
         connection_manager: AMQPConnectionManager,
         job_processor: JobProcessor,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
     ) -> bool:
         """Process one cycle through all queues in priority order."""
         for queue_name in queue_names:
             if self.shutdown_requested:
                 break
-                
+
             try:
-                if self._process_single_queue(queue_name, connection_manager, job_processor):
+                if self._process_single_queue(
+                    queue_name, connection_manager, job_processor
+                ):
                     return True  # Job processed, restart from highest priority
-                    
+
             except Exception as e:
                 self._handle_queue_error(queue_name, e, connection_manager)
                 continue
-        
+
         return False  # No jobs processed
-    
+
     def _process_single_queue(
-        self, 
-        queue_name: str, 
+        self,
+        queue_name: str,
         connection_manager: AMQPConnectionManager,
-        job_processor: JobProcessor
+        job_processor: JobProcessor,
     ) -> bool:
         """Process a single queue and return True if job was processed."""
         channel = connection_manager.create_channel()
         if not channel:
             return False
-            
+
         try:
             # Non-blocking message retrieval
             method_frame, header_frame, body = channel.basic_get(queue=queue_name)
-            
+
             if method_frame:
                 # Process the job
                 return job_processor.process_message(channel, method_frame, body)
-            
+
             return False  # No message
-            
+
         finally:
             # Always close channel
             try:
                 channel.close()
             except:
                 pass
-    
+
     def _handle_queue_error(
-        self, 
-        queue_name: str, 
-        error: Exception, 
-        connection_manager: AMQPConnectionManager
+        self,
+        queue_name: str,
+        error: Exception,
+        connection_manager: AMQPConnectionManager,
     ) -> None:
         """Handle queue processing errors."""
         error_msg = str(error)
-        
+
         # Skip queues that don't exist
         if "NOT_FOUND" not in error_msg:
             if "connection" in error_msg.lower() or "closed" in error_msg.lower():
@@ -480,30 +544,46 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
         # Show enhanced queue stats if available
         try:
-            from app.models import Job
-
-            stats = Job.get_queue_stats(self.queue_name)
-            self.info(f"\n📈 Current Queue Status ({self.queue_name}):")
-            self.info(f"   Pending: {stats.get('pending_jobs', 0)}")
-            self.info(f"   Processing: {stats.get('processing_jobs', 0)}")
-            self.info(f"   Completed: {stats.get('completed_jobs', 0)}")
-            self.info(f"   Cancelled: {stats.get('cancelled_jobs', 0)}")
-            self.info(f"   Failed: {stats.get('failed_jobs', 0)}")
+            # Try to resolve Job model from container (framework agnostic)
+            job_model = self._resolve_job_model()
+            if job_model and hasattr(job_model, "get_queue_stats"):
+                stats = job_model.get_queue_stats(self.queue_name)
+                self.info(f"\n📈 Current Queue Status ({self.queue_name}):")
+                self.info(f"   Pending: {stats.get('pending_jobs', 0)}")
+                self.info(f"   Processing: {stats.get('processing_jobs', 0)}")
+                self.info(f"   Completed: {stats.get('completed_jobs', 0)}")
+                self.info(f"   Cancelled: {stats.get('cancelled_jobs', 0)}")
+                self.info(f"   Failed: {stats.get('failed_jobs', 0)}")
         except Exception:
             # If Job model not available or DB error, skip enhanced stats
             pass
 
+    def _resolve_job_model(self):
+        """Resolve Job model from JobTracker."""
+        import builtins
+
+        if hasattr(builtins, "app"):
+            app_instance = builtins.app()
+            if app_instance and app_instance.has("JobTracker"):
+                tracker = app_instance.make("JobTracker")
+                return getattr(tracker, "job_model", None)
+        return None
+
     def _run_main_loop(self, *args, **kwargs):
         """Main worker loop - called by AutoReloadMixin on restart."""
         # Use stored parameters from store_restart_params
-        if hasattr(self, '_restart_params') and self._restart_params:
+        if hasattr(self, "_restart_params") and self._restart_params:
             driver, queue, timeout, max_jobs, max_time = self._restart_params
         else:
-            driver, queue, timeout, max_jobs, max_time = args if args else (None, None, None, None, None)
-            
+            driver, queue, timeout, max_jobs, max_time = (
+                args if args else (None, None, None, None, None)
+            )
+
         # Prepare config with current parameters
         try:
-            worker_config = self._prepare_config(driver, queue, timeout, max_jobs, max_time)
+            worker_config = self._prepare_config(
+                driver, queue, timeout, max_jobs, max_time
+            )
         except Exception as e:
             self.error(f"❌ Configuration error: {e}")
             return
@@ -561,7 +641,3 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 self.command_watcher.shutdown()
             except Exception:
                 pass
-
-
-
-

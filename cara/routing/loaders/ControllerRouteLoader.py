@@ -82,14 +82,12 @@ class ControllerRouteLoader:
             return controller_classes
 
         except Exception:
-            # Fallback to hardcoded path if configuration fails
+            # Fallback to default app.controllers path if configuration fails
+            # Framework tries standard path but gracefully handles if not available
             try:
                 from cara.http.controllers import Controller
 
                 return get_classes("app.controllers", base_class=Controller)
             except Exception:
-                # Final fallback to old method
-                import app.controllers as controllers_module
-                from app.controllers import __all__ as controller_names
-
-                return [getattr(controllers_module, name) for name in controller_names]
+                # No controllers found - return empty list (framework agnostic)
+                return []

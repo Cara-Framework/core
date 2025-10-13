@@ -133,6 +133,22 @@ class Application(Container):
         # 3) Delegate to base Container.make
         return super().make(name, *arguments)
 
+    def has(self, name: Any) -> bool:
+        """
+        Check if a binding exists (including deferred providers).
+
+        Override Container.has() to also check deferred_providers.
+        """
+        # Check regular bindings first
+        if super().has(name):
+            return True
+
+        # Check deferred providers
+        if isinstance(name, str) and name in self.deferred_providers:
+            return True
+
+        return False
+
     def boot_providers(self) -> None:
         """
         Call boot() on all already‐registered (non‐deferred) providers.

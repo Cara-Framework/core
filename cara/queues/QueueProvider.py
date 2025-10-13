@@ -17,7 +17,7 @@ from cara.queues.drivers import AMQPDriver, AsyncDriver, DatabaseDriver, RedisDr
 class QueueProvider(DeferredProvider):
     @classmethod
     def provides(cls) -> List[str]:
-        return ["queue"]
+        return ["queue", "JobTracker"]
 
     def register(self) -> None:
         """Register queue services with configuration."""
@@ -39,6 +39,9 @@ class QueueProvider(DeferredProvider):
         self._add_redis_driver(queue_manager, drivers_config.get("redis"))
 
         self.application.bind("queue", queue_manager)
+
+        # Register JobTracker (lazy singleton)
+        self._register_job_tracker()
 
     def _add_database_driver(
         self,
@@ -154,3 +157,18 @@ class QueueProvider(DeferredProvider):
         except Exception as e:
             raise QueueConfigurationException(f"Failed to instantiate RedisDriver: {e}")
         queue_manager.add_driver(RedisDriver.driver_name, driver)
+
+    def _register_job_tracker(self) -> None:
+        """Register JobTracker singleton with models from container."""
+        from cara.queues.tracking import JobTracker
+
+        def create_job_tracker():
+            Job = self.application.make("Job") if self.application.has("Job") else None
+            JobLog = (
+                self.application.make("JobLog")
+                if self.application.has("JobLog")
+                else None
+            )
+            return JobTracker(job_log_model=JobLog, job_model=Job)
+
+        self.application.singleton("JobTracker", create_job_tracker)

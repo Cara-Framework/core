@@ -1,14 +1,10 @@
-"""
-JWT Token Generation Command for the Cara framework.
-
-This module provides a CLI command to generate JWT tokens for users with enhanced UX.
-"""
+"""JWT Token Generation Command for the Cara framework."""
 
 import json
-import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import pendulum
 from cara.commands import CommandBase
 from cara.configuration import config
 from cara.decorators import command
@@ -71,7 +67,9 @@ class JWTGenerateCommand(CommandBase):
 
         # Generate token
         try:
-            token_info = self._generate_token(target_user, token_ttl, additional_payload)
+            token_info = self._generate_token(
+                target_user, token_ttl, additional_payload
+            )
             self._show_token_info(token_info, target_user)
 
             # Save token if requested
@@ -127,8 +125,10 @@ class JWTGenerateCommand(CommandBase):
     def _find_user(self, identifier: str):
         """Find user by ID or email."""
         try:
-            # Import user model
-            from app.models.User import User
+            User = self._resolve_user_model()
+            if not User:
+                self.error("User model not available.")
+                return None
 
             # Try to find by email first (if it looks like an email)
             if "@" in identifier:
@@ -151,8 +151,8 @@ class JWTGenerateCommand(CommandBase):
 
             return None
 
-        except ImportError:
-            raise Exception("User model not found. Make sure app.models.User exists.")
+        except Exception as e:
+            raise Exception(f"Error finding user: {e}")
 
     def _show_user_info(self, user):
         """Display user information."""
@@ -217,10 +217,12 @@ class JWTGenerateCommand(CommandBase):
         jwt_guard = auth_manager.guard("jwt")
 
         # Prepare token payload
-        now = int(time.time())
+        now = pendulum.now().int_timestamp
 
         # Get user's default payload if available
-        if hasattr(user, "to_jwt_payload") and callable(getattr(user, "to_jwt_payload")):
+        if hasattr(user, "to_jwt_payload") and callable(
+            getattr(user, "to_jwt_payload")
+        ):
             payload = user.to_jwt_payload()
         else:
             # Default payload
@@ -286,7 +288,7 @@ class JWTGenerateCommand(CommandBase):
             self.info(f"   Expires At: {self._format_timestamp(expires_at)}")
 
             # Show time remaining
-            now = int(time.time())
+            now = pendulum.now().int_timestamp
             if expires_at > now:
                 remaining = expires_at - now
                 hours = remaining // 3600
@@ -345,7 +347,7 @@ class JWTGenerateCommand(CommandBase):
                 "expires_at": token_info.get("expires_at"),
                 "algorithm": token_info["algorithm"],
                 "payload": token_info["payload"],
-                "generated_at": self._format_timestamp(int(time.time())),
+                "generated_at": self._format_timestamp(pendulum.now().int_timestamp),
             }
 
             # Save as JSON
@@ -360,9 +362,7 @@ class JWTGenerateCommand(CommandBase):
     def _format_timestamp(self, timestamp: int) -> str:
         """Format timestamp for display."""
         try:
-            from datetime import datetime
-
-            dt = datetime.fromtimestamp(timestamp)
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
+            dt = pendulum.from_timestamp(timestamp)
+            return dt.to_datetime_string()
         except:
             return str(timestamp)

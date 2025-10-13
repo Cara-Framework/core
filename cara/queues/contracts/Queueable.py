@@ -8,7 +8,6 @@ failure handling. Includes automatic serialization support and job cancellation.
 from typing import Optional
 
 from cara.queues.JobStateManager import get_job_state_manager
-from cara.queues.tracking import JobTracker
 
 from .CancellableJob import CancellableJob, JobCancelledException
 from .SerializesModels import SerializesModels
@@ -17,140 +16,125 @@ from .SerializesModels import SerializesModels
 class PendingDispatch:
     """
     Laravel-style PendingDispatch for method chaining.
-    
+
     Allows chaining like: MyJob.dispatch().onQueue('high').delay(30)
     Enhanced with routing key support for topic exchange.
     """
-    
+
     def __init__(self, job_instance):
         """Initialize with job instance."""
         self.job = job_instance
-        self._queue_name = getattr(job_instance, 'queue', 'default')
+        self._queue_name = getattr(job_instance, "queue", "default")
         self._delay = None
         self._connection = None
         self._routing_key = None
         self._use_exchange = False
-        
+
     def onQueue(self, queue: str) -> "PendingDispatch":
         """Set the queue name (Laravel naming convention)."""
         self._queue_name = queue
-        if hasattr(self.job, 'queue'):
+        if hasattr(self.job, "queue"):
             self.job.queue = queue
         return self
-        
+
     def on_queue(self, queue: str) -> "PendingDispatch":
         """Python naming alias for onQueue."""
         return self.onQueue(queue)
-        
+
     def delay(self, seconds: int) -> "PendingDispatch":
         """Set delay in seconds."""
         self._delay = seconds
         return self
-        
+
     def onConnection(self, connection: str) -> "PendingDispatch":
         """Set connection (Laravel naming)."""
         self._connection = connection
         return self
-    
+
     def withRoutingKey(self, routing_key: str) -> "PendingDispatch":
         """
         Set routing key for topic exchange dispatch.
-        
+
         Args:
             routing_key: Routing key (e.g., "enrichment.product.high")
-            
+
         Usage:
             MyJob.dispatch().withRoutingKey("enrichment.product.high")
         """
         self._routing_key = routing_key
         self._use_exchange = True
         return self
-    
+
     def toExchange(self, exchange_name: str = "cheapa.events") -> "PendingDispatch":
         """
         Force dispatch to specific exchange.
-        
+
         Args:
             exchange_name: Name of the exchange
         """
         self._exchange_name = exchange_name
         self._use_exchange = True
         return self
-        
+
     def __del__(self):
         """Auto-dispatch when PendingDispatch is garbage collected (Laravel pattern)."""
         self._dispatch_now()
-        
+
     def _dispatch_now(self):
-        """Actually dispatch the job to the queue."""
-        try:
-            # Check if we should use exchange routing
-            if self._use_exchange and self._routing_key:
-                return self._dispatch_via_exchange()
-            
-            # Standard queue dispatch
-            from cara.facades import Queue
+        """
+        Dispatch job to queue.
 
-            # Set final queue properties
-            if hasattr(self.job, 'queue'):
-                self.job.queue = self._queue_name
-                
-            if self._delay and hasattr(self.job, 'delay'):
-                self.job.delay = self._delay
-                
-            # Push to queue
-            job_id = Queue.push(self.job)
-            
-            # Set tracking ID
-            if hasattr(self.job, 'set_tracking_id'):
-                self.job.set_tracking_id(str(job_id))
-                
-            return job_id
-            
-        except Exception as e:
-            # Fallback to sync execution
-            try:
-                from cara.facades import Log
-                Log.warning(f"Queue dispatch failed, running sync: {str(e)}")
-            except:
-                pass
-                
-            if hasattr(self.job, 'handle'):
-                return self.job.handle()
-    
+        IMPORTANT: NO FALLBACK - If queue dispatch fails, exception is raised.
+        """
+        # Check if we should use exchange routing
+        if self._use_exchange and self._routing_key:
+            return self._dispatch_via_exchange()
+
+        # Standard queue dispatch
+        from cara.facades import Queue
+
+        # Set final queue properties
+        if hasattr(self.job, "queue"):
+            self.job.queue = self._queue_name
+
+        if self._delay and hasattr(self.job, "delay"):
+            self.job.delay = self._delay
+
+        # Push to queue (will raise exception if fails)
+        job_id = Queue.push(self.job)
+
+        # Set tracking ID
+        if hasattr(self.job, "set_tracking_id"):
+            self.job.set_tracking_id(str(job_id))
+
+        return job_id
+
     def _dispatch_via_exchange(self):
-        """Dispatch job via topic exchange with routing key."""
-        try:
-            from cara.queues.exchanges import TopicExchange
+        """
+        Dispatch job via topic exchange with routing key.
 
-            # Get or create exchange
-            exchange_name = getattr(self, '_exchange_name', 'cheapa.events')
-            exchange = TopicExchange(exchange_name)
-            
-            # Set job properties
-            if self._delay and hasattr(self.job, 'delay'):
-                self.job.delay = self._delay
-            
-            # Dispatch via exchange
-            job_id = exchange.dispatch_job(
-                routing_key=self._routing_key,
-                job_instance=self.job
-            )
-            
-            # Set tracking ID
-            if hasattr(self.job, 'set_tracking_id'):
-                self.job.set_tracking_id(str(job_id))
-                
-            return job_id
-            
-        except Exception as e:
-            # Fallback to standard dispatch
-            from cara.facades import Log
-            Log.warning(f"Exchange dispatch failed, using standard queue: {str(e)}", category="cara.queue.exchange")
-            
-            # Remove exchange flags and retry standard dispatch
-            self._use_exchange = False
-            return self._dispatch_now()
+        NO FALLBACK - If exchange dispatch fails, exception is raised.
+        """
+        from cara.queues.exchanges import TopicExchange
+
+        # Get or create exchange
+        exchange_name = getattr(self, "_exchange_name", "cheapa.events")
+        exchange = TopicExchange(exchange_name)
+
+        # Set job properties
+        if self._delay and hasattr(self.job, "delay"):
+            self.job.delay = self._delay
+
+        # Dispatch via exchange (will raise exception if fails)
+        job_id = exchange.dispatch_job(
+            routing_key=self._routing_key, job_instance=self.job
+        )
+
+        # Set tracking ID
+        if hasattr(self.job, "set_tracking_id"):
+            self.job.set_tracking_id(str(job_id))
+
+        return job_id
 
 
 class Queueable(SerializesModels, CancellableJob):
@@ -169,9 +153,9 @@ class Queueable(SerializesModels, CancellableJob):
         super().__init__()  # CancellableJob.__init__() handles its own initialization
         self.job_tracking_id: Optional[str] = None
         self._job_state_manager = get_job_state_manager()
-        self._job_tracker = JobTracker()
-        self._db_record_id: Optional[str] = None  # Database tracking record ID
-        
+        self._job_tracker: Optional[Any] = None  # Lazy-loaded from container
+        self._db_job_id: Optional[int] = None  # Database job ID (FK for job_logs)
+
         # Laravel-style properties
         self.queue = "default"
         self.delay = None
@@ -284,15 +268,15 @@ class Queueable(SerializesModels, CancellableJob):
     def dispatch(cls, *args, **kwargs) -> PendingDispatch:
         """
         Laravel-style job dispatch with method chaining support.
-        
+
         Returns PendingDispatch for chaining methods like onQueue(), delay(), etc.
-        
+
         Usage:
             MyJob.dispatch(param1, param2).onQueue('high-priority').delay(30)
         """
         # Create job instance
         instance = cls(*args, **kwargs)
-        
+
         # Return PendingDispatch for method chaining
         return PendingDispatch(instance)
 
@@ -305,10 +289,11 @@ class Queueable(SerializesModels, CancellableJob):
     async def dispatchNow(cls, *args, **kwargs):
         """Laravel-style immediate job execution."""
         instance = cls(*args, **kwargs)
-        if hasattr(instance, 'handle'):
-            if hasattr(instance.handle, '__call__'):
+        if hasattr(instance, "handle"):
+            if hasattr(instance.handle, "__call__"):
                 # Check if handle is async
                 import asyncio
+
                 if asyncio.iscoroutinefunction(instance.handle):
                     return await instance.handle()
                 else:
