@@ -159,16 +159,11 @@ class QueueProvider(DeferredProvider):
         queue_manager.add_driver(RedisDriver.driver_name, driver)
 
     def _register_job_tracker(self) -> None:
-        """Register JobTracker singleton with models from container."""
+        """Register JobTracker singleton with unified Job model from container."""
         from cara.queues.tracking import JobTracker
 
         def create_job_tracker():
             Job = self.application.make("Job") if self.application.has("Job") else None
-            JobLog = (
-                self.application.make("JobLog")
-                if self.application.has("JobLog")
-                else None
-            )
-            return JobTracker(job_log_model=JobLog, job_model=Job)
+            return JobTracker(job_model=Job)
 
         self.application.singleton("JobTracker", create_job_tracker)

@@ -103,7 +103,7 @@ class JobProcessor:
             if db_job_id and hasattr(instance, "__dict__"):
                 instance._db_job_id = db_job_id
 
-            # Start tracking (Trackable trait creates job_logs entry)
+            # Start tracking (Trackable trait tracks entity_id)
             if hasattr(instance, "_start_tracking"):
                 instance._start_tracking()
 
@@ -111,7 +111,7 @@ class JobProcessor:
             if tracker and db_job_id:
                 tracker.update_job_status(db_job_id, "processing")
 
-            # Mark as processing in job_logs
+            # Mark as processing in unified job table
             if hasattr(instance, "_mark_processing"):
                 instance._mark_processing()
 
@@ -123,7 +123,7 @@ class JobProcessor:
                 else:
                     method_to_call(*init_args)
 
-            # Mark success in job_logs
+            # Mark success in unified job table
             if hasattr(instance, "_mark_success"):
                 instance._mark_success()
 
@@ -138,7 +138,7 @@ class JobProcessor:
         except Exception as job_error:
             Log.error(f"❌ Job failed: {str(job_error)}")
 
-            # Mark as failed in job_logs
+            # Mark as failed in unified job table
             if instance and hasattr(instance, "_mark_failed"):
                 instance._mark_failed(str(job_error), should_retry=False)
 

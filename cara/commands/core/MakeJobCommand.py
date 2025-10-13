@@ -194,7 +194,7 @@ class MakeJobCommand(CommandBase):
             self.info(f"         await Bus.dispatch({class_name}())")
             self.info("")
             self.info("📋 Features:")
-            self.info("   ✅ Automatic job tracking (job + job_logs tables)")
+            self.info("   ✅ Automatic job tracking (unified job table)")
             self.info("   ✅ Conflict resolution (prevents duplicate jobs)")
             self.info("   ✅ Smart retry with exponential backoff")
             self.info("   ✅ Performance analytics")

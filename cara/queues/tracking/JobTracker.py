@@ -15,7 +15,7 @@ from cara.facades import Log
 
 class JobTracker:
     """
-    Advanced job tracking and management service for Cara Framework.
+    Unified job tracking and management service for Cara Framework.
 
     Features:
     - Smart retry with exponential backoff
@@ -24,13 +24,14 @@ class JobTracker:
     - Performance analytics
     - Dead letter queue management
     - App-agnostic design
+    - Unified Job model (replaces separate job + job_logs tables)
 
     Usage:
-        # In app, optionally provide JobLog model
+        # In app, provide unified Job model
         from cara.queues.tracking import JobTracker
 
-        # Configure with app's JobLog model (optional)
-        tracker = JobTracker(job_log_model=MyJobLogModel)
+        # Configure with app's Job model
+        tracker = JobTracker(job_model=Job)
 
         # Or use without persistence (logs only)
         tracker = JobTracker()
@@ -43,10 +44,10 @@ class JobTracker:
 
     def __init__(
         self,
-        job_log_model=None,
         job_model=None,
         max_retries: Dict[str, int] = None,
         retry_delays: List[int] = None,
+        job_log_model=None,  # DEPRECATED - kept for backwards compatibility
     ):
         """
         Initialize JobTracker with dependency injection.
@@ -55,34 +56,35 @@ class JobTracker:
         Framework never imports app-specific models directly.
 
         Args:
-            job_log_model: JobLog model class (REQUIRED for tracking)
-            job_model: Job model class (REQUIRED for job records)
+            job_model: Unified Job model class (REQUIRED for tracking)
             max_retries: Dict of job_name -> max_retry_count
             retry_delays: List of delay seconds for retries
+            job_log_model: DEPRECATED - separate JobLog table no longer used
 
         Example (ApplicationProvider):
             # In your app's ApplicationProvider:
             from cara.queues.tracking import JobTracker
-            from app.models import Job, JobLog  # App imports here, not in framework
+            from app.models import Job  # App imports here, not in framework
 
-            tracker = JobTracker(job_log_model=JobLog, job_model=Job)
+            tracker = JobTracker(job_model=Job)
             self.application.bind("JobTracker", tracker)
         """
-        self.job_log_model = job_log_model
         self.job_model = job_model
         self.max_retries = max_retries or self.DEFAULT_MAX_RETRIES
         self.retry_delays = retry_delays or self.DEFAULT_RETRY_DELAYS
 
-        # Log warning if models not injected
-        if not self.job_log_model:
+        # DEPRECATED: Backwards compatibility warning
+        if job_log_model:
             Log.warning(
-                "⚠️ JobLog model not injected - job tracking disabled. "
-                "Register JobTracker in ApplicationProvider with models."
+                "⚠️ JobLog model is deprecated - unified Job model is now used for tracking. "
+                "Please remove job_log_model parameter."
             )
+
+        # Log warning if model not injected
         if not self.job_model:
             Log.warning(
-                "⚠️ Job model not injected - job records disabled. "
-                "Register JobTracker in ApplicationProvider with models."
+                "⚠️ Job model not injected - job tracking disabled. "
+                "Register JobTracker in ApplicationProvider with Job model."
             )
 
     def track_job_started(
@@ -95,12 +97,12 @@ class JobTracker:
         metadata: Dict = None,
     ) -> str:
         """
-        Track job start with conflict detection.
+        Track job start - updates existing job record with tracking info.
 
         Args:
             job_uid: Unique job UUID identifier for tracking
             job_name: Job class name
-            job_id: Job.id (integer FK) from driver - required for job_logs FK
+            job_id: Job.id to update
             entity_id: Optional entity ID (product_id, user_id, etc.)
             queue: Queue name
             metadata: Additional metadata
@@ -113,20 +115,26 @@ class JobTracker:
             if entity_id:
                 self._cancel_conflicting_jobs(job_name, entity_id, job_uid)
 
-            # Create job log entry if model available and job_id provided
-            if self.job_log_model and job_id:
-                self.job_log_model.create_job_log(
-                    job_name=job_name,
-                    job_id=job_id,  # Required FK to job.id
-                    job_uid=job_uid,
-                    queue=queue,
-                    entity_id=entity_id,
-                    metadata=metadata or {},
-                )
-            elif self.job_log_model and not job_id:
-                Log.warning(
-                    f"JobTracker: No job_id provided for {job_name}, skipping job_logs entry"
-                )
+            # Update job record if job_id provided (unified table approach)
+            if self.job_model and job_id:
+                job_record = self.job_model.find(job_id)
+                if job_record:
+                    # Update with tracking info
+                    job_record.job_uid = job_uid
+                    if entity_id:
+                        job_record.entity_id = entity_id
+
+                    # Merge metadata with pipeline_id
+                    from cara.context import ExecutionContext
+
+                    enriched_metadata = job_record.metadata or {}
+                    enriched_metadata.update(metadata or {})
+                    pipeline_id = ExecutionContext.get_job_id()
+                    if pipeline_id:
+                        enriched_metadata["pipeline_id"] = pipeline_id
+
+                    job_record.metadata = enriched_metadata
+                    job_record.save()
 
             Log.info(
                 f"🚀 Job started: {job_name}[{job_uid}] for entity {entity_id}",
@@ -140,23 +148,30 @@ class JobTracker:
 
     def track_job_processing(self, job_uid: str) -> None:
         """Mark job as actively processing."""
-        if self.job_log_model:
-            self.job_log_model.mark_processing(job_uid)
+        if self.job_model:
+            job_record = self.job_model.where("job_uid", job_uid).first()
+            if job_record:
+                job_record.status = self.job_model.STATUS_PROCESSING
+                job_record.processed_at = pendulum.now()
+                job_record.save()
 
     def track_job_success(self, job_uid: str, result_data: Dict = None) -> None:
         """Track successful job completion."""
-        if not self.job_log_model:
+        if not self.job_model:
             return
 
-        self.job_log_model.mark_success(job_uid)
+        job_record = self.job_model.where("job_uid", job_uid).first()
+        if job_record:
+            job_record.status = self.job_model.STATUS_SUCCESS
+            job_record.finished_at = pendulum.now()
 
-        # Store result metadata if provided
-        if result_data:
-            job_log = self.job_log_model.where("job_uid", job_uid).first()
-            if job_log:
-                metadata = job_log.metadata or {}
+            # Store result metadata if provided
+            if result_data:
+                metadata = job_record.metadata or {}
                 metadata["result"] = result_data
-                job_log.update({"metadata": metadata})
+                job_record.metadata = metadata
+
+            job_record.save()
 
     def track_job_failed(
         self, job_uid: str, error: str, should_retry: bool = True
@@ -173,34 +188,35 @@ class JobTracker:
             Optional[str]: New job_uid if retry scheduled, None if max retries exceeded
         """
         try:
-            if not self.job_log_model:
+            if not self.job_model:
                 Log.error(
                     f"💥 Job failed: {job_uid} - {error}", category="cara.queue.jobs"
                 )
                 return None
 
             # Get current job info
-            job_log = self.job_log_model.where("job_uid", job_uid).first()
-            if not job_log:
-                Log.error(
-                    f"Job log not found for {job_uid}", category="cara.queue.jobs"
-                )
+            job_record = self.job_model.where("job_uid", job_uid).first()
+            if not job_record:
+                Log.error(f"Job not found for {job_uid}", category="cara.queue.jobs")
                 return None
 
             # Mark current attempt as failed
-            self.job_log_model.mark_failed(job_uid, error)
+            job_record.status = self.job_model.STATUS_FAILED
+            job_record.error = error
+            job_record.finished_at = pendulum.now()
+            job_record.save()
 
             # Check if we should retry
             max_retries = self.max_retries.get(
-                job_log.job_name, self.max_retries["default"]
+                job_record.name, self.max_retries["default"]
             )
 
-            if should_retry and job_log.attempt < max_retries:
-                return self._schedule_retry(job_log, error)
+            if should_retry and job_record.attempt < max_retries:
+                return self._schedule_retry(job_record, error)
             else:
-                self._move_to_dead_letter(job_log, error)
+                self._move_to_dead_letter(job_record, error)
                 Log.error(
-                    f"💀 Job failed permanently: {job_uid} after {job_log.attempt} attempts",
+                    f"💀 Job failed permanently: {job_uid} after {job_record.attempt} attempts",
                     category="cara.queue.jobs",
                 )
                 return None
@@ -352,12 +368,12 @@ class JobTracker:
             int: Number of jobs cancelled
         """
         try:
-            if not self.job_log_model:
+            if not self.job_model:
                 return 0
 
             # Find pending/processing jobs for same entity and job type
             conflicting_jobs = (
-                self.job_log_model.where("job_name", job_name)
+                self.job_model.where("name", job_name)
                 .where("entity_id", entity_id)
                 .where("job_uid", "!=", current_job_uid)
                 .where_in("status", ["pending", "processing"])
@@ -365,11 +381,13 @@ class JobTracker:
             )
 
             cancelled_count = 0
-            for job_log in conflicting_jobs:
-                job_log.update({"status": self.job_log_model.STATUS_CANCELLED})
+            for job_record in conflicting_jobs:
+                job_record.status = self.job_model.STATUS_CANCELLED
+                job_record.cancelled_at = pendulum.now()
+                job_record.save()
                 cancelled_count += 1
                 Log.info(
-                    f"Cancelled conflicting job: {job_log.job_uid} for entity {entity_id}"
+                    f"Cancelled conflicting job: {job_record.job_uid} for entity {entity_id}"
                 )
 
             return cancelled_count
@@ -378,39 +396,33 @@ class JobTracker:
             Log.warning(f"Failed to cancel conflicting jobs: {str(e)}")
             return 0
 
-    def _schedule_retry(self, job_log, error: str) -> str:
-        """Schedule job retry with exponential backoff."""
+    def _schedule_retry(self, job_record, error: str) -> str:
+        """Schedule job retry with exponential backoff - updates existing job."""
         try:
-            next_attempt = job_log.attempt + 1
+            next_attempt = job_record.attempt + 1
             delay_seconds = self.retry_delays[
                 min(next_attempt - 1, len(self.retry_delays) - 1)
             ]
 
-            # Create new job log for retry
+            # Update existing job for retry
             retry_job_uid = str(uuid.uuid4())
 
-            metadata = getattr(job_log, "metadata", {}) or {}
+            metadata = job_record.metadata or {}
             metadata["retry_reason"] = error
-            metadata["original_job_uid"] = job_log.job_uid
+            metadata["original_job_uid"] = job_record.job_uid
             metadata["scheduled_for"] = (
                 pendulum.now().add(seconds=delay_seconds).to_iso8601_string()
             )
 
-            self.job_log_model.create(
-                {
-                    "job_name": job_log.job_name,
-                    "job_id": job_log.job_id,  # Use same job_id (FK to job table)
-                    "job_uid": retry_job_uid,  # New UUID for retry tracking
-                    "entity_id": getattr(job_log, "entity_id", None),
-                    "status": "retrying",
-                    "attempt": next_attempt,
-                    "queue": getattr(job_log, "queue", "default"),
-                    "metadata": metadata,
-                }
-            )
+            job_record.job_uid = retry_job_uid
+            job_record.status = self.job_model.STATUS_RETRYING
+            job_record.attempt = next_attempt
+            job_record.error = None  # Clear previous error
+            job_record.metadata = metadata
+            job_record.save()
 
             Log.info(
-                f"🔄 Retry scheduled: {job_log.job_name}[{retry_job_uid}] attempt {next_attempt} in {delay_seconds}s"
+                f"🔄 Retry scheduled: {job_record.name}[{retry_job_uid}] attempt {next_attempt} in {delay_seconds}s"
             )
             return retry_job_uid
 
@@ -418,17 +430,17 @@ class JobTracker:
             Log.error(f"Failed to schedule retry: {str(e)}")
             return None
 
-    def _move_to_dead_letter(self, job_log, final_error: str) -> None:
+    def _move_to_dead_letter(self, job_record, final_error: str) -> None:
         """Move permanently failed job to dead letter queue."""
         try:
-            if hasattr(job_log, "metadata"):
-                metadata = getattr(job_log, "metadata", {}) or {}
-                metadata["dead_letter_reason"] = final_error
-                metadata["moved_to_dlq_at"] = pendulum.now().to_iso8601_string()
-                job_log.update({"metadata": metadata})
+            metadata = job_record.metadata or {}
+            metadata["dead_letter_reason"] = final_error
+            metadata["moved_to_dlq_at"] = pendulum.now().to_iso8601_string()
+            job_record.metadata = metadata
+            job_record.save()
 
             Log.error(
-                f"💀 Job moved to dead letter: {job_log.job_name}[{job_log.job_uid}] - {final_error}"
+                f"💀 Job moved to dead letter: {job_record.name}[{job_record.job_uid}] - {final_error}"
             )
 
         except Exception as e:
@@ -441,9 +453,11 @@ class JobTracker:
         queue: str,
         payload: Dict = None,
         metadata: Dict = None,
+        job_uid: str = None,
+        entity_id: str = None,
     ) -> Optional[int]:
         """
-        Create job record for sync execution tracking.
+        Create unified job record with tracking fields.
 
         Args:
             job_name: Job class name
@@ -451,13 +465,28 @@ class JobTracker:
             queue: Queue name
             payload: Job parameters (for replay/debugging)
             metadata: Additional metadata
+            job_uid: Unique job UUID (generated if not provided)
+            entity_id: Optional entity ID (product_id, user_id, etc.)
 
         Returns:
-            int: job.id for FK in job_logs, or None if no Job model
+            int: job.id, or None if no Job model
         """
         try:
             if not self.job_model:
                 return None
+
+            # Generate job_uid if not provided
+            if not job_uid:
+                job_uid = str(uuid.uuid4())
+
+            # Enrich metadata with pipeline_id from ExecutionContext
+            from cara.context import ExecutionContext
+
+            enriched_metadata = metadata or {}
+            pipeline_id = ExecutionContext.get_job_id()
+            if pipeline_id:
+                enriched_metadata["pipeline_id"] = pipeline_id
+            enriched_metadata["sync_execution"] = True
 
             job_record = self.job_model.create(
                 {
@@ -469,7 +498,10 @@ class JobTracker:
                     "available_at": pendulum.now(),
                     "status": self.job_model.STATUS_PENDING,
                     "attempts": 0,
-                    "metadata": {**(metadata or {}), "sync_execution": True},
+                    "attempt": 1,
+                    "job_uid": job_uid,
+                    "entity_id": entity_id,
+                    "metadata": enriched_metadata,
                 }
             )
 

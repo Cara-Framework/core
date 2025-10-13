@@ -12,7 +12,7 @@ class {{ class_name }}(Trackable, ShouldQueue, Queueable):
     {{ class_name }} - Job description goes here.
     
     Features:
-    - Automatic job tracking (job + job_logs tables)
+    - Automatic job tracking (unified job table)
     - Conflict resolution (prevents duplicate jobs)
     - Performance analytics
     - Smart retry with exponential backoff
@@ -30,7 +30,7 @@ class {{ class_name }}(Trackable, ShouldQueue, Queueable):
         
         Job tracking is automatic:
         - Job status: pending → processing → completed/failed
-        - Logged to job_logs table with entity_id tracking
+        - Tracked in unified job table with entity_id
         - Conflict resolution for duplicate jobs
         """
         # Job logic goes here

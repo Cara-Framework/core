@@ -77,8 +77,8 @@ class Bus:
         Run job synchronously with full tracking support.
 
         Tracking flow (automatic):
-        1. Create job record (job table) via JobTracker
-        2. Create job_logs entry with entity_id
+        1. Create job record (unified job table) via JobTracker
+        2. Track entity_id, pipeline_id in metadata
         3. Update status: pending → processing → completed/failed
         4. Track performance, retries, conflicts
 
@@ -114,11 +114,11 @@ class Bus:
                     job_name=job_name, job_class=job_class, queue=queue, payload=payload
                 )
 
-                # Set job_id so Trackable can use it for job_logs FK
+                # Set job_id so Trackable can use it for unified job tracking
                 if job_id:
                     job._db_job_id = job_id
 
-            # Start tracking (Trackable trait handles job_logs with entity_id)
+            # Start tracking (Trackable trait handles entity_id tracking)
             if hasattr(job, "_start_tracking"):
                 job._start_tracking()
 
@@ -126,7 +126,7 @@ class Bus:
             if tracker and job_id:
                 tracker.update_job_status(job_id, "processing")
 
-            # Mark as processing in job_logs
+            # Mark as processing in unified job table
             if hasattr(job, "_mark_processing"):
                 job._mark_processing()
 
@@ -134,7 +134,7 @@ class Bus:
         try:
             result = await job.handle()
 
-            # Mark as success in job_logs
+            # Mark as success in unified job table
             if has_tracking and hasattr(job, "_mark_success"):
                 job._mark_success()
 
@@ -145,7 +145,7 @@ class Bus:
             return result
 
         except Exception as e:
-            # Mark as failed in job_logs
+            # Mark as failed in unified job table
             if has_tracking and hasattr(job, "_mark_failed"):
                 job._mark_failed(str(e), should_retry=False)
 

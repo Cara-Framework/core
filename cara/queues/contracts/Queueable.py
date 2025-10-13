@@ -154,7 +154,7 @@ class Queueable(SerializesModels, CancellableJob):
         self.job_tracking_id: Optional[str] = None
         self._job_state_manager = get_job_state_manager()
         self._job_tracker: Optional[Any] = None  # Lazy-loaded from container
-        self._db_job_id: Optional[int] = None  # Database job ID (FK for job_logs)
+        self._db_job_id: Optional[int] = None  # Database job ID for unified tracking
 
         # Laravel-style properties
         self.queue = "default"
