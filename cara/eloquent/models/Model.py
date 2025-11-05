@@ -840,37 +840,35 @@ class Model(
                         # If casting fails, keep original value
                         pass
 
-        # Handle remaining datetime and decimal types that might not have casts
-        # This runs AFTER casting to handle any values that weren't cast
+        # Handle remaining datetime and decimal types (including casted ones)
+        # This runs AFTER casting to ensure ALL Decimals are JSON-serializable
         from decimal import Decimal
 
         for key, value in data.items():
             if value is not None:
-                # Only process if this key doesn't have a cast or casting failed
-                if key not in self.__casts__ or data[key] == value:
-                    final_value = data[key]
-                    if isinstance(final_value, datetime):
-                        data[key] = final_value.isoformat()
-                    elif isinstance(final_value, datetimetime):
-                        data[key] = final_value.strftime("%H:%M:%S")
-                    elif isinstance(final_value, datetimedate):
-                        data[key] = final_value.strftime("%Y-%m-%d")
-                    elif isinstance(final_value, Decimal):
-                        data[key] = float(final_value)
+                final_value = data[key]
+                if isinstance(final_value, datetime):
+                    data[key] = final_value.isoformat()
+                elif isinstance(final_value, datetimetime):
+                    data[key] = final_value.strftime("%H:%M:%S")
+                elif isinstance(final_value, datetimedate):
+                    data[key] = final_value.strftime("%Y-%m-%d")
+                elif isinstance(final_value, Decimal):
+                    # Convert Decimal to string to preserve exact precision
+                    data[key] = str(final_value)
 
-        # Add relationships - RECURSIVE CALL WILL USE THIS SAME METHOD
-        # Use _relations (from eager loading) instead of _relationships
+        # Add relationships - Laravel way: use serialize() for proper casting
         relations_dict = getattr(self, "_relations", {})
         for relation_name, relation_value in relations_dict.items():
             if relation_value is None:
                 data[relation_name] = None
             elif isinstance(relation_value, list):
-                # Collection of models - each model will use this same serialize
+                # Collection of models
                 from cara.support.Collection import Collection
 
                 data[relation_name] = Collection(relation_value).serialize()
             elif hasattr(relation_value, "serialize"):
-                # Single model - will use this same serialize
+                # Single model - use serialize() for proper decimal casting
                 data[relation_name] = relation_value.serialize()
             else:
                 # Raw value

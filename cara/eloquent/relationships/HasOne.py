@@ -4,7 +4,23 @@ from .BaseRelationship import BaseRelationship
 
 
 class HasOne(BaseRelationship):
-    """Belongs To Relationship Class."""
+    """
+    Has One Relationship.
+    
+    Works as both decorator and property (Laravel-style).
+    """
+    
+    def __call__(self, func):
+        """Decorator: Store the function and return self."""
+        self._func = func
+        return self
+    
+    def __get__(self, instance, owner):
+        """Property access: Return Model instance like Laravel (execute query automatically)."""
+        if instance is None:
+            return self
+        # Accessed from instance, execute query and return Model (Laravel-style)
+        return self.apply_query(self.get_builder(), instance)
 
     def __init__(self, fn, foreign_key=None, local_key=None):
         if isinstance(fn, str):

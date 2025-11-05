@@ -39,6 +39,8 @@ class RouteResolver:
         self._container = container  # store container (may be None for now)
         self._route_handler: Optional[Callable] = None
         self._handler_signature: Optional[inspect.Signature] = None
+        self._controller_class = None
+        self._controller_method_name = None
 
         self.resolve(handler)
 
@@ -99,6 +101,58 @@ class RouteResolver:
 
             # Fallback: create empty signature
             return inspect.Signature()
+
+    def _instantiate_controller(self, controller_class, container=None):
+        """
+        Instantiate controller with dependency injection.
+        Resolves constructor parameters from the container.
+        """
+        # Use provided container or fall back to stored one
+        _container = container or self._container
+        
+        # If no container, instantiate without DI
+        if not _container:
+            return controller_class()
+
+        # Get constructor signature
+        try:
+            sig = inspect.signature(controller_class.__init__)
+        except (ValueError, TypeError):
+            # No signature available, instantiate without args
+            return controller_class()
+
+        # Resolve constructor parameters
+        params = {}
+        for param_name, param in sig.parameters.items():
+            # Skip 'self'
+            if param_name == 'self':
+                continue
+
+            # Get type annotation
+            param_type = param.annotation
+            if param_type == inspect.Parameter.empty:
+                # No type hint, skip
+                continue
+
+            # Resolve dependency from container
+            # Container handles multi-strategy resolution + auto-instantiation
+            try:
+                resolved = _container.make(param_type)
+                params[param_name] = resolved
+            except Exception:
+                # If resolution fails and has default, use it
+                if param.default != inspect.Parameter.empty:
+                    params[param_name] = param.default
+                else:
+                    # No default and can't resolve, raise error
+                    raise MissingContainerBindingException(
+                        f"Cannot resolve dependency '{param_name}' "
+                        f"of type '{param_type}' for controller "
+                        f"'{controller_class.__name__}'"
+                    )
+
+        # Instantiate with resolved dependencies
+        return controller_class(**params)
 
     def _get_param_type(self, param_name: str):
         """Get the expected type for a parameter from method signature."""
@@ -228,15 +282,17 @@ class RouteResolver:
             )
 
         try:
-            # Instantiate controller
-            controller = controller_class()
+            # Store controller class and method for lazy instantiation
+            self._controller_class = controller_class
+            self._controller_method_name = method_name
 
-            # Check if method exists
-            if not hasattr(controller, method_name):
+            # Create a dummy instance to validate method exists and get signature
+            temp_instance = controller_class.__new__(controller_class)
+            if not hasattr(temp_instance, method_name):
                 available_methods = [
                     m
-                    for m in dir(controller)
-                    if not m.startswith("_") and callable(getattr(controller, m))
+                    for m in dir(temp_instance)
+                    if not m.startswith("_") and callable(getattr(temp_instance, m))
                 ]
                 raise ControllerMethodNotFoundException(
                     controller_name=controller_name,
@@ -245,14 +301,13 @@ class RouteResolver:
                 )
 
             # Get the method and ensure it's callable
-            method = getattr(controller, method_name)
+            method = getattr(temp_instance, method_name)
             if not callable(method):
                 raise RouteRegistrationException(
                     f"'{method_name}' in '{controller_name}' is not callable"
                 )
 
-            self._route_handler = method
-            self._handler_signature = self._safe_signature(self._route_handler)
+            self._handler_signature = self._safe_signature(method)
 
         except (ControllerMethodNotFoundException, RouteRegistrationException):
             # Re-raise our custom exceptions
@@ -372,39 +427,35 @@ class RouteResolver:
     async def handle(self, context: Any) -> Any:
         """
         Resolves dependencies and executes the route handler for any supported context.
+        
+        Args:
+            context: HTTP (Request, Response) or WS (Socket, dict) context
+        
+        Returns:
+            Handler result (automatically awaited if async)
         """
-        if not self._route_handler:
-            raise RuntimeError("No route handler has been resolved")
-
-        # Automatic route parameter validation for HTTP requests
-        if (
-            isinstance(context, tuple)
-            and len(context) == 2
-            and hasattr(context[0], "path")
-            and hasattr(context[1], "json")
-        ):
-            request, response = context
-
-            # Extract route parameters
-            params = getattr(request, "params", {})
-
-            # Automatic route parameter validation using RouteParameterValidator
-            validation_error = RouteParameterValidator.validate_parameters(params)
-
-            if validation_error:
-                raise ValidationException(validation_errors=validation_error)
-
-            # Set validated parameters on request for easy access
-            # RouteParameterValidator already handled type conversion during validation
-            for key, value in params.items():
+        # Inject route parameters into request if available
+        request = context[0] if context else None
+        if hasattr(request, "params"):
+            for key, value in request.params.items():
                 converted_value = RouteParameterValidator.convert_parameter_value(
                     key, value
                 )
                 setattr(request, f"param_{key}", converted_value)
 
+        # If controller class stored, instantiate with DI at runtime
+        if self._controller_class and self._controller_method_name:
+            container = self._container or (request.application if request else None)
+            controller = self._instantiate_controller(self._controller_class, container)
+            route_handler = getattr(controller, self._controller_method_name)
+        else:
+            route_handler = self._route_handler
+            if not route_handler:
+                raise RuntimeError("No route handler has been resolved")
+
         resolver = self._get_resolver(context)
         kwargs = resolver(context)
-        result = self._route_handler(**kwargs)
+        result = route_handler(**kwargs)
         if inspect.isawaitable(result):
             result = await result
         return result

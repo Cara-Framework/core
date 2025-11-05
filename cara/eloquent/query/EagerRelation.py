@@ -14,21 +14,23 @@ class EagerRelations:
         self.eager_counts = []  # 🔧 For counting eager loads
         self.callback_eagers = {}  # 🔧 For callback-based eager loading
 
-    def register(self, relations):
-        """Register relations for eager loading (Laravel-style)."""
+    def register(self, *relations):
+        """Register relations for eager loading (Laravel-style with *args)."""
         try:
-            if isinstance(relations, (list, tuple)):
-                for relation in relations:
-                    if isinstance(relation, str):
-                        self.with_relation(relation)
-                    elif isinstance(relation, dict):
-                        # Handle nested relations with callbacks
-                        for rel_name, callback in relation.items():
-                            self.with_relation(rel_name)
-                            if callable(callback):
-                                self.with_callback(rel_name, callback)
-            elif isinstance(relations, str):
-                self.with_relation(relations)
+            for relation in relations:
+                if isinstance(relation, str):
+                    self.with_relation(relation)
+                elif isinstance(relation, (list, tuple)):
+                    # Handle list/tuple of relations
+                    for rel in relation:
+                        if isinstance(rel, str):
+                            self.with_relation(rel)
+                elif isinstance(relation, dict):
+                    # Handle nested relations with callbacks
+                    for rel_name, callback in relation.items():
+                        self.with_relation(rel_name)
+                        if callable(callback):
+                            self.with_callback(rel_name, callback)
         except Exception as e:
             from cara.facades import Log
 

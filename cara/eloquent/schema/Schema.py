@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from cara.facades import DB
 
 from .Blueprint import Blueprint
@@ -35,7 +37,7 @@ class Schema:
         "uuid": str,
         "binary": bytes,
         "boolean": bool,
-        "decimal": float,
+        "decimal": Decimal,
         "double": float,
         "enum": str,
         "text": str,

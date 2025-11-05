@@ -2166,7 +2166,11 @@ class QueryBuilder(ObservesEvents):
                         # Single string relation
                         try:
                             if inspect.isclass(self._model):
+                                # Get relationship instance (now works as property)
                                 related = getattr(self._model, eager_load)
+                                # If it's a function (old style), call it to get relationship
+                                if callable(related) and not hasattr(related, 'get_related'):
+                                    related = related()
                             else:
                                 related = self._model.get_related(eager_load)
 
@@ -2188,7 +2192,11 @@ class QueryBuilder(ObservesEvents):
                         for eager in eager_load:
                             try:
                                 if inspect.isclass(self._model):
+                                    # Get relationship instance (now works as property)
                                     related = getattr(self._model, eager)
+                                    # If it's a function (old style), call it to get relationship
+                                    if callable(related) and not hasattr(related, 'get_related'):
+                                        related = related()
                                 else:
                                     related = self._model.get_related(eager)
 

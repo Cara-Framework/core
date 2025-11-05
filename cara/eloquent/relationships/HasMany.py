@@ -4,7 +4,25 @@ from .BaseRelationship import BaseRelationship
 
 
 class HasMany(BaseRelationship):
-    """Has Many Relationship Class."""
+    """
+    Has Many Relationship Class.
+    
+    Works as both decorator and property (Laravel-style).
+    When accessed as property, returns self (relationship instance).
+    """
+    
+    def __call__(self, func):
+        """Decorator: Store the function and return self."""
+        self._func = func
+        return self
+    
+    def __get__(self, instance, owner):
+        """Property access: Return Collection like Laravel (execute query automatically)."""
+        if instance is None:
+            # Accessed from class, return self for eager loading
+            return self
+        # Accessed from instance, execute query and return Collection (Laravel-style)
+        return self.apply_query(self.get_builder(), instance)
 
     def apply_query(self, foreign, owner):
         """

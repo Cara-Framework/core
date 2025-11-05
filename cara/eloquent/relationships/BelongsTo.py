@@ -4,7 +4,22 @@ from .BaseRelationship import BaseRelationship
 
 
 class BelongsTo(BaseRelationship):
-    """Belongs To Relationship Class."""
+    """
+    Belongs To Relationship.
+
+    Works as both decorator and property (Laravel-style).
+    """
+
+    def __call__(self, func):
+        """Decorator: Store the function and return self."""
+        self._func = func
+        return self
+
+    def __get__(self, instance, owner):
+        """Property access: Return relationship instance for query building."""
+        if instance is None:
+            return self
+        return self.get_builder()
 
     def __init__(self, fn, local_key=None, foreign_key=None):
         if isinstance(fn, str):

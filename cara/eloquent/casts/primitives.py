@@ -66,21 +66,17 @@ class DecimalCast(BaseCast):
         self.precision = int(precision)
 
     def get(self, value):
-        """Get as string representation of Decimal with precision."""
-        if value is None or value == 0:
-            return None  # Return null for 0 values
+        """Get as Decimal for high precision arithmetic."""
+        if value is None:
+            return None
 
         if isinstance(value, Decimal):
-            formatted = f"{float(value):.{self.precision}f}"
-        else:
-            try:
-                decimal_val = Decimal(str(value))
-                formatted = f"{float(decimal_val):.{self.precision}f}"
-            except (ValueError, TypeError):
-                return None
+            return value
 
-        # Return as float for JSON compatibility
-        return float(formatted)
+        try:
+            return Decimal(str(value))
+        except (ValueError, TypeError, InvalidOperation):
+            return None
 
     def set(self, value):
         """Set as Decimal."""

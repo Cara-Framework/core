@@ -36,7 +36,21 @@ class BaseRelationship:
         return self
 
     def get_builder(self):
-        return self._related_builder
+        """Get query builder for the related model."""
+        if hasattr(self, '_related_builder') and self._related_builder:
+            return self._related_builder
+        
+        # Get the related model class from the decorated function
+        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
+        if func:
+            # Call the function to get the model class
+            related_model = func(self)
+            if related_model:
+                # Create query builder for the related model
+                self._related_builder = related_model.query()
+                return self._related_builder
+        
+        raise AttributeError("Cannot get builder: related model not found")
 
     def __get__(self, instance, owner):
         """
@@ -65,8 +79,12 @@ class BaseRelationship:
         return self.apply_query(self._related_builder, instance)
 
     def __getattr__(self, attribute):
-        relationship = self.fn(self)()
-        return getattr(relationship.builder, attribute)
+        # Use _func if set by decorator, otherwise fn
+        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
+        if func:
+            relationship = func(self)()
+            return getattr(relationship.builder, attribute)
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{attribute}'")
 
     def apply_query(self, foreign, owner):
         """

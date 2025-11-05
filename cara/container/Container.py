@@ -165,14 +165,11 @@ class Container:
 
         4) Otherwise, raise MissingContainerBindingException.
         """
-        # (1) If name is a class (e.g., type-hinted dependency)
+        # (1) If name is a class type
         if inspect.isclass(name):
-            key_str = name.__name__.lower()
-
-            # If a deferred provider is registered for this class-key, register it now
-            if key_str in self._deferred:
-                provider_class = self._deferred.pop(key_str)
-                # Remove any other keys pointing to the same provider class
+            # Check if there's a deferred provider for this class
+            if name in self._deferred or self._attempt_load_deferred(name):
+                provider_class = self._deferred.pop(name)
                 for k, cls in list(self._deferred.items()):
                     if cls is provider_class:
                         self._deferred.pop(k, None)
@@ -182,12 +179,26 @@ class Container:
                 if hasattr(provider, "boot"):
                     provider.boot()
 
-            # Try to find a previously bound instance matching this class
+            # Try to find a previously bound value matching this class
             try:
                 found = self._find_obj(name)
+                self.fire_hook("make", name, found)
+                
+                # If found is a class, resolve it (instantiate with DI)
+                if inspect.isclass(found):
+                    instance = self.resolve(found, *arguments)
+                    return instance
+                
+                # If found is a callable factory, call it
+                if callable(found):
+                    result = found(self) if self._accepts_container(found) else found()
+                    return result
+                
+                # Otherwise return the bound value (already an instance)
                 return found
+                
             except MissingContainerBindingException:
-                # If not found, perform constructor injection
+                # If not found in bindings, try to instantiate directly
                 return self.resolve(name, *arguments)
 
         # (2) If name is a string
@@ -412,17 +423,17 @@ class Container:
 
         return False
 
-    # ----------------------------
-    # Hook System (bind / make / resolve)
-    # ----------------------------
+    def _accepts_container(self, func):
+        """Check if callable accepts a container parameter."""
+        try:
+            sig = inspect.signature(func)
+            params = list(sig.parameters.keys())
+            return len(params) > 0 and params[0] in ('app', 'container', 'self')
+        except:
+            return False
 
-    def fire_hook(self, action: str, key: Any, obj: Any) -> None:
-        """Invoke any callbacks registered for the given hook name and key or class."""
-        # Exact key matches
-        if key in self._hooks[action]:
-            for fn in self._hooks[action][key]:
-                fn(obj, self)
-
+    def fire_hook(self, action: str, key: Any, obj: Any):
+        """Fire hooks for bind/make/resolve actions."""
         # If bound object is a class, invoke class-based hooks
         if inspect.isclass(obj) and obj in self._hooks[action]:
             for fn in self._hooks[action][obj]:
@@ -453,13 +464,35 @@ class Container:
 
     def _find_obj(self, obj: Any) -> Any:
         """
-        Locate a bound object by class or instance:
-
-        1) If obj is a class and provider_obj is an instance of obj, return provider_obj.
-        2) If obj exactly matches a bound instance or its class, return provider_obj.
-        3) If provider_obj is a class and issubclass(provider_obj, obj), or provider_obj.__class__ issubclass(obj), return provider_obj.
-        4) Otherwise raise MissingContainerBindingException.
+        Locate a bound object with multi-strategy resolution:
+        
+        Strategy 1: Direct key lookup in self.objects
+        Strategy 2: Try full module path (e.g., "app.contracts.CategoryContract.CategoryContract")
+        Strategy 3: Try simple class name (e.g., "CategoryContract")
+        Strategy 4: Match by type/instance/subclass
         """
+        # Strategy 1: Direct lookup
+        if obj in self.objects:
+            provider_obj = self.objects[obj]
+            self.fire_hook("resolve", obj, provider_obj)
+            return provider_obj
+        
+        # Strategy 2: Try full module path
+        if inspect.isclass(obj) and hasattr(obj, '__module__') and hasattr(obj, '__name__'):
+            full_path = f"{obj.__module__}.{obj.__name__}"
+            if full_path in self.objects:
+                provider_obj = self.objects[full_path]
+                self.fire_hook("resolve", obj, provider_obj)
+                return provider_obj
+        
+        # Strategy 3: Try simple class name
+        if inspect.isclass(obj) and hasattr(obj, '__name__'):
+            if obj.__name__ in self.objects:
+                provider_obj = self.objects[obj.__name__]
+                self.fire_hook("resolve", obj, provider_obj)
+                return provider_obj
+        
+        # Strategy 4: Match by type/instance/subclass (original logic)
         for provider_obj in self.objects.values():
             # (1) Class–instance match
             if inspect.isclass(obj) and isinstance(provider_obj, obj):
