@@ -161,6 +161,7 @@ class QueueProvider(DeferredProvider):
             from cara.facades import Log
             Log.warning(f"Redis driver not available (Redis connection failed): {e}. Skipping Redis driver registration.")
             # Don't raise exception - allow queue system to work with other drivers
+            return
 
     def _register_job_tracker(self) -> None:
         """Register JobTracker singleton with unified Job model from container."""
