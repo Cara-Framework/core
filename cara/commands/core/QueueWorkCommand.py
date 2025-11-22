@@ -474,6 +474,9 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             return False
 
         try:
+            # Declare queue if it doesn't exist (durable for persistence)
+            channel.queue_declare(queue=queue_name, durable=True)
+
             # Non-blocking message retrieval
             method_frame, header_frame, body = channel.basic_get(queue=queue_name)
 
