@@ -235,6 +235,8 @@ class AMQPDriver(HasColoredOutput, Queue):
 
     def _build_url(self, opts: Dict[str, Any]) -> str:
         """Build AMQP connection URL with proper encoding."""
+        from urllib.parse import quote_plus
+        
         connection_params = {
             "username": opts.get("username", ""),
             "password": opts.get("password", ""),
@@ -242,6 +244,10 @@ class AMQPDriver(HasColoredOutput, Queue):
             "port": opts.get("port", 5672),
             "vhost": opts.get("vhost", "/"),
         }
+
+        # URL encode username and password (handles special characters like *, #, %, etc.)
+        encoded_username = quote_plus(connection_params["username"])
+        encoded_password = quote_plus(connection_params["password"])
 
         # Encode vhost (/ becomes %2F)
         encoded_vhost = (
@@ -251,7 +257,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         )
 
         base_url = (
-            f"amqp://{connection_params['username']}:{connection_params['password']}"
+            f"amqp://{encoded_username}:{encoded_password}"
             f"@{connection_params['host']}:{connection_params['port']}/{encoded_vhost}"
         )
 
