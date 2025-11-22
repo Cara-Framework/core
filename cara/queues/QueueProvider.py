@@ -154,9 +154,13 @@ class QueueProvider(DeferredProvider):
                 application=self.application,
                 options=settings,
             )
+            queue_manager.add_driver(RedisDriver.driver_name, driver)
         except Exception as e:
-            raise QueueConfigurationException(f"Failed to instantiate RedisDriver: {e}")
-        queue_manager.add_driver(RedisDriver.driver_name, driver)
+            # Don't fail entire queue registration if Redis is unavailable
+            # Redis driver is optional, only fail if explicitly required
+            from cara.facades import Log
+            Log.warning(f"Redis driver not available (Redis connection failed): {e}. Skipping Redis driver registration.")
+            # Don't raise exception - allow queue system to work with other drivers
 
     def _register_job_tracker(self) -> None:
         """Register JobTracker singleton with unified Job model from container."""
