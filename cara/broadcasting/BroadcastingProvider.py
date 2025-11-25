@@ -71,14 +71,14 @@ class BroadcastingProvider(DeferredProvider):
         if not redis_settings:
             return  # Redis is optional
 
-        # Get Redis URL from queue config to avoid duplication
-        queue_config = config("queue", {})
-        queue_redis_config = queue_config.get("drivers", {}).get("redis", {})
+        # FIX: Use broadcasting config's connection dict directly
+        # The config("queue") call returns None when config is not yet loaded
+        connection = redis_settings.get("connection", {})
 
-        host = queue_redis_config.get("host", "localhost")
-        port = queue_redis_config.get("port", 6379)
-        password = queue_redis_config.get("password", "")
-        db = queue_redis_config.get("db", 0)
+        host = connection.get("host", "localhost")
+        port = connection.get("port", 6379)
+        password = connection.get("password", "")
+        db = connection.get("db", 0)
 
         if password:
             redis_url = f"redis://:{password}@{host}:{port}/{db}"
