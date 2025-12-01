@@ -236,7 +236,7 @@ class AMQPDriver(HasColoredOutput, Queue):
     def _build_url(self, opts: Dict[str, Any]) -> str:
         """Build AMQP connection URL with proper encoding."""
         from urllib.parse import quote_plus
-        
+
         connection_params = {
             "username": opts.get("username", ""),
             "password": opts.get("password", ""),

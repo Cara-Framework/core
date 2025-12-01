@@ -159,7 +159,10 @@ class QueueProvider(DeferredProvider):
             # Don't fail entire queue registration if Redis is unavailable
             # Redis driver is optional, only fail if explicitly required
             from cara.facades import Log
-            Log.warning(f"Redis driver not available (Redis connection failed): {e}. Skipping Redis driver registration.")
+
+            Log.warning(
+                f"Redis driver not available (Redis connection failed): {e}. Skipping Redis driver registration."
+            )
             # Don't raise exception - allow queue system to work with other drivers
             return
 
