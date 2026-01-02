@@ -36,19 +36,19 @@ class BaseRelationship:
         return self
 
     def get_builder(self):
-        """Get query builder for the related model."""
-        if hasattr(self, '_related_builder') and self._related_builder:
-            return self._related_builder
+        """Get query builder for the related model.
         
+        IMPORTANT: Always return a FRESH builder instance to avoid
+        query condition accumulation across multiple calls.
+        """
         # Get the related model class from the decorated function
         func = getattr(self, '_func', None) or getattr(self, 'fn', None)
         if func:
             # Call the function to get the model class
             related_model = func(self)
             if related_model:
-                # Create query builder for the related model
-                self._related_builder = related_model.query()
-                return self._related_builder
+                # ALWAYS create a NEW query builder (don't cache)
+                return related_model.query()
         
         raise AttributeError("Cannot get builder: related model not found")
 
