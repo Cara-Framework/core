@@ -414,7 +414,9 @@ class QueryBuilder(ObservesEvents):
             self._db_manager.validate_connection(self.connection)
 
             # Get connection class and grammar from DatabaseManager
-            self.connection_class = self._db_manager.get_connection_class(self.connection)
+            self.connection_class = self._db_manager.get_connection_class(
+                self.connection
+            )
             self.grammar = self._db_manager.get_grammar(self.connection)
 
         return self
@@ -1352,7 +1354,9 @@ class QueryBuilder(ObservesEvents):
                     )
                     continue
 
-                last_builder = related.query_has(last_builder, method="where_not_exists")
+                last_builder = related.query_has(
+                    last_builder, method="where_not_exists"
+                )
         else:
             related = getattr(self._model, relationship)
             related.query_where_exists(self, callback, method="where_not_exists")
@@ -1717,7 +1721,9 @@ class QueryBuilder(ObservesEvents):
 
             self.observe_events(model, "updating")
 
-        self._updates += (UpdateQueryExpression(column, value, update_type="increment"),)
+        self._updates += (
+            UpdateQueryExpression(column, value, update_type="increment"),
+        )
 
         if dry or self.dry:
             return self.get_grammar().compile("update").to_sql()
@@ -1761,7 +1767,9 @@ class QueryBuilder(ObservesEvents):
 
             self.observe_events(model, "updating")
 
-        self._updates += (UpdateQueryExpression(column, value, update_type="decrement"),)
+        self._updates += (
+            UpdateQueryExpression(column, value, update_type="decrement"),
+        )
 
         if dry or self.dry:
             return self.get_grammar().compile("update").to_sql()
@@ -1897,7 +1905,9 @@ class QueryBuilder(ObservesEvents):
         """
         if bindings is None:
             bindings = []
-        self._group_by += (GroupByExpression(column=query, raw=True, bindings=bindings),)
+        self._group_by += (
+            GroupByExpression(column=query, raw=True, bindings=bindings),
+        )
 
         return self
 
@@ -2129,11 +2139,17 @@ class QueryBuilder(ObservesEvents):
             hydrated_model = self._model.hydrate(result)
 
             if (
-                self._eager_relation.eagers
+                self._eager_relation.relations
+                or self._eager_relation.eagers
                 or self._eager_relation.nested_eagers
                 or self._eager_relation.callback_eagers
             ) and hydrated_model:
-                for eager_load in self._eager_relation.get_eagers():
+                # Process all registered relations
+                all_relations = (
+                    self._eager_relation.get_relations()
+                    + self._eager_relation.get_eagers()
+                )
+                for eager_load in set(all_relations):  # Remove duplicates
                     if isinstance(eager_load, dict):
                         # Nested
                         for (
@@ -2169,7 +2185,9 @@ class QueryBuilder(ObservesEvents):
                                 # Get relationship instance (now works as property)
                                 related = getattr(self._model, eager_load)
                                 # If it's a function (old style), call it to get relationship
-                                if callable(related) and not hasattr(related, 'get_related'):
+                                if callable(related) and not hasattr(
+                                    related, "get_related"
+                                ):
                                     related = related()
                             else:
                                 related = self._model.get_related(eager_load)
@@ -2195,7 +2213,9 @@ class QueryBuilder(ObservesEvents):
                                     # Get relationship instance (now works as property)
                                     related = getattr(self._model, eager)
                                     # If it's a function (old style), call it to get relationship
-                                    if callable(related) and not hasattr(related, 'get_related'):
+                                    if callable(related) and not hasattr(
+                                        related, "get_related"
+                                    ):
                                         related = related()
                                 else:
                                     related = self._model.get_related(eager)
