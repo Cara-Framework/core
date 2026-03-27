@@ -27,21 +27,18 @@ class ThrottleRequests(Middleware):
 
     async def handle(self, request: Request, next: Callable):
         """Handle rate limiting logic."""
-        # HTTP rate limit logic
-        # Derive a unique key per client. Here: use IP + path.
-        client_ip = request.ip() or "anonymous"
-        route_path = request.path or "/"
-        # You might also include request.method if you want GET vs POST separate.
-        key = f"{client_ip}|{route_path}"
+        # First, check if parameter is a named limiter
+        limit_config = self._resolve_limit_config(request)
+        
+        if limit_config is None:
+            # If no limit config found, allow the request through
+            return await next(request)
 
-        # If custom parameters provided, we need to implement custom logic
-        # Otherwise, use the global RateLimiter which uses rate.py config
-        if self.custom_limit is not None:
-            # Custom rate limiting with parameters
-            allowed, remaining, reset_in = self._custom_attempt(key)
-        else:
-            # Use global RateLimiter from rate.py config
-            allowed, remaining, reset_in = RateLimiter.attempt(key)
+        # Get the rate limit key
+        key = self._resolve_key(request, limit_config)
+        
+        # Attempt to check/record the request
+        allowed, remaining, reset_in = self._attempt_limit(key, limit_config)
 
         if not allowed:
             # Build a 429 Response and attach headers
@@ -56,7 +53,8 @@ class ThrottleRequests(Middleware):
             resp.json(body, 429)
 
             # Attach rate-limit headers
-            resp.header("X-RateLimit-Limit", str(self.custom_limit or RateLimiter.limit))
+            max_attempts = getattr(limit_config, 'max_attempts', self.custom_limit or 60)
+            resp.header("X-RateLimit-Limit", str(max_attempts))
             resp.header("X-RateLimit-Remaining", "0")
             resp.header("X-RateLimit-Reset", str(reset_in))
 
@@ -69,19 +67,87 @@ class ThrottleRequests(Middleware):
         response = await next(request)
 
         # Attach headers so clients can see their quota
-        response.header("X-RateLimit-Limit", str(self.custom_limit or RateLimiter.limit))
+        max_attempts = getattr(limit_config, 'max_attempts', self.custom_limit or 60)
+        response.header("X-RateLimit-Limit", str(max_attempts))
         response.header("X-RateLimit-Remaining", str(remaining))
         response.header("X-RateLimit-Reset", str(reset_in))
 
         return response
 
-    def _custom_attempt(self, key: str) -> tuple[bool, int, int]:
-        """Custom rate limiting when parameters are provided."""
+    def _resolve_limit_config(self, request: Request):
+        """
+        Resolve the limit configuration for this request.
+        
+        Checks in order:
+        1. Named limiter (if middleware parameter matches a registered limiter name)
+        2. Custom numeric parameters (throttle:60,1 format)
+        3. Global rate limiter configuration
+        
+        Returns a Limit object or None if no rate limiting applies.
+        """
+        from cara.rates import Limit
+        
+        # Check if custom_limit is actually a limiter name (string)
+        if isinstance(self.custom_limit, str):
+            # Try to resolve as named limiter
+            resolved = RateLimiter.resolve_limiter(self.custom_limit, request)
+            if resolved:
+                return resolved
+        elif self.custom_limit is not None:
+            # Custom numeric parameters provided (throttle:60,1)
+            window_minutes = self.custom_window_minutes or 1
+            return Limit(max_attempts=self.custom_limit, decay_minutes=window_minutes)
+        
+        # Fall back to global RateLimiter config (if available)
+        # Return a Limit object based on global settings
+        return Limit(max_attempts=RateLimiter.limit, decay_minutes=self.window / 60)
+
+    def _resolve_key(self, request: Request, limit_config) -> str:
+        """
+        Resolve the rate limit key for this request and limit config.
+        
+        Uses the limit's _key attribute if set, otherwise constructs a default key
+        from endpoint + user_id (or IP address).
+        
+        Args:
+            request: The HTTP request object
+            limit_config: The Limit object
+            
+        Returns:
+            A unique rate limit key
+        """
+        # If the Limit has a custom key set, use that
+        if hasattr(limit_config, '_key') and limit_config._key:
+            return limit_config._key
+        
+        # Default: endpoint:user_id_or_ip
+        endpoint = request.path or "/"
+        user_id = getattr(request, 'user_id', None)
+        client_ip = request.ip() or "anonymous"
+        identifier = str(user_id) if user_id else client_ip
+        
+        return f"{endpoint}:{identifier}"
+
+    def _attempt_limit(self, key: str, limit_config) -> tuple[bool, int, int]:
+        """
+        Attempt to record a request against the rate limit.
+        
+        Args:
+            key: The rate limit key
+            limit_config: The Limit object defining the limit
+            
+        Returns:
+            Tuple of (allowed: bool, remaining: int, reset_in: int)
+        """
         import time
 
         from cara.facades import Cache
 
-        window_seconds = (self.custom_window_minutes or 1) * 60
+        # Handle unlimited case
+        if limit_config.max_attempts == 0:
+            return True, -1, 0
+
+        window_seconds = limit_config.decay_minutes * 60
         now = int(time.time())
 
         # Get current count from cache
@@ -99,8 +165,8 @@ class ThrottleRequests(Middleware):
         count += 1
 
         # Check if allowed
-        allowed = count <= self.custom_limit
-        remaining = max(self.custom_limit - count, 0)
+        allowed = count <= limit_config.max_attempts
+        remaining = max(limit_config.max_attempts - count, 0)
         reset_in = max(expires_at - now, 0)
 
         # Save back to cache

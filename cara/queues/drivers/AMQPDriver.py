@@ -162,6 +162,174 @@ class AMQPDriver(HasColoredOutput, Queue):
             return self.application.make("JobTracker")
         return None
 
+    def declare_dead_letter_exchange(self, exchange_name: str = "dead.letter") -> None:
+        """
+        Declare RabbitMQ dead letter exchange and queues.
+
+        Creates DLX exchange and binds dead letter queues for failed jobs.
+
+        Args:
+            exchange_name: Base exchange name (default: "dead.letter")
+        """
+        try:
+            self._connect({})
+
+            # Declare dead letter exchange
+            dlx_name = f"{exchange_name}.dlx"
+            self.channel.exchange_declare(
+                exchange=dlx_name,
+                exchange_type="topic",
+                durable=True
+            )
+
+            # Declare dead letter queue
+            dlq_name = f"{exchange_name}.queue"
+            self.channel.queue_declare(
+                queue=dlq_name,
+                durable=True,
+                arguments={
+                    "x-message-ttl": 86400000,  # 24 hours
+                }
+            )
+
+            # Bind queue to DLX
+            self.channel.queue_bind(
+                exchange=dlx_name,
+                queue=dlq_name,
+                routing_key="dead.*"
+            )
+
+            Log.info(f"Dead letter exchange configured: {dlx_name}")
+
+            # Close connection
+            try:
+                self.channel.close()
+                self.connection.close()
+            except Exception:
+                pass
+
+        except Exception as e:
+            Log.error(f"Failed to declare dead letter exchange: {e}")
+
+    def get_dead_letter_messages(
+        self, queue_name: str = "dead.letter.queue", limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Peek at dead letter queue messages without consuming them.
+
+        Args:
+            queue_name: Dead letter queue name
+            limit: Maximum messages to retrieve
+
+        Returns:
+            List of message details (headers, body, routing_key)
+        """
+        messages = []
+        try:
+            self._connect({})
+
+            # Use basic_get to peek at messages without consuming
+            for _ in range(limit):
+                method, properties, body = self.channel.basic_get(queue_name, auto_ack=False)
+
+                if method is None:
+                    break
+
+                # Decode payload
+                try:
+                    payload = pickle.loads(body)
+                except Exception:
+                    try:
+                        payload = json.loads(body.decode("utf-8"))
+                    except Exception:
+                        payload = {"raw": body.decode("utf-8", errors="ignore")}
+
+                messages.append({
+                    "delivery_tag": method.delivery_tag,
+                    "routing_key": method.routing_key,
+                    "redelivered": method.redelivered,
+                    "exchange": method.exchange,
+                    "headers": dict(properties.headers or {}),
+                    "timestamp": properties.timestamp,
+                    "payload": payload,
+                })
+
+                # Don't consume - requeue the message
+                self.channel.basic_nack(method.delivery_tag, requeue=True)
+
+            # Close connection
+            try:
+                self.channel.close()
+                self.connection.close()
+            except Exception:
+                pass
+
+        except Exception as e:
+            Log.error(f"Failed to get dead letter messages: {e}")
+
+        return messages
+
+    def replay_dead_letter(
+        self, queue_name: str, message_id: str = None
+    ) -> int:
+        """
+        Replay dead letter messages back to original queue.
+
+        Args:
+            queue_name: Original queue to replay to
+            message_id: Specific message ID to replay, or None for all
+
+        Returns:
+            Number of messages replayed
+        """
+        dlq_name = "dead.letter.queue"
+        replayed = 0
+
+        try:
+            self._connect({})
+
+            while True:
+                method, properties, body = self.channel.basic_get(dlq_name, auto_ack=False)
+
+                if method is None:
+                    break
+
+                # Check if this is the message to replay
+                headers = dict(properties.headers or {})
+                msg_id = headers.get("message_id")
+
+                if message_id is None or msg_id == message_id:
+                    # Republish to original queue
+                    self.channel.basic_publish(
+                        exchange="",
+                        routing_key=queue_name,
+                        body=body,
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,
+                            headers=headers,
+                        ),
+                    )
+                    replayed += 1
+                    Log.info(f"Replayed message {msg_id} to {queue_name}")
+
+                    if message_id is not None:
+                        break
+
+                # Remove from dead letter queue
+                self.channel.basic_ack(method.delivery_tag)
+
+            # Close connection
+            try:
+                self.channel.close()
+                self.connection.close()
+            except Exception:
+                pass
+
+        except Exception as e:
+            Log.error(f"Failed to replay dead letter messages: {e}")
+
+        return replayed
+
     def _connect_and_publish(self, payload: Any, opts: Dict[str, Any]) -> None:
         """Connect to RabbitMQ and publish message."""
         self._connect(opts)
@@ -174,8 +342,21 @@ class AMQPDriver(HasColoredOutput, Queue):
             else opts.get("queue", "default")
         )
 
-        # Declare queue (durable for persistence)
-        self.channel.queue_declare(queue=queue_name, durable=True)
+        # Declare queue with dead letter exchange support
+        exchange_name = opts.get("exchange", "")
+        message_ttl = opts.get("message_ttl", 86400000)  # 24h default
+
+        queue_args = {
+            "x-dead-letter-exchange": f"{exchange_name}.dlx" if exchange_name else "dead.letter.dlx",
+            "x-dead-letter-routing-key": f"dead.{queue_name}",
+            "x-message-ttl": message_ttl,
+        }
+
+        self.channel.queue_declare(
+            queue=queue_name,
+            durable=True,
+            arguments=queue_args
+        )
 
         # Serialize payload
         serializer = opts.get("serializer", "pickle")

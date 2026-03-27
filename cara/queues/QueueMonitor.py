@@ -227,6 +227,172 @@ class QueueMonitor:
         else:
             raise ValueError(f"Unsupported export format: {format}")
 
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Get overall queue system health status.
+
+        Evaluates failure rates, wait times, and queue congestion to determine health.
+
+        Returns:
+            Dict with status (healthy/degraded/critical), issues, and metrics
+        """
+        stats = self.get_performance_summary()
+
+        status = "healthy"
+        issues = []
+
+        # Check failure rate
+        total = stats.get("total_jobs_processed", 0)
+        failed = stats.get("failed_jobs", 0)
+        failed_rate = (failed / max(total, 1)) if total > 0 else 0
+
+        if failed_rate > 0.3:  # >30% failure rate
+            status = "critical"
+            issues.append(f"Critical failure rate: {failed_rate:.1%}")
+        elif failed_rate > 0.1:  # >10% failure rate
+            status = "degraded"
+            issues.append(f"High failure rate: {failed_rate:.1%}")
+
+        # Check average processing time
+        avg_wait = stats.get("average_processing_time_seconds", 0)
+        if avg_wait > 300:  # >5 min avg processing time
+            if status == "healthy":
+                status = "degraded"
+            issues.append(f"High processing time: {avg_wait:.0f}s")
+
+        # Check queue backlog
+        queue_stats = stats.get("queue_stats", {})
+        for queue_name, q_stat in queue_stats.items():
+            jobs_processed = q_stat.get("jobs_processed", 0)
+            jobs_failed = q_stat.get("jobs_failed", 0)
+
+            if jobs_processed > 0:
+                queue_failure_rate = jobs_failed / jobs_processed
+                if queue_failure_rate > 0.2:
+                    if status == "healthy":
+                        status = "degraded"
+                    issues.append(
+                        f"Queue '{queue_name}' failure rate: {queue_failure_rate:.1%}"
+                    )
+
+        return {
+            "status": status,
+            "issues": issues,
+            "metrics": stats,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    def get_throughput(self, window_minutes: int = 60) -> Dict[str, Any]:
+        """
+        Get jobs processed per minute over a time window.
+
+        Args:
+            window_minutes: Time window in minutes to measure
+
+        Returns:
+            Dict with throughput metrics per queue
+        """
+        cutoff_time = datetime.now() - __import__("datetime").timedelta(minutes=window_minutes)
+
+        throughput = {}
+        for job_id, job_stat in self.job_stats.items():
+            started = job_stat.get("started_at")
+            if not started or started < cutoff_time:
+                continue
+
+            queue_name = job_stat.get("queue", "unknown")
+            if queue_name not in throughput:
+                throughput[queue_name] = {
+                    "jobs_processed": 0,
+                    "jobs_per_minute": 0.0,
+                    "jobs_completed": 0,
+                }
+
+            throughput[queue_name]["jobs_processed"] += 1
+
+            if job_stat.get("status") == "completed":
+                throughput[queue_name]["jobs_completed"] += 1
+
+        # Calculate jobs per minute
+        minutes_elapsed = max(window_minutes, 1)
+        for queue_name, q_throughput in throughput.items():
+            q_throughput["jobs_per_minute"] = round(
+                q_throughput["jobs_processed"] / minutes_elapsed, 2
+            )
+
+        return {
+            "window_minutes": window_minutes,
+            "throughput": throughput,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    def get_error_breakdown(self) -> Dict[str, Any]:
+        """
+        Get failure counts grouped by error type and job class.
+
+        Returns:
+            Dict with error statistics by type and job class
+        """
+        error_stats = {
+            "by_type": {},
+            "by_job_class": {},
+            "by_queue": {},
+        }
+
+        for job_stat in self.job_stats.values():
+            if job_stat.get("status") != "failed":
+                continue
+
+            # Track by error type
+            error_type = job_stat.get("error_type", "unknown")
+            if error_type not in error_stats["by_type"]:
+                error_stats["by_type"][error_type] = {
+                    "count": 0,
+                    "jobs": [],
+                    "sample_errors": [],
+                }
+            error_stats["by_type"][error_type]["count"] += 1
+            error_stats["by_type"][error_type]["jobs"].append(job_stat["job_name"])
+
+            if len(error_stats["by_type"][error_type]["sample_errors"]) < 3:
+                error_stats["by_type"][error_type]["sample_errors"].append(
+                    job_stat.get("error", "No error message")[:200]
+                )
+
+            # Track by job class
+            job_class = job_stat.get("job_class", "unknown")
+            if job_class not in error_stats["by_job_class"]:
+                error_stats["by_job_class"][job_class] = {
+                    "count": 0,
+                    "errors": {},
+                }
+            error_stats["by_job_class"][job_class]["count"] += 1
+
+            error_key = job_stat.get("error_type", "unknown")
+            error_stats["by_job_class"][job_class]["errors"][error_key] = (
+                error_stats["by_job_class"][job_class]["errors"].get(error_key, 0) + 1
+            )
+
+            # Track by queue
+            queue_name = job_stat.get("queue", "unknown")
+            if queue_name not in error_stats["by_queue"]:
+                error_stats["by_queue"][queue_name] = {
+                    "count": 0,
+                    "errors": {},
+                }
+            error_stats["by_queue"][queue_name]["count"] += 1
+
+            error_type_for_queue = job_stat.get("error_type", "unknown")
+            error_stats["by_queue"][queue_name]["errors"][error_type_for_queue] = (
+                error_stats["by_queue"][queue_name]["errors"].get(error_type_for_queue, 0) + 1
+            )
+
+        return {
+            "error_breakdown": error_stats,
+            "total_failed": len([j for j in self.job_stats.values() if j["status"] == "failed"]),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
     def clear_stats(self):
         """Clear all statistics."""
         self.job_stats.clear()

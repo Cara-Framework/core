@@ -29,6 +29,9 @@ class DatabaseManager:
         self._default_connection = "app"
         self._connections = {}
 
+        # Initialize morph map for polymorphic relationships
+        self._morph_map = {}
+
     def _ensure_resolver(self):
         """Lazy initialization of resolver to avoid circular dependency"""
         if self._resolver is None:
@@ -265,6 +268,27 @@ class DatabaseManager:
         if connection_key == "default" or connection_key is None:
             return self._default_connection
         return connection_key
+
+    def morph_map(self, morph_map_dict):
+        """Register morph type mappings for polymorphic relationships.
+
+        Args:
+            morph_map_dict: Dict mapping type names to model class paths
+                           e.g. {"amazon_product": "commons.models.amazon.AmazonProduct.AmazonProduct"}
+
+        Returns:
+            self for method chaining
+        """
+        self._morph_map = morph_map_dict
+        return self
+
+    def get_morph_map(self):
+        """Get the morph map for polymorphic relationships.
+
+        Returns:
+            Dict mapping type names to model class paths
+        """
+        return self._morph_map
 
     def validate_connection(self, connection_name):
         """Validate that connection exists and has required config"""

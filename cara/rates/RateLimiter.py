@@ -2,21 +2,91 @@
 Fixed-Window Rate Limiter for the Cara framework.
 
 This module implements a fixed-window rate limiting algorithm using the cache system, enforcing
-request limits per key within a time window.
+request limits per key within a time window. It supports named limiters (Laravel-style)
+for flexible per-user, per-endpoint rate limiting.
 """
 
 import time
-from typing import Tuple
+from typing import Callable, Optional, Tuple
 
 from cara.facades import Cache
 from cara.rates.contracts import RateLimit
 
 
+class Limit:
+    """
+    Represents a rate limit configuration.
+    
+    Provides builder pattern methods to configure rate limits with custom keys and responses.
+    Inspired by Laravel's Limit class for flexible rate limiting definitions.
+    """
+
+    def __init__(self, max_attempts: int = 60, decay_minutes: int = 1):
+        """
+        Initialize a rate limit.
+
+        Args:
+            max_attempts: Maximum number of requests allowed in the decay window
+            decay_minutes: Time window in minutes
+        """
+        self.max_attempts = max_attempts
+        self.decay_minutes = decay_minutes
+        self._key = None
+        self._response = None
+
+    @classmethod
+    def per_minute(cls, max_attempts: int) -> "Limit":
+        """Create a rate limit for a 1-minute window."""
+        return cls(max_attempts=max_attempts, decay_minutes=1)
+
+    @classmethod
+    def per_hour(cls, max_attempts: int) -> "Limit":
+        """Create a rate limit for a 1-hour window."""
+        return cls(max_attempts=max_attempts, decay_minutes=60)
+
+    @classmethod
+    def per_day(cls, max_attempts: int) -> "Limit":
+        """Create a rate limit for a 24-hour window."""
+        return cls(max_attempts=max_attempts, decay_minutes=1440)
+
+    @classmethod
+    def none(cls) -> "Limit":
+        """Create an unlimited rate limit (no rate limiting)."""
+        return cls(max_attempts=0, decay_minutes=0)
+
+    def by(self, key: str) -> "Limit":
+        """
+        Set the rate limit key (e.g., user ID, IP address, endpoint).
+        
+        Args:
+            key: Unique identifier for this rate limit
+            
+        Returns:
+            self for method chaining
+        """
+        self._key = key
+        return self
+
+    def response(self, callback: Callable) -> "Limit":
+        """
+        Set a custom response handler for when rate limit is exceeded.
+        
+        Args:
+            callback: Function to call when rate limited
+            
+        Returns:
+            self for method chaining
+        """
+        self._response = callback
+        return self
+
+
 class RateLimiter(RateLimit):
     """
-    Fixed‐window rate limiter.
+    Fixed‐window rate limiter with named limiter support.
 
-    Uses the 'cache' to store per‐key counts.
+    Uses the 'cache' to store per‐key counts and supports named rate limiters
+    for flexible per-user, per-endpoint configuration.
     """
 
     driver_name = "fixed"
@@ -34,6 +104,7 @@ class RateLimiter(RateLimit):
         self.limit = options.get("limit", 60)
         self.window = options.get("window_seconds", 60)
         self.prefix = options.get("cache_prefix", "rate_")
+        self._limiters = {}  # Named limiter definitions (name -> callback)
 
     def attempt(self, key: str) -> Tuple[bool, int, int]:
         """
@@ -70,6 +141,51 @@ class RateLimiter(RateLimit):
         )
 
         return allowed, remaining, reset_in
+
+    def for_(self, name: str, callback: Callable) -> "RateLimiter":
+        """
+        Register a named rate limiter with a callback.
+        
+        The callback receives a request object and should return a Limit object
+        or list of Limit objects defining the rate limit configuration.
+
+        Args:
+            name: Unique identifier for this named limiter
+            callback: Function that takes a request and returns Limit or list[Limit]
+
+        Returns:
+            self for method chaining
+        """
+        self._limiters[name] = callback
+        return self
+
+    def limiter(self, name: str) -> Optional[Callable]:
+        """
+        Get a registered named limiter callback.
+
+        Args:
+            name: Name of the limiter to retrieve
+
+        Returns:
+            The callback function or None if not found
+        """
+        return self._limiters.get(name)
+
+    def resolve_limiter(self, name: str, request):
+        """
+        Resolve a named limiter for a given request.
+
+        Args:
+            name: Name of the registered limiter
+            request: The HTTP request object
+
+        Returns:
+            Limit object or list of Limit objects, or None if limiter not found
+        """
+        callback = self._limiters.get(name)
+        if callback:
+            return callback(request)
+        return None
 
     def reset(self, key: str) -> None:
         """Immediately reset this key's counter."""
