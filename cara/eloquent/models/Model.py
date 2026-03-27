@@ -237,6 +237,13 @@ class Model(
             "where_doesnt_have",
             "with_",
             "with_count",
+            "with_sum",
+            "with_avg",
+            "with_min",
+            "with_max",
+            "tap",
+            "pipe",
+            "transaction",
             "latest",
             "oldest",
             "value",
@@ -537,6 +544,10 @@ class Model(
 
             self._fire_model_event("saved")
 
+            # Touch parent models if configured
+            if hasattr(self, "__touches__") and self.__touches__:
+                self._touch_parents()
+
             return True
 
         except Exception as e:
@@ -576,6 +587,32 @@ class Model(
             return False
 
     @classmethod
+
+    def _touch_parents(self):
+        """Touch parent models listed in __touches__."""
+        for relation_name in self.__touches__:
+            related = getattr(self, relation_name, None)
+            if related and hasattr(related, 'touch'):
+                related.touch()
+
+    def touch(self):
+        """Update the model's updated_at timestamp."""
+        # Get the timestamp column name
+        timestamp_col = 'updated_at'
+        if hasattr(self, '__timestamps__') and self.__timestamps__:
+            if isinstance(self.__timestamps__, (list, tuple)):
+                timestamp_col = self.__timestamps__[1] if len(self.__timestamps__) > 1 else 'updated_at'
+        
+        # Get the current datetime in the appropriate format
+        current_time = self.get_new_datetime_string()
+        
+        # Update only the timestamp column
+        self.update({timestamp_col: current_time})
+        
+        # Also update the local attribute
+        self.__attributes__[timestamp_col] = current_time
+        self.__original_attributes__[timestamp_col] = current_time
+
     def get_table_name(cls):
         """
         Gets the table name.

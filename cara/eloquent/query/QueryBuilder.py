@@ -32,6 +32,26 @@ from ..scopes import BaseScope
 from .EagerRelation import EagerRelations
 
 
+
+class TransactionContext:
+    """Context manager for database transactions."""
+    
+    def __init__(self, builder):
+        self.builder = builder
+    
+    def __enter__(self):
+        self.builder.begin()
+        return self.builder
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            self.builder.rollback()
+            return False
+        else:
+            self.builder.commit()
+            return True
+
+
 class QueryBuilder(ObservesEvents):
     """
     Single Responsibility: Builds and executes database queries
@@ -284,6 +304,37 @@ class QueryBuilder(ObservesEvents):
         """
         self._connection.rollback()
         return self
+
+
+    def transaction(self, callback=None):
+        """Execute code within a database transaction.
+        
+        Can be used as a context manager or with a callback.
+        
+        Example (context manager):
+            with Product.query().transaction() as trx:
+                product = Product.create({...})
+                ProductImage.create({...})
+        
+        Example (callback):
+            Product.query().transaction(lambda: [
+                Product.create({...}),
+                ProductImage.create({...}),
+            ])
+        """
+        if callback is None:
+            # Return context manager
+            return TransactionContext(self)
+        else:
+            # Execute with callback
+            self.begin()
+            try:
+                result = callback()
+                self.commit()
+                return result
+            except Exception as e:
+                self.rollback()
+                raise e
 
     def get_relation(self, key):
         """
@@ -1398,6 +1449,84 @@ class QueryBuilder(ObservesEvents):
         return getattr(self._model, relationship).get_with_count_query(
             self, callback=callback
         )
+
+
+    def with_sum(self, relationship, column, callback=None):
+        """Eager load a relationship's SUM aggregate.
+
+        Adds {relationship}_{column}_sum attribute to each model.
+
+        Example:
+            Product.with_sum("prices", "price_min").get()
+            # product.prices_price_min_sum = 150.00
+        """
+        self.select(*self._model.get_selects())
+        return getattr(self._model, relationship).get_with_sum_query(
+            self, column, callback=callback
+        )
+
+    def with_avg(self, relationship, column, callback=None):
+        """Eager load a relationship's AVG aggregate.
+
+        Adds {relationship}_{column}_avg attribute to each model.
+
+        Example:
+            Product.with_avg("prices", "price").get()
+            # product.prices_price_avg = 75.50
+        """
+        self.select(*self._model.get_selects())
+        return getattr(self._model, relationship).get_with_avg_query(
+            self, column, callback=callback
+        )
+
+    def with_min(self, relationship, column, callback=None):
+        """Eager load a relationship's MIN aggregate.
+
+        Adds {relationship}_{column}_min attribute to each model.
+
+        Example:
+            Product.with_min("prices", "price").get()
+            # product.prices_price_min = 10.00
+        """
+        self.select(*self._model.get_selects())
+        return getattr(self._model, relationship).get_with_min_query(
+            self, column, callback=callback
+        )
+
+    def with_max(self, relationship, column, callback=None):
+        """Eager load a relationship's MAX aggregate.
+
+        Adds {relationship}_{column}_max attribute to each model.
+
+        Example:
+            Product.with_max("prices", "price").get()
+            # product.prices_price_max = 200.00
+        """
+        self.select(*self._model.get_selects())
+        return getattr(self._model, relationship).get_with_max_query(
+            self, column, callback=callback
+        )
+
+    def tap(self, callback):
+        """Execute callback with the builder and return the builder for chaining.
+
+        Useful for debugging or side effects without breaking the chain.
+
+        Example:
+            Product.active().tap(lambda q: print(q.to_sql())).get()
+        """
+        callback(self)
+        return self
+
+    def pipe(self, callback):
+        """Pass the builder to a callback and return the callback's result.
+
+        Unlike tap(), pipe() returns what the callback returns.
+
+        Example:
+            result = Product.active().pipe(lambda q: q.count() > 0)
+        """
+        return callback(self)
 
     def where_not_in(self, column, wheres=None):
         """

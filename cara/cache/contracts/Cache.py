@@ -54,3 +54,22 @@ class Cache:
     ) -> bool:
         """Add a value only if key doesn't exist. Returns True if added."""
         raise NotImplementedError
+
+    def remember(
+        self,
+        key: str,
+        ttl: int,
+        callback,
+    ) -> Any:
+        """
+        Get value from cache or execute callback and cache the result.
+
+        Args:
+            key: Cache key
+            ttl: Time to live in seconds
+            callback: Callable that returns the value if not cached
+
+        Returns:
+            Cached value or result of callback
+        """
+        raise NotImplementedError

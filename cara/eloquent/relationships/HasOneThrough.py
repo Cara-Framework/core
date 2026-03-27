@@ -275,5 +275,150 @@ class HasOneThrough(BaseRelationship):
 
         return return_query
 
+
+    def get_with_sum_query(self, current_builder, column, callback):
+        dist_table = self.distant_builder.get_table_name()
+        int_table = self.intermediary_builder.get_table_name()
+
+        if not current_builder._columns:
+            current_builder.select("*")
+
+        return_query = current_builder.add_select(
+            f"{self.attribute}_{column}_sum",
+            lambda q: (
+                q.sum(f"{dist_table}.{column}")
+                .join(
+                    f"{int_table}",
+                    f"{int_table}.{self.foreign_key}",
+                    "=",
+                    f"{dist_table}.{self.other_owner_key}",
+                )
+                .where_column(
+                    f"{int_table}.{self.local_owner_key}",
+                    f"{current_builder.get_table_name()}.{self.local_key}",
+                )
+                .table(dist_table)
+                .when(
+                    callback,
+                    lambda q: (
+                        q.where_in(
+                            self.foreign_key,
+                            callback(self.distant_builder.select(self.other_owner_key)),
+                        )
+                    ),
+                )
+            ),
+        )
+
+        return return_query
+
+    def get_with_avg_query(self, current_builder, column, callback):
+        dist_table = self.distant_builder.get_table_name()
+        int_table = self.intermediary_builder.get_table_name()
+
+        if not current_builder._columns:
+            current_builder.select("*")
+
+        return_query = current_builder.add_select(
+            f"{self.attribute}_{column}_avg",
+            lambda q: (
+                q.avg(f"{dist_table}.{column}")
+                .join(
+                    f"{int_table}",
+                    f"{int_table}.{self.foreign_key}",
+                    "=",
+                    f"{dist_table}.{self.other_owner_key}",
+                )
+                .where_column(
+                    f"{int_table}.{self.local_owner_key}",
+                    f"{current_builder.get_table_name()}.{self.local_key}",
+                )
+                .table(dist_table)
+                .when(
+                    callback,
+                    lambda q: (
+                        q.where_in(
+                            self.foreign_key,
+                            callback(self.distant_builder.select(self.other_owner_key)),
+                        )
+                    ),
+                )
+            ),
+        )
+
+        return return_query
+
+    def get_with_min_query(self, current_builder, column, callback):
+        dist_table = self.distant_builder.get_table_name()
+        int_table = self.intermediary_builder.get_table_name()
+
+        if not current_builder._columns:
+            current_builder.select("*")
+
+        return_query = current_builder.add_select(
+            f"{self.attribute}_{column}_min",
+            lambda q: (
+                q.min(f"{dist_table}.{column}")
+                .join(
+                    f"{int_table}",
+                    f"{int_table}.{self.foreign_key}",
+                    "=",
+                    f"{dist_table}.{self.other_owner_key}",
+                )
+                .where_column(
+                    f"{int_table}.{self.local_owner_key}",
+                    f"{current_builder.get_table_name()}.{self.local_key}",
+                )
+                .table(dist_table)
+                .when(
+                    callback,
+                    lambda q: (
+                        q.where_in(
+                            self.foreign_key,
+                            callback(self.distant_builder.select(self.other_owner_key)),
+                        )
+                    ),
+                )
+            ),
+        )
+
+        return return_query
+
+    def get_with_max_query(self, current_builder, column, callback):
+        dist_table = self.distant_builder.get_table_name()
+        int_table = self.intermediary_builder.get_table_name()
+
+        if not current_builder._columns:
+            current_builder.select("*")
+
+        return_query = current_builder.add_select(
+            f"{self.attribute}_{column}_max",
+            lambda q: (
+                q.max(f"{dist_table}.{column}")
+                .join(
+                    f"{int_table}",
+                    f"{int_table}.{self.foreign_key}",
+                    "=",
+                    f"{dist_table}.{self.other_owner_key}",
+                )
+                .where_column(
+                    f"{int_table}.{self.local_owner_key}",
+                    f"{current_builder.get_table_name()}.{self.local_key}",
+                )
+                .table(dist_table)
+                .when(
+                    callback,
+                    lambda q: (
+                        q.where_in(
+                            self.foreign_key,
+                            callback(self.distant_builder.select(self.other_owner_key)),
+                        )
+                    ),
+                )
+            ),
+        )
+
+        return return_query
+
     def map_related(self, related_result):
         return related_result.group_by(self.local_key)

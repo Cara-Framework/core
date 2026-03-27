@@ -128,6 +128,35 @@ class BaseRelationship:
             f"{klass} relationship does not implement the 'get_with_count_query' method"
         )
 
+
+    def get_with_sum_query(self, builder, column, callback):
+        """Adds a clause to the query to get the sum of a column in the relationship."""
+        klass = self.__class__.__name__
+        raise NotImplementedError(
+            f"{klass} relationship does not implement the 'get_with_sum_query' method"
+        )
+
+    def get_with_avg_query(self, builder, column, callback):
+        """Adds a clause to the query to get the average of a column in the relationship."""
+        klass = self.__class__.__name__
+        raise NotImplementedError(
+            f"{klass} relationship does not implement the 'get_with_avg_query' method"
+        )
+
+    def get_with_min_query(self, builder, column, callback):
+        """Adds a clause to the query to get the minimum of a column in the relationship."""
+        klass = self.__class__.__name__
+        raise NotImplementedError(
+            f"{klass} relationship does not implement the 'get_with_min_query' method"
+        )
+
+    def get_with_max_query(self, builder, column, callback):
+        """Adds a clause to the query to get the maximum of a column in the relationship."""
+        klass = self.__class__.__name__
+        raise NotImplementedError(
+            f"{klass} relationship does not implement the 'get_with_max_query' method"
+        )
+
     def attach(self, current_model, related_record):
         """Link a related model to the current model."""
         klass = self.__class__.__name__

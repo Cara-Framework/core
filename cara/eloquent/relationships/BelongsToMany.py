@@ -47,6 +47,19 @@ class BelongsToMany(BaseRelationship):
         self.foreign_key = self.foreign_key or f"{attribute}_id"
         return self
 
+    def with_pivot(self, *columns):
+        """Include additional pivot table columns in the relationship results.
+
+        Adds the specified columns from the pivot table to each related model.
+
+        Example:
+            User.with_("roles", lambda q: q.with_pivot("created_at", "is_primary")).get()
+            # Each role will have pivot.created_at and pivot.is_primary attributes
+        """
+        self.with_fields = list(columns)
+        return self
+
+
     def apply_query(self, query, owner):
         """
         Apply the query and return a dictionary to be hydrated. Used during accessing a relationship
@@ -492,6 +505,127 @@ class BelongsToMany(BaseRelationship):
             f"{query.get_table_name()}_count",
             lambda q: (
                 q.count("*")
+                .where_column(
+                    f"{builder.get_table_name()}.{self.local_owner_key}",
+                    f"{self._table}.{self.local_key}",
+                )
+                .table(self._table)
+                .when(
+                    callback,
+                    lambda q: (
+                        q.where_in(
+                            self.foreign_key,
+                            callback(query.select(self.other_owner_key)),
+                        )
+                    ),
+                )
+            ),
+        )
+
+        return return_query
+
+
+    def get_with_sum_query(self, builder, column, callback):
+        query = self.get_builder()
+        self._table = self._table or self.get_pivot_table_name(query, builder)
+
+        if not builder._columns:
+            builder = builder.select("*")
+
+        return_query = builder.add_select(
+            f"{query.get_table_name()}_{column}_sum",
+            lambda q: (
+                q.sum(f"{query.get_table_name()}.{column}")
+                .where_column(
+                    f"{builder.get_table_name()}.{self.local_owner_key}",
+                    f"{self._table}.{self.local_key}",
+                )
+                .table(self._table)
+                .when(
+                    callback,
+                    lambda q: (
+                        q.where_in(
+                            self.foreign_key,
+                            callback(query.select(self.other_owner_key)),
+                        )
+                    ),
+                )
+            ),
+        )
+
+        return return_query
+
+    def get_with_avg_query(self, builder, column, callback):
+        query = self.get_builder()
+        self._table = self._table or self.get_pivot_table_name(query, builder)
+
+        if not builder._columns:
+            builder = builder.select("*")
+
+        return_query = builder.add_select(
+            f"{query.get_table_name()}_{column}_avg",
+            lambda q: (
+                q.avg(f"{query.get_table_name()}.{column}")
+                .where_column(
+                    f"{builder.get_table_name()}.{self.local_owner_key}",
+                    f"{self._table}.{self.local_key}",
+                )
+                .table(self._table)
+                .when(
+                    callback,
+                    lambda q: (
+                        q.where_in(
+                            self.foreign_key,
+                            callback(query.select(self.other_owner_key)),
+                        )
+                    ),
+                )
+            ),
+        )
+
+        return return_query
+
+    def get_with_min_query(self, builder, column, callback):
+        query = self.get_builder()
+        self._table = self._table or self.get_pivot_table_name(query, builder)
+
+        if not builder._columns:
+            builder = builder.select("*")
+
+        return_query = builder.add_select(
+            f"{query.get_table_name()}_{column}_min",
+            lambda q: (
+                q.min(f"{query.get_table_name()}.{column}")
+                .where_column(
+                    f"{builder.get_table_name()}.{self.local_owner_key}",
+                    f"{self._table}.{self.local_key}",
+                )
+                .table(self._table)
+                .when(
+                    callback,
+                    lambda q: (
+                        q.where_in(
+                            self.foreign_key,
+                            callback(query.select(self.other_owner_key)),
+                        )
+                    ),
+                )
+            ),
+        )
+
+        return return_query
+
+    def get_with_max_query(self, builder, column, callback):
+        query = self.get_builder()
+        self._table = self._table or self.get_pivot_table_name(query, builder)
+
+        if not builder._columns:
+            builder = builder.select("*")
+
+        return_query = builder.add_select(
+            f"{query.get_table_name()}_{column}_max",
+            lambda q: (
+                q.max(f"{query.get_table_name()}.{column}")
                 .where_column(
                     f"{builder.get_table_name()}.{self.local_owner_key}",
                     f"{self._table}.{self.local_key}",

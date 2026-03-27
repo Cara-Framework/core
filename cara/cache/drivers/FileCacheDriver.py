@@ -110,9 +110,29 @@ class FileCacheDriver(Cache):
         """Add a value only if key doesn't exist. Returns True if added."""
         if self.has(key):
             return False
-        
+
         self.put(key, value, ttl)
         return True
+
+    def remember(
+        self,
+        key: str,
+        ttl: int,
+        callback,
+    ) -> Any:
+        """
+        Get value from cache or execute callback and cache the result.
+
+        If the key exists and hasn't expired, return the cached value.
+        Otherwise, execute the callback, cache its result, and return it.
+        """
+        cached = self.get(key)
+        if cached is not None:
+            return cached
+
+        value = callback()
+        self.put(key, value, ttl)
+        return value
 
     # --- Private Helper Methods ---
 

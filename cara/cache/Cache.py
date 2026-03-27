@@ -95,3 +95,18 @@ class Cache:
     ) -> bool:
         """Add a value only if key doesn't exist via the given driver."""
         return self.driver(driver_name).add(key, value, ttl)
+
+    def remember(
+        self,
+        key: str,
+        ttl: int,
+        callback,
+        driver_name: Optional[str] = None,
+    ) -> Any:
+        """
+        Get value from cache or execute callback and cache the result.
+
+        If the key exists and hasn't expired, return the cached value.
+        Otherwise, execute the callback, cache its result, and return it.
+        """
+        return self.driver(driver_name).remember(key, ttl, callback)

@@ -140,3 +140,23 @@ class RedisCacheDriver(Cache):
             return result is not None
         except Exception:
             return False
+
+    def remember(
+        self,
+        key: str,
+        ttl: int,
+        callback,
+    ) -> Any:
+        """
+        Get value from cache or execute callback and cache the result.
+
+        If the key exists and hasn't expired, return the cached value.
+        Otherwise, execute the callback, cache its result, and return it.
+        """
+        cached = self.get(key)
+        if cached is not None:
+            return cached
+
+        value = callback()
+        self.put(key, value, ttl)
+        return value
