@@ -9,6 +9,7 @@ Filenames are formed as: prefix + sanitized_key + ".cache".
 Expired entries are removed on access.
 """
 
+import glob
 import os
 import pickle
 import time
@@ -173,3 +174,31 @@ class FileCacheDriver(Cache):
             return False
         except Exception:
             return False
+
+    def forget_pattern(self, pattern: str) -> int:
+        """
+        Delete multiple cache files matching a glob pattern.
+
+        Converts cache key pattern to file glob pattern and deletes matching files.
+
+        Args:
+            pattern: Glob pattern (e.g., "home:*", "products:featured:*")
+
+        Returns:
+            Number of files deleted
+        """
+        # Convert cache key pattern to file path pattern
+        prefixed_pattern = f"{self._prefix}{pattern}"
+        sanitized_pattern = prefixed_pattern.replace("/", "_")
+        file_pattern = os.path.join(self.cache_directory, f"{sanitized_pattern}.cache")
+
+        deleted_count = 0
+        try:
+            matching_files = glob.glob(file_pattern)
+            for file_path in matching_files:
+                if self._delete_file(file_path):
+                    deleted_count += 1
+        except Exception:
+            pass
+
+        return deleted_count

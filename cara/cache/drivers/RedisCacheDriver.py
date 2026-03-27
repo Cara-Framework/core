@@ -160,3 +160,38 @@ class RedisCacheDriver(Cache):
         value = callback()
         self.put(key, value, ttl)
         return value
+
+    def forget_pattern(self, pattern: str) -> int:
+        """
+        Delete multiple keys matching a glob pattern.
+
+        Uses Redis SCAN to find keys matching the pattern, then DEL to remove them.
+        This is non-blocking and safe for large key sets.
+
+        Args:
+            pattern: Glob pattern (e.g., "home:*", "products:featured:*")
+
+        Returns:
+            Number of keys deleted
+        """
+        prefixed_pattern = f"{self._prefix}{pattern}"
+        deleted_count = 0
+
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = self._client.scan(
+                    cursor=cursor,
+                    match=prefixed_pattern,
+                    count=100,
+                )
+
+                if keys:
+                    deleted_count += self._client.delete(*keys)
+
+                if cursor == 0:
+                    break
+
+            return deleted_count
+        except Exception:
+            return 0

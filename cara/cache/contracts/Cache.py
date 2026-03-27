@@ -73,3 +73,18 @@ class Cache:
             Cached value or result of callback
         """
         raise NotImplementedError
+
+    def forget_pattern(self, pattern: str) -> int:
+        """
+        Delete multiple keys matching a pattern.
+
+        For Redis: Uses SCAN + DEL with glob pattern matching.
+        For File: Uses glob matching on cache files.
+
+        Args:
+            pattern: Glob-style pattern (e.g., "home:*", "products:featured:*")
+
+        Returns:
+            Number of keys deleted
+        """
+        raise NotImplementedError

@@ -110,3 +110,16 @@ class Cache:
         Otherwise, execute the callback, cache its result, and return it.
         """
         return self.driver(driver_name).remember(key, ttl, callback)
+
+    def forget_pattern(self, pattern: str, driver_name: Optional[str] = None) -> int:
+        """
+        Delete multiple keys matching a pattern.
+
+        Args:
+            pattern: Glob-style pattern (e.g., "home:*", "products:featured:*")
+            driver_name: Optional driver name (uses default if not specified)
+
+        Returns:
+            Number of keys deleted
+        """
+        return self.driver(driver_name).forget_pattern(pattern)
