@@ -21,9 +21,23 @@ class ThrottleRequests(Middleware):
     ):
         super().__init__(application)
 
-        # If no custom parameters provided, RateLimiter will use rate.py config
-        self.custom_limit = limit
-        self.custom_window_minutes = window
+        if limit is not None and not isinstance(limit, str):
+            self.custom_limit = limit
+        elif limit is not None:
+            try:
+                self.custom_limit = int(limit)
+            except (ValueError, TypeError):
+                self.custom_limit = limit
+        else:
+            self.custom_limit = None
+
+        if window is not None:
+            try:
+                self.custom_window_minutes = int(window)
+            except (ValueError, TypeError):
+                self.custom_window_minutes = window
+        else:
+            self.custom_window_minutes = None
 
     async def handle(self, request: Request, next: Callable):
         """Handle rate limiting logic."""
@@ -99,8 +113,8 @@ class ThrottleRequests(Middleware):
             return Limit(max_attempts=self.custom_limit, decay_minutes=window_minutes)
         
         # Fall back to global RateLimiter config (if available)
-        # Return a Limit object based on global settings
-        return Limit(max_attempts=RateLimiter.limit, decay_minutes=self.window / 60)
+        window_val = self.custom_window_minutes or 1
+        return Limit(max_attempts=RateLimiter.limit, decay_minutes=window_val)
 
     def _resolve_key(self, request: Request, limit_config) -> str:
         """
