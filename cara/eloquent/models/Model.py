@@ -1556,8 +1556,9 @@ class Model(
         return related.relate(self)
 
     def get_related(self, relation):
-        related = getattr(self.__class__, relation)
-        return related
+        if hasattr(self, "_relations") and relation in self._relations:
+            return self._relations[relation]
+        return getattr(self.__class__, relation)
 
     def attach(self, relation, related_record):
         related = getattr(self.__class__, relation)
