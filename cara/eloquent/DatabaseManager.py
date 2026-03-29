@@ -156,6 +156,17 @@ class DatabaseManager:
         with resolver.transaction(connection_name):
             yield self
 
+    def select(self, query, bindings=(), connection=None):
+        """Execute a raw SELECT query and return results as list of dicts."""
+        connection_name = self._resolve_connection_name(connection)
+        resolver = self._ensure_resolver()
+        conn = resolver._create_connection_instance(connection_name)
+        conn.set_cursor()
+        conn.statement(query, bindings)
+        columns = [desc[0] for desc in conn._cursor.description] if conn._cursor and conn._cursor.description else []
+        rows = conn._cursor.fetchall() if conn._cursor else []
+        return [dict(zip(columns, row)) for row in rows]
+
     def statement(self, query, bindings=(), connection=None):
         """Executes raw SQL statement"""
         connection_name = self._resolve_connection_name(connection)

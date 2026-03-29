@@ -14,27 +14,39 @@ class OnClause:
 
     def __init__(
         self,
-        first: str,
-        operator: str,
-        second: str,
+        column1: str,
+        equality: str,
+        column2: str,
         boolean: str = "AND",
         value_type: str = "column",
     ):
-        self.first = first
-        self.operator = operator
-        self.second = second
+        self.column1 = column1
+        self.equality = equality
+        self.column2 = column2
         self.boolean = boolean
-        self.value_type = value_type  # 'column', 'value', 'null', 'not_null'
+        self.value_type = value_type
+
+    @property
+    def first(self):
+        return self.column1
+
+    @property
+    def operator(self):
+        return self.equality
+
+    @property
+    def second(self):
+        return self.column2
 
     def __str__(self) -> str:
         """String representation of the ON clause."""
         if self.value_type in ["null", "not_null"]:
-            return f"{self.first} {self.operator}"
-        return f"{self.first} {self.operator} {self.second}"
+            return f"{self.column1} {self.equality}"
+        return f"{self.column1} {self.equality} {self.column2}"
 
     def __repr__(self) -> str:
         """Developer representation."""
-        return f"OnClause(first='{self.first}', operator='{self.operator}', second='{self.second}', boolean='{self.boolean}')"
+        return f"OnClause(column1='{self.column1}', equality='{self.equality}', column2='{self.column2}', boolean='{self.boolean}')"
 
     def to_sql(self) -> str:
         """Convert to SQL string."""

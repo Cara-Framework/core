@@ -18,10 +18,12 @@ class JoinClause:
     Represents a JOIN operation with table and conditions.
     """
 
-    def __init__(self, join_type: str, table: str, on_clauses: List = None):
-        self.join_type = join_type
+    def __init__(self, table: str, clause: str = "inner", on_clauses: List = None, join_type: str = None):
         self.table = table
+        self.clause = join_type or clause
+        self.join_type = self.clause
         self.on_clauses = on_clauses or []
+        self.alias = None
 
     def __str__(self) -> str:
         """String representation of the JOIN clause."""
