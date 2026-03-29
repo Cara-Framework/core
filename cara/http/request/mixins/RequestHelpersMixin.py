@@ -16,6 +16,26 @@ class RequestHelpersMixin:
     Includes URL construction, path matching, and query parameter access methods.
     """
 
+    async def integer(self, key: str, default: int = 0) -> int:
+        """Retrieve input as int, returning default on missing/invalid values."""
+        value = await self.input(key)
+        if value is None or value == "":
+            return default
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+
+    async def float_val(self, key: str, default: float = 0.0) -> float:
+        """Retrieve input as float, returning default on missing/invalid values."""
+        value = await self.input(key)
+        if value is None or value == "":
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+
     def query(self, key: str = None, default: Any = None) -> Any:
         """
         Query parameter access.
