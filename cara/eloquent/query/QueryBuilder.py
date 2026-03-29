@@ -363,7 +363,9 @@ class QueryBuilder(ObservesEvents):
             scope.on_remove(self)
             return self
 
-        del self._global_scopes.get(action, {})[scope]
+        scopes = self._global_scopes.get(action)
+        if scopes and scope in scopes:
+            del scopes[scope]
 
         return self
 
@@ -504,9 +506,8 @@ class QueryBuilder(ObservesEvents):
         for unsorted_create in creates:
             if model:
                 unsorted_create = model.filter_mass_assignment(unsorted_create)
-            if cast:
+            if cast and model:
                 unsorted_create = model.cast_values(unsorted_create)
-            # sort the dicts by key so the values inserted align with the correct column
             self._creates.append(dict(sorted(unsorted_create.items())))
 
         if query:
@@ -1130,7 +1131,7 @@ class QueryBuilder(ObservesEvents):
         Returns:
             self
         """
-        self._wheres += (BetweenExpression(column, low, high, equality="NOT BETWEEN"),)
+        self._wheres += (BetweenExpression(column, low, high, not_between=True),)
         return self
 
     def where_in(self, column, wheres=None):
@@ -1357,9 +1358,9 @@ class QueryBuilder(ObservesEvents):
                         last_builder._model,
                         split_relationship,
                     ).query_where_exists(
-                        self,
+                        last_builder,
                         callback,
-                        method="where_exists",
+                        method="where_not_exists",
                     )
                     continue
 
@@ -1387,9 +1388,9 @@ class QueryBuilder(ObservesEvents):
                         last_builder._model,
                         split_relationship,
                     ).query_where_exists(
-                        self,
+                        last_builder,
                         callback,
-                        method="where_exists",
+                        method="or_where_not_exists",
                     )
                     continue
 
@@ -1512,6 +1513,8 @@ class QueryBuilder(ObservesEvents):
                     )
                 ),
             )
+        elif not wheres:
+            return self
         else:
             self._wheres += ((QueryExpression(column, "NOT IN", list(wheres))),)
         return self

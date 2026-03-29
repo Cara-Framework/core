@@ -54,6 +54,9 @@ class HasOneThrough(BaseRelationship):
         Returns     QueryBuilder|Model: Either returns a builder or a hydrated model.
         """
 
+        if instance is None:
+            return self
+
         attribute = self.fn.__name__
         self.attribute = attribute
         relationship1 = self.fn(self)[0]()
@@ -67,6 +70,8 @@ class HasOneThrough(BaseRelationship):
         )
 
         if instance.is_loaded():
+            if hasattr(instance, "_relations") and attribute in instance._relations:
+                return instance._relations[attribute]
             if attribute in instance._relationships:
                 return instance._relationships[attribute]
 

@@ -55,7 +55,7 @@ class ResponseFactory:
             BaseResponse: Configured response
         """
         self.response._status = status
-        self.response.set_content(json.dumps(payload, ensure_ascii=False))
+        self.response.set_content(json.dumps(payload, ensure_ascii=False, default=str))
 
         # Explicitly set content-type (Laravel approach)
         self.headers.content_type("application/json; charset=utf-8")

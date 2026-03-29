@@ -40,6 +40,9 @@ class MorphOne(BaseRelationship):
         Returns:
             object -- Either returns a builder or a hydrated model.
         """
+        if instance is None:
+            return self
+
         attribute = self.fn.__name__
         self._related_builder = instance.builder
         self.polymorphic_builder = self.fn(self)()
@@ -47,6 +50,9 @@ class MorphOne(BaseRelationship):
 
         if not instance.is_loaded():
             return self
+
+        if hasattr(instance, "_relations") and attribute in instance._relations:
+            return instance._relations[attribute]
 
         if attribute in instance._relationships:
             return instance._relationships[attribute]

@@ -284,6 +284,7 @@ class Model(
         self.__dirty_attributes__ = {}
         if not hasattr(self, "__appends__"):
             self.__appends__ = []
+        self._relations = {}
         self._relationships = {}
         self._global_scopes = {}
 
@@ -369,7 +370,8 @@ class Model(
 
     @classmethod
     def get_columns(cls):
-        return list(cls.first().__attributes__.keys())
+        row = cls.first()
+        return list(row.__attributes__.keys()) if row else []
 
     def get_connection_details(self):
         from cara.facades import DB
@@ -553,8 +555,6 @@ class Model(
             print(f"Delete operation failed: {e}")
             return False
 
-    @classmethod
-
     def _touch_parents(self):
         """Touch parent models listed in __touches__."""
         for relation_name in self.__touches__:
@@ -612,6 +612,8 @@ class Model(
             Model
         """
         if isinstance(record_id, (list, tuple)):
+            if not record_id:
+                return cls.new_collection([]) if not query else cls().get_builder()
             builder = cls().where_in(cls.get_primary_key(), record_id)
         else:
             builder = cls().where(cls.get_primary_key(), record_id)
@@ -789,6 +791,8 @@ class Model(
 
         Does not mutate the passed dictionary.
         """
+        if not dictionary:
+            return {}
         return {x: cls.cast_value(x, dictionary[x]) for x in dictionary}
 
     def fresh(self):
@@ -1064,7 +1068,8 @@ class Model(
         if not record:
             return self.create(total, id_key=cls.get_primary_key()).fresh()
 
-        return self.where(wheres).update(total)
+        self.where(wheres).update(total)
+        return self.where(wheres).first()
 
     @classmethod
     def truncate(cls, foreign_keys=False):
@@ -1099,7 +1104,7 @@ class Model(
             [type]: [description]
         """
         new_dic = {}
-        for key, value in self._relationships.items():
+        for key, value in self._relations.items():
             if value == {}:
                 new_dic.update({key: {}})
             else:
@@ -1218,6 +1223,9 @@ class Model(
 
                 return method
 
+        if attribute in self.__dict__.get("_relations", {}):
+            return self.__dict__["_relations"][attribute]
+
         if attribute in self.__dict__.get("_relationships", {}):
             return self.__dict__["_relationships"][attribute]
 
@@ -1330,11 +1338,10 @@ class Model(
         return value
 
     def all_attributes(self):
-        attributes = self.__attributes__
-        attributes.update(self.get_dirty_attributes())
-        for key, value in attributes.items():
+        attributes = {**self.__attributes__, **self.get_dirty_attributes()}
+        for key, value in list(attributes.items()):
             if key in self.__casts__:
-                attributes.update({key: self._cast_attribute(key, value)})
+                attributes[key] = self._cast_attribute(key, value)
 
         return attributes
 

@@ -29,7 +29,9 @@ class Facade(type):
             return getattr(application.make(self.key), attribute)
         except Exception as e:
             self.get_logger().error(f"Facade {self.key} cannot be resolved: {e}")
-            return None
+            raise AttributeError(
+                f"Facade '{self.key}' could not resolve attribute '{attribute}': {e}"
+            ) from e
 
     def __repr__(self):
         """Provide a clean representation for IPython."""

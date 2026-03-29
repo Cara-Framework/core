@@ -163,7 +163,7 @@ class BaseResponse:
 
     def get_headers(self) -> List[Tuple[bytes, bytes]]:
         """Get all headers as list of byte tuples for ASGI."""
-        return [(k.encode(), v.encode()) for k, v in self.header_bag.all().items()]
+        return [(k.encode(), str(v).encode()) for k, v in self.header_bag.all().items()]
 
     def set_content(self, content: Union[str, bytes]) -> "BaseResponse":
         """

@@ -1,5 +1,10 @@
+from contextlib import contextmanager
+
+
 class ObservesEvents:
     def observe_events(self, model, event):
+        if getattr(model, "_events_disabled", False):
+            return
         if model.__has_events__ == True:
             for observer in model.__observers__.get(model.__class__, []):
                 try:
@@ -25,3 +30,30 @@ class ObservesEvents:
         """Sets __has_events__ attribute on model to True."""
         cls.__has_events__ = True
         return cls
+
+    def save_quietly(self):
+        """Save without firing events (instance-level, no race condition)."""
+        self._events_disabled = True
+        try:
+            return self.save()
+        finally:
+            self._events_disabled = False
+
+    def delete_quietly(self):
+        """Delete without firing events (instance-level, no race condition)."""
+        self._events_disabled = True
+        try:
+            return self.delete()
+        finally:
+            self._events_disabled = False
+
+    @classmethod
+    @contextmanager
+    def without_events_context(cls):
+        """Context manager for disabling events safely (restores state after)."""
+        previous = cls.__has_events__
+        cls.__has_events__ = False
+        try:
+            yield cls
+        finally:
+            cls.__has_events__ = previous

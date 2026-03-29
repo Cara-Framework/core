@@ -137,10 +137,10 @@ class BelongsToMany(BaseRelationship):
             }
 
             if self.with_timestamps:
-                pivot_data = {
+                pivot_data.update({
                     "created_at": getattr(model, "m_reserved5"),
                     "updated_at": getattr(model, "m_reserved4"),
-                }
+                })
 
                 model.delete_attribute("m_reserved4")
                 model.delete_attribute("m_reserved5")
@@ -722,14 +722,6 @@ class BelongsToMany(BaseRelationship):
         self._table = self._table or self.get_pivot_table_name(
             current_model, related_record
         )
-
-        if self.with_timestamps:
-            data.update(
-                {
-                    "created_at": pendulum.now("UTC").to_datetime_string(),
-                    "updated_at": pendulum.now("UTC").to_datetime_string(),
-                }
-            )
 
         return (
             Pivot.on(current_model.get_builder().connection)

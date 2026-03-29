@@ -32,7 +32,7 @@ class SoftDeleteScope(BaseScope):
 
     def _only_trashed(self, model, builder):
         builder.remove_global_scope("_where_null", action="select")
-        return builder.where_not_null(self.deleted_at_column)
+        return builder.where_not_null(f"{builder.get_table_name()}.{self.deleted_at_column}")
 
     def _force_delete(self, model, builder, query=False):
         if query:
@@ -43,6 +43,11 @@ class SoftDeleteScope(BaseScope):
         return builder.remove_global_scope(self).update({self.deleted_at_column: None})
 
     def _query_set_null_on_delete(self, builder):
+        if hasattr(builder, "_model") and builder._model:
+            timestamp = builder._model.get_new_datetime_string()
+        else:
+            import pendulum
+            timestamp = pendulum.now("UTC").to_datetime_string()
         return builder.set_action("update").set_updates(
-            {self.deleted_at_column: builder._model.get_new_datetime_string()}
+            {self.deleted_at_column: timestamp}
         )
