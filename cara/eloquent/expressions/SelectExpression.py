@@ -6,26 +6,23 @@ Handles SELECT column expressions in a clean, simple way.
 
 
 class SelectExpression:
-    """
-    Simple expression for SELECT clauses.
+    """Expression for SELECT clauses.
 
-    Represents a column selection with optional alias.
+    Represents a column selection with optional alias and raw SQL support.
     """
 
-    def __init__(self, column: str, alias: str = None):
+    def __init__(self, column: str, alias: str = None, raw: bool = False):
         self.column = column
         self.alias = alias
+        self.raw = raw
 
     def __str__(self) -> str:
-        """String representation of the SELECT expression."""
         if self.alias:
             return f"{self.column} AS {self.alias}"
         return self.column
 
     def __repr__(self) -> str:
-        """Developer representation."""
-        return f"SelectExpression(column='{self.column}', alias='{self.alias}')"
+        return f"SelectExpression(column='{self.column}', alias={self.alias!r}, raw={self.raw})"
 
     def to_sql(self) -> str:
-        """Convert to SQL string."""
         return str(self)

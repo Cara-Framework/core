@@ -8,6 +8,8 @@ from cara.eloquent.expressions import (
     SubSelectExpression,
 )
 
+_MULTI_SPACE_RE = re.compile(r" +")
+
 
 class BaseGrammar:
     """
@@ -368,13 +370,15 @@ class BaseGrammar:
         return sql
 
     def process_order_by(self):
-        """
-        Compiles an order by for a query expression.
+        """Compile ORDER BY clause.
 
-        Returns:
-            self
+        Automatically omits ORDER BY when aggregates are present without
+        GROUP BY, since PostgreSQL (and SQL standard) rejects ORDER BY in
+        aggregate-only queries.
         """
         sql = ""
+        if self._aggregates and not self._group_by:
+            return sql
         if self._order_by:
             order_crit = ""
             for order_bys in self._order_by:
@@ -786,22 +790,12 @@ class BaseGrammar:
         )
 
     def to_sql(self):
-        """
-        Cleans up the SQL string and returns the SQL.
-
-        Returns:
-            string
-        """
-        return re.sub(" +", " ", self._sql.strip())
+        """Clean up and return the compiled SQL string."""
+        return _MULTI_SPACE_RE.sub(" ", self._sql.strip())
 
     def to_qmark(self):
-        """
-        Cleans up the SQL string and returns the SQL.
-
-        Returns:
-            string
-        """
-        return re.sub(" +", " ", self._sql.strip())
+        """Clean up and return the compiled SQL string (qmark variant)."""
+        return _MULTI_SPACE_RE.sub(" ", self._sql.strip())
 
     # TODO: Inspect this can't just be used by another method. seems duplicative
     def process_columns(self, separator="", action="select", qmark=False):

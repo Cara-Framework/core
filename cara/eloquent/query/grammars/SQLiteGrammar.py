@@ -112,30 +112,25 @@ class SQLiteGrammar(BaseGrammar):
         )
 
     def to_sql(self):
-        """
-        Cleans up the SQL string and returns the SQL.
-
-        Returns:
-            string
-        """
+        """Clean up the SQL string and return it."""
+        from . import _MULTI_SPACE_RE
 
         if self.queries and (not self._columns and not self._creates):
             sql = ""
             for query in self.queries:
                 query += "; "
-                sql += re.sub(" +", " ", query)
+                sql += _MULTI_SPACE_RE.sub(" ", query)
             return sql.rstrip(" ")
-        else:
-            sql = re.sub(
-                " +",
-                " ",
-                self._sql.strip().replace(",)", ")"),
-            )
-            for query in self.queries:
-                sql += "; "
-                sql += re.sub(" +", " ", query.strip())
 
-            return sql
+        sql = _MULTI_SPACE_RE.sub(
+            " ",
+            self._sql.strip().replace(",)", ")"),
+        )
+        for query in self.queries:
+            sql += "; "
+            sql += _MULTI_SPACE_RE.sub(" ", query.strip())
+
+        return sql
 
     def table_string(self):
         return '"{table}"'

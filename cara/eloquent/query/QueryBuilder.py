@@ -237,86 +237,53 @@ class QueryBuilder(ObservesEvents):
         return self.from_raw(query)
 
     def get_table_name(self):
-        """
-        Sets a table on the query builder.
-
-        Arguments:
-            table {string} -- The name of the table
-
-        Returns:
-            self
-        """
+        """Get the name of the table for this query."""
         return self._table.name
 
     def get_connection(self):
-        """
-        Sets a table on the query builder.
-
-        Arguments:
-            table {string} -- The name of the table
-
-        Returns:
-            self
-        """
+        """Get the connection class for this query."""
         return self.connection_class
 
     def begin(self):
-        """
-        Sets a table on the query builder.
-
-        Arguments:
-            table {string} -- The name of the table
-
-        Returns:
-            self
-        """
-        return self.new_connection().begin()
+        """Begin a new database transaction."""
+        self._connection = self.new_connection()
+        self._connection.begin()
+        return self._connection
 
     def begin_transaction(self, *args, **kwargs):
+        """Alias for begin()."""
         return self.begin(*args, **kwargs)
 
     def get_schema_builder(self):
+        """Get a schema builder instance for the current connection."""
         return Schema(
             connection=self.connection_class,
             grammar=self.grammar,
         )
 
     def commit(self):
-        """
-        Sets a table on the query builder.
-
-        Arguments:
-            table {string} -- The name of the table
-
-        Returns:
-            self
-        """
+        """Commit the active database transaction."""
+        if not hasattr(self, '_connection') or self._connection is None:
+            raise RuntimeError("No active transaction to commit.")
         return self._connection.commit()
 
     def rollback(self):
-        """
-        Sets a table on the query builder.
-
-        Arguments:
-            table {string} -- The name of the table
-
-        Returns:
-            self
-        """
+        """Roll back the active database transaction."""
+        if not hasattr(self, '_connection') or self._connection is None:
+            raise RuntimeError("No active transaction to roll back.")
         self._connection.rollback()
         return self
 
-
     def transaction(self, callback=None):
         """Execute code within a database transaction.
-        
+
         Can be used as a context manager or with a callback.
-        
+
         Example (context manager):
             with Product.query().transaction() as trx:
                 product = Product.create({...})
                 ProductImage.create({...})
-        
+
         Example (callback):
             Product.query().transaction(lambda: [
                 Product.create({...}),
@@ -324,29 +291,19 @@ class QueryBuilder(ObservesEvents):
             ])
         """
         if callback is None:
-            # Return context manager
             return TransactionContext(self)
-        else:
-            # Execute with callback
-            self.begin()
-            try:
-                result = callback()
-                self.commit()
-                return result
-            except Exception as e:
-                self.rollback()
-                raise e
+
+        self.begin()
+        try:
+            result = callback()
+            self.commit()
+            return result
+        except Exception:
+            self.rollback()
+            raise
 
     def get_relation(self, key):
-        """
-        Sets a table on the query builder.
-
-        Arguments:
-            table {string} -- The name of the table
-
-        Returns:
-            self
-        """
+        """Get the relationship instance for the given key on the owner model."""
         return getattr(self.owner, key)
 
     def set_scope(self, name, callable):
@@ -1911,73 +1868,34 @@ class QueryBuilder(ObservesEvents):
         )
         return processed_results
 
-    def sum(self, column):
-        """
-        Aggregates a columns values.
-
-        Arguments:
-            column {string} -- The name of the column to aggregate.
+    def sum(self, column, dry=False):
+        """Get the sum of a column's values.
 
         Returns:
-            self
+            The sum value, or 0 if no results.
         """
-        self.aggregate("SUM", "{column}".format(column=column))
-        return self
+        return self._run_aggregate("SUM", column, dry)
 
     def count(self, column=None, dry=False):
-        """
-        Aggregates a columns values.
+        """Get the number of records matching the query.
 
-        Arguments:
-            column {string} -- The name of the column to aggregate.
-
-        Returns:
-            self
-        """
-        alias = "m_count_reserved" if (column == "*" or column is None) else column
-        if column == "*":
-            self.aggregate("COUNT", f"{column} as {alias}")
-        elif column is None:
-            self.aggregate("COUNT", f"* as {alias}")
-        else:
-            self.aggregate("COUNT", f"{column}")
-
-        if dry or self.dry:
-            return self
-
-        if not column:
-            # ORDER BY is invalid in aggregate-only queries (PostgreSQL rejects it)
-            saved_order_by = self._order_by
-            self._order_by = ()
-            try:
-                result = self.new_connection().query(
-                    self.to_qmark(), self._bindings, results=1
-                )
-            finally:
-                self._order_by = saved_order_by
-
-            if isinstance(result, dict):
-                return result.get(alias, 0)
-
-            prepared_result = list(result.values())
-            if not prepared_result:
-                return 0
-            return prepared_result[0]
-        else:
-            return self
-
-    def max(self, column):
-        """
-        Aggregates a columns values.
-
-        Arguments:
-            column {string} -- The name of the column to aggregate.
+        Args:
+            column: Optional column to count (defaults to *).
+            dry: If True, return the builder instead of executing.
 
         Returns:
-            self
+            int -- The count of matching records.
         """
-        self.aggregate("MAX", "{column}".format(column=column))
-        return self
+        col = column or "*"
+        return self._run_aggregate("COUNT", col, dry)
+
+    def max(self, column, dry=False):
+        """Get the maximum value of a column.
+
+        Returns:
+            The max value, or None if no results.
+        """
+        return self._run_aggregate("MAX", column, dry)
 
     def order_by(self, column, direction="ASC"):
         """
@@ -2048,12 +1966,12 @@ class QueryBuilder(ObservesEvents):
         return self
 
     def aggregate(self, aggregate, column, alias=None):
-        """
-        Helper function to aggregate.
+        """Register an aggregate expression on the builder.
 
         Arguments:
-            aggregate {string} -- The name of the aggregation.
-            column {string} -- The name of the column to aggregate.
+            aggregate {string} -- The aggregate function (COUNT, SUM, etc.).
+            column {string} -- The column expression.
+            alias {string} -- Optional alias.
         """
         self._aggregates += (
             AggregateExpression(
@@ -2062,6 +1980,44 @@ class QueryBuilder(ObservesEvents):
                 alias=alias,
             ),
         )
+
+    def _run_aggregate(self, function, column, dry=False):
+        """Execute an aggregate function and return the scalar result.
+
+        Handles stripping ORDER BY (invalid in aggregate-only queries)
+        and cleaning up builder state afterward.
+
+        Returns:
+            The aggregate result, or None/0 if no results.
+        """
+        alias = f"m_{function.lower()}_result"
+        self.aggregate(function, f"{column} as {alias}")
+
+        if dry or self.dry:
+            return self
+
+        saved_order_by = self._order_by
+        self._order_by = ()
+        try:
+            result = self.new_connection().query(
+                self.to_qmark(), self._bindings, results=1
+            )
+        finally:
+            self._order_by = saved_order_by
+
+        if result is None:
+            return 0 if function == "COUNT" else None
+
+        if isinstance(result, dict):
+            val = result.get(alias)
+            if val is not None:
+                return float(val) if function in ("AVG", "SUM") else val
+            return 0 if function == "COUNT" else None
+
+        prepared = list(result.values())
+        if not prepared:
+            return 0 if function == "COUNT" else None
+        return prepared[0]
 
     def first(self, fields=None, query=False):
         """
@@ -2126,11 +2082,57 @@ class QueryBuilder(ObservesEvents):
     def sole_value(self, column: str, query=False):
         return self.sole()[column]
 
+    def first_or_fail(self, fields=None):
+        """Get the first result or raise ModelNotFoundException.
+
+        Like Laravel's firstOrFail().
+
+        Returns:
+            Model
+
+        Raises:
+            ModelNotFoundException: If no results found.
+        """
+        result = self.first(fields)
+        if result is None:
+            raise ModelNotFoundException()
+        return result
+
+    def find_or_fail(self, record_id, column=None):
+        """Find a record by primary key or raise ModelNotFoundException.
+
+        Like Laravel's findOrFail().
+
+        Returns:
+            Model
+
+        Raises:
+            ModelNotFoundException: If no results found.
+        """
+        result = self.find(record_id, column)
+        if result is None:
+            raise ModelNotFoundException()
+        return result
+
     def first_where(self, column, *args):
         """Gets the first record with the given key / value pair."""
         if not args:
             return self.where_not_null(column).first()
         return self.where(column, *args).first()
+
+    def tap(self, callback):
+        """Pass the builder to a callback and return the builder unchanged.
+
+        Useful for debugging or side effects without breaking the chain.
+
+        Example:
+            Product.active()
+                .tap(lambda q: print(q.to_sql()))
+                .where('status', 'active')
+                .get()
+        """
+        callback(self)
+        return self
 
     def last(self, column=None, query=False):
         """
@@ -2617,31 +2619,21 @@ class QueryBuilder(ObservesEvents):
 
         return builder
 
-    def avg(self, column):
-        """
-        Aggregates a columns values.
-
-        Arguments:
-            column {string} -- The name of the column to aggregate.
+    def avg(self, column, dry=False):
+        """Get the average value of a column.
 
         Returns:
-            self
+            The average value, or None if no results.
         """
-        self.aggregate("AVG", "{column}".format(column=column))
-        return self
+        return self._run_aggregate("AVG", column, dry)
 
-    def min(self, column):
-        """
-        Aggregates a columns values.
-
-        Arguments:
-            column {string} -- The name of the column to aggregate.
+    def min(self, column, dry=False):
+        """Get the minimum value of a column.
 
         Returns:
-            self
+            The min value, or None if no results.
         """
-        self.aggregate("MIN", "{column}".format(column=column))
-        return self
+        return self._run_aggregate("MIN", column, dry)
 
     def _extract_operator_value(self, *args):
         operators = [
@@ -2689,10 +2681,35 @@ class QueryBuilder(ObservesEvents):
         self._macros.update({name: callable})
         return self
 
-    def when(self, conditional, callback):
+    def when(self, conditional, callback, otherwise=None):
+        """Apply the callback if the condition is truthy (Laravel-style).
+
+        Args:
+            conditional: The condition to evaluate.
+            callback: Called with the builder when condition is truthy.
+            otherwise: Called with the builder when condition is falsy.
+
+        Returns:
+            self
+        """
         if conditional:
             callback(self)
+        elif otherwise is not None:
+            otherwise(self)
         return self
+
+    def unless(self, conditional, callback, otherwise=None):
+        """Apply the callback if the condition is falsy (opposite of when).
+
+        Args:
+            conditional: The condition to evaluate.
+            callback: Called with the builder when condition is falsy.
+            otherwise: Called with the builder when condition is truthy.
+
+        Returns:
+            self
+        """
+        return self.when(not conditional, callback, otherwise)
 
     def truncate(self, foreign_keys=False, dry=False):
         sql = self.get_grammar().truncate_table(self.get_table_name(), foreign_keys)
@@ -2703,39 +2720,43 @@ class QueryBuilder(ObservesEvents):
         return self.new_connection().query(sql, ())
 
     def exists(self):
-        """
-        Determine if rows exist for the current query.
+        """Determine if any rows exist for the current query.
+
+        Uses SELECT 1 ... LIMIT 1 for efficiency instead of fetching a full row.
 
         Returns:
-            Bool - True or False
+            bool
         """
-        if self.first():
-            return True
-        else:
-            return False
+        saved_columns = self._columns
+        saved_limit = self._limit
+        self._columns = (SelectExpression("1", raw=True),)
+        self._limit = 1
+        try:
+            result = self.new_connection().query(
+                self.to_qmark(), self._bindings, results=1
+            )
+        finally:
+            self._columns = saved_columns
+            self._limit = saved_limit
+        return result is not None and result != {}
 
     def doesnt_exist(self):
-        """
-        Determine if no rows exist for the current query.
+        """Determine if no rows exist for the current query.
 
         Returns:
-            Bool - True or False
+            bool
         """
-        if self.exists():
-            return False
-        else:
-            return True
+        return not self.exists()
 
     def in_random_order(self):
         """Puts Query results in random order."""
         return self.order_by_raw(self.grammar().compile_random())
 
     def new_from_builder(self, from_builder=None):
-        """
-        Creates a new QueryBuilder class.
+        """Create a new QueryBuilder copying all state from an existing builder.
 
         Returns:
-            QueryBuilder -- The ORM QueryBuilder class.
+            QueryBuilder
         """
         if from_builder is None:
             from_builder = self
@@ -2745,13 +2766,14 @@ class QueryBuilder(ObservesEvents):
             connection_class=self.connection_class,
             connection=self.connection,
             connection_driver=self._connection_driver,
+            model=from_builder._model,
         )
 
         if self._table:
             builder.table(self._table.name)
 
         builder._columns = tuple(deepcopy(from_builder._columns))
-        builder._creates = tuple(deepcopy(from_builder._creates))
+        builder._creates = deepcopy(from_builder._creates)
         builder._sql = ""
         builder._bindings = tuple(deepcopy(from_builder._bindings))
         builder._updates = tuple(deepcopy(from_builder._updates))
@@ -2763,8 +2785,23 @@ class QueryBuilder(ObservesEvents):
         builder._macros = deepcopy(from_builder._macros)
         builder._aggregates = tuple(deepcopy(from_builder._aggregates))
         builder._global_scopes = deepcopy(from_builder._global_scopes)
+        builder._limit = from_builder._limit
+        builder._offset = from_builder._offset
+        builder._distinct = from_builder._distinct
+        builder._eager_relation = deepcopy(from_builder._eager_relation)
 
         return builder
+
+    def clone(self):
+        """Create an independent copy of this builder (Laravel-style).
+
+        Useful when you need to run both count() and get() from the same
+        base query without one operation corrupting the other.
+
+        Returns:
+            QueryBuilder
+        """
+        return self.new_from_builder(self)
 
     def get_table_columns(self):
         return self.get_schema().get_columns(self._table.name)
@@ -2802,7 +2839,104 @@ class QueryBuilder(ObservesEvents):
         return self.order_by(column=",".join(fields), direction="ASC")
 
     def value(self, column: str):
-        return self.get().first()[column]
+        """Get a single column's value from the first result.
+
+        Returns:
+            The column value, or None if no results.
+        """
+        result = self.select(column).first()
+        if result is None:
+            return None
+        if isinstance(result, dict):
+            return result.get(column)
+        return getattr(result, column, None)
+
+    def pluck(self, column: str, key_by: str = None):
+        """Get a Collection containing the values of a given column.
+
+        Like Laravel's pluck(), returns a flat list of column values,
+        or a dict keyed by another column.
+
+        Args:
+            column: The column to pluck values from.
+            key_by: Optional column to use as dictionary keys.
+
+        Returns:
+            Collection -- A collection of values (or keyed dict).
+
+        Example:
+            names = User.where('active', True).pluck('name')
+            # Collection(['Alice', 'Bob', 'Charlie'])
+
+            users = User.pluck('name', 'id')
+            # Collection({1: 'Alice', 2: 'Bob'})
+        """
+        if key_by:
+            results = self.select(column, key_by).get()
+        else:
+            results = self.select(column).get()
+
+        if not results:
+            return Collection()
+
+        if key_by:
+            plucked = {}
+            for item in results:
+                if isinstance(item, dict):
+                    plucked[item.get(key_by)] = item.get(column)
+                else:
+                    plucked[getattr(item, key_by, None)] = getattr(item, column, None)
+            return Collection(plucked)
+
+        values = []
+        for item in results:
+            if isinstance(item, dict):
+                values.append(item.get(column))
+            else:
+                values.append(getattr(item, column, None))
+        return Collection(values)
+
+    def chunk(self, chunk_size: int, callback: Callable):
+        """Process the results in chunks (Laravel-style).
+
+        The callback receives each chunk as a Collection. Return False
+        from the callback to stop processing further chunks.
+
+        Args:
+            chunk_size: Number of records per chunk.
+            callback: Function that receives each chunk Collection.
+
+        Returns:
+            bool -- True if all chunks were processed.
+
+        Example:
+            def process(chunk):
+                for product in chunk:
+                    product.update({'processed': True})
+
+            Product.active().chunk(200, process)
+        """
+        page = 1
+        while True:
+            offset = (page - 1) * chunk_size
+            builder = self.clone()
+            results = builder.limit(chunk_size).offset(offset).get()
+
+            if not results or (hasattr(results, 'is_empty') and results.is_empty()):
+                break
+
+            result = callback(results)
+
+            if result is False:
+                return False
+
+            count = len(results) if hasattr(results, '__len__') else results.count()
+            if count < chunk_size:
+                break
+
+            page += 1
+
+        return True
 
     def upsert(
         self,
