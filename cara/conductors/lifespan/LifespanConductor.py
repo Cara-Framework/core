@@ -78,14 +78,12 @@ class LifespanConductor:
     async def _handle_shutdown(self) -> None:
         """Run application shutdown callbacks if any."""
         # Execute callbacks registered on the application instance
-        callbacks = getattr(self.application, "_shutdown_callbacks", [])
+        callbacks = getattr(self.application, "_shutdown_callbacks", None) or []
         for cb in callbacks:
             try:
-                # Each callback may be async or sync
                 if asyncio.iscoroutinefunction(cb):
                     await cb()
                 else:
-                    await cb()
+                    cb()
             except Exception as e:
-                # Log but never fail the shutdown sequence
                 Log.error(f"Shutdown callback error: {e}", exc_info=True)
