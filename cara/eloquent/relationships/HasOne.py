@@ -16,10 +16,17 @@ class HasOne(BaseRelationship):
         return self
     
     def __get__(self, instance, owner):
-        """Property access: Return Model instance like Laravel (execute query automatically)."""
+        """Property access: return eager-loaded data if available, else execute query."""
         if instance is None:
             return self
-        # Accessed from instance, execute query and return Model (Laravel-style)
+
+        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
+        if func and hasattr(func, '__name__'):
+            attr_name = func.__name__
+            relations = getattr(instance, '_relations', None)
+            if relations is not None and attr_name in relations:
+                return relations[attr_name]
+
         return self.apply_query(self.get_builder(), instance)
 
     def __init__(self, fn, foreign_key=None, local_key=None):

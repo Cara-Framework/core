@@ -73,6 +73,9 @@ class ModelMeta(type):
                 setattr(cls, scope_name, create_scope_method(scope_method, scope_name))
                 cls._class_scopes[scope_name] = scope_method
 
+        if cls._class_scopes and hasattr(cls, '_scopes'):
+            cls._scopes[cls] = cls._class_scopes
+
         return cls
 
     def __getattribute__(cls, attribute):
@@ -345,42 +348,6 @@ class Model(
 
     def query(self):
         return self.get_builder()
-
-    def __getattr__(self, attribute):
-        """
-        Laravel-style relationship access.
-
-        When accessing a relationship as a property (not method):
-        - model.relationship → Lazy loads and returns Collection
-        - model.relationship() → Returns Query Builder (already works via descriptor)
-
-        Examples:
-            product.images → Collection (lazy loaded)
-            product.images() → QueryBuilder
-            product.images().where('is_active', True).get() → Filtered Collection
-        """
-        # Check if this is a relationship method defined on the class
-        if hasattr(self.__class__, attribute):
-            class_attr = getattr(self.__class__, attribute)
-
-            # If it's a relationship (has 'get_related' method), lazy load it
-            if hasattr(class_attr, "get_related"):
-                # Check if already loaded in _relations
-                if self.is_relation_loaded(attribute):
-                    return self.get_related(attribute)
-
-                # Lazy load: call the relationship method and execute get()
-                relationship_query = class_attr(self, self.__class__)
-                result = relationship_query.get_related(self.query(), self)
-
-                # Cache the result
-                self.add_relation({attribute: result})
-                return result
-
-        # Fallback to normal attribute error
-        raise AttributeError(
-            f"'{self.__class__.__name__}' object has no attribute '{attribute}'"
-        )
 
     def get_builder(self):
         if hasattr(self, "builder"):

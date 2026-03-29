@@ -16,9 +16,16 @@ class BelongsTo(BaseRelationship):
         return self
 
     def __get__(self, instance, owner):
-        """Property access: Return relationship instance for query building."""
+        """Property access: return eager-loaded data if available, else a fresh builder."""
         if instance is None:
             return self
+
+        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
+        if func and hasattr(func, '__name__'):
+            attr_name = func.__name__
+            relations = getattr(instance, '_relations', None)
+            if relations is not None and attr_name in relations:
+                return relations[attr_name]
         return self.get_builder()
 
     def __init__(self, fn, local_key=None, foreign_key=None):

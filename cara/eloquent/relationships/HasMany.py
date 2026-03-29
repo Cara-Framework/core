@@ -17,11 +17,17 @@ class HasMany(BaseRelationship):
         return self
     
     def __get__(self, instance, owner):
-        """Property access: Return Collection like Laravel (execute query automatically)."""
+        """Property access: return eager-loaded data if available, else execute query."""
         if instance is None:
-            # Accessed from class, return self for eager loading
             return self
-        # Accessed from instance, execute query and return Collection (Laravel-style)
+
+        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
+        if func and hasattr(func, '__name__'):
+            attr_name = func.__name__
+            relations = getattr(instance, '_relations', None)
+            if relations is not None and attr_name in relations:
+                return relations[attr_name]
+
         return self.apply_query(self.get_builder(), instance)
 
     def apply_query(self, foreign, owner):
