@@ -176,6 +176,7 @@ class QueryBuilder(ObservesEvents):
         self._group_by = ()
         self._joins = ()
         self._having = ()
+        self._aggregates = ()
 
         return self
 
@@ -1945,9 +1946,15 @@ class QueryBuilder(ObservesEvents):
             return self
 
         if not column:
-            result = self.new_connection().query(
-                self.to_qmark(), self._bindings, results=1
-            )
+            # ORDER BY is invalid in aggregate-only queries (PostgreSQL rejects it)
+            saved_order_by = self._order_by
+            self._order_by = ()
+            try:
+                result = self.new_connection().query(
+                    self.to_qmark(), self._bindings, results=1
+                )
+            finally:
+                self._order_by = saved_order_by
 
             if isinstance(result, dict):
                 return result.get(alias, 0)
