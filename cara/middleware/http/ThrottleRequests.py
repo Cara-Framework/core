@@ -113,8 +113,8 @@ class ThrottleRequests(Middleware):
             return Limit(max_attempts=self.custom_limit, decay_minutes=window_minutes)
         
         # Fall back to global RateLimiter config (if available)
-        window_val = self.custom_window_minutes or 1
-        return Limit(max_attempts=RateLimiter.limit, decay_minutes=window_val)
+        # RateLimiter.window is in seconds; convert to minutes for Limit
+        return Limit(max_attempts=RateLimiter.limit, decay_minutes=RateLimiter.window / 60)
 
     def _resolve_key(self, request: Request, limit_config) -> str:
         """
