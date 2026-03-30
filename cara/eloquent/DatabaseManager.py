@@ -163,9 +163,8 @@ class DatabaseManager:
         conn = resolver._create_connection_instance(connection_name)
         conn.set_cursor()
         conn.statement(query, bindings)
-        columns = [desc[0] for desc in conn._cursor.description] if conn._cursor and conn._cursor.description else []
         rows = conn._cursor.fetchall() if conn._cursor else []
-        return [dict(zip(columns, row)) for row in rows]
+        return [dict(row) for row in rows]
 
     def statement(self, query, bindings=(), connection=None):
         """Executes raw SQL statement"""
