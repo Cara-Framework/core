@@ -47,7 +47,6 @@ class JobTracker:
         job_model=None,
         max_retries: Dict[str, int] = None,
         retry_delays: List[int] = None,
-        job_log_model=None,  # DEPRECATED - kept for backwards compatibility
     ):
         """
         Initialize JobTracker with dependency injection.
@@ -59,12 +58,10 @@ class JobTracker:
             job_model: Unified Job model class (REQUIRED for tracking)
             max_retries: Dict of job_name -> max_retry_count
             retry_delays: List of delay seconds for retries
-            job_log_model: DEPRECATED - separate JobLog table no longer used
 
         Example (ApplicationProvider):
-            # In your app's ApplicationProvider:
             from cara.queues.tracking import JobTracker
-            from app.models import Job  # App imports here, not in framework
+            from app.models import Job
 
             tracker = JobTracker(job_model=Job)
             self.application.bind("JobTracker", tracker)
@@ -73,14 +70,6 @@ class JobTracker:
         self.max_retries = max_retries or self.DEFAULT_MAX_RETRIES
         self.retry_delays = retry_delays or self.DEFAULT_RETRY_DELAYS
 
-        # DEPRECATED: Backwards compatibility warning
-        if job_log_model:
-            Log.warning(
-                "⚠️ JobLog model is deprecated - unified Job model is now used for tracking. "
-                "Please remove job_log_model parameter."
-            )
-
-        # Log warning if model not injected
         if not self.job_model:
             Log.warning(
                 "⚠️ Job model not injected - job tracking disabled. "
@@ -237,15 +226,14 @@ class JobTracker:
             bool: True if job should continue
         """
         try:
-            if not self.job_log_model:
+            if not self.job_model:
                 return True
 
-            job_log = self.job_log_model.where("job_uid", job_uid).first()
-            if not job_log:
+            job_record = self.job_model.where("job_uid", job_uid).first()
+            if not job_record:
                 return True
 
-            # Check if job was cancelled or failed
-            if job_log.status in [self.job_log_model.STATUS_CANCELLED]:
+            if job_record.status in [self.job_model.STATUS_CANCELLED]:
                 return False
 
             return True
@@ -290,16 +278,16 @@ class JobTracker:
         Returns:
             Dict with analytics data
         """
-        if not self.job_log_model:
-            return {"total_jobs": 0, "message": "No JobLog model configured"}
+        if not self.job_model:
+            return {"total_jobs": 0, "message": "No Job model configured"}
 
         try:
-            query = self.job_log_model.query()
+            query = self.job_model.query()
 
             if entity_id:
-                query = query.where("product_id", entity_id)
+                query = query.where("entity_id", entity_id)
             if job_name:
-                query = query.where("job_name", job_name)
+                query = query.where("name", job_name)
 
             # Time window
             since = pendulum.now().subtract(hours=hours)

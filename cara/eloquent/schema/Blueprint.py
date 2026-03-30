@@ -456,13 +456,3 @@ class Blueprint:
         """Get generated SQL"""
         return getattr(self, "_generated_sql", self.to_sql())
 
-    def execute(self):
-        """This method is deprecated - Blueprint should not execute SQL directly"""
-        from cara.support.Logger import Log
-
-        Log.warning("Blueprint.execute() is deprecated - use get_sql() instead")
-        return self.to_sql()
-
-    def _execute_sql(self, sql):
-        """Legacy method - no longer used"""
-        pass

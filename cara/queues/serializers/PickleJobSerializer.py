@@ -1,7 +1,6 @@
 """
 Pickle Job Serializer - Traditional Python serialization.
 
-Legacy serializer for backward compatibility.
 Use JsonJobSerializer for new projects (more secure and portable).
 """
 

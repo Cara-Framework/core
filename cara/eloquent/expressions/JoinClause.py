@@ -6,7 +6,6 @@ Handles JOIN clauses in a clean, simple way.
 
 from typing import List
 
-from ..helpers.misc import deprecated
 from .OnClause import OnClause
 from .OnValueClause import OnValueClause
 
@@ -126,10 +125,6 @@ class JoinClause:
             ),
         )
         return self
-
-    @deprecated("Using where() in a Join clause has been superceded by on_value()")
-    def where(self, column, *args):
-        return self.on_value(column, *args)
 
     def _extract_operator_value(self, *args):
         operators = [

@@ -188,7 +188,7 @@ class DatabaseManager:
     # === Config and Logic Provider Methods ===
 
     def get_resolver(self):
-        """Access to ConnectionResolver instance (backward compatibility)"""
+        """Access to the ConnectionResolver instance."""
         return self._ensure_resolver()
 
     def get_connection_details(self):

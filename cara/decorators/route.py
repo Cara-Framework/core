@@ -141,15 +141,14 @@ class RouteDecorator:
 route = RouteDecorator()
 
 
-# Legacy RouteProvider compatibility - kept for backward compatibility
 _pending_routes: List[dict] = []
 
 
 def all_pending() -> List[dict]:
-    """Return pending routes for RouteProvider (legacy)"""
+    """Return pending routes collected from @route decorators."""
     return _pending_routes.copy()
 
 
 def clear() -> None:
-    """Clear pending routes for RouteProvider (legacy)"""
+    """Clear pending routes after they have been loaded."""
     _pending_routes.clear()
