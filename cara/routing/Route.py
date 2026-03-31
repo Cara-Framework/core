@@ -1,10 +1,13 @@
-"""
-Route helper class for creating and managing route instances in the Cara framework.
+"""Route helper class for creating and managing route instances.
 
-Mirrors Laravel-style syntax for HTTP and WebSocket routes.
+Mirrors Laravel-style syntax for HTTP and WebSocket routes with support for:
+- Parameter validation and type conversion
+- Route grouping with prefix/middleware
+- Route model binding
+- Named routes
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 from cara.http import Response
 from cara.routing import (
@@ -17,10 +20,14 @@ from cara.support.Collection import flatten
 
 
 class Route:
-    """Route helper class for creating different types of routes."""
+    """Route helper class for creating different types of routes.
 
-    # Default parameter compiler patterns
-    compilers = {
+    Provides a fluent interface for defining HTTP and WebSocket routes
+    with support for parameter validation, middleware, and model binding.
+    """
+
+    # Default parameter compiler patterns - Laravel-compatible regex patterns
+    compilers: Dict[str, str] = {
         "int": r"(\d+)",
         "integer": r"(\d+)",
         "string": r"([a-zA-Z]+)",
@@ -43,38 +50,84 @@ class Route:
         name: Optional[str] = None,
         compilers: Optional[Dict[str, str]] = None,
         controllers_locations: Optional[List[str]] = None,
-        **options,
-    ):
-        """
-        Initialize a new Route instance.
+        **options: Any,
+    ) -> None:
+        """Initialize a new Route instance.
 
-        :param url: URL pattern (e.g. "/users/@id:int")
-        :param controller: handler, controller method or function
-        :param request_method: list of methods, e.g. ["get"], ["ws"]
-        :param name: optional route name
+        Args:
+            url: URL pattern (e.g. "/users/@id:int")
+            controller: Handler, controller method or function
+            request_method: List of HTTP methods (e.g. ["get"], ["post"])
+            name: Optional route name for URL generation
+            compilers: Optional custom parameter compilers
+            controllers_locations: Optional controller module locations
+            **options: Additional route options
         """
         self.url = self._normalize_url(url)
         self.request_method = [m.lower() for m in request_method]
         self._name = name
         self._middleware: List[str] = []
+        self._model_bindings: Dict[str, Type[Any]] = {}
         self.compiler = RouteCompiler(self.url, compilers or Route.compilers)
         self.controller = RouteResolver(
             controller,
             controllers_locations or Route.controllers_locations,
         )
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """String representation of the route."""
         return f"<Route [{self._name}]: {self.url}>"
 
     def get_name(self) -> Optional[str]:
+        """Get the route name.
+
+        Returns:
+            The route name or None
+        """
         return self._name
 
     def name(self, name: str) -> "Route":
+        """Set the route name.
+
+        Args:
+            name: The route name
+
+        Returns:
+            Self for method chaining
+        """
         self._name = name
         return self
 
+    def model(self, param: str, model_class: Type[Any]) -> "Route":
+        """Register implicit route model binding.
+
+        Args:
+            param: The route parameter name
+            model_class: The model class to bind to
+
+        Returns:
+            Self for method chaining
+        """
+        self._model_bindings[param] = model_class
+        return self
+
+    def get_model_bindings(self) -> Dict[str, Type[Any]]:
+        """Get all model bindings for this route.
+
+        Returns:
+            Dictionary of parameter names to model classes
+        """
+        return self._model_bindings
+
     def _normalize_url(self, url: str) -> str:
-        # Ensure leading slash and remove duplicate separators
+        """Normalize URL by ensuring leading slash and removing duplicates.
+
+        Args:
+            url: The URL to normalize
+
+        Returns:
+            The normalized URL
+        """
         return "/" + "/".join(filter(None, url.split("/")))
 
     def extract_parameters(self, path: str) -> Dict[str, Any]:
@@ -104,9 +157,31 @@ class Route:
     def matches(self, path: str, method: str) -> bool:
         return self.compiler.matches(path) and method.lower() in self.request_method
 
-    async def dispatch(self, request: Any, response: Any) -> Any:
+    async def dispatch(self, request: Any, response: Any) -> Response:
+        """Dispatch a request to this route's controller.
+
+        Extracts route parameters, applies model bindings, and delegates to controller.
+
+        Args:
+            request: The HTTP request
+            response: The HTTP response object
+
+        Returns:
+            The response object
+        """
         # Extract route parameters
         params = self.extract_parameters(request.path)
+
+        # Apply model bindings if registered
+        for param_name, model_class in self._model_bindings.items():
+            if param_name in params:
+                try:
+                    # Resolve model using find() method if available
+                    if hasattr(model_class, 'find'):
+                        params[param_name] = model_class.find(params[param_name])
+                except Exception:
+                    # Keep original value if model resolution fails
+                    pass
 
         # Set validated parameters on request for easy access
         self.set_params(params)
@@ -124,8 +199,18 @@ class Route:
             return response
         return response
 
-    def _convert_parameter_type(self, param_name: str, param_value: str):
-        """Convert route parameter to appropriate type based on compiler pattern."""
+    def _convert_parameter_type(
+        self, param_name: str, param_value: str
+    ) -> Union[int, bool, str]:
+        """Convert route parameter to appropriate type based on compiler pattern.
+
+        Args:
+            param_name: The parameter name
+            param_value: The parameter value as string
+
+        Returns:
+            The converted parameter value
+        """
         # Get the compiler pattern for this parameter
         compiler_pattern = self.compiler.compilers.get(param_name)
 

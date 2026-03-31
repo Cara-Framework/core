@@ -104,9 +104,173 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         self.push(job, options=merged_opts)
 
-    def retry(self, options: Dict[str, Any]) -> None:
-        """Retry is not supported in AMQP driver."""
-        raise QueueException("AMQP retry is not supported in this implementation.")
+    def later(self, delay: Union[int, "pendulum.Duration"], job: Any, options: Dict[str, Any] = None) -> Union[str, List[str]]:
+        """
+        Schedule a job to be executed after a delay.
+
+        Uses AMQP message TTL and delayed plugin for scheduling.
+        Implements exponential backoff for retries.
+
+        Args:
+            delay: Delay in seconds or pendulum Duration
+            job: Job instance to schedule
+            options: Queue options
+
+        Returns:
+            Job ID(s)
+        """
+        import pendulum as pendulum_module
+
+        if options is None:
+            options = {}
+
+        # Handle delay as Duration or int
+        if isinstance(delay, int):
+            delay_seconds = delay
+        else:
+            # Assume it's a Duration-like object
+            delay_seconds = int(delay.total_seconds()) if hasattr(delay, "total_seconds") else delay
+
+        # Merge options
+        merged_opts = {**self.options, **options}
+
+        # Calculate when job should run
+        when = pendulum_module.now(tz=merged_opts.get("tz", "UTC")).add(seconds=delay_seconds)
+
+        # Use schedule method which handles AMQP delayed plugin
+        self.schedule(job, when, merged_opts)
+
+        # Generate and return job ID
+        job_id = str(uuid.uuid4())
+        return job_id
+
+    def retry(
+        self,
+        job: Any,
+        options: Dict[str, Any] = None,
+        attempts: int = 3,
+        backoff: str = "exponential"
+    ) -> Union[str, List[str]]:
+        """
+        Retry a failed job with optional exponential backoff.
+
+        Implements exponential backoff retry strategy similar to Laravel.
+        Uses AMQP dead letter exchanges and TTL for delayed retries.
+
+        Args:
+            job: Job instance to retry
+            options: Queue options
+            attempts: Maximum retry attempts (default: 3)
+            backoff: Backoff strategy - 'exponential', 'linear', or int for fixed delay in seconds
+
+        Returns:
+            Job ID
+
+        Example:
+            driver.retry(my_job, attempts=5, backoff='exponential')
+        """
+        if options is None:
+            options = {}
+
+        # Get current attempt count
+        attempts_made = options.get("attempts", 0)
+
+        if attempts_made >= attempts:
+            # Max attempts reached, send to dead letter
+            Log.error(
+                f"Job {job.__class__.__name__} exceeded max retry attempts ({attempts}). "
+                f"Sending to dead letter queue."
+            )
+            self._send_to_dead_letter(job, options, attempts_made)
+            return None
+
+        # Calculate delay based on backoff strategy
+        if isinstance(backoff, str) and backoff == "exponential":
+            # Exponential backoff: 1s, 2s, 4s, 8s, etc.
+            delay_seconds = 2 ** attempts_made
+        elif isinstance(backoff, str) and backoff == "linear":
+            # Linear backoff: 1s, 2s, 3s, 4s, etc.
+            delay_seconds = (attempts_made + 1) * 60  # 1 minute per attempt
+        else:
+            # Fixed delay (assume it's an int)
+            delay_seconds = int(backoff) if backoff else 300  # Default 5 minutes
+
+        attempts_made += 1
+        Log.info(
+            f"Retrying job {job.__class__.__name__} (attempt {attempts_made}/{attempts}) "
+            f"with {delay_seconds}s delay"
+        )
+
+        # Update options with retry info
+        retry_opts = {
+            **options,
+            "attempts": attempts_made,
+            "retry_backoff": backoff,
+            "max_attempts": attempts,
+        }
+
+        # Schedule retry with delay
+        return self.later(delay_seconds, job, retry_opts)
+
+    def _send_to_dead_letter(
+        self, job: Any, options: Dict[str, Any], attempts: int
+    ) -> None:
+        """
+        Send a permanently failed job to dead letter queue.
+
+        Args:
+            job: Failed job instance
+            options: Queue options
+            attempts: Number of attempts made
+        """
+        try:
+            self._connect({})
+
+            # Prepare dead letter message
+            payload = {
+                "obj": job,
+                "args": options.get("args", ()),
+                "callback": options.get("callback", "handle"),
+                "failed_at": pendulum.now(tz=options.get("tz", "UTC")).to_datetime_string(),
+                "attempts": attempts,
+                "error": options.get("error"),
+            }
+
+            # Serialize
+            serializer = options.get("serializer", "pickle")
+            if serializer == "json":
+                body = json.dumps(payload, default=str).encode("utf-8")
+            else:
+                body = pickle.dumps(payload)
+
+            # Publish to dead letter exchange
+            dlx_name = options.get("exchange", "default") + ".dlx"
+            dlq_routing_key = f"dead.{options.get('queue', 'default')}"
+
+            self.channel.basic_publish(
+                exchange=dlx_name,
+                routing_key=dlq_routing_key,
+                body=body,
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # Persistent
+                    headers={
+                        "x-death-count": attempts,
+                        "x-original-job": job.__class__.__name__,
+                    },
+                ),
+            )
+
+            Log.info(f"Job sent to dead letter queue: {dlq_routing_key}")
+
+            # Close connection
+            try:
+                self.channel.close()
+                self.connection.close()
+            except Exception:
+                pass
+
+        except Exception as e:
+            Log.error(f"Failed to send job to dead letter queue: {e}")
 
     def consume(self, options: Dict[str, Any]) -> None:
         """

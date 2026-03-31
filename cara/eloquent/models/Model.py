@@ -1,10 +1,25 @@
+"""
+Eloquent Model - Laravel-style ORM Model.
+
+This module provides the base Model class for Cara's ORM, allowing static-like
+method calls (e.g., User.first()) through the ModelMeta metaclass.
+
+Features:
+- Attribute management with fillable/guarded/hidden
+- Type casting with automatic and custom casts
+- Relationship loading and management
+- Event lifecycle (creating, updating, deleting, etc)
+- Query builder integration with scopes
+- Model observers for event-driven logic
+"""
+
 import copy
 import inspect
 import json
 from datetime import date as datetimedate
 from datetime import datetime
 from datetime import time as datetimetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 import pendulum
 from inflection import tableize, underscore
@@ -12,7 +27,7 @@ from inflection import tableize, underscore
 from cara.exceptions import ModelNotFoundException
 from cara.support.Collection import Collection
 
-# Import new cast system - use the enhanced registry from __init__
+# Import cast system
 from ..casts.collections import ArrayCast, CollectionCast
 from ..casts.datetime import DateCast, DateTimeCast, TimestampCast
 from ..casts.primitives import BoolCast, DecimalCast, FloatCast, IntCast, JsonCast
@@ -27,23 +42,36 @@ from ..observers import ObservesEvents
 from ..query import QueryBuilder
 from ..scopes import TimeStampsMixin
 
-# Cast registry is already auto-populated by EnhancedCastRegistry in __init__.py
-# No need for manual registration here
-
-
-"""
-This is a magic class that will help using models like User.first() instead of having to instatiate a class like
-User().first()
-"""
-
 
 class ModelMeta(type):
-    def __new__(mcs, name, bases, namespace, **kwargs):
-        """Create new Model class with automatic scope method generation."""
+    """Metaclass for Model that enables static method calls and scope registration.
+
+    This metaclass allows Models to be called statically (e.g., User.first())
+    while automatically registering query scopes defined with scope_ prefix.
+    """
+
+    def __new__(
+        mcs: Type["ModelMeta"],
+        name: str,
+        bases: tuple,
+        namespace: Dict[str, Any],
+        **kwargs: Any,
+    ) -> "ModelMeta":
+        """Create new Model class with automatic scope method generation.
+
+        Args:
+            name: The class name
+            bases: Base classes
+            namespace: The class namespace
+            **kwargs: Additional arguments
+
+        Returns:
+            The new model class
+        """
         cls = super().__new__(mcs, name, bases, namespace, **kwargs)
 
         # Auto-register scope methods (Laravel style)
-        cls._class_scopes = {}
+        cls._class_scopes: Dict[str, Callable] = {}
 
         # Find all scope_ methods and create corresponding class methods
         for attr_name in dir(cls):
@@ -53,11 +81,13 @@ class ModelMeta(type):
                 scope_method = getattr(cls, attr_name)
 
                 # Extract scope name (remove 'scope_' prefix)
-                scope_name = attr_name[6:]  # Remove 'scope_' prefix
+                scope_name = attr_name[6:]
 
                 # Create a wrapper that returns a new query builder with scope applied
-                def create_scope_method(scope_func, scope_name):
-                    def scope_wrapper(cls_inner, *args, **kwargs):
+                def create_scope_method(
+                    scope_func: Callable, scope_name: str
+                ) -> classmethod:
+                    def scope_wrapper(cls_inner: Type, *args: Any, **kwargs: Any) -> QueryBuilder:
                         # Create new instance and get fresh query builder
                         instance = cls_inner()
                         builder = instance.get_builder()
@@ -73,13 +103,26 @@ class ModelMeta(type):
                 setattr(cls, scope_name, create_scope_method(scope_method, scope_name))
                 cls._class_scopes[scope_name] = scope_method
 
-        if cls._class_scopes and hasattr(cls, '_scopes'):
+        if cls._class_scopes and hasattr(cls, "_scopes"):
             cls._scopes[cls] = cls._class_scopes
 
         return cls
 
-    def __getattribute__(cls, attribute):
-        """Enhanced meta method with Laravel-style scope handling."""
+    def __getattribute__(cls: Type, attribute: str) -> Any:
+        """Enhanced meta method with Laravel-style scope handling.
+
+        Enables static method calls on models by instantiating and delegating.
+        Falls back to instance method access if class attribute not found.
+
+        Args:
+            attribute: The attribute name to access
+
+        Returns:
+            The attribute value
+
+        Raises:
+            AttributeError: If attribute cannot be found
+        """
         try:
             # First try normal attribute access
             return super().__getattribute__(attribute)
@@ -91,7 +134,7 @@ class ModelMeta(type):
             except AttributeError:
                 raise AttributeError(
                     f"'{cls.__name__}' object has no attribute '{attribute}'"
-                )
+                ) from None
 
 
 class Model(
@@ -102,47 +145,73 @@ class Model(
     HasTimestamps,
     metaclass=ModelMeta,
 ):
+    """Laravel-style ORM Model class.
+
+    Provides a complete ORM with attribute management, relationships, timestamps,
+    events, and query builder integration.
+
+    Class Attributes:
+        __fillable__: List of attributes that can be mass-assigned
+        __guarded__: List of attributes protected from mass-assignment
+        __hidden__: List of attributes hidden from serialization
+        __visible__: List of visible attributes (if set, only these are visible)
+        __casts__: Dict of attribute names to cast types
+        __dates__: List of attributes treated as dates
+        __table__: The database table name (auto-derived from class name if not set)
+        __connection__: The database connection name
+        __primary_key__: The primary key column name
+        __primary_key_type__: The PHP/JS type of the primary key
+        __timestamps__: Whether to manage created_at/updated_at timestamps
+        __timezone__: The timezone for date attributes
+        __with__: Relations to eager load by default
+        __observers__: Model observer configurations
     """
-    The ORM Model class.
 
-    Base Classes:
-        TimeStampsMixin (TimeStampsMixin): Adds scopes to add timestamps when something is inserted
-        metaclass (ModelMeta, optional): Helps instantiate a class when it hasn't been instantiated. Defaults to ModelMeta.
-    """
+    # Mass assignment and serialization
+    __fillable__: List[str] = ["*"]
+    __guarded__: List[str] = []
+    __hidden__: List[str] = []
+    __visible__: List[str] = []
+    __appends__: List[str] = []
 
-    __fillable__ = ["*"]
-    __guarded__ = []
-    __dry__ = False
-    __table__ = None
-    __connection__ = "default"
-    __resolved_connection__ = None
-    __selects__ = []
+    # Database configuration
+    __table__: Optional[str] = None
+    __connection__: str = "default"
+    __resolved_connection__: Optional[Any] = None
+    __primary_key__: str = "id"
+    __primary_key_type__: str = "int"
+    __selects__: List[str] = []
 
-    __observers__ = {}
-    __has_events__ = True
+    # Attribute casting and dates
+    __casts__: Dict[str, Union[str, Type]] = {}
+    __dates__: List[str] = []
+    __cast_map__: Dict[str, Type] = {}
+    __internal_cast_map__: Dict[str, Type] = {}
 
-    _booted = False
-    _scopes = {}
-    __primary_key__ = "id"
-    __primary_key_type__ = "int"
-    __casts__ = {}
-    __dates__ = []
-    __hidden__ = []
-    __relationship_hidden__ = {}
-    __visible__ = []
-    __timestamps__ = True
-    __timezone__ = "UTC"
-    __with__ = ()
-    __force_update__ = False
+    # Timestamps
+    __timestamps__: bool = True
+    __timezone__: str = "UTC"
+    date_created_at: str = "created_at"
+    date_updated_at: str = "updated_at"
 
-    date_created_at = "created_at"
-    date_updated_at = "updated_at"
+    # Relationships and eager loading
+    __with__: tuple = ()
+    __relationship_hidden__: Dict[str, List[str]] = {}
+
+    # Events and observers
+    __observers__: Dict[str, Any] = {}
+    __has_events__: bool = True
+
+    # Query execution
+    __dry__: bool = False
+    __force_update__: bool = False
+
+    # Internal state
+    _booted: bool = False
+    _scopes: Dict[Type, Dict[str, Callable]] = {}
 
     builder: QueryBuilder
-    """
-    Pass through will pass any method calls to the model directly through to the query
-    builder class.
-    """
+    """Passthrough delegates to QueryBuilder for query method calls."""
     __passthrough__ = set(
         (
             "add_select",
@@ -257,7 +326,7 @@ class Model(
 
     __cast_map__ = {}
 
-    __internal_cast_map__ = {
+    __internal_cast_map__: Dict[str, Type] = {
         "bool": BoolCast,
         "json": JsonCast,
         "int": IntCast,
@@ -275,26 +344,37 @@ class Model(
         "collection": CollectionCast,
     }
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
+        """Initialize a new Model instance.
+
+        Args:
+            **kwargs: Initial attribute values to set on the model
+        """
         # Call parent constructors (including HasRelationships)
         super().__init__(**kwargs)
 
-        self.__attributes__ = {}
-        self.__original_attributes__ = {}
-        self.__dirty_attributes__ = {}
+        # Initialize attribute storage
+        self.__attributes__: Dict[str, Any] = {}
+        self.__original_attributes__: Dict[str, Any] = {}
+        self.__dirty_attributes__: Dict[str, Any] = {}
+
+        # Initialize appends if not already present
         if not hasattr(self, "__appends__"):
             self.__appends__ = []
-        self._relations = {}
-        self._relationships = {}
-        self._global_scopes = {}
+
+        # Initialize relationships storage
+        self._relations: Dict[str, Any] = {}
+        self._relationships: Dict[str, Any] = {}
+        self._global_scopes: Dict[str, Any] = {}
+
+        # Initialize model events cache
+        self._model_events: Optional[Dict[str, List[Callable]]] = None
 
         # Set attributes from kwargs
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-        # Initialize model events cache
-        self._model_events = None
-
+        # Bootstrap the model (register observers, etc)
         self.boot()
 
     @classmethod
@@ -449,14 +529,14 @@ class Model(
 
         return True  # All listeners passed, continue
 
-    def save(self, **kwargs):
-        """
-        Laravel-style save method with full event lifecycle.
+    def save(self, **kwargs: Any) -> bool:
+        """Save the model to the database.
 
+        Laravel-style save method with full event lifecycle.
         Fires appropriate events: creating/updating -> saving -> created/updated -> saved
 
         Returns:
-            bool: True if successful, False if cancelled by event
+            True if successful, False if cancelled by event or error occurred
         """
         # Determine if this is a new record or existing one
         is_new_record = not self.is_created()
@@ -523,14 +603,14 @@ class Model(
             print(f"Save operation failed: {e}")
             return False
 
-    def delete(self, **kwargs):
-        """
-        Laravel-style delete method with event lifecycle.
+    def delete(self, **kwargs: Any) -> bool:
+        """Delete the model from the database.
 
+        Laravel-style delete method with event lifecycle.
         Fires: deleting -> deleted
 
         Returns:
-            bool: True if successful, False if cancelled by event
+            True if successful, False if cancelled by event or error occurred
         """
         # Fire deleting event - can cancel operation
         if not self._fire_model_event("deleting"):
@@ -601,15 +681,19 @@ class Model(
         return cls
 
     @classmethod
-    def find(cls, record_id, query=False):
-        """
-        Finds a row by the primary key ID.
+    def find(
+        cls: Type["Model"],
+        record_id: Union[Any, List[Any], tuple],
+        query: bool = False,
+    ) -> Union["Model", List["Model"], QueryBuilder, None]:
+        """Find a row by the primary key ID.
 
-        Arguments:
-            record_id {int} -- The ID of the primary key to fetch.
+        Args:
+            record_id: The primary key value (int, string) or list of IDs
+            query: If True, return the QueryBuilder instead of executing
 
         Returns:
-            Model
+            A Model instance, Collection of models, QueryBuilder, or None if not found
         """
         if isinstance(record_id, (list, tuple)):
             if not record_id:
@@ -620,27 +704,36 @@ class Model(
 
         if query:
             return builder
-        else:
-            if isinstance(record_id, (list, tuple)):
-                return builder.get()
+
+        if isinstance(record_id, (list, tuple)):
+            return builder.get()
 
         return builder.first()
 
     @classmethod
-    def find_or_fail(cls, record_id, query=False):
-        """
-        Finds a row by the primary key ID or raise a ModelNotFound exception.
+    def find_or_fail(
+        cls: Type["Model"],
+        record_id: Union[Any, List[Any], tuple],
+        query: bool = False,
+    ) -> Union["Model", List["Model"], QueryBuilder]:
+        """Find a row by the primary key ID or raise ModelNotFoundException.
 
-        Arguments:
-            record_id {int} -- The ID of the primary key to fetch.
+        Args:
+            record_id: The primary key value or list of IDs
+            query: If True, return the QueryBuilder instead of executing
 
         Returns:
-            Model
+            A Model instance or Collection of models
+
+        Raises:
+            ModelNotFoundException: If no model is found
         """
         result = cls.find(record_id, query)
 
         if not result:
-            raise ModelNotFoundException()
+            raise ModelNotFoundException(
+                f"{cls.__name__} with ID {record_id} not found"
+            )
 
         return result
 
@@ -733,28 +826,29 @@ class Model(
 
     @classmethod
     def create(
-        cls,
-        dictionary: Dict[str, Any] = None,
+        cls: Type["Model"],
+        dictionary: Optional[Dict[str, Any]] = None,
         query: bool = False,
         cast: bool = True,
-        **kwargs,
-    ):
-        """
-        Creates new records based off of a dictionary as well as data set on the model such as
-        fillable values.
+        **kwargs: Any,
+    ) -> Union["Model", QueryBuilder]:
+        """Create a new record in the database.
 
         Args:
-            dictionary (dict, optional): [description]. Defaults to {}.
-            query (bool, optional): [description]. Defaults to False.
-            cast (bool, optional): [description]. Whether or not to cast passed values.
+            dictionary: Attributes for the new record
+            query: If True, return the QueryBuilder instead of executing
+            cast: Whether to cast attribute values
+            **kwargs: Additional options passed to the query builder
 
         Returns:
-            self: A hydrated version of a model
+            A new Model instance, or a QueryBuilder if query=True
         """
         if query:
-            return cls.builder.create(dictionary, query=True, cast=cast, **kwargs)
+            return cls().get_builder().create(
+                dictionary, query=True, cast=cast, **kwargs
+            )
 
-        return cls.builder.create(dictionary, cast=cast, **kwargs)
+        return cls().get_builder().create(dictionary, cast=cast, **kwargs)
 
     @classmethod
     def cast_value(cls, attribute: str, value: Any):

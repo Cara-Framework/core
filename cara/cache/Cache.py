@@ -3,12 +3,123 @@ Central Cache Manager for the Cara framework.
 
 This module provides the Cache class, which manages multiple cache drivers and delegates cache
 operations to the appropriate driver instance.
+
+Supports Laravel-style cache tags and cache locks for distributed systems.
 """
 
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from cara.cache.contracts import Cache
 from cara.exceptions import DriverNotRegisteredException
+
+
+class CacheLock:
+    """
+    Distributed lock using cache.
+
+    Prevents race conditions in distributed systems using cache as storage.
+    """
+
+    def __init__(self, cache, key: str, timeout: int = 86400, owner: str = None):
+        """
+        Initialize a cache lock.
+
+        Args:
+            cache: Cache driver instance
+            key: Lock key
+            timeout: Lock timeout in seconds (default: 24 hours)
+            owner: Lock owner identifier (for distinguishing lock holders)
+        """
+        self.cache = cache
+        self.key = f"lock:{key}"
+        self.timeout = timeout
+        self.owner = owner or "default"
+
+    def acquire(self, timeout: int = 0) -> bool:
+        """
+        Attempt to acquire the lock.
+
+        Args:
+            timeout: Max seconds to wait for lock (0 = non-blocking)
+
+        Returns:
+            True if lock acquired, False otherwise
+        """
+        import time
+        start = time.time()
+
+        while True:
+            # Try to add the lock key (only succeeds if key doesn't exist)
+            if self.cache.add(self.key, self.owner, self.timeout):
+                return True
+
+            if timeout == 0 or (time.time() - start) >= timeout:
+                return False
+
+            time.sleep(0.1)  # Brief sleep before retry
+
+    def release(self) -> bool:
+        """Release the lock if held by this owner."""
+        # Only release if we own the lock
+        if self.cache.get(self.key) == self.owner:
+            return self.cache.forget(self.key)
+        return False
+
+    def __enter__(self):
+        """Context manager entry."""
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.release()
+        return False
+
+
+class CacheTaggedStore:
+    """
+    Tagged cache operations.
+
+    Allows grouping cache entries by tags for bulk invalidation.
+    """
+
+    def __init__(self, cache, tags: List[str]):
+        """
+        Initialize tagged cache store.
+
+        Args:
+            cache: Cache driver instance
+            tags: List of tags to apply to operations
+        """
+        self.cache = cache
+        self.tags = tags
+
+    def _build_tagged_key(self, key: str) -> str:
+        """Build a key with tag prefix."""
+        tag_prefix = ":".join(self.tags)
+        return f"{tag_prefix}:{key}"
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get value from tagged cache."""
+        return self.cache.get(self._build_tagged_key(key), default)
+
+    def put(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        """Store value in tagged cache."""
+        self.cache.put(self._build_tagged_key(key), value, ttl)
+
+    def forever(self, key: str, value: Any) -> None:
+        """Store value permanently in tagged cache."""
+        self.cache.forever(self._build_tagged_key(key), value)
+
+    def forget(self, key: str) -> bool:
+        """Remove value from tagged cache."""
+        return self.cache.forget(self._build_tagged_key(key))
+
+    def flush(self) -> int:
+        """Flush all entries with these tags."""
+        # Flush all keys matching tag pattern
+        pattern = ":".join(self.tags) + ":*"
+        return self.cache.forget_pattern(pattern)
 
 
 class Cache:
@@ -16,12 +127,14 @@ class Cache:
     Central cache manager. Delegates get/put/forget/flush to registered driver instances.
 
     The default driver name is injected via constructor (from CacheProvider).
+    Supports Laravel-style cache tags and distributed cache locks.
     """
 
     def __init__(self, application, default_driver: str):
         self.application = application
         self._stores: dict[str, Cache] = {}
         self._default_driver: str = default_driver
+        self._tags: List[str] = []
 
     def add_driver(self, driver_name: str, driver: Cache) -> None:
         """Register a driver instance under `driver_name`."""
@@ -123,3 +236,58 @@ class Cache:
             Number of keys deleted
         """
         return self.driver(driver_name).forget_pattern(pattern)
+
+    def tags(self, *tags: str, driver_name: Optional[str] = None) -> "CacheTaggedStore":
+        """
+        Tag cache entries for bulk invalidation (Laravel-style).
+
+        Example:
+            cache.tags("posts", "featured").put("post_1", post_data, ttl=3600)
+            cache.tags("posts").flush()  # Flush all posts
+
+        Args:
+            tags: One or more tag strings
+            driver_name: Optional driver name (uses default if not specified)
+
+        Returns:
+            CacheTaggedStore instance for tagged operations
+        """
+        driver = self.driver(driver_name)
+        return CacheTaggedStore(driver, list(tags))
+
+    def lock(
+        self,
+        key: str,
+        timeout: int = 86400,
+        owner: str = None,
+        driver_name: Optional[str] = None,
+    ) -> CacheLock:
+        """
+        Get a distributed cache lock (Laravel-style).
+
+        Useful for preventing race conditions in distributed systems.
+
+        Example:
+            lock = cache.lock("user_export")
+            if lock.acquire():
+                try:
+                    # Do exclusive work
+                    export_data()
+                finally:
+                    lock.release()
+
+            # Or use as context manager:
+            with cache.lock("user_export") as lock:
+                export_data()
+
+        Args:
+            key: Lock key name
+            timeout: Lock timeout in seconds (default: 24 hours)
+            owner: Lock owner identifier
+            driver_name: Optional driver name (uses default if not specified)
+
+        Returns:
+            CacheLock instance
+        """
+        driver = self.driver(driver_name)
+        return CacheLock(driver, key, timeout, owner)

@@ -2,12 +2,19 @@
 Event Base for the Cara framework.
 
 This module provides the base Event class for defining and dispatching events in the application.
+
+Supports:
+- Direct event listener subscription
+- Event subscriber classes (for grouping related listeners)
+- Wildcard event listeners (matching event name patterns)
+- Queued event listeners (via ShouldQueue interface)
+- Async/sync listener execution
 """
 
 import asyncio
 import inspect
 from threading import Lock
-from typing import Dict, List, Type
+from typing import Callable, Dict, List, Type
 
 from cara.events.contracts import Event, Listener
 from cara.exceptions import EventNameConflictException, ListenerNotFoundException
@@ -15,18 +22,55 @@ from cara.facades import Log, Queue
 from cara.queues.contracts import ShouldQueue
 
 
+class EventSubscriber:
+    """
+    Base class for event subscribers.
+
+    Group related event listeners together by extending this class
+    and implementing the subscribe() method.
+
+    Example:
+        class UserEventSubscriber(EventSubscriber):
+            def subscribe(self, dispatcher):
+                dispatcher.listen('user.created', self.on_user_created)
+                dispatcher.listen('user.updated', self.on_user_updated)
+
+            def on_user_created(self, event):
+                # Handle user created
+                pass
+
+            def on_user_updated(self, event):
+                # Handle user updated
+                pass
+    """
+
+    def subscribe(self, dispatcher: "Event") -> None:
+        """
+        Subscribe to events in the dispatcher.
+
+        Args:
+            dispatcher: The Event dispatcher instance
+        """
+        raise NotImplementedError("Subscriber must implement subscribe() method")
+
+
 class Event:
     """
     Central event dispatcher.
 
-    - You subscribe Listener classes to an event name.
-    - When you dispatch an Event instance, all subscribed listeners' handle() will run.
-    - Laravel-style: If listeners implement ShouldQueue, they get queued instead of executed immediately.
+    Features:
+    - Subscribe Listener classes to event names
+    - Support for event subscriber classes (group related listeners)
+    - Wildcard event listeners (*.user, user.*, etc)
+    - Laravel-style: Listeners implementing ShouldQueue get queued
+    - Async/sync listener support
     """
 
     def __init__(self):
         # Mapping: event_name -> list of Listener instances
         self._listeners: Dict[str, List[Listener]] = {}
+        # Wildcard listeners: pattern -> list of listeners
+        self._wildcard_listeners: Dict[str, List[Listener]] = {}
         # Keep track of registered event names to avoid conflicts
         self._registered_events: Dict[str, Type[Event]] = {}
         self._lock = Lock()
@@ -59,27 +103,87 @@ class Event:
 
         self._registered_events[event_name] = event_class
 
-    def subscribe(self, event_name: str, listener: Listener) -> None:
+    def subscribe(self, event_name: str, listener: Listener = None) -> None:
         """
-        Subscribe a Listener instance to an event name.
+        Subscribe a Listener instance or EventSubscriber to events.
+
+        Supports three patterns:
+        1. Direct listener: subscribe(event_name, listener_instance)
+        2. Event subscriber class: subscribe(MyEventSubscriber)
+        3. Wildcard listeners: subscribe('user.*', listener) or subscribe('*.created', listener)
 
         Args:
-            event_name: Name of the event to listen for
-            listener: The Listener instance
+            event_name: Event name, wildcard pattern, or EventSubscriber class
+            listener: The Listener instance (optional if event_name is EventSubscriber class)
+
+        Example:
+            # Direct listener
+            dispatcher.subscribe('user.created', my_listener)
+
+            # Wildcard listener
+            dispatcher.subscribe('user.*', my_listener)
+            dispatcher.subscribe('*.created', my_listener)
+
+            # Event subscriber class
+            dispatcher.subscribe(UserEventSubscriber)
         """
+        # Handle EventSubscriber classes
+        if listener is None and isinstance(event_name, type):
+            # event_name is actually an EventSubscriber class
+            if issubclass(event_name, EventSubscriber):
+                subscriber_instance = event_name()
+                subscriber_instance.subscribe(self)
+                return
+
+        # Handle wildcard patterns
+        if "*" in event_name:
+            with self._lock:
+                if event_name not in self._wildcard_listeners:
+                    self._wildcard_listeners[event_name] = []
+                self._wildcard_listeners[event_name].append(listener)
+            return
+
+        # Handle direct event listener subscription
         with self._lock:
             if event_name not in self._listeners:
                 self._listeners[event_name] = []
             self._listeners[event_name].append(listener)
 
+    def listen(self, event_name: str, callback: Callable) -> None:
+        """
+        Alias for subscribe that accepts a callback function.
+
+        Useful for registering simple callback handlers without creating Listener classes.
+
+        Example:
+            dispatcher.listen('user.created', lambda event: print(f"User created: {event.user}"))
+
+        Args:
+            event_name: Event name to listen for
+            callback: Function to call when event is dispatched
+        """
+        # Create a simple listener wrapper for the callback
+        class CallbackListener(Listener):
+            def handle(self, event):
+                return callback(event)
+
+        listener = CallbackListener()
+        self.subscribe(event_name, listener)
+
     async def dispatch(self, event: Event) -> None:
         """
         Dispatch an Event instance to all subscribed listeners.
 
+        Handles:
+        - Direct event listener subscription
+        - Wildcard event patterns (user.*, *.created, etc)
+        - Queued listeners (via ShouldQueue interface)
+        - Async/sync listener execution
+
         Laravel-style: If a listener implements ShouldQueue, it gets queued.
         Otherwise, it gets executed immediately.
 
-        If no listeners are registered for this event's name(), raise ListenerNotFoundException.
+        Raises ListenerNotFoundException if no listeners match the event.
 
         Note: This is async to properly handle async listeners in sync mode.
         """
@@ -89,8 +193,16 @@ class Event:
         else:
             event_name = event.__class__.__name__.lower()
 
-        listeners = self._listeners.get(event_name, [])
-        if not listeners:
+        # Get direct listeners for this event name
+        direct_listeners = self._listeners.get(event_name, []).copy()
+
+        # Get wildcard listeners that match this event name
+        wildcard_listeners = self._get_matching_wildcard_listeners(event_name)
+
+        # Combine all listeners
+        all_listeners = direct_listeners + wildcard_listeners
+
+        if not all_listeners:
             raise ListenerNotFoundException(
                 f"No listeners registered for event '{event_name}'."
             )
@@ -100,7 +212,7 @@ class Event:
 
         is_sync = ExecutionContext.is_sync()
 
-        for listener in listeners:
+        for listener in all_listeners:
             # Laravel-style queue check: If listener implements ShouldQueue, queue it
             if self._should_queue(listener):
                 self._queue_listener(listener, event)
@@ -117,6 +229,43 @@ class Event:
                 else:
                     # Sync listener - call directly
                     listener.handle(event)
+
+    def _get_matching_wildcard_listeners(self, event_name: str) -> List[Listener]:
+        """
+        Find all wildcard listeners that match the given event name.
+
+        Supports patterns like:
+        - "user.*" matches "user.created", "user.updated", etc
+        - "*.created" matches "user.created", "post.created", etc
+        - "*" matches all events
+
+        Args:
+            event_name: The event name to match
+
+        Returns:
+            List of listeners matching the wildcard patterns
+        """
+        matching_listeners = []
+
+        for pattern, listeners in self._wildcard_listeners.items():
+            if self._matches_wildcard(event_name, pattern):
+                matching_listeners.extend(listeners)
+
+        return matching_listeners
+
+    def _matches_wildcard(self, event_name: str, pattern: str) -> bool:
+        """
+        Check if an event name matches a wildcard pattern.
+
+        Args:
+            event_name: The event name to check
+            pattern: The wildcard pattern (e.g., "user.*", "*.created")
+
+        Returns:
+            True if event_name matches the pattern, False otherwise
+        """
+        import fnmatch
+        return fnmatch.fnmatch(event_name, pattern)
 
     def _should_queue(self, listener: Listener) -> bool:
         """

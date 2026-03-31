@@ -3,6 +3,8 @@ WebSocket Connection Manager for Broadcasting.
 
 Manages active WebSocket connections, channels, and message delivery.
 Similar to Laravel's broadcasting connection management.
+
+Includes automatic cleanup of stale connections and metadata to prevent memory leaks.
 """
 
 import asyncio
@@ -31,7 +33,7 @@ class ConnectionManager:
         # User subscriptions: {connection_id: {channel1, channel2}}
         self.user_channels: Dict[str, Set[str]] = defaultdict(set)
 
-        # Connection metadata: {connection_id: {user_id, ip, etc}}
+        # Connection metadata: {connection_id: {user_id, ip, connected_at, etc}}
         self.connection_metadata: Dict[str, Dict[str, Any]] = {}
 
         # Configuration-based settings
@@ -39,9 +41,14 @@ class ConnectionManager:
         self.max_connections = websocket_config.get("max_connections", 1000)
         self.heartbeat_interval = websocket_config.get("heartbeat_interval", 30)
         self.connection_timeout = websocket_config.get("connection_timeout", 60)
+        # Maximum metadata entries to keep in memory (prevents unbounded growth)
+        self.max_metadata_entries = websocket_config.get("max_metadata_entries", 10000)
 
         # Heartbeat tasks per connection
         self._heartbeat_tasks: Dict[str, asyncio.Task] = {}
+
+        # Cleanup task for stale connections
+        self._cleanup_task: Optional[asyncio.Task] = None
 
     async def add_connection(
         self,
@@ -79,15 +86,25 @@ class ConnectionManager:
             task = asyncio.create_task(self._heartbeat_loop(connection_id))
             self._heartbeat_tasks[connection_id] = task
 
-    async def remove_connection(self, connection_id: str):
-        """Remove a WebSocket connection and clean up subscriptions."""
+    async def remove_connection(self, connection_id: str) -> None:
+        """
+        Remove a WebSocket connection and clean up all associated resources.
+
+        Ensures complete cleanup to prevent memory leaks:
+        - Removes from all channel subscriptions
+        - Deletes connection object and metadata
+        - Cancels heartbeat task
+
+        Args:
+            connection_id: The connection to remove
+        """
         if connection_id in self.connections:
             # Remove from all channels
             channels_to_cleanup = self.user_channels.get(connection_id, set()).copy()
             for channel in channels_to_cleanup:
                 await self.unsubscribe(connection_id, channel)
 
-            # Clean up connection data
+            # Clean up connection data - CRITICAL for preventing memory leaks
             del self.connections[connection_id]
             self.user_channels.pop(connection_id, None)
             self.connection_metadata.pop(connection_id, None)
@@ -101,6 +118,84 @@ class ConnectionManager:
                 f"Broadcasting: Connection {connection_id} removed",
                 category="cara.broadcasting",
             )
+
+    async def cleanup_stale_connections(self) -> None:
+        """
+        Periodically clean up stale connections and metadata.
+
+        Prevents unbounded growth of metadata dictionaries by:
+        - Removing connections that haven't sent heartbeat
+        - Pruning old metadata entries
+        - Enforcing max_metadata_entries limit
+
+        Should be called periodically by the application.
+        """
+        current_time = asyncio.get_event_loop().time()
+        stale_connections = []
+
+        # Find stale connections (no heartbeat for connection_timeout seconds)
+        for conn_id, metadata in self.connection_metadata.items():
+            connected_at = metadata.get("connected_at", current_time)
+            if current_time - connected_at > self.connection_timeout:
+                if conn_id not in self.connections:
+                    # Connection object is gone but metadata remains - clean it up
+                    stale_connections.append(conn_id)
+
+        # Remove stale metadata entries
+        for conn_id in stale_connections:
+            self.connection_metadata.pop(conn_id, None)
+            Log.debug(
+                f"Broadcasting: Cleaned up stale metadata for {conn_id}",
+                category="cara.broadcasting",
+            )
+
+        # Enforce max_metadata_entries limit
+        if len(self.connection_metadata) > self.max_metadata_entries:
+            # Remove oldest entries by connected_at timestamp
+            sorted_by_time = sorted(
+                self.connection_metadata.items(),
+                key=lambda x: x[1].get("connected_at", 0)
+            )
+            entries_to_remove = len(self.connection_metadata) - self.max_metadata_entries
+            for conn_id, _ in sorted_by_time[:entries_to_remove]:
+                self.connection_metadata.pop(conn_id, None)
+            Log.warning(
+                f"Broadcasting: Pruned {entries_to_remove} old metadata entries (limit: {self.max_metadata_entries})",
+                category="cara.broadcasting",
+            )
+
+    async def start_cleanup_task(self) -> None:
+        """
+        Start periodic cleanup task.
+
+        Should be called once when the ConnectionManager is initialized.
+        Runs cleanup every 5 minutes by default.
+        """
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+            Log.info(
+                "Broadcasting: Started cleanup task",
+                category="cara.broadcasting",
+            )
+
+    async def _cleanup_loop(self) -> None:
+        """Periodic cleanup loop."""
+        cleanup_interval = 300  # 5 minutes
+        while True:
+            try:
+                await asyncio.sleep(cleanup_interval)
+                await self.cleanup_stale_connections()
+            except asyncio.CancelledError:
+                Log.info(
+                    "Broadcasting: Cleanup task cancelled",
+                    category="cara.broadcasting",
+                )
+                break
+            except Exception as e:
+                Log.error(
+                    f"Broadcasting: Cleanup task error: {e}",
+                    category="cara.broadcasting",
+                )
 
     async def subscribe(self, connection_id: str, channel: str) -> bool:
         """Subscribe connection to a channel."""
