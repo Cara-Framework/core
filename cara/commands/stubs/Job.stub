@@ -1,0 +1,50 @@
+"""
+{{ docstring }}
+"""
+
+from cara.facades import Log
+from cara.queues.contracts import Queueable, ShouldQueue
+from cara.queues.tracking import Trackable
+
+
+class {{ class_name }}(Trackable, ShouldQueue, Queueable):
+    """
+    {{ class_name }} - Job description goes here.
+    
+    Features:
+    - Automatic job tracking (unified job table)
+    - Conflict resolution (prevents duplicate jobs)
+    - Performance analytics
+    - Smart retry with exponential backoff
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Initialize job properties here
+        self.queue = "default"  # Queue name
+        self.priority = "normal"  # Priority: critical, high, normal, low
+        
+    async def handle(self):
+        """
+        Execute the job.
+        
+        Job tracking is automatic:
+        - Job status: pending → processing → completed/failed
+        - Tracked in unified job table with entity_id
+        - Conflict resolution for duplicate jobs
+        """
+        # Job logic goes here
+        Log.info("{{ class_name }} executed successfully")
+
+    def _get_entity_id(self) -> str:
+        """
+        Override to provide entity ID for conflict resolution.
+        
+        Example:
+            return str(self.product_id)
+        """
+        return super()._get_entity_id()
+        
+    def display_name(self) -> str:
+        """Get display name for job monitoring."""
+        return "{{ class_name }}" 

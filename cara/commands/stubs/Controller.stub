@@ -1,0 +1,55 @@
+"""
+{{ docstring }}
+"""
+
+from cara.http import Controller, Request, Response
+
+
+class {{ class_name }}(Controller):
+    """
+    {{ class_name }} - Controller description goes here.
+    
+    @RouteGroup(prefix="/{{ route_prefix }}", middleware=["auth:jwt"])
+        @Route(name="/")
+            @get(method="index", as="{{ route_name }}.index")
+            @post(method="store", as="{{ route_name }}.store")
+        @Route(name="/{id}")
+            @get(method="show", as="{{ route_name }}.show")
+            @put(method="update", as="{{ route_name }}.update")
+            @delete(method="destroy", as="{{ route_name }}.destroy")
+    """
+
+    async def index(self, request: Request, response: Response) -> Response:
+        """
+        Display a listing of the resource.
+        """
+        # Implementation goes here
+        return response.json({"message": "Index method"})
+
+    async def show(self, request: Request, response: Response, id: str) -> Response:
+        """
+        Display the specified resource.
+        """
+        # Implementation goes here
+        return response.json({"message": f"Show method for ID: {id}"})
+
+    async def store(self, request: Request, response: Response) -> Response:
+        """
+        Store a newly created resource in storage.
+        """
+        # Implementation goes here
+        return response.json({"message": "Store method"}, status=201)
+
+    async def update(self, request: Request, response: Response, id: str) -> Response:
+        """
+        Update the specified resource in storage.
+        """
+        # Implementation goes here
+        return response.json({"message": f"Update method for ID: {id}"})
+
+    async def destroy(self, request: Request, response: Response, id: str) -> Response:
+        """
+        Remove the specified resource from storage.
+        """
+        # Implementation goes here
+        return response.json({"message": f"Destroy method for ID: {id}"}) 

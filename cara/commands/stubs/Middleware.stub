@@ -1,0 +1,49 @@
+"""
+{{ docstring }}
+"""
+
+from typing import Callable
+
+from cara.http import Request
+from cara.middleware import Middleware
+
+
+class {{ class_name }}(Middleware):
+    """
+    {{ class_name }} - Middleware description goes here.
+    """
+
+    async def handle(self, request: Request, next: Callable):
+        """
+        Handle an incoming request.
+        
+        Args:
+            request: The incoming request
+            next: The next middleware in the chain
+            
+        Returns:
+            Response: The response after processing
+        """
+        # Pre-processing logic goes here
+        # Modify request or check conditions
+        
+        # Process the request through the next middleware/controller
+        response = await next(request)
+        
+        # Post-processing logic goes here
+        # Modify response or perform cleanup
+        
+        return response
+
+    async def terminate(self, request: Request, response):
+        """
+        Called after response is sent (terminable middleware).
+        Override this method if you need to perform actions after the response
+        has been sent to the client (like logging, cleanup, etc.).
+        
+        Args:
+            request: The original request
+            response: The final response
+        """
+        # Optional: Add termination logic here
+        pass 

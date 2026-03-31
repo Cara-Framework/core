@@ -1,0 +1,41 @@
+"""
+{{ docstring }}
+"""
+
+from typing import Any, Dict, List
+
+from cara.notifications import BaseNotification
+from cara.queues.contracts import ShouldQueue
+
+
+class {{ class_name }}(BaseNotification, ShouldQueue):
+    """
+    {{ class_name }} - Notification description goes here.
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Initialize notification properties here
+
+    def via(self, notifiable) -> List[str]:
+        """Get the notification's delivery channels."""
+        return ["mail", "database"]
+
+    def to_mail(self, notifiable) -> Dict[str, Any]:
+        """Get the mail representation of the notification."""
+        return {
+            "subject": "{{ class_name }} Notification",
+            "to": notifiable.email if hasattr(notifiable, "email") else "user@example.com",
+            "body": "Notification message goes here.",
+            "template": "{{ template_name }}",
+            "data": {
+                # Mail template data goes here
+            },
+        }
+
+    def to_database(self, notifiable) -> Dict[str, Any]:
+        """Get the database representation of the notification."""
+        return {
+            "message": "{{ class_name }} notification message",
+            # Additional database fields go here
+        } 

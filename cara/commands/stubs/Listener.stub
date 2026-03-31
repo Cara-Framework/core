@@ -1,0 +1,31 @@
+"""
+{{ class_name }} Listener for handling events.
+"""
+
+from cara.events.contracts import Event, Listener
+from cara.eloquent.concerns import SerializesModels
+from cara.queues.contracts import ShouldQueue
+
+
+class {{ class_name }}(Listener, ShouldQueue, SerializesModels):
+    """
+    {{ class_name }} - Listener description goes here.
+    """
+
+    def __init__(self):
+        # Initialize listener properties here
+        pass
+
+    def handle(self, event: Event) -> None:
+        """
+        Handle the event.
+        
+        Args:
+            event: The event instance
+        """
+        # Handle event logic goes here
+        pass
+
+    def display_name(self) -> str:
+        """Get display name for job monitoring."""
+        return "{{ class_name }}" 

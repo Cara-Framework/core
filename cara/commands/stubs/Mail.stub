@@ -1,0 +1,28 @@
+"""
+{{ docstring }}
+"""
+
+from cara.mail.Mailable import Mailable
+from cara.queues.contracts import ShouldQueue
+
+
+class {{ class_name }}(Mailable, ShouldQueue):
+    """{{ class_name }} - Mail description goes here."""
+
+    def __init__(self):
+        """Initialize the mail."""
+        super().__init__()
+        # Initialize mail properties here
+
+    def build(self):
+        """Build the email."""
+        return (
+            self.to("user@example.com")
+            .subject("{{ class_name }} Subject")
+            .view(
+                "mail.{{ template_name }}",
+                {
+                    # Template data goes here
+                },
+            )
+        ) 
