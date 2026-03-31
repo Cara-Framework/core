@@ -862,8 +862,7 @@ class Model(
                 elif isinstance(final_value, datetimedate):
                     data[key] = final_value.strftime("%Y-%m-%d")
                 elif isinstance(final_value, Decimal):
-                    # Convert Decimal to string to preserve exact precision
-                    data[key] = str(final_value)
+                    data[key] = float(final_value)
 
         # Add relationships - Laravel way: use serialize() for proper casting
         relations_dict = getattr(self, "_relations", {})
