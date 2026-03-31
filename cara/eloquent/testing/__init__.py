@@ -1,3 +1,0 @@
-from .BaseTestCaseSelectGrammar import (
-    BaseTestCaseSelectGrammar,
-)
