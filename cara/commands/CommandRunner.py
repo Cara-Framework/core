@@ -76,12 +76,22 @@ class CommandRunner:
         return cli_params, di_params
 
     def _parse_decorator_options(
-        self, raw_options: Dict[str, str]
+        self, raw_options
     ) -> List[Tuple[str, List[str], Any, str]]:
         """
-        Parse decorator options dict into a list of tuples:
+        Parse decorator options into a list of tuples:
         (param_name, flags_list, default_value, help_text).
+
+        Accepts either dict format: {"--flag=default": "help text"}
+        or list format: [{"name": "--flag=default", "help": "help text"}]
         """
+        if isinstance(raw_options, list):
+            raw_options = {
+                item.get("name", ""): item.get("help", "")
+                for item in raw_options
+                if isinstance(item, dict) and item.get("name")
+            }
+
         parsed: List[Tuple[str, List[str], Any, str]] = []
         for key, desc in raw_options.items():
             if "=" in key:
