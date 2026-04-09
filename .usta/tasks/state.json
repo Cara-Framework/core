@@ -84,7 +84,7 @@
     },
     "10": {
       "status": "done",
-      "review": "pending-review",
+      "review": "pass",
       "date": "2026-04-09",
       "cost": 0.002342916,
       "tokens": 12453,
@@ -92,14 +92,13 @@
       "messages": 2
     },
     "11": {
-      "status": "fail",
-      "review": "fail",
+      "status": "done",
+      "review": "pending-review",
       "date": "2026-04-09",
-      "cost": 0.00465085,
-      "tokens": 30691,
-      "duration": 31.7,
-      "messages": 4,
-      "error": "no file blocks in response \u2014 model ignored format"
+      "cost": 0.00321555,
+      "tokens": 7321,
+      "duration": 22.6,
+      "messages": 1
     }
   }
 }

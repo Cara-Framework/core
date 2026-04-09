@@ -290,6 +290,25 @@ def camel_case(text: str) -> str:
     return first_word + other_words
 
 
+def studly_case(text: str) -> str:
+    """Convert a string to StudlyCase (PascalCase).
+
+    Splits on whitespace, underscores, and hyphens. Each word has its first
+    letter capitalized and the rest lowercased. Words are joined without any
+    separator.
+
+    Returns empty string for empty/None input.
+    """
+    if not text:
+        return ""
+    # Drop empty tokens so leading/trailing separators don't produce a
+    # capitalized first word (e.g. "  foo_bar  " -> "FooBar").
+    words = [w for w in re.split(r"[\s_-]+", text) if w]
+    if not words:
+        return ""
+    return "".join(word.capitalize() for word in words)
+
+
 def pluralize(word: str) -> str:
     """Pluralize an English word using simple rule-based heuristics.
 
