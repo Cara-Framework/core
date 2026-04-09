@@ -131,3 +131,13 @@ def test_pluralize():
     assert pluralize("radio") == "radios"
     assert pluralize("") == ""
     assert pluralize(None) == ""
+
+
+def test_studly_case():
+    from cara.support.Str import studly_case
+    assert studly_case("foo_bar") == "FooBar"
+    assert studly_case("hello-world") == "HelloWorld"
+    assert studly_case("  foo__bar--baz  ") == "FooBarBaz"
+    assert studly_case("") == ""
+    assert studly_case("   ") == ""
+    assert studly_case("hello_WORLD") == "HelloWorld"
