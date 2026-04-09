@@ -65,3 +65,61 @@ def test_camel_case():
     assert camel_case("hello world") == "helloWorld"
     assert camel_case("Hello World") == "helloWorld"
     assert camel_case("snake_case") == "snakeCase"
+
+
+def test_snake_case_edge_cases():
+    from cara.support.Str import snake_case
+    # acronyms: snake_case only splits lower-to-upper transitions, so
+    # consecutive uppercase letters stay glued together
+    assert snake_case("HTTPServer") == "httpserver"
+    assert snake_case("getHTTPResponse") == "get_httpresponse"
+    # consecutive non-alphanumeric characters collapse to a single underscore
+    assert snake_case("foo--bar__baz") == "foo_bar_baz"
+    assert snake_case("  foo  bar  ") == "foo_bar"
+    # digit boundaries: digits are alphanumeric, so a letter/number run stays together
+    assert snake_case("user123name") == "user123name"
+    assert snake_case("item2Value") == "item2_value"
+    # empty / None-ish input
+    assert snake_case("") == ""
+    assert snake_case(None) == ""
+
+
+def test_kebab_case_edge_cases():
+    from cara.support.Str import kebab_case
+    assert kebab_case("HTTPServer") == "httpserver"
+    assert kebab_case("getHTTPResponse") == "get-httpresponse"
+    assert kebab_case("foo--bar__baz") == "foo-bar-baz"
+    assert kebab_case("  foo  bar  ") == "foo-bar"
+    assert kebab_case("item2Value") == "item2-value"
+    assert kebab_case("") == ""
+    assert kebab_case(None) == ""
+
+
+def test_camel_case_edge_cases():
+    from cara.support.Str import camel_case
+    # underscores, hyphens, and spaces are all valid separators
+    assert camel_case("hello_world") == "helloWorld"
+    assert camel_case("hello-world") == "helloWorld"
+    assert camel_case("hello world") == "helloWorld"
+    # multiple separators and surrounding whitespace
+    assert camel_case("  foo__bar--baz  ") == "fooBarBaz"
+    # single-word input: first word is fully lowercased
+    assert camel_case("Hello") == "hello"
+    assert camel_case("HELLO") == "hello"
+    # empty / None-ish input
+    assert camel_case("") == ""
+    assert camel_case(None) == ""
+
+
+def test_pluralize():
+    from cara.support.Str import pluralize
+    assert pluralize("cat") == "cats"
+    assert pluralize("box") == "boxes"
+    assert pluralize("bush") == "bushes"
+    assert pluralize("church") == "churches"
+    assert pluralize("baby") == "babies"
+    assert pluralize("day") == "days"
+    assert pluralize("hero") == "heroes"
+    assert pluralize("radio") == "radios"
+    assert pluralize("") == ""
+    assert pluralize(None) == ""

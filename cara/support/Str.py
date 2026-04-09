@@ -282,3 +282,30 @@ def camel_case(text: str) -> str:
     first_word = words[0].lower()
     other_words = "".join(word.capitalize() for word in words[1:])
     return first_word + other_words
+
+
+def pluralize(word: str) -> str:
+    """Pluralize an English word using simple rule-based heuristics.
+
+    Rules (applied in order):
+    - Empty/None -> empty string.
+    - consonant + 'y' -> replace 'y' with 'ies' (baby -> babies).
+    - vowel + 'y' -> add 's' (day -> days).
+    - ends with 's', 'x', 'z', 'ch', 'sh' -> add 'es' (box -> boxes).
+    - consonant + 'o' -> add 'es' (hero -> heroes).
+    - otherwise -> add 's'.
+
+    Intentionally dumb — does not handle irregular nouns (child, foot).
+    Returns empty string for empty/None input.
+    """
+    if not word:
+        return ""
+    vowels = "aeiou"
+    lower = word.lower()
+    if len(lower) >= 2 and lower[-1] == "y" and lower[-2] not in vowels:
+        return word[:-1] + "ies"
+    if lower.endswith(("s", "x", "z")) or lower.endswith(("ch", "sh")):
+        return word + "es"
+    if len(lower) >= 2 and lower[-1] == "o" and lower[-2] not in vowels:
+        return word + "es"
+    return word + "s"
