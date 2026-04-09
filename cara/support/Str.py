@@ -276,7 +276,9 @@ def camel_case(text: str) -> str:
     """
     if not text:
         return ""
-    words = re.split(r"[\s_-]+", text)
+    # Drop empty tokens so leading/trailing separators don't produce a
+    # capitalized first word (e.g. "  foo_bar  " -> "fooBar").
+    words = [w for w in re.split(r"[\s_-]+", text) if w]
     if not words:
         return ""
     first_word = words[0].lower()
