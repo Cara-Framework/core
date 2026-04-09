@@ -221,11 +221,15 @@ def title_case(text: str) -> str:
     Splits on whitespace, underscores, and hyphens. Each word's first letter
     is capitalized and the rest are lowercased. Words are joined with spaces.
 
-    Returns empty string for empty/None input.
+    Returns empty string for empty/None input or strings made entirely of separators.
     """
     if not text:
         return ""
-    words = re.split(r"[\s_-]+", text)
+    # Drop empty tokens so leading/trailing separators don't produce extra spaces
+    # (e.g. "  foo_bar  " -> "Foo Bar").
+    words = [w for w in re.split(r"[\s_-]+", text) if w]
+    if not words:
+        return ""
     return " ".join(word.capitalize() for word in words)
 
 

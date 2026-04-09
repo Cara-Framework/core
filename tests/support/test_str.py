@@ -49,6 +49,14 @@ def test_title_case():
     assert title_case("hello_world") == "Hello World"
 
 
+def test_title_case_edge_cases():
+    assert title_case("  foo__bar--baz  ") == "Foo Bar Baz"
+    assert title_case("___hello___") == "Hello"
+    assert title_case("---") == ""
+    assert title_case("   ") == ""
+    assert title_case("hello_WORLD") == "Hello World"
+
+
 def test_snake_case():
     assert snake_case("Hello World") == "hello_world"
     assert snake_case("helloWorld") == "hello_world"
