@@ -20,6 +20,7 @@ from .paths import config as config_paths
 from .paths import config_path, p, paths, public_path, storage, storage_path
 from .Pipeline import Pipeline
 from .Str import slugify, normalize_email, format_money, truncate, title_case, snake_case, kebab_case, camel_case
+from .SupportProvider import SupportProvider
 from .Time import humanize_seconds, format_duration
 
 __all__ = [

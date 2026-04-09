@@ -3,7 +3,7 @@
   "finished": {
     "01": {
       "status": "done",
-      "review": "pending-review",
+      "review": "pass",
       "date": "2026-04-09",
       "cost": 0.002789968,
       "tokens": 4879,
@@ -11,8 +11,8 @@
       "messages": 1
     },
     "02": {
-      "status": "done",
-      "review": "pending-review",
+      "status": "fail",
+      "review": "fail",
       "date": "2026-04-09",
       "cost": 0.0018696,
       "tokens": 3471,
@@ -21,7 +21,7 @@
     },
     "03": {
       "status": "done",
-      "review": "pending-review",
+      "review": "pass",
       "date": "2026-04-09",
       "cost": 0.0029154,
       "tokens": 5088,
@@ -30,7 +30,7 @@
     },
     "04": {
       "status": "done",
-      "review": "pending-review",
+      "review": "pass",
       "date": "2026-04-09",
       "cost": 0.0015665,
       "tokens": 3701,
@@ -39,7 +39,7 @@
     },
     "05": {
       "status": "done",
-      "review": "pending-review",
+      "review": "pass",
       "date": "2026-04-09",
       "cost": 0.00132875,
       "tokens": 3761,
@@ -48,7 +48,7 @@
     },
     "06": {
       "status": "done",
-      "review": "pending-review",
+      "review": "pass",
       "date": "2026-04-09",
       "cost": 0.001176564,
       "tokens": 3390,
@@ -57,7 +57,7 @@
     },
     "07": {
       "status": "done",
-      "review": "pending-review",
+      "review": "pass",
       "date": "2026-04-09",
       "cost": 0.00242342,
       "tokens": 3015,
