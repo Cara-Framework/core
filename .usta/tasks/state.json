@@ -92,8 +92,8 @@
       "messages": 2
     },
     "11": {
-      "status": "done",
-      "review": "pending-review",
+      "status": "fail",
+      "review": "fail",
       "date": "2026-04-09",
       "cost": 0.00321555,
       "tokens": 7321,
