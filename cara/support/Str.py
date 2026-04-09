@@ -198,3 +198,87 @@ def format_money(cents: int, currency: str = "USD") -> str:
     whole = cents // 100
     frac = cents % 100
     return f"{symbol}{whole:,}.{frac:02d}"
+
+
+def truncate(text: str, limit: int, suffix: str = "...") -> str:
+    """Truncate a string to a given length and append a suffix if needed.
+
+    If the text is shorter than or equal to the limit, it is returned unchanged.
+    Otherwise, it is truncated to the limit and the suffix is appended.
+
+    Returns empty string for empty/None input.
+    """
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + suffix
+
+
+def title_case(text: str) -> str:
+    """Convert a string to title case (capitalize first letter of each word).
+
+    Splits on whitespace, underscores, and hyphens. Each word's first letter
+    is capitalized and the rest are lowercased. Words are joined with spaces.
+
+    Returns empty string for empty/None input.
+    """
+    if not text:
+        return ""
+    words = re.split(r"[\s_-]+", text)
+    return " ".join(word.capitalize() for word in words)
+
+
+def snake_case(text: str) -> str:
+    """Convert a string to snake_case.
+
+    Inserts underscores before uppercase letters (camelCase → camel_Case),
+    replaces hyphens/spaces/consecutive non-alphanumeric chars with single underscore,
+    lowercases everything, and strips leading/trailing underscores.
+
+    Returns empty string for empty/None input.
+    """
+    if not text:
+        return ""
+    # Insert underscores before uppercase letters
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    # Replace non-alphanumeric characters with underscores
+    text = re.sub(r"[^a-zA-Z0-9]+", "_", text)
+    # Lowercase and strip leading/trailing underscores
+    return text.lower().strip("_")
+
+
+def kebab_case(text: str) -> str:
+    """Convert a string to kebab-case.
+
+    Same logic as snake_case but uses hyphens instead of underscores.
+
+    Returns empty string for empty/None input.
+    """
+    if not text:
+        return ""
+    # Insert hyphens before uppercase letters
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", text)
+    # Replace non-alphanumeric characters with hyphens
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", text)
+    # Lowercase and strip leading/trailing hyphens
+    return text.lower().strip("-")
+
+
+def camel_case(text: str) -> str:
+    """Convert a string to camelCase.
+
+    Splits on whitespace, underscores, and hyphens. The first word is fully
+    lowercased; subsequent words have their first letter capitalized and the
+    rest lowercased. Words are joined without any separator.
+
+    Returns empty string for empty/None input.
+    """
+    if not text:
+        return ""
+    words = re.split(r"[\s_-]+", text)
+    if not words:
+        return ""
+    first_word = words[0].lower()
+    other_words = "".join(word.capitalize() for word in words[1:])
+    return first_word + other_words

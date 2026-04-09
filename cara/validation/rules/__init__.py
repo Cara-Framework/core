@@ -10,7 +10,9 @@ from .ExistsRule import ExistsRule
 from .InRule import InRule
 from .IntegerRule import IntegerRule
 from .MaxRule import MaxRule
+from .MaxLengthRule import MaxLengthRule
 from .MinRule import MinRule
+from .MinLengthRule import MinLengthRule
 from .NumericRule import NumericRule
 from .NullableRule import NullableRule
 from .PhoneRule import PhoneRule
@@ -33,7 +35,9 @@ __all__ = [
     "InRule",
     "IntegerRule",
     "MaxRule",
+    "MaxLengthRule",
     "MinRule",
+    "MinLengthRule",
     "NumericRule",
     "NullableRule",
     "PhoneRule",
