@@ -63,7 +63,7 @@ def humanize_seconds(seconds: int) -> str:
         
     Examples:
         >>> humanize_seconds(273132)
-        '3 days 4 hours 12 minutes 12 seconds'
+        '3 days 3 hours 52 minutes 12 seconds'
         >>> humanize_seconds(0)
         '0 seconds'
         >>> humanize_seconds(3661)
@@ -104,7 +104,7 @@ def format_duration(seconds: int) -> str:
         
     Examples:
         >>> format_duration(273132)
-        '3d 4h 12m 12s'
+        '3d 3h 52m 12s'
         >>> format_duration(0)
         '0s'
         >>> format_duration(45)

@@ -1,8 +1,9 @@
 import re
 from typing import Any, Dict
 
+from cara.validation import MessageFormatter
+
 from .BaseRule import BaseRule
-from .MessageFormatter import MessageFormatter
 
 
 class PhoneRule(BaseRule):
