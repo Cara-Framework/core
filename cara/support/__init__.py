@@ -19,6 +19,7 @@ from .paths import app_path, base_path
 from .paths import config as config_paths
 from .paths import config_path, p, paths, public_path, storage, storage_path
 from .Pipeline import Pipeline
+from .Str import slugify, normalize_email, format_money
 from .SupportProvider import SupportProvider
 
 __all__ = [
@@ -37,6 +38,9 @@ __all__ = [
     # Utility functions
     "module_exists", "import_module", "get_classes", "get_functions",
     "storage_path", "config_path", "public_path", "app_path", "base_path",
+
+    # String utilities
+    "slugify", "normalize_email", "format_money",
 
     # Short aliases
     "m", "p",

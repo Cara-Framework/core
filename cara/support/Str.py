@@ -1,6 +1,7 @@
 """String generators and helpers."""
 
 import random
+import re
 import string
 from typing import Any
 from urllib import parse
@@ -126,3 +127,74 @@ def get_controller_name(controller: "str|Any") -> str:
     else:
         controller_str = str(controller)
     return controller_str
+
+
+def slugify(text: str, separator: str = "-") -> str:
+    """Convert a string to a URL-friendly slug.
+
+    Handles common Unicode transliterations (Turkish chars, accented letters).
+    Non-alphanumeric characters become the separator. Leading/trailing
+    separators and consecutive separators are removed.
+
+    Returns empty string for empty/whitespace-only input.
+    """
+    if not text or text.isspace():
+        return ""
+
+    # Common character transliterations
+    char_map = {
+        "ç": "c", "ğ": "g", "ı": "i", "ş": "s", "ö": "o", "ü": "u",
+        "Ç": "C", "Ğ": "G", "İ": "I", "Ş": "S", "Ö": "O", "Ü": "U",
+        "à": "a", "á": "a", "â": "a", "ã": "a", "ä": "a",
+        "è": "e", "é": "e", "ê": "e", "ë": "e",
+        "ì": "i", "í": "i", "î": "i", "ï": "i",
+        "ò": "o", "ó": "o", "ô": "o", "õ": "o",
+        "ù": "u", "ú": "u", "û": "u",
+        "ñ": "n", "ß": "ss",
+    }
+    for char, replacement in char_map.items():
+        text = text.replace(char, replacement)
+
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", separator, text)
+    text = re.sub(rf"{re.escape(separator)}+", separator, text)
+    text = text.strip(separator)
+    return text
+
+
+def normalize_email(email: str) -> str:
+    """Normalize an email address by lowercasing and stripping whitespace.
+
+    Returns empty string for empty/whitespace-only input.
+    """
+    if not email or not email.strip():
+        return ""
+    return email.strip().lower()
+
+
+def format_money(cents: int, currency: str = "USD") -> str:
+    """Format an integer cent amount as a currency string.
+
+    Raises TypeError if cents is not an int.
+    Raises ValueError if cents is negative or currency is unsupported.
+
+    Supported currencies: USD ($), EUR (€), GBP (£), TRY (₺), AUD (A$), CAD (C$).
+    Output: "<symbol><whole>.<frac>" with comma thousands separator.
+    """
+    if not isinstance(cents, int):
+        raise TypeError("cents must be an integer")
+    if cents < 0:
+        raise ValueError("cents must be non-negative")
+
+    currency = currency.upper()
+    symbols = {
+        "USD": "$", "EUR": "€", "GBP": "£", "TRY": "₺",
+        "AUD": "A$", "CAD": "C$",
+    }
+    if currency not in symbols:
+        raise ValueError(f"unsupported currency: {currency}")
+
+    symbol = symbols[currency]
+    whole = cents // 100
+    frac = cents % 100
+    return f"{symbol}{whole:,}.{frac:02d}"
