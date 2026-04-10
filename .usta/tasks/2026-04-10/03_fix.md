@@ -1,12 +1,10 @@
 # Fix: --- Registration and dispatching ---
 
 ## Reviewer Summary
-pytest: 0 failing tests; Multiple tests will fail because Event.dispatch lacks propagation-stop logic, no-listener handling, and has_listeners method
+pytest: 0 failing tests; MagicMock event causes propagation check to falsely trigger, breaking listener ordering test
 
 ## Issues Found
-- [error] tests/events/test_event_dispatcher.py:77 — test_dispatch_no_listeners_is_noop will fail: dispatch() raises ListenerNotFoundException when no listeners are registered
-- [error] tests/events/test_event_dispatcher.py:100 — test_stop_propagation will fail: dispatch() never checks is_propagation_stopped so AfterStopListener.handle will be called
-- [error] tests/events/test_event_dispatcher.py:149 — test_has_listeners_true/false/wildcard will fail: Event class has no has_listeners method
+- [error] tests/events/test_event_dispatcher.py:88 — test_listeners_called_in_registration_order uses MagicMock() as the event. MagicMock auto-creates attributes, so hasattr(event, 'is_propagation_stopped') is True and event.is_propagation_stopped returns a truthy MagicMock. The dispatch loop will break before any listener runs, making log == [] instead of ['first', 'second', 'third']. Test will fail.
 
 ## Fix Instructions
 Test runner [pytest] reported 0 failing of 1 executed tests on the files this task touched. Fix the code so every test passes. Failures:
@@ -40,10 +38,11 @@ E   ModuleNotFoundError: No module named 'pika'
 =========================== short test summary info ============================
 ERROR tests/events/test_event_dispatcher.py
 !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
-1 error in 0.11s
+1 error in 0.10s
 
 
-The tests themselves are correct — they test the intended behavior. The fixes must be applied to cara/events/Event.py as described in Task 02's fix_instructions:
-1. Replace the ListenerNotFoundException raise (lines 205-208) with `return` when no listeners found.
-2. Add `if hasattr(event, 'is_propagation_stopped') and event.is_propagation_stopped: break` at the top of the `for listener in all_listeners:` loop.
-3. Add a `has_listeners(self, event_name: str) -> bool` method that checks `self._listeners` for direct matches and `self._get_matching_wildcard_listeners(event_name)` for wildcard matches.
+In tests/events/test_event_dispatcher.py, in test_listeners_called_in_registration_order (around line 88), replace the MagicMock with a proper event object that has is_propagation_stopped = False. Either: (1) add `event.is_propagation_stopped = False` after creating the MagicMock, or (2) replace `event = MagicMock()` and `event.name = "order.test"` with a real event class. Option 1 is simplest: change lines 89-90 to:
+
+    event = MagicMock()
+    event.name = "order.test"
+    event.is_propagation_stopped = False

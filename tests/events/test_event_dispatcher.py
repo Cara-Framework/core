@@ -89,6 +89,7 @@ async def test_listeners_called_in_registration_order(dispatcher):
 
     event = MagicMock()
     event.name = "order.test"
+    event.is_propagation_stopped = False
 
     with patch("cara.context.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)

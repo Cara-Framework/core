@@ -17,7 +17,7 @@ from threading import Lock
 from typing import Callable, Dict, List, Type
 
 from cara.events.contracts import Event, Listener
-from cara.exceptions import EventNameConflictException, ListenerNotFoundException
+from cara.exceptions import EventNameConflictException
 from cara.facades import Log, Queue
 from cara.queues.contracts import ShouldQueue
 
