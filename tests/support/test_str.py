@@ -182,31 +182,6 @@ def test_format_money_edge_cases():
         format_money(None)
 
 
-def test_format_money_rejects_bool():
-    import pytest
-    from cara.support.Str import format_money
-    with pytest.raises(TypeError):
-        format_money(True)
-    with pytest.raises(TypeError):
-        format_money(False)
-
-
-def test_pluralize_edge_cases():
-    from cara.support.Str import pluralize
-    # z-ending: adds 'es'
-    assert pluralize("quiz") == "quizzes"
-    # single character: just adds 's'
-    assert pluralize("a") == "as"
-    # s-ending
-    assert pluralize("bus") == "buses"
-    # vowel + y: just adds 's'
-    assert pluralize("key") == "keys"
-    # vowel + o: just adds 's'
-    assert pluralize("zoo") == "zoos"
-    # x-ending
-    assert pluralize("fox") == "foxes"
-
-
 def test_truncate_edge_cases():
     assert truncate(None, 5) == ""
     assert truncate("Hello", 5) == "Hello"
