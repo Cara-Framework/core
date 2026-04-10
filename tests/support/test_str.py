@@ -24,6 +24,16 @@ def test_normalize_email():
     assert normalize_email("  ") == ""
 
 
+def test_normalize_email_edge_cases():
+    from cara.support.Str import normalize_email
+    # None input
+    assert normalize_email(None) == ""
+    # tabs and mixed whitespace
+    assert normalize_email("\t Bob@Example.COM \n") == "bob@example.com"
+    # already normalized
+    assert normalize_email("alice@example.com") == "alice@example.com"
+
+
 def test_format_money():
     assert format_money(1050) == "$10.50"
     assert format_money(0) == "$0.00"

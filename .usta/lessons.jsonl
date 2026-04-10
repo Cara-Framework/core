@@ -1,0 +1,2 @@
+{"category": "test-inconsistency", "message": "tests/support/test_str_utils.py:153: AssertionError", "signature": "ca5c3ab78abae580", "count": 1, "first_seen": "2026-04-10", "last_seen": "2026-04-10", "task_hint": "autopilot-test-gate", "source": "verifier"}
+{"category": "generic", "message": "FAILED tests/support/test_str_utils.py::test_get_controller_name_with_class", "signature": "161a621a5f97b18f", "count": 1, "first_seen": "2026-04-10", "last_seen": "2026-04-10", "task_hint": "autopilot-test-gate", "source": "verifier"}

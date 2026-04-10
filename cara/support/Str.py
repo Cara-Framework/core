@@ -181,6 +181,8 @@ def format_money(cents: int, currency: str = "USD") -> str:
     Supported currencies: USD ($), EUR (€), GBP (£), TRY (₺), AUD (A$), CAD (C$).
     Output: "<symbol><whole>.<frac>" with comma thousands separator.
     """
+    if isinstance(cents, bool):
+        raise TypeError("cents must be an integer")
     if not isinstance(cents, int):
         raise TypeError("cents must be an integer")
     if cents < 0:
