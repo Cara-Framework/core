@@ -183,7 +183,7 @@ class Event:
         Laravel-style: If a listener implements ShouldQueue, it gets queued.
         Otherwise, it gets executed immediately.
 
-        Raises ListenerNotFoundException if no listeners match the event.
+        If event propagation is stopped by any listener, subsequent listeners are not called.
 
         Note: This is async to properly handle async listeners in sync mode.
         """
