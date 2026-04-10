@@ -3,7 +3,7 @@
   "finished": {
     "01": {
       "status": "done",
-      "review": "pending-review",
+      "review": "pass",
       "date": "2026-04-10",
       "cost": 0.00081375,
       "tokens": 2631,
@@ -11,8 +11,8 @@
       "messages": 1
     },
     "02": {
-      "status": "done",
-      "review": "pending-review",
+      "status": "fail",
+      "review": "fail",
       "date": "2026-04-10",
       "cost": 0.0009137,
       "tokens": 4286,
@@ -20,8 +20,8 @@
       "messages": 1
     },
     "03": {
-      "status": "done",
-      "review": "pending-review",
+      "status": "fail",
+      "review": "fail",
       "date": "2026-04-10",
       "cost": 0.00177712,
       "tokens": 3676,

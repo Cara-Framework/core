@@ -170,6 +170,24 @@ class Event:
         listener = CallbackListener()
         self.subscribe(event_name, listener)
 
+    def has_listeners(self, event_name: str) -> bool:
+        """
+        Check if there are any listeners for the given event name.
+
+        Checks both direct listeners and wildcard listeners.
+
+        Args:
+            event_name: Event name to check for listeners
+
+        Returns:
+            True if there are listeners, False otherwise
+        """
+        if event_name in self._listeners and self._listeners[event_name]:
+            return True
+        if self._get_matching_wildcard_listeners(event_name):
+            return True
+        return False
+
     async def dispatch(self, event: Event) -> None:
         """
         Dispatch an Event instance to all subscribed listeners.
@@ -203,9 +221,7 @@ class Event:
         all_listeners = direct_listeners + wildcard_listeners
 
         if not all_listeners:
-            raise ListenerNotFoundException(
-                f"No listeners registered for event '{event_name}'."
-            )
+            return
 
         # Check if we're in sync mode
         from cara.context import ExecutionContext
@@ -213,6 +229,9 @@ class Event:
         is_sync = ExecutionContext.is_sync()
 
         for listener in all_listeners:
+            if hasattr(event, 'is_propagation_stopped') and event.is_propagation_stopped:
+                break
+
             # Laravel-style queue check: If listener implements ShouldQueue, queue it
             if self._should_queue(listener):
                 self._queue_listener(listener, event)
