@@ -10,18 +10,18 @@ def test_format_message_replaces_attribute():
 
 def test_format_message_replaces_field_placeholder():
     result = MessageFormatter.format_message(
-        "The :field field is required.", "user_name", {}
+        "Raw field is :field.", "user_name", {}
     )
-    assert result == "The user_name field is required."
+    assert result == "Raw field is user_name."
 
 
 def test_format_message_replaces_rule_specific_params():
     result = MessageFormatter.format_message(
-        "The :attribute must be at least :min characters.",
+        "The :attribute must be at least :min chars.",
         "name",
         {"min": "3"},
     )
-    assert result == "The Name must be at least 3 characters."
+    assert result == "The Name must be at least 3 chars."
 
 
 def test_format_message_empty_string_returns_empty():
@@ -54,4 +54,18 @@ def test_get_custom_message_present():
 
 
 def test_get_custom_message_missing_returns_empty():
+    assert MessageFormatter.get_custom_message({}) == ""
+
+
+def test_has_custom_message_missing():
+    assert not MessageFormatter.has_custom_message({})
+    assert not MessageFormatter.has_custom_message({"_custom_message": ""})
+
+
+def test_get_custom_message():
+    params = {"_custom_message": "We need your email."}
+    assert MessageFormatter.get_custom_message(params) == "We need your email."
+
+
+def test_get_custom_message_missing():
     assert MessageFormatter.get_custom_message({}) == ""
