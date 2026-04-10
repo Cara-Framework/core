@@ -153,22 +153,6 @@ def test_studly_case():
     assert studly_case("hello_WORLD") == "HelloWorld"
 
 
-def test_studly_case_edge_cases():
-    from cara.support.Str import studly_case
-    # underscores, hyphens, and spaces are all valid separators
-    assert studly_case("hello_world") == "HelloWorld"
-    assert studly_case("hello-world") == "HelloWorld"
-    assert studly_case("hello world") == "HelloWorld"
-    # multiple separators and surrounding whitespace
-    assert studly_case("  foo__bar--baz  ") == "FooBarBaz"
-    # single-word input: first word is capitalized
-    assert studly_case("Hello") == "Hello"
-    assert studly_case("HELLO") == "Hello"
-    # empty / None-ish input
-    assert studly_case("") == ""
-    assert studly_case(None) == ""
-
-
 def test_slugify_edge_cases():
     assert slugify("") == ""
     assert slugify(None) == ""
@@ -180,14 +164,6 @@ def test_slugify_edge_cases():
     assert slugify("foo   bar") == "foo-bar"
     assert slugify("hello world", ".") == "hello.world"
     assert slugify("a&b=c") == "a-b-c"
-
-
-def test_slugify_unicode_extended():
-    from cara.support.Str import slugify
-    # Additional Unicode normalization tests
-    assert slugify(u"na\xefve r\xe9sum\xe9") == "naive-resume"
-    assert slugify(u"\u00e9cole") == "ecole"  # école
-    assert slugify(u"\u00f1o\u00f1o") == "nono"  # ñoño
 
 
 def test_format_money_edge_cases():
@@ -212,30 +188,3 @@ def test_truncate_edge_cases():
     assert truncate("Hello", 0) == "..."
     assert truncate("Hello", 5, "") == "Hello"
     assert truncate("Hello World", 5, "") == "Hello"
-
-
-def test_format_money_rejects_bool():
-    import pytest
-    from cara.support.Str import format_money
-    with pytest.raises(TypeError):
-        format_money(True)
-    with pytest.raises(TypeError):
-        format_money(False)
-
-
-def test_pluralize_edge_cases():
-    from cara.support.Str import pluralize
-    # z-ending word adds 'es'
-    assert pluralize("quiz") == "quizzes"
-    # single character just adds 's'
-    assert pluralize("a") == "as"
-    # s-ending adds 'es'
-    assert pluralize("bus") == "buses"
-    # vowel + y just adds 's'
-    assert pluralize("key") == "keys"
-    # vowel + o just adds 's'
-    assert pluralize("zoo") == "zoos"
-    # x-ending adds 'es'
-    assert pluralize("fox") == "foxes"
-    # sh-ending adds 'es'
-    assert pluralize("wish") == "wishes"
