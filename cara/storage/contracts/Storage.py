@@ -5,7 +5,7 @@ This module defines the contract that any storage driver must implement, specify
 for storage operations.
 """
 
-from typing import Protocol, Any
+from typing import Protocol
 
 
 class Storage(Protocol):

@@ -5,7 +5,7 @@ This module implements the core scheduling logic, managing scheduled jobs and th
 """
 
 import uuid
-from typing import Any
+from typing import Any, Optional
 from cara.scheduling import ScheduleBuilder
 from cara.scheduling.contracts import Scheduling
 
@@ -21,7 +21,7 @@ class Scheduling:
     def add_driver(self, name: str, driver: Scheduling) -> None:
         self._drivers[name] = driver
 
-    def driver(self, name: str = None) -> Scheduling:
+    def driver(self, name: Optional[str] = None) -> Scheduling:
         chosen = name or self._default_driver
         inst = self._drivers.get(chosen)
         if not inst:

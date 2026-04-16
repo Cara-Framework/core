@@ -4,21 +4,21 @@ Schedule Decorator for the Cara framework.
 This module provides a decorator for registering scheduled jobs in the application.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 
 def scheduled(
     *,
     mode: str = "job",
-    identifier: str = None,
-    driver_name: str = None,
-    cron: str = None,
-    daily: tuple[int, int] = None,
-    hourly: int = None,
-    interval: tuple[int, int, int] = None,
+    identifier: Optional[str] = None,
+    driver_name: Optional[str] = None,
+    cron: Optional[str] = None,
+    daily: Optional[tuple[int, int]] = None,
+    hourly: Optional[int] = None,
+    interval: Optional[tuple[int, int, int]] = None,
     at: Any = None,
     weekly: tuple[Any, int, int] = None,
-    timezone: str = None,
+    timezone: Optional[str] = None,
 ):
     """Decorator to attach scheduling metadata to a class or function."""
 

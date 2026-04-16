@@ -25,7 +25,7 @@ class Crypt:
             encrypted = cipher.encrypt(padded)
             return b64encode(iv + encrypted).decode()
         except Exception as e:
-            raise EncryptionException(f"Encryption failed: {e}")
+            raise EncryptionException(f"Encryption failed: {e}") from e
 
     def decrypt(self, token: str) -> str:
         try:
@@ -36,7 +36,7 @@ class Crypt:
             padded = cipher.decrypt(encrypted)
             return self._unpad(padded).decode()
         except Exception as e:
-            raise EncryptionException(f"Decryption failed: {e}")
+            raise EncryptionException(f"Decryption failed: {e}") from e
 
     def _pad(self, b: bytes) -> bytes:
         pad_len = 16 - len(b) % 16

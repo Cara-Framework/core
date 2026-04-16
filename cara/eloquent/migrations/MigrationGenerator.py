@@ -269,8 +269,6 @@ class MigrationGenerator:
                 formatted_lines.append("(")
             elif line.endswith(");"):
                 formatted_lines.append(");")
-            elif line.endswith(","):
-                formatted_lines.append(f"    {line}")
             else:
                 formatted_lines.append(f"    {line}")
 
@@ -508,10 +506,7 @@ class {class_name}(Migration):
             blueprint_call = (
                 f'table.{field_method}("{field_name}", {length}, {precision})'
             )
-        elif field_method == "string":
-            length = params.get("length", 255)
-            blueprint_call = f'table.{field_method}("{field_name}", {length})'
-        elif field_method == "char":
+        elif field_method in ("string", "char"):
             length = params.get("length", 255)
             blueprint_call = f'table.{field_method}("{field_name}", {length})'
         elif field_method == "enum":
@@ -567,21 +562,11 @@ class {class_name}(Migration):
 
     def _generate_foreign_key_line(self, foreign_key_info: Dict) -> str:
         """Generate foreign key constraint line from foreign key info."""
-        # Handle both old format (foreign_key_info) and new format (direct field_info)
-        if "field" in foreign_key_info:
-            # Old format: field has foreign_key property
-            field = foreign_key_info.get("field")
-            references = foreign_key_info.get("references")
-            on_table = foreign_key_info.get("on")
-            on_delete = foreign_key_info.get("on_delete")
-            on_update = foreign_key_info.get("on_update")
-        else:
-            # New format: field_info is the foreign key definition itself
-            field = foreign_key_info.get("field")
-            references = foreign_key_info.get("references")
-            on_table = foreign_key_info.get("on")
-            on_delete = foreign_key_info.get("on_delete")
-            on_update = foreign_key_info.get("on_update")
+        field = foreign_key_info.get("field")
+        references = foreign_key_info.get("references")
+        on_table = foreign_key_info.get("on")
+        on_delete = foreign_key_info.get("on_delete")
+        on_update = foreign_key_info.get("on_update")
 
         if not field or not references or not on_table:
             return ""

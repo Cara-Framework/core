@@ -13,7 +13,7 @@ from cara.view import ViewCompiler, ViewDirectives, ViewDirectivesRegistry
 class ViewEngine:
     """Core view engine for template processing."""
 
-    def __init__(self, view_paths: List[str] = None, cache_path: str = None):
+    def __init__(self, view_paths: Optional[List[str]] = None, cache_path: Optional[str] = None):
         """Initialize view engine."""
         from cara.support import paths
 

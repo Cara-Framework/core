@@ -82,9 +82,11 @@ class ServeStaticFiles(Middleware):
             public_dir = os.path.abspath(public_dir)
             requested_path = os.path.abspath(path)
 
-            # Check if requested path is within public directory
-            return requested_path.startswith(public_dir)
-        except:
+            # Check if requested path is within public directory. Using
+            # os.path.commonpath avoids prefix-match false positives (e.g.
+            # /public vs /publicfoo).
+            return os.path.commonpath([public_dir, requested_path]) == public_dir
+        except (ValueError, OSError):
             return False
 
     def _serve_file(self, file_path: str, head_only: bool = False) -> Response:

@@ -72,7 +72,7 @@ class ConnectionManager:
         # Store metadata
         self.connection_metadata[connection_id] = {
             "user_id": user_id,
-            "connected_at": asyncio.get_event_loop().time(),
+            "connected_at": asyncio.get_running_loop().time(),
             **(metadata or {}),
         }
 
@@ -130,7 +130,7 @@ class ConnectionManager:
 
         Should be called periodically by the application.
         """
-        current_time = asyncio.get_event_loop().time()
+        current_time = asyncio.get_running_loop().time()
         stale_connections = []
 
         # Find stale connections (no heartbeat for connection_timeout seconds)
@@ -416,7 +416,7 @@ class ConnectionManager:
                 break
             try:
                 await websocket.send_json(
-                    {"type": "ping", "ts": asyncio.get_event_loop().time()}
+                    {"type": "ping", "ts": asyncio.get_running_loop().time()}
                 )
             except Exception as e:
                 Log.error(f"Heartbeat failed for {connection_id}: {e}")

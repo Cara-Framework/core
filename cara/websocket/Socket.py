@@ -142,7 +142,7 @@ class Socket:
             await self.send(msg)
             self._ws_connected = True
         except Exception as e:
-            raise WebSocketException(f"Failed to accept WebSocket: {e}", 4002)
+            raise WebSocketException(f"Failed to accept WebSocket: {e}", 4002) from e
 
     async def send_text(self, data: str) -> None:
         """
@@ -162,7 +162,7 @@ class Socket:
         try:
             await self.send({"type": "websocket.send", "text": data})
         except Exception as e:
-            raise WebSocketException(f"Failed to send text: {e}", 4002)
+            raise WebSocketException(f"Failed to send text: {e}", 4002) from e
 
     async def send_json(self, obj: Any) -> None:
         """
@@ -178,7 +178,7 @@ class Socket:
         try:
             payload = json.dumps(obj)
         except Exception as e:
-            raise WebSocketException(f"Failed to serialize JSON: {e}", 4009)
+            raise WebSocketException(f"Failed to serialize JSON: {e}", 4009) from e
 
         await self.send_text(payload)
 
@@ -206,7 +206,7 @@ class Socket:
             self._close_code = code
             self._error = reason if reason else None
         except Exception as e:
-            raise WebSocketException(f"Failed to close WebSocket: {e}", 4002)
+            raise WebSocketException(f"Failed to close WebSocket: {e}", 4002) from e
 
     async def receive_message(self) -> Dict[str, Any]:
         """
@@ -261,7 +261,7 @@ class Socket:
 
             return message
         except Exception as e:
-            raise WebSocketException(f"Failed to receive message: {e}", 4002)
+            raise WebSocketException(f"Failed to receive message: {e}", 4002) from e
 
     async def receive_text(self) -> str:
         """
@@ -294,10 +294,10 @@ class Socket:
         if bytes_data is not None:
             try:
                 return bytes_data.decode("utf-8")
-            except UnicodeDecodeError:
+            except UnicodeDecodeError as e:
                 raise WebSocketException(
                     "Received binary data that cannot be decoded as text", 4009
-                )
+                ) from e
 
         Log.debug(f"Message type: {message.get('type')}", category="cara.websocket")
         raise WebSocketException("Received message without text or binary data", 4009)
@@ -319,7 +319,7 @@ class Socket:
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            raise WebSocketException(f"Invalid JSON message: {e}", 4009)
+            raise WebSocketException(f"Invalid JSON message: {e}", 4009) from e
 
     async def subscribe_channel(self, channel: str) -> bool:
         """Subscribe this socket to a broadcasting channel with duplicate prevention."""

@@ -9,7 +9,7 @@ Serializes jobs as JSON instead of pickle for:
 """
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 class JsonJobSerializer:
@@ -26,7 +26,7 @@ class JsonJobSerializer:
 
     @staticmethod
     def serialize(
-        job_class: type, init_args: tuple = (), init_kwargs: dict = None
+        job_class: type, init_args: tuple = (), init_kwargs: Optional[dict] = None
     ) -> str:
         """
         Serialize job to JSON string.
@@ -59,7 +59,7 @@ class JsonJobSerializer:
                 f"Job {job_class.__name__} has non-serializable parameters. "
                 f"Only primitives (str, int, dict, list) are allowed in __init__. "
                 f"Error: {e}"
-            )
+            ) from e
 
     @staticmethod
     def deserialize(json_string: str) -> Dict[str, Any]:
@@ -80,7 +80,7 @@ class JsonJobSerializer:
         try:
             payload = json.loads(json_string)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON payload: {e}")
+            raise ValueError(f"Invalid JSON payload: {e}") from e
 
         # Import the job class dynamically
         module_name = payload.get("module")
@@ -95,7 +95,7 @@ class JsonJobSerializer:
             module = importlib.import_module(module_name)
             job_class = getattr(module, class_name)
         except (ImportError, AttributeError) as e:
-            raise ValueError(f"Cannot import {module_name}.{class_name}: {e}")
+            raise ValueError(f"Cannot import {module_name}.{class_name}: {e}") from e
 
         return {
             "class": job_class,

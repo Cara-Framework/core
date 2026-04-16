@@ -6,7 +6,7 @@ and query parameter access.
 """
 
 import re
-from typing import Any
+from typing import Any, Optional
 
 
 class RequestHelpersMixin:
@@ -36,7 +36,7 @@ class RequestHelpersMixin:
         except (ValueError, TypeError):
             return default
 
-    def query(self, key: str = None, default: Any = None) -> Any:
+    def query(self, key: Optional[str] = None, default: Any = None) -> Any:
         """
         Query parameter access.
 

@@ -123,7 +123,7 @@ class Notifiable(Notifiable):
         # For now, return empty list
         return []
 
-    def mark_as_read(self, notification_ids: List[str] = None) -> None:
+    def mark_as_read(self, notification_ids: Optional[List[str]] = None) -> None:
         """
         Mark notifications as read.
 
@@ -134,7 +134,7 @@ class Notifiable(Notifiable):
         # This would typically update the database
         pass
 
-    def mark_as_unread(self, notification_ids: List[str] = None) -> None:
+    def mark_as_unread(self, notification_ids: Optional[List[str]] = None) -> None:
         """
         Mark notifications as unread.
 

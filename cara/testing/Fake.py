@@ -6,7 +6,7 @@ integration for current Cara framework features.
 """
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 class FakeService:
@@ -36,7 +36,7 @@ class FakeService:
         """Get response for a method."""
         return self.responses.get(method, default)
 
-    def assert_called(self, method: str, times: int = None):
+    def assert_called(self, method: str, times: Optional[int] = None):
         """Assert that method was called."""
         calls = [call for call in self.calls if call["method"] == method]
         if times is not None:
@@ -64,7 +64,7 @@ class FakeMailer(FakeService):
         super().__init__()
         self.sent_emails = []
 
-    def send(self, to: str, subject: str, body: str, from_email: str = None, **kwargs):
+    def send(self, to: str, subject: str, body: str, from_email: Optional[str] = None, **kwargs):
         """Fake send email."""
         self.record_call("send", to, subject, body, from_email, **kwargs)
 
@@ -79,7 +79,7 @@ class FakeMailer(FakeService):
         self.sent_emails.append(email)
         return True
 
-    def send_template(self, to: str, template: str, data: Dict = None, **kwargs):
+    def send_template(self, to: str, template: str, data: Optional[Dict] = None, **kwargs):
         """Fake send template email."""
         self.record_call("send_template", to, template, data, **kwargs)
 
@@ -93,7 +93,7 @@ class FakeMailer(FakeService):
         self.sent_emails.append(email)
         return True
 
-    def assert_sent(self, to: str = None, subject: str = None, count: int = None):
+    def assert_sent(self, to: Optional[str] = None, subject: Optional[str] = None, count: Optional[int] = None):
         """Assert that email was sent."""
         matching_emails = self.sent_emails
 
@@ -114,7 +114,7 @@ class FakeMailer(FakeService):
         else:
             assert len(matching_emails) > 0, "Expected at least one email to be sent"
 
-    def assert_not_sent(self, to: str = None, subject: str = None):
+    def assert_not_sent(self, to: Optional[str] = None, subject: Optional[str] = None):
         """Assert that email was not sent."""
         matching_emails = self.sent_emails
 
@@ -146,7 +146,7 @@ class FakeQueue(FakeService):
         super().__init__()
         self.queued_jobs = []
 
-    def push(self, job: str, data: Dict = None, queue: str = "default", delay: int = 0):
+    def push(self, job: str, data: Optional[Dict] = None, queue: str = "default", delay: int = 0):
         """Fake push job to queue."""
         self.record_call("push", job, data, queue, delay)
 
@@ -160,11 +160,11 @@ class FakeQueue(FakeService):
         self.queued_jobs.append(queued_job)
         return True
 
-    def later(self, delay: int, job: str, data: Dict = None, queue: str = "default"):
+    def later(self, delay: int, job: str, data: Optional[Dict] = None, queue: str = "default"):
         """Fake push delayed job to queue."""
         return self.push(job, data, queue, delay)
 
-    def assert_pushed(self, job: str = None, queue: str = None, count: int = None):
+    def assert_pushed(self, job: Optional[str] = None, queue: Optional[str] = None, count: Optional[int] = None):
         """Assert that job was pushed to queue."""
         matching_jobs = self.queued_jobs
 
@@ -181,7 +181,7 @@ class FakeQueue(FakeService):
         else:
             assert len(matching_jobs) > 0, "Expected at least one job to be queued"
 
-    def assert_not_pushed(self, job: str = None, queue: str = None):
+    def assert_not_pushed(self, job: Optional[str] = None, queue: Optional[str] = None):
         """Assert that job was not pushed to queue."""
         matching_jobs = self.queued_jobs
 
@@ -225,7 +225,7 @@ class FakeNotification(FakeService):
         return self.send(notifiable, notification)
 
     def assert_sent(
-        self, notifiable=None, notification_type: str = None, count: int = None
+        self, notifiable=None, notification_type: Optional[str] = None, count: Optional[int] = None
     ):
         """Assert that notification was sent."""
         matching_notifications = self.sent_notifications
@@ -251,7 +251,7 @@ class FakeNotification(FakeService):
                 "Expected at least one notification to be sent"
             )
 
-    def assert_not_sent(self, notifiable=None, notification_type: str = None):
+    def assert_not_sent(self, notifiable=None, notification_type: Optional[str] = None):
         """Assert that notification was not sent."""
         matching_notifications = self.sent_notifications
 
@@ -285,7 +285,7 @@ class FakeEvent(FakeService):
         super().__init__()
         self.dispatched_events = []
 
-    def dispatch(self, event: str, data: Dict = None):
+    def dispatch(self, event: str, data: Optional[Dict] = None):
         """Fake dispatch event."""
         self.record_call("dispatch", event, data)
 
@@ -297,11 +297,11 @@ class FakeEvent(FakeService):
         self.dispatched_events.append(dispatched_event)
         return True
 
-    def fire(self, event: str, data: Dict = None):
+    def fire(self, event: str, data: Optional[Dict] = None):
         """Fake fire event (alias for dispatch)."""
         return self.dispatch(event, data)
 
-    def assert_dispatched(self, event: str = None, count: int = None):
+    def assert_dispatched(self, event: Optional[str] = None, count: Optional[int] = None):
         """Assert that event was dispatched."""
         matching_events = self.dispatched_events
 
@@ -317,7 +317,7 @@ class FakeEvent(FakeService):
                 "Expected at least one event to be dispatched"
             )
 
-    def assert_not_dispatched(self, event: str = None):
+    def assert_not_dispatched(self, event: Optional[str] = None):
         """Assert that event was not dispatched."""
         matching_events = self.dispatched_events
 
@@ -367,7 +367,7 @@ class FakeStorage(FakeService):
             return True
         return False
 
-    def assert_stored(self, path: str, content: str = None):
+    def assert_stored(self, path: str, content: Optional[str] = None):
         """Assert that file was stored."""
         assert path in self.stored_files, f"File {path} was not stored"
 
@@ -395,7 +395,7 @@ class FakeCache(FakeService):
         super().__init__()
         self.cached_items = {}
 
-    def put(self, key: str, value: Any, ttl: int = None):
+    def put(self, key: str, value: Any, ttl: Optional[int] = None):
         """Fake cache put."""
         self.record_call("put", key, value, ttl)
         self.cached_items[key] = {"value": value, "ttl": ttl, "timestamp": datetime.now()}

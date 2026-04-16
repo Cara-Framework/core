@@ -364,7 +364,7 @@ class TinkerCommand(CommandBase):
             except Exception as e:
                 return f"❌ Stats Error: {str(e)}"
 
-        def show_config(key: str = None):
+        def show_config(key: Optional[str] = None):
             """Show configuration values."""
             if key:
                 value = Config.get(key)

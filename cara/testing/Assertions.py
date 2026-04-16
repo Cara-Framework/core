@@ -4,14 +4,14 @@ Assertions - Test assertion methods for Cara framework
 This file provides assertion methods for testing.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class Assertions:
     """Test assertion methods for Cara framework."""
 
     def assert_database_has(
-        self, table: str, data: Dict[str, Any], connection: str = None
+        self, table: str, data: Dict[str, Any], connection: Optional[str] = None
     ):
         """Assert that database table has record with given data."""
         # Mock implementation - would integrate with actual database
@@ -19,21 +19,21 @@ class Assertions:
         return True
 
     def assert_database_missing(
-        self, table: str, data: Dict[str, Any], connection: str = None
+        self, table: str, data: Dict[str, Any], connection: Optional[str] = None
     ):
         """Assert that database table does not have record with given data."""
         # Mock implementation
         print(f"Asserting database table '{table}' missing record: {data}")
         return True
 
-    def assert_database_count(self, table: str, count: int, connection: str = None):
+    def assert_database_count(self, table: str, count: int, connection: Optional[str] = None):
         """Assert that database table has specific record count."""
         # Mock implementation
         print(f"Asserting database table '{table}' has {count} records")
         return True
 
     def assert_soft_deleted(
-        self, table: str, data: Dict[str, Any], connection: str = None
+        self, table: str, data: Dict[str, Any], connection: Optional[str] = None
     ):
         """Assert that record is soft deleted."""
         # Mock implementation
@@ -41,14 +41,14 @@ class Assertions:
         return True
 
     def assert_not_soft_deleted(
-        self, table: str, data: Dict[str, Any], connection: str = None
+        self, table: str, data: Dict[str, Any], connection: Optional[str] = None
     ):
         """Assert that record is not soft deleted."""
         # Mock implementation
         print(f"Asserting record in '{table}' is not soft deleted: {data}")
         return True
 
-    def assert_authenticated(self, guard: str = None):
+    def assert_authenticated(self, guard: Optional[str] = None):
         """Assert that user is authenticated."""
         try:
             from cara.facades import Auth
@@ -63,7 +63,7 @@ class Assertions:
             print("Auth facade not available - mocking authentication check")
         return True
 
-    def assert_guest(self, guard: str = None):
+    def assert_guest(self, guard: Optional[str] = None):
         """Assert that user is guest (not authenticated)."""
         try:
             from cara.facades import Auth
@@ -78,7 +78,7 @@ class Assertions:
             print("Auth facade not available - mocking guest check")
         return True
 
-    def assert_authenticated_as(self, user, guard: str = None):
+    def assert_authenticated_as(self, user, guard: Optional[str] = None):
         """Assert that specific user is authenticated."""
         try:
             from cara.facades import Auth
@@ -89,7 +89,7 @@ class Assertions:
             print(f"Auth facade not available - mocking authentication as {user}")
         return True
 
-    def assert_credentials(self, credentials: Dict[str, Any], guard: str = None):
+    def assert_credentials(self, credentials: Dict[str, Any], guard: Optional[str] = None):
         """Assert that credentials are valid."""
         try:
             from cara.facades import Auth
@@ -102,7 +102,7 @@ class Assertions:
             )
         return True
 
-    def assert_invalid_credentials(self, credentials: Dict[str, Any], guard: str = None):
+    def assert_invalid_credentials(self, credentials: Dict[str, Any], guard: Optional[str] = None):
         """Assert that credentials are invalid."""
         try:
             from cara.facades import Auth
@@ -139,7 +139,7 @@ class Assertions:
             print(f"Session facade not available - mocking session missing: {key}")
         return True
 
-    def assert_session_has_errors(self, keys: List[str] = None):
+    def assert_session_has_errors(self, keys: Optional[List[str]] = None):
         """Assert that session has validation errors."""
         try:
             from cara.facades import Session
@@ -171,7 +171,7 @@ class Assertions:
         print(f"Asserting redirected to: {uri}")
         return True
 
-    def assert_redirected_to_route(self, route_name: str, parameters: Dict = None):
+    def assert_redirected_to_route(self, route_name: str, parameters: Optional[Dict] = None):
         """Assert that response is redirect to specific route."""
         # Mock implementation
         print(
@@ -245,7 +245,7 @@ class Assertions:
         print(f"Asserting JSON structure: {structure}")
         return True
 
-    def assert_json_count(self, count: int, key: str = None):
+    def assert_json_count(self, count: int, key: Optional[str] = None):
         """Assert that JSON array has specific count."""
         # Mock implementation
         print(f"Asserting JSON count: {count} for key: {key}")
@@ -293,7 +293,7 @@ class Assertions:
         """Assert that response status is 500."""
         return self.assert_status(500)
 
-    def assert_header(self, header_name: str, value: str = None):
+    def assert_header(self, header_name: str, value: Optional[str] = None):
         """Assert that response has specific header."""
         # Mock implementation
         print(f"Asserting header: {header_name} = {value}")
@@ -305,7 +305,7 @@ class Assertions:
         print(f"Asserting header missing: {header_name}")
         return True
 
-    def assert_cookie(self, cookie_name: str, value: str = None):
+    def assert_cookie(self, cookie_name: str, value: Optional[str] = None):
         """Assert that response has specific cookie."""
         # Mock implementation
         print(f"Asserting cookie: {cookie_name} = {value}")

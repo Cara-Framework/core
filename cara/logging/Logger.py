@@ -109,7 +109,7 @@ class Logger(Logger):
             console_config = config("logging.channels.console", {})
             level = console_config.get("LEVEL", "DEBUG")
             return level.upper()
-        except:
+        except Exception:
             # Fallback to DEBUG if config is not available
             return "DEBUG"
 
@@ -126,7 +126,7 @@ class Logger(Logger):
             console_levelno = getattr(pylogging, console_level.upper(), 0)
 
             return current_levelno >= console_levelno
-        except:
+        except Exception:
             # If anything fails, allow logging
             return True
 
@@ -148,7 +148,7 @@ class Logger(Logger):
             module_name = frame.f_globals.get("__name__", "App")
             simple_name = module_name.split(".")[-1].replace("_", "").capitalize()
             return simple_name, str(frame.f_lineno)
-        except:
+        except Exception:
             return "App", "0"
         finally:
             del frame
@@ -160,7 +160,7 @@ class Logger(Logger):
 
             req = current_request.get()
             return getattr(req, "request_id", str(uuid.uuid4())[:8])
-        except:
+        except Exception:
             return str(uuid.uuid4())[:8]
 
     def _format_exception(

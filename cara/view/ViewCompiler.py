@@ -5,7 +5,7 @@ This file provides template compilation functionality.
 """
 
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class ViewCompiler:
@@ -365,8 +365,8 @@ class ViewCompiler:
 
         return sections
 
-    def extract_extends(self, template: str) -> str:
-        """Extract extends directive from template."""
+    def extract_extends(self, template: str) -> Optional[str]:
+        """Extract extends directive from template, or ``None`` if not present."""
         extends_pattern = r'@extends\([\'"]([^\'"]+)[\'"]\)'
         match = re.search(extends_pattern, template)
 

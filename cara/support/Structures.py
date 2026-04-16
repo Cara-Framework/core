@@ -3,7 +3,7 @@
 from dotty_dict import dotty
 
 
-def data(dictionary={}):
+def data(dictionary=None):
     """
     Transform the given dictionary to be read/written with dot notation.
 
@@ -13,7 +13,7 @@ def data(dictionary={}):
     Returns:
         {dict} -- A dot dictionary
     """
-    return dotty(dictionary)
+    return dotty(dictionary if dictionary is not None else {})
 
 
 def data_get(dictionary, key, default=None):

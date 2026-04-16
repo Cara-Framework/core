@@ -75,11 +75,13 @@ class MailgunDriver(Mail):
             if response.status_code == 200:
                 return True
             else:
-                print(f"Mailgun Error: {response.status_code} - {response.text}")
+                self._log_error(
+                    f"Mailgun API returned {response.status_code}: {response.text}"
+                )
                 return False
 
         except Exception as e:
-            print(f"Mailgun Error: {str(e)}")
+            self._log_error(f"Mailgun send failed: {e}", exc_info=True)
             return False
 
     def _prepare_data(self, mailable_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -181,7 +183,7 @@ class MailgunDriver(Mail):
                     file_handle = open(file_path, "rb")
                     files.append(("attachment", (file_name, file_handle)))
                 except Exception as e:
-                    print(f"Attachment error for {file_path}: {e}")
+                    self._log_error(f"Mailgun attachment failed for {file_path}: {e}")
 
         return files
 
@@ -216,5 +218,16 @@ class MailgunDriver(Mail):
             )
             return response.status_code == 200
         except Exception as e:
-            print(f"Mailgun connection test failed: {e}")
+            self._log_error(f"Mailgun connection test failed: {e}")
             return False
+
+    def _log_error(self, message: str, exc_info: bool = False) -> None:
+        """Log Mailgun errors via the framework logger with stderr fallback."""
+        try:
+            from cara.facades import Log
+
+            Log.error(message, category="cara.mail.mailgun", exc_info=exc_info)
+        except Exception:
+            import sys
+
+            print(message, file=sys.stderr)

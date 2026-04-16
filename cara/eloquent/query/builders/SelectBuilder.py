@@ -5,7 +5,7 @@ Handles all SELECT-related query building operations cleanly and efficiently.
 Follows DRY and KISS principles.
 """
 
-from typing import Any, List, Union
+from typing import Any, List, Union, Optional
 
 from cara.eloquent.expressions.Raw import Raw
 from cara.eloquent.expressions.SelectExpression import SelectExpression
@@ -87,7 +87,7 @@ class SelectBuilder:
 
     # ===== Aggregate Functions =====
 
-    def count(self, column: str = "*", alias: str = None) -> "SelectBuilder":
+    def count(self, column: str = "*", alias: Optional[str] = None) -> "SelectBuilder":
         """Add COUNT function."""
         count_expr = f"COUNT({column})"
         if alias:
@@ -95,7 +95,7 @@ class SelectBuilder:
 
         return self.select_raw(count_expr)
 
-    def sum(self, column: str, alias: str = None) -> "SelectBuilder":
+    def sum(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add SUM function."""
         sum_expr = f"SUM({column})"
         if alias:
@@ -103,7 +103,7 @@ class SelectBuilder:
 
         return self.select_raw(sum_expr)
 
-    def avg(self, column: str, alias: str = None) -> "SelectBuilder":
+    def avg(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add AVG function."""
         avg_expr = f"AVG({column})"
         if alias:
@@ -111,7 +111,7 @@ class SelectBuilder:
 
         return self.select_raw(avg_expr)
 
-    def max(self, column: str, alias: str = None) -> "SelectBuilder":
+    def max(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add MAX function."""
         max_expr = f"MAX({column})"
         if alias:
@@ -119,7 +119,7 @@ class SelectBuilder:
 
         return self.select_raw(max_expr)
 
-    def min(self, column: str, alias: str = None) -> "SelectBuilder":
+    def min(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add MIN function."""
         min_expr = f"MIN({column})"
         if alias:
@@ -130,7 +130,7 @@ class SelectBuilder:
     # ===== Conditional SELECT =====
 
     def select_case(
-        self, cases: List[tuple], default_value: Any = None, alias: str = None
+        self, cases: List[tuple], default_value: Any = None, alias: Optional[str] = None
     ) -> "SelectBuilder":
         """Add CASE statement in SELECT."""
         case_parts = ["CASE"]
@@ -150,7 +150,7 @@ class SelectBuilder:
         return self.select_raw(case_expr)
 
     def select_if_null(
-        self, column: str, default_value: Any, alias: str = None
+        self, column: str, default_value: Any, alias: Optional[str] = None
     ) -> "SelectBuilder":
         """Add IFNULL/COALESCE in SELECT."""
         ifnull_expr = f"COALESCE({column}, {default_value})"
@@ -161,7 +161,7 @@ class SelectBuilder:
 
     # ===== String Functions =====
 
-    def select_concat(self, columns: List[str], alias: str = None) -> "SelectBuilder":
+    def select_concat(self, columns: List[str], alias: Optional[str] = None) -> "SelectBuilder":
         """Add CONCAT function in SELECT."""
         concat_expr = f"CONCAT({', '.join(columns)})"
         if alias:
@@ -170,7 +170,7 @@ class SelectBuilder:
         return self.select_raw(concat_expr)
 
     def select_substring(
-        self, column: str, start: int, length: int = None, alias: str = None
+        self, column: str, start: int, length: Optional[int] = None, alias: Optional[str] = None
     ) -> "SelectBuilder":
         """Add SUBSTRING function in SELECT."""
         if length is not None:
@@ -183,7 +183,7 @@ class SelectBuilder:
 
         return self.select_raw(substr_expr)
 
-    def select_upper(self, column: str, alias: str = None) -> "SelectBuilder":
+    def select_upper(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add UPPER function in SELECT."""
         upper_expr = f"UPPER({column})"
         if alias:
@@ -191,7 +191,7 @@ class SelectBuilder:
 
         return self.select_raw(upper_expr)
 
-    def select_lower(self, column: str, alias: str = None) -> "SelectBuilder":
+    def select_lower(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add LOWER function in SELECT."""
         lower_expr = f"LOWER({column})"
         if alias:
@@ -202,7 +202,7 @@ class SelectBuilder:
     # ===== Date Functions =====
 
     def select_date_format(
-        self, column: str, format_str: str, alias: str = None
+        self, column: str, format_str: str, alias: Optional[str] = None
     ) -> "SelectBuilder":
         """Add DATE_FORMAT function in SELECT."""
         date_format_expr = f"DATE_FORMAT({column}, '{format_str}')"
@@ -211,7 +211,7 @@ class SelectBuilder:
 
         return self.select_raw(date_format_expr)
 
-    def select_year(self, column: str, alias: str = None) -> "SelectBuilder":
+    def select_year(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add YEAR function in SELECT."""
         year_expr = f"YEAR({column})"
         if alias:
@@ -219,7 +219,7 @@ class SelectBuilder:
 
         return self.select_raw(year_expr)
 
-    def select_month(self, column: str, alias: str = None) -> "SelectBuilder":
+    def select_month(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add MONTH function in SELECT."""
         month_expr = f"MONTH({column})"
         if alias:
@@ -227,7 +227,7 @@ class SelectBuilder:
 
         return self.select_raw(month_expr)
 
-    def select_day(self, column: str, alias: str = None) -> "SelectBuilder":
+    def select_day(self, column: str, alias: Optional[str] = None) -> "SelectBuilder":
         """Add DAY function in SELECT."""
         day_expr = f"DAY({column})"
         if alias:

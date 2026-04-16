@@ -141,7 +141,7 @@ class StorageLinkCommand(CommandBase):
             from cara.support.paths import base_path
 
             return os.path.relpath(path, base_path())
-        except:
+        except Exception:
             return path
 
     def _show_summary(self, success_count: int, total_count: int) -> None:

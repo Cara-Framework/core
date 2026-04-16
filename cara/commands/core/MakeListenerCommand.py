@@ -7,6 +7,7 @@ from pathlib import Path
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.support import paths
+from typing import Optional
 
 
 @command(
@@ -21,7 +22,7 @@ from cara.support import paths
 class MakeListenerCommand(CommandBase):
     """Generate Listener classes with enhanced configuration."""
 
-    def handle(self, name: str, event: str = None):
+    def handle(self, name: str, event: Optional[str] = None):
         """Handle listener generation."""
         self.info("🏗️  Listener Generation")
 
@@ -43,7 +44,7 @@ class MakeListenerCommand(CommandBase):
         except Exception as e:
             self.error(f"❌ Failed to generate listener: {e}")
 
-    def _prepare_listener_info(self, name: str, event: str = None) -> dict:
+    def _prepare_listener_info(self, name: str, event: Optional[str] = None) -> dict:
         """Prepare listener information."""
         if not name:
             raise ValueError("Listener name is required")
@@ -107,7 +108,7 @@ class MakeListenerCommand(CommandBase):
             self._show_usage_tips(listener_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write listener file: {e}")
+            raise Exception(f"Failed to write listener file: {e}") from e
 
     def _generate_listener_code(self, listener_info: dict) -> str:
         """Generate the listener class code."""

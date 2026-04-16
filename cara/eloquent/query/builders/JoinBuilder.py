@@ -5,7 +5,7 @@ Handles all JOIN-related query building operations cleanly and efficiently.
 Follows DRY and KISS principles.
 """
 
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 from cara.eloquent.expressions.JoinClause import JoinClause
 from cara.eloquent.expressions.OnClause import OnClause
@@ -31,31 +31,31 @@ class JoinBuilder:
     # ===== Basic JOINs =====
 
     def join(
-        self, table: str, first: str, operator: str = "=", second: str = None
+        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
     ) -> "JoinBuilder":
         """Add INNER JOIN."""
         return self._add_join("INNER", table, first, operator, second)
 
     def left_join(
-        self, table: str, first: str, operator: str = "=", second: str = None
+        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
     ) -> "JoinBuilder":
         """Add LEFT JOIN."""
         return self._add_join("LEFT", table, first, operator, second)
 
     def right_join(
-        self, table: str, first: str, operator: str = "=", second: str = None
+        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
     ) -> "JoinBuilder":
         """Add RIGHT JOIN."""
         return self._add_join("RIGHT", table, first, operator, second)
 
     def inner_join(
-        self, table: str, first: str, operator: str = "=", second: str = None
+        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
     ) -> "JoinBuilder":
         """Add INNER JOIN (alias for join)."""
         return self.join(table, first, operator, second)
 
     def full_join(
-        self, table: str, first: str, operator: str = "=", second: str = None
+        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
     ) -> "JoinBuilder":
         """Add FULL OUTER JOIN."""
         return self._add_join("FULL OUTER", table, first, operator, second)
@@ -114,7 +114,7 @@ class JoinBuilder:
         alias: str,
         first: str,
         operator: str = "=",
-        second: str = None,
+        second: Optional[str] = None,
         join_type: str = "INNER",
     ) -> "JoinBuilder":
         """Add JOIN with subquery."""
@@ -127,7 +127,7 @@ class JoinBuilder:
         alias: str,
         first: str,
         operator: str = "=",
-        second: str = None,
+        second: Optional[str] = None,
     ) -> "JoinBuilder":
         """Add LEFT JOIN with subquery."""
         return self.join_subquery(subquery, alias, first, operator, second, "LEFT")
@@ -140,7 +140,7 @@ class JoinBuilder:
         table: str,
         first: str,
         operator: str = "=",
-        second: str = None,
+        second: Optional[str] = None,
     ) -> "JoinBuilder":
         """Internal method to add JOIN."""
         if second is None:

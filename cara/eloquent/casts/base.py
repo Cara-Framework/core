@@ -101,11 +101,8 @@ class CastRegistry:
         # Handle different parameter formats
         if cast_type == "datetime":
             return self._create_datetime_cast(cast_class, params)
-        elif cast_type in ["array", "hash"]:
-            return cast_class(params)
-        else:
-            # Generic single parameter
-            return cast_class(params)
+        # Generic single parameter (covers array, hash, and all others)
+        return cast_class(params)
 
     def _create_datetime_cast(self, cast_class: Type[BaseCast], params: str) -> BaseCast:
         """Create datetime cast with format and timezone."""

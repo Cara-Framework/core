@@ -27,3 +27,12 @@ class MailSendException(MailException):
     """Raised when mail sending fails."""
 
     pass
+
+
+__all__ = [
+    "MailException",
+    "MailConfigurationException",
+    "MailDriverException",
+    "MailSendException",
+]
+

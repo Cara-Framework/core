@@ -4,7 +4,7 @@ Database Transactions - Database transaction management for Cara testing
 This file provides database transaction management for testing.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class DatabaseTransactions:
@@ -125,7 +125,7 @@ class DatabaseTransactions:
         except Exception as e:
             print(f"[TEST] Error refreshing database: {e}")
 
-    async def seed_database(self, seeders: List[str] = None):
+    async def seed_database(self, seeders: Optional[List[str]] = None):
         """Seed database with test data."""
         try:
             if seeders:
@@ -160,7 +160,7 @@ class DatabaseTransactions:
         for seeder in default_seeders:
             await self.run_seeder(seeder)
 
-    async def truncate_tables(self, tables: List[str] = None):
+    async def truncate_tables(self, tables: Optional[List[str]] = None):
         """Truncate database tables."""
         try:
             from cara.facades import DB
@@ -258,10 +258,10 @@ class DatabaseTransactions:
 
             return result
 
-        except Exception as e:
+        except Exception:
             # Rollback on error
             await self.rollback_transaction(connection_name)
-            raise e
+            raise
 
     async def assert_database_has(
         self, table: str, data: Dict[str, Any], connection: str = "default"

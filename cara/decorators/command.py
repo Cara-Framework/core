@@ -6,7 +6,7 @@ This module provides a decorator for registering command-line commands in the ap
 
 import inspect
 from functools import wraps
-from typing import Any, Callable, List, Type
+from typing import Any, Callable, List, Type, Optional
 
 # Registry of decorated command classes
 _command_registry: List[Type[Any]] = []
@@ -18,7 +18,7 @@ _on_error_hooks: List[Callable[[str, Exception], None]] = []
 
 
 def command(
-    name: str, help: str = "", options: dict[str, str] = None
+    name: str, help: str = "", options: Optional[dict[str, str]] = None
 ) -> Callable[[Type[Any]], Type[Any]]:
     """
     Decorator to mark a class as a CLI command.

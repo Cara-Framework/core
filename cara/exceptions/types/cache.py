@@ -17,3 +17,10 @@ class DriverNotRegisteredException(CaraException):
     """Raised when trying to fetch a driver that was never registered."""
 
     pass
+
+
+__all__ = [
+    "CacheConfigurationException",
+    "DriverNotRegisteredException",
+]
+

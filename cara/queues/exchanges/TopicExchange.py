@@ -55,37 +55,58 @@ class TopicExchange:
     - Singleton pattern to prevent re-initialization
     
     Usage:
-        exchange = TopicExchange("cheapa.events")
-        
+        exchange = TopicExchange()  # Reads name from config('queue.topic_exchange_name')
+
+        # Or explicit name
+        exchange = TopicExchange("my_app.events")
+
         # Define queue bindings
-        exchange.bind_queue("enrichment.default", "enrichment.*.default")
-        exchange.bind_queue("enrichment.high", "enrichment.*.high")
-        exchange.bind_queue("validation.default", "validation.*.default")
-        
+        exchange.bind_queue("jobs.default", "jobs.*.default")
+        exchange.bind_queue("jobs.high", "jobs.*.high")
+
         # Dispatch with routing key
         exchange.dispatch_job(
-            routing_key="enrichment.product.high",
+            routing_key="jobs.process.high",
             job_instance=my_job,
-            payload={"product_id": 123}
+            payload={"id": 123},
         )
     """
-    
-    _instances = {}  # Class-level instances cache
-    
-    def __new__(cls, exchange_name: str = "cheapa.events"):
-        """Singleton pattern to prevent multiple instances."""
-        if exchange_name not in cls._instances:
+
+    _instances: Dict[str, "TopicExchange"] = {}  # Class-level instances cache
+
+    @staticmethod
+    def _resolve_exchange_name(exchange_name: Optional[str]) -> str:
+        """Resolve exchange name from argument or config."""
+        if exchange_name:
+            return exchange_name
+
+        from cara.configuration import config
+
+        resolved = config("queue.topic_exchange_name", None)
+        if not resolved:
+            raise ValueError(
+                "TopicExchange requires an exchange name. Pass it explicitly or "
+                "set 'queue.topic_exchange_name' in your configuration."
+            )
+        return resolved
+
+    def __new__(cls, exchange_name: Optional[str] = None):
+        """Singleton pattern per-exchange-name to prevent duplicate instances."""
+        name = cls._resolve_exchange_name(exchange_name)
+        if name not in cls._instances:
             instance = super().__new__(cls)
-            cls._instances[exchange_name] = instance
-        return cls._instances[exchange_name]
-    
-    def __init__(self, exchange_name: str = "cheapa.events"):
+            cls._instances[name] = instance
+        return cls._instances[name]
+
+    def __init__(self, exchange_name: Optional[str] = None):
         """
         Initialize TopicExchange.
-        
+
         Args:
-            exchange_name: Name of the RabbitMQ topic exchange
+            exchange_name: Name of the RabbitMQ topic exchange. If omitted,
+                read from ``config('queue.topic_exchange_name')``.
         """
+        exchange_name = self._resolve_exchange_name(exchange_name)
         # Prevent re-initialization
         if hasattr(self, '_initialized'):
             return
@@ -182,7 +203,7 @@ class TopicExchange:
         
         return True
     
-    def dispatch_job(self, routing_key: str, job_instance, payload: Dict = None) -> Optional[str]:
+    def dispatch_job(self, routing_key: str, job_instance, payload: Optional[Dict] = None) -> Optional[str]:
         """
         Dispatch job to appropriate queue based on routing key.
         

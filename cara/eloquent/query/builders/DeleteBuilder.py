@@ -4,7 +4,7 @@ DeleteBuilder - Single Responsibility for DELETE operations
 Handles all DELETE-related query building operations cleanly and efficiently.
 Follows DRY and KISS principles.
 """
-from typing import Any, List, Optional
+from typing import Any, List
 
 
 class DeleteBuilder:

@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 from unittest.mock import Mock, patch
 
 
@@ -168,7 +168,7 @@ class TestHelpers:
     def create_test_request_data(
         method: str = "GET",
         path: str = "/",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
         data: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """Create test request data."""
@@ -184,8 +184,8 @@ class TestHelpers:
     @staticmethod
     def create_test_response_data(
         status_code: int = 200,
-        content: Union[str, Dict] = None,
-        headers: Dict[str, str] = None,
+        content: Optional[Union[str, Dict]] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Create test response data."""
         if content is None:
@@ -233,14 +233,14 @@ class TestHelpers:
     # Assertion Helpers
     @staticmethod
     def assert_arrays_equal_unordered(
-        array1: List[Any], array2: List[Any], msg: str = None
+        array1: List[Any], array2: List[Any], msg: Optional[str] = None
     ) -> bool:
         """Assert that two arrays contain the same elements regardless of order."""
         return sorted(array1) == sorted(array2)
 
     @staticmethod
     def assert_dict_contains_subset(
-        subset: Dict[str, Any], full_dict: Dict[str, Any], msg: str = None
+        subset: Dict[str, Any], full_dict: Dict[str, Any], msg: Optional[str] = None
     ) -> bool:
         """Assert that dictionary contains all key-value pairs from subset."""
         for key, value in subset.items():
@@ -250,7 +250,7 @@ class TestHelpers:
 
     @staticmethod
     def assert_string_contains_all(
-        string: str, substrings: List[str], msg: str = None
+        string: str, substrings: List[str], msg: Optional[str] = None
     ) -> bool:
         """Assert that string contains all specified substrings."""
         return all(substring in string for substring in substrings)

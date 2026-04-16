@@ -8,7 +8,7 @@ Laravel-inspired pipeline pattern with async support and priority routing.
 import asyncio
 import uuid
 from enum import Enum
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from cara.facades import Log
 
@@ -28,12 +28,12 @@ class PipelineStep:
         self,
         step_class,
         args: tuple = (),
-        kwargs: dict = None,
-        routing_key: str = None,
+        kwargs: Optional[dict] = None,
+        routing_key: Optional[str] = None,
         priority: str = "default",
-        condition: Callable = None,
-        on_success: Callable = None,
-        on_failure: Callable = None,
+        condition: Optional[Callable] = None,
+        on_success: Optional[Callable] = None,
+        on_failure: Optional[Callable] = None,
     ):
         """
         Initialize pipeline step.
@@ -98,7 +98,7 @@ class Pipeline:
             .dispatch()
     """
 
-    def __init__(self, pipeline_type: PipelineType, name: str = None):
+    def __init__(self, pipeline_type: PipelineType, name: Optional[str] = None):
         """Initialize pipeline."""
         self.pipeline_type = pipeline_type
         self.name = name or f"pipeline_{uuid.uuid4().hex[:8]}"
@@ -107,7 +107,7 @@ class Pipeline:
         self.results: List[Dict[str, Any]] = []
 
     @classmethod
-    def create(cls, pipeline_type: PipelineType, name: str = None) -> "Pipeline":
+    def create(cls, pipeline_type: PipelineType, name: Optional[str] = None) -> "Pipeline":
         """Create a new pipeline."""
         return cls(pipeline_type, name)
 
@@ -116,10 +116,10 @@ class Pipeline:
         step_class,
         *args,
         priority: str = "default",
-        routing_key: str = None,
-        condition: Callable = None,
-        on_success: Callable = None,
-        on_failure: Callable = None,
+        routing_key: Optional[str] = None,
+        condition: Optional[Callable] = None,
+        on_success: Optional[Callable] = None,
+        on_failure: Optional[Callable] = None,
         **kwargs,
     ) -> "Pipeline":
         """
@@ -382,45 +382,65 @@ class Pipeline:
         return self._dispatch_parallel()
 
     def _dispatch_chain(self) -> Dict[str, Any]:
-        """Dispatch job chain (first job will chain to next)."""
+        """Dispatch job chain with Laravel-style ``.chain([...])`` continuation.
+
+        We dispatch the first step normally and attach the remaining steps as
+        a continuation list on the returned ``PendingDispatch`` so the worker
+        will dispatch step ``N+1`` when step ``N`` completes. Falls back to a
+        single-job dispatch when the underlying job class does not expose a
+        ``chain`` method (older drivers).
+        """
         if not self.steps:
             return {"success": False, "error": "No steps to dispatch"}
 
-        # For now, dispatch first job with pipeline context
-        # TODO: Implement proper chaining mechanism
-        first_step = self.steps[0]
+        first_step, *remaining_steps = self.steps
 
         try:
-            # Check if it's a job class with dispatch method
-            if hasattr(first_step.step_class, "dispatch"):
-                job_dispatch = first_step.step_class.dispatch(
-                    *first_step.args, **first_step.kwargs
-                )
-
-                if first_step.routing_key:
-                    job_id = job_dispatch.withRoutingKey(first_step.routing_key)
-                else:
-                    job_id = job_dispatch
-
-                Log.info(
-                    f"🔗 Chain started: {first_step.step_class.__name__} [{job_id}]",
-                    category="cara.pipeline",
-                )
-
-                return {
-                    "success": True,
-                    "chain_started": True,
-                    "first_job_id": job_id,
-                    "pipeline_name": self.name,
-                    "total_steps": len(self.steps),
-                }
-            else:
+            if not hasattr(first_step.step_class, "dispatch"):
                 raise ValueError(
                     f"Step {first_step.step_class.__name__} is not a dispatchable job"
                 )
 
+            pending = first_step.step_class.dispatch(
+                *first_step.args, **first_step.kwargs
+            )
+
+            if first_step.routing_key and hasattr(pending, "withRoutingKey"):
+                pending = pending.withRoutingKey(first_step.routing_key)
+
+            # Attach the rest of the chain if the dispatcher supports it.
+            if remaining_steps and hasattr(pending, "chain"):
+                chained = [
+                    step.step_class.dispatch_sync_payload(*step.args, **step.kwargs)
+                    if hasattr(step.step_class, "dispatch_sync_payload")
+                    else (step.step_class, step.args, step.kwargs, step.routing_key)
+                    for step in remaining_steps
+                ]
+                pending = pending.chain(chained)
+
+            job_id = getattr(pending, "job_id", pending)
+
+            Log.info(
+                f"Chain started: {first_step.step_class.__name__} "
+                f"({len(remaining_steps)} follow-ups) [{job_id}]",
+                category="cara.pipeline",
+            )
+
+            return {
+                "success": True,
+                "chain_started": True,
+                "first_job_id": job_id,
+                "pipeline_name": self.name,
+                "total_steps": len(self.steps),
+                "chained_steps": len(remaining_steps),
+            }
+
         except Exception as e:
-            Log.error(f"❌ Chain dispatch failed: {str(e)}", category="cara.pipeline")
+            Log.error(
+                f"Chain dispatch failed: {str(e)}",
+                category="cara.pipeline",
+                exc_info=True,
+            )
             return {"success": False, "error": str(e)}
 
     def _dispatch_parallel(self) -> Dict[str, Any]:

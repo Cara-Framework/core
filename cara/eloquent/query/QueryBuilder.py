@@ -240,9 +240,10 @@ class QueryBuilder(ObservesEvents):
         """Get the name of the table for this query."""
         return self._table.name
 
-    def get_connection(self):
-        """Get the connection class for this query."""
-        return self.connection_class
+    # NOTE: ``get_connection`` is defined later in this class and returns
+    # ``self._connection`` (the resolved connection instance). The earlier
+    # definition that returned ``self.connection_class`` was dead code and
+    # has been removed to avoid confusion.
 
     def begin(self):
         """Begin a new database transaction."""
@@ -302,9 +303,9 @@ class QueryBuilder(ObservesEvents):
             self.rollback()
             raise
 
-    def get_relation(self, key):
-        """Get the relationship instance for the given key on the owner model."""
-        return getattr(self.owner, key)
+    # NOTE: ``get_relation`` is defined later in this class with a more
+    # general signature (accepting an optional builder argument). Python
+    # silently shadows methods, so the version formerly here was dead code.
 
     def set_scope(self, name, callable):
         """
@@ -1026,10 +1027,10 @@ class QueryBuilder(ObservesEvents):
         self._wheres += ((QueryExpression(column, "=", None, "NULL", keyword="or")),)
         return self
 
-    def chunk(self, chunk_amount):
-        chunk_connection = self.new_connection()
-        for result in chunk_connection.select_many(self.to_sql(), (), chunk_amount):
-            yield self.prepare_result(result)
+    # NOTE: ``chunk`` is defined later in this class with a Laravel-style
+    # ``(chunk_size, callback)`` signature. The dead generator-style version
+    # previously here has been removed — it could not be reached because
+    # Python class bodies use last-definition-wins semantics.
 
     def where_not_null(self, column: str):
         """
@@ -2042,7 +2043,7 @@ class QueryBuilder(ObservesEvents):
 
         return self.prepare_result(result)
 
-    def first_or_create(self, wheres, creates: dict = None):
+    def first_or_create(self, wheres, creates: Optional[dict] = None):
         """
         Get the first record matching the attributes or create it.
 
@@ -2085,37 +2086,9 @@ class QueryBuilder(ObservesEvents):
     def sole_value(self, column: str, query=False):
         return self.sole()[column]
 
-    def first_or_fail(self, fields=None):
-        """Get the first result or raise ModelNotFoundException.
-
-        Like Laravel's firstOrFail().
-
-        Returns:
-            Model
-
-        Raises:
-            ModelNotFoundException: If no results found.
-        """
-        result = self.first(fields)
-        if result is None:
-            raise ModelNotFoundException()
-        return result
-
-    def find_or_fail(self, record_id, column=None):
-        """Find a record by primary key or raise ModelNotFoundException.
-
-        Like Laravel's findOrFail().
-
-        Returns:
-            Model
-
-        Raises:
-            ModelNotFoundException: If no results found.
-        """
-        result = self.find(record_id, column)
-        if result is None:
-            raise ModelNotFoundException()
-        return result
+    # NOTE: ``first_or_fail`` and ``find_or_fail`` are both defined later
+    # in this class. The earlier duplicates here were shadowed and could
+    # never be reached; they have been removed.
 
     def first_where(self, column, *args):
         """Gets the first record with the given key / value pair."""
@@ -2123,19 +2096,9 @@ class QueryBuilder(ObservesEvents):
             return self.where_not_null(column).first()
         return self.where(column, *args).first()
 
-    def tap(self, callback):
-        """Pass the builder to a callback and return the builder unchanged.
-
-        Useful for debugging or side effects without breaking the chain.
-
-        Example:
-            Product.active()
-                .tap(lambda q: print(q.to_sql()))
-                .where('status', 'active')
-                .get()
-        """
-        callback(self)
-        return self
+    # NOTE: ``tap`` is already defined earlier in this class — the duplicate
+    # definition that used to live here was identical and has been removed
+    # to avoid confusion.
 
     def last(self, column=None, query=False):
         """
@@ -2345,7 +2308,7 @@ class QueryBuilder(ObservesEvents):
                             from cara.facades import Log
 
                             Log.error(f"Error processing eager {eager_load}: {str(e)}")
-                            raise e
+                            raise
                     else:
                         # List/tuple of relations
                         for eager in eager_load:
@@ -2373,7 +2336,7 @@ class QueryBuilder(ObservesEvents):
                                 from cara.facades import Log
 
                                 Log.error(f"Error processing eager {eager}: {str(e)}")
-                                raise e
+                                raise
 
             if collection:
                 return hydrated_model if result else Collection([])
@@ -2420,14 +2383,14 @@ class QueryBuilder(ObservesEvents):
     def _map_related(self, related_result, related):
         return related.map_related(related_result)
 
-    def all(self, selects=[], query=False):
+    def all(self, selects=None, query=False):
         """
         Returns all records from the table.
 
         Returns:
             dictionary -- Returns a dictionary of results.
         """
-
+        selects = selects or []
         self.select(*selects)
 
         if query:
@@ -2437,13 +2400,14 @@ class QueryBuilder(ObservesEvents):
 
         return self.prepare_result(result, collection=True)
 
-    def get(self, selects=[]):
+    def get(self, selects=None):
         """
         Runs the select query built from the query builder.
 
         Returns:
             self
         """
+        selects = selects or []
         self.select(*selects)
         result = self.new_connection().query(self.to_qmark(), self._bindings)
 
@@ -2473,7 +2437,7 @@ class QueryBuilder(ObservesEvents):
             from cara.facades import Log
 
             Log.error(f"Eager relation register failed: {str(e)}")
-            raise e
+            raise
         return self
 
     def paginate(self, per_page, page=1):
@@ -2854,7 +2818,7 @@ class QueryBuilder(ObservesEvents):
             return result.get(column)
         return getattr(result, column, None)
 
-    def pluck(self, column: str, key_by: str = None):
+    def pluck(self, column: str, key_by: Optional[str] = None):
         """Get a Collection containing the values of a given column.
 
         Like Laravel's pluck(), returns a flat list of column values,

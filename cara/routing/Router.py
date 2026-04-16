@@ -5,7 +5,7 @@ Implements Laravel-style route lookup, including OPTIONS preflight for HTTP and 
 Supports route model binding for automatic model resolution.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Type
 
 from cara.exceptions import (
     MethodNotAllowedException,

@@ -59,10 +59,10 @@ class SchedulingProvider(DeferredProvider):
 
         try:
             driver = APSchedulerDriver(settings or {})
-        except ImportError:
+        except ImportError as e:
             raise DriverLibraryNotFoundException(
                 "APSchedulerDriver selected but 'apscheduler' is not installed."
-            )
+            ) from e
         except Exception as e:
             raise SchedulingException(
                 f"Failed to instantiate APSchedulerDriver: {e}"

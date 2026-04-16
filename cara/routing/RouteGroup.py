@@ -6,7 +6,7 @@ framework, allowing shared attributes like URL prefixes and middleware to be app
 multiple routes, making route management more efficient and maintainable.
 """
 
-from typing import List, Union
+from typing import List, Union, Optional
 
 from cara.support.Collection import flatten
 
@@ -17,7 +17,7 @@ class RouteGroup:
     def __init__(
         self,
         prefix: str = "",
-        middleware: Union[str, List[str]] = None,
+        middleware: Optional[Union[str, List[str]]] = None,
     ):
         self._prefix = prefix
         self._middleware = (

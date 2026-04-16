@@ -22,9 +22,9 @@ class MailChannel(BaseChannel):
     def __init__(
         self,
         mail_manager,
-        from_address: str = None,
-        from_name: str = None,
-        reply_to: str = None,
+        from_address: Optional[str] = None,
+        from_name: Optional[str] = None,
+        reply_to: Optional[str] = None,
     ):
         """
         Initialize mail channel.
@@ -165,9 +165,23 @@ class MailChannel(BaseChannel):
             return False
 
         except Exception as e:
-            # Log error (could integrate with Cara's logging)
-            print(f"Mail channel error: {e}")
+            self._emit_error("Mail channel error", e)
             return False
+
+    def _emit_error(self, message: str, error: Exception) -> None:
+        """Emit mail notification errors via Log facade with stderr fallback."""
+        try:
+            from cara.facades import Log
+
+            Log.error(
+                f"{message}: {error}",
+                category="cara.notifications.mail",
+                exc_info=True,
+            )
+        except Exception:
+            import sys
+
+            print(f"{message}: {error}", file=sys.stderr)
 
     def _get_recipient(self, notifiable, notification) -> Optional[str]:
         """

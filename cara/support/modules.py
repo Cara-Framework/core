@@ -10,9 +10,10 @@ Laravel config() style dynamic interface:
 """
 
 from .ModuleManager import ModuleManager
+from typing import Optional
 
 
-def modules(path: str = "", base: str = None) -> str:
+def modules(path: str = "", base: Optional[str] = None) -> str:
     """
     Dynamic module path resolver with Laravel-style interface.
 
@@ -113,24 +114,7 @@ def _get_smart_module_path(component: str) -> str:
             return ModuleManager.config_module(component.replace("config_", ""))
         elif component == "config":
             return ModuleManager.config_module()
-        elif component in [
-            "app",
-            "database",
-            "cache",
-            "mail",
-            "queue",
-            "session",
-            "filesystems",
-            "logging",
-            "broadcasting",
-            "auth",
-            "services",
-            "cors",
-            "view",
-        ]:
-            return ModuleManager.config_module(component)
-        else:
-            return ModuleManager.config_module(component)
+        return ModuleManager.config_module(component)
 
     # App components (default for most things)
     if component in app_patterns:
@@ -162,7 +146,7 @@ def get_functions(path: str):
 
 
 # Ultra-short aliases for power users
-def m(path: str = "", base: str = None) -> str:
+def m(path: str = "", base: Optional[str] = None) -> str:
     """Ultra-short alias for modules()."""
     return modules(path, base)
 

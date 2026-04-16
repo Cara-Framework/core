@@ -50,7 +50,7 @@ class RouteGeneratorCommand(CommandBase):
         self.parsed_routes = []
         self.backup_file = None
 
-    def handle(self, type: str = None):
+    def handle(self, type: Optional[str] = None):
         """
         Generate route definitions from enhanced controller docstring annotations.
 
@@ -393,13 +393,13 @@ class RouteGeneratorCommand(CommandBase):
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
         except Exception as e:
-            raise Exception(f"Cannot read file: {e}")
+            raise Exception(f"Cannot read file: {e}") from e
 
         # Parse AST to find class
         try:
             tree = ast.parse(content)
         except SyntaxError as e:
-            raise Exception(f"Python syntax error in file: {e}")
+            raise Exception(f"Python syntax error in file: {e}") from e
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
@@ -985,7 +985,7 @@ class RouteGeneratorCommand(CommandBase):
         return re.sub(r"\{(\w+)\}", r"@\1", path)
 
     def _build_route_params(
-        self, path: str, controller: str, name: str = None, middleware: List[str] = None
+        self, path: str, controller: str, name: Optional[str] = None, middleware: Optional[List[str]] = None
     ) -> List[str]:
         """Build route parameters list."""
         params = [f'"{path}"', f'"{controller}"']
@@ -1125,7 +1125,7 @@ class RouteGeneratorCommand(CommandBase):
                 except Exception:
                     pass
 
-            raise Exception(f"Failed to write routes file: {e}")
+            raise Exception(f"Failed to write routes file: {e}") from e
 
     def _test_generated_file(self, file_path: Path) -> bool:
         """Test the generated routes file."""

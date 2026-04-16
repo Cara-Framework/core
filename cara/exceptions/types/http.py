@@ -4,7 +4,7 @@ HTTP Exception Type for the Cara framework.
 This module defines exception types related to HTTP operations.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .base import CaraException
 
@@ -34,7 +34,7 @@ class HttpException(CaraException):
     status_code = 500
 
     def __init__(
-        self, message: str = "An error occurred", status_code: int = None, **kwargs
+        self, message: str = "An error occurred", status_code: Optional[int] = None, **kwargs
     ):
         super().__init__(message)
         # Use provided status_code or fall back to class attribute
@@ -90,3 +90,14 @@ class ResponseException(CaraException):
     """Thrown if there's a failure writing to the response stream."""
 
     pass
+
+
+__all__ = [
+    "HttpException",
+    "BadRequestException",
+    "RouteNotFoundException",
+    "MethodNotAllowedException",
+    "RouteMiddlewareNotFoundException",
+    "ResponseException",
+]
+

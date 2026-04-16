@@ -68,7 +68,7 @@ class ApiKeyGuard(Guard):
         """Check if the current request is authenticated."""
         try:
             return self.user() is not None
-        except:
+        except Exception:
             return False
 
     def guest(self) -> bool:

@@ -224,3 +224,21 @@ class Queue:
             return instance.handle()
         else:
             raise ValueError(f"Cannot execute job: {job!r} has no handle() method")
+
+    # Python-style aliases for Laravel-named APIs above.
+    def dispatch_after(
+        self,
+        job: Any,
+        delay: Any,
+        *args: Any,
+        driver_name: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """Python naming alias for :meth:`dispatchAfter`."""
+        return self.dispatchAfter(
+            job, delay, *args, driver_name=driver_name, **kwargs
+        )
+
+    def dispatch_now(self, job: Any, *args: Any, **kwargs: Any):
+        """Python naming alias for :meth:`dispatchNow`."""
+        return self.dispatchNow(job, *args, **kwargs)

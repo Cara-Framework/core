@@ -74,7 +74,7 @@ class LogChannel(BaseChannel):
             return True
 
         except Exception as e:
-            print(f"Log channel error: {e}")
+            self._emit_error("Log channel error", e)
             return True  # Don't fail for logging errors
 
     def _get_notifiable_id(self, notifiable) -> Any:
@@ -141,7 +141,22 @@ class LogChannel(BaseChannel):
                         pass  # Ignore file write errors
 
         except Exception as e:
-            print(f"Log write error: {e}")
+            self._emit_error("Log write error", e)
+
+    def _emit_error(self, message: str, error: Exception) -> None:
+        """Emit notification-channel errors via Log facade with stderr fallback."""
+        try:
+            from cara.facades import Log
+
+            Log.error(
+                f"{message}: {error}",
+                category="cara.notifications.log",
+                exc_info=True,
+            )
+        except Exception:
+            import sys
+
+            print(f"{message}: {error}", file=sys.stderr)
 
     def clear_log(self) -> bool:
         """

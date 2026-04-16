@@ -2,7 +2,6 @@ class Platform:
     foreign_key_actions = {
         "cascade": "CASCADE",
         "set null": "SET NULL",
-        "cascade": "CASCADE",
         "restrict": "RESTRICT",
         "no action": "NO ACTION",
         "default": "SET DEFAULT",
@@ -22,7 +21,7 @@ class Platform:
 
             if column.default_value in (0,):
                 default = f" DEFAULT {column.default_value}"
-            elif column.default_value in self.premapped_defaults.keys():
+            elif column.default_value in self.premapped_defaults:
                 default = self.premapped_defaults.get(column.default_value)
             elif column.default_value:
                 if isinstance(column.default_value, (str,)) and not column.default_is_raw:

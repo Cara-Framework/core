@@ -242,9 +242,9 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             }
 
         except Exception as e:
-            raise Exception(f"Failed to configure schedule: {e}")
+            raise Exception(f"Failed to configure schedule: {e}") from e
 
-    def _queue_command(self, command_target: Any, driver_name: str = None):
+    def _queue_command(self, command_target: Any, driver_name: Optional[str] = None):
         """Queue command for execution."""
         instance = (
             self.application.make(command_target)
@@ -347,7 +347,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
                     time.sleep(1)
 
         except Exception as e:
-            raise Exception(f"Failed to start scheduler: {e}")
+            raise Exception(f"Failed to start scheduler: {e}") from e
 
     def _show_final_stats(self):
         """Show final scheduler statistics."""

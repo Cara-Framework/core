@@ -142,7 +142,7 @@ class DatabaseChannel(BaseChannel):
         query_builder.create(record)
         return True
 
-    def mark_as_read(self, notifiable, notification_ids: list = None) -> bool:
+    def mark_as_read(self, notifiable, notification_ids: Optional[list] = None) -> bool:
         """
         Mark notifications as read.
 

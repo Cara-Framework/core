@@ -3,6 +3,7 @@ SelectExpression - Simple expression class for SELECT statements
 
 Handles SELECT column expressions in a clean, simple way.
 """
+from typing import Optional
 
 
 class SelectExpression:
@@ -11,7 +12,7 @@ class SelectExpression:
     Represents a column selection with optional alias and raw SQL support.
     """
 
-    def __init__(self, column: str, alias: str = None, raw: bool = False):
+    def __init__(self, column: str, alias: Optional[str] = None, raw: bool = False):
         self.column = column
         self.alias = alias
         self.raw = raw

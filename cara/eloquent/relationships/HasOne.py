@@ -16,23 +16,37 @@ class HasOne(BaseRelationship):
         return self
     
     def __get__(self, instance, owner):
-        """Property access: return eager-loaded data if available, else return QueryBuilder."""
+        """Property access: return eager-loaded Model or lazy-load and cache.
+
+        Laravel behavior: accessing $model->phone returns a Model instance or None,
+        not a QueryBuilder. The result is cached in _relations for subsequent access.
+        """
         if instance is None:
             return self
 
         func = getattr(self, '_func', None) or getattr(self, 'fn', None)
-        if func and hasattr(func, '__name__'):
-            attr_name = func.__name__
+        attr_name = func.__name__ if func and hasattr(func, '__name__') else None
+
+        # Return cached relation if already loaded (eager or previous lazy load)
+        if attr_name:
             relations = getattr(instance, '_relations', None)
             if relations is not None and attr_name in relations:
                 return relations[attr_name]
 
-        # Return QueryBuilder with proper foreign key filter for method chaining
+        # Lazy load: execute query and cache the result (Laravel behavior)
         builder = self.get_builder()
-        return builder.where(
+        result = builder.where(
             self.foreign_key,
             instance.__attributes__[self.local_key],
-        )
+        ).first()
+
+        # Cache in _relations so subsequent access doesn't re-query
+        if attr_name:
+            if not hasattr(instance, '_relations') or instance._relations is None:
+                instance.__dict__.setdefault('_relations', {})
+            instance._relations[attr_name] = result
+
+        return result
 
     def __init__(self, fn, foreign_key=None, local_key=None):
         if isinstance(fn, str):

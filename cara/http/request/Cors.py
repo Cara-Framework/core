@@ -14,7 +14,7 @@ class Cors:
     validating origins, and managing CORS headers in both preflight and actual requests.
     """
 
-    def __init__(self, application: "Application", options: dict = {}):
+    def __init__(self, application: "Application", options: dict | None = None):
         """
         Initialize CORS service.
 
@@ -23,12 +23,12 @@ class Cors:
             options: CORS configuration options
         """
         self.application = application
-        self.options = {}
+        self.options: dict = {}
         self.allow_all_headers = False
         self.allow_all_methods = False
         self.allow_all_origins = False
 
-        self.set_options(options)
+        self.set_options(options or {})
 
     def set_options(self, options: dict) -> "Cors":
         """

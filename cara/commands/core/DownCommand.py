@@ -110,7 +110,7 @@ class DownCommand(CommandBase):
                     raise ValueError("Retry after must be non-negative")
                 config["retry_after"] = retry_seconds
             except ValueError as e:
-                raise Exception(f"Invalid retry_after value: {e}")
+                raise Exception(f"Invalid retry_after value: {e}") from e
 
         if allow:
             ips = [ip.strip() for ip in allow.split(",") if ip.strip()]
@@ -162,7 +162,7 @@ class DownCommand(CommandBase):
             self._show_usage_tips()
 
         except Exception as e:
-            raise Exception(f"Failed to activate maintenance mode: {e}")
+            raise Exception(f"Failed to activate maintenance mode: {e}") from e
 
     def _show_usage_tips(self) -> None:
         """Show helpful usage tips after activation."""
@@ -197,4 +197,4 @@ class DownCommand(CommandBase):
             with open(self.maintenance_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, default=str)
         except Exception as e:
-            raise Exception(f"Failed to create maintenance file: {e}")
+            raise Exception(f"Failed to create maintenance file: {e}") from e

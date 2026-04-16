@@ -94,7 +94,7 @@ class DateManager:
     def format(
         cls,
         date_value: Union[pendulum.DateTime, datetime, str, int, float],
-        format_str: str = None,
+        format_str: Optional[str] = None,
         timezone_str: Optional[str] = None,
     ) -> Optional[str]:
         """
@@ -346,7 +346,7 @@ class DateManager:
 
     @classmethod
     def to_user_timezone(
-        cls, date_value: Any, user_timezone: str = None
+        cls, date_value: Any, user_timezone: Optional[str] = None
     ) -> Optional[pendulum.DateTime]:
         """
         Convert UTC date to user timezone for display.
@@ -379,7 +379,7 @@ class DateManager:
 
     @classmethod
     def to_utc_for_database(
-        cls, date_value: Any, user_timezone: str = None
+        cls, date_value: Any, user_timezone: Optional[str] = None
     ) -> Optional[pendulum.DateTime]:
         """
         Convert user timezone date to UTC for database storage.
@@ -412,7 +412,7 @@ class DateManager:
 
     @classmethod
     def format_for_api(
-        cls, date_value: Any, user_timezone: str = None, format_str: str = None
+        cls, date_value: Any, user_timezone: Optional[str] = None, format_str: Optional[str] = None
     ) -> Optional[str]:
         """
         Format date for API response in user timezone.

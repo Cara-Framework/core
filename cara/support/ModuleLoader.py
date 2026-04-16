@@ -31,19 +31,28 @@ def load(
         error_message = (
             f"'{module_path}' not found OR error when importing this module: {str(e)}"
         )
-        print("Warning: " + error_message)
+        try:
+            from cara.facades import Log
+
+            Log.warning(error_message, category="cara.support.module_loader")
+        except Exception:
+            import sys
+
+            print("Warning: " + error_message, file=sys.stderr)
 
         if raise_exception:
-            raise LoaderNotFoundException(error_message)
+            raise LoaderNotFoundException(error_message) from e
         return None
 
     if object_name is None:
         return module
-    else:
-        try:
-            return getattr(module, object_name)
-        except KeyError:
-            if raise_exception:
-                raise LoaderNotFoundException(f"{object_name} not found in {module_path}")
-            else:
-                return default
+
+    # getattr raises AttributeError when the attribute is missing — not
+    # KeyError. The previous code swallowed the wrong exception and then
+    # crashed on a legitimately-missing attribute.
+    try:
+        return getattr(module, object_name)
+    except AttributeError:
+        if raise_exception:
+            raise LoaderNotFoundException(f"{object_name} not found in {module_path}")
+        return default

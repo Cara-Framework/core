@@ -9,3 +9,9 @@ from .base import CaraException
 
 class EncryptionException(CaraException):
     pass
+
+
+__all__ = [
+    "EncryptionException",
+]
+

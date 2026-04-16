@@ -107,7 +107,7 @@ class JWTGenerateCommand(CommandBase):
                 self.warning("⚠️  TTL is very long (over 1 year)")
             return ttl_seconds
         except ValueError as e:
-            raise ValueError(f"Invalid TTL value: {e}")
+            raise ValueError(f"Invalid TTL value: {e}") from e
 
     def _parse_payload(self, payload: Optional[str]) -> Dict[str, Any]:
         """Parse additional payload JSON."""
@@ -120,7 +120,7 @@ class JWTGenerateCommand(CommandBase):
                 raise ValueError("Payload must be a JSON object")
             return parsed
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON payload: {e}")
+            raise ValueError(f"Invalid JSON payload: {e}") from e
 
     def _find_user(self, identifier: str):
         """Find user by ID or email."""
@@ -146,13 +146,13 @@ class JWTGenerateCommand(CommandBase):
                 user = User.find(identifier)
                 if user:
                     return user
-            except:
+            except Exception:
                 pass
 
             return None
 
         except Exception as e:
-            raise Exception(f"Error finding user: {e}")
+            raise Exception(f"Error finding user: {e}") from e
 
     def _show_user_info(self, user):
         """Display user information."""
@@ -364,5 +364,5 @@ class JWTGenerateCommand(CommandBase):
         try:
             dt = pendulum.from_timestamp(timestamp)
             return dt.to_datetime_string()
-        except:
+        except Exception:
             return str(timestamp)

@@ -20,7 +20,7 @@ class CacheLock:
     Prevents race conditions in distributed systems using cache as storage.
     """
 
-    def __init__(self, cache, key: str, timeout: int = 86400, owner: str = None):
+    def __init__(self, cache, key: str, timeout: int = 86400, owner: Optional[str] = None):
         """
         Initialize a cache lock.
 
@@ -140,7 +140,7 @@ class Cache:
         """Register a driver instance under `driver_name`."""
         self._stores[driver_name] = driver
 
-    def driver(self, name: str = None) -> Cache:
+    def driver(self, name: Optional[str] = None) -> Cache:
         """
         Get a cache driver instance by name.
 
@@ -259,7 +259,7 @@ class Cache:
         self,
         key: str,
         timeout: int = 86400,
-        owner: str = None,
+        owner: Optional[str] = None,
         driver_name: Optional[str] = None,
     ) -> CacheLock:
         """

@@ -23,3 +23,11 @@ class SchedulingException(CaraException):
     """General exception for scheduling processing errors."""
 
     pass
+
+
+__all__ = [
+    "SchedulingConfigurationException",
+    "DriverLibraryNotFoundException",
+    "SchedulingException",
+]
+

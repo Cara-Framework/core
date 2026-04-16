@@ -8,12 +8,12 @@ import json
 import logging
 import pickle
 import uuid
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pendulum
 import pika
 
-from cara.exceptions import DriverLibraryNotFoundException, QueueException
+from cara.exceptions import DriverLibraryNotFoundException
 from cara.facades import Log
 from cara.queues.contracts.Queue import Queue
 from cara.support.Console import HasColoredOutput
@@ -150,7 +150,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         options: Dict[str, Any] = None,
         attempts: int = 3,
         backoff: str = "exponential"
-    ) -> Union[str, List[str]]:
+    ) -> Optional[Union[str, List[str]]]:
         """
         Retry a failed job with optional exponential backoff.
 
@@ -282,7 +282,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             "AMQPDriver.consume() is not used. Use 'python craft queue:work' command."
         )
 
-    def _create_job_record(self, job, job_id: str, opts: Dict[str, Any]) -> int:
+    def _create_job_record(self, job, job_id: str, opts: Dict[str, Any]) -> Optional[int]:
         """Create job record via JobTracker for consistent tracking."""
         try:
             tracker = self._resolve_job_tracker()
@@ -434,7 +434,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         return messages
 
     def replay_dead_letter(
-        self, queue_name: str, message_id: str = None
+        self, queue_name: str, message_id: Optional[str] = None
     ) -> int:
         """
         Replay dead letter messages back to original queue.

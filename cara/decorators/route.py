@@ -10,7 +10,6 @@ Supported extras (passed as kwargs):
   - middleware: List[Any]      # list of middleware classes or callables
 """
 
-import traceback
 from functools import wraps
 from typing import Any, Callable, List, Optional, TypedDict, Union
 
@@ -120,8 +119,13 @@ class RouteDecorator:
                     result = await func(*args, **kwargs)
                     return result
                 except Exception as e:
-                    print(f"Exception in route handler: {e}")
-                    print(traceback.format_exc())
+                    from cara.facades import Log
+
+                    Log.error(
+                        f"Exception in route handler: {e}",
+                        category="cara.routing",
+                        exc_info=True,
+                    )
                     raise
 
             # Store route metadata for registration

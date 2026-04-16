@@ -32,7 +32,7 @@ class Bus:
     """
 
     @staticmethod
-    async def dispatch(job: "Queueable", routing_key: str = None) -> Any:
+    async def dispatch(job: "Queueable", routing_key: Optional[str] = None) -> Any:
         """
         Dispatch job with automatic sync/async handling.
 

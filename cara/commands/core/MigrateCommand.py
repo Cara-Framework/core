@@ -4,6 +4,7 @@ from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.migrations import Migration
 from cara.support import paths
+from typing import Optional
 
 
 @command(
@@ -102,7 +103,7 @@ class MigrateCommand(CommandBase):
         )
 
     def _show_configuration(
-        self, connection: str, directory: str, schema: str = None, show_mode: bool = False
+        self, connection: str, directory: str, schema: Optional[str] = None, show_mode: bool = False
     ):
         """Display migration configuration."""
         self.info("Configuration:")

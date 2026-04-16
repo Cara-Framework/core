@@ -5,7 +5,7 @@ This file contains the script runner for executing Tinker scripts with Rich inte
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -20,7 +20,7 @@ from .Shell import Shell
 class ScriptRunner:
     """Tinker script runner with Rich integration."""
 
-    def __init__(self, shell: Shell = None):
+    def __init__(self, shell: Optional[Shell] = None):
         """Initialize script runner with Rich console."""
         self.shell = shell or Shell()
         self.repl = Repl(self.shell.namespace)

@@ -135,7 +135,7 @@ class MakeControllerCommand(CommandBase):
             self._show_usage_tips(controller_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write controller file: {e}")
+            raise Exception(f"Failed to write controller file: {e}") from e
 
     def _generate_controller_code(self, controller_info: dict) -> str:
         """Generate the controller class code."""

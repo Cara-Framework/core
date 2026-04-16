@@ -1,16 +1,23 @@
 """
-Security Cast Types for Cara ORM
+Security Cast Types for Cara ORM.
 
 Provides hashing and encryption capabilities for sensitive data.
+Encryption delegates to the ``Crypt`` facade (AES-CBC) registered in the
+container by :class:`EncryptionProvider`.
 """
 
 import hashlib
+from typing import Any, Optional
 
 from .base import BaseCast
 
 
 class HashCast(BaseCast):
-    """Cast for hashed values (passwords, etc.)."""
+    """Cast for hashed values (passwords, etc.).
+
+    Writes the value through a one-way hash; reads pass the hash through
+    untouched, because hashed values cannot be reversed by design.
+    """
 
     ALGORITHMS = {
         "bcrypt": "_hash_bcrypt",
@@ -21,41 +28,45 @@ class HashCast(BaseCast):
 
     def __init__(self, algorithm: str = "bcrypt"):
         self.algorithm = algorithm.lower()
+        if self.algorithm not in self.ALGORITHMS:
+            raise ValueError(
+                f"Unknown hash algorithm '{algorithm}'. "
+                f"Supported: {sorted(self.ALGORITHMS)}"
+            )
 
-    def get(self, value):
-        """Always return the hash (never unhash for security)."""
+    def get(self, value: Any) -> Any:
+        """Return the hash as-is; hashes are one-way."""
         return value
 
-    def set(self, value):
-        """Hash the value using specified algorithm."""
+    def set(self, value: Any) -> Optional[str]:
+        """Hash the value using the configured algorithm."""
         if value is None:
             return None
 
-        hash_method = self.ALGORITHMS.get(self.algorithm, "_hash_sha256")
+        hash_method = self.ALGORITHMS[self.algorithm]
         return getattr(self, hash_method)(value)
 
-    def _hash_bcrypt(self, value):
+    def _hash_bcrypt(self, value: Any) -> str:
         """Hash using bcrypt (recommended for passwords)."""
         try:
             import bcrypt
+        except ImportError as exc:
+            raise RuntimeError(
+                "bcrypt is required for HashCast(algorithm='bcrypt'). "
+                "Install it with `pip install bcrypt`."
+            ) from exc
 
-            if isinstance(value, str):
-                value = value.encode("utf-8")
-            return bcrypt.hashpw(value, bcrypt.gensalt()).decode("utf-8")
-        except ImportError:
-            # Fallback to SHA256 if bcrypt not available
-            return self._hash_sha256(value)
+        payload = value.encode("utf-8") if isinstance(value, str) else bytes(value)
+        return bcrypt.hashpw(payload, bcrypt.gensalt()).decode("utf-8")
 
-    def _hash_sha256(self, value):
-        """Hash using SHA256."""
+    def _hash_sha256(self, value: Any) -> str:
         return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
-    def _hash_sha512(self, value):
-        """Hash using SHA512."""
+    def _hash_sha512(self, value: Any) -> str:
         return hashlib.sha512(str(value).encode("utf-8")).hexdigest()
 
-    def _hash_md5(self, value):
-        """Hash using MD5 (not recommended for passwords)."""
+    def _hash_md5(self, value: Any) -> str:
+        """Hash using MD5 — provided for legacy interop only; do not use for passwords."""
         return hashlib.md5(str(value).encode("utf-8")).hexdigest()
 
 
@@ -63,86 +74,59 @@ class EncryptedCast(BaseCast):
     """
     Cast for encrypted field values.
 
-    Note: This is a placeholder implementation.
-    In production, integrate with a proper encryption service.
+    Uses the :class:`cara.facades.Crypt` facade, which is backed by the
+    framework's AES-CBC :class:`~cara.encryption.Crypt` implementation.
+    Values are encrypted on write and decrypted on read.
     """
 
-    def __init__(self, key: str = None):
-        self.key = key or "default-encryption-key"  # Should be from config
+    def __init__(self, key: Optional[str] = None):
+        # ``key`` is accepted for Laravel parity (``__casts__ = {"field": "encrypted:my_key"}``)
+        # and, when provided, creates an ad-hoc Crypt instance instead of the
+        # container-bound default. When None, the bound Crypt facade is used.
+        self._explicit_key = key
 
-    def get(self, value):
-        """Decrypt value."""
+    def _cipher(self):
+        if self._explicit_key is not None:
+            from cara.encryption.Crypt import Crypt as CryptImpl
+
+            return CryptImpl(self._explicit_key)
+
+        from cara.facades import Crypt
+
+        return Crypt
+
+    def get(self, value: Any) -> Any:
+        """Decrypt the stored value."""
         if value is None:
             return None
+        return self._cipher().decrypt(value)
 
-        # TODO: Implement actual decryption
-        # This is a placeholder - DO NOT USE IN PRODUCTION
-        try:
-            return self._simple_decrypt(value)
-        except Exception:
-            return value
-
-    def set(self, value):
-        """Encrypt value."""
+    def set(self, value: Any) -> Optional[str]:
+        """Encrypt the value before persisting."""
         if value is None:
             return None
-
-        # TODO: Implement actual encryption
-        # This is a placeholder - DO NOT USE IN PRODUCTION
-        try:
-            return self._simple_encrypt(str(value))
-        except Exception:
-            return str(value)
-
-    def _simple_encrypt(self, value):
-        """
-        Simple XOR encryption (PLACEHOLDER ONLY).
-
-        WARNING: This is NOT secure! Use proper encryption in production.
-        """
-        key_bytes = self.key.encode("utf-8")
-        value_bytes = value.encode("utf-8")
-
-        encrypted = bytearray()
-        for i, byte in enumerate(value_bytes):
-            encrypted.append(byte ^ key_bytes[i % len(key_bytes)])
-
-        return encrypted.hex()
-
-    def _simple_decrypt(self, encrypted_hex):
-        """
-        Simple XOR decryption (PLACEHOLDER ONLY).
-
-        WARNING: This is NOT secure! Use proper encryption in production.
-        """
-        key_bytes = self.key.encode("utf-8")
-        encrypted_bytes = bytes.fromhex(encrypted_hex)
-
-        decrypted = bytearray()
-        for i, byte in enumerate(encrypted_bytes):
-            decrypted.append(byte ^ key_bytes[i % len(key_bytes)])
-
-        return decrypted.decode("utf-8")
+        return self._cipher().encrypt(str(value))
 
 
 class TokenCast(BaseCast):
     """Cast for generating and validating tokens."""
 
     def __init__(self, length: int = 32):
+        if length <= 0:
+            raise ValueError("Token length must be positive")
         self.length = length
 
-    def get(self, value):
+    def get(self, value: Any) -> Any:
         """Return token as-is."""
         return value
 
-    def set(self, value):
-        """Generate token if value is None, otherwise return value."""
+    def set(self, value: Any) -> str:
+        """Generate a token when the value is None, otherwise coerce to str."""
         if value is None:
             return self._generate_token()
         return str(value)
 
-    def _generate_token(self):
-        """Generate a random token."""
+    def _generate_token(self) -> str:
         import secrets
 
         return secrets.token_urlsafe(self.length)

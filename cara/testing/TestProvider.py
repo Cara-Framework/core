@@ -6,7 +6,7 @@ integration for current Cara framework features.
 """
 
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class TestProvider:
@@ -76,8 +76,10 @@ class TestProvider:
         }
 
         for facade_name, service_key in facade_mappings.items():
+            # Bind service_key as default arg to avoid late-binding closure bug
             self.bind(
-                f"test.facade.{facade_name.lower()}", lambda: self.make(service_key)
+                f"test.facade.{facade_name.lower()}",
+                lambda key=service_key: self.make(key),
             )
 
     def register_test_utilities(self):
@@ -193,7 +195,7 @@ class TestProvider:
                 """Run test-specific migrations."""
                 try:
                     # Integration with Cara migration system
-                    from cara.facades import DB
+                    from cara.facades import DB  # noqa: F401
 
                     # Run migrations in test mode
                     print("[TEST] Running test migrations (mocked)")
@@ -229,24 +231,24 @@ class TestProvider:
                 self.cookies = {}
                 self.middleware_stack = []
 
-            async def get(self, url: str, headers: Dict = None):
+            async def get(self, url: str, headers: Optional[Dict] = None):
                 """Make GET request with middleware simulation."""
                 return await self.make_request("GET", url, headers=headers)
 
-            async def post(self, url: str, data: Dict = None, headers: Dict = None):
+            async def post(self, url: str, data: Optional[Dict] = None, headers: Optional[Dict] = None):
                 """Make POST request with validation testing."""
                 return await self.make_request("POST", url, data=data, headers=headers)
 
-            async def put(self, url: str, data: Dict = None, headers: Dict = None):
+            async def put(self, url: str, data: Optional[Dict] = None, headers: Optional[Dict] = None):
                 """Make PUT request."""
                 return await self.make_request("PUT", url, data=data, headers=headers)
 
-            async def delete(self, url: str, headers: Dict = None):
+            async def delete(self, url: str, headers: Optional[Dict] = None):
                 """Make DELETE request."""
                 return await self.make_request("DELETE", url, headers=headers)
 
             async def make_request(
-                self, method: str, url: str, data: Dict = None, headers: Dict = None
+                self, method: str, url: str, data: Optional[Dict] = None, headers: Optional[Dict] = None
             ):
                 """Make HTTP request with enhanced testing features."""
                 from .TestResponse import TestResponse
@@ -285,7 +287,7 @@ class TestProvider:
                 else:
                     return 200
 
-            def build_response_headers(self, request_headers: Dict = None) -> Dict:
+            def build_response_headers(self, request_headers: Optional[Dict] = None) -> Dict:
                 """Build response headers with CORS and security headers."""
                 return {
                     "Content-Type": "application/json",
@@ -298,7 +300,7 @@ class TestProvider:
                 }
 
             def build_response_content(
-                self, method: str, url: str, data: Dict = None
+                self, method: str, url: str, data: Optional[Dict] = None
             ) -> str:
                 """Build response content based on request."""
                 import json
@@ -314,7 +316,7 @@ class TestProvider:
                 return json.dumps(response_obj)
 
             def build_json_response(
-                self, method: str, url: str, data: Dict = None
+                self, method: str, url: str, data: Optional[Dict] = None
             ) -> Dict:
                 """Build JSON response object."""
                 response_obj = {
@@ -387,7 +389,7 @@ class TestProvider:
                 """Define sequence for generating unique values."""
                 self.sequences[name] = sequence_func
 
-            def create(self, model_name: str, attributes: Dict = None, count: int = 1):
+            def create(self, model_name: str, attributes: Optional[Dict] = None, count: int = 1):
                 """Create model instance(s)."""
                 if model_name not in self.definitions:
                     raise ValueError(f"No factory defined for {model_name}")
@@ -399,7 +401,7 @@ class TestProvider:
                         self._create_single(model_name, attributes) for _ in range(count)
                     ]
 
-            def _create_single(self, model_name: str, attributes: Dict = None):
+            def _create_single(self, model_name: str, attributes: Optional[Dict] = None):
                 """Create single model instance."""
                 factory_func = self.definitions[model_name]
                 instance = factory_func()
@@ -411,11 +413,11 @@ class TestProvider:
 
                 return instance
 
-            def make(self, model_name: str, count: int = 1, attributes: Dict = None):
+            def make(self, model_name: str, count: int = 1, attributes: Optional[Dict] = None):
                 """Make instances without persisting."""
                 return self.create(model_name, attributes, count)
 
-            def create_for_user(self, user, model_name: str, attributes: Dict = None):
+            def create_for_user(self, user, model_name: str, attributes: Optional[Dict] = None):
                 """Create model instance associated with user."""
                 attributes = attributes or {}
                 attributes["user_id"] = getattr(user, "id", user)
@@ -433,7 +435,7 @@ class TestProvider:
                 self.seeders = {}
                 self.dependencies = {}
 
-            def register(self, name: str, seeder_func, dependencies: List[str] = None):
+            def register(self, name: str, seeder_func, dependencies: Optional[List[str]] = None):
                 """Register seeder with dependencies."""
                 self.seeders[name] = seeder_func
                 self.dependencies[name] = dependencies or []
@@ -610,7 +612,7 @@ class TestProvider:
             def __init__(self):
                 self.executed_commands = []
 
-            async def execute_craft_command(self, command: str, args: List[str] = None):
+            async def execute_craft_command(self, command: str, args: Optional[List[str]] = None):
                 """Execute craft command for testing."""
                 full_command = f"craft {command}"
                 if args:
@@ -675,7 +677,7 @@ class TestProvider:
                 name: str,
                 path: str,
                 methods: List[str],
-                middleware: List[str] = None,
+                middleware: Optional[List[str]] = None,
             ):
                 """Register route for testing."""
                 self.registered_routes[name] = {

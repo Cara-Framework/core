@@ -5,7 +5,7 @@ Laravel-style streaming response support for HTTP responses.
 Handles chunked transfers and real-time data streaming.
 """
 
-from typing import Any, AsyncGenerator, Callable, Dict, List
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from .BaseResponse import BaseResponse
 from .HeaderManager import HeaderManager
@@ -35,7 +35,7 @@ class StreamingResponse:
         send: Callable,
         status: int = 200,
         content_type: str = "application/octet-stream",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Laravel-style streaming response.
@@ -108,7 +108,7 @@ class StreamingResponse:
         data_generator: AsyncGenerator[Any, None],
         send: Callable,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Stream JSON data line by line (JSONL format).
@@ -139,7 +139,7 @@ class StreamingResponse:
         event_generator: AsyncGenerator[Dict[str, Any], None],
         send: Callable,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Stream Server-Sent Events (SSE).
@@ -181,8 +181,8 @@ class StreamingResponse:
         filename: str,
         send: Callable,
         content_type: str = "application/octet-stream",
-        content_length: int = None,
-        headers: Dict[str, str] = None,
+        content_length: Optional[int] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Stream file download.
@@ -218,7 +218,7 @@ class StreamingResponse:
         data_generator: AsyncGenerator[List[str], None],
         filename: str,
         send: Callable,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Stream CSV data.
@@ -294,7 +294,7 @@ class StreamingResponse:
         template_generator: AsyncGenerator[str, None],
         send: Callable,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Stream HTML template chunks for progressive rendering.

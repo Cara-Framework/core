@@ -111,7 +111,7 @@ class GenerateKeyCommand(CommandBase):
                 raise ValueError("Length should not exceed 256")
             return key_length
         except ValueError as e:
-            raise Exception(f"Invalid length parameter: {e}")
+            raise Exception(f"Invalid length parameter: {e}") from e
 
     def _parse_encoding(self, encoding: Optional[str]) -> str:
         """Parse and validate encoding parameter."""
@@ -212,7 +212,7 @@ class GenerateKeyCommand(CommandBase):
             self.info("   • Backup your .env file before making changes in production")
 
         except Exception as e:
-            raise Exception(f"Failed to update application key: {e}")
+            raise Exception(f"Failed to update application key: {e}") from e
 
     def _update_key_in_file(self, new_key: str) -> bool:
         """Update APP_KEY in .env file, return True if key was replaced, False if added."""
@@ -220,7 +220,7 @@ class GenerateKeyCommand(CommandBase):
             with open(self.env_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
         except Exception as e:
-            raise Exception(f"Failed to read .env file: {e}")
+            raise Exception(f"Failed to read .env file: {e}") from e
 
         new_lines = []
         key_replaced = False
@@ -240,7 +240,7 @@ class GenerateKeyCommand(CommandBase):
             with open(self.env_file, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
         except Exception as e:
-            raise Exception(f"Failed to write .env file: {e}")
+            raise Exception(f"Failed to write .env file: {e}") from e
 
         return key_replaced
 

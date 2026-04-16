@@ -34,13 +34,12 @@ class RedisCacheDriver(Cache):
         self._default_ttl = default_ttl
         self._validate_connection_params(host, port, db)
         try:
-            global redis
             import redis
-        except ImportError:
+        except ImportError as e:
             raise CacheConfigurationException(
                 "redis is required for RedisCacheDriver. "
                 "Please install it with: pip install redis"
-            )
+            ) from e
         self._client = redis.Redis(host=host, port=port, db=db, password=password)
 
     def _validate_connection_params(self, host: str, port: int, db: int) -> None:

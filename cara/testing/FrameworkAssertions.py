@@ -4,14 +4,14 @@ Framework Assertions - Cara-specific testing assertions
 This file provides assertion methods specifically designed for testing Cara framework features.
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 
 
 class FrameworkAssertions:
     """Cara framework-specific assertions for testing."""
 
     # Facade Assertions
-    def assert_facade_called(self, facade_mock, method_name: str, times: int = None):
+    def assert_facade_called(self, facade_mock, method_name: str, times: Optional[int] = None):
         """Assert that facade method was called."""
         method_mock = getattr(facade_mock, method_name)
         if times is not None:
@@ -34,20 +34,20 @@ class FrameworkAssertions:
 
     # Mail Assertions
     def assert_mail_sent(
-        self, fake_mailer, to: str = None, subject: str = None, count: int = None
+        self, fake_mailer, to: Optional[str] = None, subject: Optional[str] = None, count: Optional[int] = None
     ):
         """Assert that mail was sent."""
         fake_mailer.assert_sent(to=to, subject=subject, count=count)
 
-    def assert_mail_not_sent(self, fake_mailer, to: str = None, subject: str = None):
+    def assert_mail_not_sent(self, fake_mailer, to: Optional[str] = None, subject: Optional[str] = None):
         """Assert that mail was not sent."""
         fake_mailer.assert_not_sent(to=to, subject=subject)
 
-    def assert_mail_queued(self, fake_queue, count: int = None):
+    def assert_mail_queued(self, fake_queue, count: Optional[int] = None):
         """Assert that mail was queued."""
         fake_queue.assert_pushed(job="SendMailJob", count=count)
 
-    def assert_mail_contains(self, fake_mailer, content: str, to: str = None):
+    def assert_mail_contains(self, fake_mailer, content: str, to: Optional[str] = None):
         """Assert that sent mail contains specific content."""
         matching_emails = fake_mailer.sent_emails
         if to:
@@ -60,12 +60,12 @@ class FrameworkAssertions:
 
     # Queue Assertions
     def assert_job_pushed(
-        self, fake_queue, job_name: str = None, queue: str = None, count: int = None
+        self, fake_queue, job_name: Optional[str] = None, queue: Optional[str] = None, count: Optional[int] = None
     ):
         """Assert that job was pushed to queue."""
         fake_queue.assert_pushed(job=job_name, queue=queue, count=count)
 
-    def assert_job_not_pushed(self, fake_queue, job_name: str = None, queue: str = None):
+    def assert_job_not_pushed(self, fake_queue, job_name: Optional[str] = None, queue: Optional[str] = None):
         """Assert that job was not pushed to queue."""
         fake_queue.assert_not_pushed(job=job_name, queue=queue)
 
@@ -85,8 +85,8 @@ class FrameworkAssertions:
         self,
         fake_notification,
         notifiable=None,
-        notification_type: str = None,
-        count: int = None,
+        notification_type: Optional[str] = None,
+        count: Optional[int] = None,
     ):
         """Assert that notification was sent."""
         fake_notification.assert_sent(
@@ -94,7 +94,7 @@ class FrameworkAssertions:
         )
 
     def assert_notification_not_sent(
-        self, fake_notification, notifiable=None, notification_type: str = None
+        self, fake_notification, notifiable=None, notification_type: Optional[str] = None
     ):
         """Assert that notification was not sent."""
         fake_notification.assert_not_sent(
@@ -110,12 +110,12 @@ class FrameworkAssertions:
 
     # Event Assertions
     def assert_event_dispatched(
-        self, fake_event, event_name: str = None, count: int = None
+        self, fake_event, event_name: Optional[str] = None, count: Optional[int] = None
     ):
         """Assert that event was dispatched."""
         fake_event.assert_dispatched(event=event_name, count=count)
 
-    def assert_event_not_dispatched(self, fake_event, event_name: str = None):
+    def assert_event_not_dispatched(self, fake_event, event_name: Optional[str] = None):
         """Assert that event was not dispatched."""
         fake_event.assert_not_dispatched(event=event_name)
 
@@ -151,7 +151,7 @@ class FrameworkAssertions:
         fake_cache.assert_called("flush")
 
     # Storage Assertions
-    def assert_file_stored(self, fake_storage, path: str, content: str = None):
+    def assert_file_stored(self, fake_storage, path: str, content: Optional[str] = None):
         """Assert that file was stored."""
         fake_storage.assert_stored(path=path, content=content)
 
@@ -164,14 +164,14 @@ class FrameworkAssertions:
         fake_storage.assert_called("delete", path)
 
     # Authentication Assertions
-    def assert_user_authenticated(self, fake_auth, user=None, guard: str = None):
+    def assert_user_authenticated(self, fake_auth, user=None, guard: Optional[str] = None):
         """Assert that user is authenticated."""
         if user:
             fake_auth.user.return_value = user
         fake_auth.check.return_value = True
         assert fake_auth.check(), "User is not authenticated"
 
-    def assert_user_not_authenticated(self, fake_auth, guard: str = None):
+    def assert_user_not_authenticated(self, fake_auth, guard: Optional[str] = None):
         """Assert that user is not authenticated."""
         fake_auth.check.return_value = False
         fake_auth.guest.return_value = True
@@ -280,7 +280,7 @@ class FrameworkAssertions:
         assert result.is_valid(), f"Validation failed: {result.errors}"
 
     def assert_validation_fails(
-        self, validator, data: Dict[str, Any], expected_fields: List[str] = None
+        self, validator, data: Dict[str, Any], expected_fields: Optional[List[str]] = None
     ):
         """Assert that validation fails."""
         result = validator.validate(data)

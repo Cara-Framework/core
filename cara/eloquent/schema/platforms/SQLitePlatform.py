@@ -113,7 +113,7 @@ class SQLitePlatform(Platform):
                 default = " DEFAULT ''"
             elif column.default_value in (0,):
                 default = f" DEFAULT {column.default_value}"
-            elif column.default_value in self.premapped_defaults.keys():
+            elif column.default_value in self.premapped_defaults:
                 default = self.premapped_defaults.get(column.default_value)
             elif column.default_value:
                 if isinstance(column.default_value, (str,)) and not column.default_is_raw:
@@ -167,7 +167,7 @@ class SQLitePlatform(Platform):
                 default = ""
                 if column.default_value in (0,):
                     default = f" DEFAULT {column.default_value}"
-                elif column.default_value in self.premapped_defaults.keys():
+                elif column.default_value in self.premapped_defaults:
                     default = self.premapped_defaults.get(column.default_value)
                 elif column.default_value:
                     if isinstance(column.default_value, (str,)):

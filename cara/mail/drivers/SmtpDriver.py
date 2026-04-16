@@ -53,8 +53,7 @@ class SmtpDriver(Mail):
                 return True
 
         except Exception as e:
-            # Log error (could integrate with Cara's logging system)
-            print(f"SMTP Error: {e}")
+            self._log_error("SMTP send failed", e)
             return False
 
     def _create_message(self, data: Dict[str, Any]) -> MIMEMultipart:
@@ -137,7 +136,7 @@ class SmtpDriver(Mail):
             msg.attach(part)
 
         except Exception as e:
-            print(f"Attachment error: {e}")
+            self._log_error("SMTP attachment failed", e)
 
     def _get_connection(self) -> smtplib.SMTP:
         """
@@ -167,5 +166,16 @@ class SmtpDriver(Mail):
                     server.login(self.username, self.password)
                 return True
         except Exception as e:
-            print(f"Connection test failed: {e}")
+            self._log_error("SMTP connection test failed", e)
             return False
+
+    def _log_error(self, message: str, error: Exception) -> None:
+        """Log SMTP errors via the framework logger with stderr fallback."""
+        try:
+            from cara.facades import Log
+
+            Log.error(f"{message}: {error}", category="cara.mail.smtp", exc_info=True)
+        except Exception:
+            import sys
+
+            print(f"{message}: {error}", file=sys.stderr)

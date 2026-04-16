@@ -41,7 +41,7 @@ class CompilerRuleMapper:
 
     @classmethod
     def get_validation_rules_for_compiler(
-        cls, compiler_type: str, pattern: str = None
+        cls, compiler_type: str, pattern: Optional[str] = None
     ) -> List[str]:
         """Get validation rules for a compiler type/pattern."""
         # First try direct compiler type mapping
@@ -128,7 +128,7 @@ class RouteParameterValidator:
 
     @classmethod
     def set_compile_rule(
-        cls, parameter: str, compiler_type: str, pattern: str = None
+        cls, parameter: str, compiler_type: str, pattern: Optional[str] = None
     ) -> None:
         """Set compile rule for a route parameter (from Route.compile())."""
         cls._compile_rules[parameter] = compiler_type
@@ -246,7 +246,7 @@ class RouteParameterValidator:
         cls._compile_patterns.clear()
 
     @classmethod
-    def get_debug_info(cls, parameter: str = None) -> Dict[str, Any]:
+    def get_debug_info(cls, parameter: Optional[str] = None) -> Dict[str, Any]:
         """Get debug information about rules and mappings."""
         if parameter:
             return {

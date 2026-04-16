@@ -69,8 +69,7 @@ class TenantScope(BaseScope):
             try:
                 request = current_request.get()
                 return getattr(request, "tenant_id", None)
-            except:
-                # If no request context (e.g., in CLI, jobs, etc.), return None
+            except Exception:  # If no request context (e.g., in CLI, jobs, etc.), return None
                 return None
 
         except Exception:

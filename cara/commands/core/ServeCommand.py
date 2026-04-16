@@ -102,7 +102,7 @@ class ServeCommand(CommandBase):
                     raise ValueError("Port must be between 1 and 65535")
                 return port_num
             except ValueError as e:
-                raise ValueError(f"Invalid port number: {e}")
+                raise ValueError(f"Invalid port number: {e}") from e
 
         return config("server.port", 8000)
 
@@ -117,7 +117,7 @@ class ServeCommand(CommandBase):
                     self.warning("⚠ High worker count may impact performance")
                 return worker_count
             except ValueError as e:
-                raise ValueError(f"Invalid worker count: {e}")
+                raise ValueError(f"Invalid worker count: {e}") from e
 
         return 1
 
@@ -187,7 +187,7 @@ class ServeCommand(CommandBase):
                 self.console.print(
                     f"[#e5c07b]│[/#e5c07b] [white]Network:[/white] [bold white]http://{local_ip}:{port}[/bold white]"
                 )
-            except:
+            except Exception:
                 pass
 
         self.console.print("[#e5c07b]└─[/#e5c07b]")

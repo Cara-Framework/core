@@ -70,8 +70,27 @@ class HasEvents:
                     result = observer(self, **kwargs)
                     if result is False:
                         return False
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Observer failures must not silently disappear — log
+                    # them with context so issues are debuggable, but keep
+                    # the semantics of other observers continuing to run.
+                    try:
+                        from cara.facades import Log
+
+                        Log.error(
+                            f"Observer for '{event_name}' on "
+                            f"{self.__class__.__name__} failed: {exc}",
+                            category="cara.eloquent.events",
+                            exc_info=True,
+                        )
+                    except Exception:
+                        import sys
+
+                        print(
+                            f"Observer for '{event_name}' on "
+                            f"{self.__class__.__name__} failed: {exc}",
+                            file=sys.stderr,
+                        )
 
         return True
 

@@ -5,7 +5,7 @@ This file provides REPL functionality for executing commands in the Cara framewo
 """
 
 import ast
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -49,7 +49,7 @@ class Repl:
             self.print_error(e, code)
             return None
 
-    def print_error(self, error: Exception, code: str = None):
+    def print_error(self, error: Exception, code: Optional[str] = None):
         """Print error in a beautiful Rich format."""
         error_type = type(error).__name__
         error_message = str(error)

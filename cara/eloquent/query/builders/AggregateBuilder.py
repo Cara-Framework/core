@@ -6,6 +6,7 @@ Follows DRY and KISS principles.
 """
 
 from cara.eloquent.expressions.Raw import Raw
+from typing import Optional
 
 
 class AggregateBuilder:
@@ -26,7 +27,7 @@ class AggregateBuilder:
 
     # ===== Basic Aggregates =====
 
-    def count(self, column: str = "*", alias: str = None) -> "AggregateBuilder":
+    def count(self, column: str = "*", alias: Optional[str] = None) -> "AggregateBuilder":
         """Add COUNT aggregate."""
         count_expr = f"COUNT({column})"
         if alias:
@@ -35,7 +36,7 @@ class AggregateBuilder:
         self._aggregates.append(Raw(count_expr))
         return self
 
-    def sum(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def sum(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add SUM aggregate."""
         sum_expr = f"SUM({column})"
         if alias:
@@ -44,7 +45,7 @@ class AggregateBuilder:
         self._aggregates.append(Raw(sum_expr))
         return self
 
-    def avg(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def avg(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add AVG aggregate."""
         avg_expr = f"AVG({column})"
         if alias:
@@ -53,7 +54,7 @@ class AggregateBuilder:
         self._aggregates.append(Raw(avg_expr))
         return self
 
-    def max(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def max(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add MAX aggregate."""
         max_expr = f"MAX({column})"
         if alias:
@@ -62,7 +63,7 @@ class AggregateBuilder:
         self._aggregates.append(Raw(max_expr))
         return self
 
-    def min(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def min(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add MIN aggregate."""
         min_expr = f"MIN({column})"
         if alias:
@@ -73,7 +74,7 @@ class AggregateBuilder:
 
     # ===== Advanced Aggregates =====
 
-    def count_distinct(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def count_distinct(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add COUNT DISTINCT aggregate."""
         count_expr = f"COUNT(DISTINCT {column})"
         if alias:
@@ -82,7 +83,7 @@ class AggregateBuilder:
         self._aggregates.append(Raw(count_expr))
         return self
 
-    def sum_distinct(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def sum_distinct(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add SUM DISTINCT aggregate."""
         sum_expr = f"SUM(DISTINCT {column})"
         if alias:
@@ -91,7 +92,7 @@ class AggregateBuilder:
         self._aggregates.append(Raw(sum_expr))
         return self
 
-    def avg_distinct(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def avg_distinct(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add AVG DISTINCT aggregate."""
         avg_expr = f"AVG(DISTINCT {column})"
         if alias:
@@ -102,7 +103,7 @@ class AggregateBuilder:
 
     # ===== Statistical Aggregates =====
 
-    def variance(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def variance(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add VARIANCE aggregate."""
         var_expr = f"VARIANCE({column})"
         if alias:
@@ -111,7 +112,7 @@ class AggregateBuilder:
         self._aggregates.append(Raw(var_expr))
         return self
 
-    def stddev(self, column: str, alias: str = None) -> "AggregateBuilder":
+    def stddev(self, column: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add STDDEV aggregate."""
         stddev_expr = f"STDDEV({column})"
         if alias:
@@ -123,7 +124,7 @@ class AggregateBuilder:
     # ===== String Aggregates =====
 
     def group_concat(
-        self, column: str, separator: str = ",", alias: str = None
+        self, column: str, separator: str = ",", alias: Optional[str] = None
     ) -> "AggregateBuilder":
         """Add GROUP_CONCAT/STRING_AGG aggregate."""
         # Use STRING_AGG for PostgreSQL, GROUP_CONCAT for MySQL
@@ -136,7 +137,7 @@ class AggregateBuilder:
 
     # ===== Conditional Aggregates =====
 
-    def count_if(self, condition: str, alias: str = None) -> "AggregateBuilder":
+    def count_if(self, condition: str, alias: Optional[str] = None) -> "AggregateBuilder":
         """Add conditional COUNT aggregate."""
         count_expr = f"COUNT(CASE WHEN {condition} THEN 1 END)"
         if alias:
@@ -146,7 +147,7 @@ class AggregateBuilder:
         return self
 
     def sum_if(
-        self, column: str, condition: str, alias: str = None
+        self, column: str, condition: str, alias: Optional[str] = None
     ) -> "AggregateBuilder":
         """Add conditional SUM aggregate."""
         sum_expr = f"SUM(CASE WHEN {condition} THEN {column} END)"
@@ -157,7 +158,7 @@ class AggregateBuilder:
         return self
 
     def avg_if(
-        self, column: str, condition: str, alias: str = None
+        self, column: str, condition: str, alias: Optional[str] = None
     ) -> "AggregateBuilder":
         """Add conditional AVG aggregate."""
         avg_expr = f"AVG(CASE WHEN {condition} THEN {column} END)"

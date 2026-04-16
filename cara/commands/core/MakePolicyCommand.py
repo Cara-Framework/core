@@ -7,6 +7,7 @@ from pathlib import Path
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.support import paths
+from typing import Optional
 
 
 @command(
@@ -21,7 +22,7 @@ from cara.support import paths
 class MakePolicyCommand(CommandBase):
     """Generate Policy classes with enhanced configuration."""
 
-    def handle(self, name: str, model: str = None):
+    def handle(self, name: str, model: Optional[str] = None):
         """Handle policy generation."""
         self.info("🏗️  Policy Generation")
 
@@ -43,7 +44,7 @@ class MakePolicyCommand(CommandBase):
         except Exception as e:
             self.error(f"❌ Failed to generate policy: {e}")
 
-    def _prepare_policy_info(self, name: str, model: str = None) -> dict:
+    def _prepare_policy_info(self, name: str, model: Optional[str] = None) -> dict:
         """Prepare policy information."""
         if not name:
             raise ValueError("Policy name is required")
@@ -104,7 +105,7 @@ class MakePolicyCommand(CommandBase):
             self._show_usage_tips(policy_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write policy file: {e}")
+            raise Exception(f"Failed to write policy file: {e}") from e
 
     def _generate_policy_code(self, policy_info: dict) -> str:
         """Generate the policy class code."""

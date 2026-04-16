@@ -64,9 +64,11 @@ class MiddlewareProvider(DeferredProvider):
                 raise ValueError(
                     f"Middleware {middleware_class.__name__} must inherit from Middleware base class"
                 )
-        except TypeError:
+        except TypeError as e:
             # Handle cases where middleware_class is not a class
-            raise ValueError(f"Invalid middleware: {middleware_class} is not a class")
+            raise ValueError(
+                f"Invalid middleware: {middleware_class} is not a class"
+            ) from e
 
         # Check if handle method exists and has correct signature
         if not hasattr(middleware_class, "handle"):

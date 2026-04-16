@@ -378,14 +378,9 @@ class Model(
         self.boot()
 
     @classmethod
-    def get_primary_key(self):
-        """
-        Gets the primary key column.
-
-        Returns:
-            mixed
-        """
-        return self.__primary_key__
+    def get_primary_key(cls) -> str:
+        """Get the primary key column name."""
+        return cls.__primary_key__
 
     def get_primary_key_type(self):
         """
@@ -427,8 +422,9 @@ class Model(
         """
         return underscore(self.__class__.__name__ + "_" + self.get_primary_key())
 
-    def query(self):
-        return self.get_builder()
+    # NOTE: ``query`` is defined later in this class as a ``@classmethod``
+    # (Laravel parity — ``Model.query()``). The instance-level shadow that
+    # used to live here was dead code and has been removed.
 
     def get_builder(self):
         if hasattr(self, "builder"):
@@ -525,7 +521,12 @@ class Model(
 
             except Exception as e:
                 # Log error but don't stop other listeners
-                print(f"Model event error in {listener_method.__name__}: {e}")
+                from cara.facades import Log
+
+                Log.error(
+                    f"Model event error in {listener_method.__name__}: {e}",
+                    exc_info=True,
+                )
 
         return True  # All listeners passed, continue
 
@@ -600,7 +601,9 @@ class Model(
             return True
 
         except Exception as e:
-            print(f"Save operation failed: {e}")
+            from cara.facades import Log
+
+            Log.error(f"Save operation failed: {e}", exc_info=True)
             return False
 
     def delete(self, **kwargs: Any) -> bool:
@@ -632,7 +635,9 @@ class Model(
                 return False
 
         except Exception as e:
-            print(f"Delete operation failed: {e}")
+            from cara.facades import Log
+
+            Log.error(f"Delete operation failed: {e}", exc_info=True)
             return False
 
     def _touch_parents(self):
@@ -660,13 +665,9 @@ class Model(
         self.__attributes__[timestamp_col] = current_time
         self.__original_attributes__[timestamp_col] = current_time
 
-    def get_table_name(cls):
-        """
-        Gets the table name.
-
-        Returns:
-            str
-        """
+    @classmethod
+    def get_table_name(cls) -> str:
+        """Get the table name, deriving from class name via Laravel's tableize rules."""
         return cls.__table__ or tableize(cls.__name__)
 
     @classmethod
@@ -890,6 +891,7 @@ class Model(
         return {x: cls.cast_value(x, dictionary[x]) for x in dictionary}
 
     def fresh(self):
+        """Return a newly-loaded instance of the same record (Laravel parity)."""
         return (
             self.get_builder()
             .where(
@@ -898,6 +900,30 @@ class Model(
             )
             .first()
         )
+
+    def refresh(self):
+        """Reload the model's attributes from the database in place.
+
+        Laravel parity — unlike :meth:`fresh`, this mutates ``self`` and
+        returns ``self`` so callers can chain or ignore the return value.
+        Raises ``ValueError`` if the record no longer exists.
+        """
+        reloaded = self.fresh()
+        if reloaded is None:
+            raise ValueError(
+                f"Cannot refresh {self.__class__.__name__}: record "
+                f"{self.get_primary_key()}={self.get_primary_key_value()!r} "
+                "was not found."
+            )
+
+        reloaded_attrs = getattr(reloaded, "__attributes__", {})
+        self.__attributes__ = dict(reloaded_attrs)
+        self.__original_attributes__ = dict(reloaded_attrs)
+        self.__dirty_attributes__ = {}
+        # Clear any cached relationship data so accessors reload fresh.
+        self._relations = {}
+        self._relationships = {}
+        return self
 
     def serialize(self, exclude=None, include=None):
         """
@@ -1133,7 +1159,7 @@ class Model(
         return clone
 
     @classmethod
-    def first_or_create(cls, wheres, creates: dict = None):
+    def first_or_create(cls, wheres, creates: Optional[dict] = None):
         """
         Get the first record matching the attributes or create it.
 
@@ -1375,7 +1401,15 @@ class Model(
             else:
                 self.__dict__[attribute] = value
         except KeyError:
-            pass
+            # `__dirty_attributes__` has not been initialized yet (can happen
+            # during parent ``__init__`` before our ``__init__`` runs line
+            # ``self.__dirty_attributes__ = {}``). Silently dropping the value
+            # — as the previous implementation did — lost writes. Instead, we
+            # bootstrap the dict and retry so no attribute is lost.
+            if not attribute.startswith("_"):
+                self.__dict__.setdefault("__dirty_attributes__", {})[attribute] = value
+            else:
+                self.__dict__[attribute] = value
 
     def get_raw_attribute(self, attribute):
         """
@@ -1390,8 +1424,22 @@ class Model(
         """
         return self.__attributes__.get(attribute)
 
-    def is_dirty(self):
-        return bool(self.__dirty_attributes__)
+    def is_dirty(self, *attributes: str) -> bool:
+        """Return ``True`` if the model (or specific attributes) has unsaved changes.
+
+        Mirrors Laravel's ``isDirty`` signature — with no arguments, returns
+        ``True`` if any attribute is dirty; with one or more names, returns
+        ``True`` only if at least one of the named attributes is dirty.
+        """
+        if not self.__dirty_attributes__:
+            return False
+        if not attributes:
+            return True
+        return any(name in self.__dirty_attributes__ for name in attributes)
+
+    def is_clean(self, *attributes: str) -> bool:
+        """Inverse of :meth:`is_dirty` — Laravel parity."""
+        return not self.is_dirty(*attributes)
 
     def get_original(self, key):
         return self.__original_attributes__.get(key)
@@ -1471,23 +1519,13 @@ class Model(
                     elif cast_type == "decimal":
                         precision = int(cast_params) if cast_params.isdigit() else 2
                         return cast_map[cast_type](precision).get(value)
-                    elif cast_type == "array":
-                        return cast_map[cast_type](cast_params).get(value)
-                    elif cast_type == "hash":
-                        return cast_map[cast_type](cast_params).get(value)
-                    else:
-                        return cast_map[cast_type](cast_params).get(value)
+                    # array / hash / other single-param casts share the same path
+                    return cast_map[cast_type](cast_params).get(value)
 
             elif cast_method in cast_map:
                 return cast_map[cast_method]().get(value)
 
         return cast_method(value)
-
-    @classmethod
-    def load(cls, *loads):
-        cls.boot()
-        cls._loads += loads
-        return cls.builder
 
     def __getitem__(self, attribute):
         return getattr(self, attribute)

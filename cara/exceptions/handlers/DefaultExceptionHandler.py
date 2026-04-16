@@ -76,9 +76,18 @@ class DefaultExceptionHandler:
         try:
             from cara.facades import Log
 
-            Log.error(f"{exception.__class__.__name__}: {str(exception)}")
-        except:
-            print(f"🚨 {exception.__class__.__name__}: {str(exception)}")
+            Log.error(
+                f"{exception.__class__.__name__}: {str(exception)}",
+                category="cara.exceptions",
+                exc_info=True,
+            )
+        except Exception:
+            import sys
+
+            print(
+                f"{exception.__class__.__name__}: {str(exception)}",
+                file=sys.stderr,
+            )
 
     async def send_response(
         self,
@@ -137,7 +146,7 @@ class DefaultExceptionHandler:
             from cara.configuration import config
 
             return config("app.debug", False)
-        except:
+        except Exception:
             return False
 
     def get_exception_file(self, exception: Exception) -> Optional[str]:
@@ -148,7 +157,7 @@ class DefaultExceptionHandler:
                 while tb.tb_next:
                     tb = tb.tb_next
                 return tb.tb_frame.f_code.co_filename
-        except:
+        except Exception:
             pass
         return None
 
@@ -160,7 +169,7 @@ class DefaultExceptionHandler:
                 while tb.tb_next:
                     tb = tb.tb_next
                 return tb.tb_lineno
-        except:
+        except Exception:
             pass
         return None
 
@@ -168,5 +177,5 @@ class DefaultExceptionHandler:
         """Get formatted traceback."""
         try:
             return traceback.format_exc().split("\n")
-        except:
+        except Exception:
             return []

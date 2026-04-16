@@ -171,12 +171,14 @@ class BaseGrammar:
         )
         return self
 
-    def columnize_bulk_columns(self, columns=[]):
+    def columnize_bulk_columns(self, columns=None):
+        columns = columns or []
         return ", ".join(
             self.column_string().format(column=x, separator="") for x in columns
         ).rstrip(",")
 
-    def columnize_bulk_values(self, columns=[], qmark=False):
+    def columnize_bulk_values(self, columns=None, qmark=False):
+        columns = columns or []
         sql = ""
         for x in columns:
             inner = ""
@@ -394,7 +396,7 @@ class BaseGrammar:
 
                     continue
 
-                if len(order_crit):
+                if order_crit:
                     order_crit += ", "
                 column = order_bys.column
                 direction = order_bys.direction
@@ -1051,7 +1053,3 @@ class BaseGrammar:
 
         return self
 
-    def columnize_bulk_columns(self, columns=[]):
-        return ", ".join(
-            self.column_string().format(column=x, separator="") for x in columns
-        ).rstrip(",")

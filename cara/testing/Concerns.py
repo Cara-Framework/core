@@ -7,7 +7,7 @@ This file provides test concerns and mixins.
 import random
 import string
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class WithFaker:
@@ -131,7 +131,7 @@ class WithFaker:
         return random.choice([True, False])
 
     def fake_date(
-        self, start_date: datetime = None, end_date: datetime = None
+        self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None
     ) -> datetime:
         """Generate fake date in range."""
         if start_date is None:
@@ -162,7 +162,7 @@ class WithFaker:
 
         return str(uuid.uuid4())
 
-    def fake_slug(self, text: str = None) -> str:
+    def fake_slug(self, text: Optional[str] = None) -> str:
         """Generate fake slug."""
         if text is None:
             text = self.fake_string(10)
@@ -295,7 +295,7 @@ class DatabaseTransactions(TestConcern):
 class WithoutMiddleware(TestConcern):
     """Concern for disabling middleware in tests."""
 
-    def __init__(self, middleware: List[str] = None):
+    def __init__(self, middleware: Optional[List[str]] = None):
         """Initialize without middleware."""
         self.disabled_middleware = middleware or []
 

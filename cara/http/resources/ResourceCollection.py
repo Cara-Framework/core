@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Type
-
-from .MissingValue import MissingValue
+from typing import Any, Dict, Type, Optional
 
 
 class ResourceCollection:
@@ -19,7 +17,7 @@ class ResourceCollection:
 
     wrap = "data"
 
-    def __init__(self, items: Any, resource_class: Type = None):
+    def __init__(self, items: Any, resource_class: Optional[Type] = None):
         self.items = items if items is not None else []
         self.resource_class = resource_class
         self._additional: Dict[str, Any] = {}

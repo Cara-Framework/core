@@ -170,7 +170,7 @@ class MakeModelCommand(CommandBase):
             self._show_usage_tips(model_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write model file: {e}")
+            raise Exception(f"Failed to write model file: {e}") from e
 
     def _generate_model_code(self, model_info: dict) -> str:
         """Generate the model class code."""

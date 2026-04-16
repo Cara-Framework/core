@@ -63,17 +63,27 @@ class LifespanConductor:
                     break  # Exit even if shutdown failed
 
     async def _handle_startup(self) -> None:
-        """
-        Handle application startup tasks.
+        """Run application startup callbacks if any.
 
-        This is where you can add:
-        - Database connections
-        - Cache warming
-        - Resource initialization
-        - etc.
+        Mirrors :meth:`_handle_shutdown` — any callable registered on the
+        application under ``_startup_callbacks`` is invoked here. Sync and
+        async callables are both supported; per-callback failures are logged
+        and then re-raised so the ASGI server sees ``lifespan.startup.failed``.
         """
-        # TODO: Implement startup tasks
-        pass
+        callbacks = getattr(self.application, "_startup_callbacks", None) or []
+        for cb in callbacks:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb()
+                else:
+                    cb()
+            except Exception as e:
+                Log.error(
+                    f"Startup callback error: {e}",
+                    category="cara.lifespan",
+                    exc_info=True,
+                )
+                raise
 
     async def _handle_shutdown(self) -> None:
         """Run application shutdown callbacks if any."""
@@ -86,4 +96,8 @@ class LifespanConductor:
                 else:
                     cb()
             except Exception as e:
-                Log.error(f"Shutdown callback error: {e}", exc_info=True)
+                Log.error(
+                    f"Shutdown callback error: {e}",
+                    category="cara.lifespan",
+                    exc_info=True,
+                )

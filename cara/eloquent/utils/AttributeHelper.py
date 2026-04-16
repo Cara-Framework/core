@@ -1,6 +1,7 @@
 """
 AttributeHelper - Utility for attribute operations
 """
+from typing import Optional
 
 class AttributeHelper:
     """Helper for attribute manipulation operations."""
@@ -32,7 +33,7 @@ class AttributeHelper:
         return f"set_{attribute}_attribute"
     
     @staticmethod
-    def is_hidden(attribute: str, hidden: list, visible: list = None) -> bool:
+    def is_hidden(attribute: str, hidden: list, visible: Optional[list] = None) -> bool:
         """Check if attribute should be hidden."""
         if visible and attribute not in visible:
             return True

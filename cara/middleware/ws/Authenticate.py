@@ -9,7 +9,7 @@ from cara.websocket import Socket
 class Authenticate(Middleware):
     """JWT authentication middleware for WebSocket connections."""
 
-    def __init__(self, application, guards: List[str] = None):
+    def __init__(self, application, guards: Optional[List[str]] = None):
         super().__init__(application)
         self.guards = guards or [
             application.make("auth").get_default_guard()  # usually "jwt"
@@ -23,7 +23,7 @@ class Authenticate(Middleware):
         except Exception as e:
             Log.error(f"WebSocket auth error: {e}", category="cara.websocket")
             # Don't try to send close message on error - just raise the exception
-            raise WebSocketException("Unauthorized WebSocket", 4006)
+            raise WebSocketException("Unauthorized WebSocket", 4006) from e
 
         # If we get here authentication failed
         try:

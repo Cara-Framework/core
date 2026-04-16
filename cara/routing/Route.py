@@ -7,7 +7,7 @@ Mirrors Laravel-style syntax for HTTP and WebSocket routes with support for:
 - Named routes
 """
 
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 from cara.http import Response
 from cara.routing import (

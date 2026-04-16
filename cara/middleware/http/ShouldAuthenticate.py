@@ -5,7 +5,7 @@ Core authentication logic with easy customization points.
 Users can extend this in their app for custom authentication needs.
 """
 
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 from cara.http import Request, Response
 from cara.middleware import Middleware
@@ -14,21 +14,20 @@ from cara.middleware import Middleware
 class ShouldAuthenticate(Middleware):
     """Base authentication middleware with automatic parameter parsing."""
 
-    def __init__(self, application, guards: List[str] = None):
+    def __init__(self, application, guards: Optional[List[str]] = None):
         super().__init__(application)
 
-        # Default to jwt if no guards specified
-        self.guards = guards or ["jwt"]
+        if guards:
+            self.guards = list(guards)
+            return
 
-        # Try to get default guard from application if using default
-        if self.guards == ["jwt"]:
-            try:
-                auth_manager = application.make("auth")
-                default_guard = auth_manager.get_default_guard()
-                self.guards = [default_guard]
-            except:
-                # Fallback to jwt if auth service not available
-                self.guards = ["jwt"]
+        # No guards specified — resolve the configured default guard from the
+        # auth manager. Fall back to ["jwt"] only if auth is not wired up.
+        try:
+            auth_manager = application.make("auth")
+            self.guards = [auth_manager.get_default_guard()]
+        except Exception:
+            self.guards = ["jwt"]
 
     async def handle(self, request: Request, next_fn: Callable) -> Response:
         """Handle authentication check."""
@@ -67,7 +66,7 @@ class ShouldAuthenticate(Middleware):
         return response
 
     def authentication_failed(
-        self, request: Request, last_error: Exception = None
+        self, request: Request, last_error: Optional[Exception] = None
     ) -> Response:
         """Handle authentication failure."""
         response = Response(self.application)

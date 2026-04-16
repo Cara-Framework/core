@@ -47,7 +47,7 @@ class HeaderManager:
         # HeaderBag automatically handles case-insensitive and duplicates
         self.header_bag.add(Header(name, value))
 
-    def get(self, name: str, default: str = None) -> Optional[str]:
+    def get(self, name: str, default: Optional[str] = None) -> Optional[str]:
         """
         Get header value by name (Laravel-style).
 
@@ -120,7 +120,7 @@ class HeaderManager:
     # CONTENT-TYPE MANAGEMENT (Laravel-style)
     # =============================================================================
 
-    def content_type(self, type_: str = None) -> Union[Optional[str], None]:
+    def content_type(self, type_: Optional[str] = None) -> Union[Optional[str], None]:
         """
         Get or set Content-Type header (Laravel-style).
 
@@ -238,7 +238,7 @@ class HeaderManager:
     # UTILITY METHODS
     # =============================================================================
 
-    def finalize(self, content_length: int, default_content_type: str = None) -> None:
+    def finalize(self, content_length: int, default_content_type: Optional[str] = None) -> None:
         """
         Finalize headers before sending (Laravel-style).
 

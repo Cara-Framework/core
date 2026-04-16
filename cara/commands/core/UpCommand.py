@@ -125,7 +125,7 @@ class UpCommand(CommandBase):
             self._show_success_tips()
 
         except Exception as e:
-            raise Exception(f"Failed to disable maintenance mode: {e}")
+            raise Exception(f"Failed to disable maintenance mode: {e}") from e
 
     def _show_success_tips(self) -> None:
         """Show helpful tips after successful deactivation."""
@@ -160,7 +160,7 @@ class UpCommand(CommandBase):
         try:
             self.maintenance_file.unlink()
         except Exception as e:
-            raise Exception(f"Failed to remove maintenance file: {e}")
+            raise Exception(f"Failed to remove maintenance file: {e}") from e
 
     def _is_production(self) -> bool:
         """Check if running in production environment."""

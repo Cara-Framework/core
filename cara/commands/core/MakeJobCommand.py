@@ -135,7 +135,7 @@ class MakeJobCommand(CommandBase):
             self._show_usage_tips(job_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write job file: {e}")
+            raise Exception(f"Failed to write job file: {e}") from e
 
     def _generate_job_code(self, job_info: dict) -> str:
         """Generate the job class code."""

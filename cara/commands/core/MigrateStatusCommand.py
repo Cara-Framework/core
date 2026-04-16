@@ -2,6 +2,7 @@ from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.migrations import Migration
 from cara.support import paths
+from typing import Optional
 
 
 @command(
@@ -55,7 +56,7 @@ class MigrateStatusCommand(CommandBase):
             dry=False,
         )
 
-    def _show_configuration(self, connection: str, directory: str, schema: str = None):
+    def _show_configuration(self, connection: str, directory: str, schema: Optional[str] = None):
         """Display migration configuration."""
         self.info("Configuration:")
         self.info(f"   Connection: {connection}")
@@ -123,5 +124,5 @@ class MigrateStatusCommand(CommandBase):
             if batch_info and "batch" in batch_info:
                 return str(batch_info["batch"])
             return "1"  # Default batch if not found
-        except:
+        except Exception:
             return "1"  # Default batch on error

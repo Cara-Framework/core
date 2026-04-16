@@ -221,8 +221,8 @@ class Gate(Gate):
                     before_result = policy_instance.before(user, method, *args)
                     if before_result is not None:
                         return bool(before_result)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log_policy_hook_error("before", policy_instance, method, exc)
 
             # Call the ability method
             method_func = getattr(policy_instance, method)
@@ -236,13 +236,40 @@ class Gate(Gate):
                     )
                     if after_result is not None:
                         return bool(after_result)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log_policy_hook_error("after", policy_instance, method, exc)
 
             return bool(result)
 
-        except Exception:
+        except Exception as exc:
+            try:
+                from cara.facades import Log
+
+                Log.error(
+                    f"Policy '{method}' evaluation failed: {exc}",
+                    category="cara.authorization",
+                    exc_info=True,
+                )
+            except Exception:
+                pass
             return False
+
+    def _log_policy_hook_error(
+        self, hook: str, policy_instance: Any, method: str, exc: Exception
+    ) -> None:
+        """Log a failure in a policy before/after hook with stderr fallback."""
+        policy_name = type(policy_instance).__name__
+        message = (
+            f"Policy {hook}-hook for '{method}' on {policy_name} raised: {exc}"
+        )
+        try:
+            from cara.facades import Log
+
+            Log.error(message, category="cara.authorization", exc_info=True)
+        except Exception:
+            import sys
+
+            print(message, file=sys.stderr)
 
     def _instantiate_policy(self, policy_class: str):
         """Instantiate a policy class from string."""

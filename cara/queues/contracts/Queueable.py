@@ -5,7 +5,7 @@ This module provides the foundation for creating background tasks with retry cap
 failure handling. Includes automatic serialization support and job cancellation.
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from cara.queues.JobStateManager import get_job_state_manager
 
@@ -56,25 +56,34 @@ class PendingDispatch:
         Set routing key for topic exchange dispatch.
 
         Args:
-            routing_key: Routing key (e.g., "enrichment.product.high")
+            routing_key: Routing key (e.g., "jobs.process.high")
 
         Usage:
-            MyJob.dispatch().withRoutingKey("enrichment.product.high")
+            MyJob.dispatch().withRoutingKey("jobs.process.high")
         """
         self._routing_key = routing_key
         self._use_exchange = True
         return self
 
-    def toExchange(self, exchange_name: str = "cheapa.events") -> "PendingDispatch":
+    def with_routing_key(self, routing_key: str) -> "PendingDispatch":
+        """Python naming alias for withRoutingKey."""
+        return self.withRoutingKey(routing_key)
+
+    def toExchange(self, exchange_name: Optional[str] = None) -> "PendingDispatch":
         """
         Force dispatch to specific exchange.
 
         Args:
-            exchange_name: Name of the exchange
+            exchange_name: Name of the exchange. If None, the configured default
+                from ``config('queue.topic_exchange_name')`` is used at dispatch time.
         """
         self._exchange_name = exchange_name
         self._use_exchange = True
         return self
+
+    def to_exchange(self, exchange_name: Optional[str] = None) -> "PendingDispatch":
+        """Python naming alias for toExchange."""
+        return self.toExchange(exchange_name)
 
     def __del__(self):
         """Auto-dispatch when PendingDispatch is garbage collected (Laravel pattern)."""
@@ -117,8 +126,9 @@ class PendingDispatch:
         """
         from cara.queues.exchanges import TopicExchange
 
-        # Get or create exchange
-        exchange_name = getattr(self, "_exchange_name", "cheapa.events")
+        # Get or create exchange — if _exchange_name is None, TopicExchange reads
+        # the default from config('queue.topic_exchange_name').
+        exchange_name = getattr(self, "_exchange_name", None)
         exchange = TopicExchange(exchange_name)
 
         # Set job properties
@@ -286,6 +296,11 @@ class Queueable(SerializesModels, CancellableJob):
         return cls.dispatch(*args, **kwargs).delay(delay)
 
     @classmethod
+    def dispatch_after(cls, delay, *args, **kwargs):
+        """Python naming alias for dispatchAfter."""
+        return cls.dispatchAfter(delay, *args, **kwargs)
+
+    @classmethod
     async def dispatchNow(cls, *args, **kwargs):
         """Laravel-style immediate job execution."""
         instance = cls(*args, **kwargs)
@@ -299,6 +314,11 @@ class Queueable(SerializesModels, CancellableJob):
                 else:
                     return instance.handle()
         return None
+
+    @classmethod
+    async def dispatch_now(cls, *args, **kwargs):
+        """Python naming alias for dispatchNow."""
+        return await cls.dispatchNow(*args, **kwargs)
 
     def _safe_serialize(self) -> dict:
         """Safely serialize job data for database storage."""

@@ -56,10 +56,9 @@ class DateTimeCast(BaseCast):
         "H:i:s": "HH:mm:ss",
         "H:i": "HH:mm",
         "c": None,  # ISO 8601 format
-        # 🧪 Custom test formats
+        # Additional formats
         "d/m/Y H:i:s": "DD/MM/YYYY HH:mm:ss",  # 26/06/2025 21:53:03
         "H:i:s d.m.Y": "HH:mm:ss DD.MM.YYYY",  # 21:53:03 26.06.2025
-        "Y-m-d": "YYYY-MM-DD",  # 2025-06-26
     }
 
     def __init__(self, format_string: Optional[str] = None, timezone: str = "UTC"):

@@ -14,7 +14,7 @@ Supports:
 import asyncio
 import inspect
 from threading import Lock
-from typing import Callable, Dict, List, Type
+from typing import Callable, Dict, List, Type, Optional
 
 from cara.events.contracts import Event, Listener
 from cara.exceptions import EventNameConflictException
@@ -103,7 +103,7 @@ class Event:
 
         self._registered_events[event_name] = event_class
 
-    def subscribe(self, event_name: str, listener: Listener = None) -> None:
+    def subscribe(self, event_name: str, listener: Optional[Listener] = None) -> None:
         """
         Subscribe a Listener instance or EventSubscriber to events.
 

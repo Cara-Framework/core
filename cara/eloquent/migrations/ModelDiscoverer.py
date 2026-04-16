@@ -115,8 +115,18 @@ class ModelDiscoverer:
                             models.extend(self._resolve_direct_import_models(alias.name))
                             
         except Exception as e:
-            print(f"Warning: Could not parse {init_file}: {e}")
-            
+            try:
+                from cara.facades import Log
+
+                Log.warning(
+                    f"Could not parse {init_file}: {e}",
+                    category="cara.eloquent.migrations",
+                )
+            except Exception:
+                import sys
+
+                print(f"Warning: Could not parse {init_file}: {e}", file=sys.stderr)
+
         return models
         
     def _resolve_import_models(self, module_path: str, names: List[ast.alias]) -> List[Dict]:
@@ -235,7 +245,7 @@ class ModelDiscoverer:
                 return True
         return False
 
-    def _extract_model_structure(self, class_node: ast.ClassDef, filename: str, file_path: str = None) -> Dict:
+    def _extract_model_structure(self, class_node: ast.ClassDef, filename: str, file_path: Optional[str] = None) -> Dict:
         """Extract model structure from AST looking for table attribute and fields() method."""
         model_info = {
             "name": class_node.name,
@@ -687,7 +697,7 @@ class ModelDiscoverer:
             }
         return None
 
-    def _extract_raw_sql_dependencies(self, model_info: Dict, all_known_tables: List[str] = None):
+    def _extract_raw_sql_dependencies(self, model_info: Dict, all_known_tables: Optional[List[str]] = None):
         """Extract table dependencies from raw SQL in the up() function."""
         if all_known_tables is None:
             all_known_tables = []

@@ -168,9 +168,9 @@ class Application(Container):
             if isinstance(e, RouteRegistrationException):
                 raise RuntimeError(
                     f"Application startup failed due to route configuration: {e}"
-                )
+                ) from e
             else:
-                raise RuntimeError(f"Application startup failed: {e}")
+                raise RuntimeError(f"Application startup failed: {e}") from e
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         """ASGI application interface: delegate to HTTP or lifespan conductor."""

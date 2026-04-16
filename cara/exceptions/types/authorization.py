@@ -75,3 +75,10 @@ class AuthorizationFailedException(AuthorizationException):
         String representation of the exception.
         """
         return self.message
+
+
+__all__ = [
+    "AuthorizationException",
+    "AuthorizationFailedException",
+]
+

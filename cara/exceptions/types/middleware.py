@@ -13,3 +13,10 @@ class MiddlewareNotFoundException(MiddlewareException):
     """Thrown when a middleware alias does not resolve to a class."""
 
     pass
+
+
+__all__ = [
+    "MiddlewareException",
+    "MiddlewareNotFoundException",
+]
+

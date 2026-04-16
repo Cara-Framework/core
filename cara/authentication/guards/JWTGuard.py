@@ -43,11 +43,11 @@ class JWTGuard(Guard):
         try:
             global jwt
             import jwt
-        except ImportError:
+        except ImportError as e:
             raise AuthenticationConfigurationException(
                 "PyJWT is required for JWT authentication. "
                 "Please install it with: pip install PyJWT"
-            )
+            ) from e
 
         # Configuration
         self.application = application
@@ -74,7 +74,7 @@ class JWTGuard(Guard):
         """Check if the current request is authenticated."""
         try:
             return self.user() is not None
-        except:
+        except Exception:
             return False
 
     def guest(self) -> bool:
@@ -156,7 +156,7 @@ class JWTGuard(Guard):
         try:
             user = self._resolve_user_from_token(token)
             return user is not None
-        except:
+        except Exception:
             return False
 
     def validate_refresh_token(self, token: str) -> bool:
@@ -178,7 +178,7 @@ class JWTGuard(Guard):
             # Resolve user
             user = self._resolve_user_by_id(user_id, payload)
             return user is not None
-        except:
+        except Exception:
             return False
 
     def refresh(self) -> str:
@@ -384,8 +384,18 @@ class JWTGuard(Guard):
             ttl = max(0, exp - int(time.time()) + self.blacklist_grace_period)
             if ttl > 0:
                 Cache.put(f"jwt_blacklist:{token}", True, ttl)
-        except Exception:
-            pass
+        except Exception as exc:
+            # A malformed or already-expired token reaching blacklist is
+            # notable but recoverable — log rather than silently swallow.
+            try:
+                from cara.facades import Log
+
+                Log.warning(
+                    f"JWT blacklist add failed (token ignored): {exc}",
+                    category="cara.auth.jwt",
+                )
+            except Exception:
+                pass
 
     def _is_blacklisted(self, token: str) -> bool:
         """Check if token is blacklisted."""

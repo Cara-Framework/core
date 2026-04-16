@@ -1,11 +1,12 @@
 """
 JoinClause - Simple JOIN clause component (different from expression)
 """
+from typing import Optional
 
 class JoinClause:
     """Simple JOIN clause component representation."""
     
-    def __init__(self, join_type: str, table: str, on_conditions: list = None):
+    def __init__(self, join_type: str, table: str, on_conditions: Optional[list] = None):
         self.join_type = join_type
         self.table = table
         self.on_conditions = on_conditions or []

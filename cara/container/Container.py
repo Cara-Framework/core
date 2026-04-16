@@ -283,7 +283,7 @@ class Container:
                         MissingContainerBindingException,
                         StrictContainerException,
                     ) = _get_container_exceptions()
-                    raise GenericContainerException(str(e))
+                    raise GenericContainerException(str(e)) from e
             if inspect.ismethod(obj):
                 signature = (
                     f"{obj.__module__}.{obj.__self__.__class__.__name__}.{obj.__name__}"
@@ -298,7 +298,7 @@ class Container:
                             MissingContainerBindingException,
                             StrictContainerException,
                         ) = _get_container_exceptions()
-                        raise GenericContainerException(str(e))
+                        raise GenericContainerException(str(e)) from e
 
         # Inspect constructor parameters
         for _, param in self.get_parameters(obj):
@@ -428,8 +428,8 @@ class Container:
         try:
             sig = inspect.signature(func)
             params = list(sig.parameters.keys())
-            return len(params) > 0 and params[0] in ('app', 'container', 'self')
-        except:
+            return len(params) > 0 and params[0] in ("app", "container", "self")
+        except (TypeError, ValueError):
             return False
 
     def fire_hook(self, action: str, key: Any, obj: Any):

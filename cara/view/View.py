@@ -4,7 +4,7 @@ View - Main view factory for Cara framework
 This file provides the main View factory functionality.
 """
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from cara.view import ViewEngine, ViewInstance
 
@@ -12,7 +12,7 @@ from cara.view import ViewEngine, ViewInstance
 class View:
     """Main View factory for creating and managing views."""
 
-    def __init__(self, engine: ViewEngine = None):
+    def __init__(self, engine: Optional[ViewEngine] = None):
         """Initialize view factory."""
         self.engine = engine or ViewEngine()
         self.shared_data = {}

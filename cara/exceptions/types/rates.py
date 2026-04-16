@@ -11,3 +11,9 @@ class RateLimitConfigurationException(CaraException):
     """Thrown when rate‐limit configuration is missing or invalid."""
 
     pass
+
+
+__all__ = [
+    "RateLimitConfigurationException",
+]
+

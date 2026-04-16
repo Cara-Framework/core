@@ -60,4 +60,4 @@ class ExplicitRouteLoader:
             )
             raise RouteRegistrationException(
                 f"Unexpected error during route registration from {module_name}: {e}"
-            )
+            ) from e

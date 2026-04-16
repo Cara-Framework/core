@@ -10,7 +10,6 @@ from cara.exceptions import (
     ControllerMethodNotFoundException,
     MissingContainerBindingException,
     RouteRegistrationException,
-    ValidationException,
 )
 from cara.facades import Loader
 from cara.http import Request, Response
@@ -23,7 +22,7 @@ class RouteResolver:
     def __init__(
         self,
         handler: Any,
-        controller_paths: List[str] = None,
+        controller_paths: Optional[List[str]] = None,
         container: Any = None,  # container may be None at route‐registration time
     ) -> None:
         """
@@ -316,7 +315,7 @@ class RouteResolver:
             # Wrap any other exceptions
             raise RouteRegistrationException(
                 f"Unexpected error resolving route '{handler_path}': {e}"
-            )
+            ) from e
 
     def _resolve_params(self, param_items, providers, container):
         """

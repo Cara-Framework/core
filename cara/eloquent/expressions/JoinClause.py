@@ -4,7 +4,7 @@ JoinClause - Simple expression class for JOIN statements
 Handles JOIN clauses in a clean, simple way.
 """
 
-from typing import List
+from typing import List, Optional
 
 from .OnClause import OnClause
 from .OnValueClause import OnValueClause
@@ -17,7 +17,7 @@ class JoinClause:
     Represents a JOIN operation with table and conditions.
     """
 
-    def __init__(self, table: str, clause: str = "inner", on_clauses: List = None, join_type: str = None):
+    def __init__(self, table: str, clause: str = "inner", on_clauses: Optional[List] = None, join_type: Optional[str] = None):
         self.table = table
         self.clause = join_type or clause
         self.join_type = self.clause

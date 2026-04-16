@@ -159,7 +159,7 @@ class BlockingCommandMixin(AutoReloadMixin, ABC):
         """Increment processed counter."""
         self.service_stats['processed'] += 1
 
-    def increment_failed(self, error: str = None):
+    def increment_failed(self, error: Optional[str] = None):
         """Increment failed counter."""
         self.service_stats['failed'] += 1
         if error:

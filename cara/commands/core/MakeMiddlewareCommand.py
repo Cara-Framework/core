@@ -100,7 +100,7 @@ class MakeMiddlewareCommand(CommandBase):
             self._show_usage_tips(middleware_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write middleware file: {e}")
+            raise Exception(f"Failed to write middleware file: {e}") from e
 
     def _generate_middleware_code(self, middleware_info: dict) -> str:
         """Generate the middleware class code."""

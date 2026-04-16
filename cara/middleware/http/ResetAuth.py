@@ -8,6 +8,7 @@ Guards are singleton instances that persist across requests.
 This middleware runs automatically after every HTTP response is sent.
 """
 
+from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
@@ -43,18 +44,27 @@ class ResetAuth(Middleware):
                 request.user = None
 
             # Clear all registered guard caches
-            for guard_name in ["api_key", "jwt"]:  # Known guards
+            guard_names = getattr(auth_manager, "registered_guards", None) or [
+                "api_key",
+                "jwt",
+            ]
+            for guard_name in guard_names:
                 try:
                     guard = auth_manager.guard(guard_name)
-                    if hasattr(guard, "_user"):
-                        guard._user = None
-                    if hasattr(guard, "_token"):
-                        guard._token = None
-                except:
-                    # Ignore errors for non-existent guards
-                    pass
+                except Exception:
+                    # Unknown/unconfigured guard — nothing to reset.
+                    continue
 
-        except:
-            # CRITICAL: Never let cache cleanup break the application
-            # Silently ignore all errors during cleanup
-            pass
+                if hasattr(guard, "_user"):
+                    guard._user = None
+                if hasattr(guard, "_token"):
+                    guard._token = None
+
+        except Exception as exc:
+            # CRITICAL: Never let cache cleanup break the application,
+            # but do log so operators can diagnose cache-leak risks.
+            Log.warning(
+                f"ResetAuth cleanup failed: {exc}",
+                category="cara.middleware.reset_auth",
+                exc_info=True,
+            )

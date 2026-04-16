@@ -4,7 +4,7 @@ Validation Errors for the Cara framework.
 This module provides the ValidationErrors class to handle validation errors in Laravel style.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class ValidationErrors:
@@ -13,7 +13,7 @@ class ValidationErrors:
     def __init__(self, errors: Dict[str, list[str]]):
         self._errors = errors
 
-    def first(self, field: str = None) -> str:
+    def first(self, field: Optional[str] = None) -> str:
         """Get the first error message for a field, or the first error overall."""
         if field:
             field_errors = self._errors.get(field, [])
@@ -44,7 +44,7 @@ class ValidationErrors:
         """Get all error messages for a specific field."""
         return self._errors.get(field, [])
 
-    def count(self, field: str = None) -> int:
+    def count(self, field: Optional[str] = None) -> int:
         """Count errors for a field or total error count."""
         if field:
             return len(self._errors.get(field, []))

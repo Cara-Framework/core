@@ -155,7 +155,9 @@ class MiddlewareParameterParser:
                 parsed[param_name] = parsed_value
             except Exception as e:
                 if is_required:
-                    raise ValueError(f"Cannot parse parameter '{param_name}': {e}")
+                    raise ValueError(
+                        f"Cannot parse parameter '{param_name}': {e}"
+                    ) from e
                 parsed[param_name] = default_value
 
         return parsed

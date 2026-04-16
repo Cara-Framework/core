@@ -17,3 +17,10 @@ class EventNameConflictException(CaraException):
     """Thrown if two different Event classes share the same name()."""
 
     pass
+
+
+__all__ = [
+    "ListenerNotFoundException",
+    "EventNameConflictException",
+]
+

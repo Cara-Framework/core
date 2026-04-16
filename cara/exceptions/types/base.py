@@ -6,3 +6,9 @@ class CaraException(Exception):
 
     def __init__(self, message: str = "An error occurred"):
         super().__init__(message)
+
+
+__all__ = [
+    "CaraException",
+]
+

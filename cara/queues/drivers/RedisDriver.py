@@ -74,7 +74,7 @@ class RedisDriver(HasColoredOutput, Queue):
         except Exception as e:
             raise DriverLibraryNotFoundException(
                 f"Cannot connect to Redis at {host}:{port}: {e}"
-            )
+            ) from e
 
         # Prefix settings
         self.queue_prefix = self.options.get("queue_prefix", "queue:")
@@ -114,13 +114,17 @@ class RedisDriver(HasColoredOutput, Queue):
             try:
                 data = pickle.dumps(payload_obj)
             except Exception as e:
-                raise QueueException(f"RedisDriver: could not pickle payload: {e}")
+                raise QueueException(
+                    f"RedisDriver: could not pickle payload: {e}"
+                ) from e
 
             try:
                 # RPUSH to append job to queue
                 self._redis.rpush(key, data)
             except Exception as e:
-                raise QueueException(f"RedisDriver: error pushing to Redis: {e}")
+                raise QueueException(
+                    f"RedisDriver: error pushing to Redis: {e}"
+                ) from e
 
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
@@ -224,7 +228,9 @@ class RedisDriver(HasColoredOutput, Queue):
                 run_dt = pendulum.parse(str(when))
                 run_ts = run_dt.int_timestamp
             except Exception as e:
-                raise QueueException(f"RedisDriver.schedule: invalid time: {e}")
+                raise QueueException(
+                    f"RedisDriver.schedule: invalid time: {e}"
+                ) from e
 
         # Prepare payload
         payload_obj = {
@@ -239,7 +245,9 @@ class RedisDriver(HasColoredOutput, Queue):
         try:
             data = pickle.dumps(payload_obj)
         except Exception as e:
-            raise QueueException(f"RedisDriver.schedule: could not pickle payload: {e}")
+            raise QueueException(
+                f"RedisDriver.schedule: could not pickle payload: {e}"
+            ) from e
 
         if run_ts <= now.int_timestamp:
             # Time is now or past: push immediately
@@ -251,7 +259,7 @@ class RedisDriver(HasColoredOutput, Queue):
             except Exception as e:
                 raise QueueException(
                     f"RedisDriver.schedule: error adding to delayed set: {e}"
-                )
+                ) from e
 
     def _queue_key(self, queue_name: str) -> str:
         """Get queue key with prefix."""

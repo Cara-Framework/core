@@ -22,12 +22,6 @@ class TimeStampsScope(BaseScope):
     def on_remove(self, builder):
         pass
 
-    def set_timestamp(owner_cls, query):
-        # Use UTC timestamp instead of "now" to avoid database timezone issues
-        import pendulum
-
-        owner_cls.updated_at = pendulum.now("UTC").to_datetime_string()
-
     def set_timestamp_create(self, builder):
         if not builder._model.__timestamps__:
             return builder

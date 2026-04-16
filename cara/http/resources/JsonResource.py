@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, Optional
 
 from .MissingValue import MissingValue
 
@@ -93,7 +93,7 @@ class JsonResource:
         return default() if callable(default) else default
 
     @staticmethod
-    def when_loaded(resource: Any, relation: str, value_fn: Callable = None) -> Any:
+    def when_loaded(resource: Any, relation: str, value_fn: Optional[Callable] = None) -> Any:
         """Include a relation only when it has been eager-loaded.
 
         Args:

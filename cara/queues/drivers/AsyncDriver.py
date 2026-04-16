@@ -112,4 +112,4 @@ class AsyncDriver(HasColoredOutput, Queue):
                         f"AsyncDriver: Exception in failed() (ID: {job_id}): {inner}"
                     )
 
-            raise e
+            raise

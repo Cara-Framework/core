@@ -83,7 +83,7 @@ class SerializesModels:
         # Fallback: convert to string
         try:
             return str(value)
-        except:
+        except Exception:
             return None
 
     def _serialize_object(self, obj: Any) -> Dict[str, Any]:
@@ -112,8 +112,7 @@ class SerializesModels:
 
             try:
                 serialized[key] = self._serialize_property(value)
-            except:
-                # Skip if can't serialize
+            except Exception:  # Skip if can't serialize
                 continue
 
         return serialized
@@ -170,8 +169,7 @@ class SerializesModels:
 
             module = __import__(module_name, fromlist=[class_name])
             return getattr(module, class_name)
-        except:
-            # Fallback: return a dummy class
+        except Exception:  # Fallback: return a dummy class
             return type("DummyClass", (), {})
 
     def _deserialize_object(self, data: Dict[str, Any]) -> Any:
@@ -196,19 +194,18 @@ class SerializesModels:
                 try:
                     # Try with empty constructor
                     obj = cls()
-                except:
+                except Exception:
                     try:
                         # Try with data as dict
                         obj = cls(obj_data)
-                    except:
-                        # Create minimal instance
+                    except Exception:  # Create minimal instance
                         obj = cls.__new__(cls)
 
             # Set attributes
             for key, value in obj_data.items():
                 try:
                     setattr(obj, key, self._deserialize_property(value))
-                except:
+                except Exception:
                     continue
 
             return obj

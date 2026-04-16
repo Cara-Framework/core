@@ -49,9 +49,15 @@ class HandleCors(Middleware):
         # Try to load from config/cors.py (Laravel style)
         try:
             cors_config = config("cors", {})
-            defaults.update(cors_config)
-        except:
-            pass
+            if cors_config:
+                defaults.update(cors_config)
+        except Exception as exc:
+            from cara.facades import Log
+
+            Log.debug(
+                f"CORS config not loaded, using defaults: {exc}",
+                category="cara.middleware.cors",
+            )
 
         return defaults
 

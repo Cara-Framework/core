@@ -93,7 +93,7 @@ class BaseQueueable(Queueable, ShouldQueue):
             try:
                 from cara.facades import Log
                 Log.warning(f"Queue failed, running synchronously: {str(e)}")
-            except:
+            except Exception:
                 pass
             
             # Run synchronously as fallback

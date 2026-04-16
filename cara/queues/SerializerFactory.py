@@ -4,7 +4,7 @@ Serializer Factory - Creates appropriate serializer based on config.
 Generic factory pattern for pluggable serialization.
 """
 
-from typing import Union
+from typing import Union, Optional
 
 from .serializers import JsonJobSerializer, PickleJobSerializer
 
@@ -24,7 +24,7 @@ class SerializerFactory:
 
     @classmethod
     def create(
-        cls, serializer_type: str = None
+        cls, serializer_type: Optional[str] = None
     ) -> Union[JsonJobSerializer, PickleJobSerializer]:
         """
         Create serializer instance based on type.

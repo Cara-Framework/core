@@ -21,3 +21,12 @@ class KeyNotFoundException(CaraException):
 
 class DriverNotRegisteredException(CaraException):
     pass
+
+
+__all__ = [
+    "StorageException",
+    "StorageConfigurationException",
+    "KeyNotFoundException",
+    "DriverNotRegisteredException",
+]
+

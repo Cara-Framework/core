@@ -1,25 +1,29 @@
 """String generators and helpers."""
 
-import random
 import re
+import secrets
 import string
 from typing import Any
 from urllib import parse
 
 
-def random_string(length=4):
+def random_string(length: int = 4) -> str:
     """
-    Generate a random string based on the given length.
+    Generate a random alphanumeric string of ``length`` characters.
+
+    Uses :mod:`secrets` (CSPRNG) because callers often rely on this helper
+    for tokens, nonces, or IDs where predictability would be a security risk.
 
     Keyword Arguments:
-        length {int} -- The amount of the characters to generate (default: {4})
+        length {int} -- Number of characters to generate (default: 4).
 
     Returns:
         string
     """
-    return "".join(
-        random.choice(string.ascii_uppercase + string.digits) for _ in range(length)
-    )
+    if length < 0:
+        raise ValueError("length must be non-negative")
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def modularize(file_path, suffix=".py"):

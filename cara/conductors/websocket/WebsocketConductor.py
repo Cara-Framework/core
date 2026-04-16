@@ -70,9 +70,9 @@ class WebsocketConductor:
                 socket.set_route(route).load_params(
                     route.set_params_from_path(socket.path)
                 )
-            except Exception as e:
+            except Exception:
                 # If route not found or method not allowed, let exception handler deal with it
-                raise e
+                raise
 
             async def route_dispatch(s: Socket) -> None:
                 """Dispatch to controller and handle the result."""

@@ -34,3 +34,9 @@ class WebSocketException(CaraException):
 
     def __str__(self):
         return f"[{self.code}] {super().__str__()}"
+
+
+__all__ = [
+    "WebSocketException",
+]
+

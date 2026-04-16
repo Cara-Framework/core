@@ -5,7 +5,7 @@ class ObservesEvents:
     def observe_events(self, model, event):
         if getattr(model, "_events_disabled", False):
             return
-        if model.__has_events__ == True:
+        if model.__has_events__:
             for observer in model.__observers__.get(model.__class__, []):
                 try:
                     getattr(observer, event)(model)

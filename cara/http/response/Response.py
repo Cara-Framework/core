@@ -117,7 +117,7 @@ class Response(BaseResponse):
         self,
         payload: Any,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style JSON response."""
         self.factory.json(payload, status, headers)
@@ -127,7 +127,7 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style HTML response."""
         self.factory.html(content, status, headers)
@@ -137,7 +137,7 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style plain text response."""
         self.factory.text(content, status, headers)
@@ -147,7 +147,7 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style XML response."""
         self.factory.xml(content, status, headers)
@@ -157,7 +157,7 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style CSS response."""
         self.factory.css(content, status, headers)
@@ -167,7 +167,7 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style JavaScript response."""
         self.factory.javascript(content, status, headers)
@@ -177,7 +177,7 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style SVG response."""
         self.factory.svg(content, status, headers)
@@ -192,7 +192,7 @@ class Response(BaseResponse):
         data: Any = None,
         message: str = "Success",
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style success response."""
         self.factory.success(data, message, status, headers)
@@ -203,7 +203,7 @@ class Response(BaseResponse):
         message: str = "Error",
         errors: Any = None,
         status: int = 400,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style error response."""
         self.factory.error(message, errors, status, headers)
@@ -213,7 +213,7 @@ class Response(BaseResponse):
         self,
         errors: Dict[str, List[str]],
         message: str = "Validation failed",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style validation error response."""
         self.factory.validation_error(errors, message, headers)
@@ -222,7 +222,7 @@ class Response(BaseResponse):
     def not_found(
         self,
         message: str = "Resource not found",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style 404 response."""
         self.factory.not_found(message, headers)
@@ -231,7 +231,7 @@ class Response(BaseResponse):
     def unauthorized(
         self,
         message: str = "Unauthorized",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style 401 response."""
         self.factory.unauthorized(message, headers)
@@ -240,7 +240,7 @@ class Response(BaseResponse):
     def forbidden(
         self,
         message: str = "Forbidden",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style 403 response."""
         self.factory.forbidden(message, headers)
@@ -249,7 +249,7 @@ class Response(BaseResponse):
     def server_error(
         self,
         message: str = "Internal Server Error",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style 500 response."""
         self.factory.server_error(message, headers)
@@ -263,7 +263,7 @@ class Response(BaseResponse):
         self,
         url: str,
         status: int = 302,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style redirect response."""
         self.factory.redirect(url, status, headers)
@@ -274,7 +274,7 @@ class Response(BaseResponse):
         content: Union[str, bytes],
         filename: str,
         content_type: str = "application/octet-stream",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style download response."""
         self.factory.download(content, filename, content_type, headers)
@@ -283,15 +283,15 @@ class Response(BaseResponse):
     def file(
         self,
         file_path: str,
-        filename: str = None,
-        content_type: str = None,
-        headers: Dict[str, str] = None,
+        filename: Optional[str] = None,
+        content_type: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> "Response":
         """Laravel-style file response for controlled access."""
         self.factory.file(file_path, filename, content_type, headers)
         return self
 
-    def no_content(self, headers: Dict[str, str] = None) -> "Response":
+    def no_content(self, headers: Optional[Dict[str, str]] = None) -> "Response":
         """Laravel-style 204 No Content response."""
         self.factory.no_content(headers)
         return self
@@ -300,7 +300,7 @@ class Response(BaseResponse):
     # HEADER MANAGEMENT (Laravel-style) - FORCED NEW API
     # =============================================================================
 
-    def header(self, name: str, value: str = None) -> Union["Response", Optional[str]]:
+    def header(self, name: str, value: Optional[str] = None) -> Union["Response", Optional[str]]:
         """
         Laravel-style header method - get or set header.
 
@@ -379,7 +379,7 @@ class Response(BaseResponse):
         send: Callable,
         status: int = 200,
         content_type: str = "application/octet-stream",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """Laravel-style streaming response."""
         await self.streaming.stream(generator, send, status, content_type, headers)
@@ -389,7 +389,7 @@ class Response(BaseResponse):
         data_generator: AsyncGenerator[Any, None],
         send: Callable,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """Stream JSON Lines (JSONL) format."""
         await self.streaming.stream_json_lines(data_generator, send, status, headers)
@@ -399,7 +399,7 @@ class Response(BaseResponse):
         event_generator: AsyncGenerator[Dict[str, Any], None],
         send: Callable,
         status: int = 200,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """Stream Server-Sent Events."""
         await self.streaming.stream_server_sent_events(
@@ -412,8 +412,8 @@ class Response(BaseResponse):
         filename: str,
         send: Callable,
         content_type: str = "application/octet-stream",
-        content_length: int = None,
-        headers: Dict[str, str] = None,
+        content_length: Optional[int] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """Stream file download."""
         await self.streaming.stream_file_download(
@@ -425,7 +425,7 @@ class Response(BaseResponse):
         data_generator: AsyncGenerator[List[str], None],
         filename: str,
         send: Callable,
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """Stream CSV data."""
         await self.streaming.stream_csv(data_generator, filename, send, headers)

@@ -67,7 +67,7 @@ class AMQPConnectionManager:
         if self.connection and not self.connection.is_closed:
             try:
                 self.connection.close()
-            except:
+            except Exception:
                 pass
 
 
@@ -157,7 +157,7 @@ class JobProcessor:
                         asyncio.run(failed_method(msg, str(job_error)))
                     else:
                         failed_method(msg, str(job_error))
-            except:
+            except Exception:
                 pass
 
             return True  # Still processed (failed gracefully)
@@ -244,7 +244,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 if timeout_val < 1:
                     raise ValueError("Timeout must be at least 1 second")
             except ValueError as e:
-                raise Exception(f"Invalid timeout value: {e}")
+                raise Exception(f"Invalid timeout value: {e}") from e
         else:
             # Get from driver config
             driver_config = config(f"queue.drivers.{driver_name}", {})
@@ -258,7 +258,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 if max_jobs_val <= 0:
                     raise ValueError("max-jobs must be positive")
             except ValueError as e:
-                raise Exception(f"Invalid max-jobs value: {e}")
+                raise Exception(f"Invalid max-jobs value: {e}") from e
 
         max_time_val = None
         if max_time:
@@ -267,7 +267,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 if max_time_val <= 0:
                     raise ValueError("max-time must be positive")
             except ValueError as e:
-                raise Exception(f"Invalid max-time value: {e}")
+                raise Exception(f"Invalid max-time value: {e}") from e
 
         return {
             "driver_name": driver_name,
@@ -490,7 +490,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             # Always close channel
             try:
                 channel.close()
-            except:
+            except Exception:
                 pass
 
     def _handle_queue_error(

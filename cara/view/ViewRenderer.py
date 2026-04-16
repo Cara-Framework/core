@@ -4,7 +4,7 @@ View Renderer - Rendering functionality for Cara view engine
 This file provides view rendering capabilities.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from cara.view import ViewEngine
 
@@ -12,7 +12,7 @@ from cara.view import ViewEngine
 class ViewRenderer:
     """View renderer for processing and rendering templates."""
 
-    def __init__(self, engine: ViewEngine = None, factory=None):
+    def __init__(self, engine: Optional[ViewEngine] = None, factory=None):
         """Initialize view renderer."""
         self.engine = engine or ViewEngine()
         self.factory = factory
@@ -113,13 +113,12 @@ class ViewRenderer:
 
             return context.get("__output__", "")
 
-        except Exception as e:
+        except Exception:
             if self.debug:
                 # Re-raise the original exception in debug mode
-                raise e
-            else:
-                # Return error message in production mode
-                return "Template Error"
+                raise
+            # Return error message in production mode
+            return "Template Error"
 
     def render_partial(self, view: str, data: Dict[str, Any] = None) -> str:
         """Render a partial view (for includes)."""

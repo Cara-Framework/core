@@ -46,15 +46,15 @@ def can(ability: str, *args) -> Callable:
                         status_code=403,
                     )
 
+            except AuthorizationFailedException:
+                raise
             except Exception as e:
-                if "AuthorizationFailedException" in str(type(e)):
-                    raise e
                 # Fallback for any other errors
                 raise AuthorizationFailedException(
                     message=f"Authorization check failed: {ability}",
                     ability=ability,
                     status_code=403,
-                )
+                ) from e
 
             return func(*func_args, **func_kwargs)
 
@@ -91,14 +91,14 @@ def can_any(abilities: List[str], *args) -> Callable:
                         status_code=403,
                     )
 
+            except AuthorizationFailedException:
+                raise
             except Exception as e:
-                if "AuthorizationFailedException" in str(type(e)):
-                    raise e
                 raise AuthorizationFailedException(
                     message="Authorization check failed",
                     ability=str(abilities),
                     status_code=403,
-                )
+                ) from e
 
             return func(*func_args, **func_kwargs)
 
@@ -144,13 +144,13 @@ def authenticated_only(func: Callable) -> Callable:
                     status_code=401,
                 )
 
+        except AuthorizationFailedException:
+            raise
         except Exception as e:
-            if "AuthorizationFailedException" in str(type(e)):
-                raise e
             raise AuthorizationFailedException(
                 message="Authentication required",
                 status_code=401,
-            )
+            ) from e
 
         return func(*func_args, **func_kwargs)
 
@@ -173,9 +173,9 @@ def guest_only(func: Callable) -> Callable:
                     status_code=403,
                 )
 
-        except Exception as e:
-            if "AuthorizationFailedException" in str(type(e)):
-                raise e
+        except AuthorizationFailedException:
+            raise
+        except Exception:
             # If auth fails, user is probably guest anyway
             pass
 

@@ -398,7 +398,7 @@ class HasAttributes:
         return value
 
     @classmethod
-    def cast_value(cls, attribute: str, value: Any, cast_type: str = None) -> Any:
+    def cast_value(cls, attribute: str, value: Any, cast_type: Optional[str] = None) -> Any:
         """Cast a value using the specified cast type."""
         if cast_type is None and attribute in cls.__casts__:
             cast_type = cls.__casts__[attribute]

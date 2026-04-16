@@ -54,6 +54,10 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
 
         current_request.set(self)
 
+    def app(self):
+        """Return the application instance (Laravel-style convenience)."""
+        return self.application
+
     def load(
         self,
         scope: Dict[str, Any] = None,

@@ -10,7 +10,7 @@ import json
 import pickle
 import time
 import uuid
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 
 import pendulum
 
@@ -207,7 +207,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         }
         builder.create(record)
 
-    def _get_builder(self, opts: Dict[str, Any], table: str = None):
+    def _get_builder(self, opts: Dict[str, Any], table: Optional[str] = None):
         """Get database query builder for specified table."""
         tbl = table or opts.get("table")
         return self.application.make("DB").query(opts.get("connection")).table(tbl)
@@ -230,7 +230,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             data = pickle.loads(decoded_payload)
         except Exception as e:
             self._update_job_status(job_db_id, "failed", {"error": str(e)})
-            raise QueueException(f"Invalid payload for job id {job['id']}: {e}")
+            raise QueueException(f"Invalid payload for job id {job['id']}: {e}") from e
 
         raw = data.get("obj")
         callback = data.get("callback", "handle")
@@ -319,7 +319,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 instance.unregister_job()
             raise
 
-    def _update_job_status(self, job_id: str, status: str, metadata: dict = None):
+    def _update_job_status(self, job_id: str, status: str, metadata: Optional[dict] = None):
         """Update job status and metadata in database."""
         try:
             update_data = {"status": status}
@@ -332,7 +332,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                     if isinstance(current_metadata, str):
                         try:
                             current_metadata = json.loads(current_metadata)
-                        except:
+                        except Exception:
                             current_metadata = {}
                     elif not isinstance(current_metadata, dict):
                         current_metadata = {}

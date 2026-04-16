@@ -284,7 +284,7 @@ class DatabaseManager:
 
         Args:
             morph_map_dict: Dict mapping type names to model class paths
-                           e.g. {"amazon_product": "commons.models.amazon.AmazonProduct.AmazonProduct"}
+                           e.g. {"post": "app.models.Post.Post", "user": "app.models.User.User"}
 
         Returns:
             self for method chaining

@@ -115,7 +115,7 @@ class Trackable:
         if job_tracker:
             job_tracker.track_job_processing(self._job_uid)
 
-    def _mark_success(self, result_data: Dict = None) -> None:
+    def _mark_success(self, result_data: Optional[Dict] = None) -> None:
         """Mark job as successful."""
         if not self._tracking_enabled or not self._job_uid:
             return
@@ -170,21 +170,28 @@ class Trackable:
                 raise
             Log.warning(f"Failed to validate job continuation: {str(e)}")
 
+    #: Class-level hook — override in subclasses to declare which attribute
+    #: identifies the entity being worked on (Laravel-style convention).
+    trackable_entity_attr: Optional[str] = None
+
     def _get_entity_id(self) -> Optional[str]:
         """
-        Get entity ID for this job (app-specific).
+        Resolve entity ID for this job.
 
-        Override this method or provide common attribute names.
+        Resolution order:
+            1. Subclass override of ``_get_entity_id``
+            2. Attribute named in ``trackable_entity_attr``
+            3. Generic ``entity_id`` attribute
+            4. Generic primary key ``id`` attribute
+
+        Keep this generic — app-specific attribute names belong in user code,
+        not the framework.
         """
-        # Common attribute names for entity identification
-        for attr in [
-            "entity_id",
-            "product_id",
-            "amazon_product_id",
-            "user_id",
-            "receipt_id",
-            "id",
-        ]:
+        if self.trackable_entity_attr and hasattr(self, self.trackable_entity_attr):
+            value = getattr(self, self.trackable_entity_attr)
+            return str(value) if value is not None else None
+
+        for attr in ("entity_id", "id"):
             if hasattr(self, attr):
                 value = getattr(self, attr)
                 return str(value) if value is not None else None

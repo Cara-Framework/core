@@ -57,10 +57,10 @@ class APSchedulerDriver(Scheduling):
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
             from apscheduler.schedulers.blocking import BlockingScheduler
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "APScheduler is required for scheduling. Please install it with: pip install apscheduler"
-            )
+            ) from e
 
         # Prepare scheduler kwargs
         sched_kwargs = self._extract_scheduler_kwargs(settings)
@@ -172,10 +172,10 @@ class APSchedulerDriver(Scheduling):
             from apscheduler.triggers.cron import CronTrigger
             from apscheduler.triggers.date import DateTrigger
             from apscheduler.triggers.interval import IntervalTrigger
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "APScheduler is required for scheduling. Please install it with: pip install apscheduler"
-            )
+            ) from e
 
         if sched_type == "cron":
             return self._build_cron_trigger(schedule_spec, CronTrigger)

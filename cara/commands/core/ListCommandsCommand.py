@@ -5,7 +5,7 @@ This module provides a CLI command to list all registered commands with enhanced
 """
 
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from cara.commands import CommandBase
 from cara.decorators import command, get_registered_commands
@@ -29,8 +29,8 @@ class ListCommandsCommand(CommandBase):
 
     def handle(
         self,
-        filter: str = None,
-        category: str = None,
+        filter: Optional[str] = None,
+        category: Optional[str] = None,
     ):
         """Handle command listing with enhanced options."""
         self.info("📋 Available CLI Commands")

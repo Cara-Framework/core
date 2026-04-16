@@ -14,7 +14,7 @@ class MigrationTracker:
             # Drop and recreate table to ensure correct structure
             try:
                 connection.query(f"DROP TABLE IF EXISTS {self.table_name}")
-            except:
+            except Exception:
                 pass
 
             self._create_migrations_table(connection)
@@ -44,7 +44,7 @@ class MigrationTracker:
         try:
             result = connection.query(f"SELECT 1 FROM {self.table_name} LIMIT 1")
             return True
-        except:
+        except Exception:
             return False
 
     def _create_migrations_table(self, connection):
@@ -157,5 +157,5 @@ class MigrationTracker:
                 f"SELECT id, migration, batch FROM {self.table_name} LIMIT 1"
             )
             return True
-        except:
+        except Exception:
             return False

@@ -24,7 +24,7 @@ class Authentication:
         """Add a guard to the authentication manager."""
         self.guards[name] = guard
 
-    def guard(self, name: str = None):
+    def guard(self, name: Optional[str] = None):
         """Get a guard by name or detect from request."""
         if name:
             # Explicit guard name provided

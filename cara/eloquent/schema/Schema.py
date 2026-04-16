@@ -57,7 +57,6 @@ class Schema:
         "datetime": str,
         "tiny_increments": int,
         "unsigned": int,
-        "unsigned_integer": int,
     }
 
     def __init__(
@@ -303,9 +302,6 @@ class BlueprintExecutor:
 
 class FieldBuilder:
     """Field builder for new Schema.build syntax."""
-
-    def __init__(self):
-        pass
 
     def string(self, name, length=255):
         return FieldDefinition("string", name, length=length)

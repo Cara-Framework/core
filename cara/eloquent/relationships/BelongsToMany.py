@@ -21,7 +21,7 @@ class BelongsToMany(BaseRelationship):
         with_timestamps=False,
         pivot_id="id",
         attribute="pivot",
-        with_fields=[],
+        with_fields=None,
     ):
         if isinstance(fn, str):
             self.fn = None
@@ -40,7 +40,8 @@ class BelongsToMany(BaseRelationship):
         self.with_timestamps = with_timestamps
         self._as = attribute
         self.pivot_id = pivot_id
-        self.with_fields = with_fields
+        # Avoid mutable-default-arg foot gun — always bind a fresh list.
+        self.with_fields = list(with_fields) if with_fields else []
 
     def __call__(self, func):
         """Decorator: Store the function and return self."""
@@ -48,19 +49,33 @@ class BelongsToMany(BaseRelationship):
         return self
 
     def __get__(self, instance, owner):
-        """Property access: return eager-loaded data if available, else a filtered QueryBuilder."""
+        """Property access: return eager-loaded Collection or lazy-load and cache.
+
+        Laravel behavior: accessing $model->roles returns a Collection directly.
+        The result is cached in _relations for subsequent access.
+        """
         if instance is None:
             return self
 
         func = getattr(self, '_func', None) or getattr(self, 'fn', None)
-        if func and hasattr(func, '__name__'):
-            attr_name = func.__name__
+        attr_name = func.__name__ if func and hasattr(func, '__name__') else None
+
+        # Return cached relation if already loaded (eager or previous lazy load)
+        if attr_name:
             relations = getattr(instance, '_relations', None)
             if relations is not None and attr_name in relations:
                 return relations[attr_name]
 
-        # Return QueryBuilder with proper joins for method chaining
-        return self.apply_query(self.get_builder(), instance)
+        # Lazy load: apply_query already executes .get() and returns Collection
+        result = self.apply_query(self.get_builder(), instance)
+
+        # Cache in _relations so subsequent access doesn't re-query
+        if attr_name:
+            if not hasattr(instance, '_relations') or instance._relations is None:
+                instance.__dict__.setdefault('_relations', {})
+            instance._relations[attr_name] = result
+
+        return result
 
     def set_keys(self, owner, attribute):
         self.local_key = self.local_key or "id"

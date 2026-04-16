@@ -35,7 +35,7 @@ class EagerRelations:
             from cara.facades import Log
 
             Log.error(f"Error in register: {str(e)}")
-            raise e
+            raise
         return self
 
     def with_relation(self, relation: str):

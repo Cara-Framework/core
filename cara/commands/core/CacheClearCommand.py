@@ -121,7 +121,7 @@ class CacheClearCommand(CommandBase):
                 stats = cache.get_stats()
                 self.info(f"   Current entries: {stats.get('entries', 'Unknown')}")
                 self.info(f"   Memory usage: {stats.get('memory', 'Unknown')}")
-        except:
+        except Exception:
             self.info("   Cache statistics not available")
 
     def _show_cleanup_suggestions(self) -> None:

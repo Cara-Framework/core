@@ -161,7 +161,7 @@ class Shell:
                                 if model_class and isinstance(model_class, type):
                                     self.namespace[model_name] = model_class
                                     loaded_models.append(model_name)
-                            except:
+                            except Exception:
                                 pass
 
             except ImportError:
@@ -290,7 +290,7 @@ class Shell:
                         if service_name:
                             return app_instance.make(service_name)
                         return app_instance
-                except:
+                except Exception:
                     pass
                 return None
 
@@ -300,7 +300,7 @@ class Shell:
                 from cara.facades import Config
 
                 return Config.get(key, default)
-            except:
+            except Exception:
                 return default
 
         def env(key, default=None):
@@ -315,7 +315,7 @@ class Shell:
                 from cara.support import Collection
 
                 return Collection(items or [])
-            except:
+            except Exception:
                 return items or []
 
         def cache(key=None, value=None, ttl=None):
@@ -329,7 +329,7 @@ class Shell:
                     return Cache.get(key)
                 else:
                     return Cache
-            except:
+            except Exception:
                 return None
 
         def route(name, parameters=None):
@@ -338,7 +338,7 @@ class Shell:
                 from cara.facades import Route
 
                 return Route.url(name, parameters or {})
-            except:
+            except Exception:
                 return f"/{name}"
 
         # Add helpers to namespace
@@ -501,8 +501,8 @@ class Shell:
             self._setup_ipython_completers()
 
             embed(user_ns=self.namespace, colors="neutral")
-        except ImportError:
-            raise ImportError("IPython not available")
+        except ImportError as e:
+            raise ImportError("IPython not available") from e
 
     def _setup_ipython_completers(self):
         """Setup custom autocompletion for Cara framework."""
@@ -700,7 +700,7 @@ class Shell:
                                 if method.startswith(attr_prefix)
                             ]
                             matches.extend(model_matches)
-                    except:
+                    except Exception:
                         pass
 
                 return matches

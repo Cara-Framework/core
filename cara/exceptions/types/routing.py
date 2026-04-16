@@ -25,3 +25,11 @@ class RouteMiddlewareNotFoundException(CaraException):
 
 # RouteNotFoundException moved to cara.exceptions.types.http
 # Import it from there to avoid duplication
+
+
+__all__ = [
+    "RouteException",
+    "RouteRegistrationException",
+    "RouteMiddlewareNotFoundException",
+]
+

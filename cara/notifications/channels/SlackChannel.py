@@ -25,7 +25,7 @@ class SlackChannel(BaseChannel):
     def __init__(
         self,
         webhook_url: str,
-        default_channel: str = None,
+        default_channel: Optional[str] = None,
         username: str = "Cara Bot",
         icon: str = ":robot_face:",
     ):
@@ -73,8 +73,7 @@ class SlackChannel(BaseChannel):
             return self._send_to_slack(webhook_url, payload)
 
         except Exception as e:
-            # Log error
-            print(f"Slack channel error: {e}")
+            self._emit_error("Slack channel error", e)
             return False
 
     def _get_webhook_url(
@@ -175,8 +174,23 @@ class SlackChannel(BaseChannel):
                 return response.status == 200
 
         except Exception as e:
-            print(f"Slack send error: {e}")
+            self._emit_error("Slack send error", e)
             return False
+
+    def _emit_error(self, message: str, error: Exception) -> None:
+        """Emit Slack notification errors via Log facade with stderr fallback."""
+        try:
+            from cara.facades import Log
+
+            Log.error(
+                f"{message}: {error}",
+                category="cara.notifications.slack",
+                exc_info=True,
+            )
+        except Exception:
+            import sys
+
+            print(f"{message}: {error}", file=sys.stderr)
 
     def format_simple_message(
         self, title: str, message: str, color: str = "good"

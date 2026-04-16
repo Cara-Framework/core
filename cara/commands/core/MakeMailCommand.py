@@ -119,7 +119,7 @@ class MakeMailCommand(CommandBase):
             self._show_usage_tips(mail_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write mail file: {e}")
+            raise Exception(f"Failed to write mail file: {e}") from e
 
     def _generate_mail_code(self, mail_info: dict) -> str:
         """Generate the mail class code."""

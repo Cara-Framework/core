@@ -119,7 +119,7 @@ class MakeEventCommand(CommandBase):
             self._show_usage_tips(event_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write event file: {e}")
+            raise Exception(f"Failed to write event file: {e}") from e
 
     def _generate_event_code(self, event_info: dict) -> str:
         """Generate the event class code."""

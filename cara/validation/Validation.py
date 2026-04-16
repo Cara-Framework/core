@@ -8,7 +8,7 @@ checks.
 import importlib
 import inspect
 import os
-from typing import Any, Dict, Type
+from typing import Any, Dict, Type, Optional
 
 from cara.exceptions import (
     InvalidRuleFormatException,
@@ -69,7 +69,7 @@ class Validation(ValidationContract):
     def make(
         data: Dict[str, Any],
         rules: Dict[str, str],
-        messages: Dict[str, str] = None,
+        messages: Optional[Dict[str, str]] = None,
     ) -> "Validation":
         """
         Laravel-style validation method with custom message support.
@@ -163,7 +163,7 @@ class Validation(ValidationContract):
         """Returns ValidationErrors object with all errors."""
         return ValidationErrors(self._errors)
 
-    def first_error(self, field: str = None) -> str:
+    def first_error(self, field: Optional[str] = None) -> str:
         """Get the first error message for a field, or the first error overall."""
         if field:
             field_errors = self._errors.get(field, [])
