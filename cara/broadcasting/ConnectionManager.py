@@ -76,8 +76,8 @@ class ConnectionManager:
             **(metadata or {}),
         }
 
-        Log.info(
-            f"Broadcasting: Connection {connection_id} added (user: {user_id})",
+        Log.debug(
+            f"ConnectionManager: {connection_id} added (user: {user_id})",
             category="cara.broadcasting",
         )
 
@@ -114,8 +114,8 @@ class ConnectionManager:
             if task and not task.done():
                 task.cancel()
 
-            Log.info(
-                f"Broadcasting: Connection {connection_id} removed",
+            Log.debug(
+                f"ConnectionManager: {connection_id} removed",
                 category="cara.broadcasting",
             )
 

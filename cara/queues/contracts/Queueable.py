@@ -29,6 +29,9 @@ class PendingDispatch:
         self._connection = None
         self._routing_key = None
         self._use_exchange = False
+        self._exchange_name: Optional[str] = None
+        # Idempotency guard — __del__ must not redispatch or raise during GC.
+        self._dispatched = False
 
     def onQueue(self, queue: str) -> "PendingDispatch":
         """Set the queue name (Laravel naming convention)."""
@@ -86,18 +89,46 @@ class PendingDispatch:
         return self.toExchange(exchange_name)
 
     def __del__(self):
-        """Auto-dispatch when PendingDispatch is garbage collected (Laravel pattern)."""
-        self._dispatch_now()
+        """Auto-dispatch when PendingDispatch is garbage collected (Laravel pattern).
+
+        __del__ runs during GC and must never raise — Python would otherwise
+        print "Exception ignored in ..." to stderr, polluting logs. Also skip
+        if the caller already dispatched explicitly (idempotency).
+        """
+        try:
+            if getattr(self, "_dispatched", False):
+                return
+            self._dispatch_now()
+        except Exception as e:
+            # Log quietly — the dispatch call site already raises if caller
+            # invoked _dispatch_now() directly, so this path only matters for
+            # fire-and-forget usage (MyJob.dispatch(...).withRoutingKey(...)).
+            try:
+                from cara.facades import Log
+
+                Log.error(
+                    f"PendingDispatch auto-dispatch failed during GC: {e}",
+                    category="cara.queue",
+                )
+            except Exception:
+                # Log facade unavailable during interpreter shutdown — swallow.
+                pass
 
     def _dispatch_now(self):
         """
         Dispatch job to queue.
 
         IMPORTANT: NO FALLBACK - If queue dispatch fails, exception is raised.
+        Idempotent: second call returns the prior job id without redispatching.
         """
+        if getattr(self, "_dispatched", False):
+            return getattr(self.job, "job_tracking_id", None)
+
         # Check if we should use exchange routing
         if self._use_exchange and self._routing_key:
-            return self._dispatch_via_exchange()
+            job_id = self._dispatch_via_exchange()
+            self._dispatched = True
+            return job_id
 
         # Standard queue dispatch
         from cara.facades import Queue
@@ -116,6 +147,7 @@ class PendingDispatch:
         if hasattr(self.job, "set_tracking_id"):
             self.job.set_tracking_id(str(job_id))
 
+        self._dispatched = True
         return job_id
 
     def _dispatch_via_exchange(self):

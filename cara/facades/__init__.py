@@ -23,6 +23,7 @@ from .Schedule import Schedule
 from .Storage import Storage
 from .Validation import Validation
 from .View import View
+from ..eloquent.transactions import atomic
 
 __all__ = [
     "Auth",
@@ -50,4 +51,5 @@ __all__ = [
     "View",
     "Validation",
     "Image",
+    "atomic",
 ]

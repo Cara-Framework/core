@@ -516,11 +516,35 @@ class AMQPDriver(HasColoredOutput, Queue):
             "x-message-ttl": message_ttl,
         }
 
-        self.channel.queue_declare(
-            queue=queue_name,
-            durable=True,
-            arguments=queue_args
-        )
+        # Idempotent declare: if the queue was originally created with
+        # different args (e.g. older codebase or manual setup left it
+        # without x-message-ttl), an active declare raises
+        # PRECONDITION_FAILED (406) and kills the channel. We swallow
+        # that once, reopen the channel, and fall back to passive
+        # declare — the queue already exists so we can publish anyway.
+        # This prevents TTL-drift from wedging every dispatcher forever.
+        try:
+            self.channel.queue_declare(
+                queue=queue_name,
+                durable=True,
+                arguments=queue_args,
+            )
+        except pika.exceptions.ChannelClosedByBroker as exc:
+            if getattr(exc, "reply_code", None) != 406:
+                raise
+            Log.warning(
+                f"⚠️  Queue '{queue_name}' exists with different args "
+                f"(reply={exc.reply_text}); falling back to passive declare"
+            )
+            # Channel is dead after 406 — reopen on the same connection.
+            try:
+                self.channel = self.connection.channel()
+                self.channel.confirm_delivery()
+            except Exception:
+                self._connect(opts)
+            self.channel.queue_declare(
+                queue=queue_name, durable=True, passive=True
+            )
 
         # Serialize payload
         serializer = opts.get("serializer", "pickle")
@@ -575,8 +599,12 @@ class AMQPDriver(HasColoredOutput, Queue):
         # Enable publisher confirms for reliability
         self.channel.confirm_delivery()
 
-        # Declare durable queue
-        self.channel.queue_declare(opts.get("queue"), durable=True)
+        # NOTE: Queue declaration is intentionally NOT done here.
+        # Each caller (_connect_and_publish, setup_dead_letter_exchange, etc.)
+        # declares its target queue with the correct arguments (x-message-ttl,
+        # x-dead-letter-exchange, ...). Declaring here without arguments
+        # conflicted with existing queues and caused PRECONDITION_FAILED
+        # (inequivalent arg 'x-message-ttl') on reconnects.
 
     def _build_url(self, opts: Dict[str, Any]) -> str:
         """Build AMQP connection URL with proper encoding."""

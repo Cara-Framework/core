@@ -168,7 +168,9 @@ class CastManager:
 
     @classmethod
     def _cast_integer(cls, value: Any, operation: str) -> int:
-        """Cast value to integer."""
+        """Cast value to integer. Preserves None for nullable columns."""
+        if value is None:
+            return None
         try:
             return int(value)
         except (ValueError, TypeError):
@@ -176,7 +178,9 @@ class CastManager:
 
     @classmethod
     def _cast_float(cls, value: Any, operation: str) -> float:
-        """Cast value to float."""
+        """Cast value to float. Preserves None for nullable columns."""
+        if value is None:
+            return None
         try:
             return float(value)
         except (ValueError, TypeError):

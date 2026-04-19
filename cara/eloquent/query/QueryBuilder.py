@@ -757,6 +757,156 @@ class QueryBuilder(ObservesEvents):
         )
         return self
 
+    def or_where_raw(self, query: str, bindings=()):
+        """
+        Specifies raw SQL that should be injected into the where expression, OR-joined.
+
+        Arguments:
+            query {string} -- The raw query string.
+
+        Keyword Arguments:
+            bindings {tuple} -- query bindings that should be added to the connection. (default: {()})
+
+        Returns:
+            self
+        """
+        self._wheres += (
+            (
+                QueryExpression(
+                    query,
+                    "=",
+                    None,
+                    "value",
+                    raw=True,
+                    bindings=bindings,
+                    keyword="or",
+                )
+            ),
+        )
+        return self
+
+    # ===== JSON / JSONB helpers (Laravel-style) ======================================
+    #
+    # These are thin wrappers around where_raw that build Postgres jsonb operator SQL
+    # for the caller. Column names pass through unquoted (mirrors where_raw convention,
+    # since callers often use qualified names like "b.aliases" or "product.metadata").
+    # Path segments are single-quote escaped to prevent injection.
+
+    @staticmethod
+    def _escape_json_path_segment(segment: str) -> str:
+        """Escape a JSON path segment for safe embedding inside single quotes."""
+        if not isinstance(segment, str):
+            segment = str(segment)
+        return segment.replace("'", "''")
+
+    @staticmethod
+    def _json_path_sql(column: str, path) -> str:
+        """Build a Postgres jsonb path expression ending with ->> (text extract).
+
+        ``path`` may be a dotted string ("a.b.c"), a list, or None/empty for a direct
+        column reference. All segments except the last use -> (keep jsonb), last uses
+        ->> (cast to text) so the result can be compared against a scalar.
+        """
+        if path is None or path == "" or path == []:
+            return column
+        if isinstance(path, str):
+            parts = [p for p in path.split(".") if p]
+        else:
+            parts = [str(p) for p in path if p or p == 0]
+        if not parts:
+            return column
+        esc = [QueryBuilder._escape_json_path_segment(p) for p in parts]
+        middle = "".join(f"->'{p}'" for p in esc[:-1])
+        return f"{column}{middle}->>'{esc[-1]}'"
+
+    def where_json_contains(self, column: str, value):
+        """
+        Filter rows whose jsonb column contains the given value (Postgres @>).
+
+        Example:
+            Brand.where_json_contains("aliases", ["Olay"])
+            # -> aliases @> '["Olay"]'::jsonb
+
+            Product.where_json_contains("metadata", {"active_deal": True})
+            # -> metadata @> '{"active_deal": true}'::jsonb
+        """
+        import json
+
+        return self.where_raw(f"{column} @> %s::jsonb", [json.dumps(value)])
+
+    def or_where_json_contains(self, column: str, value):
+        """OR-joined variant of where_json_contains."""
+        import json
+
+        return self.or_where_raw(f"{column} @> %s::jsonb", [json.dumps(value)])
+
+    def where_json_doesnt_contain(self, column: str, value):
+        """Inverse of where_json_contains."""
+        import json
+
+        return self.where_raw(f"NOT ({column} @> %s::jsonb)", [json.dumps(value)])
+
+    def where_json_path(self, column: str, path, operator: str = "=", value=None):
+        """
+        Filter by a nested JSON path extract.
+
+        Arguments:
+            column {string} -- The JSON column, e.g. "metadata".
+            path {string|list} -- Dotted string ("active_deal.savings_pct") or a list
+                of segments. Each segment is treated as a key name, not an array index.
+            operator {string} -- SQL comparison operator ("=", ">=", "!=", "LIKE", ...).
+            value -- The value to compare against (bound safely).
+
+        Example:
+            q.where_json_path("metadata", "external_order_id", "=", "ord_123")
+            # -> metadata->>'external_order_id' = %s
+        """
+        # Two-arg form: where_json_path(column, path, value) with operator defaulted to "="
+        if value is None and operator not in (
+            "=", "!=", "<>", ">", ">=", "<", "<=", "LIKE", "ILIKE", "NOT LIKE", "NOT ILIKE",
+        ):
+            value = operator
+            operator = "="
+        sql_col = self._json_path_sql(column, path)
+        return self.where_raw(f"{sql_col} {operator} %s", [value])
+
+    def or_where_json_path(self, column: str, path, operator: str = "=", value=None):
+        """OR-joined variant of where_json_path."""
+        if value is None and operator not in (
+            "=", "!=", "<>", ">", ">=", "<", "<=", "LIKE", "ILIKE", "NOT LIKE", "NOT ILIKE",
+        ):
+            value = operator
+            operator = "="
+        sql_col = self._json_path_sql(column, path)
+        return self.or_where_raw(f"{sql_col} {operator} %s", [value])
+
+    def where_json_length(self, column: str, operator_or_value, value=None):
+        """
+        Filter by length of a jsonb array column.
+
+        Example:
+            q.where_json_length("aliases", ">", 0)       # jsonb_array_length(aliases) > 0
+            q.where_json_length("aliases", 3)            # jsonb_array_length(aliases) = 3
+        """
+        if value is None:
+            operator, val = "=", operator_or_value
+        else:
+            operator, val = operator_or_value, value
+        return self.where_raw(
+            f"jsonb_array_length({column}) {operator} %s", [val]
+        )
+
+    def where_json_key_exists(self, column: str, key: str):
+        """
+        Filter rows whose jsonb object contains the given top-level key (Postgres ?).
+
+        Example:
+            q.where_json_key_exists("metadata", "active_deal")
+            # -> metadata ? 'active_deal'
+        """
+        esc = self._escape_json_path_segment(key)
+        return self.where_raw(f"{column} ? '{esc}'")
+
     def or_where(self, column, *args):
         """
         Specifies an or where query expression.
@@ -1732,13 +1882,18 @@ class QueryBuilder(ObservesEvents):
             date_fields = model.get_dates()
             for key, value in updates.items():
                 if key in date_fields:
-                    if value:
+                    if value is not None:
                         updates[key] = model.get_new_datetime_string(value)
                     else:
                         updates[key] = value
                 # Cast value if necessary
+                # NOTE: Must use `is not None` — NOT `if value` — because
+                # falsy values like {}, [], 0, False are valid data that
+                # still need casting (e.g. json.dumps({}) → "{}").
+                # Using truthiness would skip the cast for these values,
+                # causing psycopg2 "can't adapt type 'dict'" errors.
                 if cast:
-                    if value:
+                    if value is not None:
                         updates[key] = model.cast_value(key, value)
                     else:
                         updates[key] = value
@@ -2542,6 +2697,42 @@ class QueryBuilder(ObservesEvents):
         explanation = self.statement(f"EXPLAIN {sql}")
         return explanation
 
+    def dump_sql(self, pretty: bool = True):
+        """Compile the query without executing and return (sql, bindings).
+
+        Equivalent to Laravel's ``$query->toSql() + $query->getBindings()`` in one
+        call. Uses the qmark path so bindings are isolated from the SQL string.
+
+        Example:
+            sql, params = Product.active().where("id", 5).dump_sql()
+        """
+        # to_qmark() has a side effect of resetting the builder; take a copy first
+        # so subsequent calls on the original builder still work.
+        cloned = deepcopy(self)
+        grammar = cloned.get_grammar()
+        cloned.run_scopes()
+        sql = grammar.compile(cloned._action, qmark=True).to_sql()
+        bindings = list(grammar._bindings)
+        if pretty:
+            # Swap '?' placeholders for %s for psycopg-style display
+            sql = sql.replace("'?'", "%s")
+        return sql, bindings
+
+    def debug_sql(self):
+        """Print compiled SQL + bindings to stderr (dev-aid). Returns self for chaining.
+
+        Example:
+            rows = Product.active().where("brand", "Olay").debug_sql().get()
+            # stderr: [SQL] SELECT ... FROM "product" WHERE "brand" = %s
+            # stderr: [BIND] ['Olay']
+        """
+        import sys
+
+        sql, bindings = self.dump_sql()
+        print(f"[SQL] {sql}", file=sys.stderr)
+        print(f"[BIND] {bindings}", file=sys.stderr)
+        return self
+
     def run_scopes(self):
         for name, scope in self._global_scopes.get(self._action, {}).items():
             scope(self)
@@ -2995,6 +3186,63 @@ class QueryBuilder(ObservesEvents):
             )
 
         return len(self._upsert_values)
+
+    def bulk_update(
+        self,
+        records: List[Dict[str, Any]],
+        key: str = "id",
+        update_columns: Optional[List[str]] = None,
+    ):
+        """Bulk update multiple records in a single query using PostgreSQL VALUES + UPDATE FROM.
+
+        Args:
+            records: List of dicts, each must contain the key column
+            key: Column to match records on (default: "id")
+            update_columns: Columns to update (if None, updates all except key)
+
+        Returns:
+            Number of affected rows
+
+        Example:
+            Product.bulk_update([
+                {"id": 1, "price": 9.99, "status": "active"},
+                {"id": 2, "price": 19.99, "status": "inactive"},
+            ], key="id", update_columns=["price", "status"])
+        """
+        if not records:
+            return 0
+
+        # Determine columns to update
+        if update_columns is None:
+            update_columns = [k for k in records[0].keys() if k != key]
+
+        if not update_columns:
+            return 0
+
+        # Build VALUES clause
+        all_columns = [key] + update_columns
+        placeholders = []
+        bindings = []
+        for record in records:
+            row_placeholders = []
+            for col in all_columns:
+                bindings.append(record.get(col))
+                row_placeholders.append("%s")
+            placeholders.append(f"({', '.join(row_placeholders)})")
+
+        values_clause = ', '.join(placeholders)
+        col_defs = ', '.join(f'"{c}"' for c in all_columns)
+        set_clause = ', '.join(f'"{c}" = _bulk."{c}"' for c in update_columns)
+        table = self._table.name if hasattr(self._table, 'name') else str(self._table)
+
+        sql = f'''
+            UPDATE "{table}" SET {set_clause}
+            FROM (VALUES {values_clause}) AS _bulk({col_defs})
+            WHERE "{table}"."{key}" = _bulk."{key}"
+        '''
+
+        connection = self.new_connection()
+        return connection.query(sql, tuple(bindings))
 
     def cursor(self, chunk_size: int = 1000):
         """

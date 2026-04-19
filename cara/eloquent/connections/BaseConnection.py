@@ -10,6 +10,7 @@ class BaseConnection:
     _connection = None
     _cursor = None
     _dry = False
+    SLOW_QUERY_THRESHOLD_MS = 500  # 500ms default
 
     def dry(self):
         self._dry = True
@@ -44,12 +45,24 @@ class BaseConnection:
             )
 
         self._cursor.execute(query, bindings)
-        end = "{:.2f}".format(timer() - start)
+        elapsed_ms = (timer() - start) * 1000  # Convert to ms
+        elapsed_formatted = "{:.2f}".format(elapsed_ms / 1000)
+
+        # Slow query detection
+        threshold = (self.full_details or {}).get(
+            "slow_query_threshold_ms", self.SLOW_QUERY_THRESHOLD_MS
+        )
+        if elapsed_ms >= threshold:
+            from cara.facades import Log
+            Log.warning(
+                f"SLOW QUERY ({elapsed_ms:.0f}ms): {query[:500]}",
+                category="slow_query",
+            )
 
         # Log query if either connection-specific log_queries is True
         # or if LOG_DB_QUERIES is enabled via logging config
         if self.full_details and self.full_details.get("log_queries", False):
-            self.log(query, bindings, query_time=end)
+            self.log(query, bindings, query_time=elapsed_formatted)
 
     def has_global_connection(self):
         """Check if there's a global connection - removed circular dependency"""

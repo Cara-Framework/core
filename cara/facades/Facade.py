@@ -27,13 +27,15 @@ class Facade(type):
             The attribute from the resolved service
 
         Raises:
+            RuntimeError: If bootstrap is unavailable and no fallback exists
             AttributeError: If service cannot be resolved or attribute doesn't exist
         """
         try:
             from bootstrap import application
-        except (ImportError, ModuleNotFoundError):
-            # Graceful fallback when bootstrap isn't available
-            # (e.g. running stress tests outside the full Cara framework)
+        except (ImportError, ModuleNotFoundError, TypeError):
+            # Handle bootstrap unavailability with targeted fallbacks
+            # (e.g. running stress tests outside the full Cara framework,
+            # or Python version mismatch causing TypeError on 3.10+ syntax)
             if cls.key == "logger":
                 import logging
                 _fallback = logging.getLogger("cara.fallback")
@@ -42,24 +44,28 @@ class Facade(type):
                     _h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
                     _fallback.addHandler(_h)
                     _fallback.setLevel(logging.DEBUG)
-                return getattr(_fallback, attribute)
-            # For any other facade, return a no-op that supports method chaining
-            class _NoOpResult:
-                def __getattr__(self, name):
-                    return lambda *a, **kw: _NoOpResult()
-                def __bool__(self):
-                    return False
-                def __iter__(self):
-                    return iter([])
-                def __call__(self, *a, **kw):
-                    return _NoOpResult()
-                def items(self): return []
-                def all(self): return {}
-                def fails(self): return False
-                def passes(self): return True
-                def errors(self): return _NoOpResult()
-                def get(self, *a, **kw): return None
-            return lambda *a, **kw: _NoOpResult()
+                _orig = getattr(_fallback, attribute)
+                # Wrap to strip extra kwargs (e.g. category=) that stdlib doesn't support
+                def _safe_log(*args, _orig_fn=_orig, **kwargs):
+                    # Only pass kwargs that stdlib logging accepts
+                    safe_kwargs = {k: v for k, v in kwargs.items()
+                                   if k in ("exc_info", "stack_info", "stacklevel", "extra")}
+                    return _orig_fn(*args, **safe_kwargs)
+                return _safe_log
+            if cls.key == "DB":
+                # Fallback: use DatabaseManager directly when bootstrap fails
+                from cara.eloquent.DatabaseManager import DatabaseManager
+                _db = DatabaseManager.get_instance()
+                return getattr(_db, attribute)
+            if cls.key == "validation":
+                # Fallback: use Validation directly when bootstrap fails (common in scripts)
+                from cara.validation import Validation
+                return getattr(Validation, attribute)
+            # No fallback available - raise clear error
+            raise RuntimeError(
+                f"Facade '{cls.key}' is unavailable: application container not bootstrapped. "
+                f"Ensure bootstrap.py is properly imported and the application is initialized."
+            )
 
         # Handle IPython introspection methods
         if cls._is_private_method(attribute):

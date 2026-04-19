@@ -14,7 +14,7 @@ class Cors:
     validating origins, and managing CORS headers in both preflight and actual requests.
     """
 
-    def __init__(self, application: "Application", options: dict | None = None):
+    def __init__(self, application: "Application", options=None):
         """
         Initialize CORS service.
 

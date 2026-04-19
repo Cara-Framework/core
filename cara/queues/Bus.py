@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from cara.queues.contracts import Queueable
     from cara.queues.tracking import JobTracker
+    from cara.queues.contracts import UniqueJob
 
 
 class Bus:
@@ -64,6 +65,16 @@ class Bus:
             # Run synchronously WITH tracking
             return await Bus._run_sync_with_tracking(job)
         else:
+            # Check if job is UniqueJob and already locked
+            from cara.queues.contracts import UniqueJob
+            if isinstance(job, UniqueJob):
+                uid = job.unique_id()
+                if UniqueJob.is_unique_locked(uid):
+                    from cara.facades import Log
+                    Log.debug(f"UniqueJob skipped (already locked): {uid}")
+                    return None  # Silent drop
+                UniqueJob.acquire_unique_lock(uid, job.unique_for)
+            
             # Dispatch to queue
             params = Bus.get_dispatch_params(job)
             dispatch_call = job.__class__.dispatch(**params)

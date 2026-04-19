@@ -44,11 +44,17 @@ class MiddlewareProvider(DeferredProvider):
     @property
     def default_ws_middleware(self) -> List[MiddlewareClass]:
         """
-        Core WebSocket middleware that's always available.
+        Core WebSocket middleware that runs globally on every connection.
+
+        Authentication is intentionally *not* global — it is registered as an
+        opt-in alias (``ws.auth``) in :meth:`_register_core_aliases` so routes
+        can declare auth requirements explicitly. Making auth global would
+        reject every unauthenticated WebSocket (e.g. public live feeds) with a
+        4006 close code regardless of the user's ``middleware.websocket``
+        configuration.
         """
         return [
             LogWSRequests,
-            Authenticate,
         ]
 
     @staticmethod
@@ -137,8 +143,13 @@ class MiddlewareProvider(DeferredProvider):
         # Create capsule
         capsule = MiddlewareCapsule(application)
 
-        # Add core middleware aliases (available in all apps)
-        MiddlewareProvider._register_core_aliases(capsule)
+        # Add core middleware aliases (available in all apps). Each transport
+        # gets its own alias set so HTTP capsules don't leak ``ws.auth`` and
+        # WS capsules don't leak ``auth``/``can``/``throttle``.
+        if bind_name == "middleware_http":
+            MiddlewareProvider._register_core_http_aliases(capsule)
+        elif bind_name == "middleware_ws":
+            MiddlewareProvider._register_core_ws_aliases(capsule)
 
         # Get user configuration
         user_config = config(config_key, default={})
@@ -158,15 +169,16 @@ class MiddlewareProvider(DeferredProvider):
         application.bind(bind_name, capsule)
 
     @staticmethod
-    def _register_core_aliases(capsule) -> None:
-        """
-        Register core framework middleware aliases.
-        These are available in all Cara applications by default.
-        """
-        # Core HTTP middleware aliases
+    def _register_core_http_aliases(capsule) -> None:
+        """Register core HTTP middleware aliases available in all apps."""
         capsule.add_alias("auth", ShouldAuthenticate)
         capsule.add_alias("can", CanPerform)
         capsule.add_alias("throttle", ThrottleRequests)
+
+    @staticmethod
+    def _register_core_ws_aliases(capsule) -> None:
+        """Register core WebSocket middleware aliases (opt-in per route)."""
+        capsule.add_alias("ws.auth", Authenticate)
 
     def register(self) -> None:
         """Register HTTP and WebSocket middleware."""

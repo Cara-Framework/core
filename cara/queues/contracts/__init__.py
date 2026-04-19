@@ -5,6 +5,7 @@ from .Queue import Queue
 from .Queueable import Queueable
 from .SerializesModels import SerializesModels
 from .ShouldQueue import ShouldQueue
+from .UniqueJob import UniqueJob
 
 __all__ = [
     "Queue",
@@ -15,4 +16,5 @@ __all__ = [
     "BaseJob",
     "CancellableJob",
     "JobCancelledException",
+    "UniqueJob",
 ]

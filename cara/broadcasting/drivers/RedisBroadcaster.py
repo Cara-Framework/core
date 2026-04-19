@@ -314,14 +314,6 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                                 channel = channel.decode("utf-8")
 
                             unprefixed_channel = self._unprefix_channel(channel)
-                            local_subs = self.channel_subscribers.get(
-                                unprefixed_channel, set()
-                            )
-                            if local_subs:
-                                Log.debug(
-                                    f"Redis listener received message on {channel} (unprefixed={unprefixed_channel})",
-                                    category="cara.broadcasting",
-                                )
                             try:
                                 data = json.loads(message["data"])
                             except Exception:
@@ -330,16 +322,26 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                                 )
                                 continue
 
+                            event_name = (
+                                data.get("event", "?") if isinstance(data, dict) else "?"
+                            )
                             local_subs = self.channel_subscribers.get(
                                 unprefixed_channel, set()
                             )
                             if local_subs:
+                                Log.info(
+                                    f"📡 WS BROADCAST: '{event_name}' -> "
+                                    f"{len(local_subs)} subscribers on {unprefixed_channel}",
+                                    category="cara.broadcasting",
+                                )
                                 failed_connections = []
+                                delivered = 0
                                 for connection_id in local_subs.copy():
                                     websocket = self.connections.get(connection_id)
                                     if websocket:
                                         try:
                                             await websocket.send_json(data)
+                                            delivered += 1
                                         except Exception as e:
                                             Log.warning(
                                                 f"Failed to send Redis message to {connection_id}: {e}"
@@ -349,6 +351,20 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                                 # Clean up failed connections after the loop
                                 for connection_id in failed_connections:
                                     await self.remove_connection(connection_id)
+
+                                if failed_connections:
+                                    Log.warning(
+                                        f"📡 WS BROADCAST: '{event_name}' delivered "
+                                        f"{delivered}/{len(local_subs)} on {unprefixed_channel} "
+                                        f"({len(failed_connections)} failed)",
+                                        category="cara.broadcasting",
+                                    )
+                            else:
+                                Log.debug(
+                                    f"Redis listener: no local subscribers on "
+                                    f"{unprefixed_channel} — dropping '{event_name}'",
+                                    category="cara.broadcasting",
+                                )
 
                     except asyncio.CancelledError:
                         Log.info("Redis listener cancelled", category="cara.broadcasting")
@@ -429,13 +445,10 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         if len(self.connections) >= self.max_connections:
             raise Exception(f"Maximum connections ({self.max_connections}) exceeded")
 
-        # Log connection details
-        Log.info(
-            f"Broadcasting: Adding connection {connection_id} for user {user_id or 'anonymous'}",
-            category="cara.broadcasting",
-        )
-        Log.info(
-            f"RB.add_connection: now total_connections(before_add)={len(self.connections)}",
+        # Log connection details (debug — LogWSRequests emits the canonical CONNECT line)
+        Log.debug(
+            f"RB.add_connection: {connection_id} user={user_id or 'anonymous'} "
+            f"total_connections(before_add)={len(self.connections)}",
             category="cara.broadcasting",
         )
 
@@ -538,8 +551,8 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         if connection_id not in self.connections:
             return
 
-        Log.info(
-            f"Broadcasting: Removing connection {connection_id}",
+        Log.debug(
+            f"RB.remove_connection: {connection_id}",
             category="cara.broadcasting",
         )
 

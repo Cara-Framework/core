@@ -297,6 +297,10 @@ class Model(
             "where_from_builder",
             "where_has",
             "where_in",
+            "where_json_contains",
+            "where_json_doesnt_contain",
+            "where_json_path",
+            "or_where_json_contains",
             "where_like",
             "where_not_between",
             "where_not_in",
@@ -776,12 +780,9 @@ class Model(
                     value = model.get_new_date(value)
                 dic.update({key: value})
 
-            # TEST: Hydration logging for debugging
-            from cara.facades import Log
-
-            Log.debug(
-                f"Hydrating Model {cls.__name__}", category="cara.eloquent.hydrate"
-            )
+            # Hydration logging disabled for performance
+            # from cara.facades import Log
+            # Log.debug(f"Hydrating Model {cls.__name__}", category="cara.eloquent.hydrate")
 
             model.observe_events(model, "hydrating")
             model.__attributes__.update(dic or {})
@@ -1279,10 +1280,27 @@ class Model(
                 # Call the accessor with the raw value (bound method call)
                 return accessor_method(self, raw_value)
 
-        new_name_accessor = "get_" + attribute + "_attribute"
+        # Check for non-decorated accessor methods (Laravel-style naming convention)
+        non_decorated_accessor = "get_" + attribute + "_attribute"
+        if non_decorated_accessor in self.__class__.__dict__:
+            accessor_method = self.__class__.__dict__[non_decorated_accessor]
+            # Get the raw value for non-decorated accessors
+            if (
+                "__dirty_attributes__" in self.__dict__
+                and attribute in self.__dict__["__dirty_attributes__"]
+            ):
+                raw_value = self.__dict__["__dirty_attributes__"][attribute]
+            elif (
+                "__attributes__" in self.__dict__
+                and attribute in self.__dict__["__attributes__"]
+            ):
+                raw_value = self.__dict__["__attributes__"][attribute]
+            else:
+                # For virtual attributes (no stored value), pass None
+                raw_value = None
 
-        if (new_name_accessor) in self.__class__.__dict__:
-            return self.__class__.__dict__.get(new_name_accessor)(self)
+            # Call the accessor method with raw value
+            return accessor_method(self, raw_value)
 
         if (
             "__dirty_attributes__" in self.__dict__
@@ -1379,13 +1397,11 @@ class Model(
         if mutator_method_name in self.__class__.__dict__:
             mutator_method = self.__class__.__dict__[mutator_method_name]
             if hasattr(mutator_method, "_is_mutator"):
+                # Decorated mutator (receives self and value)
                 value = mutator_method(self, value)
             else:
-                # Legacy Laravel-style mutator support
-                value = mutator_method(value)
-        elif hasattr(self, "set_" + attribute + "_attribute"):
-            method = getattr(self, "set_" + attribute + "_attribute")
-            value = method(value)
+                # Non-decorated mutator (legacy support - receives self and value)
+                value = mutator_method(self, value)
 
         if attribute in self.__casts__:
             value = self._set_cast_attribute(attribute, value)

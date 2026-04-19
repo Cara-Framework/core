@@ -8,7 +8,7 @@ Follows HttpConductor architecture with proper route resolution and middleware.
 from itertools import chain
 from typing import Any, Dict
 
-from cara.exceptions import MiddlewareNotFoundException
+from cara.exceptions import MiddlewareNotFoundException, WebSocketException
 from cara.facades import Log
 from cara.support import Pipeline
 from cara.websocket import Socket
@@ -91,6 +91,14 @@ class WebsocketConductor:
             await Pipeline(self.socket, application=self.application).through(
                 global_middleware
             )(full_handler)
+        except WebSocketException as e:
+            # Known/expected WS errors (e.g. client-close race on send → 4002).
+            # These are benign — client dropped mid-handler. Log at debug only.
+            Log.debug(
+                f"WebSocket connection ended: {e}",
+                category="cara.websocket",
+            )
+            raise
         except Exception as e:
             Log.error(f"Error in WebSocket connection: {e}")
             raise

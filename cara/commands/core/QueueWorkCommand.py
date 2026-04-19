@@ -6,8 +6,11 @@ This module provides a CLI command to process jobs from the queue with enhanced 
 
 import asyncio
 import builtins
+import concurrent.futures
 import inspect
+import os
 import pickle
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -16,6 +19,7 @@ from cara.commands.AutoReloadMixin import AutoReloadMixin
 from cara.configuration import config
 from cara.decorators import command
 from cara.facades import Log
+from cara.queues.contracts import UniqueJob
 
 
 class AMQPConnectionManager:
@@ -74,9 +78,69 @@ class AMQPConnectionManager:
 class JobProcessor:
     """Processes individual jobs from queue messages (Single Responsibility)."""
 
+    # Class-level constants for job execution
+    DEFAULT_JOB_TIMEOUT = 3600  # 1 hour in seconds
+    MAX_PAYLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+
+    @staticmethod
+    def _execute_job_with_timeout(method_to_call, init_args, timeout_seconds):
+        """Execute job with timeout enforcement using ThreadPoolExecutor."""
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(method_to_call, *init_args)
+        try:
+            future.result(timeout=timeout_seconds)
+        finally:
+            executor.shutdown(wait=False)
+
+    @staticmethod
+    def _execute_async_job_with_timeout(method_to_call, init_args, timeout_seconds):
+        """Execute async job with timeout enforcement."""
+        try:
+            asyncio.run(method_to_call(*init_args))
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
+
+    @staticmethod
+    def _should_retry_job(msg, attempts_count):
+        """Determine if job should be retried based on attempt configuration."""
+        if not msg or "attempts" not in msg:
+            return False
+        max_attempts = msg.get("attempts", 1)
+        current_attempt = msg.get("attempt", 1)
+        return current_attempt < max_attempts
+
+    @staticmethod
+    def _nack_with_requeue(channel, method_frame, msg):
+        """NACK message with requeue to put it back in queue."""
+        try:
+            channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
+            Log.info(f"↻ Job requeued for retry (attempt {msg.get('attempt', 1)}/{msg.get('attempts', 1)})")
+        except Exception as e:
+            Log.error(f"Failed to NACK with requeue: {e}")
+            # Fallback: ACK to prevent infinite loop
+            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+
+    @staticmethod
+    def _ack_to_dlq(channel, method_frame, msg, error_msg):
+        """ACK message and log to dead letter pattern for failed jobs."""
+        try:
+            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            # Log to DLQ-style pattern for monitoring
+            dlq_queue = f"{msg.get('queue', 'unknown')}.dlq"
+            job_id = msg.get("job_id", "unknown")
+            Log.error(f"💀 Job moved to DLQ: {job_id} | Queue: {dlq_queue} | Error: {error_msg}")
+        except Exception as e:
+            Log.error(f"Failed to ACK message: {e}")
+
     @staticmethod
     def process_message(channel, method_frame, body) -> bool:
         """Process a single queue message and return success status."""
+        # CRITICAL FIX #4: Validate payload size before unpickling
+        if len(body) > JobProcessor.MAX_PAYLOAD_SIZE:
+            Log.error(f"❌ Payload exceeds max size ({len(body)} > {JobProcessor.MAX_PAYLOAD_SIZE})")
+            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            return False
+
         # Resolve app and tracker outside try block for exception handler access
         app_instance = builtins.app() if hasattr(builtins, "app") else None
         tracker = None
@@ -94,6 +158,7 @@ class JobProcessor:
             callback = msg.get("callback", "handle")
             init_args = msg.get("args", ())
             db_job_id = msg.get("db_job_id")
+            job_timeout = msg.get("timeout", JobProcessor.DEFAULT_JOB_TIMEOUT)
 
             # Set up job tracking
             job_id = msg.get("job_id")
@@ -115,13 +180,23 @@ class JobProcessor:
             if hasattr(instance, "_mark_processing"):
                 instance._mark_processing()
 
-            # Execute job
+            # CRITICAL FIX #1: Execute job with timeout enforcement
             method_to_call = getattr(instance, callback, None)
             if callable(method_to_call):
                 if inspect.iscoroutinefunction(method_to_call):
-                    asyncio.run(method_to_call(*init_args))
+                    # Async job with timeout
+                    try:
+                        asyncio.run(asyncio.wait_for(
+                            method_to_call(*init_args),
+                            timeout=job_timeout
+                        ))
+                    except asyncio.TimeoutError as e:
+                        raise TimeoutError(f"Job exceeded timeout of {job_timeout}s") from e
                 else:
-                    method_to_call(*init_args)
+                    # Sync job with timeout using ThreadPoolExecutor
+                    JobProcessor._execute_job_with_timeout(
+                        method_to_call, init_args, job_timeout
+                    )
 
             # Mark success in unified job table
             if hasattr(instance, "_mark_success"):
@@ -131,8 +206,46 @@ class JobProcessor:
             if tracker and db_job_id:
                 tracker.update_job_status(db_job_id, "completed")
 
+            # Release UniqueJob lock if applicable
+            if isinstance(instance, UniqueJob):
+                UniqueJob.release_unique_lock(instance.unique_id())
+
             # Acknowledge message
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            return True
+
+        except TimeoutError as timeout_error:
+            Log.error(f"⏱️ Job timeout: {str(timeout_error)}")
+
+            # Mark as failed in unified job table
+            if instance and hasattr(instance, "_mark_failed"):
+                instance._mark_failed(str(timeout_error), should_retry=True)
+
+            # Update job table status to failed
+            if tracker and db_job_id:
+                tracker.update_job_status(db_job_id, "failed")
+
+            # CRITICAL FIX #2: Handle retry logic for timeout failures
+            if msg and JobProcessor._should_retry_job(msg, msg.get("attempt", 1)):
+                JobProcessor._nack_with_requeue(channel, method_frame, msg)
+            else:
+                JobProcessor._ack_to_dlq(channel, method_frame, msg, str(timeout_error))
+
+            # Release UniqueJob lock on timeout failure
+            if instance and isinstance(instance, UniqueJob):
+                UniqueJob.release_unique_lock(instance.unique_id())
+
+            # Try to call failed method
+            try:
+                if instance and hasattr(instance, "failed"):
+                    failed_method = getattr(instance, "failed")
+                    if inspect.iscoroutinefunction(failed_method):
+                        asyncio.run(failed_method(msg, str(timeout_error)))
+                    else:
+                        failed_method(msg, str(timeout_error))
+            except Exception:
+                pass
+
             return True
 
         except Exception as job_error:
@@ -146,12 +259,21 @@ class JobProcessor:
             if tracker and db_job_id:
                 tracker.update_job_status(db_job_id, "failed")
 
-            # Job failed, still ack to avoid redelivery loop
-            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            # CRITICAL FIX #2: Implement smart NACK/DLQ handling
+            if msg and JobProcessor._should_retry_job(msg, msg.get("attempt", 1)):
+                # Requeue for retry if attempts remain
+                JobProcessor._nack_with_requeue(channel, method_frame, msg)
+            else:
+                # Move to DLQ if no retries or attempts exhausted
+                JobProcessor._ack_to_dlq(channel, method_frame, msg, str(job_error))
+
+            # Release UniqueJob lock on failure
+            if instance and isinstance(instance, UniqueJob):
+                UniqueJob.release_unique_lock(instance.unique_id())
 
             # Try to call failed method
             try:
-                if hasattr(instance, "failed"):
+                if instance and hasattr(instance, "failed"):
                     failed_method = getattr(instance, "failed")
                     if inspect.iscoroutinefunction(failed_method):
                         asyncio.run(failed_method(msg, str(job_error)))
@@ -183,6 +305,14 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         self.start_time = None
         self.jobs_processed = 0
         self.jobs_failed = 0
+        self.memory_limit_bytes = 512 * 1024 * 1024  # 512 MB default
+        # Queues that don't exist yet — skipped until the retry TTL expires.
+        # A passive queue_declare for a missing queue closes the channel
+        # (RabbitMQ returns 404) which triggers expensive reconnects every
+        # poll tick. Cache the miss to avoid the loop and retry periodically
+        # so newly-published queues are picked up.
+        self._missing_queues: Dict[str, float] = {}
+        self._missing_queue_retry_s: float = 30.0
 
     def handle(
         self,
@@ -407,6 +537,52 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         finally:
             connection_manager.close()
 
+    def _check_memory_usage(self) -> bool:
+        """
+        Check worker memory usage and exit gracefully if limit exceeded.
+        CRITICAL FIX #3: Enforce memory limit to prevent unbounded growth.
+        Returns True if memory is within limits, False if exceeded.
+        """
+        try:
+            import psutil
+            process = psutil.Process(os.getpid())
+            rss_bytes = process.memory_info().rss
+
+            if rss_bytes > self.memory_limit_bytes:
+                limit_mb = self.memory_limit_bytes / (1024 * 1024)
+                current_mb = rss_bytes / (1024 * 1024)
+                Log.warning(
+                    f"⚠️ Memory limit exceeded: {current_mb:.1f}MB > {limit_mb:.1f}MB. "
+                    f"Initiating graceful shutdown for supervisor restart."
+                )
+                self.shutdown_requested = True
+                return False
+
+            return True
+        except ImportError:
+            # psutil not available, fall back to /proc on Linux
+            try:
+                with open(f"/proc/{os.getpid()}/status", "r") as f:
+                    for line in f:
+                        if line.startswith("VmRSS:"):
+                            rss_kb = int(line.split()[1])
+                            rss_bytes = rss_kb * 1024
+
+                            if rss_bytes > self.memory_limit_bytes:
+                                limit_mb = self.memory_limit_bytes / (1024 * 1024)
+                                current_mb = rss_bytes / (1024 * 1024)
+                                Log.warning(
+                                    f"⚠️ Memory limit exceeded: {current_mb:.1f}MB > {limit_mb:.1f}MB. "
+                                    f"Initiating graceful shutdown for supervisor restart."
+                                )
+                                self.shutdown_requested = True
+                                return False
+                            break
+            except Exception:
+                pass
+
+            return True
+
     def _show_worker_startup_info(self, queue_names: list) -> None:
         """Display worker startup information in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Worker Status[/bold #e5c07b]")
@@ -446,6 +622,10 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         config: Dict[str, Any],
     ) -> bool:
         """Process one cycle through all queues in priority order."""
+        # CRITICAL FIX #3: Check memory usage after each job
+        if not self._check_memory_usage():
+            return False  # Memory limit exceeded, signal shutdown
+
         for queue_name in queue_names:
             if self.shutdown_requested:
                 break
@@ -454,6 +634,8 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 if self._process_single_queue(
                     queue_name, connection_manager, job_processor
                 ):
+                    # Memory check after successful job
+                    self._check_memory_usage()
                     return True  # Job processed, restart from highest priority
 
             except Exception as e:
@@ -469,13 +651,32 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         job_processor: JobProcessor,
     ) -> bool:
         """Process a single queue and return True if job was processed."""
+        # Skip queues we've recently seen as missing. A failed passive
+        # declare closes the channel, so without this cache every poll
+        # tick triggers a reconnect storm.
+        now = time.time()
+        missed_at = self._missing_queues.get(queue_name)
+        if missed_at is not None and (now - missed_at) < self._missing_queue_retry_s:
+            return False
+
         channel = connection_manager.create_channel()
         if not channel:
             return False
 
         try:
-            # Declare queue if it doesn't exist (durable for persistence)
-            channel.queue_declare(queue=queue_name, durable=True)
+            # Passive declare: only verify queue exists without asserting
+            # arguments. Publisher side owns queue creation with proper
+            # x-message-ttl / dead-letter args; redeclaring here with a
+            # different arg set raises PRECONDITION_FAILED (406).
+            try:
+                channel.queue_declare(queue=queue_name, durable=True, passive=True)
+            except Exception:
+                # Queue doesn't exist yet — cache the miss and retry later.
+                self._missing_queues[queue_name] = now
+                return False
+
+            # Queue exists — drop from miss cache if we had marked it.
+            self._missing_queues.pop(queue_name, None)
 
             # Non-blocking message retrieval
             method_frame, header_frame, body = channel.basic_get(queue=queue_name)

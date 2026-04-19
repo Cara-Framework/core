@@ -131,8 +131,17 @@ class Notifiable(Notifiable):
             notification_ids: List of notification IDs to mark as read.
                             If None, marks all as read.
         """
-        # This would typically update the database
-        pass
+        from commons.models.core import Notification
+        import pendulum
+
+        query = Notification.where('user_id', self.id)
+
+        if notification_ids:
+            query = query.where_in('id', notification_ids)
+
+        query.update({
+            'read_at': pendulum.now('UTC'),
+        })
 
     def mark_as_unread(self, notification_ids: Optional[List[str]] = None) -> None:
         """
@@ -142,8 +151,16 @@ class Notifiable(Notifiable):
             notification_ids: List of notification IDs to mark as unread.
                             If None, marks all as unread.
         """
-        # This would typically update the database
-        pass
+        from commons.models.core import Notification
+
+        query = Notification.where('user_id', self.id)
+
+        if notification_ids:
+            query = query.where_in('id', notification_ids)
+
+        query.update({
+            'read_at': None,
+        })
 
     def get_notification_key(self) -> Any:
         """
@@ -167,3 +184,35 @@ class Notifiable(Notifiable):
             The entity's type/class name
         """
         return self.__class__.__name__
+
+    def notification_preferences(self, notification_type: str) -> List[str]:
+        """
+        Get user's preferred channels for a notification type.
+
+        Checks the user_preference table for a key like "notification.{type}"
+        and returns the stored channel preferences. If no preference is set,
+        returns an empty list (allowing the notification to use its default channels).
+
+        Args:
+            notification_type: The type of notification (e.g., 'price_alert', 'deal_alert')
+
+        Returns:
+            List of preferred channel names, or empty list if no preference set
+        """
+        from commons.models.core import UserPreference
+        import json
+
+        pref = UserPreference.where('user_id', self.id).where(
+            'key', f'notification.{notification_type}'
+        ).first()
+
+        if pref:
+            try:
+                channels = json.loads(pref.value)
+                if isinstance(channels, list):
+                    return channels
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Return empty list = use notification's default channels
+        return []

@@ -201,6 +201,62 @@ class Schema:
         sql = self.connection_manager.platform.disable_foreign_key_constraints()
         return self.query_executor.execute_query(sql)
 
+    def raw(self, sql, bindings=()):
+        """Execute raw SQL - escape hatch used by migrations for DDL the
+        Blueprint DSL does not cover (e.g. ``CREATE EXTENSION``, trigram/GIN
+        indexes, custom ``ALTER TABLE`` constraints).
+        """
+        return self.query_executor.execute_query(sql, bindings)
+
+    def statement(self, sql, bindings=()):
+        """Alias for raw — mirrors the Laravel ``DB::statement`` naming so
+        migrations reading Laravel docs feel natural."""
+        return self.query_executor.execute_query(sql, bindings)
+
+    # === Postgres-specific index helpers ==========================================
+
+    def gin_index(self, table, column, opclass=None, name=None, if_not_exists=True):
+        """Create a Postgres GIN index.
+
+        Arguments:
+            table    {str}        -- Table to index.
+            column   {str|list}   -- Column name, "col opclass" expression string,
+                                     or list of column expressions for composite GIN.
+            opclass  {str|None}   -- Operator class (e.g. "gin_trgm_ops", "jsonb_path_ops").
+                                     Applied to all columns when given.
+            name     {str|None}   -- Index name. Defaults to ``idx_{table}_{col}_gin``.
+            if_not_exists {bool}  -- Emit IF NOT EXISTS for idempotent migrations.
+
+        Examples:
+            schema.gin_index("brand", "name", opclass="gin_trgm_ops")
+            schema.gin_index("product", "search_vector")
+            schema.gin_index("brand", "aliases", opclass="jsonb_path_ops")
+        """
+        return self._create_using_index("GIN", table, column, opclass, name, if_not_exists)
+
+    def gist_index(self, table, column, opclass=None, name=None, if_not_exists=True):
+        """Create a Postgres GiST index. Same signature as gin_index."""
+        return self._create_using_index("GIST", table, column, opclass, name, if_not_exists)
+
+    def _create_using_index(self, method, table, column, opclass, name, if_not_exists):
+        columns = column if isinstance(column, (list, tuple)) else [column]
+
+        def _col_expr(c):
+            # If caller already embedded an opclass (e.g. "name gin_trgm_ops"), trust it.
+            if " " in c.strip():
+                return c
+            return f"{c} {opclass}" if opclass else c
+
+        col_sql = ", ".join(_col_expr(c) for c in columns)
+
+        first_col = columns[0].strip().split()[0]
+        default_name = f"idx_{table}_{first_col}_{method.lower()}"
+        index_name = name or default_name
+
+        ine = "IF NOT EXISTS " if if_not_exists else ""
+        sql = f"CREATE INDEX {ine}{index_name} ON {table} USING {method} ({col_sql})"
+        return self.query_executor.execute_query(sql)
+
     # === Information Methods - Single Responsibility ===
 
     def get_connection_information(self):

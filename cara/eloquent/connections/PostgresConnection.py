@@ -1,3 +1,5 @@
+import threading
+
 from cara.exceptions import DriverNotFoundException, QueryException
 
 from ..query.grammars import PostgresGrammar
@@ -5,6 +7,7 @@ from ..query.processors import PostgresPostProcessor
 from ..schema.platforms import PostgresPlatform
 from .BaseConnection import BaseConnection
 
+_pool_lock = threading.Lock()
 CONNECTION_POOL = []
 
 
@@ -75,34 +78,61 @@ class PostgresConnection(BaseConnection):
         if (
             self.full_details.get("connection_pooling_enabled")
             and initialize_size
-            and len(CONNECTION_POOL) < initialize_size
         ):
-            for _ in range(initialize_size - len(CONNECTION_POOL)):
-                connection = psycopg2.connect(
-                    database=self.database,
-                    user=self.user,
-                    password=self.password,
-                    host=self.host,
-                    port=self.port,
-                    sslmode=self.options.get("sslmode"),
-                    sslcert=self.options.get("sslcert"),
-                    sslkey=self.options.get("sslkey"),
-                    sslrootcert=self.options.get("sslrootcert"),
-                    options=(
-                        f"-c search_path={self.schema or self.full_details.get('schema')}"
-                        if self.schema or self.full_details.get("schema")
-                        else ""
-                    ),
-                )
-                CONNECTION_POOL.append(connection)
+            with _pool_lock:
+                # Re-check pool size inside the lock to avoid race condition
+                if len(CONNECTION_POOL) < initialize_size:
+                    for _ in range(initialize_size - len(CONNECTION_POOL)):
+                        connection = psycopg2.connect(
+                            database=self.database,
+                            user=self.user,
+                            password=self.password,
+                            host=self.host,
+                            port=self.port,
+                            sslmode=self.options.get("sslmode"),
+                            sslcert=self.options.get("sslcert"),
+                            sslkey=self.options.get("sslkey"),
+                            sslrootcert=self.options.get("sslrootcert"),
+                            options=(
+                                f"-c search_path={self.schema or self.full_details.get('schema')}"
+                                if self.schema or self.full_details.get("schema")
+                                else ""
+                            ),
+                        )
+                        CONNECTION_POOL.append(connection)
 
-        if (
-            self.full_details.get("connection_pooling_enabled")
-            and CONNECTION_POOL
-            and len(CONNECTION_POOL) > 0
-        ):
-            connection = CONNECTION_POOL.pop()
-        else:
+        # Try to get a connection from the pool
+        connection = None
+        if self.full_details.get("connection_pooling_enabled"):
+            with _pool_lock:
+                if len(CONNECTION_POOL) > 0:
+                    connection = CONNECTION_POOL.pop()
+
+        # If we got a pooled connection, validate it's still healthy
+        if connection:
+            try:
+                if connection.closed:
+                    # Connection is dead, create a new one
+                    connection = None
+                else:
+                    # Reset any aborted/pending transaction state before reuse
+                    if connection.info.transaction_status != 0:  # 0 = IDLE
+                        connection.rollback()
+                    connection.autocommit = True
+                    # Verify the connection is actually alive with a simple query
+                    cursor = connection.cursor()
+                    cursor.execute("SELECT 1")
+                    cursor.close()
+            except Exception:
+                # Connection validation failed, create a new one
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+                connection = None
+
+        # If no valid pooled connection, create a new one
+        if not connection:
             connection = psycopg2.connect(
                 database=self.database,
                 user=self.user,
@@ -138,40 +168,118 @@ class PostgresConnection(BaseConnection):
         return PostgresPostProcessor
 
     def reconnect(self):
-        pass
+        """Close and re-create the connection."""
+        if self._connection is not None:
+            try:
+                self._connection.close()
+            except Exception:
+                pass
+            self._connection = None
+
+        # Reset transaction state
+        self.transaction_level = 0
+
+        # Create a fresh connection
+        self.make_connection()
 
     def close_connection(self):
-        if (
-            self.full_details.get("connection_pooling_enabled")
-            and len(CONNECTION_POOL) < self.connection_pool_size
-        ):
-            CONNECTION_POOL.append(self._connection)
+        if self._connection is None:
+            return
+
+        if self.full_details.get("connection_pooling_enabled"):
+            with _pool_lock:
+                # Enforce max pool size strictly
+                if len(CONNECTION_POOL) < self.connection_pool_size:
+                    try:
+                        # Ensure the connection is in a clean state before returning to pool
+                        if not self._connection.closed:
+                            # Roll back any pending/aborted transaction before resetting autocommit.
+                            # psycopg2 raises ProgrammingError("set_session cannot be used
+                            # inside a transaction") if we set autocommit while a transaction
+                            # is still open (e.g. after a failed query).
+                            if self._connection.info.transaction_status != 0:  # 0 = IDLE
+                                self._connection.rollback()
+                            self._connection.autocommit = True
+                            CONNECTION_POOL.append(self._connection)
+                        else:
+                            # Already closed — discard
+                            pass
+                    except Exception:
+                        # If anything goes wrong, just close it
+                        try:
+                            self._connection.close()
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        self._connection.close()
+                    except Exception:
+                        pass
         else:
-            self._connection.close()
+            try:
+                self._connection.close()
+            except Exception:
+                pass
 
         self._connection = None
 
-    def commit(self):
-        """Transaction."""
-        if self.get_transaction_level() == 1:
-            self._connection.commit()
-            self._connection.autocommit = True
+    def savepoint(self, name):
+        """Create a savepoint within the current transaction."""
+        self._connection.autocommit = False
+        cursor = self._connection.cursor()
+        cursor.execute(f"SAVEPOINT {name}")
+        cursor.close()
+        self.transaction_level += 1
 
+    def rollback_to_savepoint(self, name):
+        """Rollback to a savepoint."""
+        cursor = self._connection.cursor()
+        cursor.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        cursor.close()
         self.transaction_level -= 1
 
+    def release_savepoint(self, name):
+        """Release a savepoint (commit it)."""
+        cursor = self._connection.cursor()
+        cursor.execute(f"RELEASE SAVEPOINT {name}")
+        cursor.close()
+        self.transaction_level -= 1
+
+    def commit(self):
+        """Transaction."""
+        try:
+            if self.transaction_level > 1:
+                # Nested — release savepoint
+                self.release_savepoint(f"sp_{self.transaction_level - 1}")
+                return
+            if self.transaction_level == 1:
+                self._connection.commit()
+                self._connection.autocommit = True
+        finally:
+            self.transaction_level -= 1
+
     def begin(self):
-        """Postgres Transaction."""
+        """Postgres Transaction with savepoint support for nesting."""
+        if self.transaction_level > 0:
+            # Nested transaction — use savepoint
+            self.savepoint(f"sp_{self.transaction_level}")
+            return self
         self._connection.autocommit = False
         self.transaction_level += 1
         return self
 
     def rollback(self):
-        """Transaction."""
-        if self.get_transaction_level() == 1:
-            self._connection.rollback()
-            self._connection.autocommit = True
-
-        self.transaction_level -= 1
+        """Transaction with savepoint support for nesting."""
+        try:
+            if self.transaction_level > 1:
+                # Nested — rollback to savepoint
+                self.rollback_to_savepoint(f"sp_{self.transaction_level - 1}")
+                return
+            if self.transaction_level == 1:
+                self._connection.rollback()
+                self._connection.autocommit = True
+        finally:
+            self.transaction_level -= 1
 
     def get_transaction_level(self):
         """Transaction."""

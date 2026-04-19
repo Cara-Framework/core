@@ -442,6 +442,8 @@ class {class_name}(Migration):
             table.enum(field_name, options)
         elif field_type == "json":
             table.json(field_name)
+        elif field_type == "jsonb":
+            table.jsonb(field_name)
         elif field_type == "float":
             table.float(field_name)
         elif field_type == "binary":

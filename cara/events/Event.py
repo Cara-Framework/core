@@ -244,7 +244,9 @@ class Event:
                         await listener.handle(event)
                     else:
                         # Async mode - fire and forget (non-blocking)
-                        asyncio.create_task(listener.handle(event))
+                        task = asyncio.create_task(listener.handle(event))
+                        # Add error callback to prevent silent exception loss
+                        task.add_done_callback(self._handle_task_exception)
                 else:
                     # Sync listener - call directly
                     listener.handle(event)
@@ -298,6 +300,23 @@ class Event:
         """
         return isinstance(listener, ShouldQueue)
 
+    def _handle_task_exception(self, task: asyncio.Task) -> None:
+        """
+        Handle exceptions from fire-and-forget async listener tasks.
+
+        Called when a fire-and-forget task completes. If the task raised an exception,
+        logs it via Log.error() to prevent silent exception loss.
+
+        Args:
+            task: The completed asyncio task
+        """
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass  # Task was cancelled, ignore
+        except Exception as e:
+            Log.error(f"Fire-and-forget listener failed with exception: {str(e)}", exc_info=True)
+
     def _queue_listener(self, listener: Listener, event: Event) -> bool:
         """
         Queue a listener for background processing.
@@ -340,8 +359,28 @@ class Event:
         """
         Static method to fire an event (alias for dispatch).
 
+        Properly handles both sync and async contexts by checking ExecutionContext
+        and scheduling the coroutine appropriately.
+
         Args:
             event: The event instance to fire
         """
+        from cara.context import ExecutionContext
+
         instance = Event()
-        instance.dispatch(event)
+        coro = instance.dispatch(event)
+
+        if ExecutionContext.is_sync():
+            # Sync context - must run the coroutine to completion
+            # Create a new event loop if none exists
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop - create one
+                asyncio.run(coro)
+            else:
+                # Running loop exists - schedule as task
+                asyncio.create_task(coro)
+        else:
+            # Async context - schedule as task
+            asyncio.create_task(coro)
