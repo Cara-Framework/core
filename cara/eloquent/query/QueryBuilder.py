@@ -122,6 +122,8 @@ class QueryBuilder(ObservesEvents):
         self._macros = {}
 
         self._aggregates = ()
+        # Unions registered via union()/union_all() — list of (builder, all)
+        self._unions = []
 
         self._limit = False
         self._offset = False
@@ -1337,7 +1339,23 @@ class QueryBuilder(ObservesEvents):
                 "You must specify a model in order to use relationship methods"
             )
 
-        return getattr(builder._model, relationship)
+        # ``builder._model`` may be an unhydrated instance — in that case
+        # ``getattr(instance, rel)`` triggers the descriptor's instance-path
+        # (lazy-load from ``__attributes__``) and KeyErrors on the local key.
+        # Resolve via the descriptor on the class (walking the MRO).
+        import inspect as _inspect
+        owner = builder._model if _inspect.isclass(builder._model) else type(builder._model)
+        rel = owner.__dict__.get(relationship)
+        if rel is None:
+            for base in owner.__mro__:
+                if relationship in base.__dict__:
+                    rel = base.__dict__[relationship]
+                    break
+        if rel is None:
+            raise AttributeError(
+                f"Relation '{relationship}' is not defined on {owner.__name__}"
+            )
+        return rel
 
     def has(self, *relationships):
         if not self._model:
@@ -1352,7 +1370,7 @@ class QueryBuilder(ObservesEvents):
                     related = last_builder.get_relation(split_relationship)
                     last_builder = related.query_has(last_builder)
             else:
-                related = getattr(self._model, relationship)
+                related = self._resolve_relation_descriptor(relationship)
                 related.query_has(self)
         return self
 
@@ -1381,7 +1399,7 @@ class QueryBuilder(ObservesEvents):
                         method="or_where_exists",
                     )
             else:
-                related = getattr(self._model, relationship)
+                related = self._resolve_relation_descriptor(relationship)
                 related.query_has(self, method="or_where_exists")
         return self
 
@@ -1409,7 +1427,7 @@ class QueryBuilder(ObservesEvents):
                         method="where_not_exists",
                     )
             else:
-                related = getattr(self._model, relationship)
+                related = self._resolve_relation_descriptor(relationship)
                 related.query_has(self, method="where_not_exists")
         return self
 
@@ -1437,7 +1455,7 @@ class QueryBuilder(ObservesEvents):
                         method="or_where_not_exists",
                     )
             else:
-                related = getattr(self._model, relationship)
+                related = self._resolve_relation_descriptor(relationship)
                 related.query_has(self, method="or_where_not_exists")
         return self
 
@@ -1463,7 +1481,7 @@ class QueryBuilder(ObservesEvents):
                     continue
                 last_builder = related.query_has(last_builder, method="where_exists")
         else:
-            related = getattr(self._model, relationship)
+            related = self._resolve_relation_descriptor(relationship)
             related.query_where_exists(self, callback, method="where_exists")
         return self
 
@@ -1489,7 +1507,7 @@ class QueryBuilder(ObservesEvents):
 
                 last_builder = related.query_has(last_builder, method="or_where_exists")
         else:
-            related = getattr(self._model, relationship)
+            related = self._resolve_relation_descriptor(relationship)
             related.query_where_exists(self, callback, method="or_where_exists")
         return self
 
@@ -1505,9 +1523,8 @@ class QueryBuilder(ObservesEvents):
             for index, split_relationship in enumerate(relationship.split(".")):
                 related = last_builder.get_relation(split_relationship)
                 if index + 1 == split_count:
-                    last_builder = getattr(
-                        last_builder._model,
-                        split_relationship,
+                    last_builder = last_builder.get_relation(
+                        split_relationship
                     ).query_where_exists(
                         last_builder,
                         callback,
@@ -1519,7 +1536,7 @@ class QueryBuilder(ObservesEvents):
                     last_builder, method="where_not_exists"
                 )
         else:
-            related = getattr(self._model, relationship)
+            related = self._resolve_relation_descriptor(relationship)
             related.query_where_exists(self, callback, method="where_not_exists")
         return self
 
@@ -1535,9 +1552,8 @@ class QueryBuilder(ObservesEvents):
             for index, split_relationship in enumerate(relationship.split(".")):
                 related = last_builder.get_relation(split_relationship)
                 if index + 1 == split_count:
-                    last_builder = getattr(
-                        last_builder._model,
-                        split_relationship,
+                    last_builder = last_builder.get_relation(
+                        split_relationship
                     ).query_where_exists(
                         last_builder,
                         callback,
@@ -1550,16 +1566,75 @@ class QueryBuilder(ObservesEvents):
                     method="or_where_not_exists",
                 )
         else:
-            related = getattr(self._model, relationship)
+            related = self._resolve_relation_descriptor(relationship)
             related.query_where_exists(self, callback, method="or_where_not_exists")
         return self
 
-    def with_count(self, relationship, callback=None):
-        self.select(*self._model.get_selects())
-        return getattr(self._model, relationship).get_with_count_query(
-            self, callback=callback
-        )
+    def with_count(self, *relationships, callback=None):
+        """
+        Add ``{relationship}_count`` to the selected columns for each
+        relation. Laravel parity: accepts a single string, multiple
+        positional strings, a list/tuple, or a dict of
+        ``{relation: callback}`` for constrained counts.
 
+        Examples::
+
+            Post.with_count("comments")
+            Post.with_count("comments", "likes")
+            Post.with_count(["comments", "likes"])
+            Post.with_count({"comments": lambda q: q.where("approved", True)})
+        """
+        if not relationships:
+            return self
+
+        # Flatten heterogeneous inputs to a list of ``(name, callback)``
+        # pairs so callers can mix-and-match shapes.
+        pairs = []
+
+        def _push(spec, inherited_cb):
+            if spec is None:
+                return
+            if isinstance(spec, str):
+                pairs.append((spec, inherited_cb))
+            elif isinstance(spec, (list, tuple, set)):
+                for item in spec:
+                    _push(item, inherited_cb)
+            elif isinstance(spec, dict):
+                for name, cb in spec.items():
+                    if isinstance(name, str):
+                        pairs.append((name, cb if callable(cb) else inherited_cb))
+
+        for r in relationships:
+            _push(r, callback)
+
+        self.select(*self._model.get_selects())
+        builder = self
+        for name, cb in pairs:
+            rel = self._resolve_relation_descriptor(name)
+            builder = rel.get_with_count_query(builder, callback=cb, relation_name=name)
+        return builder
+
+
+    def _resolve_relation_descriptor(self, name):
+        """Fetch the relationship *descriptor* (not an instance-level proxy).
+
+        ``getattr(instance, rel_name)`` triggers HasMany/HasOne.__get__ on
+        instance paths which lazy-loads; we need the raw descriptor for
+        subquery building. Walk the MRO to find it.
+        """
+        import inspect as _inspect
+        owner = self._model if _inspect.isclass(self._model) else type(self._model)
+        rel = owner.__dict__.get(name)
+        if rel is None:
+            for base in owner.__mro__:
+                if name in base.__dict__:
+                    rel = base.__dict__[name]
+                    break
+        if rel is None:
+            raise AttributeError(
+                f"Relation '{name}' is not defined on {owner.__name__}"
+            )
+        return rel
 
     def with_sum(self, relationship, column, callback=None):
         """Eager load a relationship's SUM aggregate.
@@ -1571,8 +1646,8 @@ class QueryBuilder(ObservesEvents):
             # product.prices_price_min_sum = 150.00
         """
         self.select(*self._model.get_selects())
-        return getattr(self._model, relationship).get_with_sum_query(
-            self, column, callback=callback
+        return self._resolve_relation_descriptor(relationship).get_with_sum_query(
+            self, column, callback=callback, relation_name=relationship
         )
 
     def with_avg(self, relationship, column, callback=None):
@@ -1585,8 +1660,8 @@ class QueryBuilder(ObservesEvents):
             # product.prices_price_avg = 75.50
         """
         self.select(*self._model.get_selects())
-        return getattr(self._model, relationship).get_with_avg_query(
-            self, column, callback=callback
+        return self._resolve_relation_descriptor(relationship).get_with_avg_query(
+            self, column, callback=callback, relation_name=relationship
         )
 
     def with_min(self, relationship, column, callback=None):
@@ -1599,8 +1674,8 @@ class QueryBuilder(ObservesEvents):
             # product.prices_price_min = 10.00
         """
         self.select(*self._model.get_selects())
-        return getattr(self._model, relationship).get_with_min_query(
-            self, column, callback=callback
+        return self._resolve_relation_descriptor(relationship).get_with_min_query(
+            self, column, callback=callback, relation_name=relationship
         )
 
     def with_max(self, relationship, column, callback=None):
@@ -1613,8 +1688,8 @@ class QueryBuilder(ObservesEvents):
             # product.prices_price_max = 200.00
         """
         self.select(*self._model.get_selects())
-        return getattr(self._model, relationship).get_with_max_query(
-            self, column, callback=callback
+        return self._resolve_relation_descriptor(relationship).get_with_max_query(
+            self, column, callback=callback, relation_name=relationship
         )
 
     def tap(self, callback):
@@ -2403,95 +2478,61 @@ class QueryBuilder(ObservesEvents):
                 or self._eager_relation.nested_eagers
                 or self._eager_relation.callback_eagers
             ) and hydrated_model:
-                # Process all registered relations
-                all_relations = (
+                # Normalize every registered eager spec — raw strings
+                # ("product"), dotted nested strings ("product.current_price",
+                # "product.container.marketplace"), lists/tuples, and dicts
+                # (``{"product": callback_fn}``) — into an ordered map of
+                # ``{top_level_relation: [nested_path_strings...]}``. The
+                # nested paths are passed to each relationship's
+                # ``get_related(..., eagers=[...])`` so the chain continues
+                # recursively: BelongsTo/HasMany/HasOne/BelongsToMany all
+                # call ``builder.with_(eagers)`` internally, which rebuilds
+                # the same EagerRelations → QueryBuilder pipeline for the
+                # next level. Laravel parity: eager-load `product.current_price`
+                # loads `product`, then eager-loads `current_price` on that
+                # Product model in a second query.
+                normalized, callbacks = self._normalize_eager_specs(
                     self._eager_relation.get_relations()
                     + self._eager_relation.get_eagers()
                 )
-                for eager_load in set(all_relations):  # Remove duplicates
-                    if isinstance(eager_load, dict):
-                        # Nested
-                        for (
-                            relation,
-                            eagers,
-                        ) in eager_load.items():
-                            callback = None
-                            if inspect.isclass(self._model):
-                                related = getattr(self._model, relation)
-                            elif callable(eagers):
-                                related = getattr(self._model, relation)
-                                callback = eagers
-                            else:
-                                related = self._model.get_related(relation)
+                # Merge any pre-registered callback_eagers (from
+                # register(dict) path) into callbacks map.
+                for rel_name, cb in getattr(
+                    self._eager_relation, "callback_eagers", {}
+                ).items():
+                    head = rel_name.split(".")[0] if rel_name else rel_name
+                    if head and callable(cb):
+                        callbacks.setdefault(head, cb)
 
-                            result_set = related.get_related(
-                                self,
-                                hydrated_model,
-                                eagers=eagers,
-                                callback=callback,
-                            )
+                for relation, nested in normalized.items():
+                    try:
+                        if inspect.isclass(self._model):
+                            related = getattr(self._model, relation)
+                            if callable(related) and not hasattr(
+                                related, "get_related"
+                            ):
+                                related = related()
+                        else:
+                            related = self._model.get_related(relation)
 
-                            self._register_relationships_to_model(
-                                related,
-                                result_set,
-                                hydrated_model,
-                                relation_key=relation,
-                            )
-                    elif isinstance(eager_load, str):
-                        # Single string relation
-                        try:
-                            if inspect.isclass(self._model):
-                                # Get relationship instance (now works as property)
-                                related = getattr(self._model, eager_load)
-                                # If it's a function (old style), call it to get relationship
-                                if callable(related) and not hasattr(
-                                    related, "get_related"
-                                ):
-                                    related = related()
-                            else:
-                                related = self._model.get_related(eager_load)
+                        result_set = related.get_related(
+                            self,
+                            hydrated_model,
+                            eagers=nested,
+                            callback=callbacks.get(relation),
+                        )
 
-                            result_set = related.get_related(self, hydrated_model)
+                        self._register_relationships_to_model(
+                            related,
+                            result_set,
+                            hydrated_model,
+                            relation_key=relation,
+                        )
+                    except Exception as e:
+                        from cara.facades import Log
 
-                            self._register_relationships_to_model(
-                                related,
-                                result_set,
-                                hydrated_model,
-                                relation_key=eager_load,
-                            )
-                        except Exception as e:
-                            from cara.facades import Log
-
-                            Log.error(f"Error processing eager {eager_load}: {str(e)}")
-                            raise
-                    else:
-                        # List/tuple of relations
-                        for eager in eager_load:
-                            try:
-                                if inspect.isclass(self._model):
-                                    # Get relationship instance (now works as property)
-                                    related = getattr(self._model, eager)
-                                    # If it's a function (old style), call it to get relationship
-                                    if callable(related) and not hasattr(
-                                        related, "get_related"
-                                    ):
-                                        related = related()
-                                else:
-                                    related = self._model.get_related(eager)
-
-                                result_set = related.get_related(self, hydrated_model)
-
-                                self._register_relationships_to_model(
-                                    related,
-                                    result_set,
-                                    hydrated_model,
-                                    relation_key=eager,
-                                )
-                            except Exception as e:
-                                from cara.facades import Log
-
-                                Log.error(f"Error processing eager {eager}: {str(e)}")
-                                raise
+                        Log.error(f"Error processing eager {relation}: {str(e)}")
+                        raise
 
             if collection:
                 return hydrated_model if result else Collection([])
@@ -2502,6 +2543,69 @@ class QueryBuilder(ObservesEvents):
             return Collection(result) if result else Collection([])
         else:
             return result or None
+
+    @staticmethod
+    def _normalize_eager_specs(raw_list):
+        """
+        Flatten a mixed list of eager specs into a two-tuple:
+
+        - ``relations``: ordered ``{top_level: [nested_path_strings...]}``
+        - ``callbacks``: ``{top_level: callable}`` extracted from dict specs
+
+        Accepted spec shapes::
+
+            "product"                              # simple
+            "product.current_price"                # dotted
+            ["product", "product.images"]          # list/tuple
+            {"product": callback_fn}               # callback
+            {"product": ["current_price"]}         # list of nested
+            {"product.current_price": callback_fn} # dotted+callback
+
+        Duplicates are deduped, preserving insertion order. Calling
+        ``with_(["product", "product.images"])`` produces
+        ``{"product": ["images"]}`` so ``product`` is loaded once and
+        the nested ``images`` is chained via ``get_related(eagers=...)``.
+        """
+        relations = {}
+        callbacks = {}
+
+        def _add(spec):
+            if spec is None:
+                return
+            if isinstance(spec, str):
+                if not spec:
+                    return
+                head, _, tail = spec.partition(".")
+                bucket = relations.setdefault(head, [])
+                if tail and tail not in bucket:
+                    bucket.append(tail)
+            elif isinstance(spec, (list, tuple, set)):
+                for item in spec:
+                    _add(item)
+            elif isinstance(spec, dict):
+                for key, value in spec.items():
+                    if not isinstance(key, str) or not key:
+                        continue
+                    head, _, tail = key.partition(".")
+                    bucket = relations.setdefault(head, [])
+                    if tail and tail not in bucket:
+                        bucket.append(tail)
+                    if callable(value):
+                        callbacks[head] = value
+                    elif isinstance(value, (list, tuple, set)):
+                        for sub in value:
+                            if isinstance(sub, str) and sub:
+                                if sub not in bucket:
+                                    bucket.append(sub)
+                    elif isinstance(value, str) and value:
+                        if value not in bucket:
+                            bucket.append(value)
+            # other types are ignored (non-actionable specs)
+
+        for entry in raw_list:
+            _add(entry)
+
+        return relations, callbacks
 
     def _register_relationships_to_model(
         self,
@@ -2684,6 +2788,8 @@ class QueryBuilder(ObservesEvents):
         self.run_scopes()
         grammar = self.get_grammar()
         sql = grammar.compile(self._action, qmark=False).to_sql()
+        if self._unions:
+            sql = self._append_unions_sql(sql, qmark=False)
         return sql
 
     def explain(self):
@@ -2753,9 +2859,28 @@ class QueryBuilder(ObservesEvents):
 
         self._bindings = grammar._bindings
 
+        if self._unions:
+            sql = self._append_unions_sql(sql, qmark=True)
+
         self.reset()
 
         return sql
+
+    def _append_unions_sql(self, base_sql, qmark=False):
+        """Append UNION / UNION ALL clauses by compiling each union builder
+        and concatenating its SQL + bindings to the base statement.
+        """
+        parts = [base_sql]
+        for child, all_flag in self._unions:
+            cloned = deepcopy(child)
+            cloned.run_scopes()
+            child_grammar = cloned.get_grammar()
+            child_sql = child_grammar.compile(cloned._action, qmark=qmark).to_sql()
+            kw = "UNION ALL" if all_flag else "UNION"
+            parts.append(f"{kw} ({child_sql})")
+            if qmark:
+                self._bindings = tuple(self._bindings) + tuple(child_grammar._bindings)
+        return " ".join(parts)
 
     def new(self):
         """
@@ -3323,3 +3448,156 @@ class QueryBuilder(ObservesEvents):
             # If we got less than chunk_size, we've reached the end
             if len(chunk_result) < chunk_size:
                 break
+
+    # ===== UNION =====
+    def union(self, query, all=False):
+        """Append a UNION (or UNION ALL) clause from another QueryBuilder.
+
+        Args:
+            query: A QueryBuilder instance whose result set should be unioned.
+            all: When True, emit UNION ALL (keeps duplicates).
+
+        Returns:
+            self
+        """
+        if hasattr(query, "get_builder"):
+            query = query.get_builder()
+        self._unions.append((query, bool(all)))
+        return self
+
+    def union_all(self, query):
+        """Shortcut for ``union(query, all=True)``."""
+        return self.union(query, all=True)
+
+    # ===== CHUNK BY ID / LAZY ITERATION =====
+    def chunk_by_id(self, chunk_size: int, callback: Callable, column: str = "id"):
+        """Process results in keyset-paginated chunks ordered by ``column``.
+
+        Safer than ``chunk`` for mutating operations because it uses a
+        ``WHERE column > last_id`` cursor instead of ``OFFSET`` (which can skip
+        rows when records are deleted mid-iteration).
+        """
+        last_id = None
+        while True:
+            builder = self.clone()
+            if last_id is not None:
+                builder = builder.where(column, ">", last_id)
+            results = builder.order_by(column, "asc").limit(chunk_size).get()
+
+            if not results or (hasattr(results, "is_empty") and results.is_empty()):
+                break
+
+            result = callback(results)
+            if result is False:
+                return False
+
+            last_record = results[-1] if hasattr(results, "__getitem__") else None
+            if last_record is None:
+                break
+            last_id = (
+                getattr(last_record, column, None)
+                if not isinstance(last_record, dict)
+                else last_record.get(column)
+            )
+            if last_id is None:
+                break
+
+            count = len(results) if hasattr(results, "__len__") else results.count()
+            if count < chunk_size:
+                break
+
+        return True
+
+    def lazy(self, chunk_size: int = 1000):
+        """Generator interface over ``chunk`` — yields individual records.
+
+        Equivalent of Laravel's ``lazy()``. Memory-efficient streaming.
+        """
+        page = 1
+        while True:
+            offset = (page - 1) * chunk_size
+            builder = self.clone()
+            results = builder.limit(chunk_size).offset(offset).get()
+            if not results or (hasattr(results, "is_empty") and results.is_empty()):
+                break
+            for record in results:
+                yield record
+            count = len(results) if hasattr(results, "__len__") else results.count()
+            if count < chunk_size:
+                break
+            page += 1
+
+    def lazy_by_id(self, chunk_size: int = 1000, column: str = "id"):
+        """Keyset-cursor generator — yields individual records in id order.
+
+        Same safety properties as ``chunk_by_id`` but exposed as a generator.
+        """
+        last_id = None
+        while True:
+            builder = self.clone()
+            if last_id is not None:
+                builder = builder.where(column, ">", last_id)
+            results = builder.order_by(column, "asc").limit(chunk_size).get()
+            if not results or (hasattr(results, "is_empty") and results.is_empty()):
+                break
+            count = 0
+            last_record = None
+            for record in results:
+                yield record
+                last_record = record
+                count += 1
+            if last_record is None:
+                break
+            last_id = (
+                getattr(last_record, column, None)
+                if not isinstance(last_record, dict)
+                else last_record.get(column)
+            )
+            if last_id is None or count < chunk_size:
+                break
+
+    # ===== CURSOR PAGINATE =====
+    def cursor_paginate(self, per_page: int, cursor=None, column: str = "id", direction: str = "asc"):
+        """Laravel-style cursor pagination.
+
+        Returns a CursorPaginator carrying the rows and next/prev cursor strings.
+        Use the cursor returned in the response on subsequent calls to fetch the
+        next page. Avoids OFFSET — stable under inserts/deletes.
+
+        Args:
+            per_page: Page size.
+            cursor: Opaque cursor string from a previous response.
+            column: Column to keyset-paginate by (must be unique + indexed).
+            direction: "asc" or "desc".
+
+        Returns:
+            CursorPaginator
+        """
+        from ..pagination import CursorPaginator
+
+        builder = self.clone()
+        op = ">" if direction == "asc" else "<"
+        decoded = CursorPaginator.decode(cursor) if cursor else None
+        if decoded is not None:
+            builder = builder.where(column, op, decoded)
+
+        # Fetch one extra to know whether a next page exists.
+        results = (
+            builder.order_by(column, direction).limit(per_page + 1).get()
+        )
+
+        has_more = len(results) > per_page
+        if has_more:
+            results = results[:per_page]
+
+        next_cursor = None
+        if has_more and len(results) > 0:
+            last = results[-1]
+            value = (
+                getattr(last, column, None)
+                if not isinstance(last, dict)
+                else last.get(column)
+            )
+            next_cursor = CursorPaginator.encode(value)
+
+        return CursorPaginator(results, per_page, next_cursor, cursor)

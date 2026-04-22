@@ -4,6 +4,7 @@ from .CheckMaintenanceMode import CheckMaintenanceMode
 from .HandleCors import HandleCors
 from .LogHttpRequests import LogHttpRequests
 from .ResetAuth import ResetAuth
+from .SecurityHeaders import SecurityHeaders
 from .ServeStaticFiles import ServeStaticFiles
 from .ShouldAuthenticate import ShouldAuthenticate
 from .ThrottleRequests import ThrottleRequests
@@ -14,6 +15,7 @@ __all__ = [
     "ShouldAuthenticate",
     "ServeStaticFiles",
     "HandleCors",
+    "SecurityHeaders",
     "ThrottleRequests",
     "TrimStrings",
     "CanPerform",

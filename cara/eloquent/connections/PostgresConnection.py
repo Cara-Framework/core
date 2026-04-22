@@ -321,9 +321,17 @@ class PostgresConnection(BaseConnection):
                 query = query.replace("'?'", "%s")
                 self.statement(query, bindings)
                 if results == 1:
+                    if cursor.description is None:
+                        return {}
                     return dict(cursor.fetchone() or {})
                 else:
-                    if "SELECT" in cursor.statusmessage:
+                    # `cursor.description` is only populated for result-bearing
+                    # statements (SELECT, RETURNING, …). DDL such as
+                    # CREATE MATERIALIZED VIEW reports a status message like
+                    # "SELECT N" even though it yields no rowset, which would
+                    # previously blow up in `fetchall()` with "no results to
+                    # fetch". Guarding on description keeps the behaviour safe.
+                    if "SELECT" in cursor.statusmessage and cursor.description is not None:
                         return cursor.fetchall()
                     return {}
         except Exception as e:

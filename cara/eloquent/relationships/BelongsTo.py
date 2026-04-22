@@ -162,3 +162,78 @@ class BelongsTo(BaseRelationship):
                 {self.foreign_key: related_record.__attributes__[self.local_key]}
             )
         )
+
+    # ===== Aggregate Subquery Support =====
+    #
+    # BelongsTo key layout: parent stores the FK in ``self.local_key``,
+    # related row identifies itself via ``self.foreign_key`` (usually ``id``).
+    # Correlated pattern: SELECT COUNT(*) FROM <related>
+    # WHERE <related>.<foreign_key> = <parent>.<local_key>
+
+    def _aggregate_subquery(self, builder, alias, agg_fn, callback):
+        related_table = self.get_builder().get_table_name()
+        if not builder._columns:
+            builder = builder.select("*")
+        def _make_sub(_unused_new):
+            sub = self.get_builder()
+            return (
+                agg_fn(sub)
+                .where_column(
+                    f"{related_table}.{self.foreign_key}",
+                    f"{builder.get_table_name()}.{self.local_key}",
+                )
+                .when(callback, lambda qq: callback(qq))
+            )
+        return builder.add_select(alias, _make_sub)
+
+    def _alias_base(self, relation_name):
+        return relation_name or self.get_builder().get_table_name()
+
+    def get_with_count_query(self, builder, callback=None, relation_name=None):
+        base = self._alias_base(relation_name)
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_count",
+            lambda q: q.count("*", dry=True),
+            callback,
+        )
+
+    def get_with_sum_query(self, builder, column, callback=None, relation_name=None):
+        base = self._alias_base(relation_name)
+        related_table = self.get_builder().get_table_name()
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_{column}_sum",
+            lambda q: q.sum(f"{related_table}.{column}", dry=True),
+            callback,
+        )
+
+    def get_with_avg_query(self, builder, column, callback=None, relation_name=None):
+        base = self._alias_base(relation_name)
+        related_table = self.get_builder().get_table_name()
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_{column}_avg",
+            lambda q: q.avg(f"{related_table}.{column}", dry=True),
+            callback,
+        )
+
+    def get_with_min_query(self, builder, column, callback=None, relation_name=None):
+        base = self._alias_base(relation_name)
+        related_table = self.get_builder().get_table_name()
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_{column}_min",
+            lambda q: q.min(f"{related_table}.{column}", dry=True),
+            callback,
+        )
+
+    def get_with_max_query(self, builder, column, callback=None, relation_name=None):
+        base = self._alias_base(relation_name)
+        related_table = self.get_builder().get_table_name()
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_{column}_max",
+            lambda q: q.max(f"{related_table}.{column}", dry=True),
+            callback,
+        )

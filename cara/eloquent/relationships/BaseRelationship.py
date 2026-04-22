@@ -127,7 +127,7 @@ class BaseRelationship:
             clause=clause,
         )
 
-    def get_with_count_query(self, builder, callback):
+    def get_with_count_query(self, builder, callback, relation_name=None):
         """Adds a clause to the query to get the record count of the relationship."""
         klass = self.__class__.__name__
         raise NotImplementedError(
@@ -135,28 +135,28 @@ class BaseRelationship:
         )
 
 
-    def get_with_sum_query(self, builder, column, callback):
+    def get_with_sum_query(self, builder, column, callback, relation_name=None):
         """Adds a clause to the query to get the sum of a column in the relationship."""
         klass = self.__class__.__name__
         raise NotImplementedError(
             f"{klass} relationship does not implement the 'get_with_sum_query' method"
         )
 
-    def get_with_avg_query(self, builder, column, callback):
+    def get_with_avg_query(self, builder, column, callback, relation_name=None):
         """Adds a clause to the query to get the average of a column in the relationship."""
         klass = self.__class__.__name__
         raise NotImplementedError(
             f"{klass} relationship does not implement the 'get_with_avg_query' method"
         )
 
-    def get_with_min_query(self, builder, column, callback):
+    def get_with_min_query(self, builder, column, callback, relation_name=None):
         """Adds a clause to the query to get the minimum of a column in the relationship."""
         klass = self.__class__.__name__
         raise NotImplementedError(
             f"{klass} relationship does not implement the 'get_with_min_query' method"
         )
 
-    def get_with_max_query(self, builder, column, callback):
+    def get_with_max_query(self, builder, column, callback, relation_name=None):
         """Adds a clause to the query to get the maximum of a column in the relationship."""
         klass = self.__class__.__name__
         raise NotImplementedError(

@@ -123,6 +123,44 @@ class Response(BaseResponse):
         self.factory.json(payload, status, headers)
         return self
 
+    def paginated(
+        self,
+        data: Any,
+        total: int,
+        limit: int,
+        offset: int = 0,
+        status: int = 200,
+        headers: Optional[Dict[str, str]] = None,
+        **extra_meta: Any,
+    ) -> "Response":
+        """JSON response for paginated list endpoints.
+
+        Wraps ``data`` under ``"data"`` and emits the standard pagination
+        envelope under ``"meta"``. ``extra_meta`` is merged into the meta
+        object (e.g. ``response.paginated(items, total, limit, offset,
+        sort_by="recent")``).
+
+        Any resource collection exposing ``to_array()`` / ``to_list()`` is
+        serialized automatically.
+        """
+        if hasattr(data, "to_array") and callable(data.to_array):
+            serialized = data.to_array()
+        elif hasattr(data, "to_list") and callable(data.to_list):
+            serialized = data.to_list()
+        else:
+            serialized = data
+
+        meta: Dict[str, Any] = {
+            "total": int(total),
+            "limit": int(limit),
+            "offset": int(offset),
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+
+        payload = {"data": serialized, "meta": meta}
+        return self.json(payload, status=status, headers=headers)
+
     def html(
         self,
         content: str,

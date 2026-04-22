@@ -126,15 +126,109 @@ class HasRelationships:
         """Load all records with specified relationships."""
         return cls.query().with_(*relations).get()
 
-    @classmethod
-    def load(cls, *loads):
-        """Alias for with_and_load for Laravel compatibility."""
-        return cls.query().with_(*loads)
+    def load(self, *relations):
+        """
+        Lazy eager-load relationships on an already-fetched model instance.
 
-    @classmethod
-    def load_missing(cls, *loads):
-        """Load missing relationships on already loaded models."""
-        return cls.query().with_(*loads)
+        Laravel parity::
+
+            p = Product.find(1)
+            p.load("current_price", "images", "container.marketplace")
+
+        Accepts dotted nested relations and list/dict specs (same shapes as
+        ``Model.with_()``). Results are merged into ``self._relations`` so
+        subsequent attribute access returns the cached value.
+        """
+        if not relations:
+            return self
+
+        # Re-query the model alone, but attach the requested eagers. We
+        # don't care about the record itself — the query builder populates
+        # ``_relations`` on the hydrated model via the eager-load pipeline,
+        # and we copy those back onto ``self``.
+        primary = self.get_primary_key() if hasattr(self, "get_primary_key") else "id"
+        value = getattr(self, primary, None)
+        if value is None:
+            return self
+
+        reloaded = self.__class__.query().with_(*relations).where(primary, value).first()
+        if reloaded is not None:
+            loaded = getattr(reloaded, "_relations", {}) or {}
+            for name, val in loaded.items():
+                self.set_relation(name, val)
+        return self
+
+    def load_missing(self, *relations):
+        """Laravel ``loadMissing``: only loads relationships not already loaded.
+
+        Dotted nested specs are inspected segment-by-segment so a partial
+        match (``product.current_price`` when ``product`` is loaded but
+        ``current_price`` is not) still triggers the necessary child load.
+        """
+        if not relations:
+            return self
+
+        # Flatten specs to a concrete list of top-level relation strings
+        # (with nested paths preserved) that we actually need to fetch.
+        flat = []
+        def _expand(spec):
+            if spec is None:
+                return
+            if isinstance(spec, str):
+                flat.append(spec)
+            elif isinstance(spec, (list, tuple, set)):
+                for item in spec:
+                    _expand(item)
+            elif isinstance(spec, dict):
+                for key in spec.keys():
+                    if isinstance(key, str):
+                        flat.append(key)
+        for r in relations:
+            _expand(r)
+
+        missing = []
+        for rel_path in flat:
+            head = rel_path.split(".")[0]
+            if not self.is_relation_loaded(head):
+                missing.append(rel_path)
+                continue
+            # Head is loaded; check nested tail on the loaded child
+            tail = rel_path[len(head) + 1:]
+            if tail:
+                child = self.get_related(head)
+                if child is None:
+                    continue
+                # Iterable collection — check any element
+                if hasattr(child, "__iter__") and not hasattr(child, "_relations"):
+                    # Collection
+                    for elem in child:
+                        if hasattr(elem, "is_relation_loaded") and not elem.is_relation_loaded(tail.split(".")[0]):
+                            missing.append(rel_path)
+                            break
+                else:
+                    if hasattr(child, "is_relation_loaded") and not child.is_relation_loaded(tail.split(".")[0]):
+                        missing.append(rel_path)
+
+        if missing:
+            self.load(*missing)
+        return self
+
+    def when_loaded(self, relation: str, callback=None, default=None):
+        """
+        Laravel ``whenLoaded`` helper for resources.
+
+        Returns ``callback(self.relation)`` when the relation has been
+        eager-loaded; otherwise returns ``default`` (or ``default()`` if
+        callable). If no callback is given, returns the raw relation value
+        when loaded, else ``default``.
+        """
+        if not self.is_relation_loaded(relation):
+            return default() if callable(default) else default
+
+        value = self.get_related(relation)
+        if callback is None:
+            return value
+        return callback(value)
 
     # ===== Serialization Support =====
 

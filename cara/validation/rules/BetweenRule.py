@@ -31,12 +31,25 @@ class BetweenRule(BaseRule):
         except (ValueError, AttributeError):
             return False
 
-        if isinstance(value, (str, list, tuple)):
-            length = len(value)
-            return min_val <= length <= max_val
+        if isinstance(value, bool):
+            return False
+
+        chain = params.get("_rules") or ()
+        numeric_context = "integer" in chain or "numeric" in chain
 
         if isinstance(value, (int, float)):
             return min_val <= value <= max_val
+
+        if isinstance(value, str):
+            if numeric_context:
+                try:
+                    return min_val <= float(value) <= max_val
+                except ValueError:
+                    return False
+            return min_val <= len(value) <= max_val
+
+        if isinstance(value, (list, tuple, dict)):
+            return min_val <= len(value) <= max_val
 
         return False
 

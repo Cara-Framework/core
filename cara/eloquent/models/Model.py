@@ -267,6 +267,12 @@ class Model(
             "order_by_raw",
             "order_by",
             "paginate",
+            "cursor_paginate",
+            "chunk_by_id",
+            "lazy",
+            "lazy_by_id",
+            "union",
+            "union_all",
             "right_join",
             "select_raw",
             "select",
@@ -1177,6 +1183,29 @@ class Model(
         if not record:
             return self.create(total, id_key=cls.get_primary_key())
         return record
+
+    @classmethod
+    def first_or_new(cls, wheres, values: Optional[dict] = None):
+        """
+        Laravel-style firstOrNew.
+        Get the first record matching the attributes, or a new (unpersisted)
+        instance hydrated with the merged attributes.
+
+        Returns:
+            Model
+        """
+        if values is None:
+            values = {}
+        self = cls()
+        record = self.where(wheres).first()
+        if record is not None:
+            return record
+        total = {}
+        total.update(values)
+        total.update(wheres)
+        instance = cls()
+        instance.fill(total)
+        return instance
 
     @classmethod
     def update_or_create(cls, wheres, updates):

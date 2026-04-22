@@ -120,16 +120,34 @@ class DatabaseDriver(HasColoredOutput, Queue):
                     attempts_done = int(job.get("attempts", 0))
 
                     if attempts_done + 1 < attempts and not failed_table:
-                        # Retry
+                        # Retry with exponential backoff delay
+                        # Delay: 2^attempt * base_delay (5s, 10s, 20s, 40s...)
+                        base_delay = int(merged.get("retry_base_delay", 5))
+                        backoff_seconds = base_delay * (2 ** attempts_done)
+                        retry_at = pendulum.now(tz=tz).add(seconds=backoff_seconds)
                         builder.where("id", job["id"]).update(
-                            {"attempts": attempts_done + 1}
+                            {
+                                "attempts": attempts_done + 1,
+                                "available_at": retry_at.to_datetime_string(),
+                            }
                         )
-                    elif failed_table:
-                        # Move to failed table
+                    elif attempts_done + 1 >= attempts and failed_table:
+                        # Move to failed table (exhausted retries)
                         self._move_to_failed(builder.new(), job, merged, str(e), tz)
                         builder.where("id", job["id"]).delete()
+                    elif failed_table:
+                        # Still has retries but failed_table configured — retry with backoff
+                        base_delay = int(merged.get("retry_base_delay", 5))
+                        backoff_seconds = base_delay * (2 ** attempts_done)
+                        retry_at = pendulum.now(tz=tz).add(seconds=backoff_seconds)
+                        builder.where("id", job["id"]).update(
+                            {
+                                "attempts": attempts_done + 1,
+                                "available_at": retry_at.to_datetime_string(),
+                            }
+                        )
                     else:
-                        # Max retries reached
+                        # Max retries reached, no failed_table — leave in place
                         builder.where("id", job["id"]).update(
                             {"attempts": attempts_done + 1}
                         )

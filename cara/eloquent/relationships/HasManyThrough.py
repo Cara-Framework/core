@@ -257,7 +257,7 @@ class HasManyThrough(BaseRelationship):
             .when(callback, lambda q: (callback(q)))
         )
 
-    def get_with_count_query(self, current_builder, callback):
+    def get_with_count_query(self, current_builder, callback, relation_name=None):
         distant_table = self.distant_builder.get_table_name()
         intermediate_table = self.intermediary_builder.get_table_name()
 
@@ -294,7 +294,7 @@ class HasManyThrough(BaseRelationship):
         return return_query
 
 
-    def get_with_sum_query(self, current_builder, column, callback):
+    def get_with_sum_query(self, current_builder, column, callback, relation_name=None):
         distant_table = self.distant_builder.get_table_name()
         intermediate_table = self.intermediary_builder.get_table_name()
 
@@ -330,7 +330,7 @@ class HasManyThrough(BaseRelationship):
 
         return return_query
 
-    def get_with_avg_query(self, current_builder, column, callback):
+    def get_with_avg_query(self, current_builder, column, callback, relation_name=None):
         distant_table = self.distant_builder.get_table_name()
         intermediate_table = self.intermediary_builder.get_table_name()
 
@@ -366,7 +366,7 @@ class HasManyThrough(BaseRelationship):
 
         return return_query
 
-    def get_with_min_query(self, current_builder, column, callback):
+    def get_with_min_query(self, current_builder, column, callback, relation_name=None):
         distant_table = self.distant_builder.get_table_name()
         intermediate_table = self.intermediary_builder.get_table_name()
 
@@ -402,7 +402,7 @@ class HasManyThrough(BaseRelationship):
 
         return return_query
 
-    def get_with_max_query(self, current_builder, column, callback):
+    def get_with_max_query(self, current_builder, column, callback, relation_name=None):
         distant_table = self.distant_builder.get_table_name()
         intermediate_table = self.intermediary_builder.get_table_name()
 

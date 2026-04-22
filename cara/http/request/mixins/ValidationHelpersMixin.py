@@ -5,8 +5,9 @@ This mixin provides validation functionality and convenience methods for handlin
 validated data and errors.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from cara.exceptions.types.validation import ValidationException
 from cara.validation import Validation
 
 
@@ -22,19 +23,35 @@ class ValidationHelpersMixin:
         super().__init__(*args, **kwargs)
         self._validation_instance = None
 
-    async def validate(self, rules: Dict[str, str]) -> None:
+    async def validate(
+        self,
+        rules: Dict[str, str],
+        messages: Optional[Dict[str, str]] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Validate request data against a dict of field→rule_string.
 
-        Populates self.validated and stores validation instance for later checking.
-        """
-        data = await self.all()
-        validation = Validation()
-        validation.make(data, rules)
+        Returns the validated payload on success. Raises ValidationException
+        (HTTP 422) on failure — the framework's exception handler renders it
+        as a proper JSON error response, so callers get back a `dict` directly
+        instead of a two-step fails()/errors() dance.
 
-        # Store validation instance for fails() and errors() methods
+        If `data` is provided, validates that dict instead of the request body —
+        handy for controllers that mix query params + body into a custom dict
+        before validating.
+        """
+        payload = data if data is not None else await self.all()
+        # Validation.make is a static factory that returns a new instance.
+        validation = Validation.make(payload, rules, messages or {})
+
         self._validation_instance = validation
         self.validated = validation.validated()
+
+        if validation.fails():
+            raise ValidationException(validation_errors=validation.errors())
+
+        return self.validated
 
     def fails(self) -> bool:
         """Return True if last validate() had errors."""

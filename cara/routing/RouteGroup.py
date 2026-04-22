@@ -40,7 +40,11 @@ class RouteGroup:
                     route.url = Route._join_paths(self._prefix, route.url)
                     route.compiler.compile_route(route.url)
                 if self._middleware:
-                    route.middleware(self._middleware)
+                    # Group middleware must run BEFORE route-specific middleware
+                    # (Laravel parity: group `auth` establishes `request.user`
+                    # before per-route `verified` reads it).
+                    existing = list(route.get_middleware())
+                    route._middleware = list(self._middleware) + existing
                 output.append(route)
         return output
 

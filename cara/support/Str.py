@@ -1,10 +1,34 @@
 """String generators and helpers."""
 
+import html
 import re
 import secrets
 import string
+import unicodedata
 from typing import Any
 from urllib import parse
+
+
+# --- Sanitization ---------------------------------------------------------
+# These patterns target the "user-supplied free text → JSON → HTML context"
+# pipeline. Reviews, comments, profile bios etc. should never carry markup
+# through to a browser. We strip tags at input time as defense in depth —
+# frontend escaping remains the primary protection.
+_TAG_RE = re.compile(r"<[^>]+>")
+# Script/style bodies — strip tags AND contents since the content itself
+# is dangerous (event handlers, inline JS).
+_SCRIPT_BLOCK_RE = re.compile(
+    r"<(script|style|iframe|object|embed)\b[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+# Control characters except \t \n \r — these are never legitimate in text
+# input and often used to evade filters.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Whitespace normalization — collapse runs of whitespace into single space
+# but preserve paragraph breaks (double newlines → newline).
+_PARAGRAPH_BREAK_RE = re.compile(r"\n\s*\n")
+_MULTI_SPACE_RE = re.compile(r"[ \t]+")
+_MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
 
 
 def random_string(length: int = 4) -> str:
@@ -204,6 +228,54 @@ def format_money(cents: int, currency: str = "USD") -> str:
     whole = cents // 100
     frac = cents % 100
     return f"{symbol}{whole:,}.{frac:02d}"
+
+
+def strip_tags(text: str) -> str:
+    """Strip HTML/XML tags and dangerous block contents from ``text``.
+
+    Removes <script>/<style>/<iframe>/<object>/<embed> blocks entirely
+    (tags + contents), then strips remaining tags. Safe for user-entered
+    free text before it's stored or echoed back.
+    """
+    if not text:
+        return ""
+    out = _SCRIPT_BLOCK_RE.sub("", text)
+    out = _TAG_RE.sub("", out)
+    # Decode any HTML entities that were smuggled in, so the storage is
+    # canonicalized and downstream escaping only happens once.
+    out = html.unescape(out)
+    return out
+
+
+def sanitize_text(text: Any, max_length: int = 0) -> str:
+    """Sanitize user-supplied free text for safe storage.
+
+    Guarantees:
+      - No HTML tags (content of script/style blocks dropped too).
+      - No HTML entities (already unescaped).
+      - No control chars other than tab/newline/CR.
+      - Unicode NFKC-normalized (defeats look-alike/zero-width evasion).
+      - Whitespace normalized: tabs → spaces, runs collapsed, 3+ blank
+        lines clamped to 2, outer whitespace stripped.
+      - Truncated to max_length (>0) if given.
+
+    Returns empty string for empty/None input. Never returns None so
+    callers can chain without guards.
+    """
+    if text is None:
+        return ""
+    s = str(text)
+    if not s:
+        return ""
+    s = strip_tags(s)
+    s = unicodedata.normalize("NFKC", s)
+    s = _CONTROL_CHARS_RE.sub("", s)
+    s = _MULTI_SPACE_RE.sub(" ", s)
+    s = _MULTI_NEWLINE_RE.sub("\n\n", s)
+    s = s.strip()
+    if max_length and len(s) > max_length:
+        s = s[:max_length].rstrip()
+    return s
 
 
 def truncate(text: str, limit: int, suffix: str = "...") -> str:

@@ -20,6 +20,11 @@ class MiddlewareCapsule:
         self._route_middleware: Dict[str, List[MiddlewareType]] = {}
         self._middleware_aliases: Dict[str, MiddlewareType] = {}
         self._terminable_middleware: Set[MiddlewareType] = set()
+        # Laravel-style middleware priority ordering. Middleware classes in
+        # this list will be sorted into the order specified regardless of
+        # how they were registered. Unknown middleware keep registration
+        # order and appear after all prioritized ones.
+        self._priority: List[MiddlewareType] = []
 
     def __iter__(self) -> Iterator[MiddlewareType]:
         return iter(self._global_middleware)
@@ -157,6 +162,8 @@ class MiddlewareCapsule:
         # Set meaningful name for debugging
         ParameterizedMiddleware.__name__ = f"{base_middleware.__name__}WithParams"
         ParameterizedMiddleware.__qualname__ = f"{base_middleware.__qualname__}WithParams"
+        # Expose base class so priority-ordering can unwrap the proxy
+        ParameterizedMiddleware.__base_middleware__ = base_middleware
         return ParameterizedMiddleware
 
     def remove(self, mw: Union[str, MiddlewareType]) -> "MiddlewareCapsule":
@@ -174,8 +181,47 @@ class MiddlewareCapsule:
         return self
 
     def get_global_middleware(self) -> List[MiddlewareType]:
-        """Get global middleware."""
-        return self._global_middleware.copy()
+        """Get global middleware sorted by priority."""
+        return self.sort_by_priority(self._global_middleware.copy())
+
+    def set_priority(self, priority: List[MiddlewareType]) -> "MiddlewareCapsule":
+        """Set the middleware priority order (Laravel ``$middlewarePriority``).
+
+        Middleware classes present in ``priority`` are always ordered as
+        specified; classes not in the list keep their relative registration
+        order and appear after prioritized ones.
+        """
+        self._priority = list(priority)
+        return self
+
+    def get_priority(self) -> List[MiddlewareType]:
+        """Return the configured priority list."""
+        return list(self._priority)
+
+    def sort_by_priority(self, middleware: List[MiddlewareType]) -> List[MiddlewareType]:
+        """Sort a middleware stack according to the configured priority.
+
+        Classes present in ``_priority`` are emitted in that order, followed
+        by any remaining middleware in their original registration order.
+        """
+        if not self._priority:
+            return middleware
+
+        priority_index = {cls: i for i, cls in enumerate(self._priority)}
+
+        def _base(mw: MiddlewareType) -> MiddlewareType:
+            """Unwrap a ParameterizedMiddleware back to its base class."""
+            return getattr(mw, "__base_middleware__", mw)
+
+        prioritized: List[MiddlewareType] = []
+        remainder: List[MiddlewareType] = []
+        for mw in middleware:
+            if _base(mw) in priority_index:
+                prioritized.append(mw)
+            else:
+                remainder.append(mw)
+        prioritized.sort(key=lambda m: priority_index[_base(m)])
+        return prioritized + remainder
 
     def get_route_middleware(self, group: str) -> List[MiddlewareType]:
         """Get middleware for a specific route group."""
@@ -206,5 +252,10 @@ class MiddlewareCapsule:
         # Load aliases
         for alias_name, middleware in registry_config.get("aliases", {}).items():
             self.add_alias(alias_name, middleware)
+
+        # Load priority ordering (if provided)
+        priority = registry_config.get("priority")
+        if priority:
+            self.set_priority(priority)
 
         return self

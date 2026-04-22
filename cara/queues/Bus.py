@@ -33,7 +33,12 @@ class Bus:
     """
 
     @staticmethod
-    async def dispatch(job: "Queueable", routing_key: Optional[str] = None) -> Any:
+    async def dispatch(
+        job: "Queueable",
+        routing_key: Optional[str] = None,
+        delay: Optional[float] = None,
+        queue: Optional[str] = None,
+    ) -> Any:
         """
         Dispatch job with automatic sync/async handling.
 
@@ -42,11 +47,18 @@ class Bus:
         - Default → Dispatch to queue (RabbitMQ/Redis/Database)
 
         Args:
-            job: Job instance to dispatch
-            routing_key: Optional routing key for topic exchange (e.g., "collection.high")
+            job: Job instance to dispatch.
+            routing_key: Optional routing key for topic exchange (e.g. ``collection.high``).
+            delay: Optional delay in seconds before the job becomes visible on the
+                queue. Ignored in sync mode (the delay of zero is immediate) and
+                forwarded to the driver via ``PendingDispatch.delay()`` in async
+                mode. Accepts any numeric value that the driver can interpret
+                (AMQP uses milliseconds internally, Redis/Database treat it as
+                seconds — ``PendingDispatch`` normalizes this).
+            queue: Optional queue name override.
 
         Returns:
-            Job result if sync mode, None if queued
+            Job result if sync mode, None if queued.
 
         Example:
             >>> # Context-aware (recommended)
@@ -55,6 +67,9 @@ class Bus:
             >>> # Explicit sync
             >>> with ExecutionContext.sync():
             ...     result = await Bus.dispatch(MyJob(id=123))
+
+            >>> # Delayed dispatch (retry-with-backoff pattern)
+            >>> await Bus.dispatch(MyJob(id=123), delay=120)
         """
         # Check execution context
         from cara.context import ExecutionContext
@@ -62,7 +77,8 @@ class Bus:
         is_sync = ExecutionContext.is_sync()
 
         if is_sync:
-            # Run synchronously WITH tracking
+            # Run synchronously WITH tracking. Any `delay` is intentionally
+            # ignored in sync mode — the caller asked for immediate execution.
             return await Bus._run_sync_with_tracking(job)
         else:
             # Check if job is UniqueJob and already locked
@@ -74,12 +90,23 @@ class Bus:
                     Log.debug(f"UniqueJob skipped (already locked): {uid}")
                     return None  # Silent drop
                 UniqueJob.acquire_unique_lock(uid, job.unique_for)
-            
+
             # Dispatch to queue
             params = Bus.get_dispatch_params(job)
             dispatch_call = job.__class__.dispatch(**params)
             if routing_key:
                 dispatch_call.withRoutingKey(routing_key)
+            if queue:
+                # PendingDispatch exposes both camelCase and snake_case helpers.
+                # Prefer onQueue() for Laravel parity; fall back gracefully if
+                # a driver supplies a different chainable.
+                if hasattr(dispatch_call, "onQueue"):
+                    dispatch_call.onQueue(queue)
+                elif hasattr(dispatch_call, "on_queue"):
+                    dispatch_call.on_queue(queue)
+            if delay:
+                if hasattr(dispatch_call, "delay"):
+                    dispatch_call.delay(delay)
             return None
 
     @staticmethod
@@ -141,9 +168,22 @@ class Bus:
             if hasattr(job, "_mark_processing"):
                 job._mark_processing()
 
-        # Run the job
+        # Run the job through middleware pipeline
         try:
-            result = await job.handle()
+            from cara.queues.middleware import run_through_middleware_async
+
+            async def job_handler(j):
+                return await j.handle()
+
+            result = await run_through_middleware_async(job, job_handler)
+
+            # If middleware skipped the job (returned None), still mark success
+            if result is None:
+                if has_tracking and hasattr(job, "_mark_success"):
+                    job._mark_success()
+                if tracker and job_id:
+                    tracker.update_job_status(job_id, "completed")
+                return None
 
             # Mark as success in unified job table
             if has_tracking and hasattr(job, "_mark_success"):

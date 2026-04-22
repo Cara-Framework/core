@@ -44,7 +44,12 @@ class BaseConnection:
                 f"Must set the _cursor attribute on the {self.__class__.__name__} class before calling the 'statement' method."
             )
 
-        self._cursor.execute(query, bindings)
+        # psycopg2 / some DB-API drivers still scan the query for `%s`
+        # placeholders when an (even empty) bindings sequence is passed.
+        # Statements with literal `%` (e.g. PL/pgSQL `FORMAT '%I'`, `TO_CHAR(..., 'MM')`)
+        # then blow up with IndexError. Pass None when we have no bindings so
+        # the driver skips parameter parsing entirely.
+        self._cursor.execute(query, bindings if bindings else None)
         elapsed_ms = (timer() - start) * 1000  # Convert to ms
         elapsed_formatted = "{:.2f}".format(elapsed_ms / 1000)
 

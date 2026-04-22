@@ -107,6 +107,10 @@ class HandleCors(Middleware):
                 response.header("Access-Control-Allow-Origin", "*")
             else:
                 response.header("Access-Control-Allow-Origin", origin or "*")
+                # When the ACAO value depends on the Origin header, proxies and
+                # CDNs must key their cache by it — otherwise one origin's
+                # response is served to another.
+                response.header("Vary", "Origin")
 
         # Access-Control-Allow-Methods
         response.header(

@@ -41,6 +41,10 @@ class ThrottleRequests(Middleware):
 
     async def handle(self, request: Request, next: Callable):
         """Handle rate limiting logic."""
+        # Bypass for trusted IPs (monitoring, health checks, local dev).
+        if self._is_trusted_ip(request):
+            return await next(request)
+
         # First, check if parameter is a named limiter
         limit_config = self._resolve_limit_config(request)
         
@@ -87,6 +91,18 @@ class ThrottleRequests(Middleware):
         response.header("X-RateLimit-Reset", str(reset_in))
 
         return response
+
+    def _is_trusted_ip(self, request: Request) -> bool:
+        """Check whether the request originates from a trusted IP."""
+        try:
+            from cara.facades import Config
+            trusted = Config.get("rate.TRUSTED_IPS", [])
+            if not trusted:
+                return False
+            client_ip = request.ip() if callable(getattr(request, "ip", None)) else getattr(request, "ip", None)
+            return str(client_ip) in trusted
+        except Exception:
+            return False
 
     def _resolve_limit_config(self, request: Request):
         """

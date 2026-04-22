@@ -42,6 +42,13 @@ class DatabaseManager:
 
     def set_database_config(self, default_connection, connection_details):
         """Set database configuration"""
+        # Normalize connection_details to a plain dict. Sometimes config()
+        # returns a dotty_dict whose __hash__/__str__ recurses infinitely
+        # when used as a dict key or in `in` checks — flatten it here.
+        if hasattr(connection_details, "to_dict"):
+            connection_details = connection_details.to_dict()
+        elif not isinstance(connection_details, dict):
+            connection_details = dict(connection_details)
         self._database_config = {
             "default": default_connection,
             "drivers": connection_details,

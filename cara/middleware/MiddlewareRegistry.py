@@ -30,7 +30,18 @@ class MiddlewareRegistry:
             "global": [],
             "groups": {},
             "aliases": {},
+            "priority": [],
         }
+
+    def priority(self, *middlewares: Type[Middleware]) -> "MiddlewareRegistry":
+        """Set the middleware priority order (Laravel ``$middlewarePriority``).
+
+        Middleware classes listed here are ordered as specified regardless
+        of registration order. Middleware not in the list keep their original
+        registration order and appear after prioritized entries.
+        """
+        self.config["priority"] = list(middlewares)
+        return self
 
     def global_middleware(self, *middlewares: Type[Middleware]) -> "MiddlewareRegistry":
         """
@@ -273,6 +284,7 @@ class MiddlewareRegistry:
             "global": self.config["global"].copy(),
             "groups": {name: mws.copy() for name, mws in self.config["groups"].items()},
             "aliases": self.config["aliases"].copy(),
+            "priority": list(self.config.get("priority", [])),
         }
 
     def __str__(self) -> str:

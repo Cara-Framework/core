@@ -61,6 +61,52 @@ class Router:
                         self.routes_by_method[key].append(r)
         return self
 
+    # ------------------------------------------------------------------
+    # Named-route URL generation (Laravel: ``route('users.show', {id:1})``)
+    # ------------------------------------------------------------------
+    def find_by_name(self, name: str) -> Optional[Route]:
+        """Return the Route registered under ``name`` or None."""
+        for route in self.routes:
+            if route.get_name() == name:
+                return route
+        return None
+
+    def url(self, name: str, params: Optional[Dict[str, Any]] = None) -> str:
+        """Generate the URL for a named route.
+
+        Substitutes ``@param`` placeholders (with optional ``:type`` suffix)
+        in the route URL using ``params``. Unknown placeholders are left
+        in place so the caller sees the mismatch.
+        """
+        import re as _re
+
+        route = self.find_by_name(name)
+        if route is None:
+            raise RouteNotFoundException(
+                f"Route named '{name}' is not registered."
+            )
+        params = params or {}
+        url = route.url
+
+        def _replace(match):
+            key = match.group(1)
+            if key in params:
+                return str(params[key])
+            return match.group(0)
+
+        # Match @name or @name:type
+        url = _re.sub(r"@(\w+)(?::\w+)?", _replace, url)
+        # Append extra params as a query string.
+        used = set(
+            m.group(1) for m in _re.finditer(r"@(\w+)(?::\w+)?", route.url)
+        )
+        extras = {k: v for k, v in params.items() if k not in used}
+        if extras:
+            import urllib.parse as _up
+
+            url = url + "?" + _up.urlencode(extras, doseq=True)
+        return url
+
     def model(
         self,
         name: str,

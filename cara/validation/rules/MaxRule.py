@@ -30,18 +30,30 @@ class MaxRule(BaseRule):
         except (TypeError, ValueError):
             return False
 
+        if isinstance(value, bool):
+            return False
+
+        chain = params.get("_rules") or ()
+        numeric_context = "integer" in chain or "numeric" in chain
+
         # For numeric values (int, float), compare numerically
         if isinstance(value, (int, float)):
             return float(value) <= max_threshold
 
-        # For strings, lists, tuples, compare length
-        elif isinstance(value, (str, list, tuple)):
+        # Strings: in numeric context compare as number; otherwise by length.
+        if isinstance(value, str):
+            if numeric_context:
+                try:
+                    return float(value) <= max_threshold
+                except ValueError:
+                    return False
             return len(value) <= max_threshold
 
-        # Try to convert to float for numeric comparison
+        if isinstance(value, (list, tuple, dict)):
+            return len(value) <= max_threshold
+
         try:
-            numeric_value = float(value)
-            return numeric_value <= max_threshold
+            return float(value) <= max_threshold
         except (TypeError, ValueError):
             return False
 

@@ -137,7 +137,8 @@ class HttpConductor:
                 route_middleware.extend(resolved)
             else:
                 route_middleware.append(resolved)
-        return route_middleware
+        # Apply Laravel-style priority ordering
+        return capsule.sort_by_priority(route_middleware)
 
     async def maybe_send_response(self, scope, receive, send, response=None):
         """

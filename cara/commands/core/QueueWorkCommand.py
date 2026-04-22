@@ -8,6 +8,7 @@ import asyncio
 import builtins
 import concurrent.futures
 import inspect
+import logging
 import os
 import pickle
 import threading
@@ -20,6 +21,23 @@ from cara.configuration import config
 from cara.decorators import command
 from cara.facades import Log
 from cara.queues.contracts import UniqueJob
+
+# Silence pika's remote Channel.Close (404) warnings — worker polls a
+# superset of queue names via wildcards, so "queue doesn't exist" on a
+# passive declare is expected for empty queues. The worker already caches
+# the miss in ``_missing_queues``; pika still logs each channel close at
+# WARNING level on the underlying logger, which spams the console every
+# retry tick. Silencing here keeps the worker's own log line ("No job
+# found" / job output) readable.
+for _pika_logger in (
+    "pika",
+    "pika.channel",
+    "pika.connection",
+    "pika.adapters.blocking_connection",
+    "pika.adapters.utils.connection_workflow",
+    "pika.adapters.utils.io_services_utils",
+):
+    logging.getLogger(_pika_logger).setLevel(logging.CRITICAL)
 
 
 class AMQPConnectionManager:

@@ -55,11 +55,25 @@ class DefaultExceptionHandler:
         # Default formatting for exceptions without to_dict
         return self.format_error(exception, status_code)
 
+    # Generic message for unexpected 5xx errors when not in debug. The real
+    # exception still hits the logs (with exc_info) — we just don't ship
+    # internals (SQL errors, file paths, lib stack frames) to the caller.
+    _GENERIC_5XX_MESSAGE = "Internal server error"
+
     def format_error(self, exception: Exception, status_code: int) -> Dict[str, Any]:
         """Format general errors."""
-        response = {"error": str(exception)}
+        debug = self.is_debug_mode()
 
-        if self.is_debug_mode():
+        # In production, redact the raw exception message for any unexpected
+        # 5xx — `str(exception)` can carry SQL fragments, library internals,
+        # or filesystem paths. 4xx messages are intentional (validation /
+        # not-found / forbidden) and stay verbatim so callers can act.
+        if status_code >= 500 and not debug:
+            response = {"error": self._GENERIC_5XX_MESSAGE}
+        else:
+            response = {"error": str(exception)}
+
+        if debug:
             response.update(
                 {
                     "type": exception.__class__.__name__,

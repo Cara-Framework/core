@@ -4,6 +4,7 @@ JWT Authentication Guard.
 Clean, focused JWT authentication with all functionality in a single class.
 """
 
+import hashlib
 import time
 from typing import Any, Dict, Optional
 
@@ -16,6 +17,17 @@ from cara.exceptions import (
     UserNotFoundException,
 )
 from cara.facades import Cache
+
+
+# Token type claims — tokens carry `typ` so an access token can't be
+# swapped in where a refresh token is required (and vice versa).
+TOKEN_TYPE_ACCESS = "access"
+TOKEN_TYPE_REFRESH = "refresh"
+
+
+def _hash_token(token: str) -> str:
+    """Hash a JWT for use as a cache key. Prevents raw tokens in Redis."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 class JWTGuard(Guard):
@@ -169,6 +181,12 @@ class JWTGuard(Guard):
             if not user_id:
                 return False
 
+            # Enforce token-type claim: a leaked access token must not be
+            # usable as a refresh token. We treat legacy tokens without a
+            # `typ` claim as invalid for refresh (they must re-auth).
+            if payload.get("typ") != TOKEN_TYPE_REFRESH:
+                return False
+
             # Check refresh window manually
             exp = payload.get("exp", 0)
             now = int(time.time())
@@ -204,6 +222,13 @@ class JWTGuard(Guard):
 
             if not user_id:
                 raise TokenInvalidException("Invalid token payload")
+
+            # Reject access tokens passed to /refresh — defence in depth
+            # against access-token leaks (logs, dev tools, XSS).
+            if payload.get("typ") != TOKEN_TYPE_REFRESH:
+                raise TokenInvalidException(
+                    "Provided token is not a refresh token"
+                )
 
             # Check refresh window
             exp = payload.get("exp", 0)
@@ -332,14 +357,24 @@ class JWTGuard(Guard):
         except jwt.InvalidTokenError:
             raise TokenInvalidException("Invalid token")
 
-    def generate_token_with_ttl(self, user: Authenticatable, ttl: int) -> str:
-        """Generate JWT token for user with custom TTL."""
+    def generate_token_with_ttl(
+        self,
+        user: Authenticatable,
+        ttl: int,
+        token_type: str = TOKEN_TYPE_ACCESS,
+    ) -> str:
+        """Generate JWT token for user with custom TTL and type.
+
+        The `token_type` becomes the `typ` claim — used by refresh() and
+        validate_refresh_token() to ensure access tokens can't be swapped
+        in for refresh tokens or vice versa.
+        """
         now = int(time.time())
 
         # Use user's custom payload if available
         if hasattr(user, "to_jwt_payload") and callable(getattr(user, "to_jwt_payload")):
             payload = user.to_jwt_payload()
-            payload.update({"iat": now, "exp": now + ttl})
+            payload.update({"iat": now, "exp": now + ttl, "typ": token_type})
         else:
             # Default payload
             payload = {
@@ -350,24 +385,32 @@ class JWTGuard(Guard):
                 ),
                 "iat": now,
                 "exp": now + ttl,
+                "typ": token_type,
             }
 
         return jwt.encode(payload, self.secret, algorithm=self.algorithm)
 
     def generate_access_token(self, user: Authenticatable) -> str:
         """Generate access token with configured TTL."""
-        return self.generate_token_with_ttl(user, self.ttl)
+        return self.generate_token_with_ttl(user, self.ttl, TOKEN_TYPE_ACCESS)
 
     def generate_refresh_token(self, user: Authenticatable) -> str:
         """Generate refresh token with configured refresh TTL."""
-        return self.generate_token_with_ttl(user, self.refresh_ttl)
+        return self.generate_token_with_ttl(
+            user, self.refresh_ttl, TOKEN_TYPE_REFRESH
+        )
 
     def _generate_token(self, user: Authenticatable) -> str:
-        """Generate JWT token for user."""
-        return self.generate_token_with_ttl(user, self.ttl)
+        """Generate JWT access token for user."""
+        return self.generate_token_with_ttl(user, self.ttl, TOKEN_TYPE_ACCESS)
 
     def _blacklist_token(self, token: str) -> None:
-        """Add token to blacklist."""
+        """Add token to blacklist.
+
+        We store a SHA-256 hash rather than the raw token so a cache dump
+        or log line can't be replayed as a bearer token. Collision risk is
+        negligible for SHA-256 over the token space.
+        """
         if not self.blacklist_enabled:
             return
 
@@ -383,7 +426,7 @@ class JWTGuard(Guard):
             # Calculate TTL for blacklist
             ttl = max(0, exp - int(time.time()) + self.blacklist_grace_period)
             if ttl > 0:
-                Cache.put(f"jwt_blacklist:{token}", True, ttl)
+                Cache.put(f"jwt_blacklist:{_hash_token(token)}", True, ttl)
         except Exception as exc:
             # A malformed or already-expired token reaching blacklist is
             # notable but recoverable — log rather than silently swallow.
@@ -398,12 +441,12 @@ class JWTGuard(Guard):
                 pass
 
     def _is_blacklisted(self, token: str) -> bool:
-        """Check if token is blacklisted."""
+        """Check if token is blacklisted (by hash — see _blacklist_token)."""
         if not self.blacklist_enabled:
             return False
 
         try:
-            return Cache.get(f"jwt_blacklist:{token}", False)
+            return Cache.get(f"jwt_blacklist:{_hash_token(token)}", False)
         except Exception:
             return False
 

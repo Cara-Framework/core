@@ -69,6 +69,10 @@ class ValidationErrors:
         """Check if there are any errors."""
         return bool(self._errors)
 
+    def add(self, field: str, message: str) -> None:
+        """Append a new error message for ``field`` (used by after-hooks)."""
+        self._errors.setdefault(field, []).append(message)
+
     def only(self, *fields: str) -> Dict[str, List[str]]:
         """Get errors for only specified fields."""
         return {

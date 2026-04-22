@@ -285,6 +285,81 @@ class Route:
         return cls.factory(url, controller, ["ws"], **options)
 
     @classmethod
+    def options(cls, url: str, controller: Any, **options) -> "Route":
+        """Create an OPTIONS route."""
+        return cls.factory(url, controller, ["options"], **options)
+
+    @classmethod
+    def any(cls, url: str, controller: Any, **options) -> "Route":
+        """Create a route matching any HTTP verb."""
+        return cls.factory(
+            url,
+            controller,
+            ["get", "post", "put", "patch", "delete", "options", "head"],
+            **options,
+        )
+
+    @classmethod
+    def api_resource(
+        cls,
+        base: str,
+        controller: Any,
+        param: str = "id",
+        param_type: str = "int",
+        only: Optional[List[str]] = None,
+        exclude: Optional[List[str]] = None,
+    ) -> List["Route"]:
+        """Laravel-style ``apiResource``.
+
+        Auto-registers the standard REST actions on ``controller``:
+          - ``index``   GET    ``/{base}``
+          - ``store``   POST   ``/{base}``
+          - ``show``    GET    ``/{base}/@{param}:{param_type}``
+          - ``update``  PUT    ``/{base}/@{param}:{param_type}``
+          - ``update``  PATCH  ``/{base}/@{param}:{param_type}``
+          - ``destroy`` DELETE ``/{base}/@{param}:{param_type}``
+
+        Pass ``only=[...]`` or ``exclude=[...]`` to trim the action set.
+
+        Example::
+
+            Route.api_resource("/products", "ProductController")
+        """
+        actions = ["index", "store", "show", "update", "destroy"]
+        if only is not None:
+            actions = [a for a in actions if a in only]
+        if exclude is not None:
+            actions = [a for a in actions if a not in exclude]
+
+        base = cls._join_paths(base)
+        param_segment = f"/@{param}:{param_type}" if param_type else f"/@{param}"
+        routes: List[Route] = []
+
+        if "index" in actions:
+            routes.append(cls.get(base, f"{controller}@index"))
+        if "store" in actions:
+            routes.append(cls.post(base, f"{controller}@store"))
+        if "show" in actions:
+            routes.append(cls.get(base + param_segment, f"{controller}@show"))
+        if "update" in actions:
+            routes.append(cls.put(base + param_segment, f"{controller}@update"))
+            routes.append(cls.patch(base + param_segment, f"{controller}@update"))
+        if "destroy" in actions:
+            routes.append(cls.delete(base + param_segment, f"{controller}@destroy"))
+        return routes
+
+    @classmethod
+    def resource(
+        cls,
+        base: str,
+        controller: Any,
+        **kwargs,
+    ) -> List["Route"]:
+        """Alias for :meth:`api_resource` (Laravel uses ``resource`` for
+        web-side routes; for API-only apps the semantics are identical)."""
+        return cls.api_resource(base, controller, **kwargs)
+
+    @classmethod
     def _join_paths(cls, *paths: str) -> str:
         segments = []
         for path in paths:

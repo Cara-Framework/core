@@ -529,15 +529,16 @@ class BelongsToMany(BaseRelationship):
         pivot_tables.sort()
         return "_".join(pivot_tables)
 
-    def get_with_count_query(self, builder, callback):
+    def get_with_count_query(self, builder, callback, relation_name=None):
         query = self.get_builder()
         self._table = self._table or self.get_pivot_table_name(query, builder)
 
         if not builder._columns:
             builder = builder.select("*")
 
+        alias_base = relation_name or query.get_table_name()
         return_query = builder.add_select(
-            f"{query.get_table_name()}_count",
+            f"{alias_base}_count",
             lambda q: (
                 q.count("*")
                 .where_column(
@@ -560,15 +561,16 @@ class BelongsToMany(BaseRelationship):
         return return_query
 
 
-    def get_with_sum_query(self, builder, column, callback):
+    def get_with_sum_query(self, builder, column, callback, relation_name=None):
         query = self.get_builder()
         self._table = self._table or self.get_pivot_table_name(query, builder)
 
         if not builder._columns:
             builder = builder.select("*")
 
+        alias_base = relation_name or query.get_table_name()
         return_query = builder.add_select(
-            f"{query.get_table_name()}_{column}_sum",
+            f"{alias_base}_{column}_sum",
             lambda q: (
                 q.sum(f"{query.get_table_name()}.{column}")
                 .where_column(
@@ -590,15 +592,16 @@ class BelongsToMany(BaseRelationship):
 
         return return_query
 
-    def get_with_avg_query(self, builder, column, callback):
+    def get_with_avg_query(self, builder, column, callback, relation_name=None):
         query = self.get_builder()
         self._table = self._table or self.get_pivot_table_name(query, builder)
 
         if not builder._columns:
             builder = builder.select("*")
 
+        alias_base = relation_name or query.get_table_name()
         return_query = builder.add_select(
-            f"{query.get_table_name()}_{column}_avg",
+            f"{alias_base}_{column}_avg",
             lambda q: (
                 q.avg(f"{query.get_table_name()}.{column}")
                 .where_column(
@@ -620,15 +623,16 @@ class BelongsToMany(BaseRelationship):
 
         return return_query
 
-    def get_with_min_query(self, builder, column, callback):
+    def get_with_min_query(self, builder, column, callback, relation_name=None):
         query = self.get_builder()
         self._table = self._table or self.get_pivot_table_name(query, builder)
 
         if not builder._columns:
             builder = builder.select("*")
 
+        alias_base = relation_name or query.get_table_name()
         return_query = builder.add_select(
-            f"{query.get_table_name()}_{column}_min",
+            f"{alias_base}_{column}_min",
             lambda q: (
                 q.min(f"{query.get_table_name()}.{column}")
                 .where_column(
@@ -650,15 +654,16 @@ class BelongsToMany(BaseRelationship):
 
         return return_query
 
-    def get_with_max_query(self, builder, column, callback):
+    def get_with_max_query(self, builder, column, callback, relation_name=None):
         query = self.get_builder()
         self._table = self._table or self.get_pivot_table_name(query, builder)
 
         if not builder._columns:
             builder = builder.select("*")
 
+        alias_base = relation_name or query.get_table_name()
         return_query = builder.add_select(
-            f"{query.get_table_name()}_{column}_max",
+            f"{alias_base}_{column}_max",
             lambda q: (
                 q.max(f"{query.get_table_name()}.{column}")
                 .where_column(

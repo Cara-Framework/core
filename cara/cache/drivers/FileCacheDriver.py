@@ -56,7 +56,14 @@ class FileCacheDriver(Cache):
         if not os.path.exists(file_path):
             return default
 
-        expires_at, stored_value = self._read_file(file_path)
+        ok, expires_at, stored_value = self._read_file(file_path)
+        if not ok:
+            # Read/unpickle failed — treat as cache miss so remember()'s sentinel
+            # logic kicks in. Previously we returned `stored_value` (None) which
+            # caused Cache.remember to return None even when the caller's
+            # callback produced a real value, breaking tuple-unpacking sites.
+            return default
+
         if expires_at is None or expires_at >= time.time():
             return stored_value
 
@@ -94,7 +101,9 @@ class FileCacheDriver(Cache):
         if not os.path.exists(file_path):
             return False
 
-        expires_at, _ = self._read_file(file_path)
+        ok, expires_at, _ = self._read_file(file_path)
+        if not ok:
+            return False
         if expires_at is None or expires_at >= time.time():
             return True
 
@@ -148,12 +157,13 @@ class FileCacheDriver(Cache):
             return None if ttl <= 0 else time.time() + ttl
         return time.time() + self._default_ttl
 
-    def _read_file(self, file_path: str) -> tuple[Optional[float], Any]:
+    def _read_file(self, file_path: str) -> tuple[bool, Optional[float], Any]:
         try:
             with open(file_path, "rb") as f:
-                return pickle.load(f)
+                expires_at, value = pickle.load(f)
+                return True, expires_at, value
         except Exception:
-            return None, None
+            return False, None, None
 
     def _write_file(
         self,

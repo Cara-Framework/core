@@ -103,19 +103,48 @@ class ExistsRule(BaseRule):
         """
         Auto-discover model class based on table name.
         Converts table_name to model class name using Laravel conventions.
+
+        Tries both the per-file module layout (``app.models.<Name>``) and the
+        aggregated package layout (``app.models`` re-exports). Also tries
+        both singular- and plural-derived model names so tables like
+        ``product`` (no trailing "s") and ``users`` both resolve.
         """
         try:
-            # Convert table name to model name (Laravel convention)
-            # users -> User, user_profiles -> UserProfile
-            model_name = self._table_to_model_name(table_name)
+            candidates = {
+                self._table_to_model_name(table_name),
+                self._table_to_model_name_plural(table_name),
+            }
 
-            # Try to import the model
-            module_path = f"app.models.{model_name}"
-            module = __import__(module_path, fromlist=[model_name])
-            return getattr(module, model_name, None)
+            for model_name in candidates:
+                if not model_name:
+                    continue
 
+                # 1. per-file layout: app.models.<Name>
+                try:
+                    module = __import__(f"app.models.{model_name}", fromlist=[model_name])
+                    cls = getattr(module, model_name, None)
+                    if cls is not None:
+                        return cls
+                except Exception:
+                    pass
+
+                # 2. aggregated layout: app.models re-exports
+                try:
+                    pkg = __import__("app.models", fromlist=[model_name])
+                    cls = getattr(pkg, model_name, None)
+                    if cls is not None:
+                        return cls
+                except Exception:
+                    pass
+
+            return None
         except Exception:
             return None
+
+    def _table_to_model_name_plural(self, table_name: str) -> str:
+        """Treat table as already-singular (no trailing 's' strip)."""
+        parts = table_name.split("_")
+        return "".join(word.capitalize() for word in parts)
 
     def _table_to_model_name(self, table_name: str) -> str:
         """Convert table name to model class name."""

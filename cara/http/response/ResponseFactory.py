@@ -376,6 +376,67 @@ class ResponseFactory:
             self.headers.merge(headers)
         return self.response
 
+    def paginated(
+        self,
+        items: List[Any],
+        total: int,
+        limit: int,
+        offset: int,
+        status: int = 200,
+        base_url: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+        **extra_meta,
+    ) -> BaseResponse:
+        """
+        Create a paginated collection response with limit/offset pagination.
+
+        Args:
+            items: Items for this page
+            total: Total count of all items
+            limit: Items per page
+            offset: Current offset (0-indexed)
+            status: HTTP status code (default 200)
+            base_url: Base URL for pagination links (optional)
+            headers: Additional headers
+            **extra_meta: Extra metadata to include in response (e.g., sort_by, query)
+
+        Returns:
+            BaseResponse: Paginated response with standard envelope
+        """
+        current_page = (offset // limit + 1) if limit > 0 else 1
+        last_page = (total + limit - 1) // limit if limit > 0 else 1
+        from_index = offset + 1 if total > 0 else 0
+        to_index = min(offset + limit, total)
+
+        payload = {
+            "data": items,
+            "meta": {
+                "total": total,
+                "per_page": limit,
+                "current_page": current_page,
+                "last_page": last_page,
+                "from": from_index,
+                "to": to_index,
+                "offset": offset,
+                "limit": limit,
+            },
+        }
+
+        # Add extra metadata if provided (e.g., sort_by, query, query_hash)
+        if extra_meta:
+            payload["meta"].update(extra_meta)
+
+        # Add pagination links if base_url provided
+        if base_url:
+            payload["links"] = {
+                "first": f"{base_url}?offset=0&limit={limit}",
+                "last": f"{base_url}?offset={max(0, (last_page - 1) * limit)}&limit={limit}",
+                "prev": f"{base_url}?offset={max(0, offset - limit)}&limit={limit}" if offset > 0 else None,
+                "next": f"{base_url}?offset={offset + limit}&limit={limit}" if offset + limit < total else None,
+            }
+
+        return self.json(payload, status, headers)
+
     # =============================================================================
     # SMART DETECTION FALLBACK
     # =============================================================================

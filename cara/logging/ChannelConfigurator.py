@@ -47,7 +47,7 @@ class ChannelConfigurator:
             if webhook:
                 slack_level = channels_cfg.get("slack", {}).get("LEVEL", "ERROR")
                 slack_sink = SlackChannel(slack_cfg, webhook)
-                self._logger.add(
+                self._safe_add(
                     slack_sink,
                     level=slack_level,
                     backtrace=True,
@@ -121,7 +121,23 @@ class ChannelConfigurator:
             if sink_obj is not None:
                 if isinstance(sink_obj, FileChannel):
                     # Pass a string (the path template) rather than the object itself
-                    self._logger.add(str(sink_obj), **add_kwargs)
+                    self._safe_add(str(sink_obj), **add_kwargs)
                 else:
                     # ConsoleChannel or SlackChannel just pass the object
-                    self._logger.add(sink_obj, **add_kwargs)
+                    self._safe_add(sink_obj, **add_kwargs)
+
+    def _safe_add(self, sink: Any, **kwargs: Any) -> None:
+        """
+        Wraps `logger.add` with a fallback when the OS refuses to allocate the
+        POSIX semaphore that `enqueue=True` needs (macOS
+        `kern.posix.sem.max` exhausted → `OSError: [Errno 28] No space left on device`).
+        Falls back to a non-enqueued sink rather than crashing the whole process.
+        """
+        try:
+            self._logger.add(sink, **kwargs)
+        except OSError as exc:
+            if exc.errno != 28 or not kwargs.get("enqueue"):
+                raise
+            fallback = dict(kwargs)
+            fallback["enqueue"] = False
+            self._logger.add(sink, **fallback)

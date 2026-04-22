@@ -139,7 +139,8 @@ class WebsocketConductor:
             else:
                 route_middleware.append(resolved)
 
-        return route_middleware
+        # Apply Laravel-style priority ordering
+        return capsule.sort_by_priority(route_middleware)
 
     async def _run_terminable_middleware(self):
         """
