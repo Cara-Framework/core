@@ -223,11 +223,6 @@ class Event:
         if not all_listeners:
             return
 
-        # Check if we're in sync mode
-        from cara.context import ExecutionContext
-
-        is_sync = ExecutionContext.is_sync()
-
         for listener in all_listeners:
             if hasattr(event, 'is_propagation_stopped') and event.is_propagation_stopped:
                 break
@@ -235,21 +230,23 @@ class Event:
             # Laravel-style queue check: If listener implements ShouldQueue, queue it
             if self._should_queue(listener):
                 self._queue_listener(listener, event)
+                continue
+
+            # In-process listener: always await to completion.
+            #
+            # Rationale: ExecutionContext.is_sync() controls Bus job dispatch
+            # (immediate vs queued) — it is NOT an event-dispatch flag. If a
+            # listener should run out-of-band, it must implement ShouldQueue
+            # (handled above). Firing in-process listeners as background tasks
+            # here is unsafe: callers (e.g. queue workers) commonly drive
+            # dispatch() via asyncio.run(), which closes the loop as soon as
+            # the awaited coroutine returns and silently cancels any
+            # detached tasks mid-execution — dropping downstream work
+            # (e.g. cascading job dispatches) without error.
+            if inspect.iscoroutinefunction(listener.handle):
+                await listener.handle(event)
             else:
-                # Execute immediately - handle both sync and async listeners
-                if inspect.iscoroutinefunction(listener.handle):
-                    # Async listener
-                    if is_sync:
-                        # Sync mode - await for completion (blocking)
-                        await listener.handle(event)
-                    else:
-                        # Async mode - fire and forget (non-blocking)
-                        task = asyncio.create_task(listener.handle(event))
-                        # Add error callback to prevent silent exception loss
-                        task.add_done_callback(self._handle_task_exception)
-                else:
-                    # Sync listener - call directly
-                    listener.handle(event)
+                listener.handle(event)
 
     def _get_matching_wildcard_listeners(self, event_name: str) -> List[Listener]:
         """
