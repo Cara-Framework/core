@@ -35,9 +35,17 @@ class BelongsTo(BaseRelationship):
 
         # Lazy load: execute query and cache the result (Laravel behavior)
         builder = self.get_builder()
+        local_value = instance.__attributes__.get(self.local_key)
+        if local_value is None:
+            # FK is NULL — no related record exists
+            if attr_name:
+                if not hasattr(instance, '_relations') or instance._relations is None:
+                    instance.__dict__.setdefault('_relations', {})
+                instance._relations[attr_name] = None
+            return None
         result = builder.where(
             self.foreign_key,
-            instance.__attributes__[self.local_key],
+            local_value,
         ).first()
 
         # Cache in _relations so subsequent access doesn't re-query
@@ -74,9 +82,12 @@ class BelongsTo(BaseRelationship):
         Returns:
             dict -- A dictionary of data which will be hydrated.
         """
+        local_value = owner.__attributes__.get(self.local_key)
+        if local_value is None:
+            return None
         return foreign.where(
             self.foreign_key,
-            owner.__attributes__[self.local_key],
+            local_value,
         ).first()
 
     def query_has(self, current_query_builder, method="where_exists"):
@@ -152,14 +163,15 @@ class BelongsTo(BaseRelationship):
         return current_model.update({self.local_key: None})
 
     def relate(self, related_record):
+        local_value = related_record.__attributes__.get(self.local_key)
         return (
             self.get_builder()
             .where(
                 self.foreign_key,
-                related_record.__attributes__[self.local_key],
+                local_value,
             )
             ._set_creates_related(
-                {self.foreign_key: related_record.__attributes__[self.local_key]}
+                {self.foreign_key: local_value}
             )
         )
 

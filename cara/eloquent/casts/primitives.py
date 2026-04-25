@@ -23,17 +23,30 @@ class BoolCast(BaseCast):
 
 
 class IntCast(BaseCast):
-    """Cast to integer."""
+    """Cast to integer.
+
+    Preserves ``None`` as ``None`` — SQL NULL must not silently collapse to
+    0, because nullable integer columns that happen to be foreign keys
+    (e.g. ``product_container.brand_id``) would then point at a
+    non-existent row and trip FK violations downstream. Previously this
+    cast returned 0 for any non-numeric input including ``None``, which
+    caused ``ConsolidateProductRecordJob`` to insert ``brand_id=0`` and
+    hit ``fk_product_brand_id`` when the scraped brand failed to resolve.
+    """
 
     def get(self, value):
-        """Get as integer."""
+        """Get as integer, preserving ``None`` for SQL NULL."""
+        if value is None:
+            return None
         try:
             return int(value)
         except (ValueError, TypeError):
             return 0
 
     def set(self, value):
-        """Set as integer."""
+        """Set as integer, preserving ``None`` for SQL NULL."""
+        if value is None:
+            return None
         try:
             return int(value)
         except (ValueError, TypeError):
@@ -41,17 +54,21 @@ class IntCast(BaseCast):
 
 
 class FloatCast(BaseCast):
-    """Cast to float."""
+    """Cast to float. ``None`` passes through — SQL NULL stays NULL."""
 
     def get(self, value):
-        """Get as float."""
+        """Get as float, preserving ``None``."""
+        if value is None:
+            return None
         try:
             return float(value)
         except (ValueError, TypeError):
             return 0.0
 
     def set(self, value):
-        """Set as float."""
+        """Set as float, preserving ``None``."""
+        if value is None:
+            return None
         try:
             return float(value)
         except (ValueError, TypeError):

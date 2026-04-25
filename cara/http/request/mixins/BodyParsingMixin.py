@@ -32,6 +32,16 @@ class BodyParsingMixin:
     # Maximum file size (10MB by default)
     MAX_FILE_SIZE = 10 * 1024 * 1024
 
+    async def body(self) -> bytes:
+        """Public accessor for the raw request body bytes.
+
+        Thin wrapper around ``_read_body`` so callers (HMAC verification,
+        webhook handlers, etc.) can read the literal bytes without
+        reaching for a name-mangled private method. Caches the body so
+        repeated calls are free.
+        """
+        return await self._read_body()
+
     async def _read_body(self) -> bytes:
         """
         Read and cache the raw request body from ASGI receive.

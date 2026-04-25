@@ -1,3 +1,5 @@
+import threading
+
 from cara.exceptions import DriverNotFoundException, QueryException
 
 from ..query.grammars import MySQLGrammar
@@ -5,7 +7,10 @@ from ..query.processors import MySQLPostProcessor
 from ..schema.platforms import MySQLPlatform
 from .BaseConnection import BaseConnection
 
-CONNECTION_POOL = []
+# Per-target connection pools keyed by (host, port, database, user) so that
+# different tenants / databases never share raw connection handles.
+CONNECTION_POOLS: dict = {}
+_POOL_LOCK = threading.Lock()
 
 
 class MySQLConnection(BaseConnection):
@@ -36,13 +41,16 @@ class MySQLConnection(BaseConnection):
         self.password = password
         self.prefix = prefix
         self.full_details = full_details or {}
-        self.connection_pool_size = full_details.get("connection_pooling_max_size", 100)
+        self.connection_pool_size = self.full_details.get("connection_pooling_max_size", 100)
         self.options = options or {}
         self._cursor = None
         self.open = 0
         self.transaction_level = 0
         if name:
             self.name = name
+
+    def _pool_key(self) -> tuple:
+        return (self.host, self.port, self.database, self.user)
 
     def make_connection(self):
         """This sets the connection on the connection class."""
@@ -60,11 +68,28 @@ class MySQLConnection(BaseConnection):
         return self
 
     def close_connection(self):
-        if (
-            self.full_details.get("connection_pooling_enabled")
-            and len(CONNECTION_POOL) < self.connection_pool_size
-        ):
-            CONNECTION_POOL.append(self._connection)
+        if self._connection is None:
+            self.open = 0
+            return
+
+        if self.full_details.get("connection_pooling_enabled"):
+            key = self._pool_key()
+            with _POOL_LOCK:
+                pool = CONNECTION_POOLS.setdefault(key, [])
+                if len(pool) < self.connection_pool_size:
+                    pool.append(self._connection)
+                else:
+                    try:
+                        # Bypass any monkey-patch — we want the real driver close.
+                        type(self._connection).close(self._connection)
+                    except Exception:
+                        pass
+        else:
+            try:
+                type(self._connection).close(self._connection)
+            except Exception:
+                pass
+
         self.open = 0
         self._connection = None
 
@@ -84,30 +109,12 @@ class MySQLConnection(BaseConnection):
             pymysql.converters.escape_datetime
         )
 
-        # Initialize the connection pool if the option is set
+        pooling_enabled = bool(self.full_details.get("connection_pooling_enabled"))
+        key = self._pool_key()
         initialize_size = self.full_details.get("connection_pooling_min_size")
-        if initialize_size and len(CONNECTION_POOL) < initialize_size:
-            for _ in range(initialize_size - len(CONNECTION_POOL)):
-                connection = pymysql.connect(
-                    cursorclass=pymysql.cursors.DictCursor,
-                    autocommit=autocommit,
-                    host=self.host,
-                    user=self.user,
-                    password=self.password,
-                    port=self.port,
-                    database=self.database,
-                    **self.options,
-                )
-                CONNECTION_POOL.append(connection)
 
-        if (
-            self.full_details.get("connection_pooling_enabled")
-            and CONNECTION_POOL
-            and len(CONNECTION_POOL) > 0
-        ):
-            connection = CONNECTION_POOL.pop()
-        else:
-            connection = pymysql.connect(
+        def _new_connection():
+            return pymysql.connect(
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=autocommit,
                 host=self.host,
@@ -118,7 +125,23 @@ class MySQLConnection(BaseConnection):
                 **self.options,
             )
 
-        connection.close = self.close_connection
+        connection = None
+
+        if pooling_enabled:
+            with _POOL_LOCK:
+                pool = CONNECTION_POOLS.setdefault(key, [])
+
+                # Warm up the pool if requested and it's below the min size.
+                if initialize_size and len(pool) < initialize_size:
+                    missing = initialize_size - len(pool)
+                    for _ in range(missing):
+                        pool.append(_new_connection())
+
+                if pool:
+                    connection = pool.pop()
+
+        if connection is None:
+            connection = _new_connection()
 
         self.open = 1
 
@@ -149,7 +172,10 @@ class MySQLConnection(BaseConnection):
         self.transaction_level -= 1
         if self.get_transaction_level() <= 0:
             self.open = 0
-            self._connection.close()
+            try:
+                self._connection.close()
+            except Exception:
+                pass
 
     def dry(self):
         """Transaction."""
@@ -168,7 +194,10 @@ class MySQLConnection(BaseConnection):
         self.transaction_level -= 1
         if self.get_transaction_level() <= 0:
             self.open = 0
-            self._connection.close()
+            try:
+                self._connection.close()
+            except Exception:
+                pass
 
     def get_transaction_level(self):
         """Transaction."""

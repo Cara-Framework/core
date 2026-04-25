@@ -80,6 +80,27 @@ class SoftDeleteScope(BaseScope):
         """
         Convert a DELETE query to a soft delete (UPDATE).
         Sets deleted_at timestamp instead of deleting the record.
+
+        ROOT CAUSE (2026-04-24): The previous implementation called
+        ``builder.remove_global_scope("_soft_delete_delete", action="delete")``
+        to "prevent infinite recursion". But QueryBuilder.__init__ assigns
+        ``self._global_scopes = model._global_scopes`` — a REFERENCE to the
+        class-level dict, not a copy. ``remove_global_scope`` mutates that
+        inner dict via ``del scopes[scope]``, which PERMANENTLY strips the
+        soft-delete scope from the model class. The first ``.delete()`` on
+        a Product would soft-delete correctly, but every subsequent
+        ``.delete()`` on ANY Product instance/builder would fall through
+        to a hard DELETE — and with ``ON DELETE CASCADE`` FKs
+        (product_price_per_marketplace, product_image, etc.) the row and
+        its dependents were obliterated. DB diagnosis: after a dedup run,
+        Product rows 7/8/10/12 were completely missing (not even soft-
+        deleted), while AmazonProductMap still pointed at winners.
+
+        The recursion-protection claim was also incorrect: ``builder.update``
+        sets ``_action="update"`` before running scopes, and the soft-delete
+        scope is registered on ``action="delete"``. The inner ``to_qmark()``
+        therefore looks up scopes for "update" and never re-enters this
+        callback. Leaving the scope registered is safe.
         """
         if hasattr(builder, "_model") and builder._model:
             timestamp = builder._model.get_new_datetime_string()
@@ -87,8 +108,6 @@ class SoftDeleteScope(BaseScope):
             import pendulum
             timestamp = pendulum.now("UTC").to_datetime_string()
 
-        # Must remove the delete scope to avoid infinite recursion
-        builder.remove_global_scope("_soft_delete_delete", action="delete")
         return builder.update({self.deleted_at_column: timestamp})
 
     def _force_delete(self, builder):

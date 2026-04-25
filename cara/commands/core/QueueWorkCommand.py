@@ -8,6 +8,7 @@ import asyncio
 import builtins
 import concurrent.futures
 import inspect
+import json
 import logging
 import os
 import pickle
@@ -21,6 +22,46 @@ from cara.configuration import config
 from cara.decorators import command
 from cara.facades import Log
 from cara.queues.contracts import UniqueJob
+
+# Prometheus metrics — optional import so a bare ``cara`` package import
+# (e.g. tests) doesn't require the services-tree ``app.support.Metrics``.
+try:
+    from app.support.Metrics import Metrics as _M
+except Exception:  # pragma: no cover
+    _M = None  # type: ignore[assignment]
+
+
+def _queue_label(msg: Optional[dict], instance: Any = None, queue_name: Optional[str] = None) -> str:
+    """Best-effort queue label for the current message (bounded cardinality).
+
+    Priority order:
+      1. ``queue_name`` arg — the queue the worker just polled from
+         (highest fidelity — this is exactly where the message was consumed).
+      2. ``msg["queue"]`` / ``msg["routing_key"]`` — the producer-side hint.
+      3. ``instance.queue`` — the job's own class-level queue attribute.
+    """
+    if queue_name:
+        return str(queue_name)
+    if isinstance(msg, dict):
+        q = msg.get("queue") or msg.get("routing_key")
+        if q:
+            return str(q)
+    if instance is not None and hasattr(instance, "queue"):
+        q = getattr(instance, "queue", None)
+        if q:
+            return str(q)
+    return "unknown"
+
+
+def _job_label(instance: Any, msg: Optional[dict]) -> str:
+    """Class-name label for the running job."""
+    if instance is not None:
+        return instance.__class__.__name__
+    if isinstance(msg, dict):
+        obj_ref = msg.get("obj")
+        if isinstance(obj_ref, str):
+            return obj_ref.rsplit(".", 1)[-1] or "unknown"
+    return "unknown"
 
 # Silence pika's remote Channel.Close (404) warnings — worker polls a
 # superset of queue names via wildcards, so "queue doesn't exist" on a
@@ -48,8 +89,33 @@ class AMQPConnectionManager:
         self.connection = None
 
     def ensure_connection(self) -> bool:
-        """Ensure AMQP connection is alive."""
+        """Ensure AMQP connection is alive.
+
+        Treats any prior operational failure (``StreamLostError``,
+        ``ConnectionClosedByBroker``, TCP RST during a long scrape)
+        as "connection is dead" even when ``is_closed`` still reports
+        False. pika's BlockingConnection occasionally keeps a zombie
+        connection object after the underlying stream dies; the next
+        ``channel()`` call then explodes with the original
+        ``StreamLostError`` instead of transparently reconnecting.
+        A fresh heartbeat probe rules that out.
+        """
         try:
+            if self.connection is not None and not self.connection.is_closed:
+                try:
+                    # Cheap liveness probe — pika doesn't expose a
+                    # dedicated ``ping``; dispatching data events
+                    # triggers a heartbeat exchange and surfaces a
+                    # stale connection as an exception here rather
+                    # than much later in the consumer loop.
+                    self.connection.process_data_events(time_limit=0)
+                except Exception:
+                    try:
+                        self.connection.close()
+                    except Exception:
+                        pass
+                    self.connection = None
+
             if self.connection is None or self.connection.is_closed:
                 self.connection = self._create_connection()
             return True
@@ -60,6 +126,7 @@ class AMQPConnectionManager:
                 Log.error(f"Failed to connect to RabbitMQ: {e}")
             except ImportError:
                 pass
+            self.connection = None
             return False
 
     def _create_connection(self):
@@ -75,6 +142,14 @@ class AMQPConnectionManager:
             port=self.config("queue.drivers.amqp.port", 5672),
             virtual_host=self.config("queue.drivers.amqp.vhost", "/"),
             credentials=credentials,
+            # Long-running jobs (Amazon browser scrape + proxy rotation ~30-120s)
+            # blocked pika's I/O thread past the default 60s heartbeat → broker
+            # closed the channel → basic_ack fails → RabbitMQ re-delivers →
+            # second worker picks up same job → idempotency lock collision.
+            # 600s gives plenty of headroom; prefetch=1 keeps fairness.
+            heartbeat=600,
+            blocked_connection_timeout=300,
+            socket_timeout=30,
         )
         return pika.BlockingConnection(parameters)
 
@@ -144,19 +219,57 @@ class JobProcessor:
         try:
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
             # Log to DLQ-style pattern for monitoring
-            dlq_queue = f"{msg.get('queue', 'unknown')}.dlq"
-            job_id = msg.get("job_id", "unknown")
+            dlq_queue = f"{msg.get('queue', 'unknown')}.dlq" if msg else "unknown.dlq"
+            job_id = msg.get("job_id", "unknown") if msg else "unknown"
             Log.error(f"💀 Job moved to DLQ: {job_id} | Queue: {dlq_queue} | Error: {error_msg}")
         except Exception as e:
             Log.error(f"Failed to ACK message: {e}")
 
     @staticmethod
-    def process_message(channel, method_frame, body) -> bool:
-        """Process a single queue message and return success status."""
+    def process_message(channel, method_frame, body, queue_name: Optional[str] = None) -> bool:
+        """Process a single queue message and return success status.
+
+        ``queue_name`` is the queue the worker dequeued from. Used as
+        the highest-fidelity label for Prometheus metrics — otherwise
+        we'd have to infer the queue from the pickled message
+        payload, which is lossy.
+        """
+        # Start of job window — used across all exit paths below.
+        _mx_start = time.time()
+        _mx_queue = str(queue_name) if queue_name else "unknown"
+        _mx_job = "unknown"
+        _mx_inflight_entered = False
+
+        def _mx_record(outcome: str) -> None:
+            """Emit metrics for this job exit. Safe to call multiple times
+            (we only set ``_mx_recorded`` once inside the closure)."""
+            if _M is None:
+                return
+            nonlocal _mx_recorded
+            if _mx_recorded:
+                return
+            _mx_recorded = True
+            try:
+                _M.queue_jobs_consumed_total.labels(
+                    queue=_mx_queue, job=_mx_job, outcome=outcome,
+                ).inc()
+                _M.queue_job_duration_seconds.labels(
+                    queue=_mx_queue, job=_mx_job,
+                ).observe(time.time() - _mx_start)
+                if _mx_inflight_entered:
+                    _M.queue_jobs_in_flight.labels(
+                        queue=_mx_queue, job=_mx_job,
+                    ).dec()
+            except Exception:
+                pass
+
+        _mx_recorded = False
+
         # CRITICAL FIX #4: Validate payload size before unpickling
         if len(body) > JobProcessor.MAX_PAYLOAD_SIZE:
             Log.error(f"❌ Payload exceeds max size ({len(body)} > {JobProcessor.MAX_PAYLOAD_SIZE})")
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            _mx_record("oversized")
             return False
 
         # Resolve app and tracker outside try block for exception handler access
@@ -170,13 +283,71 @@ class JobProcessor:
         db_job_id = None
 
         try:
-            # Unpickle message
-            msg = pickle.loads(body)
+            # Unpickle message. When a cross-service queue shares a
+            # RabbitMQ instance (e.g. the API publishes ``ai.*`` jobs
+            # whose classes only live in the api/ tree), pickle raises
+            # ``ModuleNotFoundError`` here because services/ doesn't
+            # have the module. We catch those specifically and ACK
+            # without a full traceback — the message isn't for us, and
+            # swamping logs with a stack trace per orphan message hides
+            # the real errors underneath.
+            try:
+                # Try JSON first (messages published with serializer="json"),
+                # then fall back to pickle (the default serializer).
+                if body and body[0:1] == b"{":
+                    import importlib
+
+                    msg = json.loads(body)
+                    # JSON-serialized jobs store the class as a dotted path
+                    # string instead of a live object. Reconstruct it.
+                    obj_ref = msg.get("obj")
+                    if isinstance(obj_ref, str) and "." in obj_ref:
+                        module_path, class_name = obj_ref.rsplit(".", 1)
+                        mod = importlib.import_module(module_path)
+                        cls = getattr(mod, class_name)
+                        # Reconstruct with init_kwargs if available, or
+                        # with individual known keys from the payload.
+                        init_kwargs = msg.get("init_kwargs", {})
+                        if not init_kwargs:
+                            # Try to extract constructor args from the
+                            # payload itself (e.g. product_id, asin).
+                            for key in ("product_id", "asin", "container_id",
+                                        "url", "keyword", "category_id"):
+                                if key in msg and key != "obj":
+                                    init_kwargs[key] = msg[key]
+                        try:
+                            msg["obj"] = cls(**init_kwargs)
+                        except TypeError:
+                            msg["obj"] = cls()
+                else:
+                    msg = pickle.loads(body)
+            except (ModuleNotFoundError, AttributeError, ImportError) as e:
+                Log.warning(
+                    f"Dropping orphan message (class not importable in this service): "
+                    f"{e.__class__.__name__}: {e}"
+                )
+                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+                _mx_queue = _queue_label(msg, queue_name=queue_name)
+                _mx_job = _job_label(None, msg)
+                _mx_record("orphan")
+                return True
             instance = msg.get("obj")
             callback = msg.get("callback", "handle")
             init_args = msg.get("args", ())
             db_job_id = msg.get("db_job_id")
             job_timeout = msg.get("timeout", JobProcessor.DEFAULT_JOB_TIMEOUT)
+
+            # Metric labels — now that we have a resolved job instance.
+            _mx_queue = _queue_label(msg)
+            _mx_job = _job_label(instance, msg)
+            if _M is not None:
+                try:
+                    _M.queue_jobs_in_flight.labels(
+                        queue=_mx_queue, job=_mx_job,
+                    ).inc()
+                    _mx_inflight_entered = True
+                except Exception:
+                    pass
 
             # Set up job tracking
             job_id = msg.get("job_id")
@@ -230,6 +401,7 @@ class JobProcessor:
 
             # Acknowledge message
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            _mx_record("success")
             return True
 
         except TimeoutError as timeout_error:
@@ -264,10 +436,13 @@ class JobProcessor:
             except Exception:
                 pass
 
+            _mx_record("timeout")
             return True
 
         except Exception as job_error:
+            import traceback
             Log.error(f"❌ Job failed: {str(job_error)}")
+            Log.error(f"   Traceback: {traceback.format_exc()}")
 
             # Mark as failed in unified job table
             if instance and hasattr(instance, "_mark_failed"):
@@ -300,6 +475,7 @@ class JobProcessor:
             except Exception:
                 pass
 
+            _mx_record("failed")
             return True  # Still processed (failed gracefully)
 
 
@@ -312,6 +488,7 @@ class JobProcessor:
         "--timeout=?": "Poll timeout in seconds (default: 5)",
         "--max-jobs=?": "Maximum number of jobs to process before stopping",
         "--max-time=?": "Maximum runtime in seconds before stopping",
+        "--concurrency=?": "Number of parallel consumer threads inside this worker process (default: 1). Each thread keeps its own AMQP connection/channel, so --concurrency=5 is roughly equivalent to starting 5 worker processes but shares the Python heap, the Cara DB connection pool, and the HTTP clients — much lower memory and cleaner lifecycle.",
         "--reload": "Enable auto-reload on file changes",
     },
 )
@@ -323,7 +500,23 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         self.start_time = None
         self.jobs_processed = 0
         self.jobs_failed = 0
-        self.memory_limit_bytes = 512 * 1024 * 1024  # 512 MB default
+        # Memory ceiling for the worker process — configurable via
+        # WORKER_MEMORY_LIMIT_MB env. The default doubles when
+        # ``--concurrency`` is in use (each consumer thread carries its
+        # own ORM pool + HTTP clients + parser state) so multi-threaded
+        # workers don't hit the limit after a handful of scrapes.
+        try:
+            from cara.environment import env as _env
+            default_mb = 512
+            limit_mb = int(_env("WORKER_MEMORY_LIMIT_MB", default_mb))
+        except Exception:
+            limit_mb = 512
+        # Bumped minimum so multi-thread scrape workloads (BrowserPool +
+        # extractor pipelines + HTTP clients per thread) breathe without
+        # bouncing. Override with the env if 2 GB is too aggressive for
+        # the deploy box.
+        limit_mb = max(limit_mb, 2048)
+        self.memory_limit_bytes = limit_mb * 1024 * 1024
         # Queues that don't exist yet — skipped until the retry TTL expires.
         # A passive queue_declare for a missing queue closes the channel
         # (RabbitMQ returns 404) which triggers expensive reconnects every
@@ -339,11 +532,44 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         timeout: Optional[str] = None,
         max_jobs: Optional[str] = None,
         max_time: Optional[str] = None,
+        concurrency: Optional[str] = None,
     ):
         """Handle queue worker execution with enhanced monitoring."""
         self.console.print()  # Empty line for spacing
         self.console.print("[bold #e5c07b]╭─ Queue Worker ─╮[/bold #e5c07b]")
         self.console.print()
+
+        # Stand up /metrics on a side-thread HTTP server so Prometheus
+        # can scrape the worker. Opt out with METRICS_PORT=0.
+        try:
+            from app.support.Metrics import start_http_server as _start_metrics
+            _port = _start_metrics()
+            if _port:
+                Log.info(f"📈 Metrics server on :{_port}/metrics")
+        except Exception as e:
+            # Non-fatal: worker keeps running with no metrics exposure.
+            Log.warning(f"metrics server startup failed: {e}")
+
+        # Background DB sampler — emits domain gauges (product lifecycle,
+        # queue depth, job table, entity counts) every 30s so the
+        # dashboard never has to hit the database itself.
+        try:
+            from app.support.MetricsSampler import start as _start_sampler
+            _start_sampler()
+        except Exception as e:
+            Log.warning(f"metrics sampler startup failed: {e}")
+
+        # Parse concurrency early so we can use it to gate the reload path
+        # (auto-reload restarts the whole worker — fine with 1 thread, but
+        # with N parallel consumer threads we want to drain them first).
+        concurrency_val = 1
+        if concurrency:
+            try:
+                concurrency_val = max(1, int(concurrency))
+            except ValueError:
+                self.error(f"× Invalid --concurrency value: {concurrency!r}")
+                return
+        self._concurrency = concurrency_val
 
         # Store parameters for restart
         self.store_restart_params(driver, queue, timeout, max_jobs, max_time)
@@ -530,30 +756,123 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         self.console.print()
 
     def _run_worker(self, config: Dict[str, Any]) -> None:
-        """Run the queue worker with multiple queue priority support."""
-        queue_names = config["queue_names"]
+        """Run the queue worker with multiple queue priority support.
 
-        self._show_worker_startup_info(queue_names)
+        When ``self._concurrency > 1`` we spin up N independent consumer
+        threads, each with its own AMQP connection + channel. pika's
+        BlockingConnection is not thread-safe across threads, so each
+        thread keeps its own manager. The threads share:
+
+        * The job processor (stateless, so safe to share).
+        * The Cara DB connection pool + in-flight semaphore (module-level,
+          built for multi-thread access from the start).
+        * The ``_missing_queues`` cache — this IS mutated by each thread
+          but only ever as ``dict[str]->float`` writes, which CPython's
+          GIL makes atomic. Worst case two threads race to re-probe a
+          recently-missed queue, which just costs one extra channel open.
+        * ``jobs_processed`` / ``jobs_failed`` counters — incremented
+          under a lock below (would otherwise race and undercount).
+
+        The number of in-flight jobs is bounded by ``concurrency``; each
+        thread processes one job at a time in its own loop so we preserve
+        the at-most-once-per-thread semantics that JobProcessor assumes.
+        """
+        queue_names = config["queue_names"]
+        concurrency = getattr(self, "_concurrency", 1)
+
+        self._show_worker_startup_info(queue_names, concurrency)
         self.start_time = time.time()
 
-        # Initialize connection manager and job processor
+        # Lock protecting shared counters + shutdown flag read-modify-writes.
+        # shutdown_requested itself is a bool (atomic) so we read it
+        # unlocked; counters genuinely need a lock.
+        self._stats_lock = threading.Lock()
+
+        if concurrency <= 1:
+            # Fast path: original single-threaded loop, no thread overhead.
+            from cara.configuration import config as global_config
+
+            connection_manager = AMQPConnectionManager(global_config)
+            job_processor = JobProcessor()
+
+            try:
+                while not self.shutdown_requested:
+                    job_processed = self._process_queue_cycle(
+                        queue_names, connection_manager, job_processor, config
+                    )
+
+                    # Sleep if no jobs found
+                    if not job_processed:
+                        time.sleep(config["timeout"])
+
+            finally:
+                connection_manager.close()
+            return
+
+        # Multi-threaded consumer mode.
         from cara.configuration import config as global_config
 
-        connection_manager = AMQPConnectionManager(global_config)
-        job_processor = JobProcessor()
+        job_processor = JobProcessor()  # stateless, shared
+        threads: list[threading.Thread] = []
+        managers: list[AMQPConnectionManager] = []
+
+        def _consumer_loop(slot_idx: int) -> None:
+            """One consumer slot. Owns its own AMQP connection."""
+            mgr = AMQPConnectionManager(global_config)
+            managers.append(mgr)
+            try:
+                while not self.shutdown_requested:
+                    try:
+                        job_processed = self._process_queue_cycle(
+                            queue_names, mgr, job_processor, config
+                        )
+                    except Exception as e:
+                        # Don't let a single thread's error kill the slot —
+                        # log it and keep polling. The original _run_worker
+                        # swallowed these via _handle_queue_error; we
+                        # mirror that behaviour.
+                        Log.warning(
+                            f"[worker-{slot_idx}] cycle error: {e}"
+                        )
+                        job_processed = False
+
+                    if not job_processed:
+                        # Stagger sleeps a tiny bit so N threads don't wake
+                        # up in lockstep and hammer the broker simultaneously.
+                        jittered = config["timeout"] * (1.0 + (slot_idx % 4) * 0.1)
+                        time.sleep(jittered)
+            finally:
+                mgr.close()
 
         try:
-            while not self.shutdown_requested:
-                job_processed = self._process_queue_cycle(
-                    queue_names, connection_manager, job_processor, config
+            for i in range(concurrency):
+                t = threading.Thread(
+                    target=_consumer_loop,
+                    args=(i + 1,),
+                    name=f"queue-worker-{i + 1}",
+                    daemon=True,
                 )
+                t.start()
+                threads.append(t)
 
-                # Sleep if no jobs found
-                if not job_processed:
-                    time.sleep(config["timeout"])
-
+            # Main thread just waits for shutdown. Poll for the signal
+            # rather than join() because join() on daemon threads would
+            # block forever if one thread deadlocks.
+            while not self.shutdown_requested:
+                time.sleep(1)
         finally:
-            connection_manager.close()
+            # Ask all threads to stop and let them drain gracefully.
+            self.shutdown_requested = True
+            for t in threads:
+                try:
+                    t.join(timeout=10)
+                except Exception:
+                    pass
+            for mgr in managers:
+                try:
+                    mgr.close()
+                except Exception:
+                    pass
 
     def _check_memory_usage(self) -> bool:
         """
@@ -601,7 +920,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
             return True
 
-    def _show_worker_startup_info(self, queue_names: list) -> None:
+    def _show_worker_startup_info(self, queue_names: list, concurrency: int = 1) -> None:
         """Display worker startup information in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Worker Status[/bold #e5c07b]")
 
@@ -619,6 +938,12 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             )
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b] [white]Monitoring:[/white] [{queue_color}]{queue_names[0]}[/{queue_color}]"
+            )
+
+        if concurrency > 1:
+            self.console.print(
+                f"[#e5c07b]│[/#e5c07b] [white]Concurrency:[/white] "
+                f"[#30e047]{concurrency} parallel consumer threads[/#30e047]"
             )
 
         self.console.print(
@@ -700,8 +1025,12 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             method_frame, header_frame, body = channel.basic_get(queue=queue_name)
 
             if method_frame:
-                # Process the job
-                return job_processor.process_message(channel, method_frame, body)
+                # Process the job — pass the real queue name through
+                # so metrics label it correctly instead of falling
+                # back to "unknown".
+                return job_processor.process_message(
+                    channel, method_frame, body, queue_name=queue_name,
+                )
 
             return False  # No message
 
@@ -769,8 +1098,9 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             # Try to resolve Job model from container (framework agnostic)
             job_model = self._resolve_job_model()
             if job_model and hasattr(job_model, "get_queue_stats"):
-                stats = job_model.get_queue_stats(self.queue_name)
-                self.info(f"\n📈 Current Queue Status ({self.queue_name}):")
+                queue_display = getattr(self, "_queue_names_display", "default")
+                stats = job_model.get_queue_stats(queue_display)
+                self.info(f"\n📈 Current Queue Status ({queue_display}):")
                 self.info(f"   Pending: {stats.get('pending_jobs', 0)}")
                 self.info(f"   Processing: {stats.get('processing_jobs', 0)}")
                 self.info(f"   Completed: {stats.get('completed_jobs', 0)}")

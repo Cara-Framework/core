@@ -45,6 +45,8 @@ class SQLitePostProcessor:
         new_builder = builder.select(column)
         if id_key and id_value:
             new_builder.where(id_key, id_value)
-            return new_builder.first()[column]
+            result = new_builder.first()
+            if result and column in result:
+                return result[column]
 
-        return {}
+        return None

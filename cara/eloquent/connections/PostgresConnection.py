@@ -39,7 +39,7 @@ class PostgresConnection(BaseConnection):
 
         self.prefix = prefix
         self.full_details = full_details or {}
-        self.connection_pool_size = full_details.get("connection_pooling_max_size", 100)
+        self.connection_pool_size = self.full_details.get("connection_pooling_max_size", 100)
         self.options = options or {}
         self._cursor = None
         self.transaction_level = 0
@@ -247,16 +247,18 @@ class PostgresConnection(BaseConnection):
 
     def commit(self):
         """Transaction."""
-        try:
-            if self.transaction_level > 1:
-                # Nested — release savepoint
-                self.release_savepoint(f"sp_{self.transaction_level - 1}")
-                return
-            if self.transaction_level == 1:
+        if self.transaction_level > 1:
+            # Nested — release savepoint.
+            # release_savepoint() already decrements transaction_level,
+            # so we must NOT decrement again here.
+            self.release_savepoint(f"sp_{self.transaction_level - 1}")
+            return
+        if self.transaction_level == 1:
+            try:
                 self._connection.commit()
                 self._connection.autocommit = True
-        finally:
-            self.transaction_level -= 1
+            finally:
+                self.transaction_level -= 1
 
     def begin(self):
         """Postgres Transaction with savepoint support for nesting."""
@@ -270,16 +272,20 @@ class PostgresConnection(BaseConnection):
 
     def rollback(self):
         """Transaction with savepoint support for nesting."""
-        try:
-            if self.transaction_level > 1:
-                # Nested — rollback to savepoint
-                self.rollback_to_savepoint(f"sp_{self.transaction_level - 1}")
-                return
-            if self.transaction_level == 1:
+        if self.transaction_level <= 0:
+            return
+        if self.transaction_level > 1:
+            # Nested — rollback to savepoint.
+            # rollback_to_savepoint() already decrements transaction_level,
+            # so we must NOT decrement again here.
+            self.rollback_to_savepoint(f"sp_{self.transaction_level - 1}")
+            return
+        if self.transaction_level == 1:
+            try:
                 self._connection.rollback()
                 self._connection.autocommit = True
-        finally:
-            self.transaction_level -= 1
+            finally:
+                self.transaction_level -= 1
 
     def get_transaction_level(self):
         """Transaction."""

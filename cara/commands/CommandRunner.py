@@ -248,16 +248,71 @@ class CommandRunner:
                 k: v for k, v in cli_kwargs.items() if k in handle_sig.parameters
             }
 
+            # Prometheus command-invocation instrumentation. Wraps
+            # handle() so every CLI call is counted + timed by name,
+            # regardless of whether it runs sync or async. Bounded
+            # cardinality (``name`` is a static registered command).
+            import time as _t
+            try:
+                from app.support.Metrics import (
+                    Metrics as _M,
+                    start_pushgateway_autopush as _start_autopush,
+                )
+                # Make sure metrics this CLI emits reach the gateway.
+                # Turns a craft command from "black box" into "shows up
+                # on Grafana within one scrape interval after exit"
+                # without requiring the command to know anything about
+                # Prometheus. Opt out with METRICS_PUSHGATEWAY_DISABLED=1.
+                try:
+                    # Long-running commands (autocomplete / scrape loops)
+                    # benefit from periodic pushes — set the env so the
+                    # dashboard moves while the command is still running.
+                    _start_autopush(
+                        interval_seconds=int(
+                            __import__("os").environ.get(
+                                "METRICS_PUSHGATEWAY_INTERVAL_S", "15"
+                            )
+                        ),
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                _M = None  # type: ignore[assignment]
+
+            _cmd_start = _t.time()
+            _cmd_outcome = "success"
             try:
                 result = inst.handle(**filtered_cli, **di_kwargs)
                 if inspect.isawaitable(result):
                     result = asyncio.run(result)
                 _run_after(name)
             except Exception as e:
+                _cmd_outcome = "failure"
                 traceback.print_exc()
                 _run_on_error(name, e)
                 rprint(f"[red]Error in {name}: {e}[/red]")
+                if _M is not None:
+                    try:
+                        _M.command_invocations_total.labels(
+                            command=name, outcome=_cmd_outcome,
+                        ).inc()
+                        _M.command_duration_seconds.labels(
+                            command=name,
+                        ).observe(_t.time() - _cmd_start)
+                    except Exception:
+                        pass
                 raise typer.Exit(code=1)
+
+            if _M is not None:
+                try:
+                    _M.command_invocations_total.labels(
+                        command=name, outcome=_cmd_outcome,
+                    ).inc()
+                    _M.command_duration_seconds.labels(
+                        command=name,
+                    ).observe(_t.time() - _cmd_start)
+                except Exception:
+                    pass
 
             if isinstance(result, int):
                 raise typer.Exit(code=result)

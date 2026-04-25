@@ -94,10 +94,12 @@ class SQLiteConnection(BaseConnection):
         """Transaction."""
 
         if self.get_transaction_level() == 1:
-            self.transaction_level -= 1
             self._connection.commit()
             self._connection.isolation_level = None
-            self._connection.close()
+            try:
+                self._connection.close()
+            except Exception:
+                pass
             self.open = 0
 
         self.transaction_level -= 1
@@ -112,9 +114,11 @@ class SQLiteConnection(BaseConnection):
     def rollback(self):
         """Transaction."""
         if self.get_transaction_level() == 1:
-            self.transaction_level -= 1
             self._connection.rollback()
-            self._connection.close()
+            try:
+                self._connection.close()
+            except Exception:
+                pass
             self.open = 0
 
         self.transaction_level -= 1
@@ -163,17 +167,20 @@ class SQLiteConnection(BaseConnection):
             raise QueryException(str(e)) from e
         finally:
             if self.get_transaction_level() <= 0:
-                self._connection.close()
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
                 self.open = 0
 
     def format_cursor_results(self, cursor_result):
         return [dict(row) for row in cursor_result]
 
     def select_many(self, query, bindings, amount):
-        self._cursor = self._connection.cursor()
-        self.statement(query)
         if not self.open:
             self.make_connection()
+        self._cursor = self._connection.cursor()
+        self.statement(query, bindings)
 
         result = self.format_cursor_results(self._cursor.fetchmany(amount))
         while result:

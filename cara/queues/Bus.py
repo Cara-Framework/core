@@ -88,8 +88,28 @@ class Bus:
                 if UniqueJob.is_unique_locked(uid):
                     from cara.facades import Log
                     Log.debug(f"UniqueJob skipped (already locked): {uid}")
+                    try:
+                        from app.support.Metrics import Metrics as _M
+                        _M.idempotency_total.labels(scope="unique_job", outcome="collision").inc()
+                    except Exception:
+                        pass
                     return None  # Silent drop
-                UniqueJob.acquire_unique_lock(uid, job.unique_for)
+                if not UniqueJob.acquire_unique_lock(uid, job.unique_for):
+                    # Another worker acquired the lock between our check
+                    # and our acquire — respect the lock and drop silently.
+                    from cara.facades import Log
+                    Log.debug(f"UniqueJob lock race lost: {uid}")
+                    try:
+                        from app.support.Metrics import Metrics as _M
+                        _M.idempotency_total.labels(scope="unique_job", outcome="collision").inc()
+                    except Exception:
+                        pass
+                    return None
+                try:
+                    from app.support.Metrics import Metrics as _M
+                    _M.idempotency_total.labels(scope="unique_job", outcome="fresh").inc()
+                except Exception:
+                    pass
 
             # Dispatch to queue
             params = Bus.get_dispatch_params(job)
@@ -107,6 +127,22 @@ class Bus:
             if delay:
                 if hasattr(dispatch_call, "delay"):
                     dispatch_call.delay(delay)
+
+            # Prometheus dispatch counter — bounded by the (queue, job)
+            # label pair; "unknown" covers jobs that don't carry an
+            # explicit queue attribute. Safe to no-op if Metrics
+            # isn't available (e.g. cara imported standalone in tests).
+            try:
+                from app.support.Metrics import Metrics as _M
+                _queue_lbl = (
+                    queue or routing_key or getattr(job, "queue", None) or "unknown"
+                )
+                _M.queue_dispatches_total.labels(
+                    queue=str(_queue_lbl),
+                    job=job.__class__.__name__,
+                ).inc()
+            except Exception:
+                pass
             return None
 
     @staticmethod

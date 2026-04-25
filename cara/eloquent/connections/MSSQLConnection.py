@@ -164,10 +164,16 @@ class MSSQLConnection(BaseConnection):
             raise QueryException(str(e)) from e
         finally:
             if self.get_transaction_level() <= 0:
-                self._connection.close()
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
 
     def format_cursor_results(self, cursor_result):
-        columnNames = [column[0] for column in self.get_cursor().description]
+        cursor = self.get_cursor()
+        if not cursor or not cursor.description:
+            return []
+        columnNames = [column[0] for column in cursor.description]
         results = []
         for record in cursor_result:
             results.append(dict(zip(columnNames, record)))

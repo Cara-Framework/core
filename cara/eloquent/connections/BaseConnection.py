@@ -109,7 +109,7 @@ class BaseConnection:
 
     def select_many(self, query, bindings, amount):
         self.set_cursor()
-        self.statement(query)
+        self.statement(query, bindings)
         if not self.open:
             self.make_connection()
 

@@ -1,3 +1,4 @@
+import contextlib
 from decimal import Decimal
 
 from cara.facades import DB
@@ -7,6 +8,34 @@ from .SchemaConnectionManager import SchemaConnectionManager
 from .SchemaQueryExecutor import SchemaQueryExecutor
 from .Table import Table
 from .TableDiff import TableDiff
+
+
+def _release_connection(connection) -> None:
+    """Return a borrowed connection to the pool. Best-effort."""
+    if connection is None:
+        return
+    try:
+        close = getattr(connection, "close_connection", None)
+        if callable(close):
+            close()
+    except Exception:
+        # Cleanup must never mask the real result.
+        pass
+
+
+@contextlib.contextmanager
+def _borrow_connection(connection_manager, schema=None):
+    """Borrow a pool connection and guarantee its release on exit.
+
+    Without this, every ad-hoc ``connection_manager.create_connection_instance``
+    bleeds a pool slot — within ~50 borrows the pool is exhausted and
+    every subsequent migration / schema query times out.
+    """
+    conn = connection_manager.create_connection_instance(schema)
+    try:
+        yield conn
+    finally:
+        _release_connection(conn)
 
 
 class Schema:
@@ -129,7 +158,17 @@ class Schema:
         return BlueprintExecutor(blueprint, self)
 
     def _create_blueprint(self, table_name, table_obj, action):
-        """DRY - Common blueprint creation logic"""
+        """DRY - Common blueprint creation logic.
+
+        We deliberately do NOT pass a real connection to Blueprint here.
+        Blueprint only compiles SQL (it stores the connection but never
+        executes through it — the BlueprintExecutor's __exit__ runs the
+        compiled statements via ``query_executor.execute_query``, which
+        borrows + releases its own connection per statement). Passing a
+        connection here used to silently leak one pool slot per
+        ``with self.schema.create(...)`` block, exhausting the pool
+        within ~50 migrations. Pass ``None``.
+        """
         self._table = table_name
 
         # Get grammar from DatabaseManager if not set
@@ -137,7 +176,7 @@ class Schema:
 
         self._blueprint = Blueprint(
             grammar,
-            connection=self.connection_manager.create_connection_instance(self.schema),
+            connection=None,
             table=table_obj,
             action=action,
             platform=self.connection_manager.platform,
@@ -276,12 +315,19 @@ class Schema:
         ).get("schema")
 
     def get_columns(self, table, dict=True):
-        """Get table columns - delegates to platform"""
-        table_schema = self.connection_manager.platform.get_current_schema(
-            self.new_connection(),
-            table,
-            schema=self.get_schema(),
-        )
+        """Get table columns - delegates to platform.
+
+        Borrows a connection via ``_borrow_connection`` so the platform
+        introspection call doesn't strand a pool slot. The platform
+        helper reads from the connection synchronously inside the with
+        block, so it's safe to release immediately on exit.
+        """
+        with _borrow_connection(self.connection_manager, self.schema) as conn:
+            table_schema = self.connection_manager.platform.get_current_schema(
+                conn,
+                table,
+                schema=self.get_schema(),
+            )
 
         if dict:
             result = {}
@@ -300,7 +346,7 @@ class Schema:
         )
 
         result = self.query_executor.get_query_result(sql)
-        return list(map(lambda t: list(t.values())[0], result)) if result else []
+        return list(map(lambda t: list(t.values())[0], result)) if result else []  # noqa: safe — platform SQL always returns single-column rows
 
     # === Class Methods - Configuration ===
 

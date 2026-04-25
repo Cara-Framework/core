@@ -8,6 +8,7 @@ and coordinating all its components.
 """
 
 import inspect
+import threading
 from typing import Any, Dict, List, Optional, Type
 
 from cara.container import Container
@@ -47,6 +48,22 @@ class Application(Container):
 
         # All providers that have been eagerly instantiated & registered
         self.providers: List[Provider] = []
+        # Lock around deferred provider resolution.
+        #
+        # ROOT CAUSE (2026-04-23): ``Application.make()`` has the same
+        # deferred-provider race that Container.make() was hit by —
+        # two worker threads call ``make("cache")`` simultaneously,
+        # the first pops the entry out of ``deferred_providers`` and
+        # enters ``provider.register()``, the second arrives in the
+        # narrow window after A's pop but before A's ``bind("cache",
+        # ...)`` completes, sees the key absent from both the deferred
+        # dict (A popped it) and the container ``objects`` (A hasn't
+        # bound yet), and raises ``MissingContainerBindingException``
+        # from ``super().make(name)`` at the bottom. Fixing Container
+        # alone was not enough — Application owns its own separate
+        # ``deferred_providers`` dict and has its own critical
+        # section. Same RLock pattern.
+        self._deferred_providers_lock = threading.RLock()
         # Map of deferred binding key (string) → provider class
         self.deferred_providers: Dict[str, Type[DeferredProvider]] = {}
 
@@ -98,14 +115,47 @@ class Application(Container):
           - Then delegate to super().make(name, ...).
 
         This way, deferred providers fire when you first request them by key or by class.
+
+        ROOT CAUSE (2026-04-24): the previous implementation did a
+        lock-free outer check (``if name in self.deferred_providers``)
+        and only acquired the RLock when it saw the key. That leaves a
+        window where thread A has already popped the key and is inside
+        ``register()`` (building the Cache manager, adding drivers),
+        but thread B's outer check sees the key absent, SKIPS the
+        locked block entirely, and falls straight through to
+        ``super().make(name)``. Container's ``objects`` doesn't have
+        the key yet (A hasn't called ``bind`` yet) and ``_deferred`` is
+        empty — Container uses its own ``_deferred`` dict that
+        Application bypasses — so B raises
+        ``MissingContainerBindingException: 'cache' key was not found``.
+        Under ``--concurrency=8`` this was the "Facade 'cache' could
+        not resolve 'get'" spray that DLQ'd a batch of CollectProductJobs.
+
+        Fix: check for the deferred key AND call ``super().make()``
+        inside a single critical section. Now B is forced to wait
+        behind A's lock, and by the time B gets to ``super().make()``
+        the binding is live.
         """
-        # 1) If caller is requesting by class
-        if inspect.isclass(name):
-            # Convert class to lowercase key
-            key_str = name.__name__.lower()
-            if key_str in self.deferred_providers:
-                provider_class = self.deferred_providers.pop(key_str)
-                # Remove any other keys pointing to same provider_class
+        with self._deferred_providers_lock:
+            # 1) If caller is requesting by class
+            if inspect.isclass(name):
+                key_str = name.__name__.lower()
+                if key_str in self.deferred_providers:
+                    provider_class = self.deferred_providers.pop(key_str)
+                    for k, cls in list(self.deferred_providers.items()):
+                        if cls is provider_class:
+                            self.deferred_providers.pop(k, None)
+                    provider = provider_class(self)
+                    provider.register()
+                    self.providers.append(provider)
+                    if hasattr(provider, "boot"):
+                        provider.boot()
+                # Now that (maybe) registered, delegate to Container.make
+                return super().make(name, *arguments)
+
+            # 2) If caller is requesting by string
+            if isinstance(name, str) and name in self.deferred_providers:
+                provider_class = self.deferred_providers.pop(name)
                 for k, cls in list(self.deferred_providers.items()):
                     if cls is provider_class:
                         self.deferred_providers.pop(k, None)
@@ -114,24 +164,9 @@ class Application(Container):
                 self.providers.append(provider)
                 if hasattr(provider, "boot"):
                     provider.boot()
-            # Now that (maybe) registered, delegate to Container.make (which can resolve class)
+
+            # 3) Delegate to base Container.make
             return super().make(name, *arguments)
-
-        # 2) If caller is requesting by string
-        if isinstance(name, str) and name in self.deferred_providers:
-            provider_class = self.deferred_providers.pop(name)
-            # Remove any other keys pointing to same provider_class
-            for k, cls in list(self.deferred_providers.items()):
-                if cls is provider_class:
-                    self.deferred_providers.pop(k, None)
-            provider = provider_class(self)
-            provider.register()
-            self.providers.append(provider)
-            if hasattr(provider, "boot"):
-                provider.boot()
-
-        # 3) Delegate to base Container.make
-        return super().make(name, *arguments)
 
     def has(self, name: Any) -> bool:
         """

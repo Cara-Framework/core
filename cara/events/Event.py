@@ -243,10 +243,41 @@ class Event:
             # the awaited coroutine returns and silently cancels any
             # detached tasks mid-execution — dropping downstream work
             # (e.g. cascading job dispatches) without error.
-            if inspect.iscoroutinefunction(listener.handle):
-                await listener.handle(event)
-            else:
-                listener.handle(event)
+            #
+            # Prometheus instrumentation — import lazily so the
+            # events module stays usable in contexts that don't boot
+            # the services application (e.g. cara tests). Records
+            # invocation count + duration keyed on the listener's
+            # class name; bounded cardinality regardless of event
+            # volume.
+            import time as _t
+            try:
+                from app.support.Metrics import Metrics as _M
+            except Exception:
+                _M = None  # type: ignore[assignment]
+
+            _lst_name = listener.__class__.__name__
+            _lst_start = _t.time()
+            _lst_outcome = "success"
+            try:
+                if inspect.iscoroutinefunction(listener.handle):
+                    await listener.handle(event)
+                else:
+                    listener.handle(event)
+            except Exception:
+                _lst_outcome = "failure"
+                raise
+            finally:
+                if _M is not None:
+                    try:
+                        _M.listener_invocations_total.labels(
+                            listener=_lst_name, outcome=_lst_outcome,
+                        ).inc()
+                        _M.listener_duration_seconds.labels(
+                            listener=_lst_name,
+                        ).observe(_t.time() - _lst_start)
+                    except Exception:
+                        pass
 
     def _get_matching_wildcard_listeners(self, event_name: str) -> List[Listener]:
         """

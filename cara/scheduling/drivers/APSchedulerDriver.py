@@ -5,10 +5,68 @@ This module provides a scheduling driver that integrates APScheduler for backgro
 and execution.
 """
 
+import asyncio
+import inspect
+import time as _time
 from typing import Any, Dict, Iterable
 
 from cara.facades import Log
 from cara.scheduling.contracts import Scheduling
+
+
+def _instrument_scheduled(identifier: str, callback: Any) -> Any:
+    """Wrap a scheduled-job callback with Prometheus metrics.
+
+    Returns a new callable that:
+      - records wall-clock duration on ``cheapa_scheduled_task_duration_seconds``
+      - records success / failure outcome on ``cheapa_scheduled_tasks_total``
+      - preserves async / sync semantics of the underlying callback so
+        APScheduler can still inspect ``iscoroutinefunction``.
+    """
+    try:
+        from app.support.Metrics import Metrics as _M
+    except Exception:
+        _M = None  # type: ignore[assignment]
+
+    is_coro = inspect.iscoroutinefunction(callback)
+
+    def _observe(outcome: str, duration: float) -> None:
+        if _M is None:
+            return
+        try:
+            _M.scheduled_tasks_total.labels(
+                task=identifier, outcome=outcome,
+            ).inc()
+            _M.scheduled_task_duration_seconds.labels(
+                task=identifier,
+            ).observe(duration)
+        except Exception:
+            pass
+
+    if is_coro:
+        async def _async_wrapped(*args, **kwargs):
+            start = _time.time()
+            try:
+                result = await callback(*args, **kwargs)
+                _observe("success", _time.time() - start)
+                return result
+            except Exception:
+                _observe("failure", _time.time() - start)
+                raise
+        _async_wrapped.__name__ = getattr(callback, "__name__", f"scheduled_{identifier}")
+        return _async_wrapped
+
+    def _sync_wrapped(*args, **kwargs):
+        start = _time.time()
+        try:
+            result = callback(*args, **kwargs)
+            _observe("success", _time.time() - start)
+            return result
+        except Exception:
+            _observe("failure", _time.time() - start)
+            raise
+    _sync_wrapped.__name__ = getattr(callback, "__name__", f"scheduled_{identifier}")
+    return _sync_wrapped
 
 
 class APSchedulerDriver(Scheduling):
@@ -146,9 +204,14 @@ class APSchedulerDriver(Scheduling):
         if hasattr(options, "get") and "apscheduler_job_options" in options:
             job_opts = options.get("apscheduler_job_options", {})
 
+        # Wrap the callback in a Prometheus-instrumented shim so every
+        # scheduled tick increments its counter + duration histogram.
+        # Done once at registration so APScheduler itself is oblivious.
+        instrumented = _instrument_scheduled(identifier, callback)
+
         try:
             self.scheduler.add_job(
-                func=callback,
+                func=instrumented,
                 trigger=trigger,
                 id=identifier,
                 **job_opts,

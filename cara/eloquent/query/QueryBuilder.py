@@ -98,7 +98,21 @@ class QueryBuilder(ObservesEvents):
         self._schema = schema
         self._eager_relation = EagerRelations()
         if model:
-            self._global_scopes = model._global_scopes
+            # ROOT CAUSE (2026-04-24): previously this was
+            # ``self._global_scopes = model._global_scopes`` — a shared
+            # reference to the class-level dict. Any callback that ran
+            # ``remove_global_scope()`` (notably SoftDeleteScope's
+            # ``_soft_delete_query``) mutated the class dict forever,
+            # so a single ``.delete()`` would strip the soft-delete
+            # scope class-wide and every subsequent delete hard-
+            # deleted rows + their FK-cascade dependents. Snapshot to
+            # a per-builder copy so scope mutations are scoped to this
+            # query only. Shallow copy of both layers is enough; the
+            # inner values are callables we never rewrite.
+            self._global_scopes = {
+                action: dict(scopes)
+                for action, scopes in model._global_scopes.items()
+            }
             if model.__with__:
                 self.with_(model.__with__)
         else:
@@ -2840,7 +2854,21 @@ class QueryBuilder(ObservesEvents):
         return self
 
     def run_scopes(self):
-        for name, scope in self._global_scopes.get(self._action, {}).items():
+        # ROOT CAUSE (2026-04-23): ``_global_scopes`` is a class-level
+        # dict shared across every QueryBuilder instance. Under the
+        # threaded queue worker (and ``--concurrency=8`` sync runs) two
+        # threads can race here — thread A is iterating while thread B
+        # calls ``with_global_scope()`` on the same model class, which
+        # mutates the same dict. Python raises ``RuntimeError:
+        # dictionary changed size during iteration`` and the query
+        # aborts. Snapshot to a list before iterating so the iterator
+        # is frozen for the duration of ``scope(self)`` calls. Any
+        # scopes registered mid-iteration will apply on the next query,
+        # which matches Laravel's semantics.
+        scopes = list(
+            self._global_scopes.get(self._action, {}).items()
+        )
+        for name, scope in scopes:
             scope(self)
 
         return self

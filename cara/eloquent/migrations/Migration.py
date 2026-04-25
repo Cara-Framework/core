@@ -171,13 +171,18 @@ class Migration:
         self.migrate(migration)
 
     def drop_all_tables(self, ignore_fk=False):
-        """Drop all tables"""
-        connection = DB.create_connection_instance(self.connection)
+        """Drop all tables.
 
+        We don't borrow our own connection here — every operation we
+        invoke (``disable_foreign_key_constraints``, ``get_all_tables``,
+        ``drop_table_if_exists``) goes through ``self.schema``, which
+        borrows and releases its own connection per statement. The
+        previous implementation grabbed a slot it never used and never
+        returned, draining the pool on multi-table resets.
+        """
         if ignore_fk:
             self.schema.disable_foreign_key_constraints()
 
-        # Get all table names using schema
         tables = self.schema.get_all_tables()
 
         for table_name in tables:
