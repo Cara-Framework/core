@@ -351,11 +351,60 @@ class JWTGuard(Guard):
             payload = jwt.decode(
                 token, self.secret, algorithms=[self.algorithm], options=options
             )
-            return payload
         except jwt.ExpiredSignatureError:
             raise TokenExpiredException("Token expired")
         except jwt.InvalidTokenError:
             raise TokenInvalidException("Invalid token")
+
+        # Per-user revocation cutoff. After a security-sensitive change
+        # (password reset, email change, "log out all sessions"), the
+        # caller bumps ``jwt_user_revoke:{sub}`` to ``now``. Any token
+        # with ``iat`` strictly older than that cutoff is treated as
+        # revoked even though its signature is still valid. This is the
+        # missing primitive that lets ``change_email`` actually expire
+        # outstanding sessions instead of leaving stolen tokens live
+        # for the full refresh-TTL window.
+        sub = payload.get("sub")
+        iat = payload.get("iat")
+        if sub and iat is not None:
+            try:
+                cutoff = Cache.get(f"jwt_user_revoke:{sub}", 0)
+                if cutoff and int(iat) < int(cutoff):
+                    raise TokenBlacklistedException(
+                        "Token revoked: issued before user-level revocation cutoff"
+                    )
+            except TokenBlacklistedException:
+                raise
+            except Exception:
+                # Cache misses / serialization errors must not lock users
+                # out — degrade to "no revocation cutoff" rather than 401.
+                pass
+
+        return payload
+
+    def revoke_user_sessions(self, user_id: Any, ttl: Optional[int] = None) -> None:
+        """Revoke every JWT issued before now for the given user.
+
+        Sets a per-user ``iat`` cutoff in cache so any token (access or
+        refresh) issued before this call is rejected by ``_decode_token``.
+        TTL defaults to ``refresh_ttl`` because once the longest-lived
+        token type expires naturally, the cutoff is no longer needed.
+        """
+        cache_ttl = ttl if ttl is not None else max(self.refresh_ttl, self.ttl)
+        try:
+            Cache.put(f"jwt_user_revoke:{user_id}", int(time.time()), cache_ttl)
+        except Exception:
+            # Logging only — we never want a cache hiccup to silently
+            # skip revocation. Caller should treat this as best-effort.
+            try:
+                from cara.facades import Log
+
+                Log.error(
+                    f"JWTGuard.revoke_user_sessions failed for user_id={user_id}",
+                    category="cara.auth.jwt",
+                )
+            except Exception:
+                pass
 
     def generate_token_with_ttl(
         self,

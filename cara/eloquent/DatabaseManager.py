@@ -1,3 +1,4 @@
+import threading
 from contextlib import contextmanager
 
 
@@ -9,6 +10,12 @@ class DatabaseManager:
     """
 
     _instance = None
+    # Guards ``get_instance`` against the classic double-checked-locking
+    # race: two threads both observe ``_instance is None``, both call
+    # ``cls()``, both auto-configure — one wins, the other's instance
+    # is silently discarded along with anything that captured a
+    # reference to it. With a lock, exactly one bootstrap runs.
+    _instance_lock = threading.Lock()
 
     def __init__(self):
         # Initialize database configuration directly
@@ -87,8 +94,11 @@ class DatabaseManager:
         - Auto-configure fallback = works everywhere, zero boilerplate
         """
         if cls._instance is None:
-            cls._instance = cls()
-            cls._instance._auto_configure()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    instance = cls()
+                    instance._auto_configure()
+                    cls._instance = instance
         return cls._instance
 
     def _auto_configure(self):
@@ -164,14 +174,37 @@ class DatabaseManager:
             yield self
 
     def select(self, query, bindings=(), connection=None):
-        """Execute a raw SELECT query and return results as list of dicts."""
+        """Execute a raw SELECT query and return results as list of dicts.
+
+        Always returns the connection to the pool — the previous code
+        path minted a fresh psycopg2 connection per call and never
+        closed it, so every ``DB.select(...)`` outside a transaction
+        leaked one connection. After ``max_overflow`` calls the pool
+        was exhausted and every request hung in ``checkout()``.
+
+        If the current context already has an open transaction on this
+        connection, ``_create_connection_instance`` short-circuits to
+        the pinned handle — we must NOT close that one (the
+        transaction's commit/rollback path owns its lifecycle).
+        """
+        from .connections.ConnectionResolver import _get_registry
+
         connection_name = self._resolve_connection_name(connection)
         resolver = self._ensure_resolver()
+        in_active_txn = _get_registry().get(connection_name) is not None
         conn = resolver._create_connection_instance(connection_name)
-        conn.set_cursor()
-        conn.statement(query, bindings)
-        rows = conn._cursor.fetchall() if conn._cursor else []
-        return [dict(row) for row in rows]
+        try:
+            conn.set_cursor()
+            conn.statement(query, bindings)
+            rows = conn._cursor.fetchall() if conn._cursor else []
+            return [dict(row) for row in rows]
+        finally:
+            if not in_active_txn:
+                try:
+                    conn.open = 0
+                    conn.close_connection()
+                except Exception:
+                    pass
 
     def statement(self, query, bindings=(), connection=None):
         """Executes raw SQL statement"""
@@ -247,8 +280,34 @@ class DatabaseManager:
         return resolver.connection_factory.make(driver)
 
     def create_connection_instance(self, connection=None, schema=None):
-        """Create actual connection instance"""
+        """Return a connection instance — transaction-aware.
+
+        If the current execution context has an open transaction on this
+        connection name (tracked in ``ConnectionResolver``'s per-context
+        ``_active_connections`` ``ContextVar``), return that same instance
+        so ``QueryBuilder`` and callers that bypass the resolver still
+        run inside the transaction's psycopg2 session.
+
+        Prior behaviour always minted a fresh instance, which meant every
+        ``QueryBuilder.new_connection()`` call inside a
+        ``with db.transaction(): ...`` block ran against a pool-checked-out
+        autocommit connection — the transaction's rollback couldn't undo
+        writes because the writes were never part of the transaction.
+        """
         connection_name = self._resolve_connection_name(connection)
+
+        # Transaction-aware short-circuit: reuse the active connection if
+        # this context is inside ``with db.transaction()``.
+        try:
+            from .connections.ConnectionResolver import _get_registry
+            active = _get_registry().get(connection_name)
+            if active is not None:
+                return active
+        except Exception:
+            # Defensive — if the registry lookup ever fails we still want
+            # to fall through to a fresh connection rather than crash.
+            pass
+
         connection_info = self.get_connection_info(connection_name)
         connection_class = self.get_connection_class(connection_name)
 

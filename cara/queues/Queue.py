@@ -131,6 +131,29 @@ class Queue:
 
         return get_job_state_manager().get_active_jobs()
 
+    def later(
+        self,
+        delay: Any,
+        job: Any,
+        driver_name: Optional[str] = None,
+        **options: Any,
+    ):
+        """Dispatch a job with a delay — Laravel ``Queue::later()`` parity.
+
+        Delegates to the active driver's ``later()`` method if available,
+        otherwise falls back to ``schedule()``/``dispatchAfter()``.
+
+        Args:
+            delay: Delay in seconds (or a ``pendulum.Duration``).
+            job: Queueable job instance.
+            driver_name: Optional driver name override.
+        """
+        drv = self.driver(driver_name)
+        if hasattr(drv, "later"):
+            return drv.later(delay, job, options)
+        # Fallback for drivers that only expose schedule()
+        return self.schedule(job, delay, driver_name=driver_name, **options)
+
     def dispatch(
         self,
         job: Any,
@@ -151,26 +174,26 @@ class Queue:
         """
         app = self.application
 
-        try:
-            if isinstance(job, type) and issubclass(job, ShouldQueue):
-                if hasattr(app, "make") and not args and not kwargs:
-                    instance = app.make(job)
-                else:
-                    instance = job(*args, **kwargs)
-                return self.push(instance, driver_name=driver_name)
+        if isinstance(job, type) and issubclass(job, ShouldQueue):
+            if hasattr(app, "make") and not args and not kwargs:
+                instance = app.make(job)
+            else:
+                instance = job(*args, **kwargs)
+            return self.push(instance, driver_name=driver_name)
 
-            if not isinstance(job, type) and isinstance(job, ShouldQueue):
-                return self.push(job, driver_name=driver_name)
-        except DriverNotRegisteredException as e:
-            try:
-                logger = app.make("logger")
-                logger.error(
-                    f"Queue driver error in dispatch: {e}. Running synchronously."
-                )
-            except Exception:
-                pass
+        if not isinstance(job, type) and isinstance(job, ShouldQueue):
+            return self.push(job, driver_name=driver_name)
 
-        # fallback synchronous execution - no job ID for sync execution
+        # Synchronous path: only for non-ShouldQueue jobs, where the
+        # caller is explicitly running the handler inline. The previous
+        # implementation also fell through to this path when
+        # ``DriverNotRegisteredException`` bubbled up from ``push()`` —
+        # which silently downgraded a queued ``ShouldQueue`` job into
+        # an inline request-thread call, blowing up p99 latency and
+        # bypassing every retry/idempotency guarantee the queue is
+        # there to provide. We now let driver-configuration errors
+        # surface to the caller; explicit sync execution is available
+        # via ``dispatchNow`` / ``ExecutionContext.sync()``.
         if isinstance(job, type):
             if hasattr(app, "make") and not args and not kwargs:
                 instance = app.make(job)

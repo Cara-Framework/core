@@ -48,10 +48,22 @@ class Atomic:
             return False
 
     def __call__(self, func):
-        """Use as decorator: @atomic() or @atomic(connection='other')"""
+        """Use as decorator: @atomic() or @atomic(connection='other')
+
+        Each call materializes a *fresh* ``Atomic`` instance — the
+        decorator builds at import time, but ``self._conn`` /
+        ``self._db`` are per-transaction state. Reusing the import-time
+        instance lets two concurrent callers stomp on each other's
+        ``_conn``: caller B's commit unwinds caller A's transaction,
+        caller A's rollback closes B's connection. Any sync-ORM call
+        site decorated with ``@atomic()`` and reached from threads or
+        ``asyncio.to_thread`` was vulnerable.
+        """
+        connection_name = self.connection_name
+
         @wraps(func)
         def wrapper(*args, **kwargs):
-            with self:
+            with Atomic(connection=connection_name):
                 return func(*args, **kwargs)
         return wrapper
 

@@ -80,8 +80,23 @@ class MiddlewareCapsule:
         return self
 
     def is_terminable(self, middleware: MiddlewareType) -> bool:
-        """Check if middleware is registered as terminable."""
-        return middleware in self._terminable_middleware
+        """Check if middleware is registered as terminable.
+
+        Routes that use parameterized middleware (e.g. ``throttle:60,1``,
+        ``auth:jwt``) get a *fresh* ``ParameterizedMiddleware`` proxy class
+        per resolution — see ``_create_parameterized_middleware``. The
+        proxy class is never identity-equal to the base class registered
+        in ``_terminable_middleware``, so a direct ``in`` check failed and
+        ``terminate()`` never ran for parameterized middleware. Unwrap
+        through ``__base_middleware__`` so the lookup matches the
+        registration.
+        """
+        if middleware in self._terminable_middleware:
+            return True
+        base = getattr(middleware, "__base_middleware__", None)
+        if base is not None and base in self._terminable_middleware:
+            return True
+        return False
 
     def get_terminable_middleware(self) -> Set[MiddlewareType]:
         """Get all registered terminable middleware."""
