@@ -22,7 +22,20 @@ class HasEvents:
     """
 
     __has_events__ = True
-    __observers__ = {}
+    # Per-class observer registry. Declared here only as a type marker —
+    # the actual dict is created per-subclass in ``__init_subclass__`` so
+    # ``ModelA.observe(Obs)`` does NOT silently register the same observer
+    # against ``ModelB`` via a shared mutable class attribute.
+    __observers__: Dict[type, Dict[str, list]] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Install a fresh dict on each subclass so each model owns its
+        # observer table. Without this every ``observe()`` call mutated
+        # the same dict on ``HasEvents`` itself, leading to a global
+        # registry instead of per-model isolation.
+        if "__observers__" not in cls.__dict__:
+            cls.__observers__ = {}
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

@@ -5,6 +5,7 @@ This module implements a cache driver that uses Redis as the backend storage,
 supporting TTL-based expiration and all standard cache operations.
 """
 
+from cara.facades import Log
 import pickle
 from typing import Any, Optional
 
@@ -89,8 +90,8 @@ class RedisCacheDriver(Cache):
                 self._client.set(redis_key, payload, ex=ttl_seconds)
             else:
                 self._client.set(redis_key, payload)
-        except Exception:
-            pass
+        except Exception as e:
+            Log.debug(f"[RedisCacheDriver] set failed: {e}", category="cache")
 
     def forever(self, key: str, value: Any) -> None:
         self.put(key, value, ttl=0)
@@ -105,8 +106,8 @@ class RedisCacheDriver(Cache):
     def flush(self) -> None:
         try:
             self._client.flushdb()
-        except Exception:
-            pass
+        except Exception as e:
+            Log.debug(f"[RedisCacheDriver] flush failed: {e}", category="cache")
 
     def has(self, key: str) -> bool:
         """Check if a key exists in cache."""
@@ -160,6 +161,29 @@ class RedisCacheDriver(Cache):
         value = callback()
         self.put(key, value, ttl)
         return value
+
+    # Lua: compare the stored pickled payload against the expected one and
+    # delete only on equality. EVAL is single-threaded on the Redis server,
+    # which is what makes the CAS atomic — non-atomic ``GET; DEL`` lets a
+    # different owner slip in between the two calls and lose its lock.
+    _RELEASE_LOCK_LUA = (
+        "if redis.call('get', KEYS[1]) == ARGV[1] then "
+        "  return redis.call('del', KEYS[1]) "
+        "else return 0 end"
+    )
+
+    def forget_if(self, key: str, expected_value: Any) -> bool:
+        redis_key = f"{self._prefix}{key}"
+        try:
+            payload = pickle.dumps(expected_value)
+        except Exception:
+            return False
+        try:
+            result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, payload)
+            return bool(result) and int(result) > 0
+        except Exception as e:
+            Log.debug(f"[RedisCacheDriver] forget_if failed: {e}", category="cache")
+            return False
 
     def forget_pattern(self, pattern: str) -> int:
         """

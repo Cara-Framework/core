@@ -88,3 +88,20 @@ class Cache:
             Number of keys deleted
         """
         raise NotImplementedError
+
+    def forget_if(self, key: str, expected_value: Any) -> bool:
+        """
+        Atomically delete ``key`` only if its current value equals
+        ``expected_value``. Returns True iff the delete actually happened.
+
+        This is the primitive used by ``CacheLock.release`` to avoid the
+        classic "lock A's TTL expires, lock B acquires, lock A's release
+        deletes B's key" race. A non-atomic ``get -> forget`` cannot
+        distinguish those two cases.
+
+        Drivers that cannot guarantee atomicity (e.g. naive in-process
+        memory caches) MAY fall back to the non-atomic check, but the
+        Redis driver MUST implement this via EVAL (Lua) so the read and
+        delete happen as one server-side step.
+        """
+        raise NotImplementedError

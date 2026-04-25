@@ -59,15 +59,30 @@ class CacheLock:
             time.sleep(0.1)  # Brief sleep before retry
 
     def release(self) -> bool:
-        """Release the lock if held by this owner."""
-        # Only release if we own the lock
+        """Release the lock if (and only if) it is still held by this owner.
+
+        Uses ``forget_if`` so the ownership check and the delete happen as
+        a single atomic step. The previous "check then delete" pattern had
+        a TOCTOU race: between ``get`` and ``forget`` the lock could
+        expire and be reacquired by another owner whose key would then be
+        wrongly deleted.
+        """
+        forget_if = getattr(self.cache, "forget_if", None)
+        if callable(forget_if):
+            return bool(forget_if(self.key, self.owner))
+        # Fallback for drivers that haven't implemented the CAS primitive
+        # yet — preserves prior behaviour for backwards-incompatible
+        # deployments where a lock driver is missing the upgrade.
         if self.cache.get(self.key) == self.owner:
             return self.cache.forget(self.key)
         return False
 
     def __enter__(self):
-        """Context manager entry."""
-        self.acquire()
+        """Context manager entry — raises if lock cannot be acquired."""
+        if not self.acquire(timeout=self.timeout):
+            raise TimeoutError(
+                f"Could not acquire lock '{self.key}' within {self.timeout}s"
+            )
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

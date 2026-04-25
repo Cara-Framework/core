@@ -7,6 +7,7 @@ Modern, clean implementation for RabbitMQ-based job queue management.
 import json
 import logging
 import pickle
+import threading
 import uuid
 from typing import Any, Dict, List, Optional, Union
 
@@ -38,6 +39,24 @@ class AMQPDriver(HasColoredOutput, Queue):
         self.options = options
         self.connection = None
         self.channel = None
+        # ROOT CAUSE (2026-04-24): pika's BlockingConnection is NOT
+        # thread-safe, yet this driver stores ``connection``/``channel``
+        # as instance attributes shared across all threads. Under
+        # ``--concurrency=8``, listener dispatch fan-out (every
+        # completed job fires one or more downstream publishes) ran 8
+        # publishes in parallel on the same connection. Pika's
+        # internal async transport state (a deque of outgoing frames,
+        # a tx byte counter) got corrupted mid-frame, surfacing as
+        # ``StreamLostError: ... AssertionError('tx buffer size
+        # underflow')`` or ``IndexError('pop from an empty deque')``.
+        # The connection then died and every downstream publish in the
+        # cascade failed. Serialize the connect→publish→close path
+        # behind a lock so only one thread touches pika's state at a
+        # time. Each publish opens+closes its own connection already
+        # (line 581-583), so contention is just the single publish
+        # duration (~5–20ms); concurrency of the scraping path itself
+        # is unaffected because scraping doesn't hold this lock.
+        self._publish_lock = threading.Lock()
 
         # Suppress verbose pika logs
         logging.getLogger("pika").setLevel(logging.WARNING)
@@ -89,10 +108,13 @@ class AMQPDriver(HasColoredOutput, Queue):
         """Schedule job for future execution using AMQP delayed plugin."""
         merged_opts = {**self.options, **options}
 
-        # Calculate delay in milliseconds
+        # Calculate delay in milliseconds. ``float_timestamp`` is a pendulum
+        # *property*, not a method — calling it as a method raises
+        # TypeError: 'float' object is not callable. With the previous code
+        # every scheduled AMQP job blew up at enqueue time.
         delay_ms = int(
-            pendulum.parse(str(when)).float_timestamp() * 1000
-            - pendulum.now().float_timestamp() * 1000
+            pendulum.parse(str(when)).float_timestamp * 1000
+            - pendulum.now().float_timestamp * 1000
         )
 
         # Add delay header for RabbitMQ delayed plugin
@@ -223,54 +245,58 @@ class AMQPDriver(HasColoredOutput, Queue):
             options: Queue options
             attempts: Number of attempts made
         """
-        try:
-            self._connect({})
-
-            # Prepare dead letter message
-            payload = {
-                "obj": job,
-                "args": options.get("args", ()),
-                "callback": options.get("callback", "handle"),
-                "failed_at": pendulum.now(tz=options.get("tz", "UTC")).to_datetime_string(),
-                "attempts": attempts,
-                "error": options.get("error"),
-            }
-
-            # Serialize
-            serializer = options.get("serializer", "pickle")
-            if serializer == "json":
-                body = json.dumps(payload, default=str).encode("utf-8")
-            else:
-                body = pickle.dumps(payload)
-
-            # Publish to dead letter exchange
-            dlx_name = options.get("exchange", "default") + ".dlx"
-            dlq_routing_key = f"dead.{options.get('queue', 'default')}"
-
-            self.channel.basic_publish(
-                exchange=dlx_name,
-                routing_key=dlq_routing_key,
-                body=body,
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # Persistent
-                    headers={
-                        "x-death-count": attempts,
-                        "x-original-job": job.__class__.__name__,
-                    },
-                ),
-            )
-
-            Log.info(f"Job sent to dead letter queue: {dlq_routing_key}")
-
-            # Close connection
+        # Same thread-safety rationale as _connect_and_publish: pika
+        # instance state (self.connection/self.channel) must not be
+        # mutated by concurrent threads.
+        with self._publish_lock:
             try:
-                self.channel.close()
-                self.connection.close()
-            except Exception:
-                pass
+                self._connect({})
 
-        except Exception as e:
-            Log.error(f"Failed to send job to dead letter queue: {e}")
+                # Prepare dead letter message
+                payload = {
+                    "obj": job,
+                    "args": options.get("args", ()),
+                    "callback": options.get("callback", "handle"),
+                    "failed_at": pendulum.now(tz=options.get("tz", "UTC")).to_datetime_string(),
+                    "attempts": attempts,
+                    "error": options.get("error"),
+                }
+
+                # Serialize
+                serializer = options.get("serializer", "pickle")
+                if serializer == "json":
+                    body = json.dumps(payload, default=str).encode("utf-8")
+                else:
+                    body = pickle.dumps(payload)
+
+                # Publish to dead letter exchange
+                dlx_name = options.get("exchange", "default") + ".dlx"
+                dlq_routing_key = f"dead.{options.get('queue', 'default')}"
+
+                self.channel.basic_publish(
+                    exchange=dlx_name,
+                    routing_key=dlq_routing_key,
+                    body=body,
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,  # Persistent
+                        headers={
+                            "x-death-count": attempts,
+                            "x-original-job": job.__class__.__name__,
+                        },
+                    ),
+                )
+
+                Log.info(f"Job sent to dead letter queue: {dlq_routing_key}")
+
+                # Close connection
+                try:
+                    self.channel.close()
+                    self.connection.close()
+                except Exception:
+                    pass
+
+            except Exception as e:
+                Log.error(f"Failed to send job to dead letter queue: {e}")
 
     def consume(self, options: Dict[str, Any]) -> None:
         """
@@ -495,7 +521,17 @@ class AMQPDriver(HasColoredOutput, Queue):
         return replayed
 
     def _connect_and_publish(self, payload: Any, opts: Dict[str, Any]) -> None:
-        """Connect to RabbitMQ and publish message."""
+        """Connect to RabbitMQ and publish message.
+
+        Serialized via ``_publish_lock`` because pika's BlockingConnection
+        and channel state are not thread-safe. See constructor comment
+        for the underflow/empty-deque crash this prevents.
+        """
+        with self._publish_lock:
+            return self._connect_and_publish_locked(payload, opts)
+
+    def _connect_and_publish_locked(self, payload: Any, opts: Dict[str, Any]) -> None:
+        """Inner publish path — caller must hold ``_publish_lock``."""
         self._connect(opts)
 
         # Get queue name from job or options
@@ -561,20 +597,42 @@ class AMQPDriver(HasColoredOutput, Queue):
         else:
             body = pickle.dumps(payload)
 
-        # Publish with persistence
-        self.channel.basic_publish(
-            exchange=opts.get("exchange", ""),
-            routing_key=queue_name,
-            body=body,
-            properties=pika.BasicProperties(
-                delivery_mode=2,  # Make message persistent
-                headers=opts.get("connection_options"),
-            ),
-        )
-
-        # Wait for confirmation
-        if self.channel.is_open:
-            self.channel.confirm_delivery()
+        # Publish with persistence + mandatory routing.
+        #
+        # ``mandatory=True`` makes the broker raise ``UnroutableError``
+        # (in concert with the publisher confirms enabled at channel
+        # setup) when no queue is bound for our routing key. Without
+        # this flag, a typo in the routing key, a wrong exchange, or
+        # a deleted queue silently swallowed the dispatch — the
+        # caller's job vanished with no signal anywhere. Now the
+        # caller gets a hard error and the orchestrator can retry or
+        # alert.
+        #
+        # Note: ``confirm_delivery()`` was previously called *after*
+        # every publish. That's a no-op on an already-confirms-mode
+        # channel — confirms are enabled once at channel construction
+        # (line 636 below). The actual broker ACK is awaited
+        # synchronously inside ``basic_publish`` because we use
+        # ``BlockingChannel`` with confirms on. Removing the redundant
+        # post-call.
+        try:
+            self.channel.basic_publish(
+                exchange=opts.get("exchange", ""),
+                routing_key=queue_name,
+                body=body,
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # Make message persistent
+                    headers=opts.get("connection_options"),
+                ),
+                mandatory=True,
+            )
+        except pika.exceptions.UnroutableError as exc:
+            Log.error(
+                f"AMQPDriver: message unroutable to queue='{queue_name}' "
+                f"exchange='{opts.get('exchange', '')}': {exc}",
+                category="cara.queue.amqp",
+            )
+            raise
 
         # Close connection
         try:

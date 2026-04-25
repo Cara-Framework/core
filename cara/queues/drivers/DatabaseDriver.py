@@ -95,6 +95,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             jobs = (
                 builder.where("queue", merged.get("queue", "default"))
                 .where("available_at", "<=", now)
+                .where_null("reserved_at")
                 .limit(10)
                 .order_by("id")
                 .get()
@@ -103,12 +104,36 @@ class DatabaseDriver(HasColoredOutput, Queue):
             if not jobs:
                 continue
 
-            # Reserve jobs
-            ids = [job["id"] for job in jobs]
-            builder.where_in("id", ids).update({"reserved_at": now})
+            # Atomically reserve each job: the WHERE clause includes
+            # ``reserved_at IS NULL`` so two workers fetching overlapping
+            # candidate rows can't both win — whoever's UPDATE flips the
+            # row from NULL → reserved owns it. Without this guard each
+            # row was previously updated unconditionally, so a stagger
+            # of ~ms between two pollers caused duplicate execution.
+            claimed_jobs = []
+            for job in jobs:
+                affected = (
+                    builder.new()
+                    .table(table)
+                    .where("id", job["id"])
+                    .where_null("reserved_at")
+                    .update({"reserved_at": now})
+                )
+                # ``update`` returns the affected row count on most cara
+                # drivers; treat any falsy value (None / 0 / empty) as
+                # "another worker beat us" and skip.
+                try:
+                    won = bool(int(affected)) if affected is not None else False
+                except (TypeError, ValueError):
+                    won = bool(affected)
+                if won:
+                    claimed_jobs.append(job)
+
+            if not claimed_jobs:
+                continue
 
             # Process each job
-            for job in jobs:
+            for job in claimed_jobs:
                 try:
                     self._process_job(job, merged)
                     job_id = self._extract_job_id(job)

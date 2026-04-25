@@ -30,6 +30,19 @@ class RedisDriver(HasColoredOutput, Queue):
 
     driver_name = "redis"
 
+    # Atomically promotes due delayed jobs to the main queue. Runs on
+    # the Redis server in a single step so concurrent consumers cannot
+    # both ``rpush`` the same payload, and a crash between zrem and
+    # rpush cannot drop a job. KEYS[1]=delayed_key, KEYS[2]=main_key,
+    # ARGV[1]=now_ts.
+    _MOVE_DUE_DELAYED_LUA = (
+        "local items = redis.call('zrangebyscore', KEYS[1], 0, ARGV[1]) "
+        "if #items == 0 then return 0 end "
+        "redis.call('zrem', KEYS[1], unpack(items)) "
+        "redis.call('rpush', KEYS[2], unpack(items)) "
+        "return #items"
+    )
+
     def __init__(self, application, options: Dict[str, Any]):
         """
         Initialize Redis driver.
@@ -146,18 +159,27 @@ class RedisDriver(HasColoredOutput, Queue):
 
         while True:
             try:
-                # 1. Check delayed sorted set for due jobs
+                # 1. Move every due job from the delayed sorted set into
+                #    the main queue atomically. The previous loop did
+                #    ``zrem`` then ``rpush`` outside of any transaction —
+                #    if the process crashed between the two, the job
+                #    vanished; if two consumers polled simultaneously,
+                #    each ``rpush``-ed the same job and we got duplicate
+                #    execution. ``ZPOPMIN`` doesn't fit (it pops the
+                #    smallest score, not "<= now"), so we use a Lua
+                #    script that does ``ZRANGEBYSCORE`` + ``ZREM`` +
+                #    ``RPUSH`` in one server-side step.
                 now_ts = pendulum.now(tz=merged.get("tz", self.tz)).int_timestamp
-                due_items = self._redis.zrangebyscore(delayed_key, 0, now_ts)
-
-                if due_items:
-                    for item in due_items:
-                        try:
-                            # Remove from delayed set, push to main queue
-                            self._redis.zrem(delayed_key, item)
-                            self._redis.rpush(key, item)
-                        except Exception as e:
-                            self.danger(f"RedisDriver: error moving delayed job: {e}")
+                try:
+                    self._redis.eval(
+                        self._MOVE_DUE_DELAYED_LUA,
+                        2,
+                        delayed_key,
+                        key,
+                        str(now_ts),
+                    )
+                except Exception as e:
+                    self.danger(f"RedisDriver: error moving delayed jobs: {e}")
 
                 # 2. Blocking pop from main queue
                 popped = self._redis.blpop(key, timeout=self.blocking_timeout)
@@ -232,11 +254,17 @@ class RedisDriver(HasColoredOutput, Queue):
                     f"RedisDriver.schedule: invalid time: {e}"
                 ) from e
 
-        # Prepare payload
+        # Prepare payload. Include a fresh uuid envelope so two
+        # ``schedule()`` calls with the same callable + same args + same
+        # ``when`` produce different pickled bytes. Without this, the
+        # delayed sorted set silently deduplicates identical members
+        # (ZADD only stores each member once) and one of the two
+        # scheduled jobs is dropped.
         payload_obj = {
             "obj": job,
             "callback": callback,
             "args": args,
+            "job_id": str(uuid.uuid4()),
             "scheduled_at": pendulum.now(
                 tz=merged.get("tz", self.tz)
             ).to_datetime_string(),

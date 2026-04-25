@@ -9,14 +9,35 @@ Filenames are formed as: prefix + sanitized_key + ".cache".
 Expired entries are removed on access.
 """
 
+from cara.facades import Log
 import glob
+import hashlib
 import os
 import pickle
+import re
+import threading
 import time
 from typing import Any, Optional
 
 from cara.cache.contracts import Cache
 from cara.exceptions import CacheConfigurationException
+
+# Anything outside this whitelist gets replaced before being used in a
+# filename. Keeping ``:`` (Cara cache key separator) and ``-`` / ``.``
+# preserves human-readable cache files while making path traversal
+# (``..``, ``/``, ``\\``, NUL) impossible at the filename layer.
+_UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9._:\-]")
+# Same as above but also permits glob metacharacters so ``forget_pattern``
+# can still build wildcard expressions ("home:*", "products:?").
+_UNSAFE_PATTERN_CHARS = re.compile(r"[^A-Za-z0-9._:\-\*\?\[\]]")
+# Filename length cap (most filesystems error around 255 bytes; reserve
+# room for the ``.cache`` suffix and any hash suffix we append).
+_MAX_FILENAME_LEN = 200
+
+# Process-wide lock used by ``forget_if`` to make the CAS sequence safe
+# against concurrent in-process releases. Cross-process racing is out of
+# scope for the file driver — distributed locks belong on Redis.
+_FILE_CAS_LOCK = threading.Lock()
 
 
 class FileCacheDriver(Cache):
@@ -149,8 +170,29 @@ class FileCacheDriver(Cache):
 
     def _file_path(self, key: str) -> str:
         prefixed_key = f"{self._prefix}{key}"
-        sanitized = prefixed_key.replace("/", "_")
-        return os.path.join(self.cache_directory, f"{sanitized}.cache")
+        # Whitelist sanitize — replacing only "/" was insufficient. A key
+        # like "../etc/passwd" with the previous implementation became
+        # ".._etc_passwd" (safe), but ``..\\..`` on Windows or ``\x00``
+        # NUL injection would still escape on non-POSIX layers. Strict
+        # whitelist closes the class entirely.
+        sanitized = _UNSAFE_KEY_CHARS.sub("_", prefixed_key)
+        if len(sanitized) > _MAX_FILENAME_LEN:
+            # Long keys get truncated + hashed so collisions stay
+            # vanishingly improbable while filenames remain bounded.
+            digest = hashlib.sha256(prefixed_key.encode("utf-8")).hexdigest()[:32]
+            sanitized = f"{sanitized[: _MAX_FILENAME_LEN - 33]}_{digest}"
+        candidate = os.path.join(self.cache_directory, f"{sanitized}.cache")
+        # Defense in depth: reject any resolved path that escapes the
+        # cache directory. ``realpath`` collapses symlinks too, so a
+        # cache_directory containing a symlinked subdir can't be abused
+        # to land writes outside the configured root.
+        resolved = os.path.realpath(candidate)
+        root_with_sep = self.cache_directory.rstrip(os.sep) + os.sep
+        if not (resolved == self.cache_directory or resolved.startswith(root_with_sep)):
+            raise ValueError(
+                "FileCacheDriver: refusing to operate on cache file outside the cache root"
+            )
+        return candidate
 
     def _compute_expiration(self, ttl: Optional[int]) -> Optional[float]:
         if ttl is not None:
@@ -174,8 +216,8 @@ class FileCacheDriver(Cache):
         try:
             with open(file_path, "wb") as f:
                 pickle.dump((expires_at, value), f)
-        except Exception:
-            pass
+        except Exception as e:
+            Log.debug(f"[FileCacheDriver] write failed: {e}", category="cache")
 
     def _delete_file(self, file_path: str) -> bool:
         try:
@@ -185,6 +227,30 @@ class FileCacheDriver(Cache):
             return False
         except Exception:
             return False
+
+    def forget_if(self, key: str, expected_value: Any) -> bool:
+        """
+        Best-effort CAS on a file-backed cache: re-read the entry, compare
+        against ``expected_value``, and delete on match. The whole sequence
+        runs under a per-process lock so concurrent ``release()`` calls in
+        the same worker can't both succeed; cross-process racing is still
+        possible (file caches are not the right primitive for distributed
+        locks — use Redis), but at least every individual worker's
+        local view stays consistent.
+        """
+        with _FILE_CAS_LOCK:
+            file_path = self._file_path(key)
+            if not os.path.exists(file_path):
+                return False
+            ok, expires_at, stored_value = self._read_file(file_path)
+            if not ok:
+                return False
+            if expires_at is not None and expires_at < time.time():
+                self._delete_file(file_path)
+                return False
+            if stored_value != expected_value:
+                return False
+            return self._delete_file(file_path)
 
     def forget_pattern(self, pattern: str) -> int:
         """
@@ -198,9 +264,11 @@ class FileCacheDriver(Cache):
         Returns:
             Number of files deleted
         """
-        # Convert cache key pattern to file path pattern
+        # Convert cache key pattern to file path pattern. Same whitelist
+        # sanitize as ``_file_path`` but with glob metacharacters allowed
+        # so wildcard invalidation still works.
         prefixed_pattern = f"{self._prefix}{pattern}"
-        sanitized_pattern = prefixed_pattern.replace("/", "_")
+        sanitized_pattern = _UNSAFE_PATTERN_CHARS.sub("_", prefixed_pattern)
         file_pattern = os.path.join(self.cache_directory, f"{sanitized_pattern}.cache")
 
         deleted_count = 0
@@ -209,7 +277,7 @@ class FileCacheDriver(Cache):
             for file_path in matching_files:
                 if self._delete_file(file_path):
                     deleted_count += 1
-        except Exception:
-            pass
+        except Exception as e:
+            Log.debug(f"[FileCacheDriver] forget_pattern failed: {e}", category="cache")
 
         return deleted_count
