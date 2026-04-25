@@ -207,6 +207,11 @@ class Container:
         # the window between pop() and bind().
         if inspect.isclass(name):
             with self._deferred_lock:
+                (
+                    GenericContainerException,
+                    MissingContainerBindingException,
+                    StrictContainerException,
+                ) = _get_container_exceptions()
                 if name in self._deferred or self._attempt_load_deferred(name):
                     provider_class = self._deferred.pop(name)
                     for k, cls in list(self._deferred.items()):
@@ -309,7 +314,13 @@ class Container:
         - "self" parameters receive the class itself.
         """
         objects: List[Any] = []
+        keyword_objects: Dict[str, Any] = {}
         passing_args = list(resolving_arguments)
+        (
+            GenericContainerException,
+            MissingContainerBindingException,
+            StrictContainerException,
+        ) = _get_container_exceptions()
 
         # If remember=True and arguments were cached, use them directly
         if self.remember:
@@ -342,7 +353,32 @@ class Container:
 
         # Inspect constructor parameters
         for _, param in self.get_parameters(obj):
+            if param.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                continue
             ann = param.annotation
+            is_keyword_only = param.kind == inspect.Parameter.KEYWORD_ONLY
+
+            # Resolve postponed annotations (`from __future__ import annotations`)
+            # so contract strings become real classes for DI.
+            if isinstance(ann, str):
+                module = inspect.getmodule(obj)
+                if module is not None:
+                    ann = module.__dict__.get(ann, ann)
+
+            # Treat typing.Any as an untyped slot: pull from passed args
+            # or fall back to None/default handling below.
+            if ann is Any:
+                value = passing_args.pop(0) if passing_args else (
+                    param.default if param.default is not inspect._empty else None
+                )
+                if is_keyword_only:
+                    keyword_objects[param.name] = value
+                else:
+                    objects.append(value)
+                continue
 
             # (1) Primitive types: expect passed argument or default
             if ann in (
@@ -355,20 +391,25 @@ class Container:
                 tuple,
             ) or (isinstance(ann, type) and ann.__module__ == "builtins"):
                 if passing_args:
-                    objects.append(passing_args.pop(0))
+                    value = passing_args.pop(0)
                 else:
-                    objects.append(
-                        param.default if param.default is not inspect._empty else None
-                    )
+                    value = param.default if param.default is not inspect._empty else None
+                if is_keyword_only:
+                    keyword_objects[param.name] = value
+                else:
+                    objects.append(value)
                 continue
 
             # (2) If annotation is a class, attempt to resolve it
-            if inspect.isclass(ann):
+            if ann is not inspect._empty and inspect.isclass(ann):
                 try:
                     dep = self._find_obj(ann)
                     if inspect.isclass(dep):
                         dep = self.resolve(dep)
-                    objects.append(dep)
+                    if is_keyword_only:
+                        keyword_objects[param.name] = dep
+                    else:
+                        objects.append(dep)
                     continue
                 except MissingContainerBindingException:
                     # Maybe a deferred provider can supply this class
@@ -376,11 +417,18 @@ class Container:
                         dep = self._find_obj(ann)
                         if inspect.isclass(dep):
                             dep = self.resolve(dep)
-                        objects.append(dep)
+                        if is_keyword_only:
+                            keyword_objects[param.name] = dep
+                        else:
+                            objects.append(dep)
                         continue
                     # Otherwise, if user passed an extra argument, use it
                     if passing_args:
-                        objects.append(passing_args.pop(0))
+                        value = passing_args.pop(0)
+                        if is_keyword_only:
+                            keyword_objects[param.name] = value
+                        else:
+                            objects.append(value)
                         continue
                     (
                         GenericContainerException,
@@ -391,19 +439,25 @@ class Container:
                         f"Cannot resolve dependency '{param.name}' of {obj}"
                     )
 
-            # (3) If parameter name is "self", pass the class/function itself
+            # (3) Skip explicit "self" params when present in inspected signatures.
             if param.name == "self":
-                objects.append(obj)
                 continue
 
             # (4) If a default value is specified in signature, use it
             if param.default is not inspect._empty:
-                objects.append(param.default)
+                if is_keyword_only:
+                    keyword_objects[param.name] = param.default
+                else:
+                    objects.append(param.default)
                 continue
 
             # (5) Last resort: use a passed argument if available
             if passing_args:
-                objects.append(passing_args.pop(0))
+                value = passing_args.pop(0)
+                if is_keyword_only:
+                    keyword_objects[param.name] = value
+                else:
+                    objects.append(value)
                 continue
 
             (
@@ -424,7 +478,7 @@ class Container:
             )
             self._remembered[key] = objects.copy()
 
-        return obj(*objects)
+        return obj(*objects, **keyword_objects)
 
     # ---------------------------------------
     # Deferred Provider Support Methods
@@ -535,24 +589,33 @@ class Container:
         # Strategy 4: Match by type/instance/subclass (original logic)
         for provider_obj in self.objects.values():
             # (1) Class–instance match
-            if inspect.isclass(obj) and isinstance(provider_obj, obj):
-                self.fire_hook("resolve", obj, provider_obj)
-                return provider_obj
+            try:
+                if inspect.isclass(obj) and isinstance(provider_obj, obj):
+                    self.fire_hook("resolve", obj, provider_obj)
+                    return provider_obj
+            except TypeError:
+                pass
 
             # (2) Exact match: key bound as instance or class
-            if obj in (
-                provider_obj,
-                provider_obj.__class__,
-            ):
-                self.fire_hook("resolve", obj, provider_obj)
-                return provider_obj
+            try:
+                if obj in (
+                    provider_obj,
+                    provider_obj.__class__,
+                ):
+                    self.fire_hook("resolve", obj, provider_obj)
+                    return provider_obj
+            except TypeError:
+                pass
 
             # (3) Subclass match
-            if (
-                inspect.isclass(provider_obj) and issubclass(provider_obj, obj)
-            ) or issubclass(provider_obj.__class__, obj):
-                self.fire_hook("resolve", obj, provider_obj)
-                return provider_obj
+            try:
+                if (
+                    inspect.isclass(provider_obj) and issubclass(provider_obj, obj)
+                ) or issubclass(provider_obj.__class__, obj):
+                    self.fire_hook("resolve", obj, provider_obj)
+                    return provider_obj
+            except TypeError:
+                pass
 
         (
             GenericContainerException,
