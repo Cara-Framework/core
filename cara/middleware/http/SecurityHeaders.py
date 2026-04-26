@@ -101,10 +101,16 @@ class SecurityHeaders(Middleware):
                 if self._hsts_preload and "preload" not in value:
                     value = f"{value}; preload"
                 response.header("Strict-Transport-Security", value)
-        except Exception:
+        except Exception as e:
             # Never break a response because a header couldn't be set —
-            # the response itself is still what the caller needs.
-            pass
+            # the response itself is still what the caller needs. Log
+            # at debug level instead of swallowing silently so a
+            # systematic header-setting bug becomes visible during
+            # incident review.
+            self._log_debug(
+                f"SecurityHeaders: failed to attach headers "
+                f"({e.__class__.__name__}: {e})"
+            )
 
         return response
 
@@ -120,6 +126,20 @@ class SecurityHeaders(Middleware):
             forwarded = request.header("Forwarded")
             if isinstance(forwarded, str) and "proto=https" in forwarded.lower():
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            self._log_debug(
+                f"SecurityHeaders: HTTPS detection raised "
+                f"({e.__class__.__name__}: {e})"
+            )
         return False
+
+    @staticmethod
+    def _log_debug(msg: str) -> None:
+        """Best-effort debug log; survives partial-boot when Log facade is missing."""
+        try:
+            from cara.facades import Log
+            Log.debug(msg, category="cara.http.security_headers")
+        except Exception:
+            # Don't recurse into Log if Log itself failed; a silent
+            # debug log is acceptable for a non-fatal header-set issue.
+            pass

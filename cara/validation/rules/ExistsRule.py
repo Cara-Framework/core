@@ -54,8 +54,12 @@ class ExistsRule(BaseRule):
 
                     result = query.first()
                     return result is not None
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._log_debug(
+                        f"ExistsRule: model-based query failed for "
+                        f"{model_class.__name__}.{column}: "
+                        f"{e.__class__.__name__}: {e}"
+                    )
 
             # Fallback: Try DB facade
             try:
@@ -69,14 +73,32 @@ class ExistsRule(BaseRule):
 
                 result = query.first()
                 return result is not None
-            except Exception:
-                pass
+            except Exception as e:
+                self._log_debug(
+                    f"ExistsRule: DB-fallback query failed for "
+                    f"{table}.{column}: {e.__class__.__name__}: {e}"
+                )
 
-        except Exception:
-            # If any database error occurs, consider it as validation failure
-            pass
+        except Exception as e:
+            # Outer guard — should never hit. If it does, the rule is
+            # broken at a deeper level than the inner blocks; log so we
+            # see it in incident review instead of silently returning
+            # validation failure.
+            self._log_debug(
+                f"ExistsRule: unexpected outer failure: "
+                f"{e.__class__.__name__}: {e}"
+            )
 
         return False
+
+    @staticmethod
+    def _log_debug(msg: str) -> None:
+        """Best-effort debug log; survives when Log facade isn't yet booted."""
+        try:
+            from cara.facades import Log
+            Log.debug(msg, category="cara.validation.exists")
+        except Exception:
+            pass
 
     def default_message(self, field: str, params: Dict[str, Any]) -> str:
         """Return default exists validation message."""
