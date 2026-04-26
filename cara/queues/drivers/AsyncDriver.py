@@ -15,6 +15,17 @@ from cara.support.Console import HasColoredOutput
 
 
 class AsyncDriver(HasColoredOutput, Queue):
+    # Strong refs for fire-and-forget tasks. ``asyncio.create_task``
+    # only weakly tracks tasks in the loop registry; without a strong
+    # reference the GC can collect mid-flight tasks. Tasks remove
+    # themselves from this set on completion.
+    _pending_tasks: "set[asyncio.Task]" = set()
+
+    @classmethod
+    def _track(cls, task: asyncio.Task) -> None:
+        cls._pending_tasks.add(task)
+        task.add_done_callback(cls._pending_tasks.discard)
+
     """
     Async queue driver for immediate execution.
 
@@ -80,14 +91,17 @@ class AsyncDriver(HasColoredOutput, Queue):
             if not callable(method_to_call):
                 raise AttributeError(f"Callback '{callback}' not found on {instance!r}")
 
-            # Execute synchronously or asynchronously
+            # Execute synchronously or asynchronously. Async-path tasks
+            # are tracked in ``_pending_tasks`` so the GC can't drop
+            # them between dispatch and completion — see class-level
+            # docstring on ``_track``.
             if asyncio.iscoroutinefunction(method_to_call):
                 if hasattr(self.application, "call"):
-                    asyncio.create_task(
+                    AsyncDriver._track(asyncio.create_task(
                         self.application.call(method_to_call, *init_args)
-                    )
+                    ))
                 else:
-                    asyncio.create_task(method_to_call(*init_args))
+                    AsyncDriver._track(asyncio.create_task(method_to_call(*init_args)))
             else:
                 if hasattr(self.application, "call"):
                     self.application.call(method_to_call, *init_args)

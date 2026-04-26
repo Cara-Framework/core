@@ -35,15 +35,30 @@ class CacheLock:
         self.timeout = timeout
         self.owner = owner or "default"
 
+    # Spin interval between failed acquires. 100ms balances:
+    # responsiveness when the lock holder finishes quickly vs. wasted
+    # cache hits while waiting. Could be made configurable per-call,
+    # but the same number is correct for every site so far.
+    _SPIN_INTERVAL_S = 0.1
+
     def acquire(self, timeout: int = 0) -> bool:
         """
-        Attempt to acquire the lock.
+        Attempt to acquire the lock (sync API).
 
         Args:
             timeout: Max seconds to wait for lock (0 = non-blocking)
 
         Returns:
             True if lock acquired, False otherwise
+
+        Async callers
+        -------------
+        ``acquire`` blocks the calling thread on its retry sleep — fine
+        from sync code (CLI commands, sync workers), but in an async
+        context it would stall the event loop. Async callers should use
+        ``await acquire_async(timeout)`` instead, which yields control
+        with ``asyncio.sleep`` so other coroutines keep making progress
+        while we wait.
         """
         import time
         start = time.time()
@@ -56,7 +71,28 @@ class CacheLock:
             if timeout == 0 or (time.time() - start) >= timeout:
                 return False
 
-            time.sleep(0.1)  # Brief sleep before retry
+            time.sleep(self._SPIN_INTERVAL_S)
+
+    async def acquire_async(self, timeout: int = 0) -> bool:
+        """Async-safe variant of :meth:`acquire`.
+
+        Yields the event loop on each retry interval instead of
+        blocking the worker thread. The cache primitive itself
+        (``cache.add``) is sync — that's a single fast op so it's
+        acceptable to call inline.
+        """
+        import asyncio
+        import time
+        start = time.time()
+
+        while True:
+            if self.cache.add(self.key, self.owner, self.timeout):
+                return True
+
+            if timeout == 0 or (time.time() - start) >= timeout:
+                return False
+
+            await asyncio.sleep(self._SPIN_INTERVAL_S)
 
     def release(self) -> bool:
         """Release the lock if (and only if) it is still held by this owner.

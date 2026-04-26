@@ -400,13 +400,38 @@ class Event:
             Log.error(f"Failed to queue listener: {str(e)}")
             return False
 
+    # Strong refs to fire-and-forget tasks. ``asyncio.create_task``
+    # only weakly tracks tasks in the loop registry; without an extra
+    # strong ref the GC can collect a Task whose owning code went
+    # out of scope, and the coroutine simply vanishes mid-flight.
+    # Tasks remove themselves from this set when done.
+    _pending_tasks: "set[asyncio.Task]" = set()
+
+    @classmethod
+    def _track(cls, task: asyncio.Task) -> None:
+        cls._pending_tasks.add(task)
+        task.add_done_callback(cls._pending_tasks.discard)
+
     @staticmethod
     def fire(event: Event) -> None:
         """
         Static method to fire an event (alias for dispatch).
 
-        Properly handles both sync and async contexts by checking ExecutionContext
-        and scheduling the coroutine appropriately.
+        Properly handles both sync and async contexts by checking
+        ExecutionContext and scheduling the coroutine appropriately.
+
+        Edge cases handled
+        ------------------
+        - **No running loop** (sync context, e.g. CLI command): use
+          ``asyncio.run`` to drive the coroutine to completion. Safe
+          here because there's no parent loop to nest inside.
+        - **Loop running, sync caller** (e.g. async server processing
+          a request that called a sync helper): schedule as a task
+          AND keep a strong reference so the GC can't collect it
+          mid-flight. This was the bug — bare ``asyncio.create_task``
+          drops the reference and 0–N% of fired events silently
+          disappear depending on GC pressure.
+        - **Async context**: same task-with-ref path.
 
         Args:
             event: The event instance to fire
@@ -417,16 +442,14 @@ class Event:
         coro = instance.dispatch(event)
 
         if ExecutionContext.is_sync():
-            # Sync context - must run the coroutine to completion
-            # Create a new event loop if none exists
             try:
-                loop = asyncio.get_running_loop()
+                asyncio.get_running_loop()
             except RuntimeError:
-                # No running loop - create one
+                # No running loop — drive the coroutine to completion.
                 asyncio.run(coro)
             else:
-                # Running loop exists - schedule as task
-                asyncio.create_task(coro)
+                # Loop already running — schedule + retain ref.
+                Event._track(asyncio.create_task(coro))
         else:
-            # Async context - schedule as task
-            asyncio.create_task(coro)
+            # Async context — schedule + retain ref.
+            Event._track(asyncio.create_task(coro))
