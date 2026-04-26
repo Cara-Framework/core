@@ -346,7 +346,50 @@ class Logger(Logger):
         """Log an exception message with backtrace."""
         self._log("ERROR", message, category, exc_info=exc_info)
 
+    def withContext(self, **context: Any) -> "ContextualLogger":
+        """Return a scoped logger that auto-injects context into every message.
+
+        Laravel-style usage::
+
+            logger = Log.withContext(job_id=self.job_id)
+            logger.info("Starting collect")   # → "[CollectProductJob] Starting collect [job_id=abc123]"
+            logger.error("Failed")            # → "[CollectProductJob] Failed [job_id=abc123]"
+        """
+        return ContextualLogger(self, context)
+
     # Convenience methods for different styles
     def database(self, message: str, level: str = "DEBUG") -> None:
         """Log a database query (muted style)."""
         self._log(level.upper(), message, "db.queries")
+
+
+class ContextualLogger:
+    """Scoped logger that appends context tags to every message."""
+
+    __slots__ = ("_parent", "_context", "_suffix")
+
+    def __init__(self, parent: Logger, context: dict) -> None:
+        self._parent = parent
+        self._context = context
+        self._suffix = " ".join(f"[{k}={v}]" for k, v in context.items()) if context else ""
+
+    def _fmt(self, message: str) -> str:
+        return f"{message} {self._suffix}" if self._suffix else message
+
+    def debug(self, message: str, *a: Any, **kw: Any) -> None:
+        self._parent.debug(self._fmt(message), *a, **kw)
+
+    def info(self, message: str, *a: Any, **kw: Any) -> None:
+        self._parent.info(self._fmt(message), *a, **kw)
+
+    def warning(self, message: str, *a: Any, **kw: Any) -> None:
+        self._parent.warning(self._fmt(message), *a, **kw)
+
+    def error(self, message: str, *a: Any, **kw: Any) -> None:
+        self._parent.error(self._fmt(message), *a, **kw)
+
+    def critical(self, message: str, *a: Any, **kw: Any) -> None:
+        self._parent.critical(self._fmt(message), *a, **kw)
+
+    def exception(self, message: str, *a: Any, **kw: Any) -> None:
+        self._parent.exception(self._fmt(message), *a, **kw)

@@ -168,9 +168,4 @@ class QueueableNotification(BaseQueueable):
             if self.notifiable:
                 Log.error(f"Notifiable: {self.notifiable}")
         except ImportError:
-            import sys
-
-            print(
-                f"Notification failed for channel {channel}: {str(error)}",
-                file=sys.stderr,
-            )
+            pass

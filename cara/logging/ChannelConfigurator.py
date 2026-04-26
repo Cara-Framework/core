@@ -43,7 +43,13 @@ class ChannelConfigurator:
 
         # 2) If "slack" is in that stack, register a Slack sink first (ERROR+)
         if "slack" in enabled_channels:
-            webhook = slack_cfg.get("WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_URL")
+            webhook = slack_cfg.get("WEBHOOK_URL")
+            if not webhook:
+                try:
+                    from cara.configuration import config
+                    webhook = config("logging.slack.WEBHOOK_URL")
+                except Exception:
+                    webhook = os.getenv("SLACK_WEBHOOK_URL")
             if webhook:
                 slack_level = channels_cfg.get("slack", {}).get("LEVEL", "ERROR")
                 slack_sink = SlackChannel(slack_cfg, webhook)

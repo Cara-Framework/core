@@ -203,7 +203,10 @@ class Queue:
             instance = job
 
         if hasattr(instance, "handle") and callable(getattr(instance, "handle")):
-            result = instance.handle()
+            if hasattr(app, "call"):
+                result = app.call(instance.handle)
+            else:
+                result = instance.handle()
             return result  # Return handle result for sync execution
         else:
             raise ValueError(f"Cannot dispatch job: {job!r} has no handle()")
@@ -244,6 +247,8 @@ class Queue:
             instance = job
 
         if hasattr(instance, "handle") and callable(getattr(instance, "handle")):
+            if hasattr(self.application, "call"):
+                return self.application.call(instance.handle)
             return instance.handle()
         else:
             raise ValueError(f"Cannot execute job: {job!r} has no handle() method")

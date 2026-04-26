@@ -5,12 +5,12 @@ Immediate asynchronous execution without queuing.
 """
 
 import asyncio
-import inspect
 import uuid
 from typing import Any, Dict, List, Union
 
 from cara.exceptions import QueueException
 from cara.queues.contracts.Queue import Queue
+from cara.queues.job_instantiation import instantiate_job
 from cara.support.Console import HasColoredOutput
 
 
@@ -73,17 +73,7 @@ class AsyncDriver(HasColoredOutput, Queue):
             callback = options.get("callback", "handle")
             init_args = options.get("args", ())
 
-            # Instantiate job if it's a class
-            if inspect.isclass(job):
-                if hasattr(self.application, "make") and not init_args:
-                    try:
-                        instance = self.application.make(job)
-                    except Exception:
-                        instance = job(*init_args)
-                else:
-                    instance = job(*init_args)
-            else:
-                instance = job
+            instance = instantiate_job(self.application, job, init_args)
 
             # Get callback method
             method_to_call = getattr(instance, callback, None)
@@ -92,11 +82,17 @@ class AsyncDriver(HasColoredOutput, Queue):
 
             # Execute synchronously or asynchronously
             if asyncio.iscoroutinefunction(method_to_call):
-                # Async method: create task
-                asyncio.create_task(method_to_call(*init_args))
+                if hasattr(self.application, "call"):
+                    asyncio.create_task(
+                        self.application.call(method_to_call, *init_args)
+                    )
+                else:
+                    asyncio.create_task(method_to_call(*init_args))
             else:
-                # Sync method: call directly
-                method_to_call(*init_args)
+                if hasattr(self.application, "call"):
+                    self.application.call(method_to_call, *init_args)
+                else:
+                    method_to_call(*init_args)
 
             self.success(f"AsyncDriver: Job executed successfully (ID: {job_id})")
 

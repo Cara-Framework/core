@@ -66,6 +66,8 @@ class Event:
     - Async/sync listener support
     """
 
+    _app = None
+
     def __init__(self):
         # Mapping: event_name -> list of Listener instances
         self._listeners: Dict[str, List[Listener]] = {}
@@ -74,6 +76,17 @@ class Event:
         # Keep track of registered event names to avoid conflicts
         self._registered_events: Dict[str, Type[Event]] = {}
         self._lock = Lock()
+
+    @classmethod
+    def _resolve_application(cls):
+        if cls._app is not None:
+            return cls._app
+        try:
+            from bootstrap import application
+            cls._app = application
+            return application
+        except Exception:
+            return None
 
     def register_event(self, event_class: Type[Event]) -> None:
         """
@@ -260,7 +273,12 @@ class Event:
             _lst_start = _t.time()
             _lst_outcome = "success"
             try:
-                if inspect.iscoroutinefunction(listener.handle):
+                app = self._resolve_application()
+                if app is not None and hasattr(app, "call"):
+                    result = app.call(listener.handle, event)
+                    if inspect.isawaitable(result):
+                        await result
+                elif inspect.iscoroutinefunction(listener.handle):
                     await listener.handle(event)
                 else:
                     listener.handle(event)

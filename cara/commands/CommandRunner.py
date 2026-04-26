@@ -200,15 +200,14 @@ class CommandRunner:
         return parameters
 
     def _make_callback(
-        self, cmd_cls: Type[Any], name: str, di_params: List[inspect.Parameter]
+        self, cmd_cls: Type[Any], name: str, _di_params: List[inspect.Parameter]
     ):
         """
         Create the Typer callback that:
         - Runs before hooks
         - Instantiates the command class
         - Sets parsed options
-        - Resolves DI parameters
-        - Calls handle()
+        - Calls handle() (DI via application.call())
         - Runs after hooks or on_error hooks, printing full traceback if exceptions occur
         """
 
@@ -224,23 +223,6 @@ class CommandRunner:
             # Pass parsed options so self.option() works
             if hasattr(inst, "set_parsed_options"):
                 inst.set_parsed_options(cli_kwargs)
-
-            # Resolve DI params
-            di_kwargs: Dict[str, Any] = {}
-            for param in di_params:
-                if param.name in cli_kwargs:
-                    continue
-                try:
-                    if param.annotation is not inspect.Parameter.empty:
-                        di_kwargs[param.name] = self.application.make(param.annotation)
-                    else:
-                        di_kwargs[param.name] = self.application.make(param.name)
-                except Exception:
-                    if param.default is not inspect.Parameter.empty:
-                        di_kwargs[param.name] = param.default
-                    else:
-                        traceback.print_exc()
-                        raise
 
             # Filter cli_kwargs for handle signature
             handle_sig = inspect.signature(inst.handle)
@@ -267,13 +249,12 @@ class CommandRunner:
                     # Long-running commands (autocomplete / scrape loops)
                     # benefit from periodic pushes — set the env so the
                     # dashboard moves while the command is still running.
-                    _start_autopush(
-                        interval_seconds=int(
-                            __import__("os").environ.get(
-                                "METRICS_PUSHGATEWAY_INTERVAL_S", "15"
-                            )
-                        ),
-                    )
+                    try:
+                        from cara.configuration import config
+                        _push_interval = int(config("metrics.pushgateway_interval_s", 15))
+                    except Exception:
+                        _push_interval = int(__import__("os").environ.get("METRICS_PUSHGATEWAY_INTERVAL_S", "15"))
+                    _start_autopush(interval_seconds=_push_interval)
                 except Exception:
                     pass
             except Exception:
@@ -282,7 +263,7 @@ class CommandRunner:
             _cmd_start = _t.time()
             _cmd_outcome = "success"
             try:
-                result = inst.handle(**filtered_cli, **di_kwargs)
+                result = self.application.call(inst.handle, **filtered_cli)
                 if inspect.isawaitable(result):
                     result = asyncio.run(result)
                 _run_after(name)

@@ -97,13 +97,7 @@ class HasEvents:
                             exc_info=True,
                         )
                     except Exception:
-                        import sys
-
-                        print(
-                            f"Observer for '{event_name}' on "
-                            f"{self.__class__.__name__} failed: {exc}",
-                            file=sys.stderr,
-                        )
+                        pass
 
         return True
 

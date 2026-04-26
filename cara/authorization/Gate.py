@@ -267,9 +267,7 @@ class Gate(Gate):
 
             Log.error(message, category="cara.authorization", exc_info=True)
         except Exception:
-            import sys
-
-            print(message, file=sys.stderr)
+            pass
 
     def _instantiate_policy(self, policy_class: str):
         """Instantiate a policy class from string."""

@@ -206,10 +206,19 @@ class Bus:
 
         # Run the job through middleware pipeline
         try:
+            import asyncio
+
             from cara.queues.middleware import run_through_middleware_async
 
             async def job_handler(j):
-                return await j.handle()
+                app = Bus._resolve_application()
+                if app is not None and hasattr(app, "call"):
+                    out = app.call(j.handle)
+                else:
+                    out = j.handle()
+                if asyncio.iscoroutine(out):
+                    return await out
+                return out
 
             result = await run_through_middleware_async(job, job_handler)
 
@@ -243,6 +252,18 @@ class Bus:
             raise
 
     @staticmethod
+    def _resolve_application() -> Any:
+        """Return the global application instance when available (sync Bus dispatch)."""
+        import builtins
+
+        if not hasattr(builtins, "app"):
+            return None
+        try:
+            return builtins.app()
+        except Exception:
+            return None
+
+    @staticmethod
     def _resolve_job_tracker() -> Optional["JobTracker"]:
         """
         Resolve JobTracker from container.
@@ -252,12 +273,7 @@ class Bus:
         Returns:
             JobTracker instance or None
         """
-        import builtins
-
-        if not hasattr(builtins, "app"):
-            return None
-
-        app_instance = builtins.app()
+        app_instance = Bus._resolve_application()
         if app_instance and app_instance.has("JobTracker"):
             return app_instance.make("JobTracker")
 

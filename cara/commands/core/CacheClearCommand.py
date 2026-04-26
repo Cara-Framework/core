@@ -84,7 +84,11 @@ class CacheClearCommand(CommandBase):
 
     def _is_production(self) -> bool:
         """Check if we're running in production environment."""
-        env = os.getenv("APP_ENV", "").lower()
+        try:
+            from cara.configuration import config
+            env = str(config("app.ENV", "")).lower()
+        except Exception:
+            env = os.getenv("APP_ENV", "").lower()
         return env in ["production", "prod"]
 
     def _confirm_production(self) -> bool:

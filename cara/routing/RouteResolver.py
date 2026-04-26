@@ -130,20 +130,25 @@ class RouteResolver:
             # Get type annotation
             param_type = param.annotation
             if param_type == inspect.Parameter.empty:
-                # No type hint, skip
                 continue
 
-            # Resolve dependency from container
-            # Container handles multi-strategy resolution + auto-instantiation
+            if hasattr(_container, "_unwrap_annotation"):
+                param_type = _container._unwrap_annotation(param_type)
+                if param_type is None:
+                    continue
+
+            if param_type in (str, int, float, bool, dict, list, tuple, type(None)):
+                continue
+            if not inspect.isclass(param_type):
+                continue
+
             try:
                 resolved = _container.make(param_type)
                 params[param_name] = resolved
             except Exception:
-                # If resolution fails and has default, use it
                 if param.default != inspect.Parameter.empty:
                     params[param_name] = param.default
                 else:
-                    # No default and can't resolve, raise error
                     raise MissingContainerBindingException(
                         f"Cannot resolve dependency '{param_name}' "
                         f"of type '{param_type}' for controller "

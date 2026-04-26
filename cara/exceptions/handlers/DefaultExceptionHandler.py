@@ -96,12 +96,7 @@ class DefaultExceptionHandler:
                 exc_info=True,
             )
         except Exception:
-            import sys
-
-            print(
-                f"{exception.__class__.__name__}: {str(exception)}",
-                file=sys.stderr,
-            )
+            pass
 
     async def send_response(
         self,

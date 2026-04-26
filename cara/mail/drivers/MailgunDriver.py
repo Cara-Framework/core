@@ -228,6 +228,4 @@ class MailgunDriver(Mail):
 
             Log.error(message, category="cara.mail.mailgun", exc_info=exc_info)
         except Exception:
-            import sys
-
-            print(message, file=sys.stderr)
+            pass

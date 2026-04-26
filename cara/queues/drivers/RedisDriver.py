@@ -4,7 +4,6 @@ Redis Queue Driver for the Cara framework.
 Modern, clean implementation for Redis-backed job queue management.
 """
 
-import inspect
 import pickle
 import time
 import uuid
@@ -14,6 +13,7 @@ import pendulum
 
 from cara.exceptions import DriverLibraryNotFoundException, QueueException
 from cara.queues.contracts import Queue
+from cara.queues.job_instantiation import instantiate_job
 from cara.support.Console import HasColoredOutput
 
 
@@ -321,16 +321,7 @@ class RedisDriver(HasColoredOutput, Queue):
 
         # Instantiate job if it's a class
         try:
-            if inspect.isclass(raw):
-                if hasattr(self.application, "make") and not args:
-                    try:
-                        instance = self.application.make(raw)
-                    except Exception:
-                        instance = raw(*args)
-                else:
-                    instance = raw(*args)
-            else:
-                instance = raw
+            instance = instantiate_job(self.application, raw, args)
         except Exception as e:
             self.danger(f"RedisDriver: could not instantiate job: {e}")
             return
@@ -343,10 +334,10 @@ class RedisDriver(HasColoredOutput, Queue):
                     f"Callback '{callback}' not found on instance {instance!r}"
                 )
 
-            if args:
-                method(*args)
+            if hasattr(self.application, "call"):
+                self.application.call(method, *args)
             else:
-                method()
+                method(*args) if args else method()
 
             self.info(f"RedisDriver: job processed successfully, queue={queue_name}")
 

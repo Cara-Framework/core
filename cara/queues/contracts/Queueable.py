@@ -5,6 +5,7 @@ This module provides the foundation for creating background tasks with retry cap
 failure handling. Includes automatic serialization support and job cancellation.
 """
 
+import asyncio
 from typing import Any, Optional
 
 from cara.queues.JobStateManager import get_job_state_manager
@@ -336,16 +337,20 @@ class Queueable(SerializesModels, CancellableJob):
     async def dispatchNow(cls, *args, **kwargs):
         """Laravel-style immediate job execution."""
         instance = cls(*args, **kwargs)
-        if hasattr(instance, "handle"):
-            if hasattr(instance.handle, "__call__"):
-                # Check if handle is async
-                import asyncio
+        if not hasattr(instance, "handle") or not callable(instance.handle):
+            return None
 
-                if asyncio.iscoroutinefunction(instance.handle):
-                    return await instance.handle()
-                else:
-                    return instance.handle()
-        return None
+        app = getattr(instance, "_app", None) or getattr(cls, "_app", None)
+        if app is not None and hasattr(app, "call"):
+            result = app.call(instance.handle)
+        elif asyncio.iscoroutinefunction(instance.handle):
+            result = await instance.handle()
+        else:
+            result = instance.handle()
+
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result
 
     @classmethod
     async def dispatch_now(cls, *args, **kwargs):

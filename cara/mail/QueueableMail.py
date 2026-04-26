@@ -113,8 +113,4 @@ class QueueableMail(BaseQueueable):
             if self.user:
                 Log.error(f"Recipient: {getattr(self.user, 'email', 'unknown')}")
         except ImportError:
-            # Logging facade unavailable — fall back to stderr so the failure
-            # is not silently swallowed.
-            import sys
-
-            print(f"Mail delivery failed: {error}", file=sys.stderr)
+            pass

@@ -2846,11 +2846,11 @@ class QueryBuilder(ObservesEvents):
             # stderr: [SQL] SELECT ... FROM "product" WHERE "brand" = %s
             # stderr: [BIND] ['Olay']
         """
-        import sys
+        from cara.facades import Log
 
         sql, bindings = self.dump_sql()
-        print(f"[SQL] {sql}", file=sys.stderr)
-        print(f"[BIND] {bindings}", file=sys.stderr)
+        Log.debug(f"[SQL] {sql}", category="db.debug")
+        Log.debug(f"[BIND] {bindings}", category="db.debug")
         return self
 
     def run_scopes(self):

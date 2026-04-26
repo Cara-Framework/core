@@ -11,7 +11,7 @@ container functionality.
 
 import inspect
 import threading
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Union
 
 # Lazy import exceptions to avoid circular imports
 
@@ -226,6 +226,14 @@ class Container:
                 # Try to find a previously bound value matching this class
                 try:
                     found = self._find_obj(name)
+                    if inspect.isclass(found) and inspect.isabstract(found):
+                        concrete = self._find_concrete_binding(name)
+                        if concrete:
+                            found = concrete
+                        else:
+                            raise TypeError(
+                                f"No concrete implementation found for '{name}'"
+                            )
                     self.fire_hook("make", name, found)
 
                     # If found is a class, resolve it (instantiate with DI)
@@ -264,6 +272,14 @@ class Container:
                     self.fire_hook("make", name, bound)
 
                     # a) If the bound value is a class, resolve its constructor
+                    if inspect.isclass(bound) and inspect.isabstract(bound):
+                        concrete = self._find_concrete_binding(name)
+                        if concrete:
+                            bound = concrete
+                        else:
+                            raise TypeError(
+                                f"No concrete implementation found for '{name}'"
+                            )
                     if inspect.isclass(bound):
                         return self.resolve(bound, *arguments)
 
@@ -610,8 +626,13 @@ class Container:
             # (3) Subclass match
             try:
                 if (
-                    inspect.isclass(provider_obj) and issubclass(provider_obj, obj)
-                ) or issubclass(provider_obj.__class__, obj):
+                    inspect.isclass(provider_obj)
+                    and not inspect.isabstract(provider_obj)
+                    and issubclass(provider_obj, obj)
+                ) or (
+                    issubclass(provider_obj.__class__, obj)
+                    and not inspect.isabstract(provider_obj.__class__)
+                ):
                     self.fire_hook("resolve", obj, provider_obj)
                     return provider_obj
             except TypeError:
@@ -626,9 +647,109 @@ class Container:
             f"The dependency with the '{obj}' annotation could not be resolved by the container"
         )
 
+    def _find_concrete_binding(self, abstract_obj: Any) -> Any:
+        """Find a concrete subclass for an abstract binding.
+
+        When a binding or direct lookup resolves to an abstract class, this
+        fallback searches all bound values for a concrete class that subclasses
+        the requested abstraction.
+        """
+        if not inspect.isclass(abstract_obj):
+            return None
+
+        for provider_obj in self.objects.values():
+            if inspect.isclass(provider_obj):
+                try:
+                    if (
+                        issubclass(provider_obj, abstract_obj)
+                        and not inspect.isabstract(provider_obj)
+                    ):
+                        return provider_obj
+                except TypeError:
+                    pass
+
+            try:
+                if isinstance(provider_obj, abstract_obj) and not inspect.isabstract(
+                    provider_obj.__class__
+                ):
+                    return provider_obj.__class__
+            except (TypeError, AttributeError):
+                pass
+
+        return None
+
     def get_parameters(self, obj: Any):
         """Return inspect.signature(obj).parameters.items() for parameter inspection."""
         return inspect.signature(obj).parameters.items()
+
+    @staticmethod
+    def _unwrap_annotation(ann: Any) -> Any:
+        """Extract the concrete class from union types like ``X | None`` or ``Optional[X]``."""
+        import types
+        import typing
+
+        origin = getattr(ann, "__origin__", None)
+        if origin is Union or isinstance(ann, types.UnionType):
+            type_args = [a for a in ann.__args__ if a is not type(None)]
+            if len(type_args) == 1:
+                return type_args[0]
+            return None
+        return ann
+
+    def call(self, callable_or_method: Any, *args: Any, **kwargs: Any) -> Any:
+        """Invoke any callable, auto-resolving class-annotated params from the container.
+
+        Works with sync/async functions, bound methods, and closures.
+        Primitive-typed and un-annotated params are left to the caller.
+        Returns whatever the callable returns (including a coroutine for
+        async functions — the caller is responsible for awaiting it).
+        """
+        sig = inspect.signature(callable_or_method)
+        resolved: Dict[str, Any] = {}
+
+        for name, param in sig.parameters.items():
+            if name in ("self", "cls") or name in kwargs:
+                continue
+            if param.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                continue
+
+            ann = param.annotation
+            if ann is inspect.Parameter.empty or ann is Any:
+                continue
+
+            if isinstance(ann, str):
+                module = inspect.getmodule(callable_or_method)
+                if module is not None:
+                    ann = module.__dict__.get(ann, ann)
+
+            ann = self._unwrap_annotation(ann)
+            if ann is None:
+                continue
+            if ann in (str, int, float, bool, dict, list, tuple, type(None)):
+                continue
+            if not inspect.isclass(ann):
+                continue
+
+            try:
+                resolved[name] = self.make(ann)
+            except Exception as e:
+                if param.default is not inspect.Parameter.empty:
+                    continue
+                (
+                    GenericContainerException,
+                    MissingContainerBindingException,
+                    StrictContainerException,
+                ) = _get_container_exceptions()
+                raise GenericContainerException(
+                    f"Could not resolve required parameter {name!r} "
+                    f"(annotation {ann!r}) for {callable_or_method!r}: {e}"
+                ) from e
+
+        merged = {**resolved, **kwargs}
+        return callable_or_method(*args, **merged)
 
     # ----------------------------
     # Wildcard Binding Search (collect)

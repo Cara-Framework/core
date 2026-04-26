@@ -10,18 +10,30 @@ class HasColoredOutput:
     """
     Base class for colored console output.
 
-    This class provides methods for outputting colored messages to the console, with support for
-    success, warning, danger, and info message types.
+    Outputs through the Log facade when available, falling back to print for
+    environments where the logger isn't bootstrapped (e.g. bare drivers).
     """
 
     def success(self, message):
-        print("\033[92m {0} \033[0m".format(message))
+        try:
+            from cara.facades import Log
+            Log.info(message)
+        except Exception:
+            print("\033[92m {0} \033[0m".format(message))
 
     def warning(self, message):
-        print("\033[93m {0} \033[0m".format(message))
+        try:
+            from cara.facades import Log
+            Log.warning(message)
+        except Exception:
+            print("\033[93m {0} \033[0m".format(message))
 
     def danger(self, message):
-        print("\033[91m {0} \033[0m".format(message))
+        try:
+            from cara.facades import Log
+            Log.error(message)
+        except Exception:
+            print("\033[91m {0} \033[0m".format(message))
 
     def info(self, message):
         return self.success(message)

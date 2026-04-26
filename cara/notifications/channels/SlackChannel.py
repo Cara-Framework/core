@@ -188,9 +188,7 @@ class SlackChannel(BaseChannel):
                 exc_info=True,
             )
         except Exception:
-            import sys
-
-            print(f"{message}: {error}", file=sys.stderr)
+            pass
 
     def format_simple_message(
         self, title: str, message: str, color: str = "good"

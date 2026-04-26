@@ -5,7 +5,6 @@ Modern, clean implementation for database-backed job queue management.
 """
 
 import base64
-import inspect
 import json
 import pickle
 import time
@@ -17,6 +16,7 @@ import pendulum
 from cara.exceptions import QueueException
 from cara.queues.contracts import JobCancelledException, Queue
 from cara.queues.JobStateManager import get_job_state_manager
+from cara.queues.job_instantiation import instantiate_job
 from cara.support.Console import HasColoredOutput
 from cara.support.Time import parse_human_time
 
@@ -279,17 +279,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         callback = data.get("callback", "handle")
         init_args = data.get("args", ())
 
-        # Instantiate if raw is a class
-        if inspect.isclass(raw):
-            if hasattr(self.application, "make") and not init_args:
-                try:
-                    instance = self.application.make(raw)
-                except Exception:
-                    instance = raw(*init_args)
-            else:
-                instance = raw(*init_args)
-        else:
-            instance = raw
+        instance = instantiate_job(self.application, raw, init_args)
 
         # Update job_class in database
         job_class_name = instance.__class__.__name__ if instance else raw.__name__
@@ -318,7 +308,10 @@ class DatabaseDriver(HasColoredOutput, Queue):
                     f"Callback '{callback}' not found on job object {instance!r}"
                 )
 
-            result = method_to_call()
+            if hasattr(self.application, "call"):
+                result = self.application.call(method_to_call)
+            else:
+                result = method_to_call()
 
             # Job completed successfully
             self._update_job_status(
@@ -425,17 +418,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         raw = data.get("obj")
         init_args = data.get("args", ())
 
-        # Instantiate again
-        if inspect.isclass(raw):
-            if hasattr(self.application, "make") and not init_args:
-                try:
-                    instance = self.application.make(raw)
-                except Exception:
-                    instance = raw(*init_args)
-            else:
-                instance = raw(*init_args)
-        else:
-            instance = raw
+        instance = instantiate_job(self.application, raw, init_args)
 
         if hasattr(instance, "failed"):
             try:

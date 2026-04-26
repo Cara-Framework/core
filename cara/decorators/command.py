@@ -4,9 +4,8 @@ Command Decorator for the Cara framework.
 This module provides a decorator for registering command-line commands in the application.
 """
 
-import inspect
 from functools import wraps
-from typing import Any, Callable, List, Type, Optional
+from typing import Any, Callable, List, Optional, Type
 
 # Registry of decorated command classes
 _command_registry: List[Type[Any]] = []
@@ -47,18 +46,13 @@ def command(
 
 def _wrap_init(cls: Type[Any]) -> None:
     orig = cls.__init__
-    sig = inspect.signature(orig)
 
     @wraps(orig)
     def wrapped(self, application, *args, **kwargs):
-        # Resolve dependencies from application.make for __init__
-        kwargs_di = {}
-        for pname, param in list(sig.parameters.items())[1:]:
-            if pname == "application":
-                continue
-            dep = _resolve_dep(application, pname, param.annotation, param.default)
-            kwargs_di[pname] = dep
-        orig(self, application, **kwargs_di)
+        if hasattr(application, "call"):
+            application.call(orig, self, application, *args, **kwargs)
+        else:
+            orig(self, application, *args, **kwargs)
 
     cls.__init__ = wrapped
 
@@ -67,41 +61,14 @@ def _wrap_handle(cls: Type[Any]) -> None:
     if not hasattr(cls, "handle"):
         return
     orig = cls.handle
-    sig = inspect.signature(orig)
 
     @wraps(orig)
     def wrapped(self, *args, **kwargs):
-        # Resolve DI parameters for handle
-        bound = {}
-        for pname, param in sig.parameters.items():
-            if pname == "self":
-                continue
-            if pname in kwargs:
-                bound[pname] = kwargs[pname]
-                continue
-            dep = _resolve_dep(self.application, pname, param.annotation, param.default)
-            bound[pname] = dep
-        return orig(self, **bound)
+        if hasattr(self, "application") and hasattr(self.application, "call"):
+            return self.application.call(orig, self, *args, **kwargs)
+        return orig(self, *args, **kwargs)
 
     cls.handle = wrapped
-
-
-def _resolve_dep(app, name: str, annotation: Any, default: Any) -> Any:
-    # Try resolving by annotation via application.make
-    if annotation is not inspect._empty:
-        try:
-            return app.make(annotation)
-        except Exception:
-            pass
-    # Try resolving by name
-    try:
-        return app.make(name)
-    except Exception:
-        pass
-    # Use default if available
-    if default is not inspect._empty:
-        return default
-    raise RuntimeError(f"Cannot resolve dependency '{name}'")
 
 
 def get_registered_commands() -> List[Type[Any]]:

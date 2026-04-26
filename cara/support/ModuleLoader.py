@@ -36,9 +36,7 @@ def load(
 
             Log.warning(error_message, category="cara.support.module_loader")
         except Exception:
-            import sys
-
-            print("Warning: " + error_message, file=sys.stderr)
+            pass
 
         if raise_exception:
             raise LoaderNotFoundException(error_message) from e

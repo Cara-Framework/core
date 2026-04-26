@@ -369,23 +369,35 @@ class JobProcessor:
             if hasattr(instance, "_mark_processing"):
                 instance._mark_processing()
 
-            # CRITICAL FIX #1: Execute job with timeout enforcement
+            # Stamp container on job so BaseJob and method-level DI can use it.
+            if app_instance is not None and hasattr(instance, "__dict__"):
+                instance._app = app_instance
+                if hasattr(type(instance), "_app"):
+                    type(instance)._app = app_instance
+
+            # Execute job — auto-inject type-hinted deps via container.call()
             method_to_call = getattr(instance, callback, None)
             if callable(method_to_call):
                 if inspect.iscoroutinefunction(method_to_call):
-                    # Async job with timeout
                     try:
-                        asyncio.run(asyncio.wait_for(
-                            method_to_call(*init_args),
-                            timeout=job_timeout
-                        ))
+                        if app_instance is not None:
+                            coro = app_instance.call(method_to_call, *init_args)
+                        else:
+                            coro = method_to_call(*init_args)
+                        asyncio.run(asyncio.wait_for(coro, timeout=job_timeout))
                     except asyncio.TimeoutError as e:
                         raise TimeoutError(f"Job exceeded timeout of {job_timeout}s") from e
                 else:
-                    # Sync job with timeout using ThreadPoolExecutor
-                    JobProcessor._execute_job_with_timeout(
-                        method_to_call, init_args, job_timeout
-                    )
+                    if app_instance is not None:
+                        def _call_with_di():
+                            return app_instance.call(method_to_call, *init_args)
+                        JobProcessor._execute_job_with_timeout(
+                            _call_with_di, (), job_timeout
+                        )
+                    else:
+                        JobProcessor._execute_job_with_timeout(
+                            method_to_call, init_args, job_timeout
+                        )
 
             # Mark success in unified job table
             if hasattr(instance, "_mark_success"):

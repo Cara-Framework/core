@@ -43,13 +43,16 @@ class ChainRunnerJob(ShouldQueue, Queueable):
         """Execute all jobs in sequence."""
         for job in self.jobs:
             try:
-                # Handle both sync and async job.handle()
-                if asyncio.iscoroutinefunction(job.handle):
-                    await job.handle()
+                app = getattr(job, "_app", None)
+                if app is not None and hasattr(app, "call"):
+                    result = app.call(job.handle)
+                elif asyncio.iscoroutinefunction(job.handle):
+                    result = await job.handle()
                 else:
                     result = job.handle()
-                    if asyncio.iscoroutine(result):
-                        await result
+
+                if asyncio.iscoroutine(result):
+                    await result
             except Exception as e:
                 if self.catch_callback:
                     self.catch_callback(e, job)

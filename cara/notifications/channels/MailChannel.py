@@ -179,9 +179,7 @@ class MailChannel(BaseChannel):
                 exc_info=True,
             )
         except Exception:
-            import sys
-
-            print(f"{message}: {error}", file=sys.stderr)
+            pass
 
     def _get_recipient(self, notifiable, notification) -> Optional[str]:
         """

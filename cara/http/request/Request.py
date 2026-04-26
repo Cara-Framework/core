@@ -30,7 +30,11 @@ def _trusted_proxy_networks() -> tuple:
     Accepts comma-separated IPs or CIDR blocks. Private loopback + link-local
     ranges are always included to match a typical dev + containerized layout.
     """
-    raw = os.environ.get("TRUSTED_PROXIES", "")
+    try:
+        from cara.configuration import config
+        raw = str(config("app.TRUSTED_PROXIES", "") or "")
+    except Exception:
+        raw = os.environ.get("TRUSTED_PROXIES", "")
     nets = []
     # Loopback + common private ranges for dev / behind-LB topology.
     defaults = ("127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")

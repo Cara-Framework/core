@@ -129,10 +129,6 @@ class LogChannel(BaseChannel):
 
                 Log.info(log_message)
             except ImportError:
-                # Fallback to print/file logging
-                print(log_message)
-
-                # Also write to file if specified
                 if self.log_file:
                     try:
                         with open(self.log_file, "a", encoding="utf-8") as f:
@@ -154,9 +150,7 @@ class LogChannel(BaseChannel):
                 exc_info=True,
             )
         except Exception:
-            import sys
-
-            print(f"{message}: {error}", file=sys.stderr)
+            pass
 
     def clear_log(self) -> bool:
         """

@@ -123,9 +123,7 @@ class ModelDiscoverer:
                     category="cara.eloquent.migrations",
                 )
             except Exception:
-                import sys
-
-                print(f"Warning: Could not parse {init_file}: {e}", file=sys.stderr)
+                pass
 
         return models
         
