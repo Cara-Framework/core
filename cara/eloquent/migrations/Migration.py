@@ -16,6 +16,15 @@ class Migration:
     Dependency Inversion: Depends on abstractions (DB facade, components)
     """
 
+    # Default to non-transactional. Schema.create() and Schema.statement()
+    # already commit on their own pooled connection; wrapping them in an
+    # outer ``db.transaction()`` causes the executor to fetch a freshly
+    # closed handle when the inner work is done, which crashes with
+    # "'NoneType' object has no attribute 'commit'". Migrations that
+    # genuinely need outer-tx atomicity can opt in with
+    # ``transactional = True``.
+    transactional = False
+
     def __init__(
         self,
         connection=None,
