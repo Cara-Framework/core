@@ -1,9 +1,12 @@
 """
-Null Broadcasting Driver.
+Null broadcasting driver — every operation is a no-op.
 
-Does nothing - useful for disabling broadcasting.
-Implements Laravel-style Broadcaster interface.
+Used as the default in CLI / migration / queue worker contexts where
+broadcasting is meaningless. Implements the full Broadcaster contract
+so apps can swap it in without changing call sites.
 """
+
+from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
@@ -11,59 +14,61 @@ from cara.broadcasting.contracts.Broadcaster import Broadcaster
 
 
 class NullBroadcaster(Broadcaster):
-    """Null broadcasting driver - does nothing."""
+    """No-op broadcaster."""
 
     driver_name = "null"
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any]) -> None:
         self.config = config
 
-    # Broadcaster interface implementation - all no-ops
     async def broadcast(
-        self, channels: Union[str, List[str]], event: str, data: Dict[str, Any]
-    ):
-        """Do nothing."""
-        pass
+        self,
+        channels: Union[str, List[str]],
+        event: str,
+        data: Dict[str, Any],
+        *,
+        except_socket_id: Optional[str] = None,
+    ) -> None:
+        return
 
     async def add_connection(
         self,
         connection_id: str,
-        websocket,
+        websocket: Any,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict] = None,
-    ):
-        """Do nothing."""
-        pass
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        return
 
-    async def remove_connection(self, connection_id: str):
-        """Do nothing."""
-        pass
+    async def remove_connection(self, connection_id: str) -> None:
+        return
 
     async def subscribe(self, connection_id: str, channel: str) -> bool:
-        """Do nothing."""
         return True
 
     async def unsubscribe(self, connection_id: str, channel: str) -> bool:
-        """Do nothing."""
         return True
 
-    async def broadcast_to_user(self, user_id: str, event: str, data: Dict[str, Any]):
-        """Do nothing."""
-        pass
+    async def broadcast_to_user(
+        self,
+        user_id: str,
+        event: str,
+        data: Dict[str, Any],
+        *,
+        except_socket_id: Optional[str] = None,
+    ) -> None:
+        return
 
     def get_connection_count(self) -> int:
-        """Null driver has no connections."""
         return 0
 
     def get_channel_subscribers(self, channel: str) -> List[str]:
-        """Null driver has no subscribers."""
         return []
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get null broadcasting statistics."""
         return {
             "driver": "null",
             "connections": 0,
             "channels": 0,
-            "description": "Null driver - all operations are no-ops",
+            "description": "Null driver — all operations are no-ops",
         }

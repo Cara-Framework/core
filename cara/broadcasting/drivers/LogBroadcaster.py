@@ -1,9 +1,11 @@
 """
-Log Broadcasting Driver.
+Log broadcasting driver — emits log lines instead of WebSocket frames.
 
-Logs broadcasting events instead of actually broadcasting them.
-Useful for development and testing. Implements Laravel-style Broadcaster interface.
+Useful in dev / CI when you want to verify broadcast intent without
+actually wiring up redis or browser clients.
 """
+
+from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
@@ -12,83 +14,86 @@ from cara.facades import Log
 
 
 class LogBroadcaster(Broadcaster):
-    """Log broadcasting driver - logs events instead of broadcasting."""
+    """No-op broadcaster that logs every operation."""
 
     driver_name = "log"
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any]) -> None:
         self.config = config
 
-    # Broadcaster interface implementation
     async def broadcast(
-        self, channels: Union[str, List[str]], event: str, data: Dict[str, Any]
-    ):
-        """Log broadcast event instead of actually broadcasting."""
+        self,
+        channels: Union[str, List[str]],
+        event: str,
+        data: Dict[str, Any],
+        *,
+        except_socket_id: Optional[str] = None,
+    ) -> None:
         if isinstance(channels, str):
             channels = [channels]
-
         Log.info(
-            f"📡 Broadcasting '{event}' to channels: {channels}",
+            f"📡 [log] Broadcasting '{event}' to {channels} "
+            f"(except_socket_id={except_socket_id or '-'})",
             category="cara.broadcasting",
         )
-        Log.debug(f"📡 Event data: {data}", category="cara.broadcasting")
+        Log.debug(f"📡 [log] Payload: {data}", category="cara.broadcasting")
 
     async def add_connection(
         self,
         connection_id: str,
-        websocket,
+        websocket: Any,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict] = None,
-    ):
-        """Log connection addition."""
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         Log.info(
-            f"🔗 Log Broadcasting: Connection {connection_id} added (user: {user_id})",
+            f"🔗 [log] Connection added: {connection_id} (user={user_id or '-'})",
             category="cara.broadcasting",
         )
 
-    async def remove_connection(self, connection_id: str):
-        """Log connection removal."""
+    async def remove_connection(self, connection_id: str) -> None:
         Log.info(
-            f"🔗 Log Broadcasting: Connection {connection_id} removed",
+            f"🔗 [log] Connection removed: {connection_id}",
             category="cara.broadcasting",
         )
 
     async def subscribe(self, connection_id: str, channel: str) -> bool:
-        """Log subscription."""
         Log.info(
-            f"📺 Log Broadcasting: {connection_id} subscribed to {channel}",
+            f"📺 [log] {connection_id} subscribed to {channel}",
             category="cara.broadcasting",
         )
         return True
 
     async def unsubscribe(self, connection_id: str, channel: str) -> bool:
-        """Log unsubscription."""
         Log.info(
-            f"📺 Log Broadcasting: {connection_id} unsubscribed from {channel}",
+            f"📺 [log] {connection_id} unsubscribed from {channel}",
             category="cara.broadcasting",
         )
         return True
 
-    async def broadcast_to_user(self, user_id: str, event: str, data: Dict[str, Any]):
-        """Log user-specific broadcast."""
+    async def broadcast_to_user(
+        self,
+        user_id: str,
+        event: str,
+        data: Dict[str, Any],
+        *,
+        except_socket_id: Optional[str] = None,
+    ) -> None:
         Log.info(
-            f"👤 Broadcasting '{event}' to user: {user_id}", category="cara.broadcasting"
+            f"👤 [log] Broadcasting '{event}' to user {user_id}",
+            category="cara.broadcasting",
         )
-        Log.debug(f"👤 User event data: {data}", category="cara.broadcasting")
+        Log.debug(f"👤 [log] Payload: {data}", category="cara.broadcasting")
 
     def get_connection_count(self) -> int:
-        """Log driver has no real connections."""
         return 0
 
     def get_channel_subscribers(self, channel: str) -> List[str]:
-        """Log driver has no real subscribers."""
         return []
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get log broadcasting statistics."""
         return {
             "driver": "log",
             "connections": 0,
             "channels": 0,
-            "description": "Log driver - events are logged instead of broadcast",
+            "description": "Log driver — events are logged instead of broadcast",
         }

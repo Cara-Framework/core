@@ -1,9 +1,27 @@
 """
-Broadcasting Provider for the Cara framework.
+Broadcasting service provider — registers the manager + drivers and
+loads the application's channel auth callbacks.
 
-This module provides the deferred service provider that configures and registers the broadcasting
-subsystem, including Redis, memory, log, and null broadcasting drivers.
+Channel auth callbacks live in ``routes/broadcasting.py`` of the
+host application::
+
+    # routes/broadcasting.py
+    from cara.facades import Broadcast
+
+    @Broadcast.channel("user.{user_id}.alerts")
+    async def authorize_user_alerts(user, user_id: str) -> bool:
+        return user is not None and str(user.id) == str(user_id)
+
+The provider imports that module on registration, mirroring how
+Laravel's ``BroadcastServiceProvider`` invokes
+``Broadcast::routes()`` and ``require base_path('routes/channels.php')``.
+Loading is best-effort — apps with no broadcasting routes module
+boot fine.
 """
+
+from __future__ import annotations
+
+import importlib
 
 from cara.broadcasting import Broadcasting
 from cara.broadcasting.drivers import (
@@ -14,128 +32,102 @@ from cara.broadcasting.drivers import (
 )
 from cara.configuration import config
 from cara.exceptions import BroadcastingConfigurationException
+from cara.facades import Log
 from cara.foundation import DeferredProvider
 
 
 class BroadcastingProvider(DeferredProvider):
-    """
-    Deferred provider for the broadcasting subsystem.
-
-    Reads configuration and registers the Broadcasting manager and its drivers.
-    """
+    """Bind the broadcasting manager and its drivers."""
 
     @classmethod
     def provides(cls) -> list[str]:
         return ["broadcasting"]
 
     def register(self) -> None:
-        """Register broadcasting drivers based on configuration."""
-        broadcasting_config = config("broadcasting", {})
-
-        # Check if broadcasting_config is dict-like
-        if not hasattr(broadcasting_config, "get") or broadcasting_config is None:
-            raise BroadcastingConfigurationException(
-                "Broadcasting configuration must be a dictionary-like object."
-            )
-
-        default_driver = broadcasting_config.get("default")
+        default_driver = config("broadcasting.default")
         if not default_driver:
             raise BroadcastingConfigurationException(
                 "Broadcasting default driver must be specified in configuration."
             )
 
-        # Diagnostics: log selected default driver
-        try:
-            from cara.facades import Log
+        manager = Broadcasting(self.application, default_driver)
 
+        self._add_redis_driver(manager)
+        self._add_memory_driver(manager)
+        self._add_log_driver(manager)
+        self._add_null_driver(manager)
+
+        self.application.bind("broadcasting", manager)
+
+        # Load app-level channel auth callbacks. Best-effort; a missing
+        # module is normal for apps that haven't migrated yet.
+        try:
+            importlib.import_module("routes.broadcasting")
             Log.debug(
-                f"BroadcastingProvider: default driver = {default_driver}",
+                "Loaded routes.broadcasting (channel auth callbacks)",
                 category="cara.broadcasting",
             )
-        except Exception:
+        except ModuleNotFoundError:
             pass
+        except Exception as e:
+            # Real syntax/import error — surface it so apps don't ship
+            # broken auth silently.
+            Log.error(
+                f"Failed to import routes.broadcasting: {e}",
+                category="cara.broadcasting",
+                exc_info=True,
+            )
 
-        broadcasting_manager = Broadcasting(self.application, default_driver)
+    # ------------------------------------------------------------------
+    # Driver registration helpers
+    # ------------------------------------------------------------------
+    def _add_redis_driver(self, manager: Broadcasting) -> None:
+        if not config("broadcasting.drivers.redis"):
+            return
 
-        # Register broadcasting drivers
-        self._add_redis_driver(broadcasting_manager, broadcasting_config)
-        self._add_memory_driver(broadcasting_manager, broadcasting_config)
-        self._add_log_driver(broadcasting_manager, broadcasting_config)
-        self._add_null_driver(broadcasting_manager, broadcasting_config)
-
-        self.application.bind("broadcasting", broadcasting_manager)
-
-    def _add_redis_driver(self, manager: Broadcasting, settings) -> None:
-        """Register Redis broadcasting driver with configuration."""
-        redis_settings = settings.get("drivers", {}).get("redis", None)
-        if not redis_settings:
-            return  # Redis is optional
-
-        # FIX: Use broadcasting config's connection dict directly
-        # The config("queue") call returns None when config is not yet loaded
-        connection = redis_settings.get("connection", {})
-
-        host = connection.get("host", "localhost")
-        port = connection.get("port", 6379)
-        password = connection.get("password", "")
-        db = connection.get("db", 0)
+        host = config("broadcasting.drivers.redis.connection.host", "localhost")
+        port = config("broadcasting.drivers.redis.connection.port", 6379)
+        password = config("broadcasting.drivers.redis.connection.password", "")
+        db = config("broadcasting.drivers.redis.connection.db", 0)
 
         if password:
             redis_url = f"redis://:{password}@{host}:{port}/{db}"
         else:
             redis_url = f"redis://{host}:{port}/{db}"
 
-        # Include websocket configuration in the driver config
-        driver_config = redis_settings.copy()
-        if "WEBSOCKET" in settings:
-            driver_config["websocket"] = settings["WEBSOCKET"]
+        driver_config = config("broadcasting.drivers.redis", {})
+        if isinstance(driver_config, dict):
+            driver_config = dict(driver_config)
+        else:
+            driver_config = {}
 
-        # Diagnostics: log Redis broadcaster settings
-        try:
-            from cara.facades import Log
+        ws_cfg = config("broadcasting.WEBSOCKET")
+        if ws_cfg:
+            driver_config["websocket"] = ws_cfg
 
-            ws_cfg = (
-                driver_config.get("websocket", {})
-                if isinstance(driver_config, dict)
-                else {}
-            )
-            Log.debug(
-                f"BroadcastingProvider: registering RedisBroadcaster redis_url={redis_url} ws_path={ws_cfg.get('path')} ws_port={ws_cfg.get('port')}",
-                category="cara.broadcasting",
-            )
-        except Exception:
-            pass
+        manager.add_driver(
+            RedisBroadcaster.driver_name,
+            RedisBroadcaster(driver_config, redis_url=redis_url),
+        )
 
-        # Create and register driver instance
-        driver = RedisBroadcaster(driver_config, redis_url=redis_url)
-        manager.add_driver(RedisBroadcaster.driver_name, driver)
+    def _add_memory_driver(self, manager: Broadcasting) -> None:
+        settings = config("broadcasting.drivers.memory")
+        if not settings:
+            return
+        driver_config = dict(settings) if isinstance(settings, dict) else {}
+        ws_cfg = config("broadcasting.WEBSOCKET")
+        if ws_cfg:
+            driver_config["websocket"] = ws_cfg
+        manager.add_driver(MemoryBroadcaster.driver_name, MemoryBroadcaster(driver_config))
 
-    def _add_memory_driver(self, manager: Broadcasting, settings) -> None:
-        """Register memory broadcasting driver with configuration."""
-        memory_settings = settings.get("drivers", {}).get("memory", None)
-        if not memory_settings:
-            return  # Memory is optional
+    def _add_log_driver(self, manager: Broadcasting) -> None:
+        settings = config("broadcasting.drivers.log")
+        if not settings:
+            return
+        manager.add_driver(LogBroadcaster.driver_name, LogBroadcaster(settings))
 
-        # Create and register driver instance
-        driver = MemoryBroadcaster(memory_settings)
-        manager.add_driver(MemoryBroadcaster.driver_name, driver)
-
-    def _add_log_driver(self, manager: Broadcasting, settings) -> None:
-        """Register log broadcasting driver with configuration."""
-        log_settings = settings.get("drivers", {}).get("log", None)
-        if not log_settings:
-            return  # Log is optional
-
-        # Create and register driver instance
-        driver = LogBroadcaster(log_settings)
-        manager.add_driver(LogBroadcaster.driver_name, driver)
-
-    def _add_null_driver(self, manager: Broadcasting, settings) -> None:
-        """Register null broadcasting driver with configuration."""
-        null_settings = settings.get("drivers", {}).get("null", None)
-        if not null_settings:
-            return  # Null is optional
-
-        # Create and register driver instance
-        driver = NullBroadcaster(null_settings)
-        manager.add_driver(NullBroadcaster.driver_name, driver)
+    def _add_null_driver(self, manager: Broadcasting) -> None:
+        settings = config("broadcasting.drivers.null")
+        if not settings:
+            return
+        manager.add_driver(NullBroadcaster.driver_name, NullBroadcaster(settings))

@@ -1,13 +1,33 @@
 """
-WebSocket Connection Manager for Broadcasting.
+WebSocket Connection Manager — base for in-process broadcasting drivers.
 
-Manages active WebSocket connections, channels, and message delivery.
-Similar to Laravel's broadcasting connection management.
+Tracks live WebSocket connections, channel subscriptions, per-user
+indexes, and last-activity metadata. The Memory and Redis drivers
+both inherit from this class; Redis adds cross-process pub/sub on
+top of the same in-process state.
 
-Includes automatic cleanup of stale connections and metadata to prevent memory leaks.
+Key invariants
+--------------
+* Every connection has a stable, opaque ``connection_id`` (chosen
+  by the Socket layer, typically ``ws_<uuid>``) and a separate
+  ``socket_id`` exposed to the client. ``socket_id`` is what the
+  client sends back as ``X-Socket-Id`` for "don't echo back to me"
+  semantics.
+* All shared dict / set state is mutated only inside ``async`` methods
+  on the same event loop, so cooperative scheduling between awaits is
+  enough to prevent torn reads. Where a method iterates a collection
+  and may block (``await ws.send_json(...)``), the collection is
+  snapshotted first so concurrent ``subscribe`` / ``remove_connection``
+  calls can't mutate it underneath us.
+* Removing a connection drops it from every channel index and from
+  the metadata dict. Heartbeat / cleanup tasks are cancelled so they
+  don't keep the dead connection alive in memory.
 """
 
+from __future__ import annotations
+
 import asyncio
+import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set
 
@@ -15,410 +35,499 @@ from cara.facades import Log
 
 
 class ConnectionManager:
-    """
-    Manages WebSocket connections and channel subscriptions.
+    """In-process connection registry.
 
-    Laravel-style connection management for broadcasting.
+    Separated from the broadcasting driver interface so the Memory
+    and Redis drivers can both inherit and add their own transport-
+    specific behaviour without re-implementing the bookkeeping.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any]) -> None:
         self.config = config
 
-        # Active connections: {connection_id: websocket}
+        # connection_id → websocket-like object (anything with .send_json).
         self.connections: Dict[str, Any] = {}
 
-        # Channel subscriptions: {channel_name: {connection_id1, connection_id2}}
+        # Reverse index: which connection_ids are subscribed to a channel.
+        # ``defaultdict(set)`` simplifies subscribe/unsubscribe but means
+        # ``"foo" in self.channel_subscribers`` is True even for empty
+        # entries — clean-up code below explicitly deletes empty keys.
         self.channel_subscribers: Dict[str, Set[str]] = defaultdict(set)
 
-        # User subscriptions: {connection_id: {channel1, channel2}}
-        self.user_channels: Dict[str, Set[str]] = defaultdict(set)
+        # Forward index: which channels a connection is on. Lets us
+        # find every channel a dropped connection needs to leave in O(1).
+        self.connection_channels: Dict[str, Set[str]] = defaultdict(set)
 
-        # Connection metadata: {connection_id: {user_id, ip, connected_at, etc}}
+        # Per-connection metadata: user_id, IP, connected_at, last_activity.
+        # Kept separate from ``self.connections`` so we can preserve a
+        # post-mortem trail (e.g. for telemetry) briefly after a
+        # connection drops without leaking its websocket object.
         self.connection_metadata: Dict[str, Dict[str, Any]] = {}
 
-        # Configuration-based settings
-        websocket_config = config.get("websocket", {})
-        self.max_connections = websocket_config.get("max_connections", 1000)
-        self.heartbeat_interval = websocket_config.get("heartbeat_interval", 30)
-        self.connection_timeout = websocket_config.get("connection_timeout", 60)
-        # Maximum metadata entries to keep in memory (prevents unbounded growth)
-        self.max_metadata_entries = websocket_config.get("max_metadata_entries", 10000)
+        # User → set of connection_ids index. Lets ``broadcast_to_user``
+        # avoid scanning ``connection_metadata`` on every call. Index is
+        # maintained by ``add_connection`` / ``remove_connection``.
+        self.user_connections: Dict[str, Set[str]] = defaultdict(set)
 
-        # Heartbeat tasks per connection
+        # connection_id → public socket_id (UUID-like). Exposed to the
+        # client as the ``connection.established`` payload so it can
+        # echo it back via ``X-Socket-Id`` for skip-self broadcasts.
+        self.socket_ids: Dict[str, str] = {}
+
+        # Reverse: socket_id → connection_id. Cheap lookup for the
+        # except_socket_id filter at broadcast time.
+        self.connections_by_socket_id: Dict[str, str] = {}
+
+        ws_cfg = config.get("websocket", {})
+        self.max_connections: int = int(ws_cfg.get("max_connections", 1000))
+        self.heartbeat_interval: int = int(ws_cfg.get("heartbeat_interval", 30))
+        self.idle_timeout: float = float(ws_cfg.get("idle_timeout", 300))
+        self.cleanup_interval: int = int(ws_cfg.get("cleanup_interval", 60))
+        self.max_connections_per_user: int = int(ws_cfg.get("max_connections_per_user", 10))
+
+        # Background tasks. Indexed by connection_id so we can cancel
+        # the heartbeat for a single dropped connection without
+        # touching the others.
         self._heartbeat_tasks: Dict[str, asyncio.Task] = {}
-
-        # Cleanup task for stale connections
         self._cleanup_task: Optional[asyncio.Task] = None
 
+    # ------------------------------------------------------------------
+    # Connection lifecycle
+    # ------------------------------------------------------------------
     async def add_connection(
         self,
         connection_id: str,
         websocket: Any,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict] = None,
-    ):
-        """Add a new WebSocket connection."""
-        # Check max connections limit
-        if len(self.connections) >= self.max_connections:
-            Log.warning(
-                f"Broadcasting: Max connections ({self.max_connections}) reached, rejecting {connection_id}"
-            )
-            raise ConnectionError(
-                f"Maximum connections ({self.max_connections}) exceeded"
-            )
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register a new WebSocket connection.
 
-        self.connections[connection_id] = websocket
-
-        # Store metadata
-        self.connection_metadata[connection_id] = {
-            "user_id": user_id,
-            "connected_at": asyncio.get_running_loop().time(),
-            **(metadata or {}),
-        }
-
-        Log.debug(
-            f"ConnectionManager: {connection_id} added (user: {user_id})",
-            category="cara.broadcasting",
-        )
-
-        # Start heartbeat
-        if self.heartbeat_interval > 0:
-            task = asyncio.create_task(self._heartbeat_loop(connection_id))
-            self._heartbeat_tasks[connection_id] = task
-
-    async def remove_connection(self, connection_id: str) -> None:
-        """
-        Remove a WebSocket connection and clean up all associated resources.
-
-        Ensures complete cleanup to prevent memory leaks:
-        - Removes from all channel subscriptions
-        - Deletes connection object and metadata
-        - Cancels heartbeat task
-
-        Args:
-            connection_id: The connection to remove
+        Refuses the connection (``ConnectionError``) when the global
+        cap is exceeded. When the per-user cap is exceeded the OLDEST
+        connection for that user is dropped, mirroring Laravel
+        Echo's "kick the previous tab" behaviour.
         """
         if connection_id in self.connections:
-            # Remove from all channels
-            channels_to_cleanup = self.user_channels.get(connection_id, set()).copy()
-            for channel in channels_to_cleanup:
-                await self.unsubscribe(connection_id, channel)
-
-            # Clean up connection data - CRITICAL for preventing memory leaks
-            del self.connections[connection_id]
-            self.user_channels.pop(connection_id, None)
-            self.connection_metadata.pop(connection_id, None)
-
-            # Cancel heartbeat task
-            task = self._heartbeat_tasks.pop(connection_id, None)
-            if task and not task.done():
-                task.cancel()
-
+            # Idempotency: a re-add with the same id replaces the old
+            # connection. Mirrors how a browser tab reload arrives at
+            # the same conn_id under some ASGI servers.
             Log.debug(
-                f"ConnectionManager: {connection_id} removed",
+                f"Connection {connection_id} re-added; replacing prior entry",
                 category="cara.broadcasting",
             )
+            await self.remove_connection(connection_id)
 
-    async def cleanup_stale_connections(self) -> None:
-        """
-        Periodically clean up stale connections and metadata.
-
-        Prevents unbounded growth of metadata dictionaries by:
-        - Removing connections that haven't sent heartbeat
-        - Pruning old metadata entries
-        - Enforcing max_metadata_entries limit
-
-        Should be called periodically by the application.
-        """
-        current_time = asyncio.get_running_loop().time()
-        stale_connections = []
-
-        # Find stale connections (no heartbeat for connection_timeout seconds)
-        for conn_id, metadata in self.connection_metadata.items():
-            connected_at = metadata.get("connected_at", current_time)
-            if current_time - connected_at > self.connection_timeout:
-                if conn_id not in self.connections:
-                    # Connection object is gone but metadata remains - clean it up
-                    stale_connections.append(conn_id)
-
-        # Remove stale metadata entries
-        for conn_id in stale_connections:
-            self.connection_metadata.pop(conn_id, None)
-            Log.debug(
-                f"Broadcasting: Cleaned up stale metadata for {conn_id}",
-                category="cara.broadcasting",
-            )
-
-        # Enforce max_metadata_entries limit
-        if len(self.connection_metadata) > self.max_metadata_entries:
-            # Remove oldest entries by connected_at timestamp
-            sorted_by_time = sorted(
-                self.connection_metadata.items(),
-                key=lambda x: x[1].get("connected_at", 0)
-            )
-            entries_to_remove = len(self.connection_metadata) - self.max_metadata_entries
-            for conn_id, _ in sorted_by_time[:entries_to_remove]:
-                self.connection_metadata.pop(conn_id, None)
-            Log.warning(
-                f"Broadcasting: Pruned {entries_to_remove} old metadata entries (limit: {self.max_metadata_entries})",
-                category="cara.broadcasting",
-            )
-
-    async def start_cleanup_task(self) -> None:
-        """
-        Start periodic cleanup task.
-
-        Should be called once when the ConnectionManager is initialized.
-        Runs cleanup every 5 minutes by default.
-        """
-        if self._cleanup_task is None or self._cleanup_task.done():
-            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-            Log.info(
-                "Broadcasting: Started cleanup task",
-                category="cara.broadcasting",
-            )
-
-    async def _cleanup_loop(self) -> None:
-        """Periodic cleanup loop."""
-        cleanup_interval = 300  # 5 minutes
-        while True:
-            try:
-                await asyncio.sleep(cleanup_interval)
-                await self.cleanup_stale_connections()
-            except asyncio.CancelledError:
+        if user_id and self.max_connections_per_user > 0:
+            user_set = self.user_connections.get(user_id, set())
+            if len(user_set) >= self.max_connections_per_user:
+                # Pick the oldest by ``connected_at`` instead of relying
+                # on dict insertion order, which gets jumbled after
+                # repeated add/remove cycles.
+                oldest = min(
+                    user_set,
+                    key=lambda cid: self.connection_metadata.get(cid, {}).get(
+                        "connected_at", 0
+                    ),
+                )
                 Log.info(
-                    "Broadcasting: Cleanup task cancelled",
+                    f"User {user_id} hit per-user cap "
+                    f"({self.max_connections_per_user}); dropping oldest {oldest}",
                     category="cara.broadcasting",
                 )
-                break
-            except Exception as e:
-                Log.error(
-                    f"Broadcasting: Cleanup task error: {e}",
-                    category="cara.broadcasting",
-                )
+                await self.remove_connection(oldest)
 
-    async def subscribe(self, connection_id: str, channel: str) -> bool:
-        """Subscribe connection to a channel."""
-        if connection_id not in self.connections:
-            return False
+        if len(self.connections) >= self.max_connections:
+            Log.warning(
+                f"Max connections ({self.max_connections}) reached, rejecting {connection_id}",
+                category="cara.broadcasting",
+            )
+            raise ConnectionError(f"Maximum connections ({self.max_connections}) exceeded")
 
-        self.channel_subscribers[channel].add(connection_id)
-        self.user_channels[connection_id].add(channel)
+        now = time.time()
+        self.connections[connection_id] = websocket
+
+        # Pull socket_id out of metadata if the Socket layer provided one;
+        # otherwise fall back to connection_id as the public id. The
+        # Socket layer always sets it.
+        socket_id = (metadata or {}).get("socket_id") or connection_id
+        self.socket_ids[connection_id] = socket_id
+        self.connections_by_socket_id[socket_id] = connection_id
+
+        self.connection_metadata[connection_id] = {
+            "user_id": user_id,
+            "connected_at": now,
+            "last_activity": now,
+            "socket_id": socket_id,
+            **{k: v for k, v in (metadata or {}).items() if k != "socket_id"},
+        }
+
+        if user_id:
+            self.user_connections[user_id].add(connection_id)
 
         Log.debug(
-            f"Broadcasting: {connection_id} subscribed to {channel}",
+            f"Connection added: {connection_id} (user={user_id or '-'}, "
+            f"total={len(self.connections)})",
             category="cara.broadcasting",
         )
+
+        if self.heartbeat_interval > 0:
+            self._heartbeat_tasks[connection_id] = asyncio.create_task(
+                self._heartbeat_loop(connection_id)
+            )
+
+        # First connection lazily starts the cleanup task. Avoids
+        # idle background work in apps that don't actually use WS.
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+
+    async def remove_connection(self, connection_id: str) -> None:
+        """Remove a connection and clean up every index it appears in.
+
+        Cleanup steps must happen in this order so a concurrent
+        ``broadcast_to_channel`` iterating a snapshot never sees a
+        partially-removed connection:
+          1. Drop from every channel index.
+          2. Cancel the heartbeat task.
+          3. Drop the websocket object and the metadata.
+        """
+        if connection_id not in self.connections:
+            return
+
+        # Step 1 — leave every channel.
+        channels = self.connection_channels.pop(connection_id, set()).copy()
+        for channel in channels:
+            subs = self.channel_subscribers.get(channel)
+            if subs is not None:
+                subs.discard(connection_id)
+                if not subs:
+                    # ``defaultdict(set)`` doesn't auto-prune empty
+                    # sets; do it explicitly so empty channels don't
+                    # linger as keys.
+                    self.channel_subscribers.pop(channel, None)
+
+        # Step 2 — cancel heartbeat.
+        task = self._heartbeat_tasks.pop(connection_id, None)
+        if task and not task.done():
+            task.cancel()
+
+        # Step 3 — drop the websocket + metadata + indexes.
+        self.connections.pop(connection_id, None)
+        meta = self.connection_metadata.pop(connection_id, None)
+        socket_id = self.socket_ids.pop(connection_id, None)
+        if socket_id:
+            # Only remove if it still points at this connection_id —
+            # defensive against a re-add that re-mapped the socket_id.
+            if self.connections_by_socket_id.get(socket_id) == connection_id:
+                self.connections_by_socket_id.pop(socket_id, None)
+
+        if meta and meta.get("user_id"):
+            user_set = self.user_connections.get(meta["user_id"])
+            if user_set is not None:
+                user_set.discard(connection_id)
+                if not user_set:
+                    self.user_connections.pop(meta["user_id"], None)
+
+        Log.debug(
+            f"Connection removed: {connection_id} (remaining={len(self.connections)})",
+            category="cara.broadcasting",
+        )
+
+    # ------------------------------------------------------------------
+    # Subscription management
+    # ------------------------------------------------------------------
+    async def subscribe(self, connection_id: str, channel: str) -> bool:
+        """Attach ``connection_id`` to ``channel``.
+
+        Returns ``False`` if the connection is unknown (caller should
+        treat that as a no-op rather than raise — clients can race
+        subscribe against disconnect).
+        """
+        if connection_id not in self.connections:
+            return False
+        self.channel_subscribers[channel].add(connection_id)
+        self.connection_channels[connection_id].add(channel)
         return True
 
     async def unsubscribe(self, connection_id: str, channel: str) -> bool:
-        """Unsubscribe connection from a channel."""
-        if connection_id in self.channel_subscribers[channel]:
-            self.channel_subscribers[channel].remove(connection_id)
-
-            # Clean up empty channels
-            if not self.channel_subscribers[channel]:
-                del self.channel_subscribers[channel]
-
-        if connection_id in self.user_channels:
-            self.user_channels[connection_id].discard(channel)
-
-        Log.debug(
-            f"Broadcasting: {connection_id} unsubscribed from {channel}",
-            category="cara.broadcasting",
-        )
+        """Detach ``connection_id`` from ``channel``. Always returns
+        ``True`` — unsubscribing a non-subscribed connection is a
+        no-op, not an error."""
+        subs = self.channel_subscribers.get(channel)
+        if subs is not None:
+            subs.discard(connection_id)
+            if not subs:
+                self.channel_subscribers.pop(channel, None)
+        chans = self.connection_channels.get(connection_id)
+        if chans is not None:
+            chans.discard(channel)
         return True
 
-    async def broadcast_to_channel(self, channel: str, event: str, data: Dict[str, Any]):
-        """Broadcast message to all subscribers of a channel."""
-        if channel not in self.channel_subscribers:
-            Log.debug(
-                f"Broadcasting: No subscribers for channel {channel}",
-                category="cara.broadcasting",
-            )
-            return
+    # ------------------------------------------------------------------
+    # Activity tracking — replaces Socket's old reach-around into the
+    # driver's metadata dict (layer violation removed).
+    # ------------------------------------------------------------------
+    def touch(self, connection_id: str) -> None:
+        """Mark the connection as having received a message right now."""
+        meta = self.connection_metadata.get(connection_id)
+        if meta is not None:
+            meta["last_activity"] = time.time()
 
-        subscribers = self.channel_subscribers[channel].copy()
+    # ------------------------------------------------------------------
+    # Broadcasting (in-process). Cross-process broadcast is implemented
+    # by the Redis driver on top of these.
+    # ------------------------------------------------------------------
+    async def broadcast_to_channel(
+        self,
+        channel: str,
+        event: str,
+        data: Dict[str, Any],
+        *,
+        except_socket_id: Optional[str] = None,
+    ) -> int:
+        """Deliver ``event`` to every local subscriber of ``channel``.
+
+        ``except_socket_id`` skips the connection whose public socket
+        id matches — the "don't echo back to sender" pattern.
+
+        Returns the number of successful deliveries. Failed sends
+        trigger an immediate ``remove_connection`` for the dead
+        connection so it doesn't accumulate dead entries in the
+        index.
+        """
+        # Snapshot the subscriber set BEFORE the first await so a
+        # concurrent subscribe/unsubscribe / remove_connection can't
+        # mutate the set we're iterating.
+        subscribers = list(self.channel_subscribers.get(channel, set()))
+        if not subscribers:
+            return 0
+
+        # Resolve the connection_id to skip once, outside the loop.
+        skip_conn_id: Optional[str] = None
+        if except_socket_id:
+            skip_conn_id = self.connections_by_socket_id.get(except_socket_id)
+
         message = {"event": event, "channel": channel, "data": data}
-
-        Log.info(
-            f"Broadcasting: Sending '{event}' to {len(subscribers)} subscribers on {channel}",
-            category="cara.broadcasting",
-        )
-        Log.info(f"📋 Subscribers: {list(subscribers)}", category="cara.broadcasting")
-        Log.info(
-            f"📨 Message data keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}",
-            category="cara.broadcasting",
-        )
-
-        # Send to all subscribers
-        failed_connections = []
-        successful_sends = 0
+        delivered = 0
+        failed: List[str] = []
 
         for connection_id in subscribers:
-            Log.debug(
-                f"🔄 Attempting send to {connection_id}", category="cara.broadcasting"
-            )
-            if connection_id in self.connections:
-                websocket = self.connections[connection_id]
-                try:
-                    # Skip complex connection state checks - if websocket exists, try to send
+            if skip_conn_id and connection_id == skip_conn_id:
+                continue
+            ws = self.connections.get(connection_id)
+            if ws is None:
+                # Stale entry — was removed between snapshot and now.
+                continue
+            try:
+                await ws.send_json(message)
+                delivered += 1
+            except Exception as e:
+                if _is_connection_closed_error(e):
                     Log.debug(
-                        f"📤 Sending message to {connection_id}",
+                        f"Subscriber {connection_id} closed mid-send on {channel}",
                         category="cara.broadcasting",
                     )
-                    await websocket.send_json(message)
-                    successful_sends += 1
-                    Log.debug(
-                        f"✅ Successfully sent to {connection_id}",
+                else:
+                    Log.warning(
+                        f"Send to {connection_id} on {channel} failed: {e}",
                         category="cara.broadcasting",
                     )
-                except Exception as e:
-                    # Be more tolerant to temporary issues during job processing
-                    error_msg = str(e)
+                failed.append(connection_id)
 
-                    # Only log as error for definitive connection closed errors
-                    if any(
-                        keyword in error_msg
-                        for keyword in [
-                            "ConnectionClosed",
-                            "WebSocket is closed",
-                            "Connection closed",
-                            "ClientDisconnected",
-                            "Connection is closed",
-                        ]
-                    ):
-                        Log.debug(
-                            f"Broadcasting: Connection {connection_id} closed during send",
-                            category="cara.broadcasting",
-                        )
-                        failed_connections.append(connection_id)
-                    elif "timeout" in error_msg.lower() or "busy" in error_msg.lower():
-                        Log.debug(
-                            f"Broadcasting: Temporary issue for {connection_id} (likely busy event loop): {e}",
-                            category="cara.broadcasting",
-                        )
-                        # Don't mark as failed for temporary issues - just skip this send
-                        continue
-                    else:
-                        Log.warning(
-                            f"Broadcasting: Send failed for {connection_id}: {e}",
-                            category="cara.broadcasting",
-                        )
-                        # For other errors, still mark as failed but don't be too aggressive
-                        failed_connections.append(connection_id)
-            else:
-                # Connection not in active connections, mark for cleanup
-                Log.warning(
-                    f"❌ Connection {connection_id} not found in active connections",
-                    category="cara.broadcasting",
-                )
-                failed_connections.append(connection_id)
+        for connection_id in failed:
+            await self.remove_connection(connection_id)
 
-        # Clean up failed connections
-        if failed_connections:
+        if delivered:
             Log.debug(
-                f"Broadcasting: Cleaning up {len(failed_connections)} failed connections",
+                f"Delivered '{event}' to {delivered}/{len(subscribers)} on {channel}",
                 category="cara.broadcasting",
             )
-            for connection_id in failed_connections:
-                await self.remove_connection(connection_id)
+        return delivered
 
-        if successful_sends > 0:
-            Log.info(
-                f"✅ Broadcasting: Successfully sent to {successful_sends} connections",
-                category="cara.broadcasting",
-            )
-        elif subscribers:
-            Log.error(
-                f"❌ Broadcasting: Failed to send to any of {len(subscribers)} subscribers on {channel}",
-                category="cara.broadcasting",
-            )
-        else:
-            Log.warning(
-                f"⚠️ Broadcasting: No subscribers found for {channel}",
-                category="cara.broadcasting",
-            )
+    async def broadcast_to_user_local(
+        self,
+        user_id: str,
+        event: str,
+        data: Dict[str, Any],
+        *,
+        except_socket_id: Optional[str] = None,
+    ) -> int:
+        """Deliver to every LOCAL connection belonging to ``user_id``.
 
-    async def broadcast_to_user(self, user_id: str, event: str, data: Dict[str, Any]):
-        """Broadcast message to a specific user (all their connections)."""
-        user_connections = [
-            conn_id
-            for conn_id, metadata in self.connection_metadata.items()
-            if metadata.get("user_id") == user_id
-        ]
+        Drivers that need cross-process delivery (Redis) extend this
+        by also publishing to a per-user pubsub channel. The base
+        implementation only knows about in-process connections.
+        """
+        connection_ids = list(self.user_connections.get(user_id, set()))
+        if not connection_ids:
+            return 0
 
-        if not user_connections:
-            Log.debug(
-                f"Broadcasting: No connections found for user {user_id}",
-                category="cara.broadcasting",
-            )
-            return
+        skip_conn_id: Optional[str] = None
+        if except_socket_id:
+            skip_conn_id = self.connections_by_socket_id.get(except_socket_id)
 
         message = {"event": event, "data": data}
-
-        Log.info(
-            f"Broadcasting: Sending '{event}' to user {user_id} ({len(user_connections)} connections)",
-            category="cara.broadcasting",
-        )
-
-        # Send to all user connections
-        for connection_id in user_connections:
-            if connection_id in self.connections:
-                websocket = self.connections[connection_id]
-                try:
-                    await websocket.send_json(message)
-                except Exception as e:
-                    Log.error(
-                        f"Broadcasting: Failed to send to user {user_id} connection {connection_id}: {e}"
+        delivered = 0
+        failed: List[str] = []
+        for connection_id in connection_ids:
+            if skip_conn_id and connection_id == skip_conn_id:
+                continue
+            ws = self.connections.get(connection_id)
+            if ws is None:
+                continue
+            try:
+                await ws.send_json(message)
+                delivered += 1
+            except Exception as e:
+                if _is_connection_closed_error(e):
+                    Log.debug(
+                        f"User-channel send to {connection_id} closed mid-send",
+                        category="cara.broadcasting",
                     )
+                else:
+                    Log.warning(
+                        f"User-channel send to {connection_id} failed: {e}",
+                        category="cara.broadcasting",
+                    )
+                failed.append(connection_id)
 
+        for connection_id in failed:
+            await self.remove_connection(connection_id)
+        return delivered
+
+    # ------------------------------------------------------------------
+    # Read-only accessors
+    # ------------------------------------------------------------------
     def get_channel_subscribers(self, channel: str) -> List[str]:
-        """Get list of connection IDs subscribed to a channel."""
         return list(self.channel_subscribers.get(channel, set()))
 
-    def get_user_channels(self, connection_id: str) -> List[str]:
-        """Get list of channels a connection is subscribed to."""
-        return list(self.user_channels.get(connection_id, set()))
+    def get_connection_channels(self, connection_id: str) -> List[str]:
+        return list(self.connection_channels.get(connection_id, set()))
+
+    def get_user_connection_ids(self, user_id: str) -> List[str]:
+        return list(self.user_connections.get(user_id, set()))
 
     def get_connection_count(self) -> int:
-        """Get total number of active connections."""
         return len(self.connections)
 
     def get_channel_count(self) -> int:
-        """Get total number of active channels."""
         return len(self.channel_subscribers)
 
+    def get_socket_id(self, connection_id: str) -> Optional[str]:
+        return self.socket_ids.get(connection_id)
+
     def get_stats(self) -> Dict[str, Any]:
-        """Get broadcasting statistics."""
         return {
             "total_connections": self.get_connection_count(),
             "total_channels": self.get_channel_count(),
+            "total_users": len(self.user_connections),
             "channels": {
-                channel: len(subscribers)
-                for channel, subscribers in self.channel_subscribers.items()
+                channel: len(subs) for channel, subs in self.channel_subscribers.items()
             },
         }
 
-    async def broadcast(self, channel_name: str, message: Dict[str, Any]):
-        """Broadcast a message to a channel - alias for broadcast_to_channel."""
-        event_name = message.get("event", "message")
-        data = message.get("data", {})
-        await self.broadcast_to_channel(channel_name, event_name, data)
-
-    async def _heartbeat_loop(self, connection_id: str):
-        """Periodic ping to client to keep connection alive."""
+    # ------------------------------------------------------------------
+    # Background tasks
+    # ------------------------------------------------------------------
+    async def _heartbeat_loop(self, connection_id: str) -> None:
+        """Periodic ping so dead connections surface within
+        ``heartbeat_interval`` seconds instead of lingering until the
+        next broadcast attempt fails."""
         interval = self.heartbeat_interval
-        while connection_id in self.connections:
-            await asyncio.sleep(interval)
-            websocket = self.connections.get(connection_id)
-            if not websocket:
-                break
-            try:
-                await websocket.send_json(
-                    {"type": "ping", "ts": asyncio.get_running_loop().time()}
+        try:
+            while connection_id in self.connections:
+                await asyncio.sleep(interval)
+                ws = self.connections.get(connection_id)
+                if ws is None:
+                    return
+                try:
+                    await ws.send_json({"event": "ping", "ts": time.time()})
+                except Exception as e:
+                    if _is_connection_closed_error(e):
+                        Log.debug(
+                            f"Heartbeat: {connection_id} closed",
+                            category="cara.broadcasting",
+                        )
+                    else:
+                        Log.warning(
+                            f"Heartbeat to {connection_id} failed: {e}",
+                            category="cara.broadcasting",
+                        )
+                    await self.remove_connection(connection_id)
+                    return
+        except asyncio.CancelledError:
+            # Normal shutdown path when ``remove_connection`` cancels us.
+            raise
+
+    async def _cleanup_loop(self) -> None:
+        """Periodic idle-connection sweep. Removes any connection whose
+        ``last_activity`` is older than ``idle_timeout`` seconds, and
+        prunes orphan metadata for connections whose websocket object
+        is already gone."""
+        try:
+            while True:
+                await asyncio.sleep(self.cleanup_interval)
+                await self._sweep_idle_connections()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            Log.error(
+                f"Connection cleanup loop crashed: {e}",
+                category="cara.broadcasting",
+            )
+
+    async def _sweep_idle_connections(self) -> None:
+        now = time.time()
+        # Snapshot keys so removals during iteration don't error.
+        for connection_id in list(self.connection_metadata.keys()):
+            meta = self.connection_metadata.get(connection_id)
+            if meta is None:
+                continue
+            last = meta.get("last_activity") or meta.get("connected_at") or 0
+            if now - last > self.idle_timeout:
+                Log.debug(
+                    f"Sweeping idle connection {connection_id} "
+                    f"(last activity {now - last:.0f}s ago)",
+                    category="cara.broadcasting",
                 )
-            except Exception as e:
-                Log.error(f"Heartbeat failed for {connection_id}: {e}")
                 await self.remove_connection(connection_id)
-                break
+
+    async def cleanup(self) -> None:
+        """Tear down everything. Called by the application during
+        graceful shutdown so background tasks don't leak."""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        for task in list(self._heartbeat_tasks.values()):
+            if task and not task.done():
+                task.cancel()
+        self._heartbeat_tasks.clear()
+        self.connections.clear()
+        self.channel_subscribers.clear()
+        self.connection_channels.clear()
+        self.connection_metadata.clear()
+        self.user_connections.clear()
+        self.socket_ids.clear()
+        self.connections_by_socket_id.clear()
+
+
+# Surface-level pattern matching for "the client just dropped" errors.
+# Centralised here so heartbeat / broadcast send paths share the same
+# benign-error filter.
+_CONNECTION_CLOSED_MARKERS = (
+    "ConnectionClosed",
+    "WebSocket is closed",
+    "Connection closed",
+    "ClientDisconnected",
+    "Connection is closed",
+    "websocket.close",
+    "ASGI message",
+)
+
+
+def _is_connection_closed_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return any(marker in msg for marker in _CONNECTION_CLOSED_MARKERS)

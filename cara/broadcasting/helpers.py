@@ -1,118 +1,113 @@
 """
-Broadcasting Helper Functions.
+Broadcasting helpers — Laravel-style ``broadcast()`` shortcuts.
 
-Laravel-style helper functions for broadcasting.
+Cara is async-first; the canonical helpers are the ``*_async``
+variants. The synchronous wrappers exist for the rare caller (a
+sync queue handler, a script) that must dispatch a broadcast from a
+purely synchronous context — they do the right thing in either
+context but are NEVER the preferred API. Code running inside an
+event loop should always use the ``_async`` versions.
 """
 
-import asyncio
-from datetime import datetime
-from typing import Any, Dict, List, Union
+from __future__ import annotations
 
-from cara.broadcasting import BroadcastEvent
+import asyncio
+from typing import Any, Awaitable, Dict, List, Optional, Sequence, Union
+
+from cara.broadcasting.BroadcastEvent import BroadcastEvent
+from cara.broadcasting.Channel import Channel
 from cara.broadcasting.contracts import ShouldBroadcast
 from cara.facades import Broadcast
 
-
-def broadcast(
-    channels: Union[str, List[str]], event: str = "message", data: Dict[str, Any] = None
-):
-    """
-    Laravel-style broadcast helper.
-
-    Usage:
-        broadcast("user.123", "order.created", {"order_id": 456})
-        broadcast(["user.123", "admin"], "notification", {"message": "Hello"})
-    """
-    event_obj = BroadcastEvent(channels, event, data or {})
-    # This needs to be run in an event loop
-    asyncio.run(broadcast_event(event_obj))
+ChannelLike = Union[str, Channel]
 
 
-def broadcast_event(event: ShouldBroadcast):
-    """
-    Broadcast a custom event class.
-
-    Usage:
-        await broadcast_event(OrderCreated(data={"order_id": 456}))
-    """
-
-    # This helper now ensures it works correctly whether called from a sync or async context.
-    # It always returns an awaitable coroutine.
-    async def run_broadcast():
-        await Broadcast.broadcast_event(event)
-
-    try:
-        loop = asyncio.get_running_loop()
-        if loop.is_running():
-            # If we're in an async context, create a task to run in the background
-            # without blocking the current flow.
-            return loop.create_task(run_broadcast())
-    except RuntimeError:
-        # No running loop, so we're in a sync context.
-        pass
-
-    # In a sync context, run the coroutine to completion.
-    asyncio.run(run_broadcast())
-
-
-# Laravel-style async helpers for direct use in async contexts
+# ---------------------------------------------------------------------
+# Async — preferred API.
+# ---------------------------------------------------------------------
 async def broadcast_async(
-    channels: Union[str, List[str]], event: str = "message", data: Dict[str, Any] = None
-):
-    """
-    Async version of broadcast helper.
+    channels: Union[ChannelLike, Sequence[ChannelLike]],
+    event: str = "message",
+    data: Optional[Dict[str, Any]] = None,
+    *,
+    except_socket_id: Optional[str] = None,
+) -> None:
+    """Fan out an ad-hoc event to one or more channels.
 
-    Usage:
-        await broadcast_async("user.123", "order.created", {"order_id": 456})
+    Use ``broadcast_event_async`` instead for any event with a stable
+    payload shape — the event class keeps the wire contract close to
+    its data.
     """
-    await Broadcast.broadcast(channels, event, data or {})
+    await Broadcast.broadcast(
+        channels, event, data or {}, except_socket_id=except_socket_id
+    )
 
 
-async def broadcast_event_async(event: ShouldBroadcast):
-    """
-    Async version of broadcast_event helper.
-
-    Usage:
-        await broadcast_event_async(OrderCreated(data={"order_id": 456}))
-    """
+async def broadcast_event_async(event: ShouldBroadcast) -> None:
+    """Dispatch a ``ShouldBroadcast`` event."""
     await Broadcast.broadcast_event(event)
 
 
-# Helper function for broadcasting to specific users
-def broadcast_to_user(user_id: str, event: str = "message", data: Dict[str, Any] = None):
-    """
-    Broadcast to a specific user.
-
-    Usage:
-        broadcast_to_user("123", "notification", {"message": "Hello"})
-    """
-
-    async def _broadcast():
-        await Broadcast.broadcast_to_user(user_id, event, data or {})
-
-    if hasattr(asyncio, "current_task") and asyncio.current_task():
-        return _broadcast()
-    else:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(_broadcast())
-        finally:
-            loop.close()
-
-
 async def broadcast_to_user_async(
-    user_id: str, event: str = "message", data: Dict[str, Any] = None
-):
+    user_id: str,
+    event: str = "message",
+    data: Optional[Dict[str, Any]] = None,
+    *,
+    except_socket_id: Optional[str] = None,
+) -> None:
+    """Push an event to every (cross-process) connection of a user."""
+    await Broadcast.broadcast_to_user(
+        user_id, event, data or {}, except_socket_id=except_socket_id
+    )
+
+
+# ---------------------------------------------------------------------
+# Sync — only for the rare caller in a non-async context. Each helper
+# routes to the async implementation; if a loop is already running,
+# we schedule a task and return it (caller may `await` if they care
+# about completion). If no loop is running, we run-to-completion in a
+# fresh loop. We do NOT close the loop afterwards — closing tears
+# down per-loop Redis pools that other callers in this thread may
+# still be using.
+# ---------------------------------------------------------------------
+def _run_or_schedule(coro: Awaitable[None]) -> Optional[asyncio.Task]:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop in this thread → block-and-run.
+        return asyncio.run(coro)  # type: ignore[func-returns-value]
+    # Loop running → schedule. Caller may await the returned task.
+    return loop.create_task(coro)
+
+
+def broadcast(
+    channels: Union[ChannelLike, Sequence[ChannelLike]],
+    event: str = "message",
+    data: Optional[Dict[str, Any]] = None,
+    *,
+    except_socket_id: Optional[str] = None,
+) -> Optional[asyncio.Task]:
+    """Sync entry-point — async callers should prefer ``broadcast_async``.
+
+    Returns the scheduled ``asyncio.Task`` when invoked inside a
+    running loop (caller may await), or ``None`` when invoked from a
+    fully synchronous context.
     """
-    Async version of broadcast_to_user.
-
-    Usage:
-        await broadcast_to_user_async("123", "notification", {"message": "Hello"})
-    """
-    await Broadcast.broadcast_to_user(user_id, event, data or {})
+    return _run_or_schedule(
+        broadcast_async(channels, event, data, except_socket_id=except_socket_id)
+    )
 
 
-def _get_current_timestamp():
-    """Get current timestamp in ISO format."""
-    return datetime.now().isoformat()
+def broadcast_event(event: ShouldBroadcast) -> Optional[asyncio.Task]:
+    """Sync entry-point — async callers should prefer
+    ``broadcast_event_async``."""
+    return _run_or_schedule(broadcast_event_async(event))
+
+
+__all__ = [
+    "broadcast",
+    "broadcast_async",
+    "broadcast_event",
+    "broadcast_event_async",
+    "broadcast_to_user_async",
+]
