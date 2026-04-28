@@ -31,6 +31,18 @@ class CacheFake:
     def forever(self, key: str, value: Any) -> bool:
         return self.put(key, value, None)
 
+    def add(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+        """Put-if-absent. Returns True iff key was newly added.
+
+        Mirrors the real Redis/File driver semantics so atomic-claim
+        flows (e.g. cooldown locks) round-trip correctly under tests.
+        """
+        if key in self._store:
+            return False
+        self._store[key] = value
+        self._ttls[key] = ttl
+        return True
+
     def has(self, key: str) -> bool:
         return key in self._store
 
