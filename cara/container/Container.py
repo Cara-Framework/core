@@ -728,12 +728,35 @@ class Container:
         Primitive-typed and un-annotated params are left to the caller.
         Returns whatever the callable returns (including a coroutine for
         async functions — the caller is responsible for awaiting it).
+
+        Positional ``args`` are matched to the leading parameters by
+        position; those parameters are skipped during IoC resolution so
+        we don't try to instantiate the same type twice (or fail because
+        the annotation is a domain class with required init args).
         """
         sig = inspect.signature(callable_or_method)
         resolved: Dict[str, Any] = {}
 
+        # Names occupied by positional args — those must NOT be resolved.
+        positional_names: set[str] = set()
+        if args:
+            param_iter = list(sig.parameters.items())
+            pos_idx = 0
+            for name, param in param_iter:
+                if name in ("self", "cls"):
+                    continue
+                if param.kind in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                ):
+                    break
+                positional_names.add(name)
+                pos_idx += 1
+                if pos_idx >= len(args):
+                    break
+
         for name, param in sig.parameters.items():
-            if name in ("self", "cls") or name in kwargs:
+            if name in ("self", "cls") or name in kwargs or name in positional_names:
                 continue
             if param.kind in (
                 inspect.Parameter.VAR_POSITIONAL,
@@ -746,9 +769,19 @@ class Container:
                 continue
 
             if isinstance(ann, str):
+                # Resolve PEP 563 / `from __future__ import annotations`
+                # string forms by evaluating them in the callable's
+                # module + typing namespace.
                 module = inspect.getmodule(callable_or_method)
-                if module is not None:
-                    ann = module.__dict__.get(ann, ann)
+                module_globals = (module.__dict__ if module is not None else {})
+                try:
+                    import typing as _typing
+
+                    eval_globals = {"typing": _typing, **vars(_typing), **module_globals}
+                    ann = eval(ann, eval_globals, {})
+                except Exception:
+                    if module is not None:
+                        ann = module_globals.get(ann.split("|", 1)[0].strip(), ann)
 
             ann = self._unwrap_annotation(ann)
             if ann is None:
