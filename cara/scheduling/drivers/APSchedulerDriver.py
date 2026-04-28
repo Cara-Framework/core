@@ -5,7 +5,6 @@ This module provides a scheduling driver that integrates APScheduler for backgro
 and execution.
 """
 
-import asyncio
 import inspect
 import time as _time
 from typing import Any, Dict, Iterable
@@ -25,7 +24,7 @@ def _instrument_scheduled(identifier: str, callback: Any) -> Any:
     """
     try:
         from app.support.Metrics import Metrics as _M
-    except Exception:
+    except ImportError:
         _M = None  # type: ignore[assignment]
 
     is_coro = inspect.iscoroutinefunction(callback)
@@ -40,7 +39,8 @@ def _instrument_scheduled(identifier: str, callback: Any) -> Any:
             _M.scheduled_task_duration_seconds.labels(
                 task=identifier,
             ).observe(duration)
-        except Exception:
+        except (AttributeError, TypeError):
+            # Metrics not configured or wrong type — safe to skip
             pass
 
     if is_coro:

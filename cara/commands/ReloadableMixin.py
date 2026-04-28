@@ -55,7 +55,6 @@ class ReloadableMixin:
         self.command_watcher = Command(self.application, watch=True)
 
         # Override the reload method to restart the worker
-        original_reload = self.command_watcher.reload
 
         def command_reload():
             # Allow commands to customize reload message

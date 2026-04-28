@@ -2,54 +2,50 @@ from .Auth import Auth
 from .Broadcast import Broadcast
 from .Cache import Cache
 from .Config import Config
-from .Console import Console
-from .Container import Container
 from .Crypt import Crypt
 from .DB import DB
 from .Event import Event
 from .Facade import Facade
 from .Gate import Gate
-from .Hash import Hash
-from .Image import Image
 from .Loader import Loader
 from .Log import Log
 from .Mail import Mail
 from .Notification import Notification
 from .Queue import Queue
 from .RateLimiter import RateLimiter
-from .Request import Request
-from .Response import Response
 from .Schedule import Schedule
-from .Storage import Storage
 from .Validation import Validation
 from .View import View
-from ..eloquent.transactions import atomic
+
+# NOTE: ``atomic`` (DB transaction context manager) intentionally lives
+# in ``cara.eloquent.transactions`` — NOT here. Re-exporting it from
+# ``cara.facades`` would force ``cara.facades`` to import
+# ``cara.eloquent`` at module load, which closes a circular dependency:
+#
+#   cara.configuration  → cara.facades  → cara.eloquent → cara.configuration
+#
+# (``EloquentProvider`` does a top-level ``from cara.configuration
+# import config``.) All callers already use ``from
+# cara.eloquent.transactions import atomic`` directly, so the facades
+# surface stays free of eloquent-side state and the cycle stays broken.
 
 __all__ = [
     "Auth",
     "Broadcast",
     "Cache",
     "Config",
-    "Facade",
-    "Loader",
-    "Log",
-    "Queue",
-    "RateLimiter",
-    "Request",
-    "Response",
-    "Storage",
-    "Container",
-    "Event",
-    "Console",
-    "Schedule",
-    "Hash",
     "Crypt",
     "DB",
+    "Event",
+    "Facade",
     "Gate",
+    "Loader",
+    "Log",
     "Mail",
     "Notification",
-    "View",
+    "Queue",
+    "RateLimiter",
+    "Schedule",
     "Validation",
-    "Image",
-    "atomic",
+    "View",
 ]

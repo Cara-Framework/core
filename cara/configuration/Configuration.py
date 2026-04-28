@@ -5,6 +5,8 @@ This module provides the Configuration class, responsible for loading, merging, 
 application configuration settings from various sources.
 """
 
+import threading
+
 from cara.exceptions import (
     InvalidConfigurationLocationException,
     InvalidConfigurationSetupException,
@@ -15,6 +17,7 @@ from cara.support.Structures import data
 
 class Configuration:
     _instance = None
+    _lock = threading.Lock()
 
     # Foundation configuration keys that cannot be overwritten
     reserved_keys = [
@@ -32,16 +35,17 @@ class Configuration:
     ]
 
     def __init__(self, application=None):
-        if application:
-            self.application = application
-            self._config = data()
-            Configuration._instance = self
-        else:
-            if not Configuration._instance:
+        with Configuration._lock:
+            if application:
+                self.application = application
                 self._config = data()
                 Configuration._instance = self
             else:
-                self._config = Configuration._instance._config
+                if not Configuration._instance:
+                    self._config = data()
+                    Configuration._instance = self
+                else:
+                    self._config = Configuration._instance._config
 
     def load(self):
         """

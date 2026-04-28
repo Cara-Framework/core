@@ -201,7 +201,12 @@ class Cors:
             Modified response
         """
         if self.allow_all_headers:
-            allowed_headers = request.header("Access-Control-Request-Headers")
+            raw = request.header("Access-Control-Request-Headers") or ""
+            # Sanitise: strip anything that isn't a valid HTTP header-name
+            # character (RFC 7230 token chars) or comma/space separators.
+            # This prevents header injection via newlines or control chars.
+            import re
+            allowed_headers = re.sub(r"[^\w\-., ]+", "", raw)
             response = self.update_vary_header(response, "Access-Control-Request-Headers")
         else:
             allowed_headers = ", ".join(self.options.get("allowed_headers", []))
@@ -220,8 +225,10 @@ class Cors:
             Modified response
         """
         if self.allow_all_methods:
-            method = request.header("Access-Control-Request-Method")
-            allowed_methods = method.upper()
+            raw_method = request.header("Access-Control-Request-Method") or ""
+            # Sanitise: HTTP method names are uppercase alpha only.
+            import re
+            allowed_methods = re.sub(r"[^A-Z, ]+", "", raw_method.upper())
             response = self.update_vary_header(response, "Access-Control-Request-Method")
         else:
             allowed_methods = ", ".join(self.options.get("allowed_methods", []))

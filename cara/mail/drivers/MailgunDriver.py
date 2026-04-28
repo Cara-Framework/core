@@ -52,6 +52,7 @@ class MailgunDriver(Mail):
         Returns:
             True if email sent successfully, False otherwise
         """
+        files = []
         try:
             # Prepare data
             data = self._prepare_data(mailable_data)
@@ -66,11 +67,6 @@ class MailgunDriver(Mail):
                 timeout=self.config.get("timeout", 30),
             )
 
-            # Close file handles
-            for file_tuple in files:
-                if len(file_tuple) > 1 and hasattr(file_tuple[1], "close"):
-                    file_tuple[1].close()
-
             # Check response
             if response.status_code == 200:
                 return True
@@ -83,6 +79,18 @@ class MailgunDriver(Mail):
         except Exception as e:
             self._log_error(f"Mailgun send failed: {e}", exc_info=True)
             return False
+        finally:
+            # Always close file handles — even if requests.post() throws.
+            # files is [("attachment", (name, handle)), ...] so the
+            # handle lives at file_tuple[1][1].
+            for file_tuple in files:
+                try:
+                    inner = file_tuple[1]  # (name, handle)
+                    handle = inner[1] if isinstance(inner, (tuple, list)) else inner
+                    if hasattr(handle, "close"):
+                        handle.close()
+                except Exception:
+                        pass
 
     def _prepare_data(self, mailable_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -227,5 +235,5 @@ class MailgunDriver(Mail):
             from cara.facades import Log
 
             Log.error(message, category="cara.mail.mailgun", exc_info=exc_info)
-        except Exception:
+        except ImportError:
             pass

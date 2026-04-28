@@ -21,21 +21,25 @@ class ExceptionProvider(Provider):
         )
 
     def boot(self) -> None:
-        # Monkey-patch HttpConductor.handle_request
+        # Monkey-patch HttpConductor._handle_request
         from cara.conductors.http import HttpConductor
 
-        original_handle_request = HttpConductor.handle_request
+        original_handle_request = HttpConductor._handle_request
 
-        async def wrapped_handle_request(self, scope, receive, send):
+        async def wrapped_handle_request(self, scope, receive, send, request, response):
             """
-            1. Invoke the original handle_request (including middleware chain).
-            2. If any exception bubbles up, retrieve "exception.handler" from container and call handle().
+            1. Invoke the original _handle_request (including middleware chain).
+            2. If any exception bubbles up, retrieve "exception.handler" from
+               container and call handle().
+
+            Note: request and response are per-request local variables passed
+            from handle() — NOT stored on self (concurrency-safe).
             """
             try:
-                await original_handle_request(self, scope, receive, send)
+                await original_handle_request(self, scope, receive, send, request, response)
             except Exception as exc:
                 handler = self.application.make("exception.handler")
-                await handler.handle(exc, self.request, scope, receive, send)
+                await handler.handle(exc, request, scope, receive, send)
                 return
 
-        HttpConductor.handle_request = wrapped_handle_request
+        HttpConductor._handle_request = wrapped_handle_request

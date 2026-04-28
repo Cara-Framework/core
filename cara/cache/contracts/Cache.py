@@ -89,6 +89,19 @@ class Cache:
         """
         raise NotImplementedError
 
+    def increment(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+        """Atomically increment a key by ``amount``. Returns the new value.
+
+        If the key does not exist it is initialised to 0 before
+        incrementing. ``ttl`` is applied on the first creation;
+        subsequent increments do not reset the TTL.
+
+        Drivers that lack native atomic increment (e.g. file-based)
+        MAY fall back to a non-atomic get+put, but Redis MUST use
+        INCRBY to guarantee correctness under concurrency.
+        """
+        raise NotImplementedError
+
     def forget_if(self, key: str, expected_value: Any) -> bool:
         """
         Atomically delete ``key`` only if its current value equals

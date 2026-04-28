@@ -1,3 +1,4 @@
+import re
 import threading
 
 from cara.exceptions import DriverNotFoundException, QueryException
@@ -6,6 +7,10 @@ from ..query.grammars import PostgresGrammar
 from ..query.processors import PostgresPostProcessor
 from ..schema.platforms import PostgresPlatform
 from .BaseConnection import BaseConnection
+
+# Savepoint names must be alphanumeric + underscore to prevent
+# SQL injection (they cannot be parameterised in standard SQL).
+_SAVEPOINT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 _pool_lock = threading.Lock()
 CONNECTION_POOL = []
@@ -223,8 +228,18 @@ class PostgresConnection(BaseConnection):
 
         self._connection = None
 
+    @staticmethod
+    def _validate_savepoint_name(name: str) -> None:
+        """Guard against SQL injection in savepoint identifiers."""
+        if not _SAVEPOINT_RE.match(name):
+            raise ValueError(
+                f"Invalid savepoint name '{name}': "
+                "must be alphanumeric/underscore, starting with a letter or underscore"
+            )
+
     def savepoint(self, name):
         """Create a savepoint within the current transaction."""
+        self._validate_savepoint_name(name)
         self._connection.autocommit = False
         cursor = self._connection.cursor()
         cursor.execute(f"SAVEPOINT {name}")
@@ -233,6 +248,7 @@ class PostgresConnection(BaseConnection):
 
     def rollback_to_savepoint(self, name):
         """Rollback to a savepoint."""
+        self._validate_savepoint_name(name)
         cursor = self._connection.cursor()
         cursor.execute(f"ROLLBACK TO SAVEPOINT {name}")
         cursor.close()
@@ -240,6 +256,7 @@ class PostgresConnection(BaseConnection):
 
     def release_savepoint(self, name):
         """Release a savepoint (commit it)."""
+        self._validate_savepoint_name(name)
         cursor = self._connection.cursor()
         cursor.execute(f"RELEASE SAVEPOINT {name}")
         cursor.close()

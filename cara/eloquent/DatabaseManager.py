@@ -121,10 +121,14 @@ class DatabaseManager:
 
             if connection_details:
                 self.set_database_config(default_connection, connection_details)
-        except Exception:
-            # Config not available yet (early bootstrap)
-            # Provider will configure later - this is OK
-            pass
+        except Exception as e:
+            # Config not available yet (early bootstrap).
+            # Provider will configure later — this is OK. Log at debug
+            # so it's visible if someone is troubleshooting boot order.
+            import logging
+            logging.getLogger("cara.database").debug(
+                "DatabaseManager._auto_configure skipped (early bootstrap): %s", e
+            )
 
     def _resolve_connection_name(self, name=None):
         """Resolves connection name - simple logic"""

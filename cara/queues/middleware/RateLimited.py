@@ -60,7 +60,7 @@ class RateLimited:
                         f"({self.max_attempts}/{self.decay_seconds}s)",
                         category="cara.queue.middleware",
                     )
-                except Exception:
+                except ImportError:
                     pass
                 return None
 
@@ -90,7 +90,7 @@ class WithoutOverlapping:
                         f"Job {lock_key} skipped (overlapping)",
                         category="cara.queue.middleware",
                     )
-                except Exception:
+                except ImportError:
                     pass
                 return None
             _overlap_locks[lock_key] = now

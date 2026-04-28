@@ -250,7 +250,7 @@ class Gate(Gate):
                     category="cara.authorization",
                     exc_info=True,
                 )
-            except Exception:
+            except ImportError:
                 pass
             return False
 
@@ -266,7 +266,7 @@ class Gate(Gate):
             from cara.facades import Log
 
             Log.error(message, category="cara.authorization", exc_info=True)
-        except Exception:
+        except ImportError:
             pass
 
     def _instantiate_policy(self, policy_class: str):

@@ -33,28 +33,14 @@ class CategoryFilter:
         if not category:
             return True
 
-        # Get categories from config and convert to pure Python dict
-        categories_cfg = config("logging.categories", {})
-        if hasattr(categories_cfg, "_data"):
-            categories_cfg = categories_cfg._data
-
-        # Get category configuration
-        cat_cfg = categories_cfg.get(category, {})
-
-        # If no configuration for this category, allow logging
-        if not cat_cfg:
-            return True
-
-        # Check if category is enabled
-        enabled = cat_cfg.get("enabled", True)
-
+        enabled = config(f"logging.categories.{category}.enabled", True)
         if not enabled:
             return False
 
-        # Check log level
         try:
             levelno = getattr(pylogging, level.upper(), 0)
-            cat_levelno = getattr(pylogging, cat_cfg.get("level", "DEBUG").upper(), 0)
+            cat_level = config(f"logging.categories.{category}.level", "DEBUG")
+            cat_levelno = getattr(pylogging, (cat_level or "DEBUG").upper(), 0)
             return levelno >= cat_levelno
         except AttributeError:
             # If level parsing fails, allow logging

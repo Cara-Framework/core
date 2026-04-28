@@ -69,7 +69,7 @@ class ThrottlesExceptions:
                             f"retry in {self.retry_after}s)",
                             category="cara.queue.middleware",
                         )
-                    except Exception:
+                    except ImportError:
                         pass
                     return None
                 # Gate expired — reset tracking.
@@ -96,7 +96,7 @@ class ThrottlesExceptions:
                             f"{self.max_exceptions} exceptions in {self.decay_seconds}s",
                             category="cara.queue.middleware",
                         )
-                    except Exception:
+                    except ImportError:
                         pass
             raise
 

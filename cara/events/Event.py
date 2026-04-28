@@ -282,9 +282,17 @@ class Event:
                     await listener.handle(event)
                 else:
                     listener.handle(event)
-            except Exception:
+            except Exception as _listener_exc:
                 _lst_outcome = "failure"
-                raise
+                try:
+                    from cara.facades import Log
+                    Log.error(
+                        f"Event listener {_lst_name} failed: "
+                        f"{_listener_exc.__class__.__name__}: {_listener_exc}",
+                        category="cara.events",
+                    )
+                except Exception:
+                    pass
             finally:
                 if _M is not None:
                     try:
@@ -294,7 +302,7 @@ class Event:
                         _M.listener_duration_seconds.labels(
                             listener=_lst_name,
                         ).observe(_t.time() - _lst_start)
-                    except Exception:
+                    except (ImportError, AttributeError):
                         pass
 
     def _get_matching_wildcard_listeners(self, event_name: str) -> List[Listener]:

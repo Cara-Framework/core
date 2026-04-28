@@ -5,7 +5,7 @@ This module provides the service provider that configures and registers the sche
 making scheduling services available throughout the application.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from cara.foundation import DeferredProvider
 from cara.configuration import config
 from cara.scheduling import Scheduling
@@ -39,7 +39,7 @@ class SchedulingProvider(DeferredProvider):
 
         manager = Scheduling(self.application, default_driver)
 
-        self._add_apscheduler_driver(manager, drivers_cfg.get("apscheduler"))
+        self._add_apscheduler_driver(manager)
 
         self.application.bind("scheduling", manager)
 
@@ -48,17 +48,14 @@ class SchedulingProvider(DeferredProvider):
         # of schedule:work command or application boot logic if desired.
         pass
 
-    def _add_apscheduler_driver(
-        self,
-        manager: Scheduling,
-        settings: Optional[Dict[str, Any]],
-    ) -> None:
+    def _add_apscheduler_driver(self, manager: Scheduling) -> None:
         """Read APScheduler settings from config and register APSchedulerDriver."""
+        settings = config("scheduling.drivers.apscheduler")
         if settings is None:
             return
 
         try:
-            driver = APSchedulerDriver(settings or {})
+            driver = APSchedulerDriver(settings)
         except ImportError as e:
             raise DriverLibraryNotFoundException(
                 "APSchedulerDriver selected but 'apscheduler' is not installed."

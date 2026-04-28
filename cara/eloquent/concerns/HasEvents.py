@@ -96,7 +96,7 @@ class HasEvents:
                             category="cara.eloquent.events",
                             exc_info=True,
                         )
-                    except Exception:
+                    except ImportError:
                         pass
 
         return True

@@ -22,7 +22,6 @@ Usage:
 
 import time
 import threading
-from typing import Optional
 
 
 # Fallback in-memory lock store (for single-process or boot scenarios)

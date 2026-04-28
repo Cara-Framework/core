@@ -86,9 +86,15 @@ class LifespanConductor:
                 raise
 
     async def _handle_shutdown(self) -> None:
-        """Run application shutdown callbacks if any."""
-        # Execute callbacks registered on the application instance
+        """Run application shutdown callbacks if any.
+
+        All registered callbacks are executed even if one fails so that
+        every subsystem gets a chance to release resources. If any
+        callback raised, the *first* exception is re-raised after the
+        full loop so the ASGI server sees ``lifespan.shutdown.failed``.
+        """
         callbacks = getattr(self.application, "_shutdown_callbacks", None) or []
+        first_exc: Exception | None = None
         for cb in callbacks:
             try:
                 if asyncio.iscoroutinefunction(cb):
@@ -101,3 +107,7 @@ class LifespanConductor:
                     category="cara.lifespan",
                     exc_info=True,
                 )
+                if first_exc is None:
+                    first_exc = e
+        if first_exc is not None:
+            raise first_exc

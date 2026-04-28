@@ -15,6 +15,8 @@ class RouteCompiler:
     def __init__(self, url: str, compilers: Dict[str, str]):
         self._compiled_regex = None
         self.url_list: List[str] = []
+        # Maps parameter name → compiler type name (e.g. "id" → "int")
+        self.param_types: Dict[str, str] = {}
         self.compilers = compilers or {"default": r"([^/]+)"}
         self.compile_route(url)
 
@@ -34,6 +36,8 @@ class RouteCompiler:
                 pattern = self.compilers.get(compiler_name, self.compilers["default"])
                 regex += f"/{pattern}"
                 url_list.append(name)
+                if compiler_name:
+                    self.param_types[name] = compiler_name
 
             # Optional parameter in Laravel style: "@id?" or "@id:int?"
             elif part.startswith("@") and part.endswith("?"):
@@ -43,6 +47,8 @@ class RouteCompiler:
                 # Wrap slash+pattern in a single optional non-capturing group
                 regex += f"(?:/{pattern})?"
                 url_list.append(name)
+                if compiler_name:
+                    self.param_types[name] = compiler_name
 
             # Static segment
             else:
@@ -65,10 +71,10 @@ class RouteCompiler:
 
         raw_groups = match.groups()
         params: Dict[str, Any] = {}
-        # Iterate over named positions; if a group is None, substitute empty string
+        # Iterate over named positions. Optional params stay None when missing
+        # (not empty string) so callers can distinguish "absent" from "empty".
         for idx, name in enumerate(self.url_list):
-            value = raw_groups[idx] if idx < len(raw_groups) else None
-            params[name] = value if value is not None else ""
+            params[name] = raw_groups[idx] if idx < len(raw_groups) else None
         return params
 
     def matches(self, path: str) -> bool:

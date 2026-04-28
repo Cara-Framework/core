@@ -183,10 +183,9 @@ class JWTGenerateCommand(CommandBase):
         self.info("🔍 DRY RUN MODE - No token will be generated")
 
         # Show JWT configuration
-        jwt_config = config("auth.guards.jwt", {})
         self.info("🔧 JWT Configuration:")
-        self.info(f"   Algorithm: {jwt_config.get('algorithm', 'HS256')}")
-        self.info(f"   Secret: {'*' * len(jwt_config.get('secret', ''))}")
+        self.info(f"   Algorithm: {config('auth.guards.jwt.algorithm', 'HS256')}")
+        self.info(f"   Secret: {'*' * len(config('auth.guards.jwt.secret', '') or '')}")
 
         # Show token parameters
         self.info("📋 Token Parameters:")
@@ -195,7 +194,7 @@ class JWTGenerateCommand(CommandBase):
         elif self.option("no_expiry"):
             self.info("   TTL: No expiration")
         else:
-            default_ttl = jwt_config.get("ttl", 3600)
+            default_ttl = config("auth.guards.jwt.ttl", 3600)
             self.info(f"   TTL: {default_ttl} seconds (default)")
 
         if additional_payload:
@@ -217,7 +216,7 @@ class JWTGenerateCommand(CommandBase):
         jwt_guard = auth_manager.guard("jwt")
 
         # Prepare token payload
-        now = pendulum.now().int_timestamp
+        now = pendulum.now("UTC").int_timestamp
 
         # Get user's default payload if available
         if hasattr(user, "to_jwt_payload") and callable(
@@ -288,7 +287,7 @@ class JWTGenerateCommand(CommandBase):
             self.info(f"   Expires At: {self._format_timestamp(expires_at)}")
 
             # Show time remaining
-            now = pendulum.now().int_timestamp
+            now = pendulum.now("UTC").int_timestamp
             if expires_at > now:
                 remaining = expires_at - now
                 hours = remaining // 3600
@@ -347,7 +346,7 @@ class JWTGenerateCommand(CommandBase):
                 "expires_at": token_info.get("expires_at"),
                 "algorithm": token_info["algorithm"],
                 "payload": token_info["payload"],
-                "generated_at": self._format_timestamp(pendulum.now().int_timestamp),
+                "generated_at": self._format_timestamp(pendulum.now("UTC").int_timestamp),
             }
 
             # Save as JSON

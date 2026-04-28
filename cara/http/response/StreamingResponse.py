@@ -81,7 +81,13 @@ class StreamingResponse:
                     }
                 )
         except Exception as e:
-            # Log error and close stream gracefully
+            # Log error and close stream gracefully. Previously only
+            # the client saw the error message; the server had no record
+            # of the failure.
+            import logging
+            logging.getLogger("cara.http.stream").error(
+                "Stream generator raised: %s", e, exc_info=True,
+            )
             error_chunk = f"Stream error: {str(e)}".encode("utf-8")
             await send(
                 {
@@ -123,7 +129,7 @@ class StreamingResponse:
 
         async def json_chunk_generator():
             async for data in data_generator:
-                json_line = json.dumps(data, ensure_ascii=False) + "\n"
+                json_line = json.dumps(data, ensure_ascii=False, default=str) + "\n"
                 yield json_line.encode("utf-8")
 
         await self.stream(
@@ -281,7 +287,7 @@ class StreamingResponse:
         if "data" in event:
             data = event["data"]
             if isinstance(data, (dict, list)):
-                data = json.dumps(data, ensure_ascii=False)
+                data = json.dumps(data, ensure_ascii=False, default=str)
             lines.append(f"data: {data}")
 
         lines.append("")  # Empty line to end event

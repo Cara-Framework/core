@@ -278,8 +278,14 @@ class ApiKeyGuard(Guard):
             cache_key = f"api_key_rate_limit:{api_key}"
             current_count = Cache.get(cache_key, 0)
             Cache.put(cache_key, current_count + 1, self.rate_limit_window)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Rate limiting degraded — log so operators notice, but don't
+            # block the request.  Silent pass here previously hid cache
+            # outages that disabled rate limiting entirely.
+            import logging
+            logging.getLogger("cara.auth.apikey").warning(
+                "Rate limit cache write failed (rate limiting degraded): %s", exc
+            )
 
     def _load_user_class(self, user_model: str):
         """Load user model class safely."""

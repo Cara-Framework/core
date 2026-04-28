@@ -1,3 +1,12 @@
+import re
+
+# SQL identifiers (table, column, schema, database names) must be
+# alphanumeric + underscore + dot (for schema.table).  This prevents
+# injection when identifiers are interpolated into information_schema
+# queries that cannot use parameterised placeholders.
+_SQL_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
+
+
 class Platform:
     foreign_key_actions = {
         "cascade": "CASCADE",
@@ -8,6 +17,29 @@ class Platform:
     }
 
     signed = {"signed": "SIGNED", "unsigned": "UNSIGNED"}
+
+    @staticmethod
+    def _validate_identifier(name: str, label: str = "identifier") -> str:
+        """Validate a SQL identifier to prevent injection.
+
+        Args:
+            name: The identifier to validate (table, column, schema, database name)
+            label: Human-readable label for error messages
+
+        Returns:
+            The validated identifier string
+
+        Raises:
+            ValueError: If the identifier contains invalid characters
+        """
+        if not name or not isinstance(name, str):
+            raise ValueError(f"Invalid SQL {label}: must be a non-empty string")
+        if not _SQL_IDENTIFIER_RE.match(name):
+            raise ValueError(
+                f"Invalid SQL {label} '{name}': "
+                "must be alphanumeric/underscore/dot, starting with a letter or underscore"
+            )
+        return name
 
     def columnize(self, columns):
         sql = []

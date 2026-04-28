@@ -418,6 +418,8 @@ class MySQLPlatform(Platform):
         return "CONSTRAINT {constraint_name} UNIQUE ({columns})"
 
     def compile_table_exists(self, table, database=None, schema=None):
+        table = self._validate_identifier(table, "table name")
+        database = self._validate_identifier(database, "database name") if database else database
         return f"SELECT * from information_schema.tables where table_name='{table}' AND table_schema = '{database}'"
 
     def compile_truncate(self, table, foreign_keys=False):
@@ -440,12 +442,16 @@ class MySQLPlatform(Platform):
         return f"DROP TABLE {self.wrap_table(table)}"
 
     def compile_column_exists(self, table, column):
+        table = self._validate_identifier(table, "table name")
+        column = self._validate_identifier(column, "column name")
         return f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' and column_name='{column}'"
 
     def compile_get_all_tables(self, database, schema=None):
+        database = self._validate_identifier(database, "database name")
         return f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{database}'"
 
     def get_current_schema(self, connection, table_name, schema=None):
+        self._validate_identifier(table_name, "table name")
         table = Table(table_name)
         sql = f"DESCRIBE {table_name}"
         result = connection.query(sql, ())

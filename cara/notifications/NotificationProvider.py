@@ -6,6 +6,7 @@ subsystem, including mail, database, slack and log notification channels.
 """
 
 from cara.configuration import config
+from cara.facades import Log
 from cara.foundation import DeferredProvider
 from cara.notifications import Notification
 from cara.notifications.channels import (
@@ -29,80 +30,57 @@ class NotificationProvider(DeferredProvider):
 
     def register(self) -> None:
         """Register notification services with configuration."""
-        settings = config("notifications", {})
-        default_channels = settings.get("default", ["mail", "database"])
-
+        default_channels = config("notifications.default", ["mail", "database"])
         notification_manager = Notification(self.application, default_channels)
 
-        # Register notification channels
-        self._add_mail_channel(notification_manager, settings)
-        self._add_database_channel(notification_manager, settings)
-        self._add_slack_channel(notification_manager, settings)
-        self._add_log_channel(notification_manager, settings)
+        self._add_mail_channel(notification_manager)
+        self._add_database_channel(notification_manager)
+        self._add_slack_channel(notification_manager)
+        self._add_log_channel(notification_manager)
 
         self.application.bind("notification", notification_manager)
 
-    def _add_mail_channel(
-        self, notification_manager: Notification, settings: dict
-    ) -> None:
+    def _add_mail_channel(self, notification_manager: Notification) -> None:
         """Register mail notification channel with configuration."""
-        mail_settings = settings.get("channels", {}).get("mail", {})
-
         try:
             mail_manager = self.application.make("mail")
             channel = MailChannel(
                 mail_manager=mail_manager,
-                from_address=mail_settings.get("from_address"),
-                from_name=mail_settings.get("from_name"),
-                reply_to=mail_settings.get("reply_to"),
+                from_address=config("notifications.channels.mail.from_address"),
+                from_name=config("notifications.channels.mail.from_name"),
+                reply_to=config("notifications.channels.mail.reply_to"),
             )
             notification_manager.add_channel(MailChannel.channel_name, channel)
-        except Exception:
-            # Mail service not available, skip
-            pass
+        except Exception as e:
+            Log.warning(f"[NotificationProvider] Mail channel registration failed: {e}")
 
-    def _add_database_channel(
-        self, notification_manager: Notification, settings: dict
-    ) -> None:
+    def _add_database_channel(self, notification_manager: Notification) -> None:
         """Register database notification channel with configuration."""
-        database_settings = settings.get("channels", {}).get("database", {})
-
         query_builder = self.application.make("DB").query()
         channel = DatabaseChannel(
             database_manager=query_builder,
-            table_name=database_settings.get("table", "notifications"),
+            table_name=config("notifications.channels.database.table", "notifications"),
         )
         notification_manager.add_channel(DatabaseChannel.channel_name, channel)
 
-    def _add_slack_channel(
-        self, notification_manager: Notification, settings: dict
-    ) -> None:
+    def _add_slack_channel(self, notification_manager: Notification) -> None:
         """Register Slack notification channel with configuration."""
-        slack_settings = settings.get("channels", {}).get("slack", {})
-
-        if not slack_settings:
-            return  # Slack is optional
-
-        webhook_url = slack_settings.get("webhook_url")
+        webhook_url = config("notifications.channels.slack.webhook_url")
         if not webhook_url:
-            return  # No webhook URL configured
+            return
 
         channel = SlackChannel(
             webhook_url=webhook_url,
-            default_channel=slack_settings.get("channel"),
-            username=slack_settings.get("username", "Cara Bot"),
-            icon=slack_settings.get("icon", ":robot_face:"),
+            default_channel=config("notifications.channels.slack.channel"),
+            username=config("notifications.channels.slack.username", "Cara Bot"),
+            icon=config("notifications.channels.slack.icon", ":robot_face:"),
         )
         notification_manager.add_channel(SlackChannel.channel_name, channel)
 
-    def _add_log_channel(
-        self, notification_manager: Notification, settings: dict
-    ) -> None:
+    def _add_log_channel(self, notification_manager: Notification) -> None:
         """Register log notification channel with configuration."""
-        log_settings = settings.get("channels", {}).get("log", {})
-
         channel = LogChannel(
-            log_file=log_settings.get("file", "notifications.log"),
-            log_level=log_settings.get("level", "info"),
+            log_file=config("notifications.channels.log.file", "notifications.log"),
+            log_level=config("notifications.channels.log.level", "info"),
         )
         notification_manager.add_channel(LogChannel.channel_name, channel)

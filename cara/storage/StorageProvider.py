@@ -28,30 +28,20 @@ class StorageProvider(DeferredProvider):
 
     def register(self) -> None:
         """Register storage services with configuration."""
-        settings = config("storage", {})
-        default_driver = settings.get("default", "file")
-
+        default_driver = config("storage.default", "file")
         storage_manager = Storage(self.application, default_driver)
 
-        # Register storage drivers
-        self._add_file_driver(storage_manager, settings)
+        self._add_file_driver(storage_manager)
 
         self.application.bind("storage", storage_manager)
 
-    def _add_file_driver(self, storage_manager: Storage, settings: dict) -> None:
+    def _add_file_driver(self, storage_manager: Storage) -> None:
         """Register file storage driver with configuration."""
-        file_settings = settings.get("drivers", {}).get("file", None)
-        if not file_settings:
-            raise StorageConfigurationException(
-                "Missing or invalid 'storage.drivers.file' config."
-            )
-
-        raw_path = file_settings.get("path")
+        raw_path = config("storage.drivers.file.path")
         if not isinstance(raw_path, str) or not raw_path:
             raise StorageConfigurationException(
                 "'storage.drivers.file.path' must be a non-empty string."
             )
 
-        full_path = paths("base", raw_path)
-        driver = FileDriver(base_directory=full_path)
+        driver = FileDriver(base_directory=paths("base", raw_path))
         storage_manager.add_driver(FileDriver.driver_name, driver)

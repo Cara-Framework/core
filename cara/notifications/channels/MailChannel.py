@@ -178,7 +178,7 @@ class MailChannel(BaseChannel):
                 category="cara.notifications.mail",
                 exc_info=True,
             )
-        except Exception:
+        except ImportError:
             pass
 
     def _get_recipient(self, notifiable, notification) -> Optional[str]:

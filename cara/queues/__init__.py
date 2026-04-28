@@ -1,13 +1,15 @@
+from .Bus import Bus
+from .helpers import safe_dispatch
 from .JobContext import JobContext
+from .job_instantiation import instantiate_job
 from .Queue import Queue
 from .QueueProvider import QueueProvider
-from .Bus import Bus
-from .job_instantiation import instantiate_job
 
 __all__ = [
+    "Bus",
     "JobContext",
     "Queue",
     "QueueProvider",
-    "Bus",
     "instantiate_job",
+    "safe_dispatch",
 ]

@@ -425,9 +425,12 @@ class SQLitePlatform(Platform):
             return reversed_type_map.get(column_type)
 
     def compile_table_exists(self, table, database=None, schema=None):
+        table = self._validate_identifier(table, "table name")
         return f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"
 
     def compile_column_exists(self, table, column):
+        table = self._validate_identifier(table, "table name")
+        column = self._validate_identifier(column, "column name")
         return f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' and column_name='{column}'"
 
     def compile_get_all_tables(self, database, schema=None):

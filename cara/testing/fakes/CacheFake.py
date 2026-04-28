@@ -74,6 +74,33 @@ class CacheFake:
     def decrement(self, key: str, by: int = 1) -> int:
         return self.increment(key, -by)
 
+    def forget_pattern(self, pattern: str) -> int:
+        """Delete every key matching ``pattern`` (glob-style ``*`` only).
+
+        Mirrors the real driver's contract closely enough for prod
+        callers (``HomeCacheInvalidator``, admin cache controller) to
+        round-trip under tests. Only ``*`` wildcards are honoured —
+        ``?`` / character classes are not used in callers and aren't
+        worth modelling here.
+        """
+        import fnmatch
+
+        keys = [k for k in self._store if fnmatch.fnmatchcase(k, pattern)]
+        for k in keys:
+            self._store.pop(k, None)
+            self._ttls.pop(k, None)
+        return len(keys)
+
+    def forget_by_prefix(self, prefix: str) -> int:
+        """Delete every key starting with ``prefix``.
+
+        Convenience wrapper over :meth:`forget_pattern` — matches the
+        real ``Cache.forget_by_prefix`` so prefix-sweep callers
+        (``Cache.forget_by_prefix("category:facets:")``) behave the
+        same in production and in tests.
+        """
+        return self.forget_pattern(f"{prefix}*")
+
     # ── Test-time helpers ────────────────────────────────────────────
 
     def all(self) -> Dict[str, Any]:

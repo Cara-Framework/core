@@ -5,6 +5,7 @@ This module provides the Queue class, which manages job queues and delegates que
 registered driver instances.
 """
 
+import asyncio
 from typing import Any, Dict, Optional
 
 from cara.exceptions import DriverNotRegisteredException
@@ -207,6 +208,14 @@ class Queue:
                 result = app.call(instance.handle)
             else:
                 result = instance.handle()
+            # Guard against accidentally dropping a coroutine from an
+            # async handle() when no container is available.
+            if asyncio.iscoroutine(result):
+                result.close()
+                raise TypeError(
+                    f"Job {instance.__class__.__name__}.handle() is async "
+                    f"but was dispatched in a sync context without an application container."
+                )
             return result  # Return handle result for sync execution
         else:
             raise ValueError(f"Cannot dispatch job: {job!r} has no handle()")
@@ -249,7 +258,14 @@ class Queue:
         if hasattr(instance, "handle") and callable(getattr(instance, "handle")):
             if hasattr(self.application, "call"):
                 return self.application.call(instance.handle)
-            return instance.handle()
+            result = instance.handle()
+            if asyncio.iscoroutine(result):
+                result.close()
+                raise TypeError(
+                    f"Job {instance.__class__.__name__}.handle() is async "
+                    f"but was dispatched via dispatchNow without an application container."
+                )
+            return result
         else:
             raise ValueError(f"Cannot execute job: {job!r} has no handle() method")
 

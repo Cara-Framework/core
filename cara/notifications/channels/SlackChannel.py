@@ -187,7 +187,7 @@ class SlackChannel(BaseChannel):
                 category="cara.notifications.slack",
                 exc_info=True,
             )
-        except Exception:
+        except ImportError:
             pass
 
     def format_simple_message(

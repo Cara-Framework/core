@@ -15,7 +15,7 @@ Usage:
 """
 
 import asyncio
-from typing import Callable, List, Optional, Any
+from typing import Callable, List, Optional
 
 from cara.queues.contracts import ShouldQueue, Queueable
 

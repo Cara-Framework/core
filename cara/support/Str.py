@@ -190,6 +190,42 @@ def slugify(text: str, separator: str = "-") -> str:
     return text
 
 
+def email_mask(email: str) -> str:
+    """Mask the local part of an email address for privacy.
+
+    Used for PII redaction in logs / public surfaces (notification
+    digests, exposed audit trails) where the user's identity should
+    be partially obscured but the domain stays visible. Generic — the
+    framework owns it because every app eventually needs the same
+    "show ``j****@example.com`` not ``john@example.com``" rendering.
+
+    Args:
+        email: Raw email address. Empty / ``None`` / strings without
+            ``@`` return ``""`` so callers can chain without guards.
+
+    Returns:
+        ``"<local-mask>@<domain>"``. Local parts of length ≤ 2 are
+        fully masked (no leak of first letter); longer locals show
+        only the first character followed by six asterisks.
+
+    Examples:
+        >>> email_mask("john@example.com")
+        'j******@example.com'
+        >>> email_mask("ab@example.com")
+        '**@example.com'
+        >>> email_mask("")
+        ''
+    """
+    if not email or "@" not in email:
+        return ""
+    local_part, domain = email.split("@", 1)
+    if len(local_part) <= 2:
+        masked_local = "*" * len(local_part)
+    else:
+        masked_local = local_part[0] + "******"
+    return f"{masked_local}@{domain}"
+
+
 def normalize_email(email: str) -> str:
     """Normalize an email address by lowercasing and stripping whitespace.
 
@@ -200,8 +236,14 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-def format_money(cents: int, currency: str = "USD") -> str:
+def format_money_cents(cents: int, currency: str = "USD") -> str:
     """Format an integer cent amount as a currency string.
+
+    Strict integer-cent variant — raises on non-int input or unsupported
+    currency. Useful where you want crash-on-bad-input semantics
+    (payment / billing serialization). For the lenient float-based
+    renderer used in storefront / notifications / email digests, see
+    :func:`cara.support.Currency.format_money`.
 
     Raises TypeError if cents is not an int.
     Raises ValueError if cents is negative or currency is unsupported.
@@ -412,3 +454,144 @@ def pluralize(word: str) -> str:
     if len(lower) >= 2 and lower[-1] == "o" and lower[-2] not in vowels:
         return word + "es"
     return word + "s"
+
+
+# ── Laravel-parity helpers ────────────────────────────────────────────────
+# UUID / ULID generation, substring splits (before/after/between), and
+# the predicate trio (starts_with / ends_with / contains) with iterable
+# needle support so callers can pass a list of candidates instead of
+# rolling their own ``any()``.
+
+def uuid() -> str:
+    """Generate a random UUID v4 string — Laravel ``Str::uuid()`` parity.
+
+    Uses ``uuid.uuid4()`` (random) — for sortable identifiers prefer
+    :func:`ulid` instead. The returned string is the canonical 36-char
+    hyphenated form (``"xxxxxxxx-xxxx-4xxx-xxxx-xxxxxxxxxxxx"``).
+    """
+    import uuid as _uuid
+
+    return str(_uuid.uuid4())
+
+
+def ulid() -> str:
+    """Generate a 26-char ULID (Crockford-base32, time-sortable).
+
+    Mirrors Laravel ``Str::ulid()``. Falls back to UUID v4 when the
+    ``python-ulid`` package isn't installed — preserves uniqueness
+    but loses time-sortability; callers that need ordering should
+    pin ``python-ulid`` as a dependency.
+    """
+    try:
+        import ulid as _ulid_mod  # type: ignore
+    except ImportError:
+        return uuid()
+    return str(_ulid_mod.new())
+
+
+def starts_with(haystack: str, needles) -> bool:
+    """Return True if ``haystack`` starts with any of ``needles``.
+
+    ``needles`` may be a single string or any iterable of strings —
+    matches Laravel's ``Str::startsWith`` overload.
+    """
+    if haystack is None:
+        return False
+    if isinstance(needles, str):
+        return haystack.startswith(needles)
+    for needle in needles or ():
+        if needle != "" and haystack.startswith(needle):
+            return True
+    return False
+
+
+def ends_with(haystack: str, needles) -> bool:
+    """Return True if ``haystack`` ends with any of ``needles``.
+
+    ``needles`` may be a single string or any iterable of strings —
+    matches Laravel's ``Str::endsWith`` overload.
+    """
+    if haystack is None:
+        return False
+    if isinstance(needles, str):
+        return haystack.endswith(needles)
+    for needle in needles or ():
+        if needle != "" and haystack.endswith(needle):
+            return True
+    return False
+
+
+def contains(haystack: str, needles, *, ignore_case: bool = False) -> bool:
+    """Return True if ``haystack`` contains any of ``needles``.
+
+    With ``ignore_case=True`` the comparison is case-insensitive on
+    both sides. Mirrors Laravel's ``Str::contains`` overload.
+    """
+    if haystack is None:
+        return False
+    h = haystack.lower() if ignore_case else haystack
+    if isinstance(needles, str):
+        n = needles.lower() if ignore_case else needles
+        return n != "" and n in h
+    for needle in needles or ():
+        if needle == "":
+            continue
+        n = needle.lower() if ignore_case else needle
+        if n in h:
+            return True
+    return False
+
+
+def before(haystack: str, needle: str) -> str:
+    """Return the substring of ``haystack`` BEFORE the first ``needle``.
+
+    Returns the full ``haystack`` when ``needle`` is empty or absent —
+    matches Laravel's ``Str::before`` semantics.
+    """
+    if not haystack or not needle:
+        return haystack or ""
+    idx = haystack.find(needle)
+    return haystack if idx < 0 else haystack[:idx]
+
+
+def after(haystack: str, needle: str) -> str:
+    """Return the substring of ``haystack`` AFTER the first ``needle``.
+
+    Returns the full ``haystack`` when ``needle`` is empty or absent —
+    matches Laravel's ``Str::after`` semantics.
+    """
+    if not haystack or not needle:
+        return haystack or ""
+    idx = haystack.find(needle)
+    return haystack if idx < 0 else haystack[idx + len(needle):]
+
+
+def between(haystack: str, start: str, end: str) -> str:
+    """Return the substring of ``haystack`` between ``start`` and ``end``.
+
+    Returns the full ``haystack`` when either delimiter is empty or
+    not found — matches Laravel's ``Str::between`` semantics.
+    """
+    if not haystack or not start or not end:
+        return haystack or ""
+    after_start = after(haystack, start)
+    if after_start == haystack:
+        return haystack
+    return before(after_start, end)
+
+
+def mask(value: str, char: str, index: int, length: int = 0) -> str:
+    """Mask ``length`` chars of ``value`` starting at ``index`` with ``char``.
+
+    Negative ``index`` counts from the end. ``length=0`` masks to the
+    end of the string. Mirrors Laravel's ``Str::mask`` for opaque
+    PII redaction (credit-card middle digits, phone numbers, etc.).
+    """
+    if not value:
+        return ""
+    n = len(value)
+    if index < 0:
+        index = max(0, n + index)
+    index = min(index, n)
+    end = n if length <= 0 else min(n, index + length)
+    return value[:index] + char * (end - index) + value[end:]

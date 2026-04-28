@@ -46,7 +46,6 @@ class ChannelConfigurator:
             webhook = slack_cfg.get("WEBHOOK_URL")
             if not webhook:
                 try:
-                    from cara.configuration import config
                     webhook = config("logging.slack.WEBHOOK_URL")
                 except Exception:
                     webhook = os.getenv("SLACK_WEBHOOK_URL")

@@ -6,6 +6,7 @@ using the SHA-256 algorithm.
 """
 
 import hashlib
+import hmac
 
 
 class Sha256Hasher:
@@ -13,7 +14,9 @@ class Sha256Hasher:
         return hashlib.sha256(value.encode()).hexdigest()
 
     def check(self, value: str, hashed: str) -> bool:
-        return hashlib.sha256(value.encode()).hexdigest() == hashed
+        return hmac.compare_digest(
+            hashlib.sha256(value.encode()).hexdigest(), hashed
+        )
 
     def needs_rehash(self, hashed: str) -> bool:
         return False

@@ -7,6 +7,7 @@ from .BaseRule import BaseRule
 from .AcceptedRule import AcceptedRule
 from .AfterRule import AfterRule
 from .ArrayRule import ArrayRule
+from .BatchExistsRule import BatchExistsRule
 from .BeforeRule import BeforeRule
 from .BetweenRule import BetweenRule
 from .BooleanRule import BooleanRule
@@ -59,6 +60,7 @@ __all__ = [
     "AfterRule",
     "ArrayRule",
     "BaseRule",
+    "BatchExistsRule",
     "BeforeRule",
     "BetweenRule",
     "BooleanRule",

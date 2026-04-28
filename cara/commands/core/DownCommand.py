@@ -95,7 +95,7 @@ class DownCommand(CommandBase):
         """Build maintenance configuration with validation."""
         config = {
             "enabled": True,
-            "created_at": pendulum.now().to_iso8601_string(),
+            "created_at": pendulum.now("UTC").to_iso8601_string(),
             "message": message
             or "Application is temporarily unavailable for maintenance.",
             "retry_after": 3600,  # 1 hour default

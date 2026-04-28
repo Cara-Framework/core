@@ -161,8 +161,8 @@ class Shell:
                                 if model_class and isinstance(model_class, type):
                                     self.namespace[model_name] = model_class
                                     loaded_models.append(model_name)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                print(f"[tinker] swallowed model-load error for {model_name}: {e}")
 
             except ImportError:
                 continue
@@ -290,8 +290,8 @@ class Shell:
                         if service_name:
                             return app_instance.make(service_name)
                         return app_instance
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[tinker] swallowed app() resolution error: {e}")
                 return None
 
         def config(key, default=None):
@@ -700,8 +700,8 @@ class Shell:
                                 if method.startswith(attr_prefix)
                             ]
                             matches.extend(model_matches)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[tinker] swallowed completer error for {obj_name}: {e}")
 
                 return matches
 
@@ -721,7 +721,6 @@ class Shell:
         completions = []
 
         # Get the current line and cursor position
-        line = event.line
         text_until_cursor = event.text_until_cursor
 
         # Facade completions

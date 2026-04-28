@@ -113,11 +113,17 @@ class BaseConnection:
         if not self.open:
             self.make_connection()
 
-        result = self.format_cursor_results(self._cursor.fetchmany(amount))
-        while result:
-            yield result
-
+        try:
             result = self.format_cursor_results(self._cursor.fetchmany(amount))
+            while result:
+                yield result
+                result = self.format_cursor_results(self._cursor.fetchmany(amount))
+        finally:
+            # Ensure cursor/connection cleanup even if the caller
+            # abandons the generator before it is fully consumed.
+            if self.get_transaction_level() <= 0:
+                self.open = 0
+                self.close_connection()
 
     def enable_disable_foreign_keys(self):
         foreign_keys = self.full_details.get("foreign_keys")

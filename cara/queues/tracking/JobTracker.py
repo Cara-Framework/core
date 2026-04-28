@@ -141,7 +141,7 @@ class JobTracker:
             job_record = self.job_model.where("job_uid", job_uid).first()
             if job_record:
                 job_record.status = self.job_model.STATUS_PROCESSING
-                job_record.processed_at = pendulum.now()
+                job_record.processed_at = pendulum.now("UTC")
                 job_record.save()
 
     def track_job_success(self, job_uid: str, result_data: Optional[Dict] = None) -> None:
@@ -152,7 +152,7 @@ class JobTracker:
         job_record = self.job_model.where("job_uid", job_uid).first()
         if job_record:
             job_record.status = self.job_model.STATUS_SUCCESS
-            job_record.finished_at = pendulum.now()
+            job_record.finished_at = pendulum.now("UTC")
 
             # Store result metadata if provided
             if result_data:
@@ -192,7 +192,7 @@ class JobTracker:
             # Mark current attempt as failed
             job_record.status = self.job_model.STATUS_FAILED
             job_record.error = error
-            job_record.finished_at = pendulum.now()
+            job_record.finished_at = pendulum.now("UTC")
             job_record.save()
 
             # Check if we should retry
@@ -290,7 +290,7 @@ class JobTracker:
                 query = query.where("name", job_name)
 
             # Time window
-            since = pendulum.now().subtract(hours=hours)
+            since = pendulum.now("UTC").subtract(hours=hours)
             jobs = query.where("created_at", ">=", since).get()
 
             total_jobs = len(jobs)
@@ -371,7 +371,7 @@ class JobTracker:
             cancelled_count = 0
             for job_record in conflicting_jobs:
                 job_record.status = self.job_model.STATUS_CANCELLED
-                job_record.cancelled_at = pendulum.now()
+                job_record.cancelled_at = pendulum.now("UTC")
                 job_record.save()
                 cancelled_count += 1
                 Log.info(
@@ -399,7 +399,7 @@ class JobTracker:
             metadata["retry_reason"] = error
             metadata["original_job_uid"] = job_record.job_uid
             metadata["scheduled_for"] = (
-                pendulum.now().add(seconds=delay_seconds).to_iso8601_string()
+                pendulum.now("UTC").add(seconds=delay_seconds).to_iso8601_string()
             )
 
             job_record.job_uid = retry_job_uid
@@ -423,7 +423,7 @@ class JobTracker:
         try:
             metadata = job_record.metadata or {}
             metadata["dead_letter_reason"] = final_error
-            metadata["moved_to_dlq_at"] = pendulum.now().to_iso8601_string()
+            metadata["moved_to_dlq_at"] = pendulum.now("UTC").to_iso8601_string()
             job_record.metadata = metadata
             job_record.save()
 
@@ -483,7 +483,7 @@ class JobTracker:
                     "job_class": job_class,
                     "payload": payload or {},
                     "queue": queue,
-                    "available_at": pendulum.now(),
+                    "available_at": pendulum.now("UTC"),
                     "status": self.job_model.STATUS_PENDING,
                     "attempts": 0,
                     "attempt": 1,
@@ -520,11 +520,11 @@ class JobTracker:
 
         # Use model constants for conditional updates
         if status == self.job_model.STATUS_PROCESSING:
-            job_record.started_at = pendulum.now()
+            job_record.started_at = pendulum.now("UTC")
         elif status == self.job_model.STATUS_COMPLETED:
-            job_record.completed_at = pendulum.now()
+            job_record.completed_at = pendulum.now("UTC")
         elif status == self.job_model.STATUS_FAILED:
-            job_record.completed_at = pendulum.now()
+            job_record.completed_at = pendulum.now("UTC")
 
         # Save immediately (persists to database)
         job_record.save()

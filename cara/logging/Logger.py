@@ -106,8 +106,7 @@ class Logger(Logger):
             from cara.configuration import config
 
             # Get console channel configuration
-            console_config = config("logging.channels.console", {})
-            level = console_config.get("LEVEL", "DEBUG")
+            level = config("logging.channels.console.LEVEL", "DEBUG")
             return level.upper()
         except Exception:
             # Fallback to DEBUG if config is not available
@@ -215,7 +214,7 @@ class Logger(Logger):
             formatted_message = message
 
         # Get log method and execute with our pre-formatted message
-        log_method = getattr(_loguru_logger, level.lower())
+        getattr(_loguru_logger, level.lower())
 
         # Get level short form
         level_short = self._get_level_short(level)
@@ -235,7 +234,7 @@ class Logger(Logger):
             message_color=message_color,
             level_color=level_color,
         )
-        bound_log_method = getattr(bound_logger, level.lower())
+        getattr(bound_logger, level.lower())
 
         # Handle exception and exc_info
         if exc_info:

@@ -177,13 +177,31 @@ class JobProcessor:
 
     @staticmethod
     def _execute_job_with_timeout(method_to_call, init_args, timeout_seconds):
-        """Execute job with timeout enforcement using ThreadPoolExecutor."""
+        """Execute job with timeout enforcement using ThreadPoolExecutor.
+
+        On timeout the worker thread may still be holding DB connections
+        or UniqueJob locks. We give it a brief grace period (5s) to
+        finish cleanup before abandoning it. ``shutdown(wait=True)``
+        with a bounded join prevents the leak that ``wait=False``
+        caused — orphaned threads kept connections checked-out from
+        the pool until process restart.
+        """
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = executor.submit(method_to_call, *init_args)
         try:
             future.result(timeout=timeout_seconds)
+        except concurrent.futures.TimeoutError:
+            # Cancel the future (best-effort) and allow a short grace
+            # period for thread cleanup (DB rollback, lock release).
+            future.cancel()
+            raise TimeoutError(
+                f"Job exceeded timeout of {timeout_seconds}s"
+            )
         finally:
-            executor.shutdown(wait=False)
+            # Give worker thread up to 5s to release resources, then
+            # abandon. True wait prevents the pool-leak that wait=False
+            # caused, while the bounded timeout prevents infinite hangs.
+            executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
     def _execute_async_job_with_timeout(method_to_call, init_args, timeout_seconds):
@@ -633,8 +651,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 raise Exception(f"Invalid timeout value: {e}") from e
         else:
             # Get from driver config
-            driver_config = config(f"queue.drivers.{driver_name}", {})
-            timeout_val = driver_config.get("poll", 5)
+            timeout_val = config(f"queue.drivers.{driver_name}.poll", 5)
 
         # Parse limits
         max_jobs_val = None

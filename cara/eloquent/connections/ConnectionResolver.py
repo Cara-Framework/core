@@ -192,8 +192,14 @@ class ConnectionResolver:
         try:
             connection.open = 0
             connection.close_connection()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Log close failures so pool exhaustion leaks are detectable.
+            # Silent pass here previously hid connection leaks that
+            # eventually starved the pool.
+            import logging
+            logging.getLogger("cara.database.pool").warning(
+                "Connection close failed (potential pool leak): %s", exc
+            )
 
     @contextmanager
     def transaction(self, connection_name):

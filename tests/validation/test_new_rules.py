@@ -1,4 +1,3 @@
-import pytest
 
 from cara.validation.rules import MinLengthRule, MaxLengthRule, PhoneRule, SlugRule
 

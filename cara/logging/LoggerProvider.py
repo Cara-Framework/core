@@ -24,15 +24,11 @@ class LoggerProvider(Provider):
         """Register logging services with the application container."""
         logging_config = config("logging", {})
 
-        # Validate logging config early - fail fast on startup
         self._validate_logging_config(logging_config)
-
-        # Configure and bind Cara Logger
         self._configure_cara_logger(logging_config)
 
-        # Configure Python logging interception if enabled
-        if logging_config.get("intercept", True):
-            self._configure_logging_interception(logging_config)
+        if config("logging.intercept", True):
+            self._configure_logging_interception()
 
     def _validate_logging_config(self, logging_config: Dict[str, Any]) -> None:
         """
@@ -82,7 +78,7 @@ class LoggerProvider(Provider):
         # Bind to container for facade resolution
         self.application.bind("logger", logger_instance)
 
-    def _configure_logging_interception(self, logging_config: Dict[str, Any]) -> None:
+    def _configure_logging_interception(self) -> None:
         """
         Laravel-style external library logging integration.
 

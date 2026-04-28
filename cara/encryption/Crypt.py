@@ -1,16 +1,22 @@
 """
 Symmetric Encryption Utility for the Cara framework.
 
-This module provides the Crypt class, which handles AES-based encryption and decryption of strings
-using a key derived from SHA-256.
+Uses AES-256-GCM (authenticated encryption) so ciphertext tampering
+is detected at decryption time.
+
+Payload layout (base64-encoded):  nonce (12 bytes) || tag (16 bytes) || ciphertext
 """
 
 import hashlib
+from base64 import b64decode, b64encode
 
-from base64 import b64encode, b64decode
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
+
 from cara.exceptions import EncryptionException
+
+_NONCE_LEN = 12
+_TAG_LEN = 16
 
 
 class Crypt:
@@ -19,29 +25,23 @@ class Crypt:
 
     def encrypt(self, value: str) -> str:
         try:
-            iv = get_random_bytes(16)
-            cipher = AES.new(self.key, AES.MODE_CBC, iv)
-            padded = self._pad(value.encode())
-            encrypted = cipher.encrypt(padded)
-            return b64encode(iv + encrypted).decode()
+            nonce = get_random_bytes(_NONCE_LEN)
+            cipher = AES.new(self.key, AES.MODE_GCM, nonce=nonce)
+            ciphertext, tag = cipher.encrypt_and_digest(value.encode())
+            return b64encode(nonce + tag + ciphertext).decode()
         except Exception as e:
             raise EncryptionException(f"Encryption failed: {e}") from e
 
     def decrypt(self, token: str) -> str:
         try:
             raw = b64decode(token)
-            iv = raw[:16]
-            encrypted = raw[16:]
-            cipher = AES.new(self.key, AES.MODE_CBC, iv)
-            padded = cipher.decrypt(encrypted)
-            return self._unpad(padded).decode()
+            if len(raw) < _NONCE_LEN + _TAG_LEN:
+                raise ValueError("Ciphertext too short")
+            nonce = raw[:_NONCE_LEN]
+            tag = raw[_NONCE_LEN : _NONCE_LEN + _TAG_LEN]
+            ciphertext = raw[_NONCE_LEN + _TAG_LEN :]
+            cipher = AES.new(self.key, AES.MODE_GCM, nonce=nonce)
+            plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+            return plaintext.decode()
         except Exception as e:
             raise EncryptionException(f"Decryption failed: {e}") from e
-
-    def _pad(self, b: bytes) -> bytes:
-        pad_len = 16 - len(b) % 16
-        return b + bytes([pad_len] * pad_len)
-
-    def _unpad(self, b: bytes) -> bytes:
-        pad_len = b[-1]
-        return b[:-pad_len]

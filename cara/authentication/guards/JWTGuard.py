@@ -322,7 +322,8 @@ class JWTGuard(Guard):
             if hasattr(user, "verify_password"):
                 return user.verify_password(password)
             elif hasattr(user, "get_auth_password"):
-                return user.get_auth_password() == password
+                from cara.encryption import Hash
+                return Hash.check(password, user.get_auth_password())
             return False
         except Exception:
             return False
@@ -403,7 +404,7 @@ class JWTGuard(Guard):
                     f"JWTGuard.revoke_user_sessions failed for user_id={user_id}",
                     category="cara.auth.jwt",
                 )
-            except Exception:
+            except ImportError:
                 pass
 
     def generate_token_with_ttl(
@@ -486,7 +487,7 @@ class JWTGuard(Guard):
                     f"JWT blacklist add failed (token ignored): {exc}",
                     category="cara.auth.jwt",
                 )
-            except Exception:
+            except ImportError:
                 pass
 
     def _is_blacklisted(self, token: str) -> bool:

@@ -260,9 +260,18 @@ class BodyParsingMixin:
                         try:
                             self._form_params[name] = content.decode("latin-1")
                         except UnicodeDecodeError:
-                            # Last resort: base64 encode
+                            # Last resort: base64 encode. Log this because
+                            # downstream code expects a plain string but
+                            # gets base64 — can cause silent data corruption
+                            # in validation or DB writes.
                             import base64
+                            import logging
 
+                            logging.getLogger("cara.http.body").warning(
+                                "Form field '%s' could not be decoded as "
+                                "utf-8 or latin-1; base64-encoding raw bytes",
+                                name,
+                            )
                             self._form_params[name] = base64.b64encode(content).decode(
                                 "ascii"
                             )

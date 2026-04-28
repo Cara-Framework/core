@@ -35,6 +35,11 @@ class Hash:
         hashed: str,
         algorithm: str = "bcrypt",
     ) -> bool:
+        # Auto-detect bcrypt hashes so callers don't need to know
+        # which algorithm was originally used. Bcrypt hashes always
+        # start with ``$2b$`` (or ``$2a$`` / ``$2y$``).
+        if hashed and hashed.startswith(("$2b$", "$2a$", "$2y$")):
+            algorithm = "bcrypt"
         driver = cls.drivers.get(algorithm)
         if not driver:
             raise ValueError(f"Unsupported algorithm: {algorithm}")

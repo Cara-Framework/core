@@ -47,9 +47,15 @@ class Facade(type):
                 _orig = getattr(_fallback, attribute)
                 # Wrap to strip extra kwargs (e.g. category=) that stdlib doesn't support
                 def _safe_log(*args, _orig_fn=_orig, **kwargs):
-                    # Only pass kwargs that stdlib logging accepts
+                    # Forward Cara's ``category`` kwarg as ``extra`` so
+                    # stdlib formatters can still access it if desired.
                     safe_kwargs = {k: v for k, v in kwargs.items()
                                    if k in ("exc_info", "stack_info", "stacklevel", "extra")}
+                    category = kwargs.get("category")
+                    if category:
+                        extra = safe_kwargs.get("extra", {})
+                        extra["category"] = category
+                        safe_kwargs["extra"] = extra
                     return _orig_fn(*args, **safe_kwargs)
                 return _safe_log
             if cls.key == "DB":

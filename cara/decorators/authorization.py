@@ -133,7 +133,7 @@ def authenticated_only(func: Callable) -> Callable:
 
     @wraps(func)
     def wrapper(*func_args, **func_kwargs):
-        request = func_args[1] if len(func_args) > 1 else func_args[0]
+        func_args[1] if len(func_args) > 1 else func_args[0]
 
         try:
             user = Auth.user()
@@ -162,7 +162,7 @@ def guest_only(func: Callable) -> Callable:
 
     @wraps(func)
     def wrapper(*func_args, **func_kwargs):
-        request = func_args[1] if len(func_args) > 1 else func_args[0]
+        func_args[1] if len(func_args) > 1 else func_args[0]
 
         try:
             user = Auth.user()

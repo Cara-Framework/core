@@ -14,10 +14,11 @@ from itertools import groupby
 
 from dotty_dict import Dotty
 
+from cara.support.Macroable import Macroable
 from cara.support.Structures import data_get
 
 
-class Collection:
+class Collection(Macroable):
     """
     Collection class for fluent data manipulation.
 

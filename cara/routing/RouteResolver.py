@@ -132,6 +132,15 @@ class RouteResolver:
             if param_type == inspect.Parameter.empty:
                 continue
 
+            # Resolve string annotations caused by `from __future__ import annotations`
+            if isinstance(param_type, str):
+                module = inspect.getmodule(controller_class)
+                if module is not None:
+                    param_type = module.__dict__.get(param_type, param_type)
+                # Still a string → cannot resolve, skip
+                if isinstance(param_type, str):
+                    continue
+
             if hasattr(_container, "_unwrap_annotation"):
                 param_type = _container._unwrap_annotation(param_type)
                 if param_type is None:

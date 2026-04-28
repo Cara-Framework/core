@@ -93,12 +93,20 @@ class BaseQueueable(Queueable, ShouldQueue):
             try:
                 from cara.facades import Log
                 Log.warning(f"Queue failed, running synchronously: {str(e)}")
-            except Exception:
+            except ImportError:
                 pass
             
             # Run synchronously as fallback
             if hasattr(self, 'handle'):
-                self.handle()
+                import asyncio
+                result = self.handle()
+                if asyncio.iscoroutine(result):
+                    # Async handle in sync fallback — run via event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(result)
+                    except RuntimeError:
+                        asyncio.run(result)
 
     def display_name(self) -> str:
         """

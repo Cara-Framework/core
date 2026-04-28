@@ -66,6 +66,9 @@ class Container:
         # fix; the path runs once per service, so contention is nil.
         self._deferred_lock = threading.RLock()
 
+        # (6) Resolution stack for circular dependency detection
+        self._resolving_stack: List[Any] = []
+
         # (5) Hooks: callback lists for bind / make / resolve events
         self._hooks: Dict[str, Dict[Any, List[Callable]]] = {
             "bind": {},
@@ -329,6 +332,29 @@ class Container:
         - Class-annotated parameters are resolved from the container or triggered as deferred.
         - "self" parameters receive the class itself.
         """
+        # Circular dependency guard
+        if obj in self._resolving_stack:
+            chain = " -> ".join(
+                getattr(c, "__name__", str(c)) for c in self._resolving_stack
+            )
+            name = getattr(obj, "__name__", str(obj))
+            (
+                GenericContainerException,
+                _,
+                _,
+            ) = _get_container_exceptions()
+            raise GenericContainerException(
+                f"Circular dependency detected: {chain} -> {name}"
+            )
+        self._resolving_stack.append(obj)
+
+        try:
+            return self._do_resolve(obj, *resolving_arguments)
+        finally:
+            self._resolving_stack.pop()
+
+    def _do_resolve(self, obj: Any, *resolving_arguments: Any) -> Any:
+        """Internal resolve implementation."""
         objects: List[Any] = []
         keyword_objects: Dict[str, Any] = {}
         passing_args = list(resolving_arguments)
@@ -686,7 +712,6 @@ class Container:
     def _unwrap_annotation(ann: Any) -> Any:
         """Extract the concrete class from union types like ``X | None`` or ``Optional[X]``."""
         import types
-        import typing
 
         origin = getattr(ann, "__origin__", None)
         if origin is Union or isinstance(ann, types.UnionType):

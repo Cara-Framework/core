@@ -149,7 +149,7 @@ class LogChannel(BaseChannel):
                 category="cara.notifications.log",
                 exc_info=True,
             )
-        except Exception:
+        except ImportError:
             pass
 
     def clear_log(self) -> bool:

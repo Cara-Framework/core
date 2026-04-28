@@ -175,16 +175,22 @@ class Mailable(SerializesModels):
                 return result
             except ImportError:
                 pass
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.getLogger("cara.mail").debug(
+                    "View facade render failed for '%s': %s", self._view, exc
+                )
 
             # Try application view service
             try:
                 view_service = self._application.make("view")
                 result = view_service.render(self._view, self._view_data or {})
                 return result
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.getLogger("cara.mail").warning(
+                    "View render failed for '%s': %s", self._view, exc
+                )
 
         return None
 

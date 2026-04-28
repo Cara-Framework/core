@@ -105,6 +105,12 @@ class WebsocketConductor:
         finally:
             # Clean up socket broadcasting first
             await self.socket.cleanup_broadcasting()
+            # Ensure connection is closed so the ASGI server releases it
+            if not getattr(self.socket, "_closed", False):
+                try:
+                    await self.socket.close(1011, "Internal error")
+                except Exception:
+                    pass  # Already closed by client or transport
             # Always run terminable middleware
             await self._run_terminable_middleware()
 

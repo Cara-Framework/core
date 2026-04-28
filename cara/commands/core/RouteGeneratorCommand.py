@@ -445,7 +445,7 @@ class RouteGeneratorCommand(CommandBase):
 
             try:
                 # Calculate indent level
-                current_indent = len(original_line) - len(original_line.lstrip())
+                len(original_line) - len(original_line.lstrip())
 
                 # Parse sections based on markers
                 if line.startswith("@Compiler"):

@@ -33,7 +33,7 @@ class RateLimitProvider(DeferredProvider):
                 "Missing or invalid 'rate.default' or 'rate.drivers' config."
             )
 
-        driver_opts = drivers_cfg.get(default_driver)
+        driver_opts = config(f"rate.drivers.{default_driver}")
         # For now, we only have a "fixed" driver
         if default_driver != RateLimiter.driver_name:
             raise RateLimitConfigurationException(

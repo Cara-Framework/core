@@ -36,8 +36,11 @@ class SlackChannel:
                 headers={"Content-Type": "application/json"},
                 timeout=2,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Log delivery to Slack is best-effort — but don't swallow
+            # completely since repeated failures indicate a config issue.
+            import sys
+            print(f"[SlackChannel] delivery failed: {exc}", file=sys.stderr)
 
     def flush(self) -> None:
         """No-op."""

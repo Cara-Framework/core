@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Callable, List, Optional
 
 from cara.exceptions.types.websocket import WebSocketException
@@ -62,7 +64,7 @@ class Authenticate(Middleware):
                     )
                     return True
             except Exception as e:
-                Log.debug(f"Guard {guard_name} failed: {e}", category="cara.websocket")
+                Log.warning(f"Guard {guard_name} failed: {e}", category="cara.websocket")
                 continue
         return False
 

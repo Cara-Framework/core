@@ -157,7 +157,7 @@ class ModelMigrationComparator:
         if not create_match:
             return
 
-        table_name = create_match.group(1)
+        create_match.group(1)
         columns_part = create_match.group(2).strip()
 
         # Parse each line for column definitions

@@ -11,6 +11,16 @@ class ObservesEvents:
                     getattr(observer, event)(model)
                 except AttributeError:
                     pass
+                except Exception as exc:
+                    try:
+                        from cara.facades import Log
+                        Log.error(
+                            f"Observer {observer.__class__.__name__}.{event} failed: "
+                            f"{exc.__class__.__name__}: {exc}",
+                            category="cara.eloquent.observers",
+                        )
+                    except Exception:
+                        pass
 
     @classmethod
     def observe(cls, observer):

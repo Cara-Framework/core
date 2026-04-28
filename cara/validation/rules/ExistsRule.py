@@ -97,7 +97,7 @@ class ExistsRule(BaseRule):
         try:
             from cara.facades import Log
             Log.debug(msg, category="cara.validation.exists")
-        except Exception:
+        except ImportError:
             pass
 
     def default_message(self, field: str, params: Dict[str, Any]) -> str:
@@ -105,7 +105,7 @@ class ExistsRule(BaseRule):
         exists_params = params.get("exists", "")
         parts = [p.strip() for p in exists_params.split(",")]
 
-        table = parts[0] if parts else "table"
+        parts[0] if parts else "table"
         column = parts[1] if len(parts) > 1 else "id"
         condition_column = parts[2] if len(parts) > 2 else None
 
@@ -147,7 +147,7 @@ class ExistsRule(BaseRule):
                     cls = getattr(module, model_name, None)
                     if cls is not None:
                         return cls
-                except Exception:
+                except (ImportError, AttributeError):
                     pass
 
                 # 2. aggregated layout: app.models re-exports
@@ -156,7 +156,7 @@ class ExistsRule(BaseRule):
                     cls = getattr(pkg, model_name, None)
                     if cls is not None:
                         return cls
-                except Exception:
+                except (ImportError, AttributeError):
                     pass
 
             return None

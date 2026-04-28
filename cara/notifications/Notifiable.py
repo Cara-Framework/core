@@ -95,33 +95,53 @@ class Notifiable(Notifiable):
         Get all notifications for this notifiable entity.
 
         Returns:
-            List of notifications
+            List of notification dicts (or model instances)
         """
-        # This would typically query a database
-        # For now, return empty list
-        return []
+        try:
+            from commons.models.core import Notification
+            return list(
+                Notification.where("user_id", self.id)
+                .order_by("created_at", "desc")
+                .get()
+            )
+        except Exception:
+            return []
 
     def unread_notifications(self) -> List[Dict[str, Any]]:
         """
         Get all unread notifications for this notifiable entity.
 
         Returns:
-            List of unread notifications
+            List of unread notification dicts (or model instances)
         """
-        # This would typically query a database with read_at = None
-        # For now, return empty list
-        return []
+        try:
+            from commons.models.core import Notification
+            return list(
+                Notification.where("user_id", self.id)
+                .where_null("read_at")
+                .order_by("created_at", "desc")
+                .get()
+            )
+        except Exception:
+            return []
 
     def read_notifications(self) -> List[Dict[str, Any]]:
         """
         Get all read notifications for this notifiable entity.
 
         Returns:
-            List of read notifications
+            List of read notification dicts (or model instances)
         """
-        # This would typically query a database with read_at != None
-        # For now, return empty list
-        return []
+        try:
+            from commons.models.core import Notification
+            return list(
+                Notification.where("user_id", self.id)
+                .where_not_null("read_at")
+                .order_by("created_at", "desc")
+                .get()
+            )
+        except Exception:
+            return []
 
     def mark_as_read(self, notification_ids: Optional[List[str]] = None) -> None:
         """

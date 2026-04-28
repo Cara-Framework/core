@@ -37,12 +37,40 @@ _SENSITIVE_PARAM_RE = re.compile(
     r"(?i)\b(" + "|".join(map(re.escape, _SENSITIVE_QUERY_PARAMS)) + r")=([^&]*)"
 )
 
+# HTTP headers that must never appear in access logs unredacted.
+_SENSITIVE_HEADERS = frozenset({
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+    "x-csrf-token",
+    "x-xsrf-token",
+})
+
 
 def _redact_query_string(query: str) -> str:
     """Replace sensitive param values with ``[REDACTED]`` in a raw query string."""
     if not query:
         return query
     return _SENSITIVE_PARAM_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", query)
+
+
+def _redact_headers(headers: list) -> dict:
+    """Build a header dict with sensitive values replaced by ``[REDACTED]``.
+
+    ``headers`` is the raw ASGI header list of ``(name_bytes, value_bytes)``
+    tuples.
+    """
+    redacted: dict = {}
+    for raw_name, raw_value in headers:
+        name = raw_name.decode("latin-1").lower() if isinstance(raw_name, bytes) else raw_name.lower()
+        if name in _SENSITIVE_HEADERS:
+            redacted[name] = "[REDACTED]"
+        else:
+            redacted[name] = raw_value.decode("latin-1") if isinstance(raw_value, bytes) else raw_value
+    return redacted
 
 
 class LogHttpRequests(Middleware):
@@ -116,6 +144,15 @@ class LogHttpRequests(Middleware):
 
         # Log the beautiful message
         Log.info(colored_message, category="cara.http.requests")
+
+        # At debug level, include redacted request headers for diagnostics.
+        raw_headers = request.scope.get("headers", [])
+        if raw_headers:
+            safe_headers = _redact_headers(raw_headers)
+            Log.debug(
+                f"  Headers: {safe_headers}",
+                category="cara.http.requests",
+            )
 
         return response
 
