@@ -7,6 +7,7 @@ Users can extend this in their app for custom authentication needs.
 
 from typing import Callable, List, Optional
 
+from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
@@ -26,7 +27,8 @@ class ShouldAuthenticate(Middleware):
         try:
             auth_manager = application.make("auth")
             self.guards = [auth_manager.get_default_guard()]
-        except Exception:
+        except Exception as e:
+            Log.warning(f"ShouldAuthenticate: failed to resolve default guard, falling back to jwt: {e}")
             self.guards = ["jwt"]
 
     async def handle(self, request: Request, next_fn: Callable) -> Response:
@@ -58,8 +60,14 @@ class ShouldAuthenticate(Middleware):
         if not user:
             return self.authentication_failed(request, last_error)
 
-        # Set authenticated user and guard info for Auth facade
-        request.user = user
+        # ``Request.user`` is a method (returns ``self._user``).
+        # Assigning ``request.user = user`` shadows the method on the
+        # instance — every subsequent ``request.user()`` then raises
+        # ``TypeError: 'User' object is not callable``. Use the
+        # documented setter so ``request.user()`` keeps working and
+        # downstream code (controllers, facades, ResetAuth) sees one
+        # canonical place where the per-request user lives.
+        request.set_user(user)
         request._route_auth_guard = successful_guard
 
         response = await next_fn(request)

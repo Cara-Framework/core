@@ -33,33 +33,17 @@ class HandleCors(Middleware):
         self.config = self._load_config()
 
     def _load_config(self) -> dict:
-        """Load CORS configuration from config or use defaults."""
-        # Default Laravel-style CORS config
-        defaults = {
-            "paths": ["api/*"],
-            "allowed_methods": ["*"],
-            "allowed_origins": ["*"],
-            "allowed_origins_patterns": [],
-            "allowed_headers": ["*"],
-            "exposed_headers": [],
-            "max_age": 0,
-            "supports_credentials": False,
+        """Load CORS configuration from config/cors.py using dot-path access."""
+        return {
+            "paths": config("cors.cors.paths", ["api/*"]),
+            "allowed_methods": config("cors.cors.allowed_methods", ["*"]),
+            "allowed_origins": config("cors.cors.allowed_origins", ["*"]),
+            "allowed_origins_patterns": config("cors.cors.allowed_origins_patterns", []),
+            "allowed_headers": config("cors.cors.allowed_headers", ["*"]),
+            "exposed_headers": config("cors.cors.exposed_headers", []),
+            "max_age": config("cors.cors.max_age", 0),
+            "supports_credentials": config("cors.cors.supports_credentials", False),
         }
-
-        # Try to load from config/cors.py (Laravel style)
-        try:
-            cors_config = config("cors", {})
-            if cors_config:
-                defaults.update(cors_config)
-        except Exception as exc:
-            from cara.facades import Log
-
-            Log.debug(
-                f"CORS config not loaded, using defaults: {exc}",
-                category="cara.middleware.cors",
-            )
-
-        return defaults
 
     async def handle(self, request: Request, next_handler):
         """
@@ -95,22 +79,43 @@ class HandleCors(Middleware):
         return response
 
     def _add_cors_headers(self, request: Request, response: Response) -> None:
-        """Add CORS headers to response (Laravel style)."""
+        """Add CORS headers to response (Laravel style).
+
+        Security note — when ``supports_credentials`` is True we MUST
+        NOT honour ``"*"`` in ``allowed_origins``: the browser refuses
+        to send cookies / Authorization to a wildcard, but more
+        importantly reflecting an arbitrary ``Origin`` together with
+        ``Access-Control-Allow-Credentials: true`` is the textbook CSRF
+        primitive. The previous implementation took the ``else`` branch
+        — reflecting whatever the attacker's site sent — when wildcard
+        was configured alongside credentials. We now treat that
+        configuration as "no origin allowed" and emit no ACAO header.
+        """
         origin = request.header("Origin")
+        creds = bool(self.config["supports_credentials"])
 
         # Access-Control-Allow-Origin
         if self._is_origin_allowed(origin):
-            if (
-                "*" in self.config["allowed_origins"]
-                and not self.config["supports_credentials"]
-            ):
-                response.header("Access-Control-Allow-Origin", "*")
-            else:
-                response.header("Access-Control-Allow-Origin", origin or "*")
-                # When the ACAO value depends on the Origin header, proxies and
-                # CDNs must key their cache by it — otherwise one origin's
-                # response is served to another.
-                response.header("Vary", "Origin")
+            allow_origin: str | None = None
+            if creds:
+                # Credentials path — only echo the origin if it matches
+                # an EXPLICIT allowlist entry (string or regex), never
+                # a wildcard. ``_is_origin_allowed`` would have returned
+                # True for the wildcard case; double-check here.
+                if origin and self._is_origin_explicitly_allowed(origin):
+                    allow_origin = origin
+            elif "*" in self.config["allowed_origins"]:
+                allow_origin = "*"
+            elif origin:
+                allow_origin = origin
+
+            if allow_origin is not None:
+                response.header("Access-Control-Allow-Origin", allow_origin)
+                if allow_origin != "*":
+                    # When the ACAO value depends on the Origin header, proxies and
+                    # CDNs must key their cache by it — otherwise one origin's
+                    # response is served to another.
+                    response.header("Vary", "Origin")
 
         # Access-Control-Allow-Methods
         response.header(
@@ -128,21 +133,39 @@ class HandleCors(Middleware):
                 "Access-Control-Expose-Headers", ", ".join(self.config["exposed_headers"])
             )
 
-        # Access-Control-Allow-Credentials
-        if self.config["supports_credentials"]:
+        # Access-Control-Allow-Credentials — only when explicitly
+        # configured AND we actually emitted a non-wildcard ACAO above.
+        if creds:
             response.header("Access-Control-Allow-Credentials", "true")
 
         # Access-Control-Max-Age
         response.header("Access-Control-Max-Age", str(self.config["max_age"]))
 
     def _is_origin_allowed(self, origin: str) -> bool:
-        """Check if origin is allowed."""
+        """Check if origin is allowed (any rule)."""
         if not origin:
             return True
 
-        allowed_origins = self.config["allowed_origins"]
-
-        if "*" in allowed_origins:
+        if "*" in self.config["allowed_origins"]:
             return True
 
-        return origin in allowed_origins
+        return self._is_origin_explicitly_allowed(origin)
+
+    def _is_origin_explicitly_allowed(self, origin: str) -> bool:
+        """Check if origin matches a NON-WILDCARD allowlist entry.
+
+        Used by the credentials path where ``"*"`` must not match — the
+        browser would block the cookie / header, and reflecting an
+        arbitrary origin alongside ``Allow-Credentials: true`` is a
+        cross-site request forgery primitive.
+        """
+        if not origin:
+            return False
+        if origin in self.config["allowed_origins"]:
+            return True
+        import re
+
+        for pattern in self.config.get("allowed_origins_patterns", []):
+            if re.match(pattern, origin):
+                return True
+        return False

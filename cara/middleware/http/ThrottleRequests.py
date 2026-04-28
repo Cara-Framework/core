@@ -8,7 +8,7 @@ knows when to retry. Otherwise, adds rate-limit info in response headers.
 
 from typing import Callable, Optional
 
-from cara.facades import RateLimiter
+from cara.facades import Log, RateLimiter
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
@@ -101,7 +101,8 @@ class ThrottleRequests(Middleware):
                 return False
             client_ip = request.ip() if callable(getattr(request, "ip", None)) else getattr(request, "ip", None)
             return str(client_ip) in trusted
-        except Exception:
+        except Exception as e:
+            Log.warning(f"ThrottleRequests internal failure: {e}")
             return False
 
     def _resolve_limit_config(self, request: Request):
@@ -150,13 +151,46 @@ class ThrottleRequests(Middleware):
         if hasattr(limit_config, '_key') and limit_config._key:
             return limit_config._key
         
-        # Default: endpoint:user_id_or_ip
-        endpoint = request.path or "/"
-        user_id = getattr(request, 'user_id', None)
+        # Default: method:route_template:user_id_or_ip
+        #
+        # Two correctness fixes vs. the previous version:
+        #
+        # 1. Use the route TEMPLATE (e.g. ``/users/@id``), not the
+        #    literal request path. Otherwise ``/users/1`` and
+        #    ``/users/2`` get separate buckets so a ``throttle:60,1``
+        #    rule on ``/users/@id`` is per-id, not per-route — exactly
+        #    the inverse of what every caller expects.
+        #
+        # 2. Resolve the user via the canonical ``request.user()``
+        #    method (set by ShouldAuthenticate). The previous code
+        #    looked at ``request.user_id`` which never gets populated;
+        #    every authenticated request silently fell back to the
+        #    IP-keyed bucket, defeating ``throttle:auth``-style
+        #    per-user limits.
+        method = (request.method or "GET").upper()
+
+        endpoint: str = ""
+        route = getattr(request, "route", None)
+        if route is not None:
+            endpoint = getattr(route, "url", "") or getattr(route, "uri", "") or ""
+        if not endpoint:
+            endpoint = request.path or "/"
+
+        user_id = None
+        try:
+            user = request.user() if callable(getattr(request, "user", None)) else None
+            if user is not None:
+                user_id = (
+                    getattr(user, "id", None)
+                    or getattr(user, "user_id", None)
+                )
+        except Exception:
+            user_id = None
+
         client_ip = request.ip() or "anonymous"
-        identifier = str(user_id) if user_id else client_ip
-        
-        return f"{endpoint}:{identifier}"
+        identifier = str(user_id) if user_id is not None else client_ip
+
+        return f"{method}:{endpoint}:{identifier}"
 
     def _attempt_limit(self, key: str, limit_config) -> tuple[bool, int, int]:
         """
@@ -178,28 +212,20 @@ class ThrottleRequests(Middleware):
             return True, -1, 0
 
         window_seconds = limit_config.decay_minutes * 60
-        now = int(time.time())
-
-        # Get current count from cache
         cache_key = f"throttle_{key}"
-        current = Cache.get(cache_key, {"count": 0, "expires_at": 0})
-        count = current.get("count", 0)
-        expires_at = current.get("expires_at", now + window_seconds)
 
-        # If window expired, reset
-        if now >= expires_at:
-            count = 0
-            expires_at = now + window_seconds
+        try:
+            # Atomic increment — avoids the read-modify-write race that
+            # allowed concurrent requests to slip past the limit.
+            # Cache.increment creates the key with TTL if it doesn't exist.
+            count = Cache.increment(cache_key, 1, window_seconds)
+        except Exception:
+            # Cache backend down — degrade open (allow traffic) rather
+            # than crash the request or silently block legitimate users.
+            return True, limit_config.max_attempts, 0
 
-        # Increment counter
-        count += 1
-
-        # Check if allowed
         allowed = count <= limit_config.max_attempts
         remaining = max(limit_config.max_attempts - count, 0)
-        reset_in = max(expires_at - now, 0)
-
-        # Save back to cache
-        Cache.put(cache_key, {"count": count, "expires_at": expires_at}, ttl=reset_in)
+        reset_in = window_seconds  # approximate; TTL set on first increment
 
         return allowed, remaining, reset_in

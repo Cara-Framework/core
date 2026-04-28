@@ -37,17 +37,26 @@ class ResetAuth(Middleware):
             if hasattr(auth_manager, "_user"):
                 auth_manager._user = None
 
-            # Clear Request object user cache
-            if hasattr(request, "_user"):
+            # Clear Request object user cache. ``request.user`` is a
+            # METHOD (returns ``self._user``); never assign to it —
+            # doing so used to shadow the method with ``None`` and
+            # break every subsequent ``request.user()`` call within the
+            # same Request instance lifetime. We clear ``_user`` and
+            # use the canonical ``set_user`` setter where available.
+            setter = getattr(request, "set_user", None)
+            if callable(setter):
+                try:
+                    setter(None)
+                except Exception:
+                    pass
+            elif hasattr(request, "_user"):
                 request._user = None
-            if hasattr(request, "user"):
-                request.user = None
 
-            # Clear all registered guard caches
-            guard_names = getattr(auth_manager, "registered_guards", None) or [
-                "api_key",
-                "jwt",
-            ]
+            # Clear all registered guard caches — query the actual guard
+            # dict so new guards are always covered automatically.
+            guard_names = list(
+                getattr(auth_manager, "guards", {}).keys()
+            ) or ["jwt"]
             for guard_name in guard_names:
                 try:
                     guard = auth_manager.guard(guard_name)

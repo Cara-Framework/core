@@ -24,16 +24,30 @@ class CacheLock:
         """
         Initialize a cache lock.
 
+        Owner default: a unique per-instance string. The previous default of
+        ``"default"`` collided across processes — process B could ``release``
+        process A's lock because both stored the literal string ``"default"``
+        as the owner field, and ``forget_if(key, "default")`` matched. Now
+        every CacheLock instance gets ``f"{pid}:{uuid}"`` so cross-process
+        ownership is unambiguous.
+
         Args:
             cache: Cache driver instance
             key: Lock key
             timeout: Lock timeout in seconds (default: 24 hours)
-            owner: Lock owner identifier (for distinguishing lock holders)
+            owner: Lock owner identifier (for distinguishing lock holders).
+                Pass an explicit value when multiple coroutines / threads
+                share the same lock and you want the same owner to be able
+                to re-acquire / release. Otherwise leave None for a unique
+                per-instance owner.
         """
+        import os
+        import uuid as _uuid
+
         self.cache = cache
         self.key = f"lock:{key}"
         self.timeout = timeout
-        self.owner = owner or "default"
+        self.owner = owner or f"{os.getpid()}:{_uuid.uuid4().hex}"
 
     # Spin interval between failed acquires. 100ms balances:
     # responsiveness when the lock holder finishes quickly vs. wasted
@@ -107,14 +121,27 @@ class CacheLock:
         if callable(forget_if):
             return bool(forget_if(self.key, self.owner))
         # Fallback for drivers that haven't implemented the CAS primitive
-        # yet — preserves prior behaviour for backwards-incompatible
-        # deployments where a lock driver is missing the upgrade.
+        # yet — preserves prior behaviour but has a TOCTOU race window.
+        # Drivers should implement ``forget_if`` for safe distributed locks.
+        import logging
+        logging.getLogger("cara.cache").warning(
+            "CacheLock: driver %s lacks forget_if(); using non-atomic fallback. "
+            "Implement forget_if() for safe distributed lock release.",
+            type(self.cache).__name__,
+        )
         if self.cache.get(self.key) == self.owner:
             return self.cache.forget(self.key)
         return False
 
     def __enter__(self):
-        """Context manager entry — raises if lock cannot be acquired."""
+        """Sync context manager entry — raises if lock cannot be
+        acquired within ``self.timeout``.
+
+        NOTE: a 24-hour default block is a footgun when used from an
+        async handler (the sync ``acquire`` ``time.sleep``s, freezing
+        the event loop). Async callers should use ``async with`` /
+        ``acquire_async``.
+        """
         if not self.acquire(timeout=self.timeout):
             raise TimeoutError(
                 f"Could not acquire lock '{self.key}' within {self.timeout}s"
@@ -122,7 +149,21 @@ class CacheLock:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
+        """Sync context manager exit."""
+        self.release()
+        return False
+
+    async def __aenter__(self):
+        """Async context manager entry — uses ``acquire_async`` so the
+        event loop keeps running while we wait."""
+        if not await self.acquire_async(timeout=self.timeout):
+            raise TimeoutError(
+                f"Could not acquire lock '{self.key}' within {self.timeout}s"
+            )
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
         self.release()
         return False
 
@@ -287,6 +328,54 @@ class Cache:
             Number of keys deleted
         """
         return self.driver(driver_name).forget_pattern(pattern)
+
+    def forget_by_prefix(
+        self, prefix: str, driver_name: Optional[str] = None,
+    ) -> int:
+        """
+        Delete every key starting with ``prefix``.
+
+        Convenience wrapper over ``forget_pattern`` — most callers only
+        ever want a prefix sweep ("category:facets:") and don't need to
+        compose glob patterns themselves. Appends ``*`` so the driver
+        sees a valid glob.
+        """
+        return self.driver(driver_name).forget_pattern(f"{prefix}*")
+
+    def increment(
+        self,
+        key: str,
+        amount: int = 1,
+        ttl: Optional[int] = None,
+        driver_name: Optional[str] = None,
+    ) -> int:
+        """
+        Atomically increment a counter at ``key`` by ``amount``.
+
+        Initialises to ``amount`` if the key doesn't exist. ``ttl`` is
+        applied on the first set so the counter expires after a deploy
+        without manual sweeps. Backed by Redis ``INCRBY`` on the redis
+        driver; the file driver emulates with a read-modify-write under
+        a lock.
+        """
+        return self.driver(driver_name).increment(key, amount, ttl)
+
+    def decrement(
+        self,
+        key: str,
+        amount: int = 1,
+        ttl: Optional[int] = None,
+        driver_name: Optional[str] = None,
+    ) -> int:
+        """
+        Atomically decrement a counter at ``key`` by ``amount``.
+
+        Implemented as ``increment(key, -amount)`` — drivers don't need
+        a separate decrement primitive. Returning value can go negative
+        if callers decrement past zero; bound-checking is the caller's
+        responsibility.
+        """
+        return self.driver(driver_name).increment(key, -int(amount), ttl)
 
     def tags(self, *tags: str, driver_name: Optional[str] = None) -> "CacheTaggedStore":
         """

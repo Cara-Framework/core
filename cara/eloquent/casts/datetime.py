@@ -102,23 +102,40 @@ class DateTimeCast(BaseCast):
             return str(value) if value else None
 
     def set(self, value):
-        """Set datetime value from various input formats."""
+        """Set datetime value from various input formats.
+
+        Naive datetimes (no tzinfo) are interpreted in
+        ``APP_TIMEZONE`` — Pendulum defaults a bare ``datetime(...)``
+        to UTC, so a Spain-local timestamp passed in naive used to be
+        stored as if it was already UTC, off by 1-2 hours. The DB
+        column is always written in UTC; only the *interpretation* of
+        a naive input changes.
+        """
         if value is None:
             return None
 
         try:
-            if isinstance(value, str):
-                # Parse with any timezone info, then convert to UTC
-                dt = pendulum.parse(value)
-                return dt.in_timezone("UTC").to_datetime_string()
-            elif isinstance(value, datetime):
-                # Convert datetime to UTC
-                dt = pendulum.instance(value)
-                return dt.in_timezone("UTC").to_datetime_string()
+            from cara.environment import env
+
+            app_timezone = env("APP_TIMEZONE", "UTC")
+
+            if isinstance(value, datetime):
+                if value.tzinfo is None:
+                    # Naive — interpret in APP_TIMEZONE.
+                    dt = pendulum.instance(value, tz=app_timezone)
+                else:
+                    dt = pendulum.instance(value)
             else:
-                # Parse as string, then convert to UTC
-                dt = pendulum.parse(str(value))
-                return dt.in_timezone("UTC").to_datetime_string()
+                s = str(value)
+                # Cheap heuristic for "this string carries timezone
+                # info" — if it ends in Z, +HH:MM, -HH:MM, etc.
+                has_tz = bool(s) and (
+                    s.endswith("Z")
+                    or any(ch in s[10:] for ch in ("+", "-"))
+                )
+                dt = pendulum.parse(s, tz=None if has_tz else app_timezone)
+
+            return dt.in_timezone("UTC").to_datetime_string()
         except Exception:
             return str(value) if value else None
 

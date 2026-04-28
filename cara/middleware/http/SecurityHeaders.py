@@ -64,28 +64,28 @@ class SecurityHeaders(Middleware):
         headers = dict(_DEFAULT_HEADERS)
         hsts: Optional[str] = _DEFAULT_HSTS
         preload = False
+
         try:
-            cfg = config("security", {}) or {}
-        except Exception:
-            cfg = {}
+            overrides = config("security.security.headers")
+            if isinstance(overrides, dict):
+                for k, v in overrides.items():
+                    if v is None:
+                        headers.pop(k, None)
+                    else:
+                        headers[k] = str(v)
 
-        # Allow merging / overriding individual headers.
-        overrides = cfg.get("headers") if isinstance(cfg, dict) else None
-        if isinstance(overrides, dict):
-            # Value of None deletes the default header.
-            for k, v in overrides.items():
-                if v is None:
-                    headers.pop(k, None)
-                else:
-                    headers[k] = str(v)
-
-        if isinstance(cfg, dict):
-            custom_hsts = cfg.get("hsts")
+            custom_hsts = config("security.security.hsts")
             if custom_hsts is None:
-                hsts = None  # explicit opt-out
+                hsts = None
             elif isinstance(custom_hsts, str):
                 hsts = custom_hsts
-            preload = bool(cfg.get("hsts_preload", False))
+
+            preload = bool(config("security.security.hsts_preload", False))
+        except Exception as e:
+            self._log_debug(
+                f"SecurityHeaders: failed to load config "
+                f"({e.__class__.__name__}: {e})"
+            )
 
         return headers, hsts, preload
 
@@ -115,22 +115,70 @@ class SecurityHeaders(Middleware):
         return response
 
     def _is_https(self, request: Request) -> bool:
-        """Detect HTTPS — checks scheme + common reverse-proxy headers."""
+        """Detect HTTPS — ASGI scope first, X-Forwarded-Proto only when
+        the request actually came from a trusted proxy.
+
+        ``getattr(request, "scheme", None)`` returns ``None`` (Request
+        has no ``scheme`` attribute — only ``self.scope["scheme"]``),
+        so the previous check was a no-op and HSTS was never set when
+        uvicorn terminated TLS itself. We now read the ASGI scope
+        directly. ``X-Forwarded-Proto`` is honoured only when the
+        immediate peer is a configured trusted proxy, otherwise any
+        client could spoof it.
+        """
         try:
-            scheme = getattr(request, "scheme", None)
+            scope = getattr(request, "scope", None) or {}
+            scheme = scope.get("scheme")
             if isinstance(scheme, str) and scheme.lower() == "https":
                 return True
-            forwarded_proto = request.header("X-Forwarded-Proto")
-            if isinstance(forwarded_proto, str) and forwarded_proto.split(",")[0].strip().lower() == "https":
-                return True
-            forwarded = request.header("Forwarded")
-            if isinstance(forwarded, str) and "proto=https" in forwarded.lower():
-                return True
+
+            if self._peer_is_trusted_proxy(scope):
+                forwarded_proto = request.header("X-Forwarded-Proto")
+                if (
+                    isinstance(forwarded_proto, str)
+                    and forwarded_proto.split(",")[0].strip().lower() == "https"
+                ):
+                    return True
+                forwarded = request.header("Forwarded")
+                if isinstance(forwarded, str) and "proto=https" in forwarded.lower():
+                    return True
         except Exception as e:
             self._log_debug(
                 f"SecurityHeaders: HTTPS detection raised "
                 f"({e.__class__.__name__}: {e})"
             )
+        return False
+
+    def _peer_is_trusted_proxy(self, scope: dict) -> bool:
+        """Decide whether to honour proxy-supplied scheme headers.
+
+        Reads ``trustedproxies.proxies`` (list of CIDR strings) from
+        config. Empty list → trust nobody (forwarded-proto ignored,
+        only direct https counts). The "*" sentinel preserves the
+        previous unconditional-trust behaviour for callers behind a
+        single load balancer they fully control.
+        """
+        try:
+            client = scope.get("client") or ()
+            client_ip = client[0] if client else None
+            if not client_ip:
+                return False
+            proxies = config("trustedproxies.proxies", config("security.security.trusted_proxies", []))
+            if not proxies:
+                return False
+            if "*" in proxies:
+                return True
+            import ipaddress
+
+            ip = ipaddress.ip_address(client_ip)
+            for entry in proxies:
+                try:
+                    if ip in ipaddress.ip_network(entry, strict=False):
+                        return True
+                except ValueError:
+                    continue
+        except Exception:
+            return False
         return False
 
     @staticmethod
@@ -139,7 +187,12 @@ class SecurityHeaders(Middleware):
         try:
             from cara.facades import Log
             Log.debug(msg, category="cara.http.security_headers")
-        except Exception:
-            # Don't recurse into Log if Log itself failed; a silent
-            # debug log is acceptable for a non-fatal header-set issue.
-            pass
+        except Exception as e:
+            # Don't recurse into Log if Log itself failed; emit a
+            # last-resort stderr line so the issue isn't fully invisible.
+            import sys
+            print(
+                f"SecurityHeaders: log facade unavailable ({e.__class__.__name__}: {e}); "
+                f"original msg: {msg}",
+                file=sys.stderr,
+            )

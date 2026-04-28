@@ -61,7 +61,11 @@ class RedisCacheDriver(Cache):
         redis_key = f"{self._prefix}{key}"
         try:
             raw_data = self._client.get(redis_key)
-        except Exception:
+        except Exception as exc:
+            import logging
+            logging.getLogger("cara.cache.redis").debug(
+                "Redis GET failed for '%s': %s", key, exc
+            )
             return default
 
         if raw_data is None:
@@ -69,7 +73,11 @@ class RedisCacheDriver(Cache):
 
         try:
             return pickle.loads(raw_data)
-        except Exception:
+        except Exception as exc:
+            import logging
+            logging.getLogger("cara.cache.redis").warning(
+                "Cache unpickle failed for '%s' (corrupt entry?): %s", key, exc
+            )
             return default
 
     def put(
@@ -81,8 +89,18 @@ class RedisCacheDriver(Cache):
         redis_key = f"{self._prefix}{key}"
         try:
             payload = pickle.dumps(value)
-        except Exception:
-            return
+        except Exception as e:
+            # Silently swallowing serialisation failures was the
+            # original bug — callers using ``Cache.add(key, True,
+            # ttl)`` as a flight-claim got a silent False back, which
+            # they (correctly) read as "another worker won the claim",
+            # so the in-flight job never ran. Surface the real cause.
+            from cara.exceptions import CacheConfigurationException
+
+            raise CacheConfigurationException(
+                f"Cannot pickle value for cache key '{key}' "
+                f"({type(value).__name__}): {e}"
+            ) from e
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
         try:
@@ -91,7 +109,7 @@ class RedisCacheDriver(Cache):
             else:
                 self._client.set(redis_key, payload)
         except Exception as e:
-            Log.debug(f"[RedisCacheDriver] set failed: {e}", category="cache")
+            Log.warning(f"[RedisCacheDriver] set failed: {e}", category="cache")
 
     def forever(self, key: str, value: Any) -> None:
         self.put(key, value, ttl=0)
@@ -104,10 +122,37 @@ class RedisCacheDriver(Cache):
             return False
 
     def flush(self) -> None:
+        """Flush every cache entry under our prefix.
+
+        SECURITY — must NOT call ``flushdb()``: cara namespaces cache
+        keys with ``self._prefix`` but Redis databases are typically
+        shared with broadcasting state, queue jobs, sessions, rate
+        limit counters, etc. Wiping the whole DB on a routine flush
+        was wiping co-tenant data. We now SCAN+DEL only keys under
+        our prefix.
+
+        When the prefix is empty (config bug), refuse to flush — that
+        prevents an accidental "flush all keys in this DB" outage.
+        """
+        if not self._prefix:
+            Log.warning(
+                "[RedisCacheDriver] flush() refused: empty cache prefix "
+                "would wipe co-tenant Redis keys. Configure "
+                "cache.drivers.redis.prefix.",
+                category="cache",
+            )
+            return
         try:
-            self._client.flushdb()
+            cursor = 0
+            pattern = f"{self._prefix}*"
+            while True:
+                cursor, keys = self._client.scan(cursor=cursor, match=pattern, count=200)
+                if keys:
+                    self._client.delete(*keys)
+                if cursor == 0:
+                    break
         except Exception as e:
-            Log.debug(f"[RedisCacheDriver] flush failed: {e}", category="cache")
+            Log.warning(f"[RedisCacheDriver] flush failed: {e}", category="cache")
 
     def has(self, key: str) -> bool:
         """Check if a key exists in cache."""
@@ -123,16 +168,26 @@ class RedisCacheDriver(Cache):
         value: Any,
         ttl: Optional[int] = None,
     ) -> bool:
-        """Add a value only if key doesn't exist. Returns True if added."""
+        """Add a value only if the key doesn't exist. Returns True if
+        the value was added, False if a value was already present.
+
+        Serialization failures must NOT silently return False — most
+        callers use this as a flight-claim primitive; a False return
+        is interpreted as "another worker won the slot", so a
+        silently-unserialisable payload would skip the work entirely.
+        """
         redis_key = f"{self._prefix}{key}"
         try:
             payload = pickle.dumps(value)
-        except Exception:
-            return False
+        except Exception as e:
+            from cara.exceptions import CacheConfigurationException
+
+            raise CacheConfigurationException(
+                f"Cannot pickle flight-claim value for key '{key}': {e}"
+            ) from e
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
         try:
-            # Use Redis SET with NX (only if not exists)
             if ttl_seconds > 0:
                 result = self._client.set(redis_key, payload, ex=ttl_seconds, nx=True)
             else:
@@ -162,15 +217,37 @@ class RedisCacheDriver(Cache):
         self.put(key, value, ttl)
         return value
 
-    # Lua: compare the stored pickled payload against the expected one and
-    # delete only on equality. EVAL is single-threaded on the Redis server,
-    # which is what makes the CAS atomic — non-atomic ``GET; DEL`` lets a
-    # different owner slip in between the two calls and lose its lock.
+    # Lua: compare the stored payload against the expected one and
+    # delete only on equality. EVAL is single-threaded on the Redis
+    # server, which is what makes the CAS atomic — non-atomic
+    # ``GET; DEL`` lets a different owner slip in between the two
+    # calls and lose its lock.
+    #
+    # NOTE — for ``forget_if`` we deliberately compare on the *raw*
+    # string-coerced expected value, not on the pickle bytes. Pickle
+    # output is not deterministic across runs/protocols, so the
+    # earlier "compare pickled bytes" approach failed the equality
+    # check whenever caller A wrote with one protocol and caller B
+    # released with another. Lock owners are already string-typed
+    # (``CacheLock.owner``) so plain string CAS is the correct shape.
     _RELEASE_LOCK_LUA = (
         "if redis.call('get', KEYS[1]) == ARGV[1] then "
         "  return redis.call('del', KEYS[1]) "
         "else return 0 end"
     )
+
+    def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
+        """Atomically increment via Redis INCRBY."""
+        redis_key = f"{self._prefix}{key}"
+        try:
+            new_val = self._client.incrby(redis_key, amount)
+            # Set TTL only on first creation (when value equals the increment amount)
+            if ttl and ttl > 0 and new_val == amount:
+                self._client.expire(redis_key, ttl)
+            return new_val
+        except Exception as e:
+            Log.warning(f"[RedisCacheDriver] increment failed: {e}", category="cache")
+            return amount  # Best-effort fallback
 
     def forget_if(self, key: str, expected_value: Any) -> bool:
         redis_key = f"{self._prefix}{key}"
@@ -182,7 +259,7 @@ class RedisCacheDriver(Cache):
             result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, payload)
             return bool(result) and int(result) > 0
         except Exception as e:
-            Log.debug(f"[RedisCacheDriver] forget_if failed: {e}", category="cache")
+            Log.warning(f"[RedisCacheDriver] forget_if failed: {e}", category="cache")
             return False
 
     def forget_pattern(self, pattern: str) -> int:

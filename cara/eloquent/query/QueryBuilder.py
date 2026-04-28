@@ -1,7 +1,15 @@
 import inspect
+import json
+import re
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
+
+# ``order_by`` SQL injection guard: accept ``column`` or
+# ``table.column`` identifiers only. Anything fancier (functions,
+# expressions, NULLS FIRST, ...) must use ``order_by_raw`` where the
+# caller takes responsibility.
+_ORDER_BY_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 from cara.eloquent.expressions import (
     AggregateExpression,
@@ -45,7 +53,11 @@ class TransactionContext:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
-            self.builder.rollback()
+            try:
+                self.builder.rollback()
+            except Exception as rollback_exc:
+                # Chain so the original exception isn't masked.
+                raise rollback_exc from exc_val
             return False
         else:
             self.builder.commit()
@@ -519,13 +531,30 @@ class QueryBuilder(ObservesEvents):
         if self._model:
             model = self._model
 
-        self._creates = []
+        # First pass: filter / cast each row, but DO NOT sort yet — we
+        # need a single canonical column order across all rows so the
+        # generated INSERT (column1, column2, …) VALUES (...), (...)
+        # actually aligns. The previous implementation sorted each row
+        # independently, then BaseGrammar took columns from row[0]
+        # only — so heterogeneous rows ({a,b} mixed with {a,c}) silently
+        # corrupted: row 2's value for column "c" landed in column "b".
+        prepared: List[Dict[str, Any]] = []
+        column_set: set = set()
         for unsorted_create in creates:
             if model:
                 unsorted_create = model.filter_mass_assignment(unsorted_create)
             if cast and model:
                 unsorted_create = model.cast_values(unsorted_create)
-            self._creates.append(dict(sorted(unsorted_create.items())))
+            prepared.append(unsorted_create)
+            column_set.update(unsorted_create.keys())
+
+        # Canonical sorted column list. Missing keys in a row are
+        # filled with ``None`` so every row has the same shape under
+        # the generated INSERT.
+        all_columns = sorted(column_set)
+        self._creates = [
+            {col: row.get(col) for col in all_columns} for row in prepared
+        ]
 
         if query:
             return self
@@ -647,6 +676,15 @@ class QueryBuilder(ObservesEvents):
                 model.get_primary_key_value(),
             )
             self.observe_events(model, "deleting")
+
+        # Safety: refuse to execute DELETE without a WHERE clause to
+        # prevent accidental mass-deletion.  Use truncate() instead.
+        if not self._wheres:
+            from cara.exceptions import QueryException
+            raise QueryException(
+                "delete() without a WHERE clause would remove all rows. "
+                "Use truncate() for intentional mass-deletion."
+            )
 
         result = self.new_connection().query(self.to_qmark(), self._bindings)
 
@@ -846,20 +884,14 @@ class QueryBuilder(ObservesEvents):
             Product.where_json_contains("metadata", {"active_deal": True})
             # -> metadata @> '{"active_deal": true}'::jsonb
         """
-        import json
-
         return self.where_raw(f"{column} @> %s::jsonb", [json.dumps(value)])
 
     def or_where_json_contains(self, column: str, value):
         """OR-joined variant of where_json_contains."""
-        import json
-
         return self.or_where_raw(f"{column} @> %s::jsonb", [json.dumps(value)])
 
     def where_json_doesnt_contain(self, column: str, value):
         """Inverse of where_json_contains."""
-        import json
-
         return self.where_raw(f"NOT ({column} @> %s::jsonb)", [json.dumps(value)])
 
     def where_json_path(self, column: str, path, operator: str = "=", value=None):
@@ -918,10 +950,12 @@ class QueryBuilder(ObservesEvents):
 
         Example:
             q.where_json_key_exists("metadata", "active_deal")
-            # -> metadata ? 'active_deal'
+            # -> metadata ? %s    (bound: 'active_deal')
+
+        ``key`` is bound as a parameter — never interpolated — so user-supplied
+        keys cannot escape out of the SQL string literal.
         """
-        esc = self._escape_json_path_segment(key)
-        return self.where_raw(f"{column} ? '{esc}'")
+        return self.where_raw(f"{column} ? %s", [key])
 
     def or_where(self, column, *args):
         """
@@ -2149,17 +2183,27 @@ class QueryBuilder(ObservesEvents):
         """
         Specifies a column to order by.
 
-        Arguments:
-            column {string} -- The name of the column.
-
-        Keyword Arguments:
-            direction {string} -- Specify either ASC or DESC order. (default: {"ASC"})
-
-        Returns:
-            self
+        SECURITY — both ``column`` and ``direction`` are validated.
+        Postgres / MySQL grammars splice them in unparameterised, so
+        any caller passing a request-supplied value here (sort=...)
+        used to be a clean SQL injection sink. Names must look like
+        ``foo`` or ``table.column``; direction must be ASC or DESC.
+        Anything else raises ``ValueError``.
         """
         for col in column.split(","):
-            self._order_by += (OrderByExpression(col, direction=direction),)
+            col = col.strip()
+            if not _ORDER_BY_COLUMN_RE.match(col):
+                raise ValueError(
+                    f"Invalid order_by column {col!r}. "
+                    f"Expected ``name`` or ``table.column`` identifier; use "
+                    f"``order_by_raw`` for expressions."
+                )
+            dir_str = (direction or "ASC").upper()
+            if dir_str not in ("ASC", "DESC"):
+                raise ValueError(
+                    f"Invalid order_by direction {direction!r}; expected ASC or DESC"
+                )
+            self._order_by += (OrderByExpression(col, direction=dir_str),)
         return self
 
     def order_by_raw(self, query, bindings=None):
@@ -2713,15 +2757,43 @@ class QueryBuilder(ObservesEvents):
             raise
         return self
 
+    # Hard upper bounds to prevent DoS via huge OFFSET / LIMIT.
+    _MAX_PER_PAGE = 500
+    _MAX_PAGE = 100_000
+
     def paginate(self, per_page, page=1):
+        # Sanitise inputs — coerce to int, clamp to safe bounds.
+        try:
+            per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
+        except (TypeError, ValueError):
+            per_page = 15
+        try:
+            page = max(1, min(int(page), self._MAX_PAGE))
+        except (TypeError, ValueError):
+            page = 1
+
         if page == 1:
             offset = 0
         else:
-            offset = (int(page) * per_page) - per_page
+            offset = (page * per_page) - per_page
 
         new_from_builder = self.new_from_builder()
         new_from_builder._order_by = ()
         new_from_builder._columns = ()
+
+        # Pagination without an explicit ORDER BY returns rows in
+        # plan-dependent order, so concurrent inserts can make a row
+        # appear on page 2 after also appearing on page 1, or skip a
+        # row entirely between two paginate() calls. Default to the
+        # primary key when the caller didn't pin an order — same
+        # safety net Laravel applies in `Paginator::orderBy(...)`.
+        if not self._order_by:
+            try:
+                pk = self.get_primary_key() if hasattr(self, "get_primary_key") else None
+            except Exception:
+                pk = None
+            if pk:
+                self.order_by(pk, "ASC")
 
         result = self.limit(per_page).offset(offset).get()
         total = new_from_builder.count()
@@ -2730,10 +2802,20 @@ class QueryBuilder(ObservesEvents):
         return paginator
 
     def simple_paginate(self, per_page, page=1):
+        # Sanitise inputs — coerce to int, clamp to safe bounds.
+        try:
+            per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
+        except (TypeError, ValueError):
+            per_page = 15
+        try:
+            page = max(1, min(int(page), self._MAX_PAGE))
+        except (TypeError, ValueError):
+            page = 1
+
         if page == 1:
             offset = 0
         else:
-            offset = (int(page) * per_page) - per_page
+            offset = (page * per_page) - per_page
 
         result = self.limit(per_page).offset(offset).get()
 

@@ -76,35 +76,51 @@ class FloatCast(BaseCast):
 
 
 class DecimalCast(BaseCast):
-    """Cast to Decimal for high precision arithmetic."""
+    """Cast to Decimal for high-precision arithmetic.
+
+    The ``precision`` argument now actually does something: values are
+    quantised to that many fractional digits on both ``get`` and
+    ``set``. Previously the precision was stored but never applied —
+    arithmetic ran at full input precision (``Decimal("12.345678901")``)
+    and Postgres truncated on insert to the column's NUMERIC scale,
+    so ``saved_value != original_value`` for any value with more
+    fractional digits than the column allowed. Quantising at the cast
+    boundary makes the round-trip exact.
+    """
 
     def __init__(self, precision: int = 2):
-        """Initialize with precision."""
         self.precision = int(precision)
+        # Pre-build the quantum once; ``Decimal(10) ** -2`` is
+        # ``Decimal("0.01")``. Used by both get / set.
+        self._quantum: Decimal = Decimal(10) ** -self.precision
+
+    def _quantize(self, dec: Decimal) -> Decimal:
+        try:
+            return dec.quantize(self._quantum)
+        except InvalidOperation:
+            # Value can't be represented at the requested precision —
+            # leave it unquantised rather than corrupt it; the DB
+            # NUMERIC scale will still truncate, but at least we don't
+            # silently round to ``None``.
+            return dec
 
     def get(self, value):
-        """Get as Decimal for high precision arithmetic."""
         if value is None:
             return None
-
         if isinstance(value, Decimal):
-            return value
-
+            return self._quantize(value)
         try:
-            return Decimal(str(value))
+            return self._quantize(Decimal(str(value)))
         except (ValueError, TypeError, InvalidOperation):
             return None
 
     def set(self, value):
-        """Set as Decimal."""
-        # Handle None and empty values
         if value is None or str(value).strip() == "":
             return None
-
         try:
-            return Decimal(str(value))
+            return self._quantize(Decimal(str(value)))
         except (ValueError, TypeError, InvalidOperation):
-            return Decimal("0")
+            return None
 
 
 class JsonCast(BaseCast):
@@ -112,7 +128,15 @@ class JsonCast(BaseCast):
 
     def get(self, value):
         """Get as parsed JSON."""
+        if value is None:
+            return None
         if isinstance(value, str):
+            # Empty/whitespace strings are null-equivalent — they
+            # come back as NULL from many DB schemas via empty-string
+            # default. Treat them as None instead of failing JSON
+            # parse and silently producing None anyway.
+            if not value.strip():
+                return None
             try:
                 return json.loads(value)
             except (ValueError, TypeError):
@@ -120,21 +144,25 @@ class JsonCast(BaseCast):
         return value
 
     def set(self, value):
-        """Set as JSON string."""
+        """Set as JSON string.
+
+        Empty string is null-equivalent — previously ``set("")`` fell
+        through to ``json.dumps("")`` and produced the literal JSON
+        string ``'""'``. The next ``get()`` then returned the empty
+        string instead of ``None``, breaking ``if obj.field is None``
+        checks all over the call site. Now empty becomes NULL.
+        """
         if value is None:
             return None
+        if isinstance(value, str) and not value.strip():
+            return None
 
-        # Always convert to JSON string, even if value is already a string
-        # This ensures consistent behavior with PostgreSQL TEXT fields
         try:
-            # If it's already a string, try to parse it first
+            # If it's already a string, validate it's valid JSON;
+            # invalid → treat as a literal value to encode.
             if isinstance(value, str):
-                # Validate it's valid JSON
                 json.loads(value)
                 return value
-            else:
-                # Convert dict/list/other to JSON string
-                return json.dumps(value, default=str, ensure_ascii=False)
+            return json.dumps(value, default=str, ensure_ascii=False)
         except (ValueError, TypeError):
-            # If parsing fails, convert to JSON string
             return json.dumps(value, default=str, ensure_ascii=False)

@@ -21,6 +21,25 @@ from cara.support.Console import HasColoredOutput
 from cara.support.Time import parse_human_time
 
 
+def _release_unique_lock_if_any(instance) -> None:
+    """Release the UniqueJob lock for a finished job, if any.
+
+    Centralised so every driver's job-execution path can call the
+    same helper without re-importing UniqueJob inside a hot loop.
+    Defensive: a job that doesn't implement ``UniqueJob``, or whose
+    ``unique_id()`` raises, must not crash the worker.
+    """
+    if instance is None:
+        return
+    try:
+        from cara.queues.contracts import UniqueJob
+
+        if isinstance(instance, UniqueJob):
+            UniqueJob.release_unique_lock(instance.unique_id())
+    except Exception:
+        pass
+
+
 class DatabaseDriver(HasColoredOutput, Queue):
     """
     Database-based queue driver.
@@ -264,7 +283,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         self._update_job_status(
             job_db_id,
             "processing",
-            {"started_at": pendulum.now().to_datetime_string()},
+            {"started_at": pendulum.now("UTC").to_datetime_string()},
         )
 
         # Unpickle payload
@@ -297,8 +316,12 @@ class DatabaseDriver(HasColoredOutput, Queue):
                     self._update_job_status(
                         job_db_id, "processing", {"context": context}
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    import logging
+                    logging.getLogger("cara.queue.database").warning(
+                        "Failed to register cancellation context for job %s: %s",
+                        job_db_id, exc,
+                    )
 
         try:
             # Execute job callback
@@ -317,7 +340,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             self._update_job_status(
                 job_db_id,
                 "completed",
-                {"completed_at": pendulum.now().to_datetime_string()},
+                {"completed_at": pendulum.now("UTC").to_datetime_string()},
             )
 
             # Call completion handler if available
@@ -332,7 +355,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 job_db_id,
                 "cancelled",
                 {
-                    "cancelled_at": pendulum.now().to_datetime_string(),
+                    "cancelled_at": pendulum.now("UTC").to_datetime_string(),
                     "cancel_reason": str(e),
                 },
             )
@@ -347,13 +370,20 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 job_db_id,
                 "failed",
                 {
-                    "failed_at": pendulum.now().to_datetime_string(),
+                    "failed_at": pendulum.now("UTC").to_datetime_string(),
                     "error": str(e),
                 },
             )
             if hasattr(instance, "unregister_job"):
                 instance.unregister_job()
             raise
+        finally:
+            # Always release the UniqueJob lock so subsequent
+            # legitimate dispatches for the same ``unique_id`` can
+            # proceed. Without this release the lock survives until
+            # ``unique_for`` (default 1h) expires, silently dropping
+            # every retry / re-dispatch in the meantime.
+            _release_unique_lock_if_any(instance)
 
     def _update_job_status(self, job_id: str, status: str, metadata: Optional[dict] = None):
         """Update job status and metadata in database."""

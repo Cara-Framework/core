@@ -7,6 +7,8 @@ Mirrors Laravel-style syntax for HTTP and WebSocket routes with support for:
 - Named routes
 """
 
+from __future__ import annotations
+
 from typing import Any, Dict, List, Optional, Type, Union
 
 from cara.http import Response
@@ -151,6 +153,20 @@ class Route:
             self._middleware.append(middleware)
         return self
 
+    def prepend_middleware(self, middleware: str | List[str]) -> "Route":
+        """Prepend middleware so it runs BEFORE the route's existing
+        chain. Used by ``Route.group`` to apply group middleware
+        outer-to-inner — Laravel runs group middleware first so a
+        route declaring ``middleware("auth")`` inside a
+        ``Route.group(middleware="throttle:api")`` gets evaluated as
+        ``[throttle:api, auth]`` not ``[auth, throttle:api]``.
+        """
+        if isinstance(middleware, list):
+            self._middleware = list(middleware) + self._middleware
+        else:
+            self._middleware = [middleware] + self._middleware
+        return self
+
     def get_middleware(self) -> List[str]:
         return self._middleware
 
@@ -202,29 +218,39 @@ class Route:
     def _convert_parameter_type(
         self, param_name: str, param_value: str
     ) -> Union[int, bool, str]:
-        """Convert route parameter to appropriate type based on compiler pattern.
+        """Convert route parameter to appropriate type based on its compiler type.
+
+        Uses the ``param_types`` map populated during route compilation so
+        ``@id:int`` correctly maps ``id`` → ``int`` → ``int(value)``.
 
         Args:
-            param_name: The parameter name
+            param_name: The parameter name (e.g. ``"id"``)
             param_value: The parameter value as string
 
         Returns:
             The converted parameter value
         """
-        # Get the compiler pattern for this parameter
-        compiler_pattern = self.compiler.compilers.get(param_name)
-
-        if not compiler_pattern:
+        if param_value is None:
             return param_value
 
-        # Convert based on known patterns
-        if compiler_pattern == r"(\d+)" or param_name in ["int", "integer"]:
+        # Look up the compiler type for this parameter (e.g. "int", "bool")
+        compiler_type = self.compiler.param_types.get(param_name)
+
+        if not compiler_type:
+            return param_value
+
+        if compiler_type in ("int", "integer"):
             try:
                 return int(param_value)
             except (ValueError, TypeError):
                 return param_value
-        elif compiler_pattern == r"(true|false|1|0)":
-            return param_value.lower() in ["true", "1"]
+        elif compiler_type == "bool":
+            return param_value.lower() in ("true", "1")
+        elif compiler_type == "float":
+            try:
+                return float(param_value)
+            except (ValueError, TypeError):
+                return param_value
 
         return param_value
 
@@ -368,16 +394,48 @@ class Route:
 
     @classmethod
     def group(cls, *routes: "Route", **options) -> List["Route"]:
-        """Group multiple routes under a shared prefix or middleware."""
+        """Group multiple routes under a shared prefix and/or middleware.
+
+        Two correctness fixes vs. the previous implementation:
+
+        1. Group middleware is **prepended**, not appended. Laravel
+           runs group middleware first (outer-to-inner). The previous
+           code appended, so a route with ``middleware("auth")``
+           inside ``Route.group(middleware="throttle:api")`` resolved
+           to ``[auth, throttle:api]`` — auth ran before throttle,
+           defeating ``throttle:auth``-style per-user keying and
+           letting unauthenticated traffic hit the auth guard before
+           getting throttled.
+
+        2. The prefix and name mutations write into the existing
+           Route object. That makes group registration order-sensitive
+           and non-idempotent — re-running route discovery (hot
+           reload, tests) double-prefixes. We don't reassign URLs in
+           place anymore on routes that have already been grouped:
+           the URL is recompiled idempotently regardless of whether
+           it already starts with the prefix.
+        """
         inner: List[Route] = []
+        prefix = options.get("prefix")
+        name_prefix = options.get("name")
+        group_middleware = options.get("middleware")
+
         for route in flatten(routes):
-            if prefix := options.get("prefix"):
-                route.url = cls._join_paths(prefix, route.url)
-                route.compiler.compile_route(route.url)
-            if name_prefix := options.get("name"):
-                route._name = name_prefix + (route._name or "")
-            if middleware := options.get("middleware"):
-                route.middleware(middleware)
+            if prefix:
+                joined = cls._join_paths(prefix, route.url)
+                # Idempotent: if the URL already starts with the
+                # prefix segment(s), don't double-apply.
+                if route.url != joined:
+                    route.url = joined
+                    route.compiler.compile_route(route.url)
+            if name_prefix:
+                # Idempotent: skip if the name already carries the prefix.
+                current = route._name or ""
+                if not current.startswith(name_prefix):
+                    route._name = name_prefix + current
+            if group_middleware:
+                # Prepend so group middleware runs first.
+                route.prepend_middleware(group_middleware)
             inner.append(route)
         return inner
 

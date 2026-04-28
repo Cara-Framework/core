@@ -95,8 +95,79 @@ class DefaultExceptionHandler:
                 category="cara.exceptions",
                 exc_info=True,
             )
-        except Exception:
+        except ImportError:
             pass
+
+    def _cors_headers_for_scope(self, scope: Dict[str, Any]) -> list:
+        """Build CORS header pairs for an error response.
+
+        Mirrors the credentials/wildcard guard in ``HandleCors``: when
+        credentials are enabled we MUST NOT echo an arbitrary origin
+        next to ``Access-Control-Allow-Credentials: true``. The fix in
+        the live HandleCors path was useless if the exception path
+        kept reflecting; both have to apply the same rule.
+        """
+        try:
+            from cara.configuration import config
+
+            allowed_origins = config("cors.cors.allowed_origins", ["*"])
+            allowed_origins_patterns = config("cors.cors.allowed_origins_patterns", [])
+            supports_credentials = config("cors.cors.supports_credentials", False)
+            allowed_methods = config("cors.cors.allowed_methods", ["*"])
+            allowed_headers = config("cors.cors.allowed_headers", ["*"])
+            max_age = config("cors.cors.max_age", 0)
+        except Exception:
+            allowed_origins = ["*"]
+            allowed_origins_patterns = []
+            supports_credentials = False
+            allowed_methods = ["*"]
+            allowed_headers = ["*"]
+            max_age = 0
+
+        raw_headers = dict(scope.get("headers", []))
+        origin = raw_headers.get(b"origin", b"").decode()
+
+        def _explicit_match(o: str) -> bool:
+            if not o:
+                return False
+            if o in allowed_origins:
+                return True
+            import re as _re
+
+            for pat in allowed_origins_patterns or []:
+                if _re.match(pat, o):
+                    return True
+            return False
+
+        headers: list = []
+
+        if supports_credentials:
+            # Only echo when there's an explicit allowlist match;
+            # never with a wildcard.
+            if origin and _explicit_match(origin):
+                headers.append([b"access-control-allow-origin", origin.encode()])
+                headers.append([b"vary", b"Origin"])
+        else:
+            if "*" in allowed_origins:
+                headers.append([b"access-control-allow-origin", b"*"])
+            elif origin and _explicit_match(origin):
+                headers.append([b"access-control-allow-origin", origin.encode()])
+                headers.append([b"vary", b"Origin"])
+
+        if allowed_methods:
+            headers.append(
+                [b"access-control-allow-methods", ", ".join(allowed_methods).encode()]
+            )
+        if allowed_headers:
+            headers.append(
+                [b"access-control-allow-headers", ", ".join(allowed_headers).encode()]
+            )
+        if supports_credentials:
+            headers.append([b"access-control-allow-credentials", b"true"])
+        if max_age:
+            headers.append([b"access-control-max-age", str(max_age).encode()])
+
+        return headers
 
     async def send_response(
         self,
@@ -107,16 +178,23 @@ class DefaultExceptionHandler:
         send: Any,
     ) -> None:
         """Send the response."""
+        cors = self._cors_headers_for_scope(scope)
         try:
             if self.application:
                 response = self.application.make("response")
                 response.json(data, status=status_code)
+                for key, val in cors:
+                    response.header(key.decode(), val.decode())
                 if not scope.get("response_sent") and not response.is_sent():
                     await response(scope, receive, send)
             else:
-                await self.send_manual_response(data, status_code, scope, receive, send)
+                await self.send_manual_response(
+                    data, status_code, scope, receive, send, cors
+                )
         except Exception:
-            await self.send_manual_response(data, status_code, scope, receive, send)
+            await self.send_manual_response(
+                data, status_code, scope, receive, send, cors
+            )
 
     async def send_manual_response(
         self,
@@ -125,20 +203,25 @@ class DefaultExceptionHandler:
         scope: Dict[str, Any],
         receive: Any,
         send: Any,
+        extra_headers: Optional[list] = None,
     ) -> None:
         """Manual response fallback."""
         import json
 
         response_body = json.dumps(data).encode("utf-8")
 
+        headers = [
+            [b"content-type", b"application/json"],
+            [b"content-length", str(len(response_body)).encode()],
+        ]
+        if extra_headers:
+            headers.extend(extra_headers)
+
         await send(
             {
                 "type": "http.response.start",
                 "status": status_code,
-                "headers": [
-                    [b"content-type", b"application/json"],
-                    [b"content-length", str(len(response_body)).encode()],
-                ],
+                "headers": headers,
             }
         )
 

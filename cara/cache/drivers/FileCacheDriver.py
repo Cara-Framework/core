@@ -138,12 +138,63 @@ class FileCacheDriver(Cache):
         value: Any,
         ttl: Optional[int] = None,
     ) -> bool:
-        """Add a value only if key doesn't exist. Returns True if added."""
-        if self.has(key):
-            return False
+        """Atomically add a value only if the key doesn't exist.
 
-        self.put(key, value, ttl)
-        return True
+        ``has()`` then ``put()`` was a TOCTOU window: two callers
+        could both observe the missing key and both ``put`` it. This
+        broke the flight-claim pattern (``Cache.add(flight_key, True,
+        ttl)``) — both workers thought they'd claimed the slot and
+        both ran the work. The fix uses ``O_CREAT|O_EXCL`` so the
+        kernel performs the existence-check + create atomically; the
+        loser of the race sees ``FileExistsError``.
+
+        Stale (expired) files are still claimable: if the file exists
+        but has expired, we delete it under the CAS lock and retry
+        the exclusive open.
+        """
+        file_path = self._file_path(key)
+        expires_at = self._compute_expiration(ttl)
+
+        for _ in range(2):  # at most one expired-file retry
+            try:
+                # ``os.open`` returns an OS-level fd; wrap with the
+                # exclusive flag so a concurrent caller racing with us
+                # gets FileExistsError.
+                fd = os.open(
+                    file_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+            except FileExistsError:
+                # Existing entry — but it might be expired. Promote
+                # to a CAS-locked check + delete under the same lock
+                # the rest of the file-CAS code uses, so we don't
+                # race with concurrent forget_if.
+                with _FILE_CAS_LOCK:
+                    if not os.path.exists(file_path):
+                        # Vanished between the two checks — retry.
+                        continue
+                    ok, existing_exp, _ = self._read_file(file_path)
+                    if ok and (existing_exp is None or existing_exp >= time.time()):
+                        return False
+                    # Expired or unreadable — drop it and retry.
+                    self._delete_file(file_path)
+                continue
+
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    pickle.dump((expires_at, value), f)
+                return True
+            except Exception as e:
+                Log.warning(f"[FileCacheDriver] add write failed: {e}", category="cache")
+                # Roll back the empty/partial file we created.
+                try:
+                    os.remove(file_path)
+                except OSError:
+                    pass
+                return False
+
+        return False
 
     def remember(
         self,
@@ -213,11 +264,31 @@ class FileCacheDriver(Cache):
         expires_at: Optional[float],
         value: Any,
     ) -> None:
+        """Atomic write — write to a temp file, then rename.
+
+        ``open(path, "wb")`` truncates the target *immediately* and
+        only writes after the pickle dump completes. A concurrent
+        reader between truncate and dump sees an EOFError and the
+        cache returns "miss", which compounds stampede pressure on
+        the callback (``remember``) that would otherwise be served
+        from cache.
+
+        ``os.replace`` is atomic on POSIX and modern Windows, so
+        readers either see the prior file or the fully-written new
+        one — never a torn pickle.
+        """
+        tmp_path = f"{file_path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
         try:
-            with open(file_path, "wb") as f:
+            with open(tmp_path, "wb") as f:
                 pickle.dump((expires_at, value), f)
+            os.replace(tmp_path, file_path)
         except Exception as e:
-            Log.debug(f"[FileCacheDriver] write failed: {e}", category="cache")
+            Log.warning(f"[FileCacheDriver] write failed: {e}", category="cache")
+            # Best-effort cleanup of the tmp file.
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     def _delete_file(self, file_path: str) -> bool:
         try:
@@ -227,6 +298,25 @@ class FileCacheDriver(Cache):
             return False
         except Exception:
             return False
+
+    def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
+        """Increment a counter, serialised within the process.
+
+        Cross-process incrementing on a file-backed cache is
+        fundamentally unsafe — distributed counters need Redis. But
+        within a single Python process (multi-thread / async),
+        wrapping the read-modify-write in ``_FILE_CAS_LOCK`` at
+        least prevents lost updates between coroutines on the same
+        worker. Previously this was a plain non-atomic RMW.
+        """
+        with _FILE_CAS_LOCK:
+            current = self.get(key, 0)
+            try:
+                new_val = int(current) + amount
+            except (TypeError, ValueError):
+                new_val = amount
+            self.put(key, new_val, ttl)
+            return new_val
 
     def forget_if(self, key: str, expected_value: Any) -> bool:
         """
@@ -278,6 +368,6 @@ class FileCacheDriver(Cache):
                 if self._delete_file(file_path):
                     deleted_count += 1
         except Exception as e:
-            Log.debug(f"[FileCacheDriver] forget_pattern failed: {e}", category="cache")
+            Log.warning(f"[FileCacheDriver] forget_pattern failed: {e}", category="cache")
 
         return deleted_count

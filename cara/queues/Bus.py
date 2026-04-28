@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from cara.queues.contracts import Queueable
     from cara.queues.tracking import JobTracker
-    from cara.queues.contracts import UniqueJob
 
 
 class Bus:
@@ -81,52 +80,59 @@ class Bus:
             # ignored in sync mode — the caller asked for immediate execution.
             return await Bus._run_sync_with_tracking(job)
         else:
-            # Check if job is UniqueJob and already locked
+            # Check if job is UniqueJob — use a single atomic acquire
+            # instead of check-then-acquire (TOCTOU race).
             from cara.queues.contracts import UniqueJob
             if isinstance(job, UniqueJob):
                 uid = job.unique_id()
-                if UniqueJob.is_unique_locked(uid):
-                    from cara.facades import Log
-                    Log.debug(f"UniqueJob skipped (already locked): {uid}")
-                    try:
-                        from app.support.Metrics import Metrics as _M
-                        _M.idempotency_total.labels(scope="unique_job", outcome="collision").inc()
-                    except Exception:
-                        pass
-                    return None  # Silent drop
                 if not UniqueJob.acquire_unique_lock(uid, job.unique_for):
-                    # Another worker acquired the lock between our check
-                    # and our acquire — respect the lock and drop silently.
+                    # Lock already held — another instance is pending/processing.
                     from cara.facades import Log
-                    Log.debug(f"UniqueJob lock race lost: {uid}")
+                    Log.debug(f"UniqueJob skipped (lock held): {uid}")
                     try:
                         from app.support.Metrics import Metrics as _M
                         _M.idempotency_total.labels(scope="unique_job", outcome="collision").inc()
-                    except Exception:
+                    except ImportError:
                         pass
                     return None
                 try:
                     from app.support.Metrics import Metrics as _M
                     _M.idempotency_total.labels(scope="unique_job", outcome="fresh").inc()
-                except Exception:
+                except ImportError:
                     pass
 
-            # Dispatch to queue
-            params = Bus.get_dispatch_params(job)
-            dispatch_call = job.__class__.dispatch(**params)
-            if routing_key:
-                dispatch_call.withRoutingKey(routing_key)
-            if queue:
-                # PendingDispatch exposes both camelCase and snake_case helpers.
-                # Prefer onQueue() for Laravel parity; fall back gracefully if
-                # a driver supplies a different chainable.
-                if hasattr(dispatch_call, "onQueue"):
-                    dispatch_call.onQueue(queue)
-                elif hasattr(dispatch_call, "on_queue"):
-                    dispatch_call.on_queue(queue)
-            if delay:
-                if hasattr(dispatch_call, "delay"):
-                    dispatch_call.delay(delay)
+            # Dispatch to queue. Wrap in try/except so a failed
+            # ``push()`` (broker down, AMQP unroutable, Redis
+            # ConnectionError) releases the unique-job lock — without
+            # this release, the next legitimate dispatch for the same
+            # ``unique_id`` is silently dropped for the full
+            # ``unique_for`` window (default 1h) even though no job
+            # ever ran.
+            try:
+                params = Bus.get_dispatch_params(job)
+                dispatch_call = job.__class__.dispatch(**params)
+                if routing_key:
+                    dispatch_call.withRoutingKey(routing_key)
+                if queue:
+                    # PendingDispatch exposes both camelCase and snake_case helpers.
+                    # Prefer onQueue() for Laravel parity; fall back gracefully if
+                    # a driver supplies a different chainable.
+                    if hasattr(dispatch_call, "onQueue"):
+                        dispatch_call.onQueue(queue)
+                    elif hasattr(dispatch_call, "on_queue"):
+                        dispatch_call.on_queue(queue)
+                if delay:
+                    if hasattr(dispatch_call, "delay"):
+                        dispatch_call.delay(delay)
+            except Exception:
+                # Dispatch failed before the job was queued — release
+                # the unique lock so the caller can retry.
+                if isinstance(job, UniqueJob):
+                    try:
+                        UniqueJob.release_unique_lock(job.unique_id())
+                    except Exception:
+                        pass
+                raise
 
             # Prometheus dispatch counter — bounded by the (queue, job)
             # label pair; "unknown" covers jobs that don't carry an
@@ -141,7 +147,7 @@ class Bus:
                     queue=str(_queue_lbl),
                     job=job.__class__.__name__,
                 ).inc()
-            except Exception:
+            except ImportError:
                 pass
             return None
 

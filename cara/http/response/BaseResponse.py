@@ -83,15 +83,31 @@ class BaseResponse:
         )
 
     async def _handle_error(self, error: Exception, send: Any) -> None:
-        """Handle response errors gracefully."""
+        """Handle response errors gracefully.
+
+        IMPORTANT: this is the LAST-RESORT error path — reached when
+        prepare_content / send raises (e.g. JSON-encoding a Decimal that
+        the encoder doesn't know how to serialise). It must redact in
+        production: ``str(error)`` can leak DB query fragments, file
+        paths, internal class names. The framework's
+        ``DefaultExceptionHandler`` already applies this redaction for
+        normal exceptions; this branch had been omitted.
+        """
         if self._sent:
             return
 
         try:
+            try:
+                from cara.configuration import config
+
+                debug = bool(config("app.debug", False))
+            except Exception:
+                debug = False
+
             error_payload = {
                 "success": False,
                 "message": "Internal Server Error",
-                "error": str(error),
+                "error": str(error) if debug else "An unexpected error occurred",
             }
             error_content = json.dumps(error_payload).encode("utf-8")
             headers = [
