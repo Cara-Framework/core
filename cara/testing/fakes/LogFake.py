@@ -56,6 +56,16 @@ class LogFake:
     def exception(self, message: Any, **kwargs: Any) -> None:
         self._record("exception", message, **kwargs)
 
+    def withContext(self, **context: Any) -> "_FakeContextualLogger":
+        """Return a scoped fake logger that appends context tags.
+
+        Mirrors the real ``Logger.withContext`` so production code paths
+        like ``BaseJob`` (``Log.withContext(job_id=...).info(...)``)
+        round-trip under tests — every message gets a ``[k=v]`` suffix
+        and lands in this fake's ``records`` list under the same level.
+        """
+        return _FakeContextualLogger(self, context)
+
     # ── Test-time helpers ────────────────────────────────────────────
 
     def recorded(self, level: Optional[str] = None) -> List[LogRecord]:
@@ -86,3 +96,37 @@ class LogFake:
 
     def clear(self) -> None:
         self.records.clear()
+
+
+class _FakeContextualLogger:
+    """Fake counterpart to :class:`cara.logging.Logger.ContextualLogger`."""
+
+    __slots__ = ("_parent", "_suffix")
+
+    def __init__(self, parent: LogFake, context: dict) -> None:
+        self._parent = parent
+        self._suffix = (
+            " ".join(f"[{k}={v}]" for k, v in context.items()) if context else ""
+        )
+
+    def _fmt(self, message: Any) -> str:
+        text = str(message)
+        return f"{text} {self._suffix}" if self._suffix else text
+
+    def debug(self, message: Any, **kwargs: Any) -> None:
+        self._parent.debug(self._fmt(message), **kwargs)
+
+    def info(self, message: Any, **kwargs: Any) -> None:
+        self._parent.info(self._fmt(message), **kwargs)
+
+    def warning(self, message: Any, **kwargs: Any) -> None:
+        self._parent.warning(self._fmt(message), **kwargs)
+
+    def error(self, message: Any, **kwargs: Any) -> None:
+        self._parent.error(self._fmt(message), **kwargs)
+
+    def critical(self, message: Any, **kwargs: Any) -> None:
+        self._parent.critical(self._fmt(message), **kwargs)
+
+    def exception(self, message: Any, **kwargs: Any) -> None:
+        self._parent.exception(self._fmt(message), **kwargs)
