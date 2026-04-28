@@ -17,6 +17,7 @@ import pika
 from cara.exceptions import DriverLibraryNotFoundException
 from cara.facades import Log
 from cara.queues.contracts.Queue import Queue
+from cara.queues.job_instantiation import instantiate_job
 from cara.support.Console import HasColoredOutput
 
 
@@ -37,29 +38,50 @@ class AMQPDriver(HasColoredOutput, Queue):
         super().__init__(module="queue.amqp")
         self.application = application
         self.options = options
-        self.connection = None
-        self.channel = None
-        # ROOT CAUSE (2026-04-24): pika's BlockingConnection is NOT
-        # thread-safe, yet this driver stores ``connection``/``channel``
-        # as instance attributes shared across all threads. Under
-        # ``--concurrency=8``, listener dispatch fan-out (every
-        # completed job fires one or more downstream publishes) ran 8
-        # publishes in parallel on the same connection. Pika's
-        # internal async transport state (a deque of outgoing frames,
-        # a tx byte counter) got corrupted mid-frame, surfacing as
-        # ``StreamLostError: ... AssertionError('tx buffer size
-        # underflow')`` or ``IndexError('pop from an empty deque')``.
-        # The connection then died and every downstream publish in the
-        # cascade failed. Serialize the connect→publish→close path
-        # behind a lock so only one thread touches pika's state at a
-        # time. Each publish opens+closes its own connection already
-        # (line 581-583), so contention is just the single publish
-        # duration (~5–20ms); concurrency of the scraping path itself
-        # is unaffected because scraping doesn't hold this lock.
-        self._publish_lock = threading.Lock()
+        # ``connection`` / ``channel`` were instance attributes shared
+        # across all threads. They're now thread-local so each thread
+        # owns its own pika connection/channel — pika's BlockingConnection
+        # is not thread-safe, and the previous global lock pattern
+        # serialised every publish across the whole worker process.
+        # With per-thread state, parallel publishes from different
+        # threads run truly concurrently against separate sockets,
+        # while a single thread's publishes stay ordered through its
+        # own channel.
+        self._tls = threading.local()
+
+        # Connection pool: idle (host:port → list[connection]) so a
+        # thread that finished publishing can hand its connection
+        # back instead of dropping the TCP socket. The pool is
+        # process-global; thread-locals only point at a connection
+        # while that thread is using one. Bounded so we don't
+        # accumulate idle sockets on a load spike.
+        self._pool: Dict[str, List[Any]] = {}
+        self._pool_lock = threading.Lock()
+        self._max_pool_per_url = int(options.get("amqp_pool_size", 8))
 
         # Suppress verbose pika logs
         logging.getLogger("pika").setLevel(logging.WARNING)
+
+    # ── Thread-local connection / channel handles ─────────────────
+    # Existing call sites read/write ``self.connection`` and
+    # ``self.channel`` directly. Routing through a ``threading.local``
+    # via these properties preserves the call-site shape while
+    # making the state per-thread.
+    @property
+    def connection(self):
+        return getattr(self._tls, "connection", None)
+
+    @connection.setter
+    def connection(self, value):
+        self._tls.connection = value
+
+    @property
+    def channel(self):
+        return getattr(self._tls, "channel", None)
+
+    @channel.setter
+    def channel(self, value):
+        self._tls.channel = value
 
     def push(self, *jobs: Any, options: Dict[str, Any]) -> Union[str, List[str]]:
         """Push jobs to queue and return job ID(s) for tracking."""
@@ -114,7 +136,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # every scheduled AMQP job blew up at enqueue time.
         delay_ms = int(
             pendulum.parse(str(when)).float_timestamp * 1000
-            - pendulum.now().float_timestamp * 1000
+            - pendulum.now("UTC").float_timestamp * 1000
         )
 
         # Add delay header for RabbitMQ delayed plugin
@@ -299,14 +321,145 @@ class AMQPDriver(HasColoredOutput, Queue):
                 Log.error(f"Failed to send job to dead letter queue: {e}")
 
     def consume(self, options: Dict[str, Any]) -> None:
-        """
-        Consume is handled by QueueWorkCommand.
+        """Consume jobs from RabbitMQ.
 
-        Use: python craft queue:work
+        Each invocation runs a single-thread blocking consume loop.
+        ``QueueWorkCommand`` typically spawns one worker thread per
+        ``--concurrency`` so a process with concurrency=8 has 8
+        independent consumers, each with its own connection.
+
+        Behaviour:
+          * Manual ack — message is only acked after the job
+            handler returns successfully. A worker crash mid-process
+            requeues the message via the broker's redelivery
+            machinery.
+          * Failed jobs nack with ``requeue=False`` so the broker's
+            DLX (configured on the queue) catches them. The driver
+            also calls ``failed()`` on the job instance for app-side
+            handling.
+          * Releases the UniqueJob lock and dispatches batch
+            completion lifecycle on every completion path
+            (success / failure / cancellation).
         """
-        raise NotImplementedError(
-            "AMQPDriver.consume() is not used. Use 'python craft queue:work' command."
-        )
+        merged_opts = {**self.options, **options}
+        queue_name = merged_opts.get("queue", "default")
+
+        try:
+            import pika
+        except ImportError:
+            raise DriverLibraryNotFoundException(
+                "pika is required for AMQPDriver. Install with: pip install pika"
+            )
+
+        prefetch = int(merged_opts.get("prefetch", 1))
+
+        # Build a dedicated consumer connection. We don't pool
+        # consumers — they're long-lived and there's only one per
+        # worker thread.
+        connection, channel = self._open_new_connection(merged_opts)
+        # Idempotent declare — same logic as the publish path so
+        # consume against an existing TTL-mismatched queue still works.
+        exchange_name = merged_opts.get("exchange", "")
+        message_ttl = merged_opts.get("message_ttl", 86400000)
+        queue_args = {
+            "x-dead-letter-exchange": (
+                f"{exchange_name}.dlx" if exchange_name else "dead.letter.dlx"
+            ),
+            "x-dead-letter-routing-key": f"dead.{queue_name}",
+            "x-message-ttl": message_ttl,
+        }
+        try:
+            channel.queue_declare(
+                queue=queue_name, durable=True, arguments=queue_args
+            )
+        except pika.exceptions.ChannelClosedByBroker as exc:
+            if getattr(exc, "reply_code", None) != 406:
+                raise
+            channel = connection.channel()
+            channel.confirm_delivery()
+            channel.queue_declare(queue=queue_name, durable=True, passive=True)
+
+        channel.basic_qos(prefetch_count=prefetch)
+
+        def on_message(ch, method, properties, body):
+            instance = None
+            try:
+                payload = pickle.loads(body)
+                raw = payload.get("obj")
+                callback_name = payload.get("callback", "handle")
+                args = payload.get("args", ())
+                instance = instantiate_job(self.application, raw, args)
+
+                method_to_call = getattr(instance, callback_name, None)
+                if not callable(method_to_call):
+                    raise AttributeError(
+                        f"Callback '{callback_name}' not found on {instance!r}"
+                    )
+
+                if hasattr(self.application, "call"):
+                    self.application.call(method_to_call, *args)
+                else:
+                    method_to_call(*args) if args else method_to_call()
+
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                self._dispatch_batch_completion(instance, None)
+                self.info(
+                    f"AMQPDriver: job processed successfully, queue={queue_name}"
+                )
+            except Exception as exc:
+                self.danger(f"AMQPDriver: job processing failed: {exc}")
+                # nack with requeue=False so DLX gets the message.
+                try:
+                    ch.basic_nack(
+                        delivery_tag=method.delivery_tag, requeue=False
+                    )
+                except Exception:
+                    pass
+                # Job-side ``failed`` hook for app-level cleanup.
+                if instance is not None and hasattr(instance, "failed"):
+                    try:
+                        instance.failed(payload, str(exc))
+                    except Exception as inner:
+                        self.danger(f"AMQPDriver: failed() raised: {inner}")
+                self._dispatch_batch_completion(instance, exc)
+            finally:
+                self._release_unique_lock_if_any(instance)
+
+        channel.basic_consume(queue=queue_name, on_message_callback=on_message)
+        self.info(f"AMQPDriver: consuming from queue='{queue_name}'")
+        try:
+            channel.start_consuming()
+        except KeyboardInterrupt:
+            channel.stop_consuming()
+        finally:
+            try:
+                channel.close()
+                connection.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _release_unique_lock_if_any(instance) -> None:
+        if instance is None:
+            return
+        try:
+            from cara.queues.contracts import UniqueJob
+
+            if isinstance(instance, UniqueJob):
+                UniqueJob.release_unique_lock(instance.unique_id())
+        except Exception:
+            pass
+
+    @staticmethod
+    def _dispatch_batch_completion(instance, exception=None) -> None:
+        if instance is None:
+            return
+        try:
+            from cara.queues.Batch import auto_dispatch_batch_completion
+
+            auto_dispatch_batch_completion(instance, exception)
+        except Exception:
+            pass
 
     def _create_job_record(self, job, job_id: str, opts: Dict[str, Any]) -> Optional[int]:
         """Create job record via JobTracker for consistent tracking."""
@@ -523,16 +676,35 @@ class AMQPDriver(HasColoredOutput, Queue):
     def _connect_and_publish(self, payload: Any, opts: Dict[str, Any]) -> None:
         """Connect to RabbitMQ and publish message.
 
-        Serialized via ``_publish_lock`` because pika's BlockingConnection
-        and channel state are not thread-safe. See constructor comment
-        for the underflow/empty-deque crash this prevents.
+        Connection management — was: open + publish + close. Every
+        publish was a fresh TCP+TLS handshake which dominated latency
+        (5-50ms for the round trip vs. <1ms for the actual publish),
+        and serialised every publish across the worker process behind
+        ``_publish_lock`` because pika's BlockingConnection isn't
+        thread-safe.
+
+        Now: each thread keeps its own pooled connection (pika's
+        BlockingConnection is fine when used from a single thread).
+        On publish we either reuse the thread-local connection (most
+        common), grab one from the cross-thread pool, or open a new
+        one. After publish the connection goes back to the pool for
+        reuse. Truly concurrent across threads, no global lock.
         """
-        with self._publish_lock:
-            return self._connect_and_publish_locked(payload, opts)
+        url = self._build_url(opts)
+        self._acquire_thread_connection(url, opts)
+        try:
+            self._connect_and_publish_locked(payload, opts)
+        except Exception:
+            # On error drop this connection — it may be in a bad
+            # state. The next publish opens a fresh one.
+            self._discard_thread_connection()
+            raise
+        else:
+            self._return_thread_connection(url)
 
     def _connect_and_publish_locked(self, payload: Any, opts: Dict[str, Any]) -> None:
-        """Inner publish path — caller must hold ``_publish_lock``."""
-        self._connect(opts)
+        """Inner publish path — assumes ``self.channel`` / ``self.connection``
+        are bound to this thread by the caller."""
 
         # Get queue name from job or options
         job = payload.get("obj")
@@ -634,15 +806,12 @@ class AMQPDriver(HasColoredOutput, Queue):
             )
             raise
 
-        # Close connection
-        try:
-            self.channel.close()
-            self.connection.close()
-        except Exception:
-            pass
+        # No close — caller (``_connect_and_publish``) returns the
+        # connection to the pool for reuse.
 
-    def _connect(self, opts: Dict[str, Any]) -> None:
-        """Establish connection to RabbitMQ."""
+    # ── Pool helpers ───────────────────────────────────────────────
+    def _open_new_connection(self, opts: Dict[str, Any]) -> tuple:
+        """Open a brand-new connection + channel pair."""
         try:
             import pika
         except ImportError:
@@ -651,11 +820,102 @@ class AMQPDriver(HasColoredOutput, Queue):
             )
 
         connection_url = self._build_url(opts)
-        self.connection = pika.BlockingConnection(pika.URLParameters(connection_url))
-        self.channel = self.connection.channel()
+        connection = pika.BlockingConnection(pika.URLParameters(connection_url))
+        channel = connection.channel()
+        channel.confirm_delivery()
+        return connection, channel
 
-        # Enable publisher confirms for reliability
-        self.channel.confirm_delivery()
+    def _acquire_thread_connection(self, url: str, opts: Dict[str, Any]) -> None:
+        """Bind a connection + channel to this thread for the publish.
+
+        Reuse priority: existing thread-local → pool → open fresh.
+        """
+        if self.connection is not None and self.channel is not None:
+            # Already bound on this thread (typical case for hot
+            # publishers reusing the same pika channel).
+            try:
+                if self.connection.is_open and self.channel.is_open:
+                    return
+            except Exception:
+                pass
+            # Stale handle — drop it and fall through.
+            self._discard_thread_connection()
+
+        # Try to grab a connection from the pool.
+        with self._pool_lock:
+            pool = self._pool.get(url, [])
+            while pool:
+                conn, chan = pool.pop()
+                try:
+                    if conn.is_open and chan.is_open:
+                        self.connection = conn
+                        self.channel = chan
+                        return
+                except Exception:
+                    pass
+                # Stale entry — close and try the next.
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        # Pool empty / nothing healthy — open a fresh connection.
+        self.connection, self.channel = self._open_new_connection(opts)
+
+    def _return_thread_connection(self, url: str) -> None:
+        """Return the thread's connection to the pool, capped at
+        ``_max_pool_per_url``. Excess connections are closed."""
+        conn, chan = self.connection, self.channel
+        # Always clear the thread-local first so a subsequent error
+        # path can't accidentally reuse a returned connection.
+        self.connection = None
+        self.channel = None
+        if conn is None or chan is None:
+            return
+        try:
+            if not (conn.is_open and chan.is_open):
+                conn.close()
+                return
+        except Exception:
+            return
+
+        with self._pool_lock:
+            pool = self._pool.setdefault(url, [])
+            if len(pool) >= self._max_pool_per_url:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                return
+            pool.append((conn, chan))
+
+    def _discard_thread_connection(self) -> None:
+        """Drop the thread-local connection without returning it to
+        the pool. Used after a publish error."""
+        conn, chan = self.connection, self.channel
+        self.connection = None
+        self.channel = None
+        for handle in (chan, conn):
+            try:
+                if handle is not None:
+                    handle.close()
+            except Exception:
+                pass
+
+    def _connect(self, opts: Dict[str, Any]) -> None:
+        """Bind a connection + channel to this thread.
+
+        Kept for callers that don't go through ``_connect_and_publish``
+        (e.g. ``declare_dead_letter_exchange``). New code should prefer
+        ``_acquire_thread_connection`` + ``_return_thread_connection``.
+        """
+        if self.connection is not None and self.channel is not None:
+            try:
+                if self.connection.is_open and self.channel.is_open:
+                    return
+            except Exception:
+                pass
+        self.connection, self.channel = self._open_new_connection(opts)
 
         # NOTE: Queue declaration is intentionally NOT done here.
         # Each caller (_connect_and_publish, setup_dead_letter_exchange, etc.)

@@ -7,6 +7,7 @@ Modern, clean implementation for database-backed job queue management.
 import base64
 import json
 import pickle
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Union, Optional
@@ -36,6 +37,25 @@ def _release_unique_lock_if_any(instance) -> None:
 
         if isinstance(instance, UniqueJob):
             UniqueJob.release_unique_lock(instance.unique_id())
+    except Exception:
+        pass
+
+
+def _dispatch_batch_completion(instance, exception=None) -> None:
+    """Forward batch lifecycle to the Batch helper.
+
+    Ensures every batched job's ``then()`` / ``catch()`` callbacks
+    fire without the job author having to call ``batch_completed``
+    by hand. Without this wiring, ``Batch().then(...)`` was
+    effectively dead code — the counter never reached zero so the
+    callback never ran.
+    """
+    if instance is None:
+        return
+    try:
+        from cara.queues.Batch import auto_dispatch_batch_completion
+
+        auto_dispatch_batch_completion(instance, exception)
     except Exception:
         pass
 
@@ -97,57 +117,50 @@ class DatabaseDriver(HasColoredOutput, Queue):
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
     def consume(self, options: Dict[str, Any]) -> None:
-        """Continuously fetch and process jobs from database."""
+        """Continuously fetch and process jobs from database.
+
+        Two correctness fixes vs. the previous implementation:
+
+        1. ``SELECT ... FOR UPDATE SKIP LOCKED`` claims rows
+           atomically inside Postgres / MySQL 8+ instead of doing a
+           plain SELECT followed by per-row CAS UPDATEs. Under high
+           worker concurrency the old approach burned CPU on
+           contended UPDATEs that all hit the same candidate set;
+           with SKIP LOCKED the broker hands each worker a disjoint
+           batch of rows in O(1).
+
+        2. A periodic visibility-timeout reaper resets
+           ``reserved_at`` rows older than ``visibility_timeout``
+           seconds (default 600). Without this, a worker that
+           crashed mid-process left its reserved row pinned forever
+           and the job never re-ran.
+        """
         merged = {**self.options, **options}
         table = merged.get("table")
         failed_table = merged.get("failed_table")
         attempts = int(merged.get("attempts", 1))
         poll_interval = int(merged.get("poll", 1))
         tz = merged.get("tz", "UTC")
+        visibility_timeout = int(merged.get("visibility_timeout", 600))
         builder = self._get_builder(merged, table)
+
+        last_reaper_run = 0.0
+        reaper_interval = max(30, int(merged.get("reaper_interval", 60)))
 
         while True:
             time.sleep(poll_interval)
             self.info(f"Checking for available jobs on '{table}'...")
 
-            now = pendulum.now(tz=tz).to_datetime_string()
-            jobs = (
-                builder.where("queue", merged.get("queue", "default"))
-                .where("available_at", "<=", now)
-                .where_null("reserved_at")
-                .limit(10)
-                .order_by("id")
-                .get()
-            )
+            # Visibility-timeout reaper: free any row whose
+            # ``reserved_at`` is older than the cutoff. Runs at most
+            # once per ``reaper_interval`` seconds so it doesn't
+            # dominate the polling loop.
+            now_ts = time.time()
+            if now_ts - last_reaper_run > reaper_interval:
+                self._reap_stuck_reservations(merged, table, visibility_timeout, tz)
+                last_reaper_run = now_ts
 
-            if not jobs:
-                continue
-
-            # Atomically reserve each job: the WHERE clause includes
-            # ``reserved_at IS NULL`` so two workers fetching overlapping
-            # candidate rows can't both win — whoever's UPDATE flips the
-            # row from NULL → reserved owns it. Without this guard each
-            # row was previously updated unconditionally, so a stagger
-            # of ~ms between two pollers caused duplicate execution.
-            claimed_jobs = []
-            for job in jobs:
-                affected = (
-                    builder.new()
-                    .table(table)
-                    .where("id", job["id"])
-                    .where_null("reserved_at")
-                    .update({"reserved_at": now})
-                )
-                # ``update`` returns the affected row count on most cara
-                # drivers; treat any falsy value (None / 0 / empty) as
-                # "another worker beat us" and skip.
-                try:
-                    won = bool(int(affected)) if affected is not None else False
-                except (TypeError, ValueError):
-                    won = bool(affected)
-                if won:
-                    claimed_jobs.append(job)
-
+            claimed_jobs = self._claim_batch(merged, table, tz)
             if not claimed_jobs:
                 continue
 
@@ -274,6 +287,168 @@ class DatabaseDriver(HasColoredOutput, Queue):
         tbl = table or opts.get("table")
         return self.application.make("DB").query(opts.get("connection")).table(tbl)
 
+    def _claim_batch(
+        self,
+        merged: Dict[str, Any],
+        table: str,
+        tz: str,
+    ) -> list:
+        """Claim a batch of jobs atomically using SKIP LOCKED.
+
+        Postgres ≥ 9.5 and MySQL ≥ 8.0 support ``FOR UPDATE SKIP
+        LOCKED``, which is the canonical pattern for "queue table"
+        workloads. Each worker SELECTs its claim window inside a
+        transaction with a row-level lock that other workers skip
+        instead of waiting on, then UPDATEs ``reserved_at`` and
+        commits — losers see different rows, no two workers ever
+        contend for the same row.
+
+        Drivers that don't support SKIP LOCKED (SQLite, MSSQL <
+        2019) fall back to the legacy CAS-UPDATE path.
+        """
+        connection_name = merged.get("connection")
+        queue = merged.get("queue", "default")
+        now = pendulum.now(tz=tz).to_datetime_string()
+        batch_size = int(merged.get("batch_size", 10))
+
+        db = self.application.make("DB")
+        try:
+            # Detect driver via the resolver — Postgres / MySQL get
+            # SKIP LOCKED, others get the CAS fallback.
+            connection_info = db.get_connection_info(connection_name)
+            driver = (connection_info.get("driver") or "").lower()
+        except Exception:
+            driver = ""
+
+        if driver in ("postgres", "postgresql", "mysql"):
+            return self._claim_batch_skip_locked(
+                merged, table, queue, now, batch_size, driver, connection_name
+            )
+
+        # Fallback path — legacy CAS UPDATE.
+        builder = self._get_builder(merged, table)
+        jobs = (
+            builder.where("queue", queue)
+            .where("available_at", "<=", now)
+            .where_null("reserved_at")
+            .limit(batch_size)
+            .order_by("id")
+            .get()
+        )
+        if not jobs:
+            return []
+        claimed = []
+        for job in jobs:
+            affected = (
+                builder.new()
+                .table(table)
+                .where("id", job["id"])
+                .where_null("reserved_at")
+                .update({"reserved_at": now})
+            )
+            try:
+                won = bool(int(affected)) if affected is not None else False
+            except (TypeError, ValueError):
+                won = bool(affected)
+            if won:
+                claimed.append(job)
+        return claimed
+
+    def _claim_batch_skip_locked(
+        self,
+        merged: Dict[str, Any],
+        table: str,
+        queue: str,
+        now: str,
+        batch_size: int,
+        driver: str,
+        connection_name: Optional[str],
+    ) -> list:
+        """Claim a batch via SELECT ... FOR UPDATE SKIP LOCKED.
+
+        Wrapped in a transaction so the row-level locks are held for
+        exactly the duration of the claim, not longer. Returns the
+        claimed job rows (including their decoded payload).
+        """
+        # Quote the table name conservatively — most callers pass a
+        # config-supplied identifier, so the risk surface is small,
+        # but we still defend against weird configurations.
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", table):
+            raise QueueException(f"Invalid queue table identifier: {table!r}")
+
+        select_sql = (
+            f"SELECT id, name, payload, attempts, queue, available_at, reserved_at "
+            f"FROM {table} "
+            f"WHERE queue = %s AND available_at <= %s AND reserved_at IS NULL "
+            f"ORDER BY id ASC "
+            f"LIMIT %s "
+            f"FOR UPDATE SKIP LOCKED"
+        )
+        update_sql = (
+            f"UPDATE {table} SET reserved_at = %s WHERE id = ANY(%s)"
+            if driver in ("postgres", "postgresql")
+            else f"UPDATE {table} SET reserved_at = %s WHERE id IN %s"
+        )
+
+        db = self.application.make("DB")
+        try:
+            with db.transaction(connection_name):
+                rows = db.select(
+                    select_sql, [queue, now, batch_size], connection_name
+                ) or []
+                if not rows:
+                    return []
+                ids = [r["id"] for r in rows]
+                if driver in ("postgres", "postgresql"):
+                    db.statement(update_sql, [now, ids], connection_name)
+                else:
+                    db.statement(update_sql, [now, tuple(ids)], connection_name)
+                # Stamp the in-memory rows with the claim time so the
+                # caller can use them like a freshly-fetched record.
+                for r in rows:
+                    r["reserved_at"] = now
+                return rows
+        except Exception as e:
+            self.danger(f"SKIP LOCKED claim failed: {e}")
+            return []
+
+    def _reap_stuck_reservations(
+        self,
+        merged: Dict[str, Any],
+        table: str,
+        visibility_timeout: int,
+        tz: str,
+    ) -> None:
+        """Free reserved rows whose worker died mid-process.
+
+        A reservation older than ``visibility_timeout`` seconds is
+        treated as evidence the worker holding it is gone (crashed,
+        OOM-killed, deploy rotation that didn't drain). Reset
+        ``reserved_at`` to NULL so the row is re-pickable on the
+        next poll.
+        """
+        cutoff = (
+            pendulum.now(tz=tz)
+            .subtract(seconds=visibility_timeout)
+            .to_datetime_string()
+        )
+        try:
+            builder = self._get_builder(merged, table)
+            freed = (
+                builder.where("reserved_at", "<", cutoff)
+                .where_not_null("reserved_at")
+                .update({"reserved_at": None})
+            )
+            if freed:
+                self.info(
+                    f"Reaped {freed} stuck reservation(s) on '{table}' "
+                    f"(older than {visibility_timeout}s)"
+                )
+        except Exception as e:
+            # The reaper is best-effort — never let it kill the
+            # worker loop.
+            self.danger(f"Reaper sweep failed: {e}")
+
     def _process_job(self, job: Dict[str, Any], opts: Dict[str, Any]):
         """Unpickle payload, instantiate job, and execute callback."""
         job_state_manager = get_job_state_manager()
@@ -347,6 +522,12 @@ class DatabaseDriver(HasColoredOutput, Queue):
             if hasattr(instance, "on_job_complete"):
                 instance.on_job_complete()
 
+            # Batch lifecycle — fires ``batch_completed`` on the
+            # job's batch so the pending counter actually moves and
+            # ``Batch.then()`` callbacks fire when the last sibling
+            # finishes.
+            _dispatch_batch_completion(instance, None)
+
             return result
 
         except JobCancelledException as e:
@@ -362,6 +543,9 @@ class DatabaseDriver(HasColoredOutput, Queue):
             self.info(f"Job {job_db_id} was cancelled: {e}")
             if hasattr(instance, "unregister_job"):
                 instance.unregister_job()
+            # Treat cancellation as a batch failure so ``catch()`` /
+            # the failed counter still see it.
+            _dispatch_batch_completion(instance, e)
             return
 
         except Exception as e:
@@ -376,6 +560,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             )
             if hasattr(instance, "unregister_job"):
                 instance.unregister_job()
+            _dispatch_batch_completion(instance, e)
             raise
         finally:
             # Always release the UniqueJob lock so subsequent

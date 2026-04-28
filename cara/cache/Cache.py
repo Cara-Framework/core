@@ -307,14 +307,83 @@ class Cache:
         ttl: int,
         callback,
         driver_name: Optional[str] = None,
+        *,
+        stampede_lock_seconds: int = 30,
     ) -> Any:
-        """
-        Get value from cache or execute callback and cache the result.
+        """Get value from cache or execute callback and cache the result.
 
-        If the key exists and hasn't expired, return the cached value.
-        Otherwise, execute the callback, cache its result, and return it.
+        Stampede protection
+        -------------------
+        ``Cache.remember`` is the canonical "compute-once, share-many"
+        primitive. Without locking, a popular key expiring under load
+        means every concurrent caller misses, every caller runs the
+        callback (often a heavy SQL aggregate or external API call),
+        and the worst spike happens at exactly the moment cache was
+        supposed to absorb load.
+
+        This wrapper acquires a short-lived ``stampede:remember:<key>``
+        lock around the miss path. Losers of the lock wait briefly
+        for the winner's result; on timeout they fall back to running
+        the callback themselves rather than serving wrong-or-empty.
+
+        Apps that don't want this behaviour (rare — only when the
+        callback is cheap and uncacheable) can pass
+        ``stampede_lock_seconds=0`` to disable the lock entirely.
         """
-        return self.driver(driver_name).remember(key, ttl, callback)
+        driver = self.driver(driver_name)
+
+        # Fast path — hit. No lock needed when we have a value already.
+        _MISSING = object()
+        cached = driver.get(key, _MISSING)
+        if cached is not _MISSING:
+            return cached
+
+        # Drivers without ``add`` can't gate the regen with a lock.
+        # Fall back to the un-protected behaviour the original
+        # ``remember`` had.
+        if stampede_lock_seconds <= 0 or not hasattr(driver, "add"):
+            return driver.remember(key, ttl, callback)
+
+        # Try to claim the regen slot. ``add`` is atomic on every
+        # driver in this codebase (Redis SET NX, file driver O_EXCL).
+        lock_key = f"stampede:remember:{key}"
+        try:
+            won = driver.add(lock_key, "1", stampede_lock_seconds)
+        except Exception:
+            won = False
+
+        if won:
+            try:
+                value = callback()
+                driver.put(key, value, ttl)
+                return value
+            finally:
+                # Release the regen slot; another future expiry
+                # round will grab it again.
+                try:
+                    driver.forget(lock_key)
+                except Exception:
+                    pass
+
+        # Lost the race — wait briefly for the winner to populate the
+        # key, then re-read. The poll interval is short (50ms) but
+        # capped at the lock's lifetime so we don't deadlock if the
+        # winner crashes.
+        import time as _time
+
+        deadline = _time.time() + stampede_lock_seconds
+        while _time.time() < deadline:
+            cached = driver.get(key, _MISSING)
+            if cached is not _MISSING:
+                return cached
+            _time.sleep(0.05)
+
+        # Winner crashed or callback runs longer than the lock TTL.
+        # Run the callback ourselves rather than return None — the
+        # caller's contract is "you'll get the value or this raises".
+        value = callback()
+        driver.put(key, value, ttl)
+        return value
 
     def forget_pattern(self, pattern: str, driver_name: Optional[str] = None) -> int:
         """
