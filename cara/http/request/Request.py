@@ -241,6 +241,11 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         """Return unique request ID."""
         return self._request_id
 
+    @request_id.setter
+    def request_id(self, value: str) -> None:
+        """Allow middleware to set the ID (e.g. from ``X-Request-ID``)."""
+        self._request_id = str(value) if value is not None else str(uuid.uuid4())
+
     def wants_json(self) -> bool:
         """
         Determine if the request wants a JSON response.

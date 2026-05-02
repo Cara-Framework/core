@@ -108,8 +108,19 @@ class AMQPDriver(HasColoredOutput, Queue):
 
             try:
                 self._connect_and_publish(payload, merged_opts)
-            except pika.exceptions.AMQPConnectionError:
-                # Retry once on connection error
+            except (
+                pika.exceptions.AMQPConnectionError,
+                pika.exceptions.StreamLostError,
+                BrokenPipeError,
+                ConnectionResetError,
+                ConnectionRefusedError,
+                OSError,
+            ):
+                # Retry once on connection/stream error — the pooled
+                # connection may have been dropped by the broker (idle
+                # timeout, restart, etc.). _connect_and_publish will
+                # _discard_thread_connection on failure, so the retry
+                # opens a fresh TCP socket.
                 self._connect_and_publish(payload, merged_opts)
 
         return job_ids[0] if len(job_ids) == 1 else job_ids
@@ -390,6 +401,19 @@ class AMQPDriver(HasColoredOutput, Queue):
                 args = payload.get("args", ())
                 instance = instantiate_job(self.application, raw, args)
 
+                # Propagate tracing context so logs show real IDs
+                # instead of [job_id=unknown].
+                from cara.context import ExecutionContext as _EC
+                _job_id = getattr(instance, "job_id", None)
+                _batch_id = getattr(instance, "batch_id", None)
+                _corr_id = getattr(instance, "correlation_id", None)
+                if _job_id and _job_id != "unknown":
+                    _EC.set_job_id(_job_id)
+                if _batch_id:
+                    _EC.set_batch_id(_batch_id)
+                if _corr_id:
+                    _EC.set_correlation_id(_corr_id)
+
                 method_to_call = getattr(instance, callback_name, None)
                 if not callable(method_to_call):
                     raise AttributeError(
@@ -427,11 +451,35 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         channel.basic_consume(queue=queue_name, on_message_callback=on_message)
         self.info(f"AMQPDriver: consuming from queue='{queue_name}'")
+
+        # Graceful shutdown: SIGTERM (container stop, deploy) and SIGINT
+        # (Ctrl-C) trigger stop_consuming(). The in-flight on_message
+        # callback finishes and acks before the channel closes — no
+        # message loss. Without this, SIGTERM kills the process mid-job
+        # and the message is nacked back to the queue (or lost if acked
+        # before completion).
+        import signal
+
+        def _graceful_stop(signum, frame):
+            sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+            self.info(f"AMQPDriver: received {sig_name}, stopping consumer gracefully…")
+            try:
+                channel.stop_consuming()
+            except Exception:
+                pass
+
+        prev_term = signal.signal(signal.SIGTERM, _graceful_stop)
+        prev_int = signal.signal(signal.SIGINT, _graceful_stop)
+
         try:
             channel.start_consuming()
         except KeyboardInterrupt:
             channel.stop_consuming()
         finally:
+            # Restore original handlers so nested consumers or
+            # post-shutdown code isn't affected.
+            signal.signal(signal.SIGTERM, prev_term)
+            signal.signal(signal.SIGINT, prev_int)
             try:
                 channel.close()
                 connection.close()

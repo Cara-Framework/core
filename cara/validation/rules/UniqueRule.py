@@ -31,15 +31,26 @@ class UniqueRule(BaseRule):
         ignore_column = parts[3] if len(parts) > 3 else "id"
 
         try:
-            from cara.eloquent import DB
+            from cara.facades import DB
 
-            query = DB.table(table).where(column, value)
+            sql = f'SELECT 1 FROM "{table}" WHERE "{column}" = %s LIMIT 1'
+            sql_params = [value]
             if ignore_value is not None and ignore_value != "NULL":
-                query = query.where(ignore_column, "!=", ignore_value)
-            return query.first() is None
-        except Exception:
-            # DB errors should not silently pass; treat as failure so the
-            # caller gets a validation error instead of an accidental write.
+                sql = f'SELECT 1 FROM "{table}" WHERE "{column}" = %s AND "{ignore_column}" != %s LIMIT 1'
+                sql_params.append(ignore_value)
+
+            rows = DB.select(sql, sql_params)
+            return len(rows) == 0
+        except Exception as exc:
+            try:
+                from cara.facades import Log
+                Log.error(
+                    f"UniqueRule: DB query failed for {table}.{column}: "
+                    f"{exc.__class__.__name__}: {exc}",
+                    category="cara.validation.unique",
+                )
+            except Exception:
+                pass
             return False
 
     def default_message(self, field: str, params: Dict[str, Any]) -> str:

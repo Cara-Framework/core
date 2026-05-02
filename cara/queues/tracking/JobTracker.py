@@ -125,7 +125,7 @@ class JobTracker:
                     job_record.metadata = enriched_metadata
                     job_record.save()
 
-            Log.info(
+            Log.debug(
                 f"🚀 Job started: {job_name}[{job_uid}] for entity {entity_id}",
                 category="cara.queue.jobs",
             )
@@ -374,7 +374,7 @@ class JobTracker:
                 job_record.cancelled_at = pendulum.now("UTC")
                 job_record.save()
                 cancelled_count += 1
-                Log.info(
+                Log.debug(
                     f"Cancelled conflicting job: {job_record.job_uid} for entity {entity_id}"
                 )
 
@@ -409,7 +409,7 @@ class JobTracker:
             job_record.metadata = metadata
             job_record.save()
 
-            Log.info(
+            Log.debug(
                 f"🔄 Retry scheduled: {job_record.name}[{retry_job_uid}] attempt {next_attempt} in {delay_seconds}s"
             )
             return retry_job_uid

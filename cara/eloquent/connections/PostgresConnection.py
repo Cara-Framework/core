@@ -1,5 +1,6 @@
 import re
 import threading
+import time
 
 from cara.exceptions import DriverNotFoundException, QueryException
 
@@ -8,12 +9,12 @@ from ..query.processors import PostgresPostProcessor
 from ..schema.platforms import PostgresPlatform
 from .BaseConnection import BaseConnection
 
-# Savepoint names must be alphanumeric + underscore to prevent
-# SQL injection (they cannot be parameterised in standard SQL).
 _SAVEPOINT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 _pool_lock = threading.Lock()
 CONNECTION_POOL = []
+_pool_initialized = False
+_pool_semaphore = None
 
 
 class PostgresConnection(BaseConnection):
@@ -75,87 +76,112 @@ class PostgresConnection(BaseConnection):
 
         return self
 
+    _MAX_CONNECT_RETRIES = 5
+    _RETRY_BACKOFF_BASE = 0.5
+
+    def _connect_kwargs(self):
+        kw = {
+            "database": self.database,
+            "user": self.user,
+            "password": self.password,
+            "host": self.host,
+            "port": self.port,
+            "sslmode": self.options.get("sslmode"),
+            "sslcert": self.options.get("sslcert"),
+            "sslkey": self.options.get("sslkey"),
+            "sslrootcert": self.options.get("sslrootcert"),
+        }
+        schema = self.schema or self.full_details.get("schema")
+        if schema:
+            kw["options"] = f"-c search_path={schema}"
+        return {k: v for k, v in kw.items() if v is not None}
+
+    def _ensure_pool_initialized(self):
+        global _pool_initialized, _pool_semaphore
+        if _pool_initialized:
+            return
+        with _pool_lock:
+            if _pool_initialized:
+                return
+            _pool_semaphore = threading.Semaphore(self.connection_pool_size)
+            min_size = self.full_details.get("connection_pooling_min_size", 0)
+            if min_size:
+                import psycopg2
+                for _ in range(min_size):
+                    try:
+                        conn = psycopg2.connect(**self._connect_kwargs())
+                        conn.autocommit = True
+                        CONNECTION_POOL.append(conn)
+                    except Exception:
+                        break
+            _pool_initialized = True
+
+    _POOL_ACQUIRE_TIMEOUT = 30
+
     def create_connection(self):
         import psycopg2
 
-        # Initialize the connection pool if the option is set
-        initialize_size = self.full_details.get("connection_pooling_min_size")
-        if (
-            self.full_details.get("connection_pooling_enabled")
-            and initialize_size
-        ):
-            with _pool_lock:
-                # Re-check pool size inside the lock to avoid race condition
-                if len(CONNECTION_POOL) < initialize_size:
-                    for _ in range(initialize_size - len(CONNECTION_POOL)):
-                        connection = psycopg2.connect(
-                            database=self.database,
-                            user=self.user,
-                            password=self.password,
-                            host=self.host,
-                            port=self.port,
-                            sslmode=self.options.get("sslmode"),
-                            sslcert=self.options.get("sslcert"),
-                            sslkey=self.options.get("sslkey"),
-                            sslrootcert=self.options.get("sslrootcert"),
-                            options=(
-                                f"-c search_path={self.schema or self.full_details.get('schema')}"
-                                if self.schema or self.full_details.get("schema")
-                                else ""
-                            ),
-                        )
-                        CONNECTION_POOL.append(connection)
+        if not self.full_details.get("connection_pooling_enabled"):
+            return self._connect_with_retry(psycopg2)
 
-        # Try to get a connection from the pool
+        self._ensure_pool_initialized()
+
+        acquired = _pool_semaphore.acquire(timeout=self._POOL_ACQUIRE_TIMEOUT)
+        if not acquired:
+            raise psycopg2.OperationalError(
+                f"Connection pool exhausted: could not acquire a slot "
+                f"within {self._POOL_ACQUIRE_TIMEOUT}s "
+                f"(pool_size={self.connection_pool_size})"
+            )
+        self._pool_slot_acquired = True
+
         connection = None
-        if self.full_details.get("connection_pooling_enabled"):
-            with _pool_lock:
-                if len(CONNECTION_POOL) > 0:
-                    connection = CONNECTION_POOL.pop()
+        with _pool_lock:
+            if CONNECTION_POOL:
+                connection = CONNECTION_POOL.pop()
 
-        # If we got a pooled connection, validate it's still healthy
         if connection:
             try:
                 if connection.closed:
-                    # Connection is dead, create a new one
                     connection = None
                 else:
-                    # Reset any aborted/pending transaction state before reuse
-                    if connection.info.transaction_status != 0:  # 0 = IDLE
+                    if connection.info.transaction_status != 0:
                         connection.rollback()
                     connection.autocommit = True
-                    # Verify the connection is actually alive with a simple query
                     cursor = connection.cursor()
                     cursor.execute("SELECT 1")
                     cursor.close()
             except Exception:
-                # Connection validation failed, create a new one
                 try:
                     connection.close()
                 except Exception:
                     pass
                 connection = None
 
-        # If no valid pooled connection, create a new one
         if not connection:
-            connection = psycopg2.connect(
-                database=self.database,
-                user=self.user,
-                password=self.password,
-                host=self.host,
-                port=self.port,
-                sslmode=self.options.get("sslmode"),
-                sslcert=self.options.get("sslcert"),
-                sslkey=self.options.get("sslkey"),
-                sslrootcert=self.options.get("sslrootcert"),
-                options=(
-                    f"-c search_path={self.schema or self.full_details.get('schema')}"
-                    if self.schema or self.full_details.get("schema")
-                    else ""
-                ),
-            )
+            try:
+                connection = self._connect_with_retry(psycopg2)
+            except Exception:
+                _pool_semaphore.release()
+                self._pool_slot_acquired = False
+                raise
 
         return connection
+
+    def _connect_with_retry(self, psycopg2):
+        """Create a new psycopg2 connection with exponential backoff on 'too many clients'."""
+        last_err = None
+        for attempt in range(self._MAX_CONNECT_RETRIES):
+            try:
+                return psycopg2.connect(**self._connect_kwargs())
+            except psycopg2.OperationalError as e:
+                last_err = e
+                if "too many clients" in str(e) and attempt < self._MAX_CONNECT_RETRIES - 1:
+                    wait = self._RETRY_BACKOFF_BASE * (2 ** attempt)
+                    time.sleep(wait)
+                    continue
+                raise
+        raise last_err
 
     def get_database_name(self):
         return self.database
@@ -173,44 +199,34 @@ class PostgresConnection(BaseConnection):
         return PostgresPostProcessor
 
     def reconnect(self):
-        """Close and re-create the connection."""
-        if self._connection is not None:
-            try:
-                self._connection.close()
-            except Exception:
-                pass
-            self._connection = None
+        """Close and re-create the connection.
 
-        # Reset transaction state
+        Uses close_connection() instead of raw _connection.close() so the
+        pool semaphore slot is properly released before make_connection()
+        acquires a new one.
+        """
         self.transaction_level = 0
-
-        # Create a fresh connection
+        self.close_connection()
         self.make_connection()
 
     def close_connection(self):
         if self._connection is None:
+            if getattr(self, "_pool_slot_acquired", False) and _pool_semaphore is not None:
+                _pool_semaphore.release()
+                self._pool_slot_acquired = False
             return
 
         if self.full_details.get("connection_pooling_enabled"):
             with _pool_lock:
-                # Enforce max pool size strictly
                 if len(CONNECTION_POOL) < self.connection_pool_size:
                     try:
-                        # Ensure the connection is in a clean state before returning to pool
                         if not self._connection.closed:
-                            # Roll back any pending/aborted transaction before resetting autocommit.
-                            # psycopg2 raises ProgrammingError("set_session cannot be used
-                            # inside a transaction") if we set autocommit while a transaction
-                            # is still open (e.g. after a failed query).
-                            if self._connection.info.transaction_status != 0:  # 0 = IDLE
+                            if self._connection.info.transaction_status != 0:
                                 self._connection.rollback()
                             self._connection.autocommit = True
                             CONNECTION_POOL.append(self._connection)
-                        else:
-                            # Already closed — discard
-                            pass
+                        # else: already closed, discard
                     except Exception:
-                        # If anything goes wrong, just close it
                         try:
                             self._connection.close()
                         except Exception:
@@ -220,6 +236,10 @@ class PostgresConnection(BaseConnection):
                         self._connection.close()
                     except Exception:
                         pass
+
+            if getattr(self, "_pool_slot_acquired", False) and _pool_semaphore is not None:
+                _pool_semaphore.release()
+                self._pool_slot_acquired = False
         else:
             try:
                 self._connection.close()

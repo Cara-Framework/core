@@ -299,6 +299,8 @@ class ServeCommand(CommandBase):
             str(config["port"]),
             "--no-use-colors",  # Disable uvicorn's built-in colors
             "--no-access-log",  # Disable uvicorn's HTTP access logging
+            "--ws",
+            "websockets",
         ]
 
         if config["reload"]:

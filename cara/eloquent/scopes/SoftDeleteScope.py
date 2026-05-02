@@ -91,10 +91,10 @@ class SoftDeleteScope(BaseScope):
         a Product would soft-delete correctly, but every subsequent
         ``.delete()`` on ANY Product instance/builder would fall through
         to a hard DELETE — and with ``ON DELETE CASCADE`` FKs
-        (product_price_per_marketplace, product_image, etc.) the row and
+        (product_image, listing, etc.) the row and
         its dependents were obliterated. DB diagnosis: after a dedup run,
         Product rows 7/8/10/12 were completely missing (not even soft-
-        deleted), while AmazonProductMap still pointed at winners.
+        deleted), while stale map references still pointed at winners.
 
         The recursion-protection claim was also incorrect: ``builder.update``
         sets ``_action="update"`` before running scopes, and the soft-delete

@@ -1,5 +1,5 @@
 """
-🛡️ Authorization decorators inspired by Laravel and Masonite.
+🛡️ Authorization decorators inspired by Laravel and Cara.
 
 Usage Examples:
     @can("create-posts")
@@ -18,7 +18,7 @@ from cara.facades import Auth, Gate
 
 def can(ability: str, *args) -> Callable:
     """
-    ✅ Check single permission - Laravel/Masonite style
+    ✅ Check single permission - Laravel/Cara style
 
     @can("create-posts")
     @can("edit-settings")
@@ -114,7 +114,7 @@ def authorize(ability: str, *args) -> Callable:
 
 def policy(model_class: str, action: str) -> Callable:
     """
-    📋 Check model policy - Laravel/Masonite style
+    📋 Check model policy - Laravel/Cara style
 
     @policy("Post", "update")
     @policy("User", "create")
@@ -184,6 +184,6 @@ def guest_only(func: Callable) -> Callable:
     return wrapper
 
 
-# 🎯 Common shortcuts - Laravel/Masonite inspired
+# 🎯 Common shortcuts - Laravel/Cara inspired
 authenticated = authenticated_only
 admin = admin_only

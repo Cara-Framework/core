@@ -13,11 +13,17 @@ from cara.support import paths
 class ModelDiscoverer:
     """Discover model files and extract Field.* definitions."""
 
-    # Field types that take field names as first argument
+    # Field types that take field names as first argument.
+    # NOTE: ``jsonb`` lives next to ``json`` here on purpose — without
+    # this entry the AST parser silently drops every ``field.jsonb(...)``
+    # call (it doesn't match ``FIELD_TYPES_WITH_NAMES`` so
+    # ``_extract_field_definition_new_syntax`` returns None and the
+    # column never reaches the generated migration). That bug erased
+    # the ``metadata`` column from ~10 tables.
     FIELD_TYPES_WITH_NAMES = {
-        "string", "text", "integer", "tiny_integer", "small_integer", 
+        "string", "text", "integer", "tiny_integer", "small_integer",
         "medium_integer", "big_integer", "unsigned_integer", "unsigned_big_integer",
-        "decimal", "boolean", "enum", "uuid", "json", "timestamp", 
+        "decimal", "boolean", "enum", "uuid", "json", "jsonb", "timestamp",
         "date", "time", "datetime", "id", "increments", "big_increments", "float"
     }
     
@@ -253,7 +259,17 @@ class ModelDiscoverer:
             "fields": {},
             "uses_soft_deletes": False,
             "has_fields_method": False,
-
+            # Standalone constraint calls inside ``fields()`` —
+            # ``field.unique([...])`` and ``field.index([...])`` —
+            # are collected here and emitted as ``table.unique([...])``
+            # / ``table.index([...])`` in the generated migration.
+            # Without this collection the composite indexes were
+            # silently dropped and Postgres rejected later
+            # ``ON CONFLICT (col_a, col_b)`` upserts (``no unique or
+            # exclusion constraint matching the ON CONFLICT
+            # specification``).
+            "composite_uniques": [],
+            "composite_indexes": [],
         }
 
         # Check if model uses SoftDeletesMixin
@@ -405,6 +421,21 @@ class ModelDiscoverer:
             # Handle tuple of field definitions
             for field_call in lambda_node.body.elts:
                 if isinstance(field_call, ast.Call):
+                    # Composite ``field.unique([...])`` — list-of-cols
+                    # constraint, distinct from the chained
+                    # ``.unique()`` modifier on a single column.
+                    cu = self._extract_composite_call(field_call, "unique")
+                    if cu is not None:
+                        if cu and cu not in model_info["composite_uniques"]:
+                            model_info["composite_uniques"].append(cu)
+                        continue
+                    # Composite ``field.index([...])`` or
+                    # ``field.index("col")`` — emit ``table.index(...)``.
+                    ci = self._extract_composite_call(field_call, "index")
+                    if ci is not None:
+                        if ci and ci not in model_info["composite_indexes"]:
+                            model_info["composite_indexes"].append(ci)
+                        continue
                     # Check if this is a separate foreign key definition
                     if self._is_separate_foreign_key_call(field_call):
                         foreign_key_def = self._extract_separate_foreign_key_definition(field_call)
@@ -627,6 +658,43 @@ class ModelDiscoverer:
             
             # Extract SQL dependencies from the up() function (will be called later with all_known_tables)
             model_info["needs_sql_dependency_resolution"] = True
+
+    def _extract_composite_call(self, call_node: ast.Call, method_name: str):
+        """Match top-level ``field.<method_name>(...)`` and pull the column list.
+
+        Returns:
+            * ``None`` when the call is not ``field.<method_name>(...)``
+              (so the caller knows to keep trying other handlers).
+            * ``[]`` when it is the right call but no string columns
+              were extractable (still consumed; no constraint added).
+            * ``[col, col, ...]`` on success.
+
+        Accepts both ``field.unique(["a", "b"])`` (list arg) and
+        ``field.index("a")`` (single string), since the legacy schema
+        builder allowed both.
+        """
+        if not isinstance(call_node, ast.Call):
+            return None
+        if not isinstance(call_node.func, ast.Attribute):
+            return None
+        if call_node.func.attr != method_name:
+            return None
+        if not isinstance(call_node.func.value, ast.Name):
+            return None
+        if call_node.func.value.id != "field":
+            return None
+        if not call_node.args:
+            return []
+        first = call_node.args[0]
+        if isinstance(first, ast.List):
+            cols = []
+            for elt in first.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    cols.append(elt.value)
+            return cols
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return [first.value]
+        return []
 
     def _is_separate_foreign_key_call(self, call_node: ast.Call) -> bool:
         """Check if this is a separate foreign key call: field.foreign("field_name").references("id").on("table")"""

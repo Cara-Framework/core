@@ -111,11 +111,17 @@ class PostgresPlatform(Platform):
 
         if table.added_indexes:
             for name, index in table.added_indexes.items():
+                # Double-quote each column so Postgres reserved
+                # keywords (``order``, ``user``, ``timestamp``, ...)
+                # don't break the CREATE INDEX statement. Without
+                # quoting, ``(order)`` is parsed as the ORDER BY token
+                # and dies with ``syntax error at or near "order"``.
+                quoted_cols = ",".join(f'"{c}"' for c in index.column)
                 sql.append(
                     "CREATE INDEX {name} ON {table}({column})".format(
                         name=index.name,
                         table=self.wrap_table(table.name),
-                        column=",".join(index.column),
+                        column=quoted_cols,
                     )
                 )
 
@@ -383,11 +389,17 @@ class PostgresPlatform(Platform):
 
         if hasattr(table, "added_indexes") and table.added_indexes:
             for name, index in table.added_indexes.items():
+                # Double-quote each column so Postgres reserved
+                # keywords (``order``, ``user``, ``timestamp``, ...)
+                # don't break the CREATE INDEX statement. Without
+                # quoting, ``(order)`` is parsed as the ORDER BY token
+                # and dies with ``syntax error at or near "order"``.
+                quoted_cols = ",".join(f'"{c}"' for c in index.column)
                 sql.append(
                     "CREATE INDEX {name} ON {table}({column})".format(
                         name=index.name,
                         table=self.wrap_table(table.name),
-                        column=",".join(index.column),
+                        column=quoted_cols,
                     )
                 )
 

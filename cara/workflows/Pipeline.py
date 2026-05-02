@@ -217,9 +217,22 @@ class Pipeline:
                 # Execute command - instantiate with constructor args only
                 instance = step.step_class(*step.args)
 
-                # Pass kwargs to handle() method (for flags like --existing)
+                # Pass kwargs to handle() method (for flags like --existing).
+                # Use the cara IoC container's ``application.call`` when the
+                # step is a CommandBase, so contract-typed parameters
+                # (``seed: SeedDataContract``, etc.) get auto-injected the
+                # same way they are when the step is run as a stand-alone
+                # craft command — pipelines should not regress that.
+                application = getattr(instance, "application", None)
                 if hasattr(instance, "handle"):
-                    result = await self._safe_call(instance.handle, **step.kwargs)
+                    target = instance.handle
+                    if application is not None and hasattr(application, "call"):
+                        if asyncio.iscoroutinefunction(target):
+                            result = await application.call(target, **step.kwargs)
+                        else:
+                            result = application.call(target, **step.kwargs)
+                    else:
+                        result = await self._safe_call(target, **step.kwargs)
                 else:
                     result = await self._safe_call(instance, **step.kwargs)
 

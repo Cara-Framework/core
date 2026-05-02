@@ -421,25 +421,27 @@ class Event:
         task.add_done_callback(cls._pending_tasks.discard)
 
     @staticmethod
-    def fire(event: Event) -> None:
+    async def fire(event: Event) -> None:
         """
-        Static method to fire an event (alias for dispatch).
+        Fire an event (alias for dispatch).
 
-        Properly handles both sync and async contexts by checking
-        ExecutionContext and scheduling the coroutine appropriately.
+        This is an async method so callers can ``await Event.fire(evt)``.
+        Internally dispatches through the listener pipeline.
 
-        Edge cases handled
-        ------------------
-        - **No running loop** (sync context, e.g. CLI command): use
-          ``asyncio.run`` to drive the coroutine to completion. Safe
-          here because there's no parent loop to nest inside.
-        - **Loop running, sync caller** (e.g. async server processing
-          a request that called a sync helper): schedule as a task
-          AND keep a strong reference so the GC can't collect it
-          mid-flight. This was the bug — bare ``asyncio.create_task``
-          drops the reference and 0–N% of fired events silently
-          disappear depending on GC pressure.
-        - **Async context**: same task-with-ref path.
+        For sync contexts use :meth:`fire_sync` instead.
+
+        Args:
+            event: The event instance to fire
+        """
+        instance = Event()
+        await instance.dispatch(event)
+
+    @staticmethod
+    def fire_sync(event: Event) -> None:
+        """
+        Synchronous variant of :meth:`fire` for use outside an async context.
+
+        Handles both "no running loop" and "loop already running" edge cases.
 
         Args:
             event: The event instance to fire

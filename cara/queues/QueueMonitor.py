@@ -64,7 +64,7 @@ class QueueMonitor:
                 "last_job": None,
             }
 
-        Log.info(f"[QueueMonitor] Job started: {job_name} on queue '{queue_name}'")
+        Log.debug(f"[QueueMonitor] Job started: {job_name} on queue '{queue_name}'")
         return job_id
 
     def job_completed(
@@ -104,7 +104,7 @@ class QueueMonitor:
             queue_stat["jobs_failed"] += 1
 
         status_emoji = "✅" if success else "❌"
-        Log.info(
+        Log.debug(
             f"[QueueMonitor] {status_emoji} Job {job_stat['status']}: {job_stat['job_name']} ({job_stat['duration']:.2f}s)"
         )
 

@@ -130,7 +130,17 @@ class MigrateResetCommand(CommandBase):
             return connection_type
 
     def _reset_postgresql(self, connection, schema: str = "public") -> None:
-        """Reset PostgreSQL database by dropping all objects with CASCADE."""
+        """Reset PostgreSQL database by dropping all objects with CASCADE.
+
+        Functions and types installed by an extension (e.g. ``gen_salt``
+        from ``pgcrypto``) cannot be dropped directly — Postgres rejects
+        with ``cannot drop ... because extension X requires it`` and the
+        only legal action is ``DROP EXTENSION``. We exclude anything
+        whose ``pg_depend`` row carries ``deptype='e'`` so the loop
+        skips those objects; the extensions stay in place across reset
+        (which every migration assumes — none of them ``CREATE EXTENSION
+        IF NOT EXISTS pgcrypto`` themselves).
+        """
         reset_sql = f"""
 DO $do$
 DECLARE
@@ -142,29 +152,57 @@ BEGIN
         EXECUTE 'DROP TABLE IF EXISTS {schema}.' || quote_ident(r.tablename) || ' CASCADE';
     END LOOP;
 
-    -- Drop all sequences
-    FOR r IN (SELECT sequencename FROM pg_sequences WHERE schemaname = '{schema}')
+    -- Drop all sequences (skip extension-owned)
+    FOR r IN (SELECT c.relname AS sequencename
+              FROM pg_class c
+              JOIN pg_namespace n ON c.relnamespace = n.oid
+              WHERE n.nspname = '{schema}'
+                AND c.relkind = 'S'
+                AND NOT EXISTS (
+                    SELECT 1 FROM pg_depend d
+                    WHERE d.objid = c.oid AND d.deptype = 'e'
+                ))
     LOOP
         EXECUTE 'DROP SEQUENCE IF EXISTS {schema}.' || quote_ident(r.sequencename) || ' CASCADE';
     END LOOP;
 
-    -- Drop all views
-    FOR r IN (SELECT viewname FROM pg_views WHERE schemaname = '{schema}')
+    -- Drop all views (skip extension-owned)
+    FOR r IN (SELECT c.relname AS viewname
+              FROM pg_class c
+              JOIN pg_namespace n ON c.relnamespace = n.oid
+              WHERE n.nspname = '{schema}'
+                AND c.relkind = 'v'
+                AND NOT EXISTS (
+                    SELECT 1 FROM pg_depend d
+                    WHERE d.objid = c.oid AND d.deptype = 'e'
+                ))
     LOOP
         EXECUTE 'DROP VIEW IF EXISTS {schema}.' || quote_ident(r.viewname) || ' CASCADE';
     END LOOP;
 
-    -- Drop all functions
-    FOR r IN (SELECT proname, oidvectortypes(proargtypes) as argtypes
-              FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid
-              WHERE n.nspname = '{schema}')
+    -- Drop all functions (skip extension-owned, e.g. pgcrypto's gen_salt)
+    FOR r IN (SELECT p.proname, oidvectortypes(p.proargtypes) AS argtypes
+              FROM pg_proc p
+              JOIN pg_namespace n ON p.pronamespace = n.oid
+              WHERE n.nspname = '{schema}'
+                AND NOT EXISTS (
+                    SELECT 1 FROM pg_depend d
+                    WHERE d.objid = p.oid AND d.deptype = 'e'
+                ))
     LOOP
         EXECUTE 'DROP FUNCTION IF EXISTS {schema}.' || quote_ident(r.proname) || '(' || r.argtypes || ') CASCADE';
     END LOOP;
 
-    -- Drop all custom types
-    FOR r IN (SELECT typname FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid
-              WHERE n.nspname = '{schema}' AND t.typtype = 'c')
+    -- Drop all custom types (skip extension-owned)
+    FOR r IN (SELECT t.typname
+              FROM pg_type t
+              JOIN pg_namespace n ON t.typnamespace = n.oid
+              WHERE n.nspname = '{schema}'
+                AND t.typtype = 'c'
+                AND NOT EXISTS (
+                    SELECT 1 FROM pg_depend d
+                    WHERE d.objid = t.oid AND d.deptype = 'e'
+                ))
     LOOP
         EXECUTE 'DROP TYPE IF EXISTS {schema}.' || quote_ident(r.typname) || ' CASCADE';
     END LOOP;

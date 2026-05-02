@@ -152,6 +152,20 @@ class HasAttributes:
         if "*" in cls.__fillable__:
             return attributes
 
+        dropped = [
+            key for key in attributes if key not in cls.__fillable__
+        ]
+        if dropped:
+            try:
+                from cara.facades import Log
+                model_name = cls.__name__ if hasattr(cls, "__name__") else str(cls)
+                Log.warning(
+                    f"[MassAssignment] {model_name}: dropped non-fillable keys "
+                    f"{dropped}"
+                )
+            except Exception:
+                pass
+
         return {
             key: value for key, value in attributes.items() if key in cls.__fillable__
         }

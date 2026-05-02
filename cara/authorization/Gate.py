@@ -34,7 +34,7 @@ class Gate(Gate):
 
     def register_policies(self, policies: List[tuple]) -> None:
         """
-        Register multiple policies with model binding (Masonite style).
+        Register multiple policies with model binding.
 
         Args:
             policies: List of (Model, PolicyClass) tuples

@@ -61,18 +61,18 @@ class ExistsRule(BaseRule):
                         f"{e.__class__.__name__}: {e}"
                     )
 
-            # Fallback: Try DB facade
+            # Fallback: Try DB facade with raw SELECT
             try:
-                from cara.eloquent import DB
+                from cara.facades import DB
 
-                query = DB.table(table).where(column, value)
-
-                # Add additional condition if provided
+                sql = f'SELECT 1 FROM "{table}" WHERE "{column}" = %s'
+                params = [value]
                 if condition_column and condition_value is not None:
-                    query = query.where(condition_column, condition_value)
-
-                result = query.first()
-                return result is not None
+                    sql += f' AND "{condition_column}" = %s'
+                    params.append(condition_value)
+                sql += " LIMIT 1"
+                rows = DB.select(sql, params)
+                return len(rows) > 0
             except Exception as e:
                 self._log_debug(
                     f"ExistsRule: DB-fallback query failed for "

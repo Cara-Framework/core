@@ -154,8 +154,23 @@ class MigrationGenerator:
         if not has_primary_key:
             fields_code.insert(0, '            table.increments("id")')
 
-        # Combine fields and foreign keys
-        all_lines = fields_code + foreign_keys
+        # Composite ``field.unique([...])`` and ``field.index([...])``
+        # calls were collected by ModelDiscoverer. Emit them as
+        # ``table.unique([...])`` / ``table.index([...])`` so Postgres
+        # gets the matching constraints (otherwise ``ON CONFLICT
+        # (col_a, col_b)`` upserts in seed scripts fail with ``no
+        # unique or exclusion constraint matching the ON CONFLICT
+        # specification``).
+        composite_lines = []
+        for cols in model_info.get("composite_uniques", []):
+            cols_str = ", ".join(f'"{c}"' for c in cols)
+            composite_lines.append(f"            table.unique([{cols_str}])")
+        for cols in model_info.get("composite_indexes", []):
+            cols_str = ", ".join(f'"{c}"' for c in cols)
+            composite_lines.append(f"            table.index([{cols_str}])")
+
+        # Combine: regular fields → foreign keys → composite constraints
+        all_lines = fields_code + foreign_keys + composite_lines
 
         replacements = {
             "{{ class }}": class_name,

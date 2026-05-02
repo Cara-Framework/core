@@ -328,6 +328,16 @@ class APSchedulerDriver(Scheduling):
     def start(self) -> None:
         """Start the scheduler according to mode."""
         try:
+            # Guard against hot-reload: if the scheduler is already
+            # running (previous process didn't shut down cleanly),
+            # shut it down first so we can start fresh.
+            if self.scheduler.running:
+                Log.warning("Scheduler already running — shutting down before restart.")
+                try:
+                    self.scheduler.shutdown(wait=False)
+                except Exception:
+                    pass
+
             if self.mode == "background":
                 Log.info("Starting APScheduler BackgroundScheduler in background mode...")
                 self.scheduler.start()

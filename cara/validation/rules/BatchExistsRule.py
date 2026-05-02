@@ -79,15 +79,19 @@ class BatchExistsRule(BaseRule):
                 f"{table}.{column}: {exc.__class__.__name__}: {exc}"
             )
 
-        # 2) Fall back to the DB facade. Same single-query shape.
+        # 2) Fall back to the DB facade with raw SELECT.
         try:
-            from cara.eloquent import DB
+            from cara.facades import DB
 
-            query = DB.table(table).where_in(column, unique)
+            placeholders = ", ".join(["%s"] * len(unique))
+            sql = f'SELECT COUNT(*) as c FROM "{table}" WHERE "{column}" IN ({placeholders})'
+            params = list(unique)
             if condition_column and condition_value is not None:
-                query = query.where(condition_column, condition_value)
-            count = query.count()
-            return int(count) >= len(unique)
+                sql += f' AND "{condition_column}" = %s'
+                params.append(condition_value)
+            rows = DB.select(sql, params)
+            count = int((rows or [{}])[0].get("c", 0))
+            return count >= len(unique)
         except Exception as exc:
             self._log_debug(
                 f"BatchExistsRule: DB-fallback query failed for "

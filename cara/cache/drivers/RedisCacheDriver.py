@@ -237,17 +237,37 @@ class RedisCacheDriver(Cache):
     )
 
     def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
-        """Atomically increment via Redis INCRBY."""
+        """Atomically increment via Redis INCRBY.
+
+        If the key holds a non-integer value (e.g. a pickled cache entry
+        that collided with a counter key), delete it first and start fresh.
+        """
         redis_key = f"{self._prefix}{key}"
+        amount = int(amount)
+        ttl = int(ttl) if ttl is not None else None
         try:
             new_val = self._client.incrby(redis_key, amount)
-            # Set TTL only on first creation (when value equals the increment amount)
             if ttl and ttl > 0 and new_val == amount:
                 self._client.expire(redis_key, ttl)
             return new_val
-        except Exception as e:
-            Log.warning(f"[RedisCacheDriver] increment failed: {e}", category="cache")
-            return amount  # Best-effort fallback
+        except Exception:
+            # Key likely holds non-integer data — nuke and reinitialise.
+            try:
+                pipe = self._client.pipeline(transaction=True)
+                pipe.delete(redis_key)
+                if ttl and ttl > 0:
+                    pipe.set(redis_key, str(amount), ex=ttl)
+                else:
+                    pipe.set(redis_key, str(amount))
+                pipe.execute()
+                return amount
+            except Exception as fallback_error:
+                Log.warning(
+                    f"[RedisCacheDriver] increment fallback failed for '{key}': "
+                    f"{fallback_error}",
+                    category="cache",
+                )
+            return amount
 
     def forget_if(self, key: str, expected_value: Any) -> bool:
         redis_key = f"{self._prefix}{key}"

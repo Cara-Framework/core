@@ -157,7 +157,7 @@ class TopicExchange:
             # Only log once when binding is first created
             binding_key = f"{queue_name}->{routing_pattern}"
             if binding_key not in self._logged_bindings:
-                Log.info(
+                Log.debug(
                     f"Queue bound: {queue_name} -> {routing_pattern}",
                     category="cara.queue.exchange"
                 )
@@ -203,6 +203,9 @@ class TopicExchange:
         
         return True
     
+    _DISPATCH_MAX_RETRIES = 3
+    _DISPATCH_BACKOFF_BASE = 0.5
+
     def dispatch_job(self, routing_key: str, job_instance, payload: Optional[Dict] = None) -> Optional[str]:
         """
         Dispatch job to appropriate queue based on routing key.
@@ -216,46 +219,66 @@ class TopicExchange:
             Job ID if successful, None otherwise
         """
         try:
-            # Parse routing key
             parsed_key = RoutingKey.parse(routing_key)
-            
-            # Find matching queues
             matching_queues = self.get_matching_queues(routing_key)
-            
+
             if not matching_queues:
                 Log.warning(
                     f"No queues match routing key: {routing_key}",
                     category="cara.queue.exchange"
                 )
                 return None
-            
-            # Use first matching queue (highest priority)
+
             target_queue = self._select_best_queue(matching_queues, parsed_key.priority)
-            
-            # Set job queue and routing info
+
             if hasattr(job_instance, 'queue'):
                 job_instance.queue = target_queue
             if hasattr(job_instance, 'routing_key'):
                 job_instance.routing_key = routing_key
-            
-            # Dispatch via Queue facade
+
             from cara.facades import Queue
-            job_id = Queue.push(job_instance)
-            
-            # Log successful dispatch
-            Log.info(
-                f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
-                category="cara.queue.exchange"
-            )
-            
-            return str(job_id)
-            
+
+            last_error = None
+            for attempt in range(self._DISPATCH_MAX_RETRIES):
+                try:
+                    job_id = Queue.push(job_instance)
+                    Log.debug(
+                        f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
+                        category="cara.queue.exchange"
+                    )
+                    return str(job_id)
+                except Exception as publish_err:
+                    last_error = publish_err
+                    if attempt < self._DISPATCH_MAX_RETRIES - 1 and self._is_connection_error(publish_err):
+                        import time
+                        wait = self._DISPATCH_BACKOFF_BASE * (2 ** attempt)
+                        Log.warning(
+                            f"Dispatch attempt {attempt + 1} failed for {routing_key}, "
+                            f"retrying in {wait:.1f}s: {publish_err}",
+                            category="cara.queue.exchange"
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise
+
         except Exception as e:
             Log.error(
                 f"Job dispatch failed: {routing_key} - {str(e)}",
                 category="cara.queue.exchange"
             )
             return None
+
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        """Check if the exception is a recoverable AMQP connection error."""
+        err_str = str(exc).lower()
+        if any(kw in err_str for kw in ("stream", "broken pipe", "connection", "reset", "refused", "timeout")):
+            return True
+        try:
+            import pika.exceptions
+            return isinstance(exc, (pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError))
+        except ImportError:
+            return False
     
     def _select_best_queue(self, matching_queues: List[str], priority: str) -> str:
         """

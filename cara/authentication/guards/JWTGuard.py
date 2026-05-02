@@ -171,6 +171,23 @@ class JWTGuard(Guard):
         except Exception:
             return False
 
+    def resolve_refresh_token_user(self, token: str) -> Optional[Any]:
+        """Decode a refresh token and return the associated user (or None)."""
+        try:
+            payload = self._decode_token(token, verify_exp=False)
+            user_id = payload.get("sub")
+            if not user_id:
+                return None
+            if payload.get("typ") != TOKEN_TYPE_REFRESH:
+                return None
+            return self._resolve_user_by_id(user_id, payload)
+        except Exception:
+            return None
+
+    def blacklist_token(self, token: str) -> None:
+        """Public wrapper around _blacklist_token for external callers."""
+        self._blacklist_token(token)
+
     def validate_refresh_token(self, token: str) -> bool:
         """Validate a refresh token specifically - ignores expiration for refresh window check."""
         try:

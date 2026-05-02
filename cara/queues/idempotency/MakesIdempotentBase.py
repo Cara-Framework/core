@@ -113,7 +113,7 @@ class MakesIdempotentBase:
         if not is_forced:
             cached_result = self.get_cached_result()
             if cached_result is not None:
-                Log.info(
+                Log.debug(
                     f"Job already completed (cached): {self.get_job_identifier()}",
                     category="idempotency",
                 )
@@ -123,15 +123,15 @@ class MakesIdempotentBase:
             self._emit_cache_op_metric("get", "miss")
 
             if self.is_job_locked():
-                Log.warning(
-                    f"Job already running: {self.get_job_identifier()}",
+                Log.debug(
+                    f"Job already running, skipping: {self.get_job_identifier()}",
                     category="idempotency",
                 )
                 self._emit_idempotency_metric("locked")
-                return await self.wait_for_completion()
+                return None
 
             if not self.should_execute_based_on_lifecycle():
-                Log.info(
+                Log.debug(
                     f"Job skipped (already processed): {self.get_job_identifier()}",
                     category="idempotency",
                 )
@@ -283,7 +283,7 @@ class MakesIdempotentBase:
         and returns B's cached result.
         """
         if not self.acquire_job_lock():
-            Log.info(
+            Log.debug(
                 f"Lock acquire lost race for {self.get_job_identifier()}; "
                 f"waiting on the in-flight run",
                 category="idempotency",
@@ -292,13 +292,13 @@ class MakesIdempotentBase:
             return await self.wait_for_completion()
 
         try:
-            Log.info(
+            Log.debug(
                 f"Executing job with idempotency: {self.get_job_identifier()}",
                 category="idempotency",
             )
             result = await callback()
             self.cache_result(result)
-            Log.info(
+            Log.debug(
                 f"Job completed successfully: {self.get_job_identifier()}",
                 category="idempotency",
             )
@@ -331,7 +331,7 @@ class MakesIdempotentBase:
 
             cached_result = self.get_cached_result()
             if cached_result is not None:
-                Log.info(
+                Log.debug(
                     f"Waited job completed: {self.get_job_identifier()}",
                     category="idempotency",
                 )

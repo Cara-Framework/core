@@ -148,6 +148,13 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
 
         for job_target in jobs:
             try:
+                # ── Dict-based config (services-style) ──────────────
+                if isinstance(job_target, dict):
+                    entry = self._register_dict_job(job_target)
+                    if entry:
+                        job_entries.append(entry)
+                    continue
+
                 job_name = getattr(job_target, "__name__", str(job_target))
 
                 # Handle ShouldSchedule interface
@@ -176,10 +183,127 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
                     self.warning(f"⚠️  No schedule metadata found for '{job_name}'")
 
             except Exception as e:
-                job_name = getattr(job_target, "__name__", str(job_target))
+                job_name = getattr(job_target, "__name__", str(job_target)) if not isinstance(job_target, dict) else job_target.get("name", job_target.get("job", "?"))
                 self.warning(f"⚠️  Failed to register job '{job_name}': {e}")
 
         return job_entries
+
+    def _register_dict_job(self, spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Register a job defined as a dict in config/scheduling.py.
+
+        Expected keys:
+            job      – dotted import path  e.g. "app.jobs.FooJob.FooJob"
+            trigger  – "interval" | "cron"
+            id       – unique job identifier
+            name     – human label
+            + trigger-specific keys: hours/minutes/seconds (interval)
+              or hour/minute/day_of_week (cron)
+            kwargs   – (optional) passed to handle()
+        """
+        import importlib
+
+        job_path: str = spec.get("job", "")
+        module_path, _, class_name = job_path.rpartition(".")
+        if not module_path or not class_name:
+            self.warning(f"⚠️  Invalid job path: '{job_path}'")
+            return None
+
+        mod = importlib.import_module(module_path)
+        job_cls = getattr(mod, class_name)
+
+        job_id = spec.get("id", class_name)
+        job_name = spec.get("name", class_name)
+        trigger = spec.get("trigger", "interval")
+        job_kwargs = spec.get("kwargs", {})
+
+        # Build the callable — instantiate with kwargs (covers jobs whose
+        # __init__ requires parameters like ``source``), then call handle().
+        # If handle() needs DI-resolved arguments (contracts), resolve them
+        # through the container; if handle() is a coroutine, run it via
+        # asyncio so async jobs work transparently.
+        def _make_and_run(_cls=job_cls, _kw=job_kwargs, _app=self.application):
+            import asyncio
+            import inspect
+
+            # Instantiate — pass kwargs to __init__ so required params
+            # like DiscoverProductsJob(source=...) are satisfied.
+            try:
+                instance = _cls(**_kw) if _kw else _app.make(_cls)
+            except TypeError:
+                # Fallback: kwargs don't match __init__ signature,
+                # try DI container without kwargs.
+                instance = _app.make(_cls)
+
+            # Resolve handle() parameters via DI container if needed.
+            handle_method = getattr(instance, "handle", None)
+            if handle_method is None:
+                return
+
+            sig = inspect.signature(handle_method)
+            handle_kwargs = {}
+            for param_name, param in sig.parameters.items():
+                if param_name in _kw:
+                    handle_kwargs[param_name] = _kw[param_name]
+                elif param.annotation != inspect.Parameter.empty:
+                    try:
+                        handle_kwargs[param_name] = _app.make(param.annotation)
+                    except Exception:
+                        pass
+
+            result = handle_method(**handle_kwargs)
+            # Support async handle() methods
+            if inspect.isawaitable(result):
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(result)
+                finally:
+                    loop.close()
+
+        builder = Schedule.call(_make_and_run)
+        builder.identifier = job_id
+        builder.options.update({"silent": True})
+
+        if trigger == "interval":
+            builder.interval(
+                seconds=spec.get("seconds", 0),
+                minutes=spec.get("minutes", 0),
+                hours=spec.get("hours", 0),
+            )
+            parts = []
+            if spec.get("hours"):
+                parts.append(f"{spec['hours']}h")
+            if spec.get("minutes"):
+                parts.append(f"{spec['minutes']}m")
+            if spec.get("seconds"):
+                parts.append(f"{spec['seconds']}s")
+            schedule_desc = f"Every {' '.join(parts)}" if parts else "interval"
+        elif trigger == "cron":
+            cron_kw = {}
+            for k in ("hour", "minute", "day_of_week"):
+                if k in spec:
+                    cron_kw[k] = spec[k]
+            # APScheduler cron via expression
+            # Build a cron expression or use daily/hourly helpers
+            if "day_of_week" in cron_kw:
+                builder.cron(
+                    f"{cron_kw.get('minute', 0)} {cron_kw.get('hour', 0)} * * {cron_kw['day_of_week']}"
+                )
+            else:
+                builder.daily(
+                    hour=cron_kw.get("hour", 0),
+                    minute=cron_kw.get("minute", 0),
+                )
+            schedule_desc = f"Cron {cron_kw}"
+        else:
+            self.warning(f"⚠️  Unknown trigger '{trigger}' for {job_name}")
+            return None
+
+        return {
+            "name": job_name,
+            "id": job_id,
+            "type": "dict",
+            "schedule": schedule_desc,
+        }
 
     def _register_spec_job(
         self, job_target: Any, job_name: str, spec: Dict[str, Any]

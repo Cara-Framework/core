@@ -576,6 +576,9 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             _port = _start_metrics()
             if _port:
                 Log.info(f"📈 Metrics server on :{_port}/metrics")
+        except ImportError:
+            # Module only exists in services project — silently skip in other projects.
+            pass
         except Exception as e:
             # Non-fatal: worker keeps running with no metrics exposure.
             Log.warning(f"metrics server startup failed: {e}")
@@ -586,6 +589,9 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         try:
             from app.support.MetricsSampler import start as _start_sampler
             _start_sampler()
+        except ImportError:
+            # Module only exists in services project — silently skip in other projects.
+            pass
         except Exception as e:
             Log.warning(f"metrics sampler startup failed: {e}")
 
@@ -604,8 +610,11 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # Store parameters for restart
         self.store_restart_params(driver, queue, timeout, max_jobs, max_time)
 
-        # Setup auto-reload if enabled (default: true for development)
-        if self.option("reload") or config("app.debug", True):
+        # Auto-reload only when explicitly requested — module purging
+        # invalidates IoC container bindings (contract→implementation
+        # identity is lost after re-import), causing resolution failures
+        # like "Can't instantiate abstract class …Contract".
+        if self.option("reload"):
             self.enable_auto_reload()
 
         # Start main worker loop
@@ -776,7 +785,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # Auto-reload status (default: enabled in development)
         from cara.configuration import config as global_config
 
-        auto_reload = self.option("reload") or global_config("app.debug", True)
+        auto_reload = bool(self.option("reload"))
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Auto-reload:[/white] [{'#30e047' if auto_reload else '#E21102'}]{'✓' if auto_reload else '×'}[/{'#30e047' if auto_reload else '#E21102'}]"
         )

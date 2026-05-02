@@ -447,6 +447,15 @@ class FieldBuilder:
     def json(self, name):
         return FieldDefinition("json", name)
 
+    def jsonb(self, name):
+        # Postgres-native binary JSON. Several models call
+        # ``field.jsonb("metadata")``; without this method the call
+        # raised ``AttributeError`` inside ``Schema.build``,
+        # ``MakeMigrationCommand`` swallowed it as a generic ValueError,
+        # and the column quietly disappeared from every generated
+        # migration (every ``metadata`` JSONB field across all tables).
+        return FieldDefinition("jsonb", name)
+
     def timestamp(self, name):
         return FieldDefinition("timestamp", name)
 

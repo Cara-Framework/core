@@ -129,6 +129,15 @@ class Logger(Logger):
             # If anything fails, allow logging
             return True
 
+    # Class names that belong to the logging infrastructure itself and
+    # should be skipped when walking up the call stack to find the real caller.
+    _FRAMEWORK_LOGGER_CLASSES = frozenset({
+        "Logger",
+        "ContextualLogger",
+        "CaraPythonLoggerAdapter",
+        "CaraLoggerFactory",
+    })
+
     def _get_caller_info(self) -> tuple[str, str]:
         """Get caller module and line info efficiently."""
         frame = inspect.currentframe()
@@ -139,11 +148,26 @@ class Logger(Logger):
                 if not frame:
                     return "App", "0"
 
-            # Try to get class name first, then module name
-            if "self" in frame.f_locals:
-                cls_name = type(frame.f_locals["self"]).__name__
-                return cls_name, str(frame.f_lineno)
+            # Keep walking up if we're still inside logging infrastructure
+            for _ in range(8):
+                if "self" in frame.f_locals:
+                    cls_name = type(frame.f_locals["self"]).__name__
+                    if cls_name not in self._FRAMEWORK_LOGGER_CLASSES:
+                        return cls_name, str(frame.f_lineno)
+                else:
+                    module_name = frame.f_globals.get("__name__", "")
+                    # Skip frames from cara.logging.* modules
+                    if not module_name.startswith("cara.logging"):
+                        simple_name = module_name.split(".")[-1].replace("_", "").capitalize()
+                        return simple_name, str(frame.f_lineno)
 
+                # Move up one frame
+                if frame.f_back:
+                    frame = frame.f_back
+                else:
+                    break
+
+            # Fallback: use whatever we landed on
             module_name = frame.f_globals.get("__name__", "App")
             simple_name = module_name.split(".")[-1].replace("_", "").capitalize()
             return simple_name, str(frame.f_lineno)
@@ -192,8 +216,15 @@ class Logger(Logger):
         category: Optional[str] = None,
         exception: Optional[Exception] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
+        color: Optional[str] = None,
+        _module_override: Optional[str] = None,
     ) -> None:
-        """Internal logging method."""
+        """Internal logging method.
+
+        Args:
+            color: Optional hex color (e.g. '#a855f7') to override the message color.
+            _module_override: Override the caller module name (used by adapters).
+        """
         # Check if we should log this based on category filters
         if category and not CategoryFilter.should_log(level, category):
             return
@@ -203,7 +234,11 @@ class Logger(Logger):
             return
 
         # Get caller info
-        module, line = self._get_caller_info()
+        if _module_override:
+            module = _module_override
+            line = "0"
+        else:
+            module, line = self._get_caller_info()
         request_id = self._get_request_id()
         service = self._config.get("service_name", "")
 
@@ -219,8 +254,11 @@ class Logger(Logger):
         # Get level short form
         level_short = self._get_level_short(level)
 
-        # Get message color based on level
-        message_color = self._get_message_color(level)
+        # Get message color — custom hex overrides level color
+        if color:
+            message_color = self._hex_to_ansi(color)
+        else:
+            message_color = self._get_message_color(level)
 
         # Get level color (for level labels and brackets)
         level_color = self._get_level_color(level)
@@ -249,6 +287,15 @@ class Logger(Logger):
 
         # Use depth=2 to show the actual caller's line number, not Logger._log line
         bound_logger.opt(depth=2).log(level, formatted_message.strip())
+
+    @staticmethod
+    def _hex_to_ansi(hex_color: str) -> str:
+        """Convert hex color (#rrggbb) to ANSI 24-bit escape code."""
+        h = hex_color.lstrip("#")
+        if len(h) == 6:
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return f"\x1b[38;2;{r};{g};{b}m"
+        return "\x1b[0m"
 
     def _get_level_short(self, level: str) -> str:
         """Convert level to short format."""
@@ -289,51 +336,61 @@ class Logger(Logger):
         message: str,
         *args: Any,
         category: Optional[str] = None,
+        color: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
+        _module_override: Optional[str] = None,
     ) -> None:
         """Log debug message."""
-        self._log("DEBUG", message, category, exc_info=exc_info)
+        self._log("DEBUG", message, category, exc_info=exc_info, color=color, _module_override=_module_override)
 
     def info(
         self,
         message: str,
         *args: Any,
         category: Optional[str] = None,
+        color: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
+        _module_override: Optional[str] = None,
     ) -> None:
         """Log info message."""
-        self._log("INFO", message, category, exc_info=exc_info)
+        self._log("INFO", message, category, exc_info=exc_info, color=color, _module_override=_module_override)
 
     def warning(
         self,
         message: str,
         *args: Any,
         category: Optional[str] = None,
+        color: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
+        _module_override: Optional[str] = None,
     ) -> None:
         """Log warning message."""
-        self._log("WARNING", message, category, exc_info=exc_info)
+        self._log("WARNING", message, category, exc_info=exc_info, color=color, _module_override=_module_override)
 
     def error(
         self,
         message: str,
         *args: Any,
         category: Optional[str] = None,
+        color: Optional[str] = None,
         exception: Optional[Exception] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
+        _module_override: Optional[str] = None,
     ) -> None:
         """Log error message."""
-        self._log("ERROR", message, category, exception, exc_info)
+        self._log("ERROR", message, category, exception, exc_info, color=color, _module_override=_module_override)
 
     def critical(
         self,
         message: str,
         *args: Any,
         category: Optional[str] = None,
+        color: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = None,
+        _module_override: Optional[str] = None,
     ) -> None:
         """Log critical message."""
-        self._log("CRITICAL", message, category, exc_info=exc_info)
+        self._log("CRITICAL", message, category, exc_info=exc_info, color=color, _module_override=_module_override)
 
     def exception(
         self,
@@ -341,9 +398,10 @@ class Logger(Logger):
         *args: Any,
         category: Optional[str] = None,
         exc_info: Union[bool, Exception, tuple, None] = True,
+        _module_override: Optional[str] = None,
     ) -> None:
         """Log an exception message with backtrace."""
-        self._log("ERROR", message, category, exc_info=exc_info)
+        self._log("ERROR", message, category, exc_info=exc_info, _module_override=_module_override)
 
     def withContext(self, **context: Any) -> "ContextualLogger":
         """Return a scoped logger that auto-injects context into every message.

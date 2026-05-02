@@ -267,12 +267,26 @@ class ConnectionResolver:
         return Schema(connection=connection, schema=schema)
 
     def get_query_builder(self, connection_name):
-        """Factory method for query builder - Interface segregation"""
+        """Factory method for query builder - Interface segregation
+
+        Pass the connection *name* (string) instead of a live connection
+        instance. QueryBuilder.new_connection() will open the real
+        psycopg2 connection lazily — only when a query is actually
+        executed — and PostgresConnection.query() returns it to the pool
+        in its ``finally`` block.
+
+        Previously this called ``_create_connection_instance()`` eagerly,
+        but QueryBuilder.on() detected the instance (has ``name`` and
+        ``make_connection`` attrs), discarded it, and stored the default
+        connection name instead. The opened psycopg2 handle was then
+        abandoned — never returned to the pool, never closed — leaking
+        one server-side connection per get_query_builder() call until GC
+        reclaimed the orphan. Under burst load this exhausted
+        ``max_connections`` within seconds.
+        """
         from ..query import QueryBuilder
 
-        # Create connection for query operations
-        connection = self._create_connection_instance(connection_name)
-        return QueryBuilder(connection=connection)
+        return QueryBuilder(connection=connection_name)
 
     def statement(self, query, bindings=(), connection_name=None):
         """Execute raw SQL statement - Delegation to appropriate builder"""

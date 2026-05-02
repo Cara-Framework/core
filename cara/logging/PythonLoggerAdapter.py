@@ -67,6 +67,36 @@ class CaraPythonLoggerAdapter(logging.Logger):
         # Default fallback
         return f"external.{library_name.split('.')[0]}"
 
+    # Pretty display names for external libraries so the log module column
+    # shows a meaningful service name instead of "CaraPythonLoggerAdapter".
+    _LIBRARY_DISPLAY_NAMES: Dict[str, str] = {
+        "httpx": "Httpx",
+        "httpcore": "Httpx",
+        "urllib3": "Urllib3",
+        "requests": "Requests",
+        "uvicorn": "Uvicorn",
+        "uvicorn.error": "Uvicorn",
+        "uvicorn.access": "Uvicorn",
+        "pika": "RabbitMQ",
+        "amqp": "RabbitMQ",
+        "redis": "Redis",
+        "aioredis": "Redis",
+        "apscheduler": "Scheduler",
+        "websockets": "WebSocket",
+        "eloquent": "Eloquent",
+        "eloquent.models": "Eloquent",
+        "eloquent.models.hydrate": "Eloquent",
+    }
+
+    @property
+    def _display_name(self) -> str:
+        """Return a human-friendly name for the log module column."""
+        name = self._LIBRARY_DISPLAY_NAMES.get(self.library_name)
+        if name:
+            return name
+        # Fallback: capitalize the root library name
+        return self.library_name.split(".")[0].capitalize()
+
     def _log(
         self,
         level: int,
@@ -115,11 +145,12 @@ class CaraPythonLoggerAdapter(logging.Logger):
         else:
             clean_message = message
 
-        # Forward to Cara Logger with category
+        # Forward to Cara Logger with category and module override
         getattr(self.cara_logger, cara_level)(
             clean_message,
             category=self.category,
             exc_info=exc_info,
+            _module_override=self._display_name,
         )
 
 

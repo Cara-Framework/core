@@ -12,6 +12,9 @@ covers every existing call site cleanly; we'll grow the surface only
 when an app actually needs configurable rules.
 """
 
+from typing import Optional
+
+
 
 # Common-password prefixes — lowercased. Match by prefix rather than
 # exact equality so trivial decorations ("password123", "qwerty!")
@@ -27,7 +30,7 @@ _COMMON_PASSWORD_PREFIXES = (
 )
 
 
-def check_password_strength(password: str) -> str | None:
+def check_password_strength(password: str) -> Optional[str]:
     """Return an error message if ``password`` is too weak, ``None`` otherwise.
 
     Unified policy used across every auth flow (register / reset /

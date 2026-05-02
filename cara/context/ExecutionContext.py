@@ -11,6 +11,8 @@ from typing import Optional
 _sync_mode: ContextVar[bool] = ContextVar("sync_mode", default=False)
 _debug_mode: ContextVar[bool] = ContextVar("debug_mode", default=False)
 _job_id: ContextVar[Optional[str]] = ContextVar("job_id", default=None)
+_batch_id: ContextVar[Optional[str]] = ContextVar("batch_id", default=None)
+_correlation_id: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
 
 
 class ExecutionContext:
@@ -62,13 +64,28 @@ class ExecutionContext:
 
     @staticmethod
     def set_job_id(job_id: str):
-        """
-        Set job ID in context.
-
-        Args:
-            job_id: Job identifier to track across pipeline
-        """
+        """Set job ID in context."""
         _job_id.set(job_id)
+
+    @staticmethod
+    def get_batch_id() -> Optional[str]:
+        """Get current batch ID — groups related jobs dispatched together."""
+        return _batch_id.get()
+
+    @staticmethod
+    def set_batch_id(batch_id: str):
+        """Set batch ID in context."""
+        _batch_id.set(batch_id)
+
+    @staticmethod
+    def get_correlation_id() -> Optional[str]:
+        """Get correlation ID — traces a causal chain across job generations."""
+        return _correlation_id.get()
+
+    @staticmethod
+    def set_correlation_id(correlation_id: str):
+        """Set correlation ID in context."""
+        _correlation_id.set(correlation_id)
 
     @staticmethod
     def sync(debug: bool = False, job_id: Optional[str] = None):
@@ -138,28 +155,41 @@ class ExecutionContext:
 class _ExecutionContextManager:
     """Internal context manager implementation."""
 
-    def __init__(self, sync: bool, debug: bool, job_id: Optional[str] = None):
+    def __init__(
+        self,
+        sync: bool,
+        debug: bool,
+        job_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+    ):
         self.sync = sync
         self.debug = debug
         self.job_id = job_id
-        self.sync_token: Optional[object] = None
-        self.debug_token: Optional[object] = None
-        self.job_id_token: Optional[object] = None
+        self.batch_id = batch_id
+        self.correlation_id = correlation_id
+        self._tokens: list = []
 
     def __enter__(self):
-        """Enter context."""
-        self.sync_token = _sync_mode.set(self.sync)
-        self.debug_token = _debug_mode.set(self.debug)
+        self._tokens.append(("sync", _sync_mode.set(self.sync)))
+        self._tokens.append(("debug", _debug_mode.set(self.debug)))
         if self.job_id is not None:
-            self.job_id_token = _job_id.set(self.job_id)
+            self._tokens.append(("job_id", _job_id.set(self.job_id)))
+        if self.batch_id is not None:
+            self._tokens.append(("batch_id", _batch_id.set(self.batch_id)))
+        if self.correlation_id is not None:
+            self._tokens.append(("corr", _correlation_id.set(self.correlation_id)))
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit context and restore previous values."""
-        if self.sync_token is not None:
-            _sync_mode.reset(self.sync_token)
-        if self.debug_token is not None:
-            _debug_mode.reset(self.debug_token)
-        if self.job_id_token is not None:
-            _job_id.reset(self.job_id_token)
+        _var_map = {
+            "sync": _sync_mode,
+            "debug": _debug_mode,
+            "job_id": _job_id,
+            "batch_id": _batch_id,
+            "corr": _correlation_id,
+        }
+        for name, token in reversed(self._tokens):
+            _var_map[name].reset(token)
+        self._tokens.clear()
         return False
