@@ -456,22 +456,27 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         try:
             driver = Schedule.driver(scheduler_config["driver_name"])
 
-            # Start scheduler
-            try:
-                driver.start()
-            except Exception as e:
-                if "already running" not in str(e).lower():
-                    raise
+            # BackgroundScheduler: start() returns immediately, jobs
+            # run in a thread pool. The while-loop below keeps the
+            # command alive until Ctrl-C or auto-reload sets
+            # shutdown_requested.
+            driver.start()
 
             if scheduler_config["run_once"]:
-                self.console.print("[#30e047]✅ Scheduled tasks executed once[/#30e047]")
+                self.console.print("[#30e047]Scheduled tasks executed once[/#30e047]")
             else:
-                # Keep running until interrupted
                 while not self.shutdown_requested:
                     time.sleep(1)
 
         except Exception as e:
             raise Exception(f"Failed to start scheduler: {e}") from e
+        finally:
+            # Ensure the background scheduler stops its thread pool
+            # when the command exits (Ctrl-C, auto-reload, --once).
+            try:
+                driver.shutdown(wait=False)
+            except Exception:
+                pass
 
     def _show_final_stats(self):
         """Show final scheduler statistics."""

@@ -1,53 +1,50 @@
-"""
-APScheduler Driver for the Cara framework.
+"""APScheduler Driver for the Cara framework.
 
-This module provides a scheduling driver that integrates APScheduler for background job scheduling
-and execution.
+Always uses BackgroundScheduler internally so the calling command
+retains control of the main thread (required for auto-reload, graceful
+shutdown, health-check endpoints, etc.). The ``mode`` setting in config
+is kept for backward compatibility but has no effect — background mode
+is the only sane option when the command layer manages its own loop.
+
+Job registration is decoupled from scheduler lifecycle: jobs are stored
+in a local registry and (re-)applied to the underlying APScheduler
+instance on every ``start()`` call. This means ``shutdown()`` +
+``start()`` never loses registered jobs — the exact bug that caused the
+scheduler to sit idle for hours.
 """
 
 import inspect
 import time as _time
-from typing import Any, Dict, Iterable
+import traceback
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from cara.facades import Log
 from cara.scheduling.contracts import Scheduling
 
 
-def _instrument_scheduled(identifier: str, callback: Any) -> Any:
-    """Wrap a scheduled-job callback with Prometheus metrics.
+# ── Prometheus instrumentation wrapper ────────────────────────────────
 
-    Returns a new callable that:
-      - records wall-clock duration on ``cheapa_scheduled_task_duration_seconds``
-      - records success / failure outcome on ``cheapa_scheduled_tasks_total``
-      - preserves async / sync semantics of the underlying callback so
-        APScheduler can still inspect ``iscoroutinefunction``.
-    """
+def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
+    """Wrap a scheduled callback with Prometheus counter + histogram."""
     try:
         from app.support.Metrics import Metrics as _M
     except ImportError:
         _M = None  # type: ignore[assignment]
 
-    is_coro = inspect.iscoroutinefunction(callback)
-
     def _observe(outcome: str, duration: float) -> None:
         if _M is None:
             return
         try:
-            _M.scheduled_tasks_total.labels(
-                task=identifier, outcome=outcome,
-            ).inc()
-            _M.scheduled_task_duration_seconds.labels(
-                task=identifier,
-            ).observe(duration)
+            _M.scheduled_tasks_total.labels(task=identifier, outcome=outcome).inc()
+            _M.scheduled_task_duration_seconds.labels(task=identifier).observe(duration)
         except (AttributeError, TypeError):
-            # Metrics not configured or wrong type — safe to skip
             pass
 
-    if is_coro:
-        async def _async_wrapped(*args, **kwargs):
+    if inspect.iscoroutinefunction(callback):
+        async def _async_wrapped(*a, **kw):
             start = _time.time()
             try:
-                result = await callback(*args, **kwargs)
+                result = await callback(*a, **kw)
                 _observe("success", _time.time() - start)
                 return result
             except Exception:
@@ -56,10 +53,10 @@ def _instrument_scheduled(identifier: str, callback: Any) -> Any:
         _async_wrapped.__name__ = getattr(callback, "__name__", f"scheduled_{identifier}")
         return _async_wrapped
 
-    def _sync_wrapped(*args, **kwargs):
+    def _sync_wrapped(*a, **kw):
         start = _time.time()
         try:
-            result = callback(*args, **kwargs)
+            result = callback(*a, **kw)
             _observe("success", _time.time() - start)
             return result
         except Exception:
@@ -69,317 +66,233 @@ def _instrument_scheduled(identifier: str, callback: Any) -> Any:
     return _sync_wrapped
 
 
-class APSchedulerDriver(Scheduling):
-    """
-    APScheduler driver supporting both blocking and background modes.
+# ── Error listener ────────────────────────────────────────────────────
 
-    Reads settings dict for:
-      - mode: "blocking" or "background" (default "blocking")
-      - jobstores, executors, job_defaults, timezone, etc.
-    """
+def _job_error_listener(event) -> None:
+    """Forward APScheduler job errors to Cara's Log facade."""
+    if event.exception:
+        Log.error(
+            f"Scheduled job '{event.job_id}' failed: {event.exception}",
+            category="scheduler",
+        )
+        if event.traceback:
+            Log.debug(
+                f"Scheduled job '{event.job_id}' traceback:\n{event.traceback}",
+                category="scheduler",
+            )
+    else:
+        Log.debug(
+            f"Scheduled job '{event.job_id}' executed successfully.",
+            category="scheduler",
+        )
+
+
+# ── Driver ────────────────────────────────────────────────────────────
+
+class APSchedulerDriver(Scheduling):
+    """APScheduler driver — always BackgroundScheduler, auto-reload safe."""
 
     driver_name = "apscheduler"
 
-    def __init__(self, settings: Dict[str, Any] = None):
+    def __init__(self, settings: Optional[Dict[str, Any]] = None) -> None:
         settings = settings or {}
-
-        # Configure APScheduler logging to reduce noise
+        self._settings = settings
         self._configure_logging()
 
-        # Determine mode
-        self.mode = self._get_mode(settings)
+        # Registry: list of (identifier, instrumented_callback, trigger, job_opts)
+        # Survives scheduler restarts — jobs are re-applied on start().
+        self._job_registry: List[Tuple[str, Callable, Any, Dict]] = []
 
-        # Create scheduler
-        self.scheduler = self._create_scheduler(settings)
+        self.scheduler = self._create_scheduler()
+
+    # ── Scheduler creation ────────────────────────────────────────────
 
     def _configure_logging(self) -> None:
-        """Configure APScheduler logging to reduce noise."""
         import logging
-
+        # Let warnings through so misfire notices are visible.
         logging.getLogger("apscheduler").setLevel(logging.WARNING)
+        # Executor errors are forwarded via our event listener, so keep
+        # APScheduler's own executor logger quiet.
         logging.getLogger("apscheduler.executors").setLevel(logging.ERROR)
-        logging.getLogger("apscheduler.schedulers").setLevel(logging.ERROR)
 
-    def _get_mode(self, settings: Dict[str, Any]) -> str:
-        """Get and validate scheduler mode."""
-        mode = settings.get("mode", "blocking").lower()
-        if mode not in ("blocking", "background"):
-            Log.warning(
-                f"APSchedulerDriver: unknown mode '{mode}', defaulting to 'blocking'"
-            )
-            mode = "blocking"
-        return mode
+    def _create_scheduler(self):
+        from apscheduler.schedulers.background import BackgroundScheduler
 
-    def _create_scheduler(self, settings: Dict[str, Any]):
-        """Create and configure the appropriate scheduler."""
+        kwargs: Dict[str, Any] = {}
+        for key in ("jobstores", "executors", "job_defaults", "timezone"):
+            if key in self._settings:
+                kwargs[key] = self._settings[key]
+
+        # Generous misfire window: if the scheduler was down (restart,
+        # deploy) for up to 5 min, fire the job immediately on return
+        # rather than silently skipping it.
+        kwargs.setdefault("job_defaults", {})
+        kwargs["job_defaults"].setdefault("misfire_grace_time", 300)
+        kwargs["job_defaults"].setdefault("coalesce", True)
+
+        scheduler = BackgroundScheduler(**kwargs)
+
+        # Wire error listener so job failures appear in Cara logs.
         try:
-            from apscheduler.schedulers.background import BackgroundScheduler
-            from apscheduler.schedulers.blocking import BlockingScheduler
-        except ImportError as e:
-            raise ImportError(
-                "APScheduler is required for scheduling. Please install it with: pip install apscheduler"
-            ) from e
+            from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+            scheduler.add_listener(_job_error_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
+        except ImportError:
+            pass
 
-        # Prepare scheduler kwargs
-        sched_kwargs = self._extract_scheduler_kwargs(settings)
+        return scheduler
 
-        # Create scheduler
-        try:
-            if self.mode == "background":
-                scheduler = BackgroundScheduler(**sched_kwargs)
-                Log.info(
-                    f"APSchedulerDriver initialized in background mode with settings: {sched_kwargs}"
-                )
-            else:
-                scheduler = BlockingScheduler(**sched_kwargs)
-                Log.info(
-                    f"APSchedulerDriver initialized in blocking mode with settings: {sched_kwargs}"
-                )
-
-            return scheduler
-        except Exception as e:
-            Log.error(f"Failed to create APScheduler scheduler ({self.mode}): {e}")
-            raise
-
-    def _extract_scheduler_kwargs(self, settings: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract scheduler-specific kwargs from settings."""
-        sched_kwargs = {}
-        if hasattr(settings, "get"):
-            for key in ("jobstores", "executors", "job_defaults", "timezone"):
-                if key in settings:
-                    sched_kwargs[key] = settings[key]
-        return sched_kwargs
+    # ── Job registration ──────────────────────────────────────────────
 
     def schedule_job(
         self,
         identifier: str,
-        callback: Any,
+        callback: Callable,
         schedule_spec: Dict[str, Any],
         options: Dict[str, Any],
     ) -> None:
-        """Register a job according to schedule_spec."""
         silent = bool(options.get("silent", False))
 
-        # Remove existing job if present
-        self._remove_existing_job(identifier, silent)
-
-        # Build trigger
-        try:
-            trigger = self._build_trigger(schedule_spec)
-        except Exception as e:
-            if not silent:
-                Log.error(f"Failed to build trigger for job '{identifier}': {e}")
-            raise
-
-        # Add job
-        self._add_job(identifier, callback, trigger, options, silent)
-
-    def _remove_existing_job(self, identifier: str, silent: bool) -> None:
-        """Remove existing job if present."""
-        try:
-            existing = self.scheduler.get_job(job_id=identifier)
-            if existing:
-                try:
-                    self.scheduler.remove_job(job_id=identifier)
-                    if not silent:
-                        Log.info(
-                            f"Removed existing scheduled job '{identifier}' before re-adding."
-                        )
-                except Exception:
-                    if not silent:
-                        Log.warning(f"Failed to remove existing job '{identifier}'.")
-        except Exception:
-            pass
-
-    def _add_job(
-        self,
-        identifier: str,
-        callback: Any,
-        trigger: Any,
-        options: Dict[str, Any],
-        silent: bool,
-    ) -> None:
-        """Add job to scheduler."""
-        job_opts = {}
-        if hasattr(options, "get") and "apscheduler_job_options" in options:
-            job_opts = options.get("apscheduler_job_options", {})
-
-        # Wrap the callback in a Prometheus-instrumented shim so every
-        # scheduled tick increments its counter + duration histogram.
-        # Done once at registration so APScheduler itself is oblivious.
+        trigger = self._build_trigger(schedule_spec)
         instrumented = _instrument_scheduled(identifier, callback)
+        job_opts = options.get("apscheduler_job_options", {}) if isinstance(options, dict) else {}
 
-        try:
-            self.scheduler.add_job(
-                func=instrumented,
-                trigger=trigger,
-                id=identifier,
-                **job_opts,
-            )
-            if not silent:
-                Log.info(f"Scheduled job '{identifier}'.")
-        except Exception as e:
-            if not silent:
-                Log.error(f"Failed to schedule job '{identifier}': {e}")
-            raise
+        # Remove any previous entry with the same id.
+        self._job_registry = [
+            (jid, cb, tr, jo)
+            for jid, cb, tr, jo in self._job_registry
+            if jid != identifier
+        ]
+        self._job_registry.append((identifier, instrumented, trigger, job_opts))
 
-    def _build_trigger(self, schedule_spec: Dict[str, Any]):
-        """Build trigger based on schedule specification."""
-        if "type" not in schedule_spec:
-            raise ValueError("schedule_spec must include 'type' key.")
+        # If the scheduler is already running, hot-add the job.
+        if self.scheduler.running:
+            try:
+                self.scheduler.remove_job(job_id=identifier)
+            except Exception:
+                pass
+            try:
+                self.scheduler.add_job(
+                    func=instrumented,
+                    trigger=trigger,
+                    id=identifier,
+                    **job_opts,
+                )
+            except Exception as e:
+                if not silent:
+                    Log.error(f"Failed to schedule job '{identifier}': {e}")
+                raise
 
-        sched_type = schedule_spec["type"]
+        if not silent:
+            Log.info(f"Registered scheduled job '{identifier}'.")
 
-        # Import trigger classes when needed
-        try:
-            from apscheduler.triggers.cron import CronTrigger
-            from apscheduler.triggers.date import DateTrigger
-            from apscheduler.triggers.interval import IntervalTrigger
-        except ImportError as e:
-            raise ImportError(
-                "APScheduler is required for scheduling. Please install it with: pip install apscheduler"
-            ) from e
-
-        if sched_type == "cron":
-            return self._build_cron_trigger(schedule_spec, CronTrigger)
-        elif sched_type == "daily":
-            return self._build_daily_trigger(schedule_spec, CronTrigger)
-        elif sched_type == "hourly":
-            return self._build_hourly_trigger(schedule_spec, CronTrigger)
-        elif sched_type == "weekly":
-            return self._build_weekly_trigger(schedule_spec, CronTrigger)
-        elif sched_type == "interval":
-            return self._build_interval_trigger(schedule_spec, IntervalTrigger)
-        elif sched_type == "date":
-            return self._build_date_trigger(schedule_spec, DateTrigger)
-        else:
-            raise ValueError(f"Unknown schedule type: {sched_type}")
-
-    def _build_cron_trigger(self, schedule_spec: Dict[str, Any], CronTrigger):
-        """Build cron trigger."""
-        expr = schedule_spec.get("expression")
-        if not isinstance(expr, str):
-            raise ValueError("For cron type, 'expression' string is required.")
-
-        tz = schedule_spec.get("timezone", None)
-        parts = expr.split()
-        if len(parts) != 5:
-            raise ValueError(
-                "Cron expression must have 5 fields: minute hour day month day_of_week"
-            )
-
-        minute, hour, day, month, day_of_week = parts
-        return CronTrigger(
-            minute=minute,
-            hour=hour,
-            day=day,
-            month=month,
-            day_of_week=day_of_week,
-            timezone=tz,
-        )
-
-    def _build_daily_trigger(self, schedule_spec: Dict[str, Any], CronTrigger):
-        """Build daily trigger."""
-        hour = schedule_spec.get("hour", 0)
-        minute = schedule_spec.get("minute", 0)
-        tz = schedule_spec.get("timezone", None)
-        return CronTrigger(hour=hour, minute=minute, timezone=tz)
-
-    def _build_hourly_trigger(self, schedule_spec: Dict[str, Any], CronTrigger):
-        """Build hourly trigger."""
-        minute = schedule_spec.get("minute", 0)
-        tz = schedule_spec.get("timezone", None)
-        return CronTrigger(minute=minute, timezone=tz)
-
-    def _build_weekly_trigger(self, schedule_spec: Dict[str, Any], CronTrigger):
-        """Build weekly trigger."""
-        day_of_week = schedule_spec.get("day_of_week")
-        hour = schedule_spec.get("hour", 0)
-        minute = schedule_spec.get("minute", 0)
-        tz = schedule_spec.get("timezone", None)
-        return CronTrigger(
-            minute=minute,
-            hour=hour,
-            day="*",
-            month="*",
-            day_of_week=day_of_week,
-            timezone=tz,
-        )
-
-    def _build_interval_trigger(self, schedule_spec: Dict[str, Any], IntervalTrigger):
-        """Build interval trigger."""
-        return IntervalTrigger(
-            seconds=schedule_spec.get("seconds", 0),
-            minutes=schedule_spec.get("minutes", 0),
-            hours=schedule_spec.get("hours", 0),
-            days=schedule_spec.get("days", 0),
-            weeks=schedule_spec.get("weeks", 0),
-            timezone=schedule_spec.get("timezone", None),
-        )
-
-    def _build_date_trigger(self, schedule_spec: Dict[str, Any], DateTrigger):
-        """Build date trigger."""
-        run_date = schedule_spec.get("run_date")
-        if not run_date:
-            raise ValueError("For date type, 'run_date' is required.")
-        tz = schedule_spec.get("timezone", None)
-        return DateTrigger(run_date=run_date, timezone=tz)
+    # ── Lifecycle ─────────────────────────────────────────────────────
 
     def start(self) -> None:
-        """Start the scheduler according to mode."""
-        try:
-            # Guard against hot-reload: if the scheduler is already
-            # running (previous process didn't shut down cleanly),
-            # shut it down first so we can start fresh.
-            if self.scheduler.running:
-                Log.warning("Scheduler already running — shutting down before restart.")
-                try:
-                    self.scheduler.shutdown(wait=False)
-                except Exception:
-                    pass
-
-            if self.mode == "background":
-                Log.info("Starting APScheduler BackgroundScheduler in background mode...")
-                self.scheduler.start()
-                Log.info(
-                    "APScheduler BackgroundScheduler started (running in background)."
-                )
-            else:
-                Log.info(
-                    "Starting APScheduler BlockingScheduler (will block main thread)..."
-                )
-                self.scheduler.start()
-                Log.info("APScheduler BlockingScheduler has exited.")
-        except (KeyboardInterrupt, SystemExit):
-            Log.info("APScheduler scheduler interrupted, shutting down.")
+        """Start (or restart) the scheduler with all registered jobs."""
+        # Tear down a previously running instance.
+        if self.scheduler.running:
+            Log.info("Scheduler running — restarting with fresh instance.")
             try:
                 self.scheduler.shutdown(wait=False)
             except Exception:
                 pass
-        except Exception as e:
-            Log.error(f"Failed to start APScheduler scheduler ({self.mode}): {e}")
-            raise
+            self.scheduler = self._create_scheduler()
+
+        # Apply every registered job to the fresh scheduler.
+        for identifier, callback, trigger, job_opts in self._job_registry:
+            try:
+                self.scheduler.add_job(
+                    func=callback,
+                    trigger=trigger,
+                    id=identifier,
+                    **job_opts,
+                )
+            except Exception as e:
+                Log.warning(f"Failed to add job '{identifier}' on start: {e}")
+
+        job_count = len(self._job_registry)
+        self.scheduler.start()
+        Log.info(f"APScheduler started with {job_count} jobs (background mode).")
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the scheduler gracefully."""
         try:
-            self.scheduler.shutdown(wait=wait)
-            Log.info("APScheduler scheduler shut down.")
+            if self.scheduler.running:
+                self.scheduler.shutdown(wait=wait)
+                Log.info("APScheduler shut down.")
         except Exception as e:
-            Log.warning(f"Error shutting down APScheduler scheduler: {e}")
+            Log.warning(f"Error shutting down APScheduler: {e}")
 
     def remove_job(self, identifier: str) -> None:
-        """Remove a scheduled job."""
+        self._job_registry = [
+            (jid, cb, tr, jo)
+            for jid, cb, tr, jo in self._job_registry
+            if jid != identifier
+        ]
         try:
             self.scheduler.remove_job(job_id=identifier)
-            Log.info(f"Removed scheduled job '{identifier}'.")
         except Exception:
-            Log.warning(f"Failed to remove job '{identifier}' or job not found.")
+            pass
 
     def list_jobs(self) -> Iterable[Any]:
-        """List all scheduled jobs."""
         try:
             return self.scheduler.get_jobs()
-        except Exception as e:
-            Log.warning(f"Failed to list scheduled jobs: {e}")
+        except Exception:
             return []
+
+    # ── Trigger builders ──────────────────────────────────────────────
+
+    def _build_trigger(self, spec: Dict[str, Any]):
+        sched_type = spec.get("type")
+        if not sched_type:
+            raise ValueError("schedule_spec must include 'type' key.")
+
+        from apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.date import DateTrigger
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        tz = spec.get("timezone")
+
+        if sched_type == "interval":
+            return IntervalTrigger(
+                seconds=spec.get("seconds", 0),
+                minutes=spec.get("minutes", 0),
+                hours=spec.get("hours", 0),
+                days=spec.get("days", 0),
+                weeks=spec.get("weeks", 0),
+                timezone=tz,
+            )
+        elif sched_type == "cron":
+            expr = spec.get("expression", "")
+            if not isinstance(expr, str) or not expr.strip():
+                raise ValueError("Cron type requires 'expression' string.")
+            parts = expr.split()
+            if len(parts) != 5:
+                raise ValueError("Cron expression must have 5 fields: minute hour day month day_of_week")
+            minute, hour, day, month, day_of_week = parts
+            return CronTrigger(
+                minute=minute, hour=hour, day=day,
+                month=month, day_of_week=day_of_week, timezone=tz,
+            )
+        elif sched_type == "daily":
+            return CronTrigger(
+                hour=spec.get("hour", 0),
+                minute=spec.get("minute", 0),
+                timezone=tz,
+            )
+        elif sched_type == "hourly":
+            return CronTrigger(minute=spec.get("minute", 0), timezone=tz)
+        elif sched_type == "weekly":
+            return CronTrigger(
+                minute=spec.get("minute", 0),
+                hour=spec.get("hour", 0),
+                day="*", month="*",
+                day_of_week=spec.get("day_of_week"),
+                timezone=tz,
+            )
+        elif sched_type == "date":
+            run_date = spec.get("run_date")
+            if not run_date:
+                raise ValueError("Date type requires 'run_date'.")
+            return DateTrigger(run_date=run_date, timezone=tz)
+        else:
+            raise ValueError(f"Unknown schedule type: {sched_type}")
