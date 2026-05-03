@@ -135,6 +135,29 @@ class ConnectionManager:
                     f"({self.max_connections_per_user}); dropping oldest {oldest}",
                     category="cara.broadcasting",
                 )
+                # Tell the dropped tab WHY it lost the socket so the
+                # client can show "you signed in elsewhere" instead of
+                # silently retry-storming. Best-effort: a closed peer
+                # just raises here and the broadcast-closed marker
+                # filters the noise.
+                evicted_ws = self.connections.get(oldest)
+                if evicted_ws is not None:
+                    try:
+                        await evicted_ws.send_json(
+                            {
+                                "event": "connection.evicted",
+                                "data": {
+                                    "reason": "max_connections_per_user",
+                                    "limit": self.max_connections_per_user,
+                                },
+                            }
+                        )
+                    except Exception as e:
+                        if not _is_connection_closed_error(e):
+                            Log.debug(
+                                f"Eviction notice to {oldest} failed: {e}",
+                                category="cara.broadcasting",
+                            )
                 await self.remove_connection(oldest)
 
         if len(self.connections) >= self.max_connections:
@@ -294,6 +317,15 @@ class ConnectionManager:
         trigger an immediate ``remove_connection`` for the dead
         connection so it doesn't accumulate dead entries in the
         index.
+
+        Sends fan out via ``asyncio.gather`` rather than a sequential
+        ``await`` loop. The previous implementation made total
+        broadcast latency = sum of per-send time, so a single
+        slow/stuck client (head-of-line blocking) delayed every other
+        subscriber on a popular channel; with 1k subscribers and a
+        50 ms p50, that was 50 s end-to-end just to fan out.
+        Concurrent dispatch caps end-to-end at the slowest single
+        send.
         """
         # Snapshot the subscriber set BEFORE the first await so a
         # concurrent subscribe/unsubscribe / remove_connection can't
@@ -308,41 +340,9 @@ class ConnectionManager:
             skip_conn_id = self.connections_by_socket_id.get(except_socket_id)
 
         message = {"event": event, "channel": channel, "data": data}
-        delivered = 0
-        failed: List[str] = []
-
-        for connection_id in subscribers:
-            if skip_conn_id and connection_id == skip_conn_id:
-                continue
-            ws = self.connections.get(connection_id)
-            if ws is None:
-                # Stale entry — was removed between snapshot and now.
-                continue
-            try:
-                await ws.send_json(message)
-                delivered += 1
-            except Exception as e:
-                if _is_connection_closed_error(e):
-                    Log.debug(
-                        f"Subscriber {connection_id} closed mid-send on {channel}",
-                        category="cara.broadcasting",
-                    )
-                else:
-                    Log.warning(
-                        f"Send to {connection_id} on {channel} failed: {e}",
-                        category="cara.broadcasting",
-                    )
-                failed.append(connection_id)
-
-        for connection_id in failed:
-            await self.remove_connection(connection_id)
-
-        if delivered:
-            Log.debug(
-                f"Delivered '{event}' to {delivered}/{len(subscribers)} on {channel}",
-                category="cara.broadcasting",
-            )
-        return delivered
+        return await self._fan_out_send(
+            subscribers, message, skip_conn_id=skip_conn_id, label=channel
+        )
 
     async def broadcast_to_user_local(
         self,
@@ -367,32 +367,79 @@ class ConnectionManager:
             skip_conn_id = self.connections_by_socket_id.get(except_socket_id)
 
         message = {"event": event, "data": data}
-        delivered = 0
-        failed: List[str] = []
+        return await self._fan_out_send(
+            connection_ids, message, skip_conn_id=skip_conn_id, label=f"user:{user_id}"
+        )
+
+    async def _fan_out_send(
+        self,
+        connection_ids: List[str],
+        message: Dict[str, Any],
+        *,
+        skip_conn_id: Optional[str],
+        label: str,
+    ) -> int:
+        """Concurrently dispatch ``message`` to every connection id.
+
+        Shared between channel + user-channel fan-out. ``label`` is
+        only used for diagnostics so the log line carries the channel
+        / user id that fanned out.
+        """
+        # Pair each (connection_id, websocket) so we can map gather
+        # results back to ids without re-looking-up after the await.
+        targets: List[tuple] = []
         for connection_id in connection_ids:
             if skip_conn_id and connection_id == skip_conn_id:
                 continue
             ws = self.connections.get(connection_id)
             if ws is None:
+                # Stale entry — was removed between snapshot and now.
                 continue
-            try:
-                await ws.send_json(message)
-                delivered += 1
-            except Exception as e:
-                if _is_connection_closed_error(e):
+            targets.append((connection_id, ws))
+
+        if not targets:
+            return 0
+
+        # ``return_exceptions=True`` so a single dead client never
+        # tears down the whole fan-out — we collect failures and
+        # remove them after.
+        results = await asyncio.gather(
+            *(ws.send_json(message) for _, ws in targets),
+            return_exceptions=True,
+        )
+
+        delivered = 0
+        failed: List[str] = []
+        for (connection_id, _), result in zip(targets, results):
+            if isinstance(result, Exception):
+                if _is_connection_closed_error(result):
                     Log.debug(
-                        f"User-channel send to {connection_id} closed mid-send",
+                        f"Subscriber {connection_id} closed mid-send on {label}",
                         category="cara.broadcasting",
                     )
                 else:
                     Log.warning(
-                        f"User-channel send to {connection_id} failed: {e}",
+                        f"Send to {connection_id} on {label} failed: {result}",
                         category="cara.broadcasting",
                     )
                 failed.append(connection_id)
+            else:
+                delivered += 1
 
-        for connection_id in failed:
-            await self.remove_connection(connection_id)
+        # Remove dead connections in parallel too — a 100-subscriber
+        # broadcast where 50 failed would otherwise serially walk
+        # the cleanup, holding the broadcast caller for the duration.
+        if failed:
+            await asyncio.gather(
+                *(self.remove_connection(cid) for cid in failed),
+                return_exceptions=True,
+            )
+
+        if delivered:
+            Log.debug(
+                f"Delivered to {delivered}/{len(targets)} on {label}",
+                category="cara.broadcasting",
+            )
         return delivered
 
     # ------------------------------------------------------------------

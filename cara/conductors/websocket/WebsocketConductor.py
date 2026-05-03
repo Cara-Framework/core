@@ -5,7 +5,6 @@ Orchestrates WebSocket connection handling with Laravel-style patterns.
 Follows HttpConductor architecture with proper route resolution and middleware.
 """
 
-from itertools import chain
 from typing import Any, Dict
 
 from cara.exceptions import MiddlewareNotFoundException, WebSocketException
@@ -62,6 +61,14 @@ class WebsocketConductor:
 
         global_middleware = self.get_global_middleware()
 
+        # Pipelines are tracked here so the terminable-middleware sweep
+        # can call ``terminate()`` on the EXACT instances that ran for
+        # this request. Without this we either (a) miss state-bearing
+        # instances or (b) instantiate fresh ones, both of which
+        # silently drop accumulated per-request bookkeeping.
+        global_pipeline_holder: list = []
+        route_pipeline_holder: list = []
+
         async def full_handler(socket: Socket):
             """Route matching, route-specific middleware and controller dispatch."""
             # Route matching happens AFTER global middleware (Laravel style)
@@ -82,15 +89,25 @@ class WebsocketConductor:
 
             # Get and run route middleware
             route_middleware = self.get_route_middleware(route)
-            return await Pipeline(socket, application=self.application).through(
+            route_pipeline = Pipeline(socket, application=self.application).through(
                 route_middleware
-            )(route_dispatch)
+            )
+            route_pipeline_holder.append(route_pipeline)
+            return await route_pipeline(route_dispatch)
 
+        # Track whether the controller ran cleanly so the close-code
+        # below reflects reality. ``finally`` always runs but we want
+        # 1000 (normal closure) on success and 1011 (internal error)
+        # only on a real exception.
+        clean_exit = False
         try:
             # Run the full pipeline with global middleware
-            await Pipeline(self.socket, application=self.application).through(
+            global_pipeline = Pipeline(self.socket, application=self.application).through(
                 global_middleware
-            )(full_handler)
+            )
+            global_pipeline_holder.append(global_pipeline)
+            await global_pipeline(full_handler)
+            clean_exit = True
         except WebSocketException as e:
             # Known/expected WS errors (e.g. client-close race on send → 4002).
             # These are benign — client dropped mid-handler. Log at debug only.
@@ -98,6 +115,10 @@ class WebsocketConductor:
                 f"WebSocket connection ended: {e}",
                 category="cara.websocket",
             )
+            # WebSocketException carries its own close code (4xxx). Use
+            # it directly so the client sees an accurate reason rather
+            # than the catch-all 1011.
+            self._wsx_close_code = getattr(e, "code", 1011)
             raise
         except Exception as e:
             Log.error(f"Error in WebSocket connection: {e}")
@@ -105,14 +126,35 @@ class WebsocketConductor:
         finally:
             # Clean up socket broadcasting first
             await self.socket.cleanup_broadcasting()
-            # Ensure connection is closed so the ASGI server releases it
+            # Ensure connection is closed so the ASGI server releases it.
+            # Pick the close code based on how we got here:
+            #   1000 — controller returned normally
+            #   4xxx — middleware/auth raised a typed WebSocketException
+            #          (origin denied = 4003, unauthorized = 4006, etc.)
+            #   1011 — anything else (uncaught controller exception)
             if not getattr(self.socket, "_closed", False):
+                if clean_exit:
+                    code, reason = 1000, ""
+                else:
+                    code = getattr(self, "_wsx_close_code", 1011)
+                    reason = "Internal error" if code == 1011 else ""
                 try:
-                    await self.socket.close(1011, "Internal error")
+                    await self.socket.close(code, reason)
                 except Exception:
                     pass  # Already closed by client or transport
-            # Always run terminable middleware
-            await self._run_terminable_middleware()
+            # Always run terminable middleware on the EXACT instances
+            # that executed for this request — same contract as the
+            # HTTP conductor. See _run_terminable_middleware docstring.
+            try:
+                await self._run_terminable_middleware(
+                    global_pipeline_holder[0] if global_pipeline_holder else None,
+                    route_pipeline_holder[0] if route_pipeline_holder else None,
+                )
+            except Exception as term_exc:
+                Log.error(
+                    f"WebSocket terminable middleware sweep failed: {term_exc}",
+                    category="cara.websocket",
+                )
 
     def get_global_middleware(self):
         """
@@ -148,47 +190,73 @@ class WebsocketConductor:
         # Apply Laravel-style priority ordering
         return capsule.sort_by_priority(route_middleware)
 
-    async def _run_terminable_middleware(self):
+    async def _run_terminable_middleware(
+        self,
+        global_pipeline: Pipeline | None,
+        route_pipeline: Pipeline | None,
+    ) -> None:
         """
-        Calls terminate() on all terminable middleware after connection closes.
-        Similar to HttpConductor but adapted for WebSocket context.
+        Calls terminate() on the middleware instances that ACTUALLY ran
+        for this request — same contract as ``HttpConductor``.
+
+        The previous implementation walked ``capsule._route_middleware``
+        (the registry of all aliases, not what executed) and instantiated
+        fresh middleware per terminate call, which (a) silently terminated
+        middleware bound to other routes and (b) lost state any middleware
+        accumulated during ``handle()``. Tracking the executed instances
+        on each Pipeline is the same fix we did on HTTP.
         """
-        # Run auth cache cleanup first (if applicable)
+        # Always run auth cleanup first — even on the failure path
+        # where the auth middleware may not have completed. Mirrors
+        # HttpConductor's ResetAuth handling.
         try:
             from cara.middleware.ws import ResetAuth
 
-            reset_auth_middleware = ResetAuth(self.application)
-            await reset_auth_middleware.terminate(self.socket)
+            await ResetAuth(self.application).terminate(self.socket)
         except ImportError:
-            # ResetAuth might not exist for WebSocket, skip silently
+            # ResetAuth ws variant not present in this build — fine.
             pass
         except Exception as e:
-            Log.error(f"Critical error in WebSocket auth cache cleanup: {e}")
+            Log.error(
+                f"Critical error in WebSocket auth cache cleanup: {e}",
+                category="cara.websocket",
+            )
 
-        # Then run other terminable middleware
-        capsule = self.application.make("middleware_ws")
-        all_middleware_classes = chain(
-            capsule.get_global_middleware(),
-            *(group_list for group_list in capsule._route_middleware.values()),
-        )
-        for mw_class in all_middleware_classes:
+        # Collect the middleware instances that actually ran. The
+        # Pipeline records each instance it walks through into
+        # ``executed_instances`` — see Pipeline.through(...).
+        executed: list = []
+        if global_pipeline is not None:
+            executed.extend(getattr(global_pipeline, "executed_instances", []))
+        if route_pipeline is not None:
+            executed.extend(getattr(route_pipeline, "executed_instances", []))
+
+        # Deduplicate by identity — the same instance (e.g. one that
+        # appears in both global and route lists) must not terminate
+        # twice. Skip ResetAuth, already handled above.
+        seen: set = set()
+        for instance in executed:
+            if id(instance) in seen:
+                continue
+            seen.add(id(instance))
+
             try:
-                instance = mw_class(self.application)
-                terminate_fn = getattr(instance, "terminate", None)
-                if callable(terminate_fn):
-                    # Check if terminate method expects (socket) or (request, response)
-                    import inspect
+                from cara.middleware.ws import ResetAuth as _ResetAuth
 
-                    sig = inspect.signature(terminate_fn)
-                    param_count = len(
-                        [p for p in sig.parameters.values() if p.name != "self"]
-                    )
-                    if param_count == 1:  # socket only
-                        await terminate_fn(self.socket)
-                    elif param_count == 2:  # request, response (HTTP-style)
-                        # Skip HTTP-style terminate methods for WebSocket
-                        continue
+                if isinstance(instance, _ResetAuth):
+                    continue
+            except ImportError:
+                pass
+
+            terminate_fn = getattr(instance, "terminate", None)
+            if not callable(terminate_fn):
+                continue
+
+            try:
+                await terminate_fn(self.socket)
             except Exception as e:
                 Log.error(
-                    f"Error in terminable WebSocket middleware {mw_class.__name__}: {e}"
+                    f"Error in terminable WebSocket middleware "
+                    f"{type(instance).__name__}: {e}",
+                    category="cara.websocket",
                 )

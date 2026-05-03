@@ -73,6 +73,16 @@ class Socket:
         self._subscribed_channels: Set[str] = set()
         self._connection_registered: bool = False
 
+        # Cached broadcast driver reference. Resolved lazily on first
+        # use and reused for the lifetime of the socket — every
+        # ``receive_message`` used to walk the facade chain to look up
+        # the active driver just to call ``touch()`` for activity
+        # tracking; with thousands of inbound frames per long-lived
+        # tab that's pure overhead. ``None`` means "not yet resolved".
+        # The cached value is a (driver, touch_callable) pair so we
+        # avoid even the getattr-on-every-message after the first hit.
+        self._broadcast_touch_cache: Optional[Any] = None
+
     # ------------------------------------------------------------------
     # Routing/state setup — called by the WebsocketConductor.
     # ------------------------------------------------------------------
@@ -235,15 +245,28 @@ class Socket:
         # Last-activity touch lives on the broadcasting driver — we
         # used to reach into the driver's metadata dict directly here,
         # which was a layer violation. Now we just call the driver's
-        # ``touch`` helper.
-        try:
-            driver = Broadcast.driver()
-            touch = getattr(driver, "touch", None)
-            if callable(touch):
-                touch(self._connection_id)
-        except Exception:
-            # Touching is purely informational — never fail receive over it.
-            pass
+        # ``touch`` helper. Lookup is cached on first hit because
+        # walking ``Broadcast.driver().touch`` on every inbound frame
+        # is non-trivial overhead on a busy long-lived tab.
+        cached = self._broadcast_touch_cache
+        if cached is None:
+            try:
+                driver = Broadcast.driver()
+                touch = getattr(driver, "touch", None)
+                # Sentinel "_no_touch" lets us cache the absence too,
+                # so we don't keep re-resolving when the driver simply
+                # doesn't expose touch (NullBroadcaster, log-only).
+                cached = touch if callable(touch) else "_no_touch"
+                self._broadcast_touch_cache = cached
+            except Exception:
+                self._broadcast_touch_cache = "_no_touch"
+                cached = "_no_touch"
+        if cached != "_no_touch":
+            try:
+                cached(self._connection_id)
+            except Exception:
+                # Touching is purely informational — never fail receive over it.
+                pass
 
         msg_type = message.get("type")
         if msg_type == "websocket.disconnect":
@@ -403,44 +426,6 @@ class Socket:
             await self.unsubscribe_channel(channel)
             return {"event": "unsubscribed", "channel": channel}
         return {"error": f"Unknown action: {action}"}
-
-    def start_heartbeat(self, interval_seconds: int = 30) -> "asyncio.Task[None]":
-        """Spawn a background task that pushes a server-side ping every
-        ``interval_seconds``.
-
-        Long-lived connections held by load balancers / corporate
-        proxies idle out at 60s of silence. Without server-initiated
-        keepalives the socket dies and the client only finds out on
-        its next send attempt — by which point the user has been
-        watching frozen prices for the full idle window.
-
-        The task self-terminates when the socket closes. Caller is
-        expected to keep a reference (or fire-and-forget — the closure
-        check handles cleanup either way). Returns the task so the
-        controller can ``cancel()`` it on graceful shutdown if it
-        wants explicit control.
-        """
-        async def _beat() -> None:
-            try:
-                while not self._closed:
-                    await asyncio.sleep(interval_seconds)
-                    if self._closed:
-                        return
-                    try:
-                        await self.send_json({"event": "ping"})
-                    except Exception as exc:
-                        # Send failure usually means the peer is gone;
-                        # logging at debug avoids noise on normal
-                        # disconnects but keeps the trail for diagnosis.
-                        Log.debug(
-                            f"heartbeat send failed for {self._connection_id}: {exc}",
-                            category="cara.websocket",
-                        )
-                        return
-            except asyncio.CancelledError:
-                return
-
-        return asyncio.create_task(_beat())
 
     async def cleanup_broadcasting(self) -> None:
         """Idempotent broadcasting tear-down — leave every channel,
