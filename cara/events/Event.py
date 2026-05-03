@@ -446,7 +446,11 @@ class Event:
         Args:
             event: The event instance to fire
         """
-        instance = Event()
+        app = Event._resolve_application()
+        if app is not None:
+            instance = app.make("events")
+        else:
+            instance = Event()
         await instance.dispatch(event)
 
     @staticmethod
@@ -461,18 +465,19 @@ class Event:
         """
         from cara.context import ExecutionContext
 
-        instance = Event()
+        app = Event._resolve_application()
+        if app is not None:
+            instance = app.make("events")
+        else:
+            instance = Event()
         coro = instance.dispatch(event)
 
         if ExecutionContext.is_sync():
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                # No running loop — drive the coroutine to completion.
                 asyncio.run(coro)
             else:
-                # Loop already running — schedule + retain ref.
                 Event._track(asyncio.create_task(coro))
         else:
-            # Async context — schedule + retain ref.
             Event._track(asyncio.create_task(coro))
