@@ -5,10 +5,12 @@ Orchestrates WebSocket connection handling with Laravel-style patterns.
 Follows HttpConductor architecture with proper route resolution and middleware.
 """
 
+import inspect
 from typing import Any, Dict
 
 from cara.exceptions import MiddlewareNotFoundException, WebSocketException
 from cara.facades import Log
+from cara.middleware import Middleware
 from cara.support import Pipeline
 from cara.websocket import Socket
 
@@ -251,6 +253,39 @@ class WebsocketConductor:
             terminate_fn = getattr(instance, "terminate", None)
             if not callable(terminate_fn):
                 continue
+
+            # Skip middleware that doesn't override the base
+            # ``Middleware.terminate`` no-op. The base signature is
+            # ``terminate(self, request, response)`` — HTTP-shaped — so
+            # calling it with a single ``socket`` argument raises
+            # "missing 1 required positional argument: 'response'". Most
+            # WS middleware (LogWSRequests, the inherited base) doesn't
+            # need terminate at all, so the cleanest filter is "only
+            # call when overridden".
+            unbound = getattr(type(instance), "terminate", None)
+            if unbound is None or unbound is Middleware.terminate:
+                continue
+
+            # Defensive signature check — if someone overrode
+            # ``terminate`` but kept the HTTP-style ``(request,
+            # response)`` shape (e.g. middleware shared between HTTP
+            # and WS that only does HTTP cleanup), skip rather than
+            # crash. The override is intentional but not for WS.
+            try:
+                sig = inspect.signature(terminate_fn)
+                positional = [
+                    p for p in sig.parameters.values()
+                    if p.kind
+                    in (inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                ]
+                if len(positional) >= 2:
+                    # (request, response) — HTTP shape, not for us.
+                    continue
+            except (TypeError, ValueError):
+                # Builtin or otherwise non-introspectable — try the
+                # call and let the except block log if it fails.
+                pass
 
             try:
                 await terminate_fn(self.socket)
