@@ -3077,32 +3077,65 @@ class QueryBuilder(ObservesEvents):
     def when(self, conditional, callback, otherwise=None):
         """Apply the callback if the condition is truthy (Laravel-style).
 
+        Supports two calling conventions::
+
+            # Simple boolean — callback receives (builder,)
+            query.when(filters.get("brand"), lambda q: q.where("brand", brand))
+
+            # Value forwarding — callback receives (builder, value)
+            query.when(filters.get("brand"), lambda q, v: q.where("brand", v))
+
+        The value-forwarding form avoids the need to close over variables
+        or compute a flag + re-read the value separately.
+
         Args:
-            conditional: The condition to evaluate.
-            callback: Called with the builder when condition is truthy.
-            otherwise: Called with the builder when condition is falsy.
+            conditional: The value to evaluate. If truthy, ``callback``
+                is invoked. If ``conditional`` is callable, it is called
+                first and the result is used.
+            callback: ``(builder)`` or ``(builder, value)`` — called
+                when ``conditional`` is truthy.
+            otherwise: ``(builder)`` or ``(builder, value)`` — called
+                when ``conditional`` is falsy.
 
         Returns:
             self
         """
-        if conditional:
-            callback(self)
-        elif otherwise is not None:
-            otherwise(self)
+        import inspect
+
+        value = conditional() if callable(conditional) else conditional
+        chosen = callback if value else otherwise
+        if chosen is not None:
+            sig = inspect.signature(chosen)
+            if len(sig.parameters) >= 2:
+                chosen(self, value)
+            else:
+                chosen(self)
         return self
 
     def unless(self, conditional, callback, otherwise=None):
         """Apply the callback if the condition is falsy (opposite of when).
 
+        Supports the same value-forwarding convention as :meth:`when`.
+
         Args:
-            conditional: The condition to evaluate.
+            conditional: The value to evaluate.
             callback: Called with the builder when condition is falsy.
             otherwise: Called with the builder when condition is truthy.
 
         Returns:
             self
         """
-        return self.when(not conditional, callback, otherwise)
+        import inspect
+
+        value = conditional() if callable(conditional) else conditional
+        chosen = callback if not value else otherwise
+        if chosen is not None:
+            sig = inspect.signature(chosen)
+            if len(sig.parameters) >= 2:
+                chosen(self, value)
+            else:
+                chosen(self)
+        return self
 
     def truncate(self, foreign_keys=False, dry=False):
         sql = self.get_grammar().truncate_table(self.get_table_name(), foreign_keys)
