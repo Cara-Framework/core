@@ -53,7 +53,7 @@ async def test_subscribe_and_dispatch(dispatcher):
     dispatcher.subscribe("user.registered", listener)
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)
 
     assert log == ["simple"]
@@ -65,7 +65,7 @@ async def test_listen_with_callback(dispatcher):
     dispatcher.listen("user.registered", lambda e: log.append(e.email))
 
     event = UserRegisteredEvent(user_id=1, email="test@example.com")
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)
 
     assert log == ["test@example.com"]
@@ -74,7 +74,7 @@ async def test_listen_with_callback(dispatcher):
 @pytest.mark.asyncio
 async def test_dispatch_no_listeners_is_noop(dispatcher):
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)  # should not raise
 
 
@@ -91,7 +91,7 @@ async def test_listeners_called_in_registration_order(dispatcher):
     event.name = "order.test"
     event.is_propagation_stopped = False
 
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)
 
     assert log == ["first", "second", "third"]
@@ -107,7 +107,7 @@ async def test_stop_propagation(dispatcher):
     dispatcher.subscribe("user.registered", AfterStopListener(log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)
 
     assert "before" in log
@@ -123,7 +123,7 @@ async def test_wildcard_trailing(dispatcher):
     dispatcher.subscribe("user.*", SimpleListener(log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)
 
     assert log == ["simple"]
@@ -135,7 +135,7 @@ async def test_wildcard_leading(dispatcher):
     dispatcher.subscribe("*.registered", SimpleListener(log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)
 
     assert log == ["simple"]
@@ -147,7 +147,7 @@ async def test_wildcard_does_not_match_unrelated(dispatcher):
     dispatcher.subscribe("order.*", SimpleListener(log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)
 
     assert log == []
@@ -185,7 +185,7 @@ async def test_event_subscriber(dispatcher):
     dispatcher.subscribe(TestSubscriber)
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.is_sync", return_value=True):
+    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)
 
     assert log == ["sub-registered"]
