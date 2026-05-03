@@ -47,7 +47,11 @@ class _PendingMail:
         self._bcc.extend(_as_list(addrs))
         return self
 
-    def send(self, mailable: Any = None, **kwargs: Any) -> None:
+    def send(self, mailable: Any = None, **kwargs: Any) -> bool:
+        # Real ``Mail.send`` returns ``bool`` — production code does
+        # ``if Mail.send(...): ...`` to branch on delivery result. The
+        # fake returning ``None`` flipped those branches to falsy in
+        # tests, hiding regressions in delivery-failure handling.
         self._fake._record(
             SentMail(
                 to=self._to,
@@ -60,6 +64,7 @@ class _PendingMail:
                 mailable=mailable,
             )
         )
+        return True
 
 
 class MailFake:
@@ -75,7 +80,7 @@ class MailFake:
     def to(self, addrs: Union[str, Iterable[str]]) -> _PendingMail:
         return _PendingMail(self, _as_list(addrs))
 
-    def raw(self, body: str, to: Union[str, Iterable[str]], **kwargs: Any) -> None:
+    def raw(self, body: str, to: Union[str, Iterable[str]], **kwargs: Any) -> bool:
         self._record(
             SentMail(
                 to=_as_list(to),
@@ -83,8 +88,12 @@ class MailFake:
                 body=body,
             )
         )
+        return True
 
-    def send(self, mailable: Any, **kwargs: Any) -> None:
+    def send(self, mailable: Any, **kwargs: Any) -> bool:
+        # Match ``Mail.send`` real return type so production callers
+        # that branch on ``if Mail.send(...)`` exercise the same path
+        # in tests as in prod.
         self._record(
             SentMail(
                 to=_as_list(kwargs.get("to")),
@@ -97,6 +106,7 @@ class MailFake:
                 mailable=mailable,
             )
         )
+        return True
 
     # ── Assertions ───────────────────────────────────────────────────
 

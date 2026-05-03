@@ -109,31 +109,31 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
     def _show_config(self, scheduler_config: Dict[str, Any]):
         """Display scheduler configuration in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Configuration[/bold #e5c07b]")
-        
+
         # Driver info
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Driver:[/white] [bold white]{scheduler_config['driver_name'].upper()}[/bold white]"
         )
-        
+
         # Run mode
         run_mode = "Once" if scheduler_config['run_once'] else "Continuous"
         mode_color = "#e5c07b" if scheduler_config['run_once'] else "#30e047"
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Run Mode:[/white] [{mode_color}]{run_mode}[/{mode_color}]"
         )
-        
+
         # Statistics
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Statistics:[/white] [{'#30e047' if scheduler_config['show_stats'] else '#E21102'}]{'✓' if scheduler_config['show_stats'] else '×'}[/{'#30e047' if scheduler_config['show_stats'] else '#E21102'}]"
         )
-        
+
         # Auto-reload status (default: enabled in development)
         from cara.configuration import config as global_config
         auto_reload = self.option("reload") or global_config("app.debug", True)
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Auto-reload:[/white] [{'#30e047' if auto_reload else '#E21102'}]{'✓' if auto_reload else '×'}[/{'#30e047' if auto_reload else '#E21102'}]"
         )
-        
+
         self.console.print("[#e5c07b]└─[/#e5c07b]")
         self.console.print()
 
@@ -420,18 +420,18 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
     def _show_jobs(self, job_entries: List[Dict[str, Any]]):
         """Display registered jobs in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Scheduled Jobs[/bold #e5c07b]")
-        
+
         for i, job in enumerate(job_entries[:5], 1):  # Show first 5
             job_type_color = "#30e047" if job['type'] == 'command' else "#e5c07b"
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b]   [white]{i}.[/white] [{job_type_color}]{job['name']}[/{job_type_color}] [dim]({job['schedule']})[/dim]"
             )
-            
+
         if len(job_entries) > 5:
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b]   [dim]... and {len(job_entries) - 5} more jobs[/dim]"
             )
-            
+
         self.console.print("[#e5c07b]└─[/#e5c07b]")
         self.console.print()
 
@@ -443,7 +443,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         )
         self.console.print("[#e5c07b]└─[/#e5c07b]")
         self.console.print()
-        
+
         # Simple ready message
         self.console.print("[dim]Press Ctrl+C to stop the scheduler[/dim]")
         self.console.print()
@@ -482,12 +482,12 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         """Show final scheduler statistics."""
         if not hasattr(self, 'start_time') or not self.start_time:
             return
-            
+
         runtime_seconds = int(time.time() - self.start_time)
         hours, remainder = divmod(runtime_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         runtime = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-        
+
         self.console.print()
         self.console.print("[bold #e5c07b]📊 Final Scheduler Statistics:[/bold #e5c07b]")
         self.console.print(f"   Runtime: {runtime}")

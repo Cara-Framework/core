@@ -1,3 +1,3 @@
 from .SendNotificationJob import SendNotificationJob
 
-__all__ = ['SendNotificationJob'] 
+__all__ = ['SendNotificationJob']

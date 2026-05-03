@@ -68,19 +68,36 @@ def schedule_deduped_task(
           coroutine is executed synchronously via ``asyncio.run`` so
           the cache still gets warmed.
     """
-    try:
-        if Cache.has(dedup_key):
+    # Atomic SET-NX with TTL: ``Cache.add`` returns True only when the
+    # key did not previously exist. The earlier ``has`` + ``put``
+    # pattern raced — two concurrent dispatches could both see "not
+    # inflight" and both run the task. With ``add`` the loser sees
+    # False and bails. Fall back to the legacy two-step pattern only
+    # if the cache driver doesn't expose ``add`` (the safe fallback
+    # still risks a small TOCTOU window — better than silently
+    # skipping work).
+    add = getattr(Cache, "add", None)
+    if callable(add):
+        try:
+            acquired = bool(add(dedup_key, "1", inflight_ttl))
+        except Exception as e:
+            Log.warning(f"[{label}] inflight add failed for {dedup_key}: {e}")
+            # On cache failure prefer running over skipping.
+            acquired = True
+        if not acquired:
             return False
-    except Exception as e:
-        Log.warning(f"[{label}] inflight check failed for {dedup_key}: {e}")
-        # Treat as "not inflight" rather than refuse to dispatch —
-        # better to risk a duplicate run than to never generate.
+    else:
+        try:
+            if Cache.has(dedup_key):
+                return False
+        except Exception as e:
+            Log.warning(f"[{label}] inflight check failed for {dedup_key}: {e}")
 
-    try:
-        Cache.put(dedup_key, "1", inflight_ttl)
-    except Exception as e:
-        Log.warning(f"[{label}] inflight write failed for {dedup_key}: {e}")
-        # Continue anyway — losing the dedup is better than skipping work.
+        try:
+            Cache.put(dedup_key, "1", inflight_ttl)
+        except Exception as e:
+            Log.warning(f"[{label}] inflight write failed for {dedup_key}: {e}")
+            # Continue anyway — losing the dedup is better than skipping work.
 
     async def _run() -> None:
         try:

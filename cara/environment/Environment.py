@@ -78,13 +78,23 @@ def env(value, default="", cast=True):
         return env_var
 
     # Now env_var is str
-    if env_var == "":
+    stripped = env_var.strip()
+    if stripped == "":
         return default
 
-    if env_var.isnumeric():
-        return int(env_var)
-    if env_var in ("false", "False"):
-        return False
-    if env_var in ("true", "True"):
+    if stripped.isnumeric():
+        return int(stripped)
+    # Robust boolean coercion. The previous version only matched
+    # ``"true"`` / ``"True"`` (and lowercase ``"false"``) literally —
+    # everything else (``"TRUE"``, ``"yes"``, ``"on"``, padded ``" true "``)
+    # fell through and returned the raw string, which silently evaluates
+    # as truthy in ``if env(...):`` checks. The asymmetry meant
+    # ``X=true`` and ``X=TRUE`` produced different downstream behaviour
+    # depending on whether the consumer normalised the value. Match
+    # the conventions docker-compose / k8s / .env loaders use.
+    lower = stripped.lower()
+    if lower in ("true", "yes", "on"):
         return True
+    if lower in ("false", "no", "off"):
+        return False
     return env_var

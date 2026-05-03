@@ -25,7 +25,7 @@ time too.
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, TypeVar
+from typing import Callable, TypeVar
 
 T = TypeVar("T")
 

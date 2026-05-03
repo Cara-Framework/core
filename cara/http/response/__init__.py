@@ -21,7 +21,7 @@ from .StreamingResponse import StreamingResponse
 
 __all__ = [
     "Response",
-    "BaseResponse", 
+    "BaseResponse",
     "ResponseFactory",
     "HeaderManager",
     "ContentTypeDetector",

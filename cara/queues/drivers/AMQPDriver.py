@@ -319,7 +319,29 @@ class AMQPDriver(HasColoredOutput, Queue):
                     ),
                 )
 
-                Log.info(f"Job sent to dead letter queue: {dlq_routing_key}")
+                # Promote dead-letter to ERROR so log aggregators / Sentry
+                # surface it. Previously logged at INFO and silently filled
+                # the DLQ — ops only learned about job exhaustion by
+                # querying the DB after-the-fact.
+                Log.error(
+                    f"Job dead-lettered after {attempts} attempts: "
+                    f"{job.__class__.__name__} → {dlq_routing_key}",
+                    extra={
+                        "job_class": job.__class__.__name__,
+                        "attempts": attempts,
+                        "dlq_routing_key": dlq_routing_key,
+                    },
+                )
+
+                # Best-effort metric increment so dashboards / Prometheus
+                # alerts can fire when DLQ rate spikes.
+                try:
+                    from app.support.Metrics import Metrics  # type: ignore[attr-defined]
+                    Metrics.queue_jobs_dead_lettered_total.labels(
+                        job=job.__class__.__name__,
+                    ).inc()
+                except Exception:
+                    pass
 
                 # Close connection
                 try:
@@ -328,8 +350,11 @@ class AMQPDriver(HasColoredOutput, Queue):
                 except Exception:
                     pass
 
-            except Exception as e:
-                Log.error(f"Failed to send job to dead letter queue: {e}")
+            except Exception:
+                Log.error(
+                    "Failed to send job to dead letter queue",
+                    exc_info=True,
+                )
 
     def consume(self, options: Dict[str, Any]) -> None:
         """Consume jobs from RabbitMQ.

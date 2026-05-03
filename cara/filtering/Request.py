@@ -85,9 +85,15 @@ Relations = Union[RelationSet, Iterable[str]]
 # Sensible default — every list endpoint we've ever shipped uses
 # offset paging with ≤100 page size. Subclasses can override or
 # extend by setting their own ``extra_rules`` mapping.
+#
+# ``offset`` is capped at 100k — deep-offset pagination is a known
+# DOS vector (Postgres has to scan everything before the offset, and
+# clients legitimately wanting page 1001+ should use cursor-style
+# pagination). Without this cap a single ``?offset=999999999`` sends
+# the planner into multi-minute index scans.
 PAGING_RULES: Mapping[str, str] = {
     "limit": "nullable|integer|between:1,100",
-    "offset": "nullable|integer|min:0",
+    "offset": "nullable|integer|between:0,100000",
 }
 
 

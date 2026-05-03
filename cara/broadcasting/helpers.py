@@ -12,9 +12,8 @@ event loop should always use the ``_async`` versions.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Dict, List, Optional, Sequence, Union
+from typing import Any, Awaitable, Dict, Optional, Sequence, Union
 
-from cara.broadcasting.BroadcastEvent import BroadcastEvent
 from cara.broadcasting.Channel import Channel
 from cara.broadcasting.contracts import ShouldBroadcast
 from cara.facades import Broadcast

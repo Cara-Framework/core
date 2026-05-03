@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any, Callable, Iterable, Optional, Pattern, Type, Union
+from typing import Any, Iterable, Optional, Pattern, Type, Union
 
 # Sentinel marking "no value supplied" in optional kwargs without
 # colliding with legitimate ``None`` arguments.

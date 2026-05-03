@@ -10,4 +10,4 @@ from .Trackable import Trackable
 __all__ = [
     'JobTracker',
     'Trackable'
-] 
+]

@@ -5,7 +5,7 @@ from .RedisBroadcaster import RedisBroadcaster
 
 __all__ = [
     "MemoryBroadcaster",
-    "RedisBroadcaster", 
+    "RedisBroadcaster",
     "LogBroadcaster",
     "NullBroadcaster",
-] 
+]

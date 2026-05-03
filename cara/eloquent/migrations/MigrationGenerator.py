@@ -539,7 +539,7 @@ class {class_name}(Migration):
         elif field_method in [
             "integer",
             "tiny_integer",
-            "small_integer", 
+            "small_integer",
             "medium_integer",
             "big_integer",
             "unsigned_integer",
@@ -639,18 +639,18 @@ class {class_name}(Migration):
     def _generate_raw_sql_migration(self, model_info: Dict) -> str:
         """Generate migration using stub template."""
         model_name = model_info["name"]
-        
+
         # Determine import path dynamically from file location
         model_file = model_info.get('file', '')
         model_import_path = self._generate_import_path(model_file, model_name)
-        
+
         # Read stub template
         stub_content = self._get_raw_sql_stub_content()
-        
+
         # Replace placeholders
         migration_content = stub_content.replace("{{ model_name }}", model_name)
         migration_content = migration_content.replace("{{ model_import_path }}", model_import_path)
-        
+
         return migration_content
 
     def _generate_import_path(self, model_file: str, model_name: str) -> str:

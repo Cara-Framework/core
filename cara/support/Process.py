@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import Any, Mapping, Optional, Sequence, Union
+from typing import Mapping, Optional, Sequence, Union
 
 
 class ProcessResult:

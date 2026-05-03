@@ -20,16 +20,19 @@ class CacheFake:
     def get(self, key: str, default: Any = None) -> Any:
         return self._store.get(key, default)
 
-    def put(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+    def put(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        # Contract returns None — Redis/File drivers all return None on
+        # put. The fake used to return ``True`` so any test asserting
+        # on the return value silently passed against the fake and
+        # diverged from production.
         self._store[key] = value
         self._ttls[key] = ttl
-        return True
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
-        return self.put(key, value, ttl)
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        self.put(key, value, ttl)
 
-    def forever(self, key: str, value: Any) -> bool:
-        return self.put(key, value, None)
+    def forever(self, key: str, value: Any) -> None:
+        self.put(key, value, None)
 
     def add(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Put-if-absent. Returns True iff key was newly added.
@@ -52,6 +55,21 @@ class CacheFake:
         self._ttls.pop(key, None)
         return existed
 
+    def forget_if(self, key: str, expected_value: Any) -> bool:
+        """Atomically delete ``key`` only if it currently equals ``expected_value``.
+
+        Required by the ``Cache`` contract — the primitive
+        ``CacheLock.release`` uses to avoid the "A's TTL expires, B
+        acquires, A.release deletes B's key" race. The fake used to
+        omit this entirely; tests fell back to a non-atomic
+        get→forget that hid the race entirely.
+        """
+        if key in self._store and self._store[key] == expected_value:
+            self._store.pop(key, None)
+            self._ttls.pop(key, None)
+            return True
+        return False
+
     def delete(self, key: str) -> bool:
         return self.forget(key)
 
@@ -66,13 +84,25 @@ class CacheFake:
         self.put(key, value, ttl)
         return value
 
-    def increment(self, key: str, by: int = 1) -> int:
-        value = int(self._store.get(key, 0)) + by
+    def increment(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+        """Atomically increment ``key`` by ``amount``.
+
+        Signature now matches the Cache contract — callers passing
+        ``ttl=`` (e.g. version-stamp helpers in BrandCache /
+        CategoryCache / ConversionCache / BrowsingHistoryService)
+        previously crashed against the fake with TypeError. ``ttl``
+        applies on first creation only; subsequent increments do not
+        refresh the TTL, mirroring Redis ``INCRBY`` semantics.
+        """
+        existed = key in self._store
+        value = int(self._store.get(key, 0)) + amount
         self._store[key] = value
+        if not existed:
+            self._ttls[key] = ttl
         return value
 
-    def decrement(self, key: str, by: int = 1) -> int:
-        return self.increment(key, -by)
+    def decrement(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+        return self.increment(key, -amount, ttl)
 
     def forget_pattern(self, pattern: str) -> int:
         """Delete every key matching ``pattern`` (glob-style ``*`` only).

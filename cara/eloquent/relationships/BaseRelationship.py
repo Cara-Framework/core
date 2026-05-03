@@ -49,7 +49,7 @@ class BaseRelationship:
             if related_model:
                 # ALWAYS create a NEW query builder (don't cache)
                 return related_model.query()
-        
+
         raise AttributeError("Cannot get builder: related model not found")
 
     def __get__(self, instance, owner):

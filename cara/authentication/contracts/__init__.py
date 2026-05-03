@@ -8,6 +8,6 @@ from .UserResolver import UserResolver
 
 __all__ = [
     "Authenticatable",
-    "Guard", 
+    "Guard",
     "UserResolver",
-] 
+]

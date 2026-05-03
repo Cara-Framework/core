@@ -47,14 +47,14 @@ class ThrottleRequests(Middleware):
 
         # First, check if parameter is a named limiter
         limit_config = self._resolve_limit_config(request)
-        
+
         if limit_config is None:
             # If no limit config found, allow the request through
             return await next(request)
 
         # Get the rate limit key
         key = self._resolve_key(request, limit_config)
-        
+
         # Attempt to check/record the request
         allowed, remaining, reset_in = self._attempt_limit(key, limit_config)
 
@@ -117,7 +117,7 @@ class ThrottleRequests(Middleware):
         Returns a Limit object or None if no rate limiting applies.
         """
         from cara.rates import Limit
-        
+
         # Check if custom_limit is actually a limiter name (string)
         if isinstance(self.custom_limit, str):
             # Try to resolve as named limiter
@@ -128,7 +128,7 @@ class ThrottleRequests(Middleware):
             # Custom numeric parameters provided (throttle:60,1)
             window_minutes = self.custom_window_minutes or 1
             return Limit(max_attempts=self.custom_limit, decay_minutes=window_minutes)
-        
+
         # Fall back to global RateLimiter config (if available)
         # RateLimiter.window is in seconds; convert to minutes for Limit
         return Limit(max_attempts=RateLimiter.limit, decay_minutes=RateLimiter.window / 60)
@@ -150,7 +150,7 @@ class ThrottleRequests(Middleware):
         # If the Limit has a custom key set, use that
         if hasattr(limit_config, '_key') and limit_config._key:
             return limit_config._key
-        
+
         # Default: method:route_template:user_id_or_ip
         #
         # Two correctness fixes vs. the previous version:
@@ -203,7 +203,6 @@ class ThrottleRequests(Middleware):
         Returns:
             Tuple of (allowed: bool, remaining: int, reset_in: int)
         """
-        import time
 
         from cara.facades import Cache
 

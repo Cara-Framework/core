@@ -12,7 +12,7 @@ from .SmtpDriver import SmtpDriver
 
 __all__ = [
     "ArrayDriver",
-    "LogDriver", 
+    "LogDriver",
     "MailgunDriver",
     "SmtpDriver",
-] 
+]

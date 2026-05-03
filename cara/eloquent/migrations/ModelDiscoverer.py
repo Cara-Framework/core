@@ -26,7 +26,7 @@ class ModelDiscoverer:
         "decimal", "boolean", "enum", "uuid", "json", "jsonb", "timestamp",
         "date", "time", "datetime", "id", "increments", "big_increments", "float"
     }
-    
+
     # Field types that don't take field names
     FIELD_TYPES_WITHOUT_NAMES = {"timestamps", "soft_deletes", "foreign", "foreign_key"}
 
@@ -37,13 +37,13 @@ class ModelDiscoverer:
     def discover_models(self) -> List[Dict]:
         """Discover all model files by scanning for classes that inherit from Model"""
         models = []
-        
+
         # Get project root
         project_root = Path(paths("")).parent if paths("") else Path.cwd()
-        
+
         # Scan project root with max 5 levels deep
         models.extend(self._scan_path_for_models(project_root, max_depth=5))
-        
+
         # Deduplicate by model name - keep first occurrence
         seen_names = set()
         unique_models = []
@@ -53,37 +53,37 @@ class ModelDiscoverer:
                 model_file = model.get('file', '')
                 if '/cara/' in model_file and ('eloquent' in model_file or 'queues' in model_file):
                     continue
-                    
+
                 seen_names.add(model['name'])
                 unique_models.append(model)
-        
+
         return unique_models
-        
+
     def _scan_path_for_models(self, path: Path, max_depth: int = 5, current_depth: int = 0) -> List[Dict]:
         """Recursively scan a path for model files with depth limit"""
         models = []
-        
+
         # Stop if we've reached max depth
         if current_depth >= max_depth:
             return models
-            
+
         try:
             for item in path.iterdir():
                 # Skip hidden directories, venv, __pycache__, .git, etc.
-                if (item.name.startswith('.') or 
+                if (item.name.startswith('.') or
                     item.name in ['venv', '__pycache__', 'node_modules', 'build', 'dist', '.git']):
                     continue
-                    
+
                 if item.is_dir():
                     # Recursively scan subdirectories
                     models.extend(self._scan_path_for_models(item, max_depth, current_depth + 1))
                 elif item.is_file() and item.suffix == '.py':
                     # Skip __init__.py and test files
-                    if (item.name.startswith('__') or 
+                    if (item.name.startswith('__') or
                         item.name.startswith('test_') or
                         item.name.endswith('_test.py')):
                         continue
-                        
+
                     try:
                         model_info = self._parse_model_file(item)
                         if model_info:
@@ -96,19 +96,19 @@ class ModelDiscoverer:
         except PermissionError:
             # Skip directories we can't read
             pass
-                
+
         return models
-        
+
     def _discover_models_from_imports(self, init_file: Path) -> List[Dict]:
         """Discover models by parsing imports from __init__.py"""
         models = []
-        
+
         try:
             with open(init_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             tree = ast.parse(content)
-            
+
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom):
                     # Handle: from commons.models.core import User, Category
@@ -119,7 +119,7 @@ class ModelDiscoverer:
                     for alias in node.names:
                         if 'models' in alias.name:
                             models.extend(self._resolve_direct_import_models(alias.name))
-                            
+
         except Exception as e:
             try:
                 from cara.facades import Log
@@ -132,29 +132,29 @@ class ModelDiscoverer:
                 pass
 
         return models
-        
+
     def _resolve_import_models(self, module_path: str, names: List[ast.alias]) -> List[Dict]:
         """Resolve model files from import statements - generic implementation"""
         # Skip import resolution - rely on directory scanning instead
         # This keeps the framework completely app-agnostic
         return []
-        
+
     def _resolve_direct_import_models(self, import_path: str) -> List[Dict]:
         """Handle direct imports - generic implementation"""
         # Skip import resolution - rely on directory scanning instead
         # This keeps the framework completely app-agnostic
         return []
-        
+
     def _discover_models_from_packages(self, packages_dir: Path) -> List[Dict]:
         """Discover models from packages directory structure - generic implementation"""
         # Skip packages-specific discovery - rely on general directory scanning
         # This keeps the framework completely app-agnostic
         return []
-        
+
     def _scan_directory_for_models(self, directory: Path) -> List[Dict]:
         """Scan a directory for model files."""
         models = []
-        
+
         for py_file in directory.glob("*.py"):
             if py_file.name.startswith("__"):
                 continue
@@ -166,19 +166,19 @@ class ModelDiscoverer:
             except Exception:
                 # Skip files that can't be parsed
                 continue
-                
+
         return models
 
     def resolve_dependency_order(self, models: List[Dict]) -> List[Dict]:
         """Resolve dependency order for models (FK dependencies first)."""
-        
+
         # First pass: Resolve SQL dependencies for raw SQL models
         all_table_names = [model["table"] for model in models]
-        
+
         for model in models:
             if model.get("needs_sql_dependency_resolution"):
                 self._extract_raw_sql_dependencies(model, all_table_names)
-        
+
         # Second pass: Build dependency graph
         dependency_graph = {}
 
@@ -606,7 +606,7 @@ class ModelDiscoverer:
         result = []
         remaining = list(models)
         processed_tables = set()
-        
+
         # Keep iterating until all models are processed
         while remaining:
             # Find models with all dependencies satisfied
@@ -615,21 +615,21 @@ class ModelDiscoverer:
                 table_name = model["table"]
                 dependencies = dependency_graph.get(table_name, [])
                 # Check if all dependencies are already processed
-                if all(dep in processed_tables or dep == table_name or dep not in model_lookup 
+                if all(dep in processed_tables or dep == table_name or dep not in model_lookup
                        for dep in dependencies):
                     ready_models.append(model)
-            
+
             if not ready_models:
                 # If no models are ready, there might be a circular dependency
                 # Add the first remaining model to break the cycle
                 ready_models = [remaining[0]]
-            
+
             # Add ready models to result and mark as processed
             for model in ready_models:
                 result.append(model)
                 processed_tables.add(model["table"])
                 remaining.remove(model)
-        
+
         return result
 
     def _snake_case(self, camel_str: str) -> str:
@@ -641,7 +641,7 @@ class ModelDiscoverer:
         """Parse fields() method that returns {'up': function, 'down': function}."""
         has_up_function = False
         has_down_function = False
-        
+
         for key, value in zip(dict_node.keys, dict_node.values):
             if isinstance(key, ast.Constant) and key.value in ['up', 'down']:
                 # Check if value is a function (ast.Name referring to a local function)
@@ -650,12 +650,12 @@ class ModelDiscoverer:
                         has_up_function = True
                     elif key.value == 'down':
                         has_down_function = True
-        
+
         if has_up_function:
             model_info["has_raw_sql"] = True
             model_info["has_up_function"] = True
             model_info["has_down_function"] = has_down_function
-            
+
             # Extract SQL dependencies from the up() function (will be called later with all_known_tables)
             model_info["needs_sql_dependency_resolution"] = True
 
@@ -772,14 +772,14 @@ class ModelDiscoverer:
             model_file = model_info.get('file')
             if not model_file:
                 return
-                
+
             # Read the file content
             with open(model_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             # Parse the AST to find the up() function
             tree = ast.parse(content)
-            
+
             # Find the up() function within the fields property
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef) and node.name == "up":
@@ -799,7 +799,7 @@ class ModelDiscoverer:
                                         "references": "id"
                                     }
                                 }
-                        
+
         except Exception:
             # Silently continue if we can't extract dependencies
             pass
@@ -807,58 +807,58 @@ class ModelDiscoverer:
     def _extract_sql_from_function(self, function_node: ast.FunctionDef) -> str:
         """Extract SQL content from DB.statement() calls in function."""
         sql_parts = []
-        
+
         for node in ast.walk(function_node):
             if isinstance(node, ast.Call):
                 # Look for DB.statement("SQL") calls
-                if (isinstance(node.func, ast.Attribute) and 
+                if (isinstance(node.func, ast.Attribute) and
                     node.func.attr == "statement" and
                     isinstance(node.func.value, ast.Name) and
                     node.func.value.id == "DB"):
-                    
+
                     # Extract string argument
                     if node.args and isinstance(node.args[0], ast.Constant):
                         sql_parts.append(node.args[0].value)
-        
+
         return "\n".join(sql_parts)
 
     def _parse_sql_for_dependencies(self, sql: str, model_info: Dict, all_known_tables: List[str]) -> List[str]:
         """Parse SQL content to find table dependencies using known tables from discovery."""
         dependencies = []
-        
+
         # Extract all potential table references from SQL
         potential_tables = set()
-        
+
         # Pattern 1: FROM table_name
         from_matches = re.finditer(r'FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)', sql, re.IGNORECASE)
         for match in from_matches:
             potential_tables.add(match.group(1).lower())
-        
+
         # Pattern 2: JOIN table_name
         join_matches = re.finditer(r'(?:INNER\s+|LEFT\s+|RIGHT\s+|FULL\s+)?JOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)', sql, re.IGNORECASE)
         for match in join_matches:
             potential_tables.add(match.group(1).lower())
-        
+
         # Pattern 3: REFERENCES table_name (for foreign keys)
         ref_matches = re.finditer(r'REFERENCES\s+([a-zA-Z_][a-zA-Z0-9_]*)', sql, re.IGNORECASE)
         for match in ref_matches:
             potential_tables.add(match.group(1).lower())
-        
+
         # Pattern 4: Extract foreign key column patterns (column_id -> column table)
         fk_column_matches = re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)_id', sql, re.IGNORECASE)
         for match in fk_column_matches:
             base_name = match.group(1).lower()
             potential_tables.add(base_name)
-        
+
         # Filter potential tables against known tables from model discovery
         current_table = model_info.get('table', '').lower()
         known_tables_lower = [t.lower() for t in all_known_tables]
-        
+
         for table_name in potential_tables:
-            if (table_name != current_table and 
+            if (table_name != current_table and
                 table_name in known_tables_lower and
                 table_name not in dependencies):
                 dependencies.append(table_name)
-        
+
         return dependencies
 

@@ -13,7 +13,7 @@ from .QueryHelper import QueryHelper
 
 __all__ = [
     'DateManager',
-    'CastManager', 
+    'CastManager',
     'QueryHelper',
     'AttributeHelper',
-] 
+]

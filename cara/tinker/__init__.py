@@ -10,4 +10,4 @@ from .Command import Command
 from .ScriptRunner import ScriptRunner
 from .TinkerProvider import TinkerProvider
 
-__all__ = ['Shell', 'Repl', 'Command', 'ScriptRunner', 'TinkerProvider'] 
+__all__ = ['Shell', 'Repl', 'Command', 'ScriptRunner', 'TinkerProvider']

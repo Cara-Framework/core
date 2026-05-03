@@ -272,6 +272,7 @@ class Event:
             _lst_name = listener.__class__.__name__
             _lst_start = _t.time()
             _lst_outcome = "success"
+            _lst_propagate = bool(getattr(listener, "propagate_failures", False))
             try:
                 app = self._resolve_application()
                 if app is not None and hasattr(app, "call"):
@@ -293,6 +294,18 @@ class Event:
                     )
                 except Exception:
                     pass
+                # Pipeline-critical listeners opt in via
+                # ``propagate_failures = True``. Re-raising lets the
+                # upstream job/queue treat the dispatch as failed and
+                # retry instead of marking success and silently halting
+                # the chain. Observability listeners (metrics, search
+                # indexing, broadcasts) keep the legacy permissive
+                # default so a flaky third-party can't take down the
+                # whole pipeline. Metrics are recorded in ``finally``
+                # below regardless of which branch we take, so the
+                # raise is enough on its own here.
+                if _lst_propagate:
+                    raise
             finally:
                 if _M is not None:
                     try:

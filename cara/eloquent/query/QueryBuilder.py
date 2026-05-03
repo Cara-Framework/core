@@ -43,14 +43,14 @@ from .EagerRelation import EagerRelations
 
 class TransactionContext:
     """Context manager for database transactions."""
-    
+
     def __init__(self, builder):
         self.builder = builder
-    
+
     def __enter__(self):
         self.builder.begin()
         return self.builder
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
             try:

@@ -9,12 +9,12 @@ class HasOne(BaseRelationship):
     
     Works as both decorator and property (Laravel-style).
     """
-    
+
     def __call__(self, func):
         """Decorator: Store the function and return self."""
         self._func = func
         return self
-    
+
     def __get__(self, instance, owner):
         """Property access: return eager-loaded Model or lazy-load and cache.
 

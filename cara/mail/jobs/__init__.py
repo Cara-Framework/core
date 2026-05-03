@@ -1,3 +1,3 @@
 from .SendMailableJob import SendMailableJob
 
-__all__ = ['SendMailableJob'] 
+__all__ = ['SendMailableJob']

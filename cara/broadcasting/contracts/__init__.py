@@ -4,4 +4,4 @@ from .ShouldBroadcast import ShouldBroadcast
 __all__ = [
     "ShouldBroadcast",
     "Broadcaster"
-] 
+]

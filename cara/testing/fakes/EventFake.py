@@ -17,14 +17,22 @@ class EventFake:
         self.events: List[DispatchedEvent] = []
 
     # Production surface — accept the common names so any caller works.
-    def dispatch(self, event: Any, payload: Optional[dict] = None) -> None:
+    #
+    # ``async def`` matches the real ``Event.fire`` / ``Event.dispatch``
+    # signatures (commons/cara/cara/events/Event.py:204, :437).
+    # Production code does ``await Event.fire(...)`` everywhere; if the
+    # fake stayed sync, ``await EventFake.fire(...)`` would crash with
+    # ``TypeError: 'NoneType' object is not awaitable``. The body is a
+    # plain list append so it's still safe to ``asyncio.run`` in
+    # synchronous test cases.
+    async def dispatch(self, event: Any, payload: Optional[dict] = None) -> None:
         self.events.append(DispatchedEvent(event=event, payload=payload))
 
-    def fire(self, event: Any, payload: Optional[dict] = None) -> None:
-        self.dispatch(event, payload)
+    async def fire(self, event: Any, payload: Optional[dict] = None) -> None:
+        await self.dispatch(event, payload)
 
-    def emit(self, event: Any, payload: Optional[dict] = None) -> None:
-        self.dispatch(event, payload)
+    async def emit(self, event: Any, payload: Optional[dict] = None) -> None:
+        await self.dispatch(event, payload)
 
     def listen(self, *args: Any, **kwargs: Any) -> None:
         # No-op in tests — listeners aren't invoked under the fake.

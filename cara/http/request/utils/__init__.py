@@ -9,4 +9,4 @@ from .QueryParser import QueryStringParser
 
 __all__ = [
     "QueryStringParser",
-] 
+]

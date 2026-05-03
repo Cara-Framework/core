@@ -4,4 +4,4 @@ from .Notifiable import Notifiable
 __all__ = [
     'NotificationChannel',
     'Notifiable',
-] 
+]

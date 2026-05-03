@@ -16,4 +16,4 @@ __all__ = [
     'ViewDirectives',
     'ViewDirectivesRegistry',
     'ViewProvider',
-] 
+]

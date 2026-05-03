@@ -39,7 +39,7 @@ class BlockingCommandMixin(AutoReloadMixin, ABC):
                 # Your blocking service logic
                 pass
     """
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.start_time: Optional[float] = None
@@ -128,7 +128,7 @@ class BlockingCommandMixin(AutoReloadMixin, ABC):
         )
         self.console.print("[#e5c07b]└─[/#e5c07b]")
         self.console.print()
-        
+
         # Simple ready message
         self.console.print(f"[dim]Press Ctrl+C to stop {self.get_command_name().lower()}[/dim]")
         self.console.print()
@@ -137,22 +137,22 @@ class BlockingCommandMixin(AutoReloadMixin, ABC):
         """Show final service statistics."""
         if not self.start_time:
             return
-            
+
         runtime_seconds = int(time.time() - self.start_time)
         hours, remainder = divmod(runtime_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         runtime = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-        
+
         self.console.print()
         self.console.print(f"[bold #e5c07b]📊 Final {self.get_command_name()} Statistics:[/bold #e5c07b]")
         self.console.print(f"   Runtime: {runtime}")
         self.console.print(f"   Processed: {self.service_stats['processed']}")
         self.console.print(f"   Failed: {self.service_stats['failed']}")
-        
+
         if self.service_stats['processed'] > 0:
             success_rate = ((self.service_stats['processed'] - self.service_stats['failed']) / self.service_stats['processed']) * 100
             self.console.print(f"   Success Rate: {success_rate:.1f}%")
-        
+
         self.console.print()
 
     def increment_processed(self):
@@ -188,4 +188,4 @@ class BlockingCommandMixin(AutoReloadMixin, ABC):
 
     def get_status_message(self) -> str:
         """Return status message for service status display."""
-        return "Running" 
+        return "Running"

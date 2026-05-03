@@ -15,7 +15,6 @@ scheduler to sit idle for hours.
 
 import inspect
 import time as _time
-import traceback
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from cara.facades import Log

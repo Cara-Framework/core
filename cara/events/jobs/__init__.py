@@ -1,3 +1,3 @@
 from .HandleListenerJob import HandleListenerJob
 
-__all__ = ['HandleListenerJob'] 
+__all__ = ['HandleListenerJob']

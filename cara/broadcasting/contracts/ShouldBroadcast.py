@@ -17,7 +17,7 @@ when implementing their event.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, Optional, Sequence, Union
 
 # Forward-imported lazily to avoid a circular import — the Channel
 # module has no other deps but ShouldBroadcast lives in `contracts`

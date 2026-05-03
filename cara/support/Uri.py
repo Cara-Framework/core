@@ -28,7 +28,6 @@ from typing import Iterable, Mapping, Optional, Union
 from urllib.parse import (
     parse_qsl,
     quote,
-    unquote,
     urlencode,
     urlparse,
     urlunparse,

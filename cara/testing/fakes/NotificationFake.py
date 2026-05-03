@@ -17,13 +17,17 @@ class NotificationFake:
     def __init__(self) -> None:
         self.sent: List[SentNotification] = []
 
-    # Production-side surface
+    # Production-side surface — every method that the real
+    # ``Notification`` facade exposes (commons/cara/cara/notifications/Notification.py)
+    # MUST exist here too, otherwise production code that calls the
+    # missing method gets ``AttributeError`` only in tests. Real
+    # methods all return ``bool`` — the fake mirrors that.
     def send(
         self,
         notifiable: Union[Any, Iterable[Any]],
         notification: Any,
         channels: Optional[List[str]] = None,
-    ) -> None:
+    ) -> bool:
         targets = (
             list(notifiable)
             if isinstance(notifiable, (list, tuple, set))
@@ -35,14 +39,43 @@ class NotificationFake:
                     notifiable=target, notification=notification, channels=channels
                 )
             )
+        return True
+
+    def send_now(self, notifiable: Any, notification: Any) -> bool:
+        """Mirror ``Notification.send_now`` — sync delivery path.
+
+        Production callers (``NotificationDeliveryService``) reach for
+        ``send_now`` on critical alerts that mustn't sit in the queue;
+        the previous fake omitted this and any test that hit that
+        path crashed with AttributeError.
+        """
+        self.sent.append(SentNotification(notifiable=notifiable, notification=notification))
+        return True
+
+    def send_delayed(
+        self, notifiable: Any, notification: Any, delay_seconds: int
+    ) -> bool:
+        """Mirror ``Notification.send_delayed`` — queued delivery."""
+        self.sent.append(SentNotification(notifiable=notifiable, notification=notification))
+        return True
+
+    def channel(self, channel_name: str) -> "NotificationFake":
+        """Mirror ``Notification.channel(name)`` — returns a channel.
+
+        Real implementation returns a ``NotificationChannel``; the
+        fake returns self so a chained ``Notification.channel('mail').send(...)``
+        round-trips through the same recorder.
+        """
+        return self
 
     def route(self, *args: Any, **kwargs: Any) -> "NotificationFake":
         # ``Notification.route('mail', 'foo@x').notify(...)`` — return self
         # so chained ``.notify`` lands here.
         return self
 
-    def notify(self, notification: Any) -> None:
+    def notify(self, notification: Any) -> bool:
         self.sent.append(SentNotification(notifiable=None, notification=notification))
+        return True
 
     # ── Assertions ───────────────────────────────────────────────────
 

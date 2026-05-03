@@ -46,6 +46,21 @@ _DEFAULT_HEADERS: Dict[str, str] = {
     # X-XSS-Protection is legacy; explicit "0" tells old browsers to use
     # the default CSP-based protections instead of their heuristic filter.
     "X-XSS-Protection": "0",
+    # Strict CSP for the JSON API: the responses are never expected to
+    # be rendered as a document, so we deny every content type by
+    # default. If any path ever does return HTML (rendered error page,
+    # admin export view) and needs assets, override via the
+    # ``security.security.headers`` config block. ``frame-ancestors
+    # 'none'`` is a modern X-Frame-Options replacement.
+    "Content-Security-Policy": (
+        "default-src 'none'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'none'; "
+        "form-action 'none'"
+    ),
+    # Block legacy Adobe Flash / Acrobat cross-domain policy lookups
+    # — they're a tiny attack surface but the header is free.
+    "X-Permitted-Cross-Domain-Policies": "none",
 }
 
 # HSTS — only added when request is HTTPS. 6 months + includeSubDomains.

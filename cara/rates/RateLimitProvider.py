@@ -44,12 +44,12 @@ class RateLimitProvider(DeferredProvider):
             application=self.application,
             options=driver_opts,
         )
-        
+
         # Register named limiters from config
         limiters = config("rate.limiters", {})
         for name, callback in limiters.items():
             limiter.for_(name, callback)
-        
+
         self.application.bind("rate", limiter)
 
     def boot(self) -> None:

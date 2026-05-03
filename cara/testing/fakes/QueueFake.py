@@ -27,18 +27,32 @@ class QueueFake:
 
     # Production-side surface — accept any kwargs we don't model so a
     # caller using a ``priority=`` or ``options=`` flag still works.
-    def push(self, job: Any, queue: Optional[str] = None, **kwargs: Any) -> None:
+    #
+    # Real ``Queue.push`` / ``Queue.later`` return a job-id (or list of
+    # ids) so callers can track / cancel. The fake used to return
+    # ``None``, which meant production code like
+    # ``job_id = Queue.push(j); track(job_id)`` silently exercised a
+    # dead branch in tests. Returning a synthetic id lets that path
+    # round-trip.
+    @staticmethod
+    def _next_id() -> str:
+        import uuid
+        return f"fake-job-{uuid.uuid4().hex[:12]}"
+
+    def push(self, job: Any, queue: Optional[str] = None, **kwargs: Any) -> str:
         self.jobs.append(QueuedJob(job=job, queue=queue, payload=kwargs or None))
+        return self._next_id()
 
     def later(
         self, delay: float, job: Any, queue: Optional[str] = None, **kwargs: Any
-    ) -> None:
+    ) -> str:
         self.jobs.append(
             QueuedJob(job=job, queue=queue, delay=delay, payload=kwargs or None)
         )
+        return self._next_id()
 
-    def dispatch(self, job: Any, **kwargs: Any) -> None:
-        self.push(job, **kwargs)
+    def dispatch(self, job: Any, **kwargs: Any) -> str:
+        return self.push(job, **kwargs)
 
     # ── Assertions ───────────────────────────────────────────────────
 

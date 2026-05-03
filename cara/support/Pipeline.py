@@ -16,7 +16,6 @@ Two API surfaces are exposed:
   fully synchronous so callers can use the pipeline outside an event loop.
 """
 
-import asyncio
 import inspect
 from functools import reduce
 from typing import Any, Awaitable, Callable, List, Optional, Type, Union

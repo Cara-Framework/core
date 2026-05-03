@@ -16,7 +16,7 @@ from .OnValueClause import OnValueClause
 
 __all__ = [
     "Raw",
-    "JoinClause", 
+    "JoinClause",
     "QueryExpression",
     "HavingExpression",
     "FromTable",

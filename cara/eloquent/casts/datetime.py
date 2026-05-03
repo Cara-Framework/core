@@ -90,13 +90,14 @@ class DateTimeCast(BaseCast):
             app_timezone = env("APP_TIMEZONE", "UTC")
             dt = dt.in_timezone(app_timezone)
 
-            # Return as datetime object, not string
-            # Convert pendulum to standard datetime
-            return (
-                dt.to_datetime()
-                if hasattr(dt, "to_datetime")
-                else datetime.fromtimestamp(dt.timestamp())
-            )
+            # ``pendulum.DateTime`` IS a ``datetime.datetime`` subclass,
+            # so returning it directly satisfies any ``isinstance(x,
+            # datetime)`` check downstream and keeps the timezone
+            # attached. The legacy ``hasattr(dt, "to_datetime")`` fallback
+            # to ``datetime.fromtimestamp(dt.timestamp())`` produced a
+            # NAIVE LOCAL-TIME datetime — TypeError when compared against
+            # ``pendulum.now("UTC")`` and silent local/UTC drift.
+            return dt
         except Exception:
             # If parsing fails, try to return as string for backwards compatibility
             return str(value) if value else None

@@ -5,6 +5,8 @@ Shows comprehensive job tracking information from the enhanced job management sy
 
 import time
 
+import pendulum
+
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.queues.JobStateManager import get_job_state_manager
@@ -48,7 +50,7 @@ class QueueStatsCommand(CommandBase):
                 os.system("clear" if os.name == "posix" else "cls")
 
                 self.info(
-                    f"📊 Queue Stats Watch Mode - {datetime.now().strftime('%H:%M:%S')}"
+                    f"📊 Queue Stats Watch Mode - {pendulum.now().format('HH:mm:ss')}"
                 )
                 self.info("=" * 60)
 

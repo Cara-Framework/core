@@ -664,13 +664,13 @@ class Model(
         if hasattr(self, '__timestamps__') and self.__timestamps__:
             if isinstance(self.__timestamps__, (list, tuple)):
                 timestamp_col = self.__timestamps__[1] if len(self.__timestamps__) > 1 else 'updated_at'
-        
+
         # Get the current datetime in the appropriate format
         current_time = self.get_new_datetime_string()
-        
+
         # Update only the timestamp column
         self.update({timestamp_col: current_time})
-        
+
         # Also update the local attribute
         self.__attributes__[timestamp_col] = current_time
         self.__original_attributes__[timestamp_col] = current_time

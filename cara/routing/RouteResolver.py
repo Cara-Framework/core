@@ -108,7 +108,7 @@ class RouteResolver:
         """
         # Use provided container or fall back to stored one
         _container = container or self._container
-        
+
         # If no container, instantiate without DI
         if not _container:
             return controller_class()

@@ -6,7 +6,12 @@ Following SOLID principles with clean, simple interfaces.
 """
 
 # Import all base components
-from .base import BaseCast, CastRegistry, cast_registry
+# (We deliberately omit ``cast_registry`` from ``.base`` here — line 98
+# below redefines the public ``cast_registry`` symbol as the
+# ``EnhancedCastRegistry`` singleton. Importing the base one would
+# shadow it twice and ruff F811 would flag the redefinition. Modules
+# that need the base singleton can import it directly.)
+from .base import BaseCast, CastRegistry
 # Import collection casts
 from .collections import ArrayCast, CollectionCast
 # Import datetime casts
@@ -24,11 +29,11 @@ class EnhancedCastRegistry(CastRegistry):
     """
     Enhanced cast registry with auto-registration and powerful features.
     """
-    
+
     def __init__(self):
         super().__init__()
         self._auto_register_casts()
-    
+
     def _auto_register_casts(self):
         """Auto-register all available casts."""
         # Primitive casts
@@ -39,29 +44,29 @@ class EnhancedCastRegistry(CastRegistry):
         self.register('float', FloatCast)
         self.register('decimal', DecimalCast)
         self.register('json', JsonCast)
-        
+
         # Date/time casts
         self.register('date', DateCast)
         self.register('datetime', DateTimeCast)
         self.register('timestamp', TimestampCast)
         self.register('time', TimeCast)
-        
+
         # Collection casts
         self.register('array', ArrayCast)
         self.register('collection', CollectionCast)
-        
+
         # Validation casts
         self.register('email', EmailCast)
         self.register('url', URLCast)
         self.register('uuid', UUIDCast)
         self.register('slug', SlugCast)
         self.register('phone', PhoneCast)
-        
+
         # Security casts
         self.register('hash', HashCast)
         self.register('encrypted', EncryptedCast)
         self.register('token', TokenCast)
-    
+
     def cast_value(self, cast_definition: str, value, operation: str = 'get'):
         """
         Cast a value using the specified cast definition.
@@ -75,20 +80,20 @@ class EnhancedCastRegistry(CastRegistry):
             Casted value
         """
         cast_instance = self.get_cast_instance(cast_definition)
-        
+
         if cast_instance:
             if operation == 'set':
                 return cast_instance.set(value)
             else:
                 return cast_instance.get(value)
-        
+
         return value
-    
+
     def validate_cast_definition(self, cast_definition: str) -> bool:
         """Validate if a cast definition is valid."""
         cast_type = cast_definition.split(':')[0] if ':' in cast_definition else cast_definition
         return cast_type in self._casts
-    
+
     def get_available_casts(self) -> list:
         """Get list of all available cast types."""
         return list(self._casts.keys())
@@ -138,41 +143,41 @@ def get_cast_instance(cast_definition: str):
 __all__ = [
     # Base components
     'BaseCast',
-    'CastRegistry', 
+    'CastRegistry',
     'cast_registry',
     'EnhancedCastRegistry',
-    
+
     # Primitive casts
     'BoolCast',
-    'IntCast', 
+    'IntCast',
     'FloatCast',
     'DecimalCast',
     'JsonCast',
-    
+
     # Date/time casts
     'DateCast',
-    'DateTimeCast', 
+    'DateTimeCast',
     'TimestampCast',
     'TimeCast',
-    
+
     # Collection casts
     'ArrayCast',
     'CollectionCast',
-    
+
     # Validation casts
     'EmailCast',
-    'URLCast', 
+    'URLCast',
     'UUIDCast',
     'SlugCast',
     'PhoneCast',
-    
+
     # Security casts
     'HashCast',
     'EncryptedCast',
     'TokenCast',
-    
+
     # Convenience functions
     'cast_value',
     'register_cast',
     'get_cast_instance',
-] 
+]

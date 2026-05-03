@@ -75,16 +75,16 @@ class BaseQueueable(Queueable, ShouldQueue):
         """
         self.queue_name = queue
         self._chained = True
-        
+
         # Auto-dispatch when chaining is used (Laravel pattern)
         self._auto_dispatch()
         return self
-        
+
     def _auto_dispatch(self):
         """Auto-dispatch job when method chaining is used (Laravel pattern)."""
         if not self._chained:
             return
-            
+
         try:
             from cara.facades import Queue
             Queue.push(self)
@@ -95,7 +95,7 @@ class BaseQueueable(Queueable, ShouldQueue):
                 Log.warning(f"Queue failed, running synchronously: {str(e)}")
             except ImportError:
                 pass
-            
+
             # Run synchronously as fallback
             if hasattr(self, 'handle'):
                 import asyncio

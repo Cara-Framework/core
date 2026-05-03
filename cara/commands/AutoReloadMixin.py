@@ -43,11 +43,11 @@ class AutoReloadHandler(FileSystemEventHandler):
             return
 
         self.last_reload = current_time
-        
+
         # Show which file triggered the reload
         rel_path = os.path.relpath(event.src_path)
         self.command.info(f"🔄 File changed: {rel_path}")
-        
+
         # Trigger reload
         self.command._trigger_auto_reload()
 
@@ -59,7 +59,7 @@ class AutoReloadHandler(FileSystemEventHandler):
     def _is_temp_file(self, file_path: str) -> bool:
         """Check if file is temporary and should be ignored."""
         ignore_patterns = [
-            "__pycache__", ".pyc", ".pyo", ".tmp", ".swp", 
+            "__pycache__", ".pyc", ".pyo", ".tmp", ".swp",
             ".DS_Store", ".git", ".pytest_cache", "node_modules"
         ]
         return any(pattern in file_path for pattern in ignore_patterns)
@@ -80,7 +80,7 @@ class AutoReloadMixin:
                     # Your blocking operation here
                     pass
     """
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.shutdown_requested = False
@@ -93,10 +93,10 @@ class AutoReloadMixin:
         """Enable auto-reload for this command."""
         if self._auto_reload_enabled:
             return
-            
+
         self._auto_reload_enabled = True
         self.info("🔄 Auto-reload enabled - watching for file changes...")
-        
+
         # Start file watcher
         self._start_file_watcher(watch_paths)
 
@@ -128,12 +128,12 @@ class AutoReloadMixin:
     def _get_default_watch_paths(self) -> List[str]:
         """Get default paths to watch for changes."""
         from cara.support import paths
-        
+
         watch_paths = []
-        
+
         # Application directories to watch
         app_dirs = ["app", "config", "routes", "database", "packages"]
-        
+
         for app_dir in app_dirs:
             try:
                 path = paths(app_dir)
@@ -141,7 +141,7 @@ class AutoReloadMixin:
                     watch_paths.append(path)
             except Exception:
                 continue
-                
+
         return watch_paths
 
     def _stop_file_watcher(self):
@@ -159,15 +159,15 @@ class AutoReloadMixin:
         """Trigger the auto-reload process."""
         if not self._auto_reload_enabled:
             return
-            
+
         self.info("🔄 Reloading command...")
-        
+
         # Set shutdown flag to stop current loop
         self.shutdown_requested = True
-        
+
         # Give current operation time to finish gracefully
         time.sleep(0.5)
-        
+
         # Purge modules and restart
         self._purge_modules_for_reload()
         self._restart_command()
@@ -176,30 +176,30 @@ class AutoReloadMixin:
         """Purge loaded modules for hot reload."""
         # Invalidate import caches
         importlib.invalidate_caches()
-        
+
         # Modules to purge for hot reload
         purge_patterns = [
             'app.',           # Application modules
-            'packages.',      # Package modules  
+            'packages.',      # Package modules
             'config.',        # Config modules
             'routes.',        # Route modules
             'database.',      # Database modules
         ]
-        
+
         modules_to_remove = []
         for module_name in list(sys.modules.keys()):
             for pattern in purge_patterns:
                 if module_name.startswith(pattern):
                     modules_to_remove.append(module_name)
                     break
-        
+
         # Remove modules
         for module_name in modules_to_remove:
             try:
                 del sys.modules[module_name]
             except KeyError:
                 pass
-                
+
         if modules_to_remove:
             self.info(f"🔄 Purged {len(modules_to_remove)} modules for hot reload")
 
@@ -208,15 +208,15 @@ class AutoReloadMixin:
         try:
             # Reset shutdown flag
             self.shutdown_requested = False
-            
+
             self.info("✅ Command restarted successfully")
-            
+
             # Call the command's main loop again
             if hasattr(self, "_run_main_loop"):
                 self._run_main_loop(*self._restart_params, **self._restart_kwargs)
             else:
                 self.warning("⚠️  Command doesn't implement _run_main_loop method")
-                
+
         except Exception as e:
             self.error(f"❌ Failed to restart command: {e}")
             self.shutdown_requested = True
@@ -229,4 +229,4 @@ class AutoReloadMixin:
     def cleanup_auto_reload(self):
         """Cleanup auto-reload resources."""
         self._stop_file_watcher()
-        self._auto_reload_enabled = False 
+        self._auto_reload_enabled = False

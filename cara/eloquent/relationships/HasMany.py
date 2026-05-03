@@ -10,12 +10,12 @@ class HasMany(BaseRelationship):
     Works as both decorator and property (Laravel-style).
     When accessed as property, returns self (relationship instance).
     """
-    
+
     def __call__(self, func):
         """Decorator: Store the function and return self."""
         self._func = func
         return self
-    
+
     def __get__(self, instance, owner):
         """Property access: return eager-loaded Collection or lazy-load and cache.
 

@@ -315,6 +315,12 @@ class Container:
         binding or as a deferred provider)."""
         if isinstance(name, str):
             return name in self.objects or name in self._deferred
+        # Lazy-import the exception class — the same circular-import
+        # workaround the rest of this file uses. The bare reference
+        # ``MissingContainerBindingException`` would NameError at
+        # runtime because the symbol is only defined inside
+        # ``_get_container_exceptions``.
+        _, MissingContainerBindingException, _ = _get_container_exceptions()
         try:
             self._find_obj(name)
             return True
@@ -612,7 +618,7 @@ class Container:
             provider_obj = self.objects[obj]
             self.fire_hook("resolve", obj, provider_obj)
             return provider_obj
-        
+
         # Strategy 2: Try full module path
         if inspect.isclass(obj) and hasattr(obj, '__module__') and hasattr(obj, '__name__'):
             full_path = f"{obj.__module__}.{obj.__name__}"
@@ -620,14 +626,14 @@ class Container:
                 provider_obj = self.objects[full_path]
                 self.fire_hook("resolve", obj, provider_obj)
                 return provider_obj
-        
+
         # Strategy 3: Try simple class name
         if inspect.isclass(obj) and hasattr(obj, '__name__'):
             if obj.__name__ in self.objects:
                 provider_obj = self.objects[obj.__name__]
                 self.fire_hook("resolve", obj, provider_obj)
                 return provider_obj
-        
+
         # Strategy 4: Match by type/instance/subclass (original logic)
         for provider_obj in self.objects.values():
             # (1) Class–instance match

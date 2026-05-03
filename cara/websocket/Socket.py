@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional, Set
 from urllib.parse import parse_qs
 
 from cara.exceptions.types.websocket import WebSocketException
@@ -403,6 +403,44 @@ class Socket:
             await self.unsubscribe_channel(channel)
             return {"event": "unsubscribed", "channel": channel}
         return {"error": f"Unknown action: {action}"}
+
+    def start_heartbeat(self, interval_seconds: int = 30) -> "asyncio.Task[None]":
+        """Spawn a background task that pushes a server-side ping every
+        ``interval_seconds``.
+
+        Long-lived connections held by load balancers / corporate
+        proxies idle out at 60s of silence. Without server-initiated
+        keepalives the socket dies and the client only finds out on
+        its next send attempt — by which point the user has been
+        watching frozen prices for the full idle window.
+
+        The task self-terminates when the socket closes. Caller is
+        expected to keep a reference (or fire-and-forget — the closure
+        check handles cleanup either way). Returns the task so the
+        controller can ``cancel()`` it on graceful shutdown if it
+        wants explicit control.
+        """
+        async def _beat() -> None:
+            try:
+                while not self._closed:
+                    await asyncio.sleep(interval_seconds)
+                    if self._closed:
+                        return
+                    try:
+                        await self.send_json({"event": "ping"})
+                    except Exception as exc:
+                        # Send failure usually means the peer is gone;
+                        # logging at debug avoids noise on normal
+                        # disconnects but keeps the trail for diagnosis.
+                        Log.debug(
+                            f"heartbeat send failed for {self._connection_id}: {exc}",
+                            category="cara.websocket",
+                        )
+                        return
+            except asyncio.CancelledError:
+                return
+
+        return asyncio.create_task(_beat())
 
     async def cleanup_broadcasting(self) -> None:
         """Idempotent broadcasting tear-down — leave every channel,

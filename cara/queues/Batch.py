@@ -143,7 +143,12 @@ class BatchAware:
 
         from cara.facades import Cache
         try:
-            Cache.increment(_batch_failed_key(batch_id))
+            # Pass the batch TTL explicitly. If the initial ``put()``
+            # missed (cache eviction, partial init, cold-start before
+            # the batch row landed), bare ``increment`` would create a
+            # key with no expiry and the failed-counter slowly fills
+            # Redis. Explicit TTL guarantees the key dies with the batch.
+            Cache.increment(_batch_failed_key(batch_id), 1, Batch.BATCH_TTL)
         except Exception:
             pass
 

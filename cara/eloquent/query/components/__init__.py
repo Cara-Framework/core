@@ -9,7 +9,7 @@ from .JoinClause import JoinClause
 
 __all__ = [
     "WhereClause",
-    "OrderByClause", 
+    "OrderByClause",
     "GroupByClause",
     "JoinClause",
 ]

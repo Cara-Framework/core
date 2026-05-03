@@ -394,28 +394,45 @@ class JobProcessor:
                     type(instance)._app = app_instance
 
             # Execute job — auto-inject type-hinted deps via container.call()
+            #
+            # Job middleware (RateLimited, WithoutOverlapping,
+            # ThrottlesExceptions, etc.) used to apply only when a job was
+            # dispatched via Bus.dispatch() in the sync context. Jobs
+            # arriving here through RabbitMQ → queue:work skipped the
+            # middleware pipeline entirely, so a job declaring a
+            # ``middleware()`` list got it for sync calls but silently
+            # lost the protection on the production async path. Routing
+            # the call through ``run_through_middleware_async`` closes
+            # that gap; if the job has no middleware the helper is
+            # effectively a passthrough.
             method_to_call = getattr(instance, callback, None)
             if callable(method_to_call):
+                from cara.queues.middleware import run_through_middleware_async
+
                 if inspect.iscoroutinefunction(method_to_call):
-                    try:
+                    async def _async_handler(_job, _m=method_to_call, _args=init_args):
                         if app_instance is not None:
-                            coro = app_instance.call(method_to_call, *init_args)
-                        else:
-                            coro = method_to_call(*init_args)
+                            return await app_instance.call(_m, *_args)
+                        return await _m(*_args)
+
+                    try:
+                        coro = run_through_middleware_async(instance, _async_handler)
                         asyncio.run(asyncio.wait_for(coro, timeout=job_timeout))
                     except asyncio.TimeoutError as e:
                         raise TimeoutError(f"Job exceeded timeout of {job_timeout}s") from e
                 else:
-                    if app_instance is not None:
-                        def _call_with_di():
-                            return app_instance.call(method_to_call, *init_args)
-                        JobProcessor._execute_job_with_timeout(
-                            _call_with_di, (), job_timeout
-                        )
-                    else:
-                        JobProcessor._execute_job_with_timeout(
-                            method_to_call, init_args, job_timeout
-                        )
+                    async def _sync_handler(_job, _m=method_to_call, _args=init_args):
+                        if app_instance is not None:
+                            return app_instance.call(_m, *_args)
+                        return _m(*_args)
+
+                    def _call_with_middleware():
+                        coro = run_through_middleware_async(instance, _sync_handler)
+                        asyncio.run(coro)
+
+                    JobProcessor._execute_job_with_timeout(
+                        _call_with_middleware, (), job_timeout
+                    )
 
             # Mark success in unified job table
             if hasattr(instance, "_mark_success"):
@@ -515,6 +532,7 @@ class JobProcessor:
     options={
         "--driver=?": "Queue driver to use (overrides default configuration)",
         "--queue=?": "Queue name(s) to process (comma-separated for priority: high,default,low)",
+        "--pool=?": "Worker pool name from config/queue.py WORKER_POOLS (e.g. pipeline, enrichment, background, realtime). Overrides --queue and --concurrency with pool config.",
         "--timeout=?": "Poll timeout in seconds (default: 5)",
         "--max-jobs=?": "Maximum number of jobs to process before stopping",
         "--max-time=?": "Maximum runtime in seconds before stopping",
@@ -559,12 +577,28 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         self,
         driver: Optional[str] = None,
         queue: Optional[str] = None,
+        pool: Optional[str] = None,
         timeout: Optional[str] = None,
         max_jobs: Optional[str] = None,
         max_time: Optional[str] = None,
         concurrency: Optional[str] = None,
     ):
         """Handle queue worker execution with enhanced monitoring."""
+        # ── Pool resolution ────────────────────────────────────────
+        # --pool=<name> reads WORKER_POOLS from config/queue.py and
+        # overrides --queue, --concurrency, and --timeout with pool
+        # values. Explicit flags still take precedence.
+        if pool:
+            pool_cfg = self._resolve_pool(pool)
+            if pool_cfg is None:
+                return
+            if not queue:
+                queue = ",".join(pool_cfg["queues"])
+            if not concurrency:
+                concurrency = str(pool_cfg.get("concurrency", 1))
+            if not timeout:
+                timeout = str(pool_cfg.get("timeout", 5))
+
         self.console.print()  # Empty line for spacing
         self.console.print("[bold #e5c07b]╭─ Queue Worker ─╮[/bold #e5c07b]")
         self.console.print()
@@ -689,6 +723,35 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             "max_time": max_time_val,
         }
 
+    def _resolve_pool(self, pool_name: str) -> Optional[Dict[str, Any]]:
+        """Resolve a named worker pool from config/queue.py WORKER_POOLS.
+
+        Returns the pool dict on success, or None after printing an error.
+        """
+        pools = config("queue.worker_pools", None)
+        if not pools:
+            self.error(
+                "× No WORKER_POOLS defined in config/queue.py"
+            )
+            return None
+        if pool_name not in pools:
+            available = ", ".join(sorted(pools.keys()))
+            self.error(
+                f"× Pool '{pool_name}' not found. Available: {available}"
+            )
+            return None
+        pool_cfg = pools[pool_name]
+        if not pool_cfg.get("queues"):
+            self.error(f"× Pool '{pool_name}' has no queues defined")
+            return None
+        self.console.print(
+            f"  [bold #30e047]Pool:[/bold #30e047] [white]{pool_name}[/white] "
+            f"[dim]({len(pool_cfg['queues'])} queues, "
+            f"concurrency={pool_cfg.get('concurrency', 1)}, "
+            f"timeout={pool_cfg.get('timeout', 5)}s)[/dim]"
+        )
+        return pool_cfg
+
     def _parse_queue_names(self, queue: Optional[str]) -> list:
         """Parse queue names from comma-separated string with wildcard support."""
         if not queue:
@@ -783,7 +846,6 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             )
 
         # Auto-reload status (default: enabled in development)
-        from cara.configuration import config as global_config
 
         auto_reload = bool(self.option("reload"))
         self.console.print(

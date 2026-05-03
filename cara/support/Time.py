@@ -71,12 +71,12 @@ def humanize_seconds(seconds: int) -> str:
     """
     if seconds == 0:
         return "0 seconds"
-        
+
     days = seconds // 86400
     hours = (seconds % 86400) // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
-    
+
     parts = []
     if days > 0:
         parts.append(f"{days} {'day' if days == 1 else 'days'}")
@@ -86,7 +86,7 @@ def humanize_seconds(seconds: int) -> str:
         parts.append(f"{minutes} {'minute' if minutes == 1 else 'minutes'}")
     if secs > 0:
         parts.append(f"{secs} {'second' if secs == 1 else 'seconds'}")
-        
+
     return " ".join(parts)
 
 
@@ -112,12 +112,12 @@ def format_duration(seconds: int) -> str:
     """
     if seconds == 0:
         return "0s"
-        
+
     days = seconds // 86400
     hours = (seconds % 86400) // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
-    
+
     parts = []
     if days > 0:
         parts.append(f"{days}d")
@@ -127,7 +127,7 @@ def format_duration(seconds: int) -> str:
         parts.append(f"{minutes}m")
     if secs > 0:
         parts.append(f"{secs}s")
-        
+
     return " ".join(parts)
 
 

@@ -4,4 +4,4 @@ from .JWTGuard import JWTGuard
 __all__ = [
     "JWTGuard",
     "ApiKeyGuard",
-] 
+]
