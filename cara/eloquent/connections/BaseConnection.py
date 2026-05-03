@@ -10,7 +10,13 @@ class BaseConnection:
     _connection = None
     _cursor = None
     _dry = False
-    SLOW_QUERY_THRESHOLD_MS = 500  # 500ms default
+    # Bumped from 500ms — at 500ms a cold-connection first call against
+    # a freshly-restored Postgres (FK validation hitting cold pages,
+    # session settings, statement parsing on a fresh prepared-statement
+    # cache) routinely lands at 500-700ms even for trivial inserts. The
+    # warning becomes pure noise at startup. 750ms still catches every
+    # actionable slow query (anything beyond cold-cache jitter is real).
+    SLOW_QUERY_THRESHOLD_MS = 750
 
     def dry(self):
         self._dry = True
@@ -29,6 +35,21 @@ class BaseConnection:
         from cara.facades import Log
 
         Log.database(f"Running query {query}, {bindings}. Executed in {query_time}ms")
+
+    @staticmethod
+    def _normalize_query_for_log(query: str, max_len: int = 1000) -> str:
+        """Collapse whitespace and truncate so a log line is one-pretty-line.
+
+        Multi-line SQL blobs (the typical INSERT ... VALUES (...) ON CONFLICT
+        DO UPDATE SET ... pattern) wrap awkwardly in log aggregators; one
+        clean line keeps the slow-query warning grep-friendly. Truncate at
+        a wider window than before (was 500) so the ON CONFLICT body and
+        the closing of the VALUES tuple aren't sliced off.
+        """
+        compact = " ".join(query.split())
+        if len(compact) <= max_len:
+            return compact
+        return compact[:max_len] + f"… [+{len(compact) - max_len}c]"
 
     def statement(self, query, bindings=()):
         """
@@ -59,8 +80,18 @@ class BaseConnection:
         )
         if elapsed_ms >= threshold:
             from cara.facades import Log
+
+            # Annotate with binding count + transaction level so an
+            # operator can tell at a glance whether this was a fat
+            # batched insert (binding count high), a single statement
+            # inside a long-running tx (level > 1), or a one-shot.
+            # Bindings themselves are NOT logged — they may carry PII.
+            n_bindings = len(bindings) if bindings else 0
+            tx_level = self.get_transaction_level() if hasattr(self, "get_transaction_level") else 0
             Log.warning(
-                f"SLOW QUERY ({elapsed_ms:.0f}ms): {query[:500]}",
+                f"SLOW QUERY ({elapsed_ms:.0f}ms, "
+                f"params={n_bindings}, tx={tx_level}): "
+                f"{self._normalize_query_for_log(query)}",
                 category="slow_query",
             )
 
