@@ -149,6 +149,65 @@ def _init_sentry(service_name: str, release: str) -> None:
         )
 
 
+def set_request_user(user_id: Any, email: Optional[str] = None) -> None:
+    """Attach the resolved user to the current Sentry scope.
+
+    Called from the auth middleware after ``request.set_user(...)``;
+    every subsequent error in this request inherits the identity so
+    Sentry can cluster by user without ops grepping the access log.
+    Email is masked to keep PII out of the event store; pass ``None``
+    when only the surrogate id is wanted.
+    """
+    try:
+        import sentry_sdk
+    except Exception:
+        return
+    payload: dict = {"id": str(user_id)}
+    if email:
+        # Mask: ``j****@example.com``. Keeps the first char + domain
+        # so on-call can spot which tenant a flood comes from without
+        # storing the raw address.
+        try:
+            local, _, domain = email.partition("@")
+            if local and domain:
+                head = local[0] if local else ""
+                payload["email"] = f"{head}***@{domain}"
+        except Exception:
+            pass
+    try:
+        sentry_sdk.set_user(payload)
+    except Exception:
+        pass
+
+
+def set_request_tag(key: str, value: Any) -> None:
+    """Attach a tag (route, marketplace, request_id, …) to the scope.
+
+    Tags are searchable in the Sentry UI. Skip silently when the SDK
+    isn't installed so this stays a zero-cost helper in dev.
+    """
+    if value is None:
+        return
+    try:
+        import sentry_sdk
+        sentry_sdk.set_tag(key, str(value)[:200])
+    except Exception:
+        pass
+
+
+def clear_scope() -> None:
+    """Reset the per-request/job scope — call between queue ticks so
+    a prior job's user/tag context doesn't leak into the next one.
+    """
+    try:
+        import sentry_sdk
+        scope = sentry_sdk.Scope.get_isolation_scope()
+        scope.set_user(None)
+        scope.clear_breadcrumbs()
+    except Exception:
+        pass
+
+
 def _git_short_sha(repo_dir: Optional[str] = None) -> Optional[str]:
     """Resolve the current git short-SHA in ``repo_dir`` (or cwd).
 
