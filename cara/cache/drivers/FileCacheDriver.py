@@ -453,6 +453,22 @@ class FileCacheDriver(Cache):
                 return False
             return self._delete_file(file_path)
 
+    def ttl(self, key: str) -> Optional[int]:
+        """Remaining time-to-live for ``key`` in seconds.
+
+        Mirrors ``RedisCacheDriver.ttl``: returns ``None`` when the
+        file is missing or has no expiry, otherwise the integer
+        seconds until expiration. Used by the throttle middleware to
+        report an accurate ``Retry-After`` header instead of the full
+        window.
+        """
+        file_path = self._file_path(key)
+        ok, expires_at, _ = self._read_file(file_path)
+        if not ok or expires_at is None:
+            return None
+        remaining = int(expires_at - time.time())
+        return remaining if remaining > 0 else None
+
     def forget_pattern(self, pattern: str) -> int:
         """
         Delete multiple cache files matching a glob pattern.

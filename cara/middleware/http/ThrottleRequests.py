@@ -195,22 +195,28 @@ class ThrottleRequests(Middleware):
     def _attempt_limit(self, key: str, limit_config) -> tuple[bool, int, int]:
         """
         Attempt to record a request against the rate limit.
-        
+
         Args:
             key: The rate limit key
             limit_config: The Limit object defining the limit
-            
-        Returns:
-            Tuple of (allowed: bool, remaining: int, reset_in: int)
-        """
 
+        Returns:
+            Tuple of (allowed: bool, remaining: int, reset_in: int).
+            ``reset_in`` is the actual remaining seconds until the
+            counter resets — it queries ``Cache.ttl(...)`` after the
+            atomic increment instead of returning the full window
+            length. The previous implementation always reported the
+            full window, so a client that hit the limit at second 50
+            of a 60-second window was told "retry in 60 s" when the
+            truth was "retry in ~10 s".
+        """
         from cara.facades import Cache
 
         # Handle unlimited case
         if limit_config.max_attempts == 0:
             return True, -1, 0
 
-        window_seconds = limit_config.decay_minutes * 60
+        window_seconds = int(limit_config.decay_minutes * 60)
         cache_key = f"throttle_{key}"
 
         try:
@@ -225,6 +231,12 @@ class ThrottleRequests(Middleware):
 
         allowed = count <= limit_config.max_attempts
         remaining = max(limit_config.max_attempts - count, 0)
-        reset_in = window_seconds  # approximate; TTL set on first increment
+
+        # Query the actual remaining TTL on the bucket. ``Cache.ttl``
+        # returns ``None`` when the driver doesn't expose TTL or the
+        # key was just removed; in those edge cases fall back to the
+        # full window so the header is at least an upper bound.
+        actual_ttl = Cache.ttl(cache_key)
+        reset_in = actual_ttl if actual_ttl is not None else window_seconds
 
         return allowed, remaining, reset_in

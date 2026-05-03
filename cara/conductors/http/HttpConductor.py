@@ -169,22 +169,12 @@ class HttpConductor:
         """
         Returns resolved route-specific middleware.
 
-        If route middleware contains same class as global middleware,
-        the route middleware (with parameters) takes priority.
+        Sort order is left to ``MiddlewareCapsule.sort_by_priority`` so
+        global / route conflict resolution stays in the capsule's
+        contract, not duplicated here.
         """
         capsule = self.application.make("middleware_http")
         route_middleware = []
-        global_middleware_classes = set()
-
-        # Track global middleware classes to detect duplicates
-        for global_mw in capsule.get_global_middleware():
-            # Get base class (in case of parameterized middleware)
-            base_class = (
-                getattr(global_mw, "__bases__", [global_mw])[0]
-                if hasattr(global_mw, "__bases__")
-                else global_mw
-            )
-            global_middleware_classes.add(base_class)
 
         for mw in route.get_middleware():
             resolved = capsule.resolve_middleware(mw)
@@ -196,7 +186,6 @@ class HttpConductor:
                 route_middleware.extend(resolved)
             else:
                 route_middleware.append(resolved)
-        # Apply Laravel-style priority ordering
         return capsule.sort_by_priority(route_middleware)
 
     async def _run_terminable_middleware(

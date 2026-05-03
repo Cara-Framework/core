@@ -411,6 +411,30 @@ class Cache:
         """
         return self.driver(driver_name).forget_pattern(f"{prefix}*")
 
+    def ttl(self, key: str, driver_name: Optional[str] = None) -> Optional[int]:
+        """
+        Remaining seconds-to-live for ``key``.
+
+        Returns ``None`` when the key is missing or has no expiry, and
+        a non-negative int otherwise. Useful for accurate ``Retry-After``
+        headers on rate-limit responses, which previously reported the
+        full window length regardless of when in the window the bucket
+        filled.
+
+        Drivers that don't expose TTL (e.g. ``NullCacheDriver``) should
+        return ``None`` from ``ttl(...)``. The wrapper falls back to
+        ``None`` if the driver lacks the method, so callers don't need
+        to feature-detect.
+        """
+        driver = self.driver(driver_name)
+        ttl_fn = getattr(driver, "ttl", None)
+        if not callable(ttl_fn):
+            return None
+        try:
+            return ttl_fn(key)
+        except Exception:
+            return None
+
     def increment(
         self,
         key: str,

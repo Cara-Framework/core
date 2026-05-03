@@ -282,6 +282,24 @@ class RedisCacheDriver(Cache):
             Log.warning(f"[RedisCacheDriver] forget_if failed: {e}", category="cache")
             return False
 
+    def ttl(self, key: str) -> Optional[int]:
+        """Remaining time-to-live for ``key`` in seconds.
+
+        Returns ``None`` when the key doesn't exist or has no expiry,
+        and a non-negative int otherwise. Lets rate limiters /
+        throttle middleware report an accurate ``Retry-After`` instead
+        of the full window. Wraps Redis ``TTL`` which returns -2 (no
+        such key) and -1 (no expiry); both map to ``None`` here.
+        """
+        redis_key = f"{self._prefix}{key}"
+        try:
+            t = self._client.ttl(redis_key)
+        except Exception:
+            return None
+        if t is None or t < 0:
+            return None
+        return int(t)
+
     def forget_pattern(self, pattern: str) -> int:
         """
         Delete multiple keys matching a glob pattern.

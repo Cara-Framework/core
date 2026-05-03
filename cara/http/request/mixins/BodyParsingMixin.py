@@ -6,6 +6,7 @@ and multipart file uploads with Laravel-like validation and error handling.
 """
 
 import json
+from functools import lru_cache
 from typing import Any, Dict, Optional
 
 from multipart import MultipartParser
@@ -13,6 +14,36 @@ from multipart.multipart import parse_options_header
 
 from cara.exceptions import BadRequestException
 from cara.http.request import UploadedFile
+
+
+# ---------------------------------------------------------------------
+# Configurable size limits — read once per process so a hot-path call
+# doesn't re-walk the config tree on every request. Raise/lower via
+# ``app.body.MAX_BODY_SIZE`` / ``app.body.MAX_FILE_SIZE`` /
+# ``app.body.MAX_FILES`` at boot.
+# ---------------------------------------------------------------------
+@lru_cache(maxsize=1)
+def _body_limits() -> Dict[str, int]:
+    """Resolve body-parsing limits from config with sane fallbacks.
+
+    Cached for the life of the process — the values come from boot
+    config, so refreshing after a config reload requires
+    ``_body_limits.cache_clear()``.
+    """
+    try:
+        from cara.configuration import config
+
+        return {
+            "MAX_BODY_SIZE": int(config("app.body.MAX_BODY_SIZE", 10 * 1024 * 1024)),
+            "MAX_FILE_SIZE": int(config("app.body.MAX_FILE_SIZE", 10 * 1024 * 1024)),
+            "MAX_FILES": int(config("app.body.MAX_FILES", 20)),
+        }
+    except Exception:
+        return {
+            "MAX_BODY_SIZE": 10 * 1024 * 1024,
+            "MAX_FILE_SIZE": 10 * 1024 * 1024,
+            "MAX_FILES": 20,
+        }
 
 
 class BodyParsingMixin:
@@ -23,14 +54,37 @@ class BodyParsingMixin:
     and caching following Laravel patterns.
     """
 
-    # Maximum body size (10MB by default)
+    # Class attributes kept for backwards compat. Subclasses still
+    # override these directly (some app code does); the runtime
+    # accessors below prefer the class attribute when it diverges
+    # from the config default — that way an ``app/Request.py`` setting
+    # wins over the global config knob.
     MAX_BODY_SIZE = 10 * 1024 * 1024
-
-    # Maximum number of files
     MAX_FILES = 20
-
-    # Maximum file size (10MB by default)
     MAX_FILE_SIZE = 10 * 1024 * 1024
+
+    @classmethod
+    def _max_body_size(cls) -> int:
+        """Resolved per-request max body size. Class override beats config default."""
+        cfg = _body_limits()["MAX_BODY_SIZE"]
+        # If the subclass overrode the class attribute, honour it.
+        if cls.MAX_BODY_SIZE != BodyParsingMixin.MAX_BODY_SIZE:
+            return cls.MAX_BODY_SIZE
+        return cfg
+
+    @classmethod
+    def _max_file_size(cls) -> int:
+        cfg = _body_limits()["MAX_FILE_SIZE"]
+        if cls.MAX_FILE_SIZE != BodyParsingMixin.MAX_FILE_SIZE:
+            return cls.MAX_FILE_SIZE
+        return cfg
+
+    @classmethod
+    def _max_files(cls) -> int:
+        cfg = _body_limits()["MAX_FILES"]
+        if cls.MAX_FILES != BodyParsingMixin.MAX_FILES:
+            return cls.MAX_FILES
+        return cfg
 
     async def body(self) -> bytes:
         """Public accessor for the raw request body bytes.
@@ -54,33 +108,60 @@ class BodyParsingMixin:
         if self._body_consumed:
             raise BadRequestException("Request body stream already consumed")
 
-        try:
-            body = b""
-            more = True
-            total_size = 0
+        # Build the body in a list and join once at the end. The previous
+        # ``body += chunk`` loop was O(n²) — each ``+=`` on bytes copies
+        # the whole accumulated buffer, so a 10 MB upload arriving in
+        # 4 KB chunks did ~31 GB of memcpy. With the list+join approach,
+        # total work is O(n).
+        chunks: list[bytes] = []
+        total_size = 0
+        max_body = self._max_body_size()
 
+        try:
+            more = True
             while more:
                 message = await self.receive()
                 chunk = message.get("body", b"")
 
-                # Check body size limit
-                total_size += len(chunk)
-                if total_size > self.MAX_BODY_SIZE:
-                    raise BadRequestException(
-                        f"Request body too large. Maximum size: {self.MAX_BODY_SIZE} bytes"
-                    )
+                # Size check fires BEFORE the chunk is added to the
+                # accumulator so we don't allocate the chunk if it
+                # would tip us past the cap.
+                if chunk:
+                    total_size += len(chunk)
+                    if total_size > max_body:
+                        # Drain any remaining chunks so the ASGI server
+                        # can release the connection cleanly. The body
+                        # is intentionally NOT marked consumed here —
+                        # see the except path below.
+                        while message.get("more_body", False):
+                            try:
+                                message = await self.receive()
+                            except Exception:
+                                break
+                        raise BadRequestException(
+                            f"Request body too large. Maximum size: {max_body} bytes"
+                        )
+                    chunks.append(chunk)
 
-                body += chunk
                 more = message.get("more_body", False)
-
-            self._body = body
-            self._body_consumed = True
-            return body
+        except BadRequestException:
+            # Don't mark the body consumed on a size-cap violation —
+            # the request is going to 4xx and ``_body`` was never
+            # assigned, so a future ``_read_body`` call from a
+            # downstream handler would otherwise see "_body_consumed
+            # = True && _body is None" and raise a misleading "stream
+            # already consumed" error on top of the size error.
+            raise
         except Exception as exc:
+            # Genuine I/O / receive failure — consider the stream
+            # gone. Mark consumed so we don't retry the receive() loop.
             self._body_consumed = True
-            if isinstance(exc, BadRequestException):
-                raise
             raise BadRequestException(f"Failed to read request body: {exc}") from exc
+
+        body = b"".join(chunks)
+        self._body = body
+        self._body_consumed = True
+        return body
 
     async def json(self) -> Dict[str, Any]:
         """
@@ -123,9 +204,10 @@ class BodyParsingMixin:
     ) -> None:
         """Validate uploaded file before creating UploadedFile instance."""
         # Check file size
-        if len(content) > self.MAX_FILE_SIZE:
+        max_file = self._max_file_size()
+        if len(content) > max_file:
             raise BadRequestException(
-                f"File '{filename}' exceeds maximum size of {self.MAX_FILE_SIZE} bytes"
+                f"File '{filename}' exceeds maximum size of {max_file} bytes"
             )
 
         # Check if file is empty
@@ -211,6 +293,8 @@ class BodyParsingMixin:
             def on_part_data(data, start, end):
                 current_part["data"] += data[start:end]
 
+            max_files = self._max_files()
+
             def on_part_end():
                 nonlocal current_part, file_count
                 name = current_part.get("name")
@@ -223,9 +307,9 @@ class BodyParsingMixin:
                 if filename:
                     # This is a file upload
                     file_count += 1
-                    if file_count > self.MAX_FILES:
+                    if file_count > max_files:
                         raise BadRequestException(
-                            f"Too many files uploaded. Maximum: {self.MAX_FILES}"
+                            f"Too many files uploaded. Maximum: {max_files}"
                         )
 
                     # Validate file before creating UploadedFile
@@ -288,13 +372,22 @@ class BodyParsingMixin:
                 },
             )
 
-            # Write data to parser
+            # Write data to parser. Note: ``MultipartParser.write`` runs
+            # the registered callbacks synchronously, so a
+            # ``BadRequestException`` raised from ``on_part_end`` (e.g.
+            # too-many-files, oversize file) propagates straight out of
+            # ``parser.write`` — which is what the ``except`` below
+            # forwards verbatim. Without the ``isinstance`` guard the
+            # specific user-facing message ("Too many files uploaded.
+            # Maximum: 20") was being rewrapped as a generic "Failed to
+            # parse multipart data: ..." string, hiding the actual cause
+            # from the validator.
             parser.write(raw)
             parser.finalize()
 
+        except BadRequestException:
+            raise
         except Exception as exc:
-            if isinstance(exc, BadRequestException):
-                raise
             raise BadRequestException(f"Failed to parse multipart data: {exc}") from exc
 
     async def form(self) -> Dict[str, Any]:
@@ -404,14 +497,18 @@ class BodyParsingMixin:
                 # Log error but don't break the request
                 pass
         elif "application/json" in content_type:
-            # Handle as JSON data
-            try:
-                json_data = await self.json()
-                if isinstance(json_data, dict):
-                    result.update(json_data)
-            except BadRequestException:
-                # Invalid JSON → ignore, do not break overall parsing
-                pass
+            # Handle as JSON data. The previous version swallowed
+            # invalid-JSON errors silently which made
+            # ``Validation.make(request.input(), {...})`` look like
+            # every field was missing — a 422 with a list of
+            # "field required" messages — instead of telling the
+            # caller their JSON was malformed. The explicit
+            # ``Content-Type: application/json`` is a strong enough
+            # signal that the client INTENDED to send JSON, so a
+            # parse error is worth surfacing as a 400.
+            json_data = await self.json()
+            if isinstance(json_data, dict):
+                result.update(json_data)
         else:
             # Try JSON first, then form as fallback
             try:
