@@ -50,7 +50,7 @@ class QueueStatsCommand(CommandBase):
                 os.system("clear" if os.name == "posix" else "cls")
 
                 self.info(
-                    f"📊 Queue Stats Watch Mode - {pendulum.now().format('HH:mm:ss')}"
+                    f"📊 Queue Stats Watch Mode - {pendulum.now('UTC').format('HH:mm:ss')}"
                 )
                 self.info("=" * 60)
 

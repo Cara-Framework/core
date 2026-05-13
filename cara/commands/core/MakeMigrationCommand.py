@@ -143,6 +143,11 @@ class MakeMigrationCommand(CommandBase):
         """Create a fresh CREATE TABLE migration for a model."""
         style = self.option("style", "blueprint")
 
+        # Skip VIEW-only models (no fields property, backed by a SQL VIEW).
+        if not model_info.get("has_fields_method", False):
+            self.info(f"{model_info['name']} is up to date with migrations")
+            return "skipped"
+
         try:
             # Generate CREATE migration content
             content = self.generator.generate_create_migration(model_info, style)
@@ -173,6 +178,11 @@ class MakeMigrationCommand(CommandBase):
     def _process_model(self, model_info: dict) -> str:
         """Process a single model migration with database comparison."""
         table_name = model_info["table"]
+
+        # Skip VIEW-only models (no fields property).
+        if not model_info.get("has_fields_method", False):
+            self.info(f"{model_info['name']} is up to date with migrations")
+            return "unchanged"
 
         try:
             # Compare model with migration files

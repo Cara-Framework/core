@@ -182,6 +182,11 @@ class MigrationGenerator:
         for placeholder, replacement in replacements.items():
             result = result.replace(placeholder, replacement)
 
+        # Append VIEW definitions (from model __views__) after CREATE TABLE.
+        views = model_info.get("views", [])
+        if views:
+            result = self._inject_views_into_migration(result, views, table_name)
+
         return result
 
     def _generate_blueprint_update_migration(
@@ -252,8 +257,8 @@ class MigrationGenerator:
         sql = re.sub(r"\s*\)\s*", ")", sql)
         # Clean up quotes
         sql = re.sub(r"'\s*,\s*'", "', '", sql)
-        # Add spaces around operators
-        sql = re.sub(r"([<>=!]+)", r" \1 ", sql)
+        # Add spaces around comparison operators only (not DEFAULT =)
+        sql = re.sub(r"(?<!\w)([<>!=]{1,2})(?!\w)", r" \1 ", sql)
         sql = re.sub(r"\s+", " ", sql)  # Remove duplicate spaces
         return sql.strip()
 
@@ -430,46 +435,62 @@ class {class_name}(Migration):
         field_type = field_info.get("type", "string")
         params = field_info.get("params", {})
 
-        # Create the field based on type
+        # Create the field based on type — capture the returned column
+        # object so chained modifiers (.nullable(), .default(), .unique())
+        # apply to the correct column instead of the table.
+        column = None
+
         if field_type == "string":
             length = params.get("length", 255)
-            table.string(field_name, length)
+            column = table.string(field_name, length)
         elif field_type == "integer":
-            table.integer(field_name)
+            column = table.integer(field_name)
+        elif field_type == "unsigned_integer":
+            column = table.unsigned_integer(field_name)
+        elif field_type == "unsigned_big_integer":
+            column = table.unsigned_big_integer(field_name)
         elif field_type == "text":
-            table.text(field_name)
+            column = table.text(field_name)
         elif field_type == "boolean":
-            table.boolean(field_name)
+            column = table.boolean(field_name)
         elif field_type == "decimal":
             precision = params.get("precision", 10)
             scale = params.get("scale", 2)
-            table.decimal(field_name, precision, scale)
+            column = table.decimal(field_name, precision, scale)
         elif field_type == "datetime":
-            table.datetime(field_name)
+            column = table.datetime(field_name)
         elif field_type == "timestamp":
-            table.timestamp(field_name)
+            column = table.timestamp(field_name)
         elif field_type == "date":
-            table.date(field_name)
+            column = table.date(field_name)
         elif field_type == "time":
-            table.time(field_name)
+            column = table.time(field_name)
         elif field_type == "enum":
             options = params.get("options", [])
-            table.enum(field_name, options)
+            column = table.enum(field_name, options)
         elif field_type == "json":
-            table.json(field_name)
+            column = table.json(field_name)
         elif field_type == "jsonb":
-            table.jsonb(field_name)
+            column = table.jsonb(field_name)
         elif field_type == "float":
-            table.float(field_name)
+            column = table.float(field_name)
         elif field_type == "binary":
-            table.binary(field_name)
+            column = table.binary(field_name)
         elif field_type == "char":
             length = params.get("length", 255)
-            table.char(field_name, length)
+            column = table.char(field_name, length)
+        elif field_type == "tiny_integer":
+            column = table.tiny_integer(field_name)
+        elif field_type == "small_integer":
+            column = table.small_integer(field_name)
+        elif field_type == "medium_integer":
+            column = table.medium_integer(field_name)
+        elif field_type == "big_integer":
+            column = table.big_integer(field_name)
         elif field_type == "increments":
-            table.increments(field_name)
+            column = table.increments(field_name)
         elif field_type == "big_increments":
-            table.big_increments(field_name)
+            column = table.big_increments(field_name)
         elif field_type == "timestamps":
             table.timestamps()
             return  # timestamps() doesn't return a column to modify
@@ -478,17 +499,20 @@ class {class_name}(Migration):
             return  # soft_deletes() doesn't return a column to modify
         else:
             # Default to string for unknown types
-            table.string(field_name)
+            column = table.string(field_name)
 
-        # Apply modifiers
+        if column is None:
+            return
+
+        # Apply modifiers to the column object, not the table
         if params.get("nullable", False):
-            table.nullable()
+            column.nullable()
 
         if "default" in params:
-            table.default(params["default"])
+            column.default(params["default"])
 
         if params.get("unique", False):
-            table.unique()
+            column.unique()
 
         # Handle foreign keys
         foreign_key_info = field_info.get("foreign_key")
@@ -551,6 +575,7 @@ class {class_name}(Migration):
             "date",
             "time",
             "json",
+            "jsonb",
             "float",
             "binary",
         ]:
@@ -661,6 +686,54 @@ class {class_name}(Migration):
         models_location = modules("models")
         return models_location
 
+
+    def _inject_views_into_migration(
+        self, migration_content: str, views: List[Dict], table_name: str
+    ) -> str:
+        """Inject VIEW SQL statements into a generated migration.
+
+        Adds ``DB.statement(...)`` calls after the ``CREATE TABLE`` block
+        in ``up()`` and ``DROP VIEW`` calls before ``schema.drop()`` in
+        ``down()``.
+        """
+        # Build the up() VIEW statements
+        view_up_lines = []
+        view_down_lines = []
+        for view in views:
+            sql = view["sql"].strip()
+            name = view["name"]
+            view_up_lines.append(
+                f'\n        DB.statement("""\n            {sql}\n        """)'
+            )
+            view_down_lines.append(
+                f'        DB.statement("DROP VIEW IF EXISTS {name}")'
+            )
+
+        # Ensure ``from cara.facades import DB`` is present
+        if "from cara.facades import DB" not in migration_content:
+            migration_content = migration_content.replace(
+                "from cara.eloquent.migrations import Migration",
+                "from cara.eloquent.migrations import Migration\n"
+                "from cara.facades import DB",
+            )
+
+        # Insert VIEW creation after the ``with self.schema.create(...)``
+        # block closes (the line that starts the down method).
+        # We look for the blank line between up() body end and down() def.
+        up_view_block = "\n".join(view_up_lines)
+        migration_content = migration_content.replace(
+            f'\n    def down(self):',
+            f'{up_view_block}\n\n    def down(self):',
+        )
+
+        # Insert VIEW drops before ``self.schema.drop(...)``
+        down_view_block = "\n".join(view_down_lines)
+        migration_content = migration_content.replace(
+            f'        self.schema.drop("{table_name}")',
+            f'{down_view_block}\n        self.schema.drop("{table_name}")',
+        )
+
+        return migration_content
 
     def _generate_migration_filename(self, name: str) -> str:
         """Generate timestamped migration filename."""

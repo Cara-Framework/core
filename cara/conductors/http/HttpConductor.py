@@ -123,7 +123,13 @@ class HttpConductor:
                 global_middleware
             )(full_handler)
         except Exception as e:
-            Log.error(f"Error in HTTP connection: {e}")
+            # 4xx exceptions (not-found, validation, auth) are expected
+            # application behaviour — let the exception handler deal with
+            # logging at the appropriate level. Only log truly unexpected
+            # errors here to avoid noisy double-logging of 404s etc.
+            status = getattr(e, "status_code", 500)
+            if status >= 500:
+                Log.error(f"Error in HTTP connection: {e}")
             raise
         finally:
             # CRITICAL: terminate middleware MUST run on every code path,

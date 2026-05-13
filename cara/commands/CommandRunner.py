@@ -37,9 +37,13 @@ class CommandRunner:
             return
         help_text = getattr(cmd_cls, "help", "")
 
-        # 1) Inspect handle signature
+        # 1) Inspect handle signature. Pass the underlying function too
+        # so ``_split_handle_params`` can resolve PEP 563 string annotations
+        # via ``typing.get_type_hints(cmd_cls.handle)`` — without it,
+        # commands using ``from __future__ import annotations`` get every
+        # primitive misclassified as a DI dep (see _split_handle_params).
         sig = inspect.signature(cmd_cls.handle)
-        cli_params, di_params = self._split_handle_params(sig)
+        cli_params, di_params = self._split_handle_params(sig, cmd_cls.handle)
 
         # 2) Parse decorator options
         raw_options = getattr(cmd_cls, "_cli_options", {}) or {}
@@ -56,60 +60,212 @@ class CommandRunner:
         self.console_app.command(name=name, help=help_text)(callback)
 
     def _split_handle_params(
-        self, sig: inspect.Signature
+        self, sig: inspect.Signature, handle_fn: Any = None
     ) -> Tuple[List[inspect.Parameter], List[inspect.Parameter]]:
         """
         Split handle() parameters into CLI parameters (primitive types or no annotation)
         and DI parameters (other annotated types).
+
+        ROOT CAUSE FIX (scenario 8 / AI batch enrichment):
+        Commands that import ``from __future__ import annotations`` (PEP 563)
+        return their parameter annotations as raw STRINGS rather than evaluated
+        types. The original tuple-membership check ``ann in (str, int, float, bool)``
+        therefore failed for every PEP 563 command — every primitive parameter
+        ended up in di_params, cli_params came back empty, and Typer rebuilt
+        the CLI from decorator options alone. For ``ai:flush --sync`` that
+        meant ``priority`` (declared ``"--priority"`` without ``=default``)
+        was registered as a bool flag with default ``False``, so the handle
+        body's ``if priority not in VALID_PRIORITIES`` rejected it as
+        ``"Invalid priority 'False'"`` on every invocation. Resolving the
+        hints via ``typing.get_type_hints`` (with the function's own
+        module globals) restores the original intent across every command
+        that uses PEP 563 — AIDiscover, DevReset, QueuePurge, etc.
         """
         primitive_types = (str, int, float, bool)
+        # Resolve PEP 563 string annotations to real types. Use the
+        # original function so get_type_hints can resolve forward refs
+        # against the right module globals/locals. Falls back to the raw
+        # signature on any failure so a single bad annotation can't take
+        # the whole CLI out.
+        resolved_hints: Dict[str, Any] = {}
+        target_fn = handle_fn
+        if target_fn is None:
+            # Best-effort recovery for callers that didn't pass the fn.
+            target_fn = getattr(sig, "__wrapped__", None)
+        if target_fn is not None:
+            try:
+                from typing import get_type_hints as _get_type_hints
+
+                resolved_hints = _get_type_hints(target_fn) or {}
+            except Exception:
+                resolved_hints = {}
         cli_params: List[inspect.Parameter] = []
         di_params: List[inspect.Parameter] = []
         for param in sig.parameters.values():
             if param.name == "self":
                 continue
             ann = param.annotation
+            # Prefer the resolved (real-type) hint; fall back to the raw
+            # string-or-class annotation from the signature.
+            if param.name in resolved_hints:
+                ann = resolved_hints[param.name]
+            # Optional[T] / Union[T, None] should follow T's classification
+            # so ``marketplace: Optional[str] = None`` lands on the CLI side.
+            try:
+                from typing import Union, get_args, get_origin
+
+                if get_origin(ann) is Union:
+                    non_none = [a for a in get_args(ann) if a is not type(None)]
+                    if len(non_none) == 1:
+                        ann = non_none[0]
+            except Exception:
+                pass
             if ann is inspect.Parameter.empty or ann in primitive_types:
+                # Replace the parameter's raw (PEP 563 string) annotation
+                # with the resolved type so downstream Typer/Click receive
+                # a real class — typer.get_click_type raises
+                # "Type not yet supported: bool" if it sees the string
+                # ``"bool"`` instead of the type ``bool``.
+                if param.name in resolved_hints and ann is not param.annotation:
+                    param = param.replace(annotation=ann)
                 cli_params.append(param)
             else:
+                if param.name in resolved_hints and ann is not param.annotation:
+                    param = param.replace(annotation=ann)
                 di_params.append(param)
         return cli_params, di_params
 
     def _parse_decorator_options(
         self, raw_options
-    ) -> List[Tuple[str, List[str], Any, str]]:
+    ) -> List[Tuple[str, List[str], Any, str, type]]:
         """
         Parse decorator options into a list of tuples:
-        (param_name, flags_list, default_value, help_text).
+        (param_name, flags_list, default_value, help_text, annotation).
 
         Accepts either dict format: {"--flag=default": "help text"}
-        or list format: [{"name": "--flag=default", "help": "help text"}]
-        """
-        if isinstance(raw_options, list):
-            raw_options = {
-                item.get("name", ""): item.get("help", "")
-                for item in raw_options
-                if isinstance(item, dict) and item.get("name")
-            }
+        or list format with rich metadata:
+            [{"name": "--flag", "help": "...", "type": int, "default": 5}]
+            [{"name": "--flag", "help": "...", "is_flag": True}]
+            [{"name": "--flag=24", "help": "...", "type": "integer"}]
 
-        parsed: List[Tuple[str, List[str], Any, str]] = []
-        for key, desc in raw_options.items():
+        ROOT CAUSE FIX (scenario 12 / full pipeline integration):
+        Pre-fix, the list-format ingestion path collapsed every option to
+        ``{name: help}`` and threw away ``type``, ``default``, and
+        ``is_flag``. Anything declared without ``=default`` in the name
+        string therefore landed in the legacy "bare flag → bool" branch
+        below, so e.g. ``DeduplicateCommand``'s ``{"name": "--container",
+        "type": int}`` was registered as a Typer bool flag and Click
+        rejected ``--container=170`` with "Option '--container' does not
+        take a value." Same silent damage for ``RefreshProductsCommand``
+        (``--limit/--min-age-hours/--marketplace/--zipcode``),
+        ``WishlistDropSweepCommand`` (``--batch-size/--max-batches/
+        --threshold``), ``PipelineTraceCommand`` (``--listing/--asin/
+        --min-age/--stage/--minutes``), and ``PriceAlertSweepCommand``
+        (``--batch-size/--max-batches/--product``) — every typed,
+        value-bearing option without an inline default registered as a
+        bool flag and rejected the value at the CLI. The fix preserves
+        list-format metadata end-to-end and propagates the resolved
+        annotation through ``_build_signature_parameters`` so Typer/Click
+        emit the right click_type for each option.
+        """
+        # Normalize input → list of per-option dicts so we keep the
+        # rich metadata (``type``, ``default``, ``is_flag``) instead of
+        # collapsing to ``{name: help}``.
+        items: List[Dict[str, Any]] = []
+        if isinstance(raw_options, list):
+            for item in raw_options:
+                if isinstance(item, dict) and item.get("name"):
+                    items.append(dict(item))
+        elif isinstance(raw_options, dict):
+            for k, v in raw_options.items():
+                items.append({"name": k, "help": v})
+        else:
+            return []
+
+        # Map ``"integer"``/``"string"``/``"bool"`` to real types so the
+        # legacy string spellings still work alongside ``type=int``.
+        _TYPE_ALIASES: Dict[str, type] = {
+            "int": int, "integer": int,
+            "str": str, "string": str, "text": str,
+            "float": float, "double": float, "number": float,
+            "bool": bool, "boolean": bool, "flag": bool,
+        }
+
+        _SENTINEL = object()
+        parsed: List[Tuple[str, List[str], Any, str, type]] = []
+        for item in items:
+            key = item.get("name", "")
+            desc = item.get("help", "") or ""
+            explicit_type = item.get("type")
+            if isinstance(explicit_type, str):
+                explicit_type = _TYPE_ALIASES.get(
+                    explicit_type.strip().lower(), str
+                )
+            explicit_default = item.get("default", _SENTINEL)
+            is_flag = bool(item.get("is_flag", False))
+
             if "=" in key:
                 flags_part, default_str = key.split("=", 1)
                 if default_str == "?":
-                    default_val = None
-                    is_bool = False
+                    inline_default: Any = None
                 else:
-                    default_val = default_str
-                    is_bool = False
+                    inline_default = default_str
+                has_inline = True
             else:
                 flags_part = key
-                default_val = False
-                is_bool = True
+                inline_default = None
+                has_inline = False
+
+            # Resolve final annotation + default using explicit metadata
+            # first, falling back to inline ``=default`` parsing for
+            # legacy dict-format keys.
+            if is_flag:
+                ann: type = bool
+                if explicit_default is not _SENTINEL:
+                    final_default: Any = bool(explicit_default)
+                else:
+                    final_default = False
+            elif explicit_type is not None:
+                ann = explicit_type
+                if explicit_default is not _SENTINEL:
+                    final_default = explicit_default
+                elif has_inline:
+                    try:
+                        final_default = (
+                            ann(inline_default)
+                            if inline_default is not None
+                            else None
+                        )
+                    except Exception:
+                        final_default = inline_default
+                else:
+                    # Typed value option with no default → expose as
+                    # ``Optional[T]`` (None) so the CLI accepts a value
+                    # and the command can detect "not provided" cleanly.
+                    final_default = None
+            elif explicit_default is not _SENTINEL:
+                ann = type(explicit_default) if explicit_default is not None else str
+                final_default = explicit_default
+            elif has_inline:
+                # Legacy dict-format: ``"--flag=24"`` keeps the string
+                # default but pre-fix consumers expect strings here, so
+                # don't auto-cast to int even if it looks numeric.
+                ann = type(inline_default) if inline_default is not None else str
+                final_default = inline_default
+            else:
+                # Bare flag (no type, no default, no inline) — preserve
+                # the legacy "implicit bool" behaviour so commands like
+                # ``QueueMonitorCommand --queue`` (intended as a string
+                # option) keep working when handle() supplies the real
+                # annotation. handle()-bound CLI params override the
+                # decorator default in ``_build_signature_parameters``,
+                # so this only affects decorator-only options.
+                ann = bool
+                final_default = False
 
             flag_tokens = flags_part.split("|")
             flags: List[str] = []
-            param_name = None
+            param_name: str | None = None
             for tok in flag_tokens:
                 tok = tok.strip()
                 if not tok:
@@ -125,14 +281,13 @@ class CommandRunner:
                     param_name = stripped
             if not param_name:
                 continue
-            default = False if is_bool else default_val
-            parsed.append((param_name, flags, default, desc))
+            parsed.append((param_name, flags, final_default, desc, ann))
         return parsed
 
     def _build_signature_parameters(
         self,
         cli_params: List[inspect.Parameter],
-        parsed_options: List[Tuple[str, List[str], Any, str]],
+        parsed_options: List[Tuple[str, List[str], Any, str, type]],
     ) -> List[inspect.Parameter]:
         """
         Build a list of inspect.Parameter for Typer, wrapping handle() params
@@ -143,10 +298,15 @@ class CommandRunner:
 
         parameters: List[inspect.Parameter] = []
         existing_names = {param.name for param in cli_params}
-        # Map option names to their flags/default/help for quick lookup
-        option_map: Dict[str, Tuple[List[str], Any, str]] = {
-            name_opt: (flags, default, help_text)
-            for name_opt, flags, default, help_text in parsed_options
+        # Map option names to their flags/default/help/annotation for
+        # quick lookup. The annotation is sourced from the decorator's
+        # explicit ``type``/``is_flag`` metadata in
+        # ``_parse_decorator_options`` and propagated here so Typer/Click
+        # picks the right click_type (scenario 12 fix — see the
+        # ``_parse_decorator_options`` ROOT CAUSE comment).
+        option_map: Dict[str, Tuple[List[str], Any, str, type]] = {
+            name_opt: (flags, default, help_text, ann)
+            for name_opt, flags, default, help_text, ann in parsed_options
         }
 
         # 1) Wrap handle parameters
@@ -158,12 +318,17 @@ class CommandRunner:
                 else Any
             )
             if pname in option_map:
-                flags, opt_default, help_text = option_map[pname]
+                flags, opt_default, help_text, opt_ann = option_map[pname]
                 # Prefer handle default if present, else decorator default
                 if param.default is not inspect.Parameter.empty:
                     handle_def = param.default
                 else:
                     handle_def = opt_default
+                # If handle() left the annotation blank, fall back to the
+                # decorator's declared annotation so Typer doesn't see
+                # ``Any`` (which it can't translate into a click_type).
+                if annotation is Any and opt_ann is not None:
+                    annotation = opt_ann
                 default = typer.Option(
                     handle_def, *flags, help=help_text, show_default=True
                 )
@@ -181,11 +346,16 @@ class CommandRunner:
                 )
             )
 
-        # 2) Add decorator-only options as keyword-only
-        for name_opt, flags, default_val, help_text in parsed_options:
+        # 2) Add decorator-only options as keyword-only. Use the
+        # decorator-provided annotation directly so typed value options
+        # (``type=int`` etc.) round-trip through Typer correctly. We
+        # only fall back to the legacy "bool if default is bool, else
+        # str" inference if the parser couldn't decide on a type.
+        for name_opt, flags, default_val, help_text, ann in parsed_options:
             if name_opt in existing_names:
                 continue
-            ann = bool if isinstance(default_val, bool) else str
+            if ann is None:
+                ann = bool if isinstance(default_val, bool) else str
             parameters.append(
                 Parameter(
                     name_opt,
@@ -236,26 +406,21 @@ class CommandRunner:
             # cardinality (``name`` is a static registered command).
             import time as _t
             try:
-                from app.support.Metrics import (
-                    Metrics as _M,
-                    start_pushgateway_autopush as _start_autopush,
-                )
-                # Make sure metrics this CLI emits reach the gateway.
-                # Turns a craft command from "black box" into "shows up
-                # on Grafana within one scrape interval after exit"
-                # without requiring the command to know anything about
-                # Prometheus. Opt out with METRICS_PUSHGATEWAY_DISABLED=1.
+                from app.support.Metrics import Metrics as _M
+                # Optionally push metrics to a gateway so short-lived CLI
+                # commands show up in Grafana. The autopush helper may not
+                # exist (it's opt-in); that's fine — the important thing
+                # is that _M is set so counters still work for scrape-
+                # based collection.
                 try:
-                    # Long-running commands (autocomplete / scrape loops)
-                    # benefit from periodic pushes — set the env so the
-                    # dashboard moves while the command is still running.
+                    from app.support.Metrics import start_pushgateway_autopush as _start_autopush
                     try:
                         from cara.configuration import config
                         _push_interval = int(config("metrics.pushgateway_interval_s", 15))
                     except Exception:
                         _push_interval = int(__import__("os").environ.get("METRICS_PUSHGATEWAY_INTERVAL_S", "15"))
                     _start_autopush(interval_seconds=_push_interval)
-                except Exception:
+                except (ImportError, AttributeError):
                     pass
             except Exception:
                 _M = None  # type: ignore[assignment]

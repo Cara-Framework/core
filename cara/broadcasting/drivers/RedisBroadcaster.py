@@ -66,6 +66,20 @@ from cara.facades import Log
 _USER_CHANNEL_PREFIX = "__user:"
 
 
+class _SafeEncoder(json.JSONEncoder):
+    """JSON encoder that handles Decimal/datetime values from ORM models."""
+
+    def default(self, o):
+        from decimal import Decimal
+        import datetime
+
+        if isinstance(o, Decimal):
+            return float(o)
+        if isinstance(o, (datetime.datetime, datetime.date)):
+            return o.isoformat()
+        return super().default(o)
+
+
 class RedisBroadcaster(ConnectionManager, Broadcaster):
     """Redis-backed broadcaster.
 
@@ -216,7 +230,8 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                     "data": data,
                     "_node_id": self._node_id,
                     "_except_socket_id": except_socket_id,
-                }
+                },
+                cls=_SafeEncoder,
             )
             client = await self._redis()
             await client.publish(self._prefixed(unprefixed), payload)
@@ -250,7 +265,8 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                     "data": data,
                     "_node_id": self._node_id,
                     "_except_socket_id": except_socket_id,
-                }
+                },
+                cls=_SafeEncoder,
             )
             client = await self._redis()
             await client.publish(self._prefixed(f"{_USER_CHANNEL_PREFIX}{user_id}"), payload)

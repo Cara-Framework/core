@@ -21,9 +21,47 @@ from typing import Any, Callable, Optional
 
 _rate_buckets: dict = {}
 _rate_lock = threading.Lock()
+_rate_sweep_counter: int = 0
 
 _overlap_locks: dict = {}
 _overlap_lock = threading.Lock()
+_overlap_sweep_counter: int = 0
+
+# Sweep stale keys every N operations. Without this, the in-process
+# dicts only ever grow — a long-running worker that sees a stream of
+# unique rate keys (per-keyword, per-URL, per-tenant) accumulates an
+# empty bucket per key forever. Found during scenario 4 load test.
+_RATE_SWEEP_EVERY = 500
+_OVERLAP_SWEEP_EVERY = 500
+
+
+def _sweep_rate_buckets_locked(now: float) -> None:
+    """Drop empty/stale buckets. Caller must hold ``_rate_lock``.
+
+    A bucket is dead when none of its timestamps are within the
+    longest decay window we've seen. We don't track per-key
+    decay_seconds (callers can pass different values for the same
+    rate_key), so use a generous 24h ceiling — enough to reclaim
+    abandoned keys, short enough to bound the dict size in practice.
+    """
+    cutoff = now - 86400  # 24h
+    dead = [k for k, ts in _rate_buckets.items() if not ts or ts[-1] < cutoff]
+    for k in dead:
+        _rate_buckets.pop(k, None)
+
+
+def _sweep_overlap_locks_locked(now: float) -> None:
+    """Drop locks whose ``expire_after`` window has long-since passed.
+
+    Per-key ``expire_after`` is not stored; we use a 24h ceiling for
+    the sweep — well past any reasonable lock TTL. Live locks held by
+    in-flight jobs use ``time.time()`` timestamps within the last few
+    minutes and won't be touched.
+    """
+    cutoff = now - 86400  # 24h
+    dead = [k for k, ts in _overlap_locks.items() if ts < cutoff]
+    for k in dead:
+        _overlap_locks.pop(k, None)
 
 
 async def _call_next(next_fn: Callable, job) -> Any:
@@ -50,6 +88,16 @@ class RateLimited:
             bucket = _rate_buckets.setdefault(rate_key, [])
             # Prune expired hits
             bucket[:] = [t for t in bucket if now - t < self.decay_seconds]
+
+            # Periodic sweep — keeps ``_rate_buckets`` bounded over the
+            # life of a long-running worker. Per-key decay only prunes
+            # entries when that key is touched again; one-shot keys
+            # (per-keyword/URL/tenant) would otherwise live forever.
+            global _rate_sweep_counter
+            _rate_sweep_counter += 1
+            if _rate_sweep_counter >= _RATE_SWEEP_EVERY:
+                _rate_sweep_counter = 0
+                _sweep_rate_buckets_locked(now)
 
             if len(bucket) >= self.max_attempts:
                 try:
@@ -119,6 +167,20 @@ class WithoutOverlapping:
                 self._log_skip(lock_key)
                 return None
             _overlap_locks[lock_key] = now
+
+            # Periodic sweep — same shape as the rate-bucket sweep
+            # above. Without it, the fallback path leaks one entry
+            # per unique lock_key over the worker's lifetime. The
+            # try/finally pop() below catches successful completions,
+            # but a job that exits via ``return None`` from inside the
+            # ``with _overlap_lock`` block (the "skipped" branch
+            # above) leaves no entry to pop. The sweep covers the
+            # rare case where a non-cleaned entry survives.
+            global _overlap_sweep_counter
+            _overlap_sweep_counter += 1
+            if _overlap_sweep_counter >= _OVERLAP_SWEEP_EVERY:
+                _overlap_sweep_counter = 0
+                _sweep_overlap_locks_locked(now)
 
         try:
             return await _call_next(next_fn, job)

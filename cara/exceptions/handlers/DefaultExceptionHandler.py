@@ -28,7 +28,7 @@ class DefaultExceptionHandler:
         self.log_exception(exception)
         status_code = self.get_status_code(exception)
         response_data = self.format_response(exception, status_code)
-        await self.send_response(response_data, status_code, scope, receive, send)
+        await self.send_response(response_data, status_code, scope, receive, send, request)
 
     def get_status_code(self, exception: Exception) -> int:
         """Get HTTP status code from exception - Laravel style."""
@@ -61,7 +61,27 @@ class DefaultExceptionHandler:
     _GENERIC_5XX_MESSAGE = "Internal server error"
 
     def format_error(self, exception: Exception, status_code: int) -> Dict[str, Any]:
-        """Format general errors."""
+        """Format general errors.
+
+        ROOT-CAUSE (frontend stress scenario 4 / cycle 1): debug-mode
+        404 / 422 / 401 / 403 responses were shipping ``file`` /
+        ``line`` / full Python ``trace`` arrays in the JSON body. A
+        ``GET /api/products/<bad-slug>`` 404 returned an 8.6 KB
+        envelope with ``app/services/ProductDetailService.py:295``
+        and the entire framework call stack pasted in. Even with
+        ``app.debug=True``, 4xx responses are EXPECTED application
+        behaviour (validation failed / not found / forbidden) — the
+        caller acted on a bad input, the server didn't fault. Stack
+        traces / file paths are diagnostics for unexpected 5xx faults
+        only; surfacing them on 4xx leaks repository structure to
+        anyone who can hit the API and bloats every "this slug
+        doesn't exist" response.
+
+        New rule: ``type`` (the exception class name) stays for
+        debug-mode 4xx as a useful tag for the storefront's error UX,
+        but ``file`` / ``line`` / ``trace`` are reserved for the 5xx
+        path. Production behaviour is unchanged.
+        """
         debug = self.is_debug_mode()
 
         # In production, redact the raw exception message for any unexpected
@@ -74,27 +94,37 @@ class DefaultExceptionHandler:
             response = {"error": str(exception)}
 
         if debug:
-            response.update(
-                {
-                    "type": exception.__class__.__name__,
-                    "file": self.get_exception_file(exception),
-                    "line": self.get_exception_line(exception),
-                    "trace": self.get_trace(exception),
-                }
-            )
+            response["type"] = exception.__class__.__name__
+            # Only attach diagnostic stack/file/line for genuine 5xx
+            # faults. 4xx responses are documented application
+            # outcomes and should stay clean even when debug is on.
+            if status_code >= 500:
+                response.update(
+                    {
+                        "file": self.get_exception_file(exception),
+                        "line": self.get_exception_line(exception),
+                        "trace": self.get_trace(exception),
+                    }
+                )
 
         return response
 
     def log_exception(self, exception: Exception) -> None:
-        """Log the exception."""
+        """Log the exception.
+
+        4xx errors are expected application behaviour (not-found,
+        validation, auth) so they log at WARNING. 5xx errors are
+        genuine server faults and log at ERROR with a full traceback.
+        """
         try:
             from cara.facades import Log
 
-            Log.error(
-                f"{exception.__class__.__name__}: {str(exception)}",
-                category="cara.exceptions",
-                exc_info=True,
-            )
+            status = self.get_status_code(exception)
+            msg = f"{exception.__class__.__name__}: {str(exception)}"
+            if status < 500:
+                Log.warning(msg, category="cara.exceptions")
+            else:
+                Log.error(msg, category="cara.exceptions", exc_info=True)
         except ImportError:
             pass
 
@@ -169,6 +199,106 @@ class DefaultExceptionHandler:
 
         return headers
 
+    def _security_headers_for_scope(self, scope: Dict[str, Any]) -> list:
+        """Build defense-in-depth header pairs for an error response.
+
+        ROOT-CAUSE (frontend stress scenario 7 / cycle 1): every error
+        response (404 route-not-found, 405 method-not-allowed, 422
+        validation, 401/403 auth, 5xx) bypassed the
+        ``SecurityHeaders`` middleware because the exception path
+        unwinds the middleware stack. The header sweep observed:
+
+          * 200/204 success responses had nosniff / DENY / Permissions-
+            Policy / CSP / COOP / CORP / Referrer-Policy / X-XSS-
+            Protection / X-Permitted-Cross-Domain-Policies — every
+            baseline header.
+          * 404 / 405 / 422 / 4xx error responses had ZERO of those.
+            ``curl /api/no-such-endpoint`` came back with only CORS
+            and content-type. A browser landing on a 404 JSON URL
+            would happily MIME-sniff it as HTML.
+
+        Mirroring the SecurityHeaders middleware here means the
+        baseline applies on every code path, not just the happy path.
+        Config overrides (``security.security.headers``) honour the
+        same dict and ``None`` values still suppress a header.
+        """
+        from cara.middleware.http.SecurityHeaders import (
+            _DEFAULT_HEADERS as _SH_DEFAULT_HEADERS,
+            _DEFAULT_HSTS as _SH_DEFAULT_HSTS,
+        )
+
+        headers_dict: Dict[str, str] = dict(_SH_DEFAULT_HEADERS)
+        hsts: Optional[str] = _SH_DEFAULT_HSTS
+        hsts_preload = False
+        try:
+            from cara.configuration import config
+
+            overrides = config("security.security.headers")
+            if isinstance(overrides, dict):
+                for k, v in overrides.items():
+                    if v is None:
+                        headers_dict.pop(k, None)
+                    else:
+                        headers_dict[k] = str(v)
+
+            custom_hsts = config("security.security.hsts")
+            if custom_hsts is None and "security.security.hsts" in (
+                getattr(config, "loaded_keys", set()) or set()
+            ):
+                hsts = None
+            elif isinstance(custom_hsts, str):
+                hsts = custom_hsts
+            hsts_preload = bool(config("security.security.hsts_preload", False))
+        except Exception:
+            pass
+
+        out: list = [
+            [k.lower().encode(), str(v).encode()] for k, v in headers_dict.items()
+        ]
+
+        # HSTS only on HTTPS — match SecurityHeaders middleware logic.
+        try:
+            scheme = scope.get("scheme") if isinstance(scope, dict) else None
+            if hsts and isinstance(scheme, str) and scheme.lower() == "https":
+                value = hsts
+                if hsts_preload and "preload" not in value:
+                    value = f"{value}; preload"
+                out.append([b"strict-transport-security", value.encode()])
+        except Exception:
+            pass
+
+        return out
+
+    def _request_id_header_for(self, request: Any, scope: Dict[str, Any]) -> list:
+        """Return the X-Request-ID header pair for the error response.
+
+        The ``AttachRequestID`` middleware sets this on success
+        responses, but on the exception path the middleware never
+        wraps a response, so the header is missing. Same scenario 7
+        finding as the security headers above — without the request
+        id, an ops engineer correlating a user complaint to a Sentry
+        event has to fall back to timestamp matching.
+        """
+        rid: Optional[str] = None
+        try:
+            rid = getattr(request, "request_id", None) if request is not None else None
+        except Exception:
+            rid = None
+        if not rid:
+            try:
+                raw = dict(scope.get("headers", []) if isinstance(scope, dict) else [])
+                rid = raw.get(b"x-request-id", b"").decode() or None
+            except Exception:
+                rid = None
+        if not rid:
+            try:
+                import uuid
+
+                rid = str(uuid.uuid4())
+            except Exception:
+                rid = ""
+        return [[b"x-request-id", rid.encode()]] if rid else []
+
     async def send_response(
         self,
         data: Dict[str, Any],
@@ -176,24 +306,28 @@ class DefaultExceptionHandler:
         scope: Dict[str, Any],
         receive: Any,
         send: Any,
+        request: Any = None,
     ) -> None:
         """Send the response."""
         cors = self._cors_headers_for_scope(scope)
+        sec = self._security_headers_for_scope(scope)
+        rid = self._request_id_header_for(request, scope)
+        extras = cors + sec + rid
         try:
             if self.application:
                 response = self.application.make("response")
                 response.json(data, status=status_code)
-                for key, val in cors:
+                for key, val in extras:
                     response.header(key.decode(), val.decode())
                 if not scope.get("response_sent") and not response.is_sent():
                     await response(scope, receive, send)
             else:
                 await self.send_manual_response(
-                    data, status_code, scope, receive, send, cors
+                    data, status_code, scope, receive, send, extras
                 )
         except Exception:
             await self.send_manual_response(
-                data, status_code, scope, receive, send, cors
+                data, status_code, scope, receive, send, extras
             )
 
     async def send_manual_response(
@@ -210,8 +344,11 @@ class DefaultExceptionHandler:
 
         response_body = json.dumps(data).encode("utf-8")
 
+        # Match the success-path content-type (includes charset) so a
+        # client picking the type up programmatically sees the same
+        # value on success and error responses. Scenario 7 / cycle 1.
         headers = [
-            [b"content-type", b"application/json"],
+            [b"content-type", b"application/json; charset=utf-8"],
             [b"content-length", str(len(response_body)).encode()],
         ]
         if extra_headers:

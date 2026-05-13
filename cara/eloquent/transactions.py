@@ -22,6 +22,8 @@ Two distinct ``__exit__`` paths
    the outer caller's transaction.
 """
 
+from __future__ import annotations
+
 from functools import wraps
 
 

@@ -16,9 +16,24 @@ from cara.middleware import Middleware
 class ThrottleRequests(Middleware):
     """Rate limiting middleware with automatic parameter parsing."""
 
-    def __init__(
-        self, application, limit: Optional[int] = None, window: Optional[int] = None
-    ):
+    def __init__(self, application, limit=None, window=None):
+        """ROOT-CAUSE / scenario 6 (concurrent load probe).
+        ----------------------------------------------------
+        ``limit`` and ``window`` are intentionally **untyped**.
+        ``MiddlewareParameterParser`` inspects ``__init__`` annotations
+        and uses them to coerce raw route-middleware strings — so
+        annotating ``limit: Optional[int]`` made the parser run
+        ``int("catalog")`` for ``throttle:catalog``, raise ``ValueError``,
+        and silently fall back to ``limit=None``. The route then
+        behaved as if it had no throttle at all, and the parameterless
+        ``ThrottleRequests`` global did the actual rate-limit work
+        with the global fallback ``Limit(RateLimiter.limit, ...)``
+        instead of the named limiter the route asked for. With the
+        annotations removed the parser keeps the raw string and the
+        constructor's existing string/int branching does the right
+        thing — named limiters resolve via
+        ``RateLimiter.resolve_limiter(name, request)``.
+        """
         super().__init__(application)
 
         if limit is not None and not isinstance(limit, str):
@@ -43,6 +58,32 @@ class ThrottleRequests(Middleware):
         """Handle rate limiting logic."""
         # Bypass for trusted IPs (monitoring, health checks, local dev).
         if self._is_trusted_ip(request):
+            return await next(request)
+
+        # ROOT-CAUSE / scenario 6 (concurrent load probe).
+        # ``ThrottleRequests`` is registered TWICE in the framework:
+        #   1. As a default global middleware in
+        #      ``MiddlewareProvider.default_http_middleware`` (no params).
+        #   2. As the route-level alias ``throttle:<name>`` (with params).
+        #
+        # Previously, the parameterless global instance fell through to
+        # ``Limit(max_attempts=RateLimiter.limit, ...)`` and incremented
+        # the same ``throttle_<method>:<endpoint>:<ip>`` key the
+        # route-level instance later incremented again — every request
+        # to a throttled route burned TWO units of budget instead of
+        # one. ``X-RateLimit-Remaining`` decremented at 2x the request
+        # rate, halving the effective per-IP budget for any route that
+        # opted into ``throttle:<name>`` (which is most of the API).
+        #
+        # The default global instance has ``custom_limit is None`` and
+        # ``custom_window_minutes is None`` (no constructor args).
+        # Treat that shape as opt-out: rate limiting is now strictly
+        # opt-in via ``throttle:<name>`` per route (or via parameterised
+        # global registration like ``throttle:60,1`` in
+        # ``config/middleware.py``). This eliminates the double-charge
+        # without taking protection away from any route that already
+        # declared ``throttle:<name>``.
+        if self.custom_limit is None and self.custom_window_minutes is None:
             return await next(request)
 
         # First, check if parameter is a named limiter
@@ -93,10 +134,33 @@ class ThrottleRequests(Middleware):
         return response
 
     def _is_trusted_ip(self, request: Request) -> bool:
-        """Check whether the request originates from a trusted IP."""
+        """Check whether the request originates from a trusted IP.
+
+        ROOT-CAUSE (scenario 8 / cycle 1, deferred from scenario 6):
+        ``Configuration.load`` lower-cases every module attribute name when
+        storing it (``commons/cara/cara/configuration/Configuration.py:64``
+        — ``self._config[f"{module_name}.{name.lower()}"] = value``).
+        ``config/rate.py`` declares ``TRUSTED_IPS = [...]`` (uppercase, the
+        Python module-level convention for constants), which is stored as
+        ``rate.trusted_ips``. The previous lookup of ``rate.TRUSTED_IPS``
+        always missed → default ``[]`` → trusted-IP bypass was dead, and
+        every health-check / monitoring probe / local dev request was
+        consuming rate-limit budget. Verified at runtime in scenario 6:
+        ``Config.get("rate.TRUSTED_IPS")`` → ``[]`` while
+        ``Config.get("rate.trusted_ips")`` → ``["127.0.0.1", "::1"]``.
+
+        We probe the lowercase path first (the canonical, post-load shape)
+        and fall back to the uppercase path so any legacy out-of-tree
+        config that was registered manually with ``Config.set("rate.TRUSTED_IPS", ...)``
+        keeps working without a behaviour change.
+        """
         try:
             from cara.facades import Config
-            trusted = Config.get("rate.TRUSTED_IPS", [])
+            trusted = Config.get("rate.trusted_ips", None)
+            if trusted is None:
+                # Defensive fallback — if a caller registered the
+                # uppercase key explicitly via Config.set, keep honouring it.
+                trusted = Config.get("rate.TRUSTED_IPS", [])
             if not trusted:
                 return False
             client_ip = request.ip() if callable(getattr(request, "ip", None)) else getattr(request, "ip", None)

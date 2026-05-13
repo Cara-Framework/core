@@ -16,7 +16,7 @@ from typing import Optional
         "--f|force": "Force migrations without prompt in production",
         "--show": "Show SQL output without executing migrations",
         "--schema=?": "Sets the schema to be migrated",
-        "--d|directory=database/migrations": "The location of the migration directory",
+        "--d|directory=?": "The location of the migration directory",
     },
 )
 class MigrateCommand(CommandBase):

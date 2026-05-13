@@ -44,6 +44,27 @@ class RedisDriver(HasColoredOutput, Queue):
         "return #items"
     )
 
+    # Atomically claims a stale processing list and moves every entry
+    # back to the main queue. KEYS[1]=stale processing list,
+    # KEYS[2]=main queue. Returns the number of entries requeued.
+    # Required because the reaper runs concurrently from every healthy
+    # worker; without this script, two reapers can both LRANGE the
+    # same stale list and both RPUSH each entry before either DELs it
+    # — every dead worker's in-flight jobs get duplicated once per
+    # healthy reaper. Lua scripts run atomically against the keyspace
+    # (single-threaded), so the second concurrent caller sees an
+    # empty list and is a no-op.
+    _REAP_PROCESSING_LUA = (
+        "local items = redis.call('lrange', KEYS[1], 0, -1) "
+        "if #items == 0 then "
+        "  redis.call('del', KEYS[1]) "
+        "  return 0 "
+        "end "
+        "redis.call('rpush', KEYS[2], unpack(items)) "
+        "redis.call('del', KEYS[1]) "
+        "return #items"
+    )
+
     def __init__(self, application, options: Dict[str, Any]):
         """
         Initialize Redis driver.
@@ -438,31 +459,35 @@ class RedisDriver(HasColoredOutput, Queue):
                         # Our own list — leave it alone. We'll clean
                         # our entries via lrem in the consume loop.
                         continue
-                    # ``LRANGE`` is O(N) on length, but processing
-                    # lists are bounded by per-worker concurrency so
-                    # they stay small.
-                    pending = self._redis.lrange(proc_key, 0, -1) or []
-                    if not pending:
-                        # Empty list left over from a clean shutdown
-                        # — remove it.
-                        self._redis.delete(proc_key)
-                        continue
-                    # Best-effort age check via the list's TTL
-                    # (reset on every push). Lists without a TTL
-                    # default to "old enough to reap".
+                    # Best-effort age check via the list's idle time
+                    # (reset on every read or write). Empty lists from
+                    # clean shutdowns also report large idletime, so
+                    # they're swept by the same path. Lists younger
+                    # than ``visibility_timeout`` are left alone — the
+                    # owning worker is presumed alive and processing.
                     list_idle = self._redis.object("idletime", proc_key) or 0
                     if list_idle < visibility_timeout:
                         continue
-                    # Move every entry back to the main queue.
-                    for data in pending:
-                        try:
-                            self._redis.rpush(requeue_key, data)
-                            recovered += 1
-                        except Exception as e:
-                            self.danger(
-                                f"Reaper: failed to requeue from {proc_key}: {e}"
-                            )
-                    self._redis.delete(proc_key)
+                    # Atomically drain the stale processing list back
+                    # onto the main queue and DEL the source. The Lua
+                    # script holds Redis's keyspace lock for the
+                    # duration, so when two healthy reapers race on
+                    # the same stale list, only the first sees a
+                    # non-empty LRANGE; the second sees an already-
+                    # deleted key and returns 0 — no duplicate
+                    # requeue. Pre-fix, two reapers could both
+                    # ``lrange`` the same key, both ``rpush`` each
+                    # entry, and only the slower ``delete`` would
+                    # win, producing one duplicate per healthy reaper.
+                    try:
+                        moved = self._redis.eval(
+                            self._REAP_PROCESSING_LUA, 2, proc_key, requeue_key
+                        )
+                        recovered += int(moved or 0)
+                    except Exception as e:
+                        self.danger(
+                            f"Reaper: atomic move failed for {proc_key}: {e}"
+                        )
                 if cursor == 0:
                     break
             if recovered:

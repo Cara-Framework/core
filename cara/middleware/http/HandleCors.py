@@ -5,6 +5,8 @@ Laravel-style CORS middleware with configurable options.
 Handles cross-origin requests with proper preflight support.
 """
 
+from __future__ import annotations
+
 from cara.configuration import config
 from cara.http import Request, Response
 from cara.middleware import Middleware

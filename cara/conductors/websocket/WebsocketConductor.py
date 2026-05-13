@@ -5,6 +5,8 @@ Orchestrates WebSocket connection handling with Laravel-style patterns.
 Follows HttpConductor architecture with proper route resolution and middleware.
 """
 
+from __future__ import annotations
+
 import inspect
 from typing import Any, Dict
 

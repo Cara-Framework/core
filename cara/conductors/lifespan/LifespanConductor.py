@@ -5,6 +5,8 @@ This module handles all ASGI lifespan events in the Cara framework. It orchestra
 startup and shutdown events.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any, Dict
 

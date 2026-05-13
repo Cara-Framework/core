@@ -53,13 +53,10 @@ class HasAttributes:
         """Get attribute with automatic casting and accessor support."""
         # Check for accessor methods first
         accessor_method = f"get_{attribute}_attribute"
-        if hasattr(self, accessor_method) and callable(getattr(self, accessor_method)):
-            try:
-                method = getattr(self, accessor_method)
-                if callable(method):
-                    return method(self.get_raw_attribute(attribute))
-            except RecursionError:
-                pass
+        if accessor_method in dir(self.__class__):
+            method = getattr(self.__class__, accessor_method, None)
+            if callable(method):
+                return method(self, self.get_raw_attribute(attribute))
 
         # Check for relationship
         if hasattr(self.__class__, attribute):

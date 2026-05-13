@@ -23,6 +23,8 @@ HMAC prefix) and rejected as cache misses, so a deploy can roll out
 without a full cache flush.
 """
 
+from __future__ import annotations
+
 import glob
 import hashlib
 import hmac

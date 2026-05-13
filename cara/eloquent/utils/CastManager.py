@@ -94,59 +94,37 @@ class CastManager:
 
         return options
 
+    _BUILTIN_CASTERS: Dict[str, str] = {
+        "bool": "_cast_boolean",
+        "boolean": "_cast_boolean",
+        "int": "_cast_integer",
+        "integer": "_cast_integer",
+        "float": "_cast_float",
+        "decimal": "_cast_decimal",
+        "str": "_cast_string",
+        "string": "_cast_string",
+        "json": "_cast_json",
+        "array": "_cast_array",
+        "date": "_cast_date",
+        "datetime": "_cast_datetime",
+        "timestamp": "_cast_timestamp",
+        "collection": "_cast_collection",
+    }
+
     @classmethod
     def _cast_builtin(
         cls, cast_type: str, value: Any, options: Dict[str, Any], operation: str
     ) -> Any:
-        """Handle built-in casting types."""
-        cast_type = cast_type.lower()
-
-        # Boolean casting
-        if cast_type in ["bool", "boolean"]:
-            return cls._cast_boolean(value, operation)
-
-        # Integer casting
-        elif cast_type in ["int", "integer"]:
-            return cls._cast_integer(value, operation)
-
-        # Float casting
-        elif cast_type == "float":
-            return cls._cast_float(value, operation)
-
-        # Decimal casting
-        elif cast_type == "decimal":
-            return cls._cast_decimal(value, options, operation)
-
-        # String casting
-        elif cast_type in ["str", "string"]:
-            return cls._cast_string(value, operation)
-
-        # JSON casting
-        elif cast_type == "json":
-            return cls._cast_json(value, operation)
-
-        # Array casting
-        elif cast_type == "array":
-            return cls._cast_array(value, operation)
-
-        # Date casting
-        elif cast_type == "date":
-            return cls._cast_date(value, options, operation)
-
-        # DateTime casting
-        elif cast_type == "datetime":
-            return cls._cast_datetime(value, options, operation)
-
-        # Timestamp casting
-        elif cast_type == "timestamp":
-            return cls._cast_timestamp(value, operation)
-
-        # Collection casting
-        elif cast_type == "collection":
-            return cls._cast_collection(value, operation)
-
-        # No casting defined - return as is
-        return value
+        """Handle built-in casting types via a registry lookup."""
+        method_name = cls._BUILTIN_CASTERS.get(cast_type.lower())
+        if method_name is None:
+            return value
+        method = getattr(cls, method_name)
+        import inspect
+        sig = inspect.signature(method)
+        if "options" in sig.parameters:
+            return method(value, options, operation)
+        return method(value, operation)
 
     # ===== Specific Cast Methods =====
 

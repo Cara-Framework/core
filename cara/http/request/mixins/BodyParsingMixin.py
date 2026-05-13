@@ -183,6 +183,21 @@ class BodyParsingMixin:
         except json.JSONDecodeError as exc:
             raise BadRequestException(f"Invalid JSON body: {exc}") from exc
 
+    async def json_dict(self) -> Dict[str, Any]:
+        """Parse JSON body, always returning a dict.
+
+        Replaces the repeated controller pattern::
+
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+
+        If the body parses to a non-dict (e.g. a list or scalar),
+        returns an empty dict instead of raising.
+        """
+        data = await self.json()
+        return data if isinstance(data, dict) else {}
+
     def _validate_multipart_structure(self, content_type: str) -> Optional[bytes]:
         """Validate multipart content type and extract boundary."""
         if "multipart/form-data" not in content_type:

@@ -68,6 +68,17 @@ class Event:
 
     _app = None
 
+    def meta(self, key: str, default=None):
+        """Read a value from the event's metadata dict.
+
+        Consolidates 5 different null-guard patterns across listeners::
+
+            # Before: (event.metadata or {}).get("priority", "default")
+            # After:  event.meta("priority", "default")
+        """
+        md = getattr(self, "metadata", None) or {}
+        return md.get(key, default)
+
     def __init__(self):
         # Mapping: event_name -> list of Listener instances
         self._listeners: Dict[str, List[Listener]] = {}

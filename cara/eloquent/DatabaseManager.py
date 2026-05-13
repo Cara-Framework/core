@@ -216,6 +216,10 @@ class DatabaseManager:
         resolver = self._ensure_resolver()
         return resolver.statement(query, bindings, connection_name)
 
+    def table(self, table_name, connection=None):
+        """Returns query builder scoped to a table (Laravel DB::table equivalent)."""
+        return self.query(connection).table(table_name)
+
     def query(self, connection=None):
         """Returns query builder instance"""
         connection_name = self._resolve_connection_name(connection)

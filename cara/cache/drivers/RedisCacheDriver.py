@@ -5,6 +5,8 @@ This module implements a cache driver that uses Redis as the backend storage,
 supporting TTL-based expiration and all standard cache operations.
 """
 
+from __future__ import annotations
+
 from cara.facades import Log
 import pickle
 from typing import Any, Optional
@@ -62,9 +64,9 @@ class RedisCacheDriver(Cache):
         try:
             raw_data = self._client.get(redis_key)
         except Exception as exc:
-            import logging
-            logging.getLogger("cara.cache.redis").debug(
-                "Redis GET failed for '%s': %s", key, exc
+            Log.warning(
+                f"[RedisCacheDriver] GET failed for '{key}': {exc}",
+                category="cache",
             )
             return default
 
@@ -74,10 +76,23 @@ class RedisCacheDriver(Cache):
         try:
             return pickle.loads(raw_data)
         except Exception as exc:
-            import logging
-            logging.getLogger("cara.cache.redis").warning(
-                "Cache unpickle failed for '%s' (corrupt entry?): %s", key, exc
+            # Self-heal a corrupt / pickle-incompatible entry instead of
+            # serving the default forever. Without the proactive DELETE
+            # every subsequent GET re-fetched, re-failed to unpickle,
+            # and re-warned — so the same poison key burned a syscall +
+            # log line on every request until the TTL expired (which,
+            # for ``BRAND_VERSION_TTL`` and friends, is 30 days). Drop
+            # it on first miss so the next caller's ``Cache.remember``
+            # repopulates with the current pickle protocol.
+            Log.warning(
+                f"[RedisCacheDriver] unpickle failed for '{key}' "
+                f"(corrupt entry, deleting): {exc}",
+                category="cache",
             )
+            try:
+                self._client.delete(redis_key)
+            except Exception:
+                pass
             return default
 
     def put(
@@ -118,7 +133,17 @@ class RedisCacheDriver(Cache):
         redis_key = f"{self._prefix}{key}"
         try:
             return self._client.delete(redis_key) > 0
-        except Exception:
+        except Exception as e:
+            # Don't swallow silently — admin invalidation paths
+            # (CacheController, AdminProductRepository.invalidate_*)
+            # log the count of forgotten keys, and a returned False
+            # is interpreted as "key wasn't there", not "Redis is
+            # down". Surface the failure so the caller's audit trail
+            # records something operators can act on.
+            Log.warning(
+                f"[RedisCacheDriver] forget failed for '{key}': {e}",
+                category="cache",
+            )
             return False
 
     def flush(self) -> None:
@@ -175,6 +200,16 @@ class RedisCacheDriver(Cache):
         callers use this as a flight-claim primitive; a False return
         is interpreted as "another worker won the slot", so a
         silently-unserialisable payload would skip the work entirely.
+
+        Same reasoning applies when Redis itself is unreachable. The
+        previous `except Exception: return False` swallowed connection
+        errors and made every worker think it had lost the flight
+        claim — so during a Redis blip nothing executed at all. Now we
+        fail-OPEN: log loudly and return True so the work runs. At-most-
+        once becomes at-least-once during the outage, which downstream
+        idempotency wrappers (`wrap_with_idempotency`) already tolerate.
+        Total starvation, by contrast, isn't recoverable until someone
+        notices the queue backlog.
         """
         redis_key = f"{self._prefix}{key}"
         try:
@@ -193,8 +228,13 @@ class RedisCacheDriver(Cache):
             else:
                 result = self._client.set(redis_key, payload, nx=True)
             return result is not None
-        except Exception:
-            return False
+        except Exception as e:
+            Log.error(
+                f"[RedisCacheDriver] add() flight-claim failed for '{key}' "
+                f"(Redis unreachable?): {e} — failing OPEN so caller proceeds",
+                category="cache",
+            )
+            return True
 
     def remember(
         self,

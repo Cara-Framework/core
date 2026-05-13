@@ -270,6 +270,12 @@ class ModelDiscoverer:
             # specification``).
             "composite_uniques": [],
             "composite_indexes": [],
+            # SQL VIEWs that depend on this table. Defined via
+            # ``__views__`` on the model class, each entry is a dict
+            # with ``name`` (view name) and ``sql`` (CREATE OR REPLACE
+            # VIEW ...). The migration generator appends these as
+            # DB.statement() calls after the CREATE TABLE block.
+            "views": [],
         }
 
         # Check if model uses SoftDeletesMixin
@@ -347,6 +353,14 @@ class ModelDiscoverer:
                     assign_node.value, ast.Constant
                 ):
                     model_info["timestamps"] = assign_node.value.value
+
+                # Parse __views__ = [{"name": "...", "sql": "..."}]
+                elif target.id == "__views__" and isinstance(
+                    assign_node.value, ast.List
+                ):
+                    model_info["views"] = self._parse_views_attribute(
+                        assign_node.value
+                    )
 
     def _parse_fields_dict(self, dict_node: ast.Dict, model_info: Dict):
         """Parse __columns__ = {...} dictionary and extract Field.* definitions."""
@@ -637,6 +651,20 @@ class ModelDiscoverer:
         s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", camel_str)
         return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
+    def _parse_views_attribute(self, list_node: ast.List) -> list:
+        """Parse ``__views__ = [{"name": "...", "sql": "..."}]`` from AST."""
+        views = []
+        for elt in list_node.elts:
+            if not isinstance(elt, ast.Dict):
+                continue
+            view_entry: Dict[str, str] = {}
+            for key, value in zip(elt.keys, elt.values):
+                if isinstance(key, ast.Constant) and isinstance(value, ast.Constant):
+                    view_entry[key.value] = value.value
+            if view_entry.get("name") and view_entry.get("sql"):
+                views.append(view_entry)
+        return views
+
     def _parse_raw_sql_fields(self, dict_node: ast.Dict, model_info: Dict):
         """Parse fields() method that returns {'up': function, 'down': function}."""
         has_up_function = False
@@ -739,10 +767,10 @@ class ModelDiscoverer:
                     elif method_name == "on" and current.args:
                         if isinstance(current.args[0], ast.Constant):
                             on_table = current.args[0].value
-                    elif method_name == "onDelete" and current.args:
+                    elif method_name in ("on_delete", "onDelete") and current.args:
                         if isinstance(current.args[0], ast.Constant):
                             on_delete = current.args[0].value
-                    elif method_name == "onUpdate" and current.args:
+                    elif method_name in ("on_update", "onUpdate") and current.args:
                         if isinstance(current.args[0], ast.Constant):
                             on_update = current.args[0].value
 

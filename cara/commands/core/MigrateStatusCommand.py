@@ -10,7 +10,7 @@ from typing import Optional
     help="Show the status of each migration",
     options={
         "--c|connection=default": "The connection you want to check migrations on",
-        "--d|directory=database/migrations": "The location of the migration directory",
+        "--d|directory=?": "The location of the migration directory",
         "--schema=?": "Sets the schema to be checked",
     },
 )

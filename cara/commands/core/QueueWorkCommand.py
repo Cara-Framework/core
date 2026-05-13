@@ -355,6 +355,20 @@ class JobProcessor:
             db_job_id = msg.get("db_job_id")
             job_timeout = msg.get("timeout", JobProcessor.DEFAULT_JOB_TIMEOUT)
 
+            # Queue wait time — measure dispatched_at → now.
+            _dispatched_at = getattr(instance, "_dispatched_at", None)
+            if _dispatched_at and isinstance(_dispatched_at, str):
+                try:
+                    import pendulum
+                    dt = pendulum.parse(_dispatched_at)
+                    wait_secs = max((pendulum.now("UTC") - dt).total_seconds(), 0)
+                    if hasattr(instance, "__dict__"):
+                        instance._queue_wait_seconds = wait_secs
+                except Exception:
+                    wait_secs = None
+            else:
+                wait_secs = None
+
             # Metric labels — now that we have a resolved job instance.
             _mx_queue = _queue_label(msg)
             _mx_job = _job_label(instance, msg)
@@ -366,6 +380,13 @@ class JobProcessor:
                     _mx_inflight_entered = True
                 except Exception:
                     pass
+                if wait_secs is not None:
+                    try:
+                        _M.queue_wait_seconds.labels(
+                            queue=_mx_queue, job=_mx_job,
+                        ).observe(wait_secs)
+                    except Exception:
+                        pass
 
             # Set up job tracking
             job_id = msg.get("job_id")
@@ -449,7 +470,7 @@ class JobProcessor:
             # Acknowledge message
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
             _mx_record("success")
-            return True
+            return "success"
 
         except TimeoutError as timeout_error:
             Log.error(f"⏱️ Job timeout: {str(timeout_error)}")
@@ -484,7 +505,7 @@ class JobProcessor:
                 pass
 
             _mx_record("timeout")
-            return True
+            return "failure"
 
         except Exception as job_error:
             import traceback
@@ -523,7 +544,7 @@ class JobProcessor:
                 pass
 
             _mx_record("failed")
-            return True  # Still processed (failed gracefully)
+            return "failure"  # Still processed (failed gracefully)
 
 
 @command(
@@ -571,7 +592,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # poll tick. Cache the miss to avoid the loop and retry periodically
         # so newly-published queues are picked up.
         self._missing_queues: Dict[str, float] = {}
-        self._missing_queue_retry_s: float = 30.0
+        self._missing_queue_retry_s: float = 5.0
 
     def handle(
         self,
@@ -775,21 +796,81 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         return expanded_queues if expanded_queues else ["default"]
 
     def _expand_wildcard_pattern(self, pattern: str) -> list:
-        """Expand wildcard pattern to actual queue names."""
-        # Standard priority levels for all queue types
+        """Expand wildcard pattern to actual queue names.
+
+        Two-phase expansion:
+        1. Try to discover real queues from RabbitMQ Management API and
+           match with fnmatch. This catches nested prefixes like
+           ``notification.email.default`` when the user passes
+           ``notification.*``.
+        2. Fallback: generate standard priority suffixes (the old
+           behaviour) so the worker starts even when RabbitMQ
+           management is unavailable.
+        """
+        import fnmatch as _fnmatch
+
+        # Always include standard priority levels so the worker
+        # subscribes even if some queues don't exist yet in RabbitMQ.
+        # Without this, a fresh broker only has queues that received
+        # messages before — the worker misses queues created later.
         priority_levels = ["critical", "high", "default", "low"]
 
         if pattern.endswith(".*"):
-            # Pattern like "enrichment.*" or "discovery.*"
-            prefix = pattern[:-2]  # Remove ".*"
-            return [f"{prefix}.{level}" for level in priority_levels]
+            prefix = pattern[:-2]
+            static = {f"{prefix}.{level}" for level in priority_levels}
         elif pattern.endswith("*"):
-            # Pattern like "enrichment*"
-            prefix = pattern[:-1]  # Remove "*"
-            return [f"{prefix}.{level}" for level in priority_levels]
+            prefix = pattern[:-1]
+            static = {f"{prefix}.{level}" for level in priority_levels}
         else:
-            # No wildcard, return as-is
             return [pattern]
+
+        # Merge with any extra queues discovered from RabbitMQ
+        # (e.g. notification.email.default) that the static set misses.
+        discovered = self._discover_rabbitmq_queues()
+        if discovered:
+            matched = {q for q in discovered if _fnmatch.fnmatch(q, pattern)}
+            static |= matched
+
+        return sorted(static)
+
+    def _discover_rabbitmq_queues(self) -> list:
+        """Fetch existing queue names from RabbitMQ Management API.
+
+        Returns an empty list on any failure so the caller can
+        fall back to static expansion.
+        """
+        if hasattr(self, "_rabbitmq_queues_cache"):
+            return self._rabbitmq_queues_cache
+
+        try:
+            import urllib.request
+            import json
+            from cara.configuration import config
+
+            host = config("queue.connections.amqp.host", "127.0.0.1")
+            mgmt_port = config("queue.connections.amqp.management_port", 15672)
+            user = config("queue.connections.amqp.user", "guest")
+            password = config("queue.connections.amqp.password", "guest")
+            vhost = config("queue.connections.amqp.vhost", "/")
+
+            import urllib.parse
+            encoded_vhost = urllib.parse.quote(vhost, safe="")
+            url = f"http://{host}:{mgmt_port}/api/queues/{encoded_vhost}"
+
+            req = urllib.request.Request(url)
+            credentials = f"{user}:{password}"
+            import base64
+            auth = base64.b64encode(credentials.encode()).decode()
+            req.add_header("Authorization", f"Basic {auth}")
+
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read())
+                queues = [q["name"] for q in data if isinstance(q, dict) and "name" in q]
+                self._rabbitmq_queues_cache = queues
+                return queues
+        except Exception:
+            self._rabbitmq_queues_cache = []
+            return []
 
     def _show_config(self, config: Dict[str, Any]):
         """Display worker configuration in ServeCommand style."""
@@ -897,12 +978,31 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
             try:
                 while not self.shutdown_requested:
-                    job_processed = self._process_queue_cycle(
+                    outcome = self._process_queue_cycle(
                         queue_names, connection_manager, job_processor, config
                     )
 
+                    # Update terminal-attempt counters. Without this,
+                    # ``jobs_processed`` and ``jobs_failed`` stay at 0
+                    # for the worker's lifetime — they were only ever
+                    # initialised, never incremented — which (a) made
+                    # the final-stats summary lie and (b) silently
+                    # neutralised --max-jobs entirely.
+                    if outcome == "success":
+                        self.jobs_processed += 1
+                    elif outcome == "failure":
+                        self.jobs_failed += 1
+
+                    # Enforce --max-jobs / --max-time. Without this
+                    # check the limits printed in the startup banner
+                    # are decorative only — the worker would only
+                    # exit on SIGTERM/SIGINT.
+                    if self._should_stop(config):
+                        self.shutdown_requested = True
+                        break
+
                     # Sleep if no jobs found
-                    if not job_processed:
+                    if not outcome:
                         time.sleep(config["timeout"])
 
             finally:
@@ -923,7 +1023,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             try:
                 while not self.shutdown_requested:
                     try:
-                        job_processed = self._process_queue_cycle(
+                        outcome = self._process_queue_cycle(
                             queue_names, mgr, job_processor, config
                         )
                     except Exception as e:
@@ -934,9 +1034,28 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                         Log.warning(
                             f"[worker-{slot_idx}] cycle error: {e}"
                         )
-                        job_processed = False
+                        outcome = False
 
-                    if not job_processed:
+                    # Per-slot counter increments. ``_stats_lock`` (set
+                    # up just above before the consumer threads start)
+                    # guards concurrent increments so the cap stays
+                    # accurate under --concurrency>1.
+                    if outcome:
+                        with self._stats_lock:
+                            if outcome == "success":
+                                self.jobs_processed += 1
+                            elif outcome == "failure":
+                                self.jobs_failed += 1
+
+                    # Same enforcement as the single-threaded path.
+                    # Any consumer slot tripping the limit asks the
+                    # whole worker to drain — the main thread sees
+                    # ``shutdown_requested=True`` and joins.
+                    if self._should_stop(config):
+                        self.shutdown_requested = True
+                        break
+
+                    if not outcome:
                         # Stagger sleeps a tiny bit so N threads don't wake
                         # up in lockstep and hammer the broker simultaneously.
                         jittered = config["timeout"] * (1.0 + (slot_idx % 4) * 0.1)
@@ -957,8 +1076,15 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
             # Main thread just waits for shutdown. Poll for the signal
             # rather than join() because join() on daemon threads would
-            # block forever if one thread deadlocks.
+            # block forever if one thread deadlocks. Also poll the
+            # configured stop conditions so --max-time fires even if
+            # every consumer is blocked on a slow job (otherwise a
+            # poison-message that hangs forever would never trip the
+            # cap).
             while not self.shutdown_requested:
+                if self._should_stop(config):
+                    self.shutdown_requested = True
+                    break
                 time.sleep(1)
         finally:
             # Ask all threads to stop and let them drain gracefully.
@@ -1074,12 +1200,16 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 break
 
             try:
-                if self._process_single_queue(
+                outcome = self._process_single_queue(
                     queue_name, connection_manager, job_processor
-                ):
+                )
+                if outcome:
                     # Memory check after successful job
                     self._check_memory_usage()
-                    return True  # Job processed, restart from highest priority
+                    # Outcome is "success" / "failure" — propagate so
+                    # the caller can update jobs_processed / jobs_failed
+                    # counters that gate --max-jobs.
+                    return outcome  # Job processed, restart from highest priority
 
             except Exception as e:
                 self._handle_queue_error(queue_name, e, connection_manager)
@@ -1107,16 +1237,25 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             return False
 
         try:
-            # Passive declare: only verify queue exists without asserting
-            # arguments. Publisher side owns queue creation with proper
-            # x-message-ttl / dead-letter args; redeclaring here with a
-            # different arg set raises PRECONDITION_FAILED (406).
+            # First try passive declare (cheap — no arg mismatch risk).
+            # If the queue doesn't exist yet, RabbitMQ returns 404 and
+            # closes the channel. In that case we open a fresh channel
+            # and create the queue with a normal declare so the worker
+            # doesn't have to wait for the publisher to go first.
             try:
                 channel.queue_declare(queue=queue_name, durable=True, passive=True)
             except Exception:
-                # Queue doesn't exist yet — cache the miss and retry later.
-                self._missing_queues[queue_name] = now
-                return False
+                # Channel is dead after 404 — get a new one.
+                channel = connection_manager.create_channel()
+                if not channel:
+                    self._missing_queues[queue_name] = now
+                    return False
+                try:
+                    channel.queue_declare(queue=queue_name, durable=True)
+                except Exception:
+                    # Truly cannot create — cache miss briefly.
+                    self._missing_queues[queue_name] = now
+                    return False
 
             # Queue exists — drop from miss cache if we had marked it.
             self._missing_queues.pop(queue_name, None)
@@ -1159,9 +1298,24 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 self.error(f"Error checking queue {queue_name}: {error_msg}")
 
     def _should_stop(self, config: Dict[str, Any]) -> bool:
-        """Check if worker should stop due to configured limits."""
-        if config["max_jobs"] and self.jobs_processed >= config["max_jobs"]:
-            self.info(f"🎯 Reached maximum job limit ({config['max_jobs']})")
+        """Check if worker should stop due to configured limits.
+
+        ``--max-jobs`` is a *terminal-attempt* cap, not a *successful-job*
+        cap. Under a failure storm (poison-message stream, DB outage,
+        misconfigured retention, etc.) every dequeue increments
+        ``jobs_failed`` while ``jobs_processed`` stays at 0 — and the
+        cap was never tripped, so the worker drained an unbounded
+        number of jobs into the DLQ before --max-time eventually
+        kicked in. Counting both completed and failed terminal
+        attempts gives operators the safety bound they expect when
+        load-testing or running short triage workers.
+        """
+        terminal_jobs = self.jobs_processed + self.jobs_failed
+        if config["max_jobs"] and terminal_jobs >= config["max_jobs"]:
+            self.info(
+                f"🎯 Reached maximum job limit ({config['max_jobs']}) "
+                f"[processed={self.jobs_processed} failed={self.jobs_failed}]"
+            )
             return True
 
         if config["max_time"] and (time.time() - self.start_time) >= config["max_time"]:

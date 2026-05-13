@@ -377,6 +377,21 @@ class BaseGrammar:
         Automatically omits ORDER BY when aggregates are present without
         GROUP BY, since PostgreSQL (and SQL standard) rejects ORDER BY in
         aggregate-only queries.
+
+        ROOT-CAUSE NOTE (frontend_stress_log scenario 2, cycle 1):
+        Pre-fix the comma separator was added only INSIDE the
+        non-raw branch (``if order_crit: order_crit += ", "``).
+        Two consecutive ``order_by_raw`` calls therefore concatenated
+        without any separator — e.g.
+        ``order_by_raw("review_count DESC NULLS LAST")`` followed by
+        ``order_by_raw("rating DESC NULLS LAST")`` rendered as
+        ``review_count DESC NULLS LASTrating DESC NULLS LAST``,
+        triggering a Postgres ``syntax error at or near "NULLS"``
+        and a 500 with the full traceback leaked to the response
+        body. Surfaced live via ``?sort_by=popular`` (PopularSorter
+        chains two raws). The fix lifts the separator to the top of
+        the loop so it fires on every iteration after the first,
+        regardless of raw vs. typed.
         """
         sql = ""
         if self._aggregates and not self._group_by:
@@ -384,6 +399,13 @@ class BaseGrammar:
         if self._order_by:
             order_crit = ""
             for order_bys in self._order_by:
+                # Comma separator before EVERY clause after the
+                # first — applies uniformly to raw and non-raw so
+                # consecutive ``order_by_raw`` calls get the comma
+                # they need (the pre-fix code added it only in the
+                # non-raw branch).
+                if order_crit:
+                    order_crit += ", "
                 if order_bys.raw:
                     order_crit += order_bys.column
                     if not isinstance(order_bys.bindings, (list, tuple)):
@@ -396,8 +418,6 @@ class BaseGrammar:
 
                     continue
 
-                if order_crit:
-                    order_crit += ", "
                 column = order_bys.column
                 direction = order_bys.direction
                 if "." in column:

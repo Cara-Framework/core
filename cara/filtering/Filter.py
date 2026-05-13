@@ -32,6 +32,7 @@ subclasses tighten the type hint at the override site.
 from __future__ import annotations
 
 import json
+import math
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -257,14 +258,33 @@ class Filter(ABC):
             return "{" + ";".join(parts) + "}"
         return str(value).strip()
 
+    # Hard cap on multi-select payload length (brand_slugs, conditions,
+    # marketplaces, …). The storefront UIs that drive these filters
+    # advertise on the order of 5-50 options at most; values
+    # significantly above that come either from a malicious / scripted
+    # client or from a degenerate URL builder. A cap of 256 entries
+    # leaves comfortable headroom for legitimate use while preventing
+    # the soft-DOS path of a 10k-element ``ANY(%s)`` array — measured
+    # at ~390ms per request pre-cap, which is enough to chew workers
+    # under modest concurrency.
+    #
+    # ROOT-CAUSE NOTE (frontend_stress_log scenario 2, cycle 1).
+    _CSV_LIST_HARD_CAP = 256
+
     @staticmethod
     def _parse_csv_or_json(raw: Any) -> List[str]:
-        """Coerce a CSV string or JSON array into a deduped, sorted list.
+        """Coerce a CSV string or JSON array into a deduped, sorted, capped list.
 
         Centralises the pattern that used to exist as ``_csv_or_json``
         in three different services. Sorted output guarantees cache-
         key stability regardless of how the storefront serialised
         the array.
+
+        Output is hard-capped at ``_CSV_LIST_HARD_CAP`` entries to
+        bound the size of downstream ``ANY(%s)`` parameter arrays —
+        no legitimate UI surface ships more options than that, and
+        an unbounded list lets a hostile caller force the planner
+        through tens of thousands of equality probes per request.
         """
         if raw is None or raw == "":
             return []
@@ -288,7 +308,12 @@ class Filter(ABC):
         # Dedupe + sort. Sorting guarantees identical filter values
         # produce identical cache keys regardless of input order, and
         # also makes parameter lists stable in tests.
-        return sorted(set(cleaned))
+        deduped = sorted(set(cleaned))
+        # Cap AFTER dedupe so a payload of "a,a,a,…" (10k duplicates)
+        # collapses to a single entry instead of being truncated to
+        # the first 256 dupes — the cap is a defensive bound, not a
+        # silent drop on legitimate-but-redundant input.
+        return deduped[: Filter._CSV_LIST_HARD_CAP]
 
     @staticmethod
     def _truthy(raw: Any) -> bool:
@@ -300,6 +325,72 @@ class Filter(ABC):
         if isinstance(raw, str):
             return raw.strip().lower() in ("true", "1", "yes", "on")
         return False
+
+    @staticmethod
+    def _coerce_float(
+        raw: Any,
+        *,
+        min_val: Optional[float] = None,
+        max_val: Optional[float] = None,
+        label: str = "filter",
+    ) -> Optional[float]:
+        """Parse a numeric filter value, returning None when inactive.
+
+        Consolidates the try/except + bounds-check pattern that was
+        copy-pasted across RatingFilter, MinSavingsFilter,
+        PriceRangeFilter, MinDiscountFilter, and SearchRepository.
+
+        Defense-in-depth: ``Infinity`` / ``-Infinity`` / ``NaN`` are
+        rejected even when the HTTP-layer ``numeric`` rule is also
+        in place. Some callers (background tasks, internal services,
+        wizard auto-apply) build filter payloads without going
+        through the HTTP validator, so we keep the same finite
+        check here so the SQL never receives a non-finite bound.
+
+        Usage in a Filter subclass::
+
+            def parse(self, payload):
+                return self._coerce_float(
+                    payload.get("min_rating"), min_val=0.01, max_val=5, label="rating",
+                )
+        """
+        if raw is None or raw == "":
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        # ``math.isfinite`` rejects ``inf``, ``-inf``, and ``NaN``.
+        # ROOT-CAUSE NOTE (frontend_stress_log scenario 2, cycle 1):
+        # leaving these in let ``?price_max=Infinity`` bypass any
+        # upper bound and silently match the entire catalog.
+        if not math.isfinite(value):
+            return None
+        if min_val is not None and value < min_val:
+            return None
+        if max_val is not None and value > max_val:
+            return None
+        return value
+
+    @staticmethod
+    def _coerce_int(
+        raw: Any,
+        *,
+        min_val: Optional[int] = None,
+        max_val: Optional[int] = None,
+    ) -> Optional[int]:
+        """Parse an integer filter value, returning None when inactive."""
+        if raw is None or raw == "":
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if min_val is not None and value < min_val:
+            return None
+        if max_val is not None and value > max_val:
+            return None
+        return value
 
 
 __all__ = [

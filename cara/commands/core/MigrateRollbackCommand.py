@@ -15,7 +15,7 @@ from cara.support import paths
         "--f|force": "Force rollback without prompt in production",
         "--s|show": "Shows the output of SQL for rollback operations",
         "--schema=?": "Sets the schema to be used",
-        "--d|directory=database/migrations": "The location of the migration directory",
+        "--d|directory=?": "The location of the migration directory",
         "--step=1": "Number of migration batches to rollback",
     },
 )

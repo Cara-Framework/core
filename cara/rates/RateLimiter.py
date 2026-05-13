@@ -111,34 +111,61 @@ class RateLimiter(RateLimit):
         Record one attempt.
 
         Returns (allowed, remaining, reset_in).
+
+        ROOT-CAUSE / scenario 6 (concurrent load probe).
+        ------------------------------------------------
+        The previous implementation was a textbook non-atomic
+        read-modify-write:
+
+            current = Cache.get(cache_key, {"count": 0, ...})
+            count   = current.get("count", 0) + 1
+            Cache.put(cache_key, {"count": count, ...})
+
+        Under concurrent traffic, N threads all read the same ``count``,
+        all increment locally, and all write back the same ``count + 1``.
+        The on-storage count under-counts by ``N - 1`` for every burst,
+        which means the rate limiter silently allows roughly ``N x``
+        the configured budget when callers slam the same key in
+        parallel — exactly when rate limiting matters most (abuse,
+        scraping, account-creation bots).
+
+        ``ThrottleRequests`` (the framework's HTTP middleware) was
+        already migrated to ``Cache.increment`` (atomic Redis
+        ``INCRBY``); ``RateLimiter.attempt`` is the public
+        ``RateLimit`` contract method and was still on the unsafe path.
+        Apps calling ``RateLimiter.attempt(key)`` directly (custom
+        middleware, queue jobs, console commands) inherited the race.
+
+        This rewrite delegates to ``Cache.increment`` for the count and
+        ``Cache.ttl`` for the reset deadline, matching the throttle
+        middleware's semantics and giving the same atomic guarantee on
+        every backend the framework supports (Redis ``INCRBY`` is
+        atomic; the file driver acquires a per-key lock around the
+        increment).
         """
-        now = int(time.time())
         cache_key = f"{self.prefix}{key}"
-        # Retrieve current count or zero
-        current = Cache.get(cache_key, {"count": 0, "expires_at": 0})
-        count = current.get("count", 0)
-        expires_at = current.get("expires_at", now + self.window)
 
-        # If the window expired, start a new window
-        if now >= expires_at:
-            count = 0
-            expires_at = now + self.window
+        # Atomic increment. ``Cache.increment`` initialises the key to
+        # ``amount`` with ``ttl`` when it doesn't exist, so the first
+        # caller in a fresh window sets the expiry; subsequent callers
+        # in the same window reuse it without resetting.
+        try:
+            count = Cache.increment(cache_key, 1, self.window)
+        except Exception:
+            # Cache backend down — degrade open (allow traffic) rather
+            # than crash the request. Same posture as
+            # ``ThrottleRequests._attempt_limit``.
+            return True, self.limit, 0
 
-        # Increment
-        count += 1
-
-        # Determine if allowed
         allowed = count <= self.limit
         remaining = max(self.limit - count, 0)
-        reset_in = max(expires_at - now, 0)
 
-        # Store back with TTL = window remaining
-        # (we store both count and expires_at so we know when to reset)
-        Cache.put(
-            cache_key,
-            {"count": count, "expires_at": expires_at},
-            ttl=reset_in,
-        )
+        # Query the actual remaining TTL on the bucket. ``Cache.ttl``
+        # returns ``None`` when the driver doesn't expose TTL or the
+        # key was just removed; in those edge cases fall back to the
+        # full window so the header is at least an upper bound.
+        actual_ttl = Cache.ttl(cache_key)
+        reset_in = actual_ttl if actual_ttl is not None else self.window
 
         return allowed, remaining, reset_in
 

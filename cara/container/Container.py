@@ -448,29 +448,21 @@ class Container:
                     objects.append(value)
                 continue
 
-            # (2) If annotation is a class, attempt to resolve it
+            # (2) If annotation is a class, resolve via make() which handles
+            # deferred providers, lock serialization, and the full lookup
+            # chain. Previous code used _find_obj() + manual deferred
+            # fallback — a weaker path that missed edge cases (e.g. nested
+            # deps whose providers hadn't fired yet).
             if ann is not inspect._empty and inspect.isclass(ann):
                 try:
-                    dep = self._find_obj(ann)
-                    if inspect.isclass(dep):
-                        dep = self.resolve(dep)
+                    dep = self.make(ann)
                     if is_keyword_only:
                         keyword_objects[param.name] = dep
                     else:
                         objects.append(dep)
                     continue
-                except MissingContainerBindingException:
-                    # Maybe a deferred provider can supply this class
-                    if self._attempt_load_deferred(ann):
-                        dep = self._find_obj(ann)
-                        if inspect.isclass(dep):
-                            dep = self.resolve(dep)
-                        if is_keyword_only:
-                            keyword_objects[param.name] = dep
-                        else:
-                            objects.append(dep)
-                        continue
-                    # Otherwise, if user passed an extra argument, use it
+                except Exception:
+                    # If make() fails, try caller-supplied positional args
                     if passing_args:
                         value = passing_args.pop(0)
                         if is_keyword_only:
@@ -720,7 +712,9 @@ class Container:
         import types
 
         origin = getattr(ann, "__origin__", None)
-        if origin is Union or isinstance(ann, types.UnionType):
+        _union_type = getattr(types, "UnionType", None)
+        is_union = origin is Union or (_union_type is not None and isinstance(ann, _union_type))
+        if is_union:
             type_args = [a for a in ann.__args__ if a is not type(None)]
             if len(type_args) == 1:
                 return type_args[0]
@@ -777,17 +771,30 @@ class Container:
             if isinstance(ann, str):
                 # Resolve PEP 563 / `from __future__ import annotations`
                 # string forms by evaluating them in the callable's
-                # module + typing namespace.
-                module = inspect.getmodule(callable_or_method)
-                module_globals = (module.__dict__ if module is not None else {})
+                # namespace. For closures/nested functions, __globals__
+                # captures the enclosing scope's locals at definition
+                # time, which is more accurate than module-level globals.
+                func_globals = getattr(callable_or_method, "__globals__", None)
+                if func_globals is None:
+                    module = inspect.getmodule(callable_or_method)
+                    func_globals = module.__dict__ if module is not None else {}
                 try:
                     import typing as _typing
 
-                    eval_globals = {"typing": _typing, **vars(_typing), **module_globals}
+                    eval_globals = {"typing": _typing, **vars(_typing), **func_globals}
                     ann = eval(ann, eval_globals, {})
                 except Exception:
-                    if module is not None:
-                        ann = module_globals.get(ann.split("|", 1)[0].strip(), ann)
+                    # Fallback: look up by class name in container bindings.
+                    # This handles closures whose annotations reference
+                    # locally-imported contracts not in __globals__.
+                    raw_name = ann.split("|", 1)[0].strip()
+                    found = func_globals.get(raw_name)
+                    if found is None:
+                        for bound_key in self._bindings:
+                            if inspect.isclass(bound_key) and bound_key.__name__ == raw_name:
+                                found = bound_key
+                                break
+                    ann = found if found is not None else ann
 
             ann = self._unwrap_annotation(ann)
             if ann is None:

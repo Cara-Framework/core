@@ -13,9 +13,16 @@ class PathManager:
 
     Handles all filesystem path operations for the project structure.
     If `set_base_path(...)` is never called, `base_path()` returns cwd.
+
+    Individual paths can be overridden via `set_path_override(key, path)`.
+    When set, the corresponding `*_path()` method returns the override
+    instead of deriving from base_path.  This lets multi-app monorepos
+    share a single migrations (or seeds, etc.) directory without Cara
+    needing to know about the repo layout.
     """
 
     _base_path: str = None
+    _overrides: dict = {}
 
     @staticmethod
     def set_base_path(path: str) -> None:
@@ -24,6 +31,25 @@ class PathManager:
         Call this early to override cwd.
         """
         PathManager._base_path = path
+
+    @staticmethod
+    def set_path_override(key: str, path: str) -> None:
+        """
+        Override a specific path key with an absolute path.
+
+        Supported keys match method names: 'migrations', 'seeds', 'database',
+        'storage', 'config', 'routes', 'public', 'views', 'app', etc.
+
+        Example::
+
+            PathManager.set_path_override('migrations', '/project/commons/database/migrations')
+        """
+        PathManager._overrides[key] = path
+
+    @staticmethod
+    def get_path_override(key: str):
+        """Return the override for *key*, or ``None`` if not set."""
+        return PathManager._overrides.get(key)
 
     @staticmethod
     def base_path(relative: str = "") -> str:
@@ -153,7 +179,10 @@ class PathManager:
 
     @staticmethod
     def migrations_path(relative: str = "") -> str:
-        """Return <base>/database/migrations[/relative]."""
+        """Return <base>/database/migrations[/relative], or the override if set."""
+        override = PathManager.get_path_override("migrations")
+        if override:
+            return os.path.join(override, relative) if relative else override
         return PathManager.database_path(
             os.path.join("migrations", relative) if relative else "migrations"
         )

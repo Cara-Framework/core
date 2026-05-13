@@ -115,6 +115,54 @@ class JsonResource:
             return value_fn(related)
         return related
 
+    # ── Type coercion helpers ────────────────────────────────────────────
+    #
+    # Resources repeatedly write ``float(x) if x is not None else None``
+    # for every numeric field. These helpers eliminate that noise.
+
+    @staticmethod
+    def opt_float(value: Any) -> Optional[float]:
+        """Coerce to float, preserving None."""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def opt_int(value: Any) -> Optional[int]:
+        """Coerce to int, preserving None."""
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def opt_str(value: Any, default: str = "") -> str:
+        """Coerce to string with a fallback default."""
+        if value is None:
+            return default
+        return str(value).strip() or default
+
+    @staticmethod
+    def opt_datetime(value: Any) -> Optional[str]:
+        """Coerce a datetime-like value to an ISO-8601 string, preserving None."""
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value) if value else None
+
+    @staticmethod
+    def opt_bool(value: Any, default: bool = False) -> bool:
+        """Coerce to bool with a fallback default."""
+        if value is None:
+            return default
+        return bool(value)
+
     # ── Serialization ─────────────────────────────────────────────────────
 
     def resolve(self, request=None) -> dict:

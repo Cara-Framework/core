@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from cara.exceptions import DriverNotFoundException, QueryException
 
 from ..query.grammars import MSSQLGrammar

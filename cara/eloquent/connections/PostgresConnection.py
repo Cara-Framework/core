@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import threading
 import time
@@ -91,9 +93,56 @@ class PostgresConnection(BaseConnection):
             "sslkey": self.options.get("sslkey"),
             "sslrootcert": self.options.get("sslrootcert"),
         }
+
+        # ``application_name`` and ``connect_timeout`` are first-class
+        # psycopg2.connect kwargs — pull them from the config-level
+        # ``options`` dict so the values declared in config/database.py
+        # actually reach the live connection. Previously these were
+        # silently dropped: pg_stat_activity showed empty
+        # application_name and connect_timeout fell back to the OS
+        # default (~75-130s on Linux), defeating the declared 10s cap.
+        app_name = self.options.get("application_name")
+        if app_name:
+            kw["application_name"] = app_name
+
+        connect_timeout = self.options.get("connect_timeout")
+        if connect_timeout is not None:
+            try:
+                kw["connect_timeout"] = int(connect_timeout)
+            except (TypeError, ValueError):
+                pass
+
+        # ``server_settings`` is the asyncpg-style nested dict for GUCs
+        # we want SET on every fresh session (statement_timeout,
+        # lock_timeout, idle_in_transaction_session_timeout, jit,
+        # timezone). psycopg2 has no equivalent kwarg — they have to
+        # ride in via the connection-level "options" string as
+        # ``-c key=value`` flags. Merge with any pre-existing
+        # ``search_path`` opt below so neither side wins silently.
+        opts_parts = []
         schema = self.schema or self.full_details.get("schema")
         if schema:
-            kw["options"] = f"-c search_path={schema}"
+            opts_parts.append(f"-c search_path={schema}")
+
+        server_settings = self.options.get("server_settings") or {}
+        if isinstance(server_settings, dict):
+            for k, v in server_settings.items():
+                if v is None:
+                    continue
+                # GUC names are ASCII identifiers; values may contain
+                # spaces (rare for our use). psycopg2 splits on
+                # whitespace, so wrap value in single quotes when it
+                # contains spaces — but for the GUCs we care about
+                # (timeouts, on/off flags, IANA tz strings) this is a
+                # no-op and the bare form is what postgres docs show.
+                v_str = str(v)
+                if " " in v_str:
+                    v_str = f"'{v_str}'"
+                opts_parts.append(f"-c {k}={v_str}")
+
+        if opts_parts:
+            kw["options"] = " ".join(opts_parts)
+
         return {k: v for k, v in kw.items() if v is not None}
 
     def _ensure_pool_initialized(self):

@@ -139,7 +139,7 @@ class MakesIdempotentBase:
                 return None
 
         self._emit_idempotency_metric("fresh")
-        return await self._execute_with_lock(callback)
+        return await self._execute_with_lock(callback, force_lock=is_forced)
 
     async def idempotent_execute(
         self,
@@ -268,7 +268,7 @@ class MakesIdempotentBase:
     # ── Execution + waiter ─────────────────────────────────────────
 
     async def _execute_with_lock(
-        self, callback: Callable[[], Awaitable[Any]]
+        self, callback: Callable[[], Awaitable[Any]], *, force_lock: bool = False
     ) -> Any:
         """Acquire lock, run callback, cache result, release lock.
 
@@ -283,13 +283,21 @@ class MakesIdempotentBase:
         and returns B's cached result.
         """
         if not self.acquire_job_lock():
-            Log.debug(
-                f"Lock acquire lost race for {self.get_job_identifier()}; "
-                f"waiting on the in-flight run",
-                category="idempotency",
-            )
-            self._emit_idempotency_metric("locked")
-            return await self.wait_for_completion()
+            if force_lock:
+                self.release_job_lock()
+                self.acquire_job_lock()
+                Log.debug(
+                    f"Force-acquired lock for {self.get_job_identifier()}",
+                    category="idempotency",
+                )
+            else:
+                Log.debug(
+                    f"Lock acquire lost race for {self.get_job_identifier()}; "
+                    f"waiting on the in-flight run",
+                    category="idempotency",
+                )
+                self._emit_idempotency_metric("locked")
+                return await self.wait_for_completion()
 
         try:
             Log.debug(

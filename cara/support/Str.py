@@ -486,7 +486,9 @@ def ulid() -> str:
         import ulid as _ulid_mod  # type: ignore
     except ImportError:
         return uuid()
-    return str(_ulid_mod.new())
+    if hasattr(_ulid_mod, 'new'):
+        return str(_ulid_mod.new())
+    return str(_ulid_mod.ULID())
 
 
 def starts_with(haystack: str, needles) -> bool:

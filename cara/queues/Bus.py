@@ -124,6 +124,19 @@ class Bus:
                 if delay:
                     if hasattr(dispatch_call, "delay"):
                         dispatch_call.delay(delay)
+                # Trigger dispatch synchronously so failures (broker
+                # down, AMQP unroutable, exchange RoutingKey parse
+                # error, no-binding fail-loud, Redis ConnectionError)
+                # raise here and the caller can react.  Without this
+                # explicit call PendingDispatch only dispatches when
+                # the local goes out of scope and __del__ runs — at
+                # which point any exception is logged-and-swallowed
+                # by __del__'s safety net so the caller sees success
+                # while the message vanishes.  ``_dispatch_now`` is
+                # idempotent (PendingDispatch._dispatched guard) so
+                # the GC-time path becomes a cheap no-op.
+                if hasattr(dispatch_call, "_dispatch_now"):
+                    dispatch_call._dispatch_now()
             except Exception:
                 # Dispatch failed before the job was queued — release
                 # the unique lock so the caller can retry.
