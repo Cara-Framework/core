@@ -589,7 +589,11 @@ class AMQPDriver(HasColoredOutput, Queue):
             exchange_name: Base exchange name (default: "dead.letter")
         """
         try:
-            self._connect({})
+            # Use the driver's own credentials — ``_connect({})`` would
+            # build an unauthenticated URL (empty username/password) and
+            # the broker refuses with ACCESS_REFUSED, leaving the DLX
+            # undeclared and every nack/TTL-expiry silently dropped.
+            self._connect(self.options)
 
             # Declare dead letter exchange
             dlx_name = f"{exchange_name}.dlx"

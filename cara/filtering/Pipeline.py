@@ -318,7 +318,17 @@ class FilterPipeline:
         rows = self.get(limit=limit, offset=offset)
 
         if resource is not None:
-            data = [resource(r).to_array() for r in rows]
+            # Route through ``resource.collection(rows)`` so any batch-
+            # preload hooks defined on the resource class (e.g. listing
+            # images, price-lows history) fire exactly once for the
+            # whole page instead of N+1 per row. Falls back to the
+            # per-row constructor if the resource subclass doesn't
+            # provide a ``collection`` factory.
+            if hasattr(resource, "collection"):
+                coll = resource.collection(rows)
+                data = coll.to_array()
+            else:
+                data = [resource(r).to_array() for r in rows]
         else:
             data = [r.serialize() for r in rows]
 

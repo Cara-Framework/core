@@ -100,6 +100,23 @@ class QueueProvider(DeferredProvider):
         )
         queue_manager.add_driver(AMQPDriver.driver_name, driver)
 
+        # Dead-letter infrastructure. Every pipeline queue is declared
+        # with ``x-dead-letter-exchange: dead.letter.dlx`` — if the DLX
+        # itself is never declared, the broker drops nacks/TTL-expired
+        # messages silently. Declare it here so the failure mode visible
+        # to operators is "DLQ filling up" (recoverable) rather than
+        # "messages vanish without trace" (forensically impossible).
+        try:
+            driver.declare_dead_letter_exchange()
+        except Exception as exc:
+            from cara.facades import Log
+            Log.warning(
+                f"Failed to declare dead-letter exchange at boot: {exc}. "
+                f"Failed messages will be silently dropped until the DLX "
+                f"is created manually.",
+                category="cara.queue.amqp",
+            )
+
     def _add_async_driver(self, queue_manager: Queue) -> None:
         """Register async queue driver with configuration."""
         if not config("queue.drivers.async"):
