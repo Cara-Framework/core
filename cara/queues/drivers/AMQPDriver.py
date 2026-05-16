@@ -30,9 +30,23 @@ class AMQPDriver(HasColoredOutput, Queue):
     - Job tracking with unique IDs
     - Integration with JobTracker for status updates
     - Persistent messages and durable queues
+    - Bounded automatic retry on consumer-side failure (see
+      ``_handle_failed_message``)
     """
 
     driver_name = "amqp"
+
+    # Framework-level default retry policy. A job class may override
+    # both knobs by declaring ``max_attempts`` and ``retry_backoff``
+    # (list of per-attempt delays in seconds) at the class level.
+    # Pre-fix the consumer nacked every failure straight to the DLX
+    # which meant every transient hiccup (DB connection drop, AMQP
+    # broker blip, scrape.do 5xx) lost the job permanently. The 1/5/30
+    # schedule covers the fastest realistic recovery windows without
+    # holding a poisoned message in flight long enough to back the
+    # queue up.
+    DEFAULT_MAX_ATTEMPTS = 3
+    DEFAULT_RETRY_BACKOFF_SECONDS = (1, 5, 30)
 
     def __init__(self, application, options: Dict[str, Any]):
         super().__init__(module="queue.amqp")
@@ -97,7 +111,12 @@ class AMQPDriver(HasColoredOutput, Queue):
             # Create job record in database via JobTracker
             db_job_id = self._create_job_record(job, job_id, merged_opts)
 
-            # Prepare payload
+            # Prepare payload. ``attempts`` is the retry counter that
+            # the consume() failure path increments and republishes;
+            # carrying it inside the payload (instead of an AMQP
+            # header) keeps the count alive across the delayed-retry
+            # republish without depending on header preservation
+            # through the delayed-plugin path.
             payload = {
                 "obj": job,
                 "args": merged_opts.get("args", ()),
@@ -105,6 +124,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 "created": pendulum.now(tz=merged_opts.get("tz", "UTC")),
                 "job_id": job_id,
                 "db_job_id": db_job_id,
+                "attempts": int(merged_opts.get("attempts", 0) or 0),
             }
 
             try:
@@ -267,6 +287,145 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         # Schedule retry with delay
         return self.later(delay_seconds, job, retry_opts)
+
+    def _handle_failed_message(
+        self,
+        instance: Any,
+        payload: Dict[str, Any],
+        exc: Exception,
+        options: Dict[str, Any],
+    ) -> None:
+        """Route a failed in-flight message to retry or to DLX.
+
+        The decision is hard-bounded by the per-class ``max_attempts``
+        (instance class attribute; default
+        ``DEFAULT_MAX_ATTEMPTS``). A class can also override
+        ``retry_backoff`` with a tuple/list of per-attempt delays in
+        seconds (default ``DEFAULT_RETRY_BACKOFF_SECONDS = (1, 5,
+        30)``).
+
+        Conventions:
+
+        * The first delivery has ``attempts = 0`` in the payload. On
+          failure we count this as attempt #1 and republish with
+          ``attempts = 1`` after the configured delay.
+        * When ``attempts >= max_attempts`` we DLX immediately so the
+          DLQ recovery cron (``CleanDeadLetterJob``) can re-decide
+          whether to revive the job manually.
+        * ``do_not_retry`` on the exception (e.g. ``PermanentScrapeError``
+          flagged by upstream scrape jobs) shortcuts straight to DLX —
+          no point burning the 1+5+30 seconds on a 404 that won't
+          come back. Subclassing ``Exception`` with
+          ``do_not_retry = True`` is the opt-in.
+        * If the message couldn't even be unpickled (``instance is
+          None``) we have no class to read ``max_attempts`` from, so
+          we DLX immediately. Re-running an unparseable message is
+          pointless and would just thrash.
+        """
+        # Carry the error class + message through to the DLX payload
+        # so the recovery cron (CleanDeadLetterJob) can classify
+        # transient vs permanent without re-running the job.
+        dlx_options = {
+            **options,
+            "error": {
+                "class": type(exc).__name__,
+                "message": str(exc)[:500],
+                "do_not_retry": bool(getattr(exc, "do_not_retry", False)),
+            },
+        }
+
+        if instance is None:
+            # Pickle/instantiate failure — nothing to retry against.
+            try:
+                self._send_to_dead_letter(
+                    job=None,
+                    options=dlx_options,
+                    attempts=int(payload.get("attempts", 0)),
+                )
+            except Exception as e:
+                Log.warning(
+                    f"_handle_failed_message: DLX after unpickle failure raised: {e}"
+                )
+            return
+
+        if getattr(exc, "do_not_retry", False):
+            Log.error(
+                f"Job {instance.__class__.__name__} raised "
+                f"{type(exc).__name__} marked do_not_retry — "
+                f"sending straight to DLX"
+            )
+            self._send_to_dead_letter(
+                job=instance,
+                options=dlx_options,
+                attempts=int(payload.get("attempts", 0)),
+            )
+            return
+
+        attempts_made = int(payload.get("attempts", 0)) + 1
+        max_attempts = int(
+            getattr(instance, "max_attempts", None)
+            or self.DEFAULT_MAX_ATTEMPTS
+        )
+
+        if attempts_made >= max_attempts:
+            Log.error(
+                f"Job {instance.__class__.__name__} exhausted "
+                f"{max_attempts} attempts (last error: "
+                f"{type(exc).__name__}: {exc}). Routing to DLX."
+            )
+            self._send_to_dead_letter(
+                job=instance, options=dlx_options, attempts=attempts_made
+            )
+            return
+
+        backoff_schedule = getattr(
+            instance,
+            "retry_backoff",
+            self.DEFAULT_RETRY_BACKOFF_SECONDS,
+        )
+        # Index by attempt count; clamp to the last entry so jobs
+        # with custom higher ``max_attempts`` than the schedule
+        # length still get a sane delay instead of an IndexError.
+        if not isinstance(backoff_schedule, (list, tuple)) or not backoff_schedule:
+            backoff_schedule = self.DEFAULT_RETRY_BACKOFF_SECONDS
+        idx = min(attempts_made - 1, len(backoff_schedule) - 1)
+        delay_seconds = int(backoff_schedule[idx])
+
+        Log.info(
+            f"Job {instance.__class__.__name__} attempt "
+            f"{attempts_made}/{max_attempts} failed "
+            f"({type(exc).__name__}: {exc}). Retrying in "
+            f"{delay_seconds}s."
+        )
+
+        retry_options = {
+            **options,
+            "attempts": attempts_made,
+        }
+        try:
+            self.later(delay_seconds, instance, retry_options)
+        except Exception as republish_exc:
+            # Republish failed — we've already acked the original
+            # delivery, so the job is lost unless we surface this.
+            # Best-effort DLX hop so the message at least survives
+            # in the dead-letter store for manual recovery.
+            Log.error(
+                f"Job {instance.__class__.__name__}: retry republish "
+                f"failed ({republish_exc}). Falling back to DLX so "
+                f"the payload isn't lost."
+            )
+            try:
+                self._send_to_dead_letter(
+                    job=instance,
+                    options={**dlx_options, **retry_options},
+                    attempts=attempts_made,
+                )
+            except Exception:
+                Log.error(
+                    f"Job {instance.__class__.__name__}: DLX fallback "
+                    f"also failed — payload IS lost",
+                    exc_info=True,
+                )
 
     def _send_to_dead_letter(
         self, job: Any, options: Dict[str, Any], attempts: int
@@ -458,17 +617,40 @@ class AMQPDriver(HasColoredOutput, Queue):
                 )
             except Exception as exc:
                 self.danger(f"AMQPDriver: job processing failed: {exc}")
-                # nack with requeue=False so DLX gets the message.
+                # Bounded automatic retry. Pre-fix the consumer nacked
+                # to DLX on first failure, so every transient outage
+                # (network blip, DB pool exhaustion, broker
+                # reconnect, scrape.do 5xx) lost the job permanently.
+                # The retry decision honours the job's own
+                # ``max_attempts`` knob (default 3), falls back to a
+                # per-class ``retry_backoff`` tuple, and only routes
+                # to DLX when the budget is exhausted. The ack-first
+                # discipline avoids a duplicate delivery if the
+                # republish raises.
                 try:
-                    ch.basic_nack(
-                        delivery_tag=method.delivery_tag, requeue=False
-                    )
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                 except Exception:
                     pass
-                # Job-side ``failed`` hook for app-level cleanup.
+                try:
+                    self._handle_failed_message(
+                        instance=instance,
+                        payload=payload if "payload" in dir() else {},
+                        exc=exc,
+                        options=merged_opts,
+                    )
+                except Exception as retry_exc:
+                    self.danger(
+                        f"AMQPDriver: retry/dead-letter path raised: {retry_exc}"
+                    )
+                # Job-side ``failed`` hook for app-level cleanup —
+                # fires once per *attempt* (the framework already
+                # logs the retry separately), so listeners that care
+                # about every failure observe it. Hooks that should
+                # only fire on terminal failure can check the
+                # ``attempts`` field on the payload they receive.
                 if instance is not None and hasattr(instance, "failed"):
                     try:
-                        instance.failed(payload, str(exc))
+                        instance.failed(payload if "payload" in dir() else {}, str(exc))
                     except Exception as inner:
                         self.danger(f"AMQPDriver: failed() raised: {inner}")
                 self._dispatch_batch_completion(instance, exc)
