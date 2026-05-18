@@ -177,7 +177,23 @@ class Logger(Logger):
             del frame
 
     def _get_request_id(self) -> str:
-        """Get current request ID or generate a new one."""
+        """Get the current correlation ID.
+
+        Priority:
+          1. ``ExecutionContext.get_correlation_id()`` — covers HTTP
+             (set by ``AttachRequestID``) AND queue jobs (set by the
+             AMQP driver from the job envelope).
+          2. ``request.request_id`` — bare HTTP request without a
+             middleware bridge (defensive fallback).
+          3. A fresh short UUID so logs always carry *something*.
+        """
+        try:
+            from cara.context import ExecutionContext
+            corr = ExecutionContext.get_correlation_id()
+            if corr:
+                return str(corr)
+        except Exception:
+            pass
         try:
             from cara.http.request.context import current_request
 
