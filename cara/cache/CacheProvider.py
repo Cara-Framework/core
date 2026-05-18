@@ -66,5 +66,27 @@ class CacheProvider(DeferredProvider):
             password=config("cache.drivers.redis.password"),
             prefix=config("cache.drivers.redis.prefix", ""),
             default_ttl=config("cache.drivers.redis.ttl", 60),
+            # Socket / pool hardening — all optional. When unset the
+            # driver picks the conservative defaults documented in its
+            # constructor. Surfacing them through config lets operators
+            # tune per-environment without code changes (Redis hosted in
+            # k8s tends to need more aggressive keepalive than self-
+            # hosted, etc.).
+            socket_connect_timeout=config(
+                "cache.drivers.redis.socket_connect_timeout", 5.0
+            ),
+            socket_timeout=config("cache.drivers.redis.socket_timeout", 5.0),
+            socket_keepalive=config(
+                "cache.drivers.redis.socket_keepalive", True
+            ),
+            health_check_interval=config(
+                "cache.drivers.redis.health_check_interval", 30
+            ),
+            max_connections=config(
+                "cache.drivers.redis.max_connections", 32
+            ),
+            retry_on_timeout=config(
+                "cache.drivers.redis.retry_on_timeout", True
+            ),
         )
         cache_manager.add_driver(RedisCacheDriver.driver_name, driver)

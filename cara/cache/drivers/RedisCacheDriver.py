@@ -12,7 +12,20 @@ import pickle
 from typing import Any, Optional
 
 from cara.cache.contracts import Cache
+from cara.cache.observer import notify_cache_event
 from cara.exceptions import CacheConfigurationException
+
+
+# Payloads above this size emit a one-time warning per key so operators
+# notice runaway cache-as-blob patterns (e.g. caching a full search
+# response that ballooned past 1 MB). Configurable via the
+# ``CARA_CACHE_LARGE_VALUE_BYTES`` environment variable; default 256 KB.
+import os
+try:
+    _LARGE_VALUE_BYTES = int(os.environ.get("CARA_CACHE_LARGE_VALUE_BYTES", "262144"))
+except (TypeError, ValueError):
+    _LARGE_VALUE_BYTES = 262144
+_LARGE_VALUE_WARNED: set[str] = set()
 
 
 class RedisCacheDriver(Cache):
@@ -32,6 +45,20 @@ class RedisCacheDriver(Cache):
         password: Optional[str],
         prefix: str = "",
         default_ttl: int = 60,
+        *,
+        # ── Socket / pool hardening ──────────────────────────────────
+        # Bounds for redis-py's internal ConnectionPool — all optional
+        # so existing callers stay source-compatible. Defaults are tuned
+        # for an ASGI worker: short connect, generous read, periodic
+        # health pings so a Redis blip doesn't permanently poison the
+        # pool, and a hard ceiling on connection count so a slow
+        # downstream can't grow the pool unboundedly under load.
+        socket_connect_timeout: Optional[float] = 5.0,
+        socket_timeout: Optional[float] = 5.0,
+        socket_keepalive: bool = True,
+        health_check_interval: int = 30,
+        max_connections: Optional[int] = 32,
+        retry_on_timeout: bool = True,
     ):
         self._prefix = prefix or ""
         self._default_ttl = default_ttl
@@ -43,7 +70,33 @@ class RedisCacheDriver(Cache):
                 "redis is required for RedisCacheDriver. "
                 "Please install it with: pip install redis"
             ) from e
-        self._client = redis.Redis(host=host, port=port, db=db, password=password)
+        # ``redis.Redis`` accepts a flat kwargs surface and constructs the
+        # underlying ``ConnectionPool`` for us. ``health_check_interval``
+        # makes redis-py issue a PING on idle connections older than the
+        # interval; without it a stale TCP connection (Redis-side restart,
+        # NAT timeout, k8s service rotation) keeps getting handed out to
+        # request paths until the first command fails. ``max_connections``
+        # caps growth so a burst of slow requests can't exhaust file
+        # descriptors. ``retry_on_timeout`` lets a single socket-timeout
+        # transparently retry once before bubbling — covers the most
+        # common transient network blip.
+        redis_kwargs: dict = {
+            "host": host,
+            "port": port,
+            "db": db,
+            "password": password,
+            "socket_connect_timeout": socket_connect_timeout,
+            "socket_timeout": socket_timeout,
+            "socket_keepalive": socket_keepalive,
+            "health_check_interval": health_check_interval,
+            "retry_on_timeout": retry_on_timeout,
+        }
+        if max_connections is not None:
+            redis_kwargs["max_connections"] = max_connections
+        # Drop None entries so we don't override redis-py's own defaults
+        # (e.g. for ``password``) with explicit None values.
+        redis_kwargs = {k: v for k, v in redis_kwargs.items() if v is not None or k == "password"}
+        self._client = redis.Redis(**redis_kwargs)
 
     def _validate_connection_params(self, host: str, port: int, db: int) -> None:
         if not host or not isinstance(host, str):
@@ -68,13 +121,17 @@ class RedisCacheDriver(Cache):
                 f"[RedisCacheDriver] GET failed for '{key}': {exc}",
                 category="cache",
             )
+            notify_cache_event("get", "error", key, None)
             return default
 
         if raw_data is None:
+            notify_cache_event("get", "miss", key, None)
             return default
 
         try:
-            return pickle.loads(raw_data)
+            value = pickle.loads(raw_data)
+            notify_cache_event("get", "hit", key, len(raw_data))
+            return value
         except Exception as exc:
             # Self-heal a corrupt / pickle-incompatible entry instead of
             # serving the default forever. Without the proactive DELETE
@@ -93,6 +150,7 @@ class RedisCacheDriver(Cache):
                 self._client.delete(redis_key)
             except Exception:
                 pass
+            notify_cache_event("get", "error", key, None)
             return default
 
     def put(
@@ -118,13 +176,24 @@ class RedisCacheDriver(Cache):
             ) from e
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
+        payload_size = len(payload)
+        if payload_size > _LARGE_VALUE_BYTES and key not in _LARGE_VALUE_WARNED:
+            _LARGE_VALUE_WARNED.add(key)
+            Log.warning(
+                f"[RedisCacheDriver] large cache value: key='{key}' "
+                f"size={payload_size}B threshold={_LARGE_VALUE_BYTES}B "
+                f"— consider normalising or sharding the payload",
+                category="cache",
+            )
         try:
             if ttl_seconds > 0:
                 self._client.set(redis_key, payload, ex=ttl_seconds)
             else:
                 self._client.set(redis_key, payload)
+            notify_cache_event("put", "set", key, payload_size)
         except Exception as e:
             Log.warning(f"[RedisCacheDriver] set failed: {e}", category="cache")
+            notify_cache_event("put", "error", key, payload_size)
 
     def forever(self, key: str, value: Any) -> None:
         self.put(key, value, ttl=0)
@@ -132,7 +201,9 @@ class RedisCacheDriver(Cache):
     def forget(self, key: str) -> bool:
         redis_key = f"{self._prefix}{key}"
         try:
-            return self._client.delete(redis_key) > 0
+            deleted = self._client.delete(redis_key) > 0
+            notify_cache_event("forget", "deleted" if deleted else "noop", key, None)
+            return deleted
         except Exception as e:
             # Don't swallow silently — admin invalidation paths
             # (CacheController, AdminProductRepository.invalidate_*)
@@ -144,6 +215,7 @@ class RedisCacheDriver(Cache):
                 f"[RedisCacheDriver] forget failed for '{key}': {e}",
                 category="cache",
             )
+            notify_cache_event("forget", "error", key, None)
             return False
 
     def flush(self) -> None:
@@ -222,18 +294,22 @@ class RedisCacheDriver(Cache):
             ) from e
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
+        payload_size = len(payload)
         try:
             if ttl_seconds > 0:
                 result = self._client.set(redis_key, payload, ex=ttl_seconds, nx=True)
             else:
                 result = self._client.set(redis_key, payload, nx=True)
-            return result is not None
+            won = result is not None
+            notify_cache_event("add", "set" if won else "noop", key, payload_size)
+            return won
         except Exception as e:
             Log.error(
                 f"[RedisCacheDriver] add() flight-claim failed for '{key}' "
                 f"(Redis unreachable?): {e} — failing OPEN so caller proceeds",
                 category="cache",
             )
+            notify_cache_event("add", "error", key, payload_size)
             return True
 
     def remember(
