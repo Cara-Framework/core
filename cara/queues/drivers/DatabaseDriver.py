@@ -591,9 +591,22 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 else:
                     update_data["metadata"] = metadata
 
-            # Add timestamp updates
-            if status == "processing" and metadata and "started_at" in metadata:
-                update_data["started_at"] = metadata["started_at"]
+            # Add timestamp updates.
+            # ``started_at`` MUST be stamped whenever we move a row into
+            # ``processing`` — even when the caller forgot to thread the
+            # value through ``metadata``. The watchdog's stale-processing
+            # sweep filters on ``started_at < cutoff`` to garbage-collect
+            # zombies left behind by worker death; rows with a NULL
+            # ``started_at`` (the previous failure mode when this branch
+            # didn't fire) skipped that filter forever and accumulated as
+            # permanent ``processing`` entries that polluted health
+            # dashboards and queue-depth metrics. Default to ``NOW()``
+            # so the safety-net always has something to compare against.
+            if status == "processing":
+                if metadata and "started_at" in metadata:
+                    update_data["started_at"] = metadata["started_at"]
+                else:
+                    update_data["started_at"] = pendulum.now("UTC").to_datetime_string()
             elif status == "completed" and metadata and "completed_at" in metadata:
                 update_data["completed_at"] = metadata["completed_at"]
             elif status == "cancelled" and metadata and "cancelled_at" in metadata:
