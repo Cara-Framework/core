@@ -97,11 +97,42 @@ class RedisDriver(HasColoredOutput, Queue):
         db = int(self.options.get("db", 0))
         password = self.options.get("password") or None
 
-        # Create Redis client
+        # Pool hardening — kept in lockstep with ``RedisCacheDriver``.
+        # Pre-fix the queue driver constructed ``redis.Redis(host, port,
+        # db[, password])`` with NOTHING else, so a single Redis blip
+        # would stall every queue worker until the OS TCP timeout
+        # fired (potentially minutes), stale sockets after a Redis
+        # restart got handed out until the first command failed, and
+        # the pool was free to grow to redis-py's default 2^31-1 cap —
+        # exhausting file descriptors on the worker host. Pull
+        # overrides from ``options`` so the queue config can tune
+        # them per-driver without touching every framework caller.
+        socket_connect_timeout = float(
+            self.options.get("socket_connect_timeout", 5.0)
+        )
+        socket_timeout = float(self.options.get("socket_timeout", 5.0))
+        health_check_interval = int(
+            self.options.get("health_check_interval", 30)
+        )
+        max_connections = int(self.options.get("max_connections", 32))
+
+        # Drop ``password`` from the kwargs entirely when not set —
+        # redis-py treats explicit ``None`` differently from "omitted"
+        # in some auth-aware paths.
+        client_kwargs: dict[str, Any] = {
+            "host": host,
+            "port": port,
+            "db": db,
+            "socket_connect_timeout": socket_connect_timeout,
+            "socket_timeout": socket_timeout,
+            "socket_keepalive": True,
+            "health_check_interval": health_check_interval,
+            "max_connections": max_connections,
+            "retry_on_timeout": True,
+        }
         if password:
-            self._redis = _redis.Redis(host=host, port=port, db=db, password=password)
-        else:
-            self._redis = _redis.Redis(host=host, port=port, db=db)
+            client_kwargs["password"] = password
+        self._redis = _redis.Redis(**client_kwargs)
 
         # Test connection
         try:
