@@ -5,6 +5,10 @@ This module provides email notification channel functionality,
 integrating with Cara's mail system.
 """
 
+import hashlib
+import hmac
+from typing import Any
+
 from cara.notifications.channels import BaseChannel
 
 
@@ -98,7 +102,22 @@ class MailChannel(BaseChannel):
                     message.html(mail_message["html"])
 
                 if "view" in mail_message:
-                    message.view(mail_message["view"], mail_message.get("data", {}))
+                    # Templates assume ``unsubscribe_url`` / ``preferences_url``
+                    # / ``frontend_url`` exist in the render context;
+                    # Jinja's ``{{ unsubscribe_url | default('#') }}``
+                    # fallback in the stock notification templates
+                    # paints a dead ``#`` link when the notification's
+                    # ``to_mail()`` payload forgets to set them, which
+                    # is a CAN-SPAM / GDPR liability (the law calls for
+                    # a working unsubscribe affordance, not a no-op
+                    # anchor). Enrich the data dict with sensible
+                    # defaults derived from the framework config +
+                    # notifiable before render. Existing keys win, so
+                    # notifications that DO supply their own URLs are
+                    # untouched.
+                    view_data = dict(mail_message.get("data") or {})
+                    self._inject_default_urls(view_data, notifiable)
+                    message.view(mail_message["view"], view_data)
 
                 # Use message from or fallback to channel defaults
                 from_addr = mail_message.get("from", self.from_address)
@@ -203,3 +222,66 @@ class MailChannel(BaseChannel):
             return notifiable.email_address
 
         return None
+
+    def _inject_default_urls(self, view_data: dict[str, Any], notifiable: Any) -> None:
+        """Stamp the mail-template render context with default URLs.
+
+        Reads ``app.frontend_url`` / ``app.unsubscribe_secret`` from
+        the framework config so the host application can centralise
+        the values without every notification class repeating them.
+        Honors any value the notification already supplied in
+        ``to_mail()['data']`` — those wins; we only fill in the gaps.
+
+        ``unsubscribe_url`` carries an HMAC token per
+        ``(user_id, email)`` matching the existing
+        ``EmailChannel.send`` token shape, so the unsubscribe handler
+        can verify both delivery paths with the same secret. When the
+        secret isn't configured we fall back to the user-facing
+        preferences page rather than emitting a token-less link, so
+        an unsubscribed user still has a working route.
+        """
+        try:
+            from cara.configuration import config
+        except Exception:
+            return
+
+        try:
+            frontend_url = (config("app.frontend_url", "") or "").rstrip("/")
+        except Exception:
+            frontend_url = ""
+        if not frontend_url:
+            return  # No base URL configured — leave templates to their own defaults.
+
+        view_data.setdefault("frontend_url", frontend_url)
+        view_data.setdefault(
+            "preferences_url", f"{frontend_url}/profile/preferences",
+        )
+
+        if "unsubscribe_url" in view_data and view_data["unsubscribe_url"]:
+            return
+
+        user_id = getattr(notifiable, "id", None)
+        email = getattr(notifiable, "email", None) or getattr(
+            notifiable, "email_address", None,
+        )
+        try:
+            secret = config("app.unsubscribe_secret", "") or ""
+        except Exception:
+            secret = ""
+
+        if user_id is not None and email and secret:
+            token = hmac.new(
+                secret.encode("utf-8"),
+                f"{user_id}:{email}".encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            view_data["unsubscribe_url"] = (
+                f"{frontend_url}/unsubscribe?user={user_id}&token={token}"
+            )
+        else:
+            # No HMAC available — point at the manual preferences page
+            # rather than a token-less ``/unsubscribe`` URL the handler
+            # would reject. A real link beats a dead ``#`` either way.
+            view_data["unsubscribe_url"] = (
+                f"{frontend_url}/profile/preferences#email"
+            )
