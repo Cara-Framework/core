@@ -29,9 +29,19 @@ from .Manager import Manager
 from .HigherOrderTapProxy import HigherOrderTapProxy
 from .Image import Image
 from .ModuleManager import ModuleManager
+
 # Dynamic helpers (Laravel-style)
-from .modules import (app, config, get_classes, get_functions, import_module,
-                      m, module_exists, modules, routes)
+from .modules import (
+    app,
+    config,
+    get_classes,
+    get_functions,
+    import_module,
+    m,
+    module_exists,
+    modules,
+    routes,
+)
 from .PathManager import PathManager
 from .paths import app as app_paths
 from .paths import app_path, base_path
@@ -41,10 +51,28 @@ from .Currency import currency_symbol, default_currency, format_money
 from .Number import clamp
 from .Pipeline import Pipeline
 from .Str import (
-    after, before, between, camel_case, contains, email_mask, ends_with,
-    format_money_cents, kebab_case, mask, normalize_email, pluralize,
-    sanitize_text, slugify, snake_case, starts_with, strip_tags, studly_case,
-    title_case, truncate, ulid, uuid,
+    after,
+    before,
+    between,
+    camel_case,
+    contains,
+    email_mask,
+    ends_with,
+    format_money_cents,
+    kebab_case,
+    mask,
+    normalize_email,
+    pluralize,
+    sanitize_text,
+    slugify,
+    snake_case,
+    starts_with,
+    strip_tags,
+    studly_case,
+    title_case,
+    truncate,
+    ulid,
+    uuid,
 )
 from .SupportProvider import SupportProvider
 from .Time import format_duration, humanize_seconds, to_pendulum

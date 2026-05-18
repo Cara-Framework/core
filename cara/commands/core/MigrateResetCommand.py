@@ -5,7 +5,6 @@ This module provides a CLI command to completely reset the database schema.
 """
 
 import os
-from typing import List
 
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -25,14 +24,22 @@ from cara.eloquent.DatabaseManager import get_database_manager
 class MigrateResetCommand(CommandBase):
     """Database reset command with enhanced safety and database-specific operations."""
 
-    def handle(self):
-        """Main command handler."""
+    def handle(self, force: bool = False, **_: object):
+        """Main command handler.
+
+        ``--force`` was previously declared as an option but never
+        consulted, so non-TTY callers (CI, scripted resets, audit
+        harnesses) blew up on ``EOFError: EOF when reading a line``.
+        With this fix ``--force`` actually skips the prompt; the
+        production guard (``_should_block_execution``) still applies
+        either way.
+        """
         self._display_warning()
 
         if self._should_block_execution():
             return
 
-        if not self._get_user_confirmation():
+        if not force and not self._get_user_confirmation():
             self.info("❌ Reset operation cancelled by user.")
             return
 
@@ -226,7 +233,7 @@ END $do$;"""
         # Re-enable foreign key checks
         connection.query("SET FOREIGN_KEY_CHECKS = 1")
 
-    def _get_mysql_tables(self, connection) -> List[str]:
+    def _get_mysql_tables(self, connection) -> list[str]:
         """Get all table names from MySQL."""
         result = connection.query("SHOW TABLES")
         return [list(row.values())[0] for row in result]
@@ -241,7 +248,7 @@ END $do$;"""
         for table in tables:
             connection.query(f"DROP TABLE IF EXISTS `{table}`")
 
-    def _get_sqlite_tables(self, connection) -> List[str]:
+    def _get_sqlite_tables(self, connection) -> list[str]:
         """Get all table names from SQLite excluding system tables."""
         result = connection.query(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -262,6 +269,7 @@ END $do$;"""
         """Check if running in production environment."""
         try:
             from cara.configuration import config
+
             env = str(config("app.ENV", "")).lower()
         except Exception:
             env = os.getenv("APP_ENV", "").lower()

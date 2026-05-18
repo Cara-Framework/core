@@ -5,7 +5,8 @@ Laravel-style streaming response support for HTTP responses.
 Handles chunked transfers and real-time data streaming.
 """
 
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
+from collections.abc import AsyncGenerator, Callable
+from typing import Any
 
 from .BaseResponse import BaseResponse
 from .HeaderManager import HeaderManager
@@ -31,11 +32,11 @@ class StreamingResponse:
 
     async def stream(
         self,
-        generator: AsyncGenerator[bytes, None],
+        generator: AsyncGenerator[bytes],
         send: Callable,
         status: int = 200,
         content_type: str = "application/octet-stream",
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """
         Laravel-style streaming response.
@@ -85,10 +86,13 @@ class StreamingResponse:
             # the client saw the error message; the server had no record
             # of the failure.
             import logging
+
             logging.getLogger("cara.http.stream").error(
-                "Stream generator raised: %s", e, exc_info=True,
+                "Stream generator raised: %s",
+                e,
+                exc_info=True,
             )
-            error_chunk = f"Stream error: {str(e)}".encode("utf-8")
+            error_chunk = f"Stream error: {str(e)}".encode()
             await send(
                 {
                     "type": "http.response.body",
@@ -111,10 +115,10 @@ class StreamingResponse:
 
     async def stream_json_lines(
         self,
-        data_generator: AsyncGenerator[Any, None],
+        data_generator: AsyncGenerator[Any],
         send: Callable,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """
         Stream JSON data line by line (JSONL format).
@@ -142,10 +146,10 @@ class StreamingResponse:
 
     async def stream_server_sent_events(
         self,
-        event_generator: AsyncGenerator[Dict[str, Any], None],
+        event_generator: AsyncGenerator[dict[str, Any]],
         send: Callable,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """
         Stream Server-Sent Events (SSE).
@@ -183,12 +187,12 @@ class StreamingResponse:
 
     async def stream_file_download(
         self,
-        file_generator: AsyncGenerator[bytes, None],
+        file_generator: AsyncGenerator[bytes],
         filename: str,
         send: Callable,
         content_type: str = "application/octet-stream",
-        content_length: Optional[int] = None,
-        headers: Optional[Dict[str, str]] = None,
+        content_length: int | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """
         Stream file download.
@@ -221,10 +225,10 @@ class StreamingResponse:
 
     async def stream_csv(
         self,
-        data_generator: AsyncGenerator[List[str], None],
+        data_generator: AsyncGenerator[list[str]],
         filename: str,
         send: Callable,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """
         Stream CSV data.
@@ -261,7 +265,7 @@ class StreamingResponse:
             headers=download_headers,
         )
 
-    def _format_sse_event(self, event: Dict[str, Any]) -> str:
+    def _format_sse_event(self, event: dict[str, Any]) -> str:
         """
         Format event data for Server-Sent Events.
 
@@ -297,10 +301,10 @@ class StreamingResponse:
 
     async def stream_template_chunks(
         self,
-        template_generator: AsyncGenerator[str, None],
+        template_generator: AsyncGenerator[str],
         send: Callable,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """
         Stream HTML template chunks for progressive rendering.

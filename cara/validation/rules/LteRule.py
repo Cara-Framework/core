@@ -1,5 +1,6 @@
 """Less-than-or-equal rule. Usage: ``lte:10`` or ``lte:field``."""
-from typing import Any, Dict
+
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -8,12 +9,12 @@ from cara.validation.rules import BaseRule
 def _to_number(v):
     try:
         return float(v)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
 class LteRule(BaseRule):
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         threshold = params.get("lte")
         if threshold is None or value is None:
             return False
@@ -25,6 +26,8 @@ class LteRule(BaseRule):
             return False
         return val <= compare_to
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
-        return f"The {attr.lower()} must be less than or equal to {params.get('lte', '')}."
+        return (
+            f"The {attr.lower()} must be less than or equal to {params.get('lte', '')}."
+        )

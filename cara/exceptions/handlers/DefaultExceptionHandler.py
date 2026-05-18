@@ -5,7 +5,7 @@ Professional exception handler using proper exception hierarchy.
 """
 
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class DefaultExceptionHandler:
@@ -20,7 +20,7 @@ class DefaultExceptionHandler:
         self,
         exception: Exception,
         request: Any,
-        scope: Dict[str, Any],
+        scope: dict[str, Any],
         receive: Any,
         send: Any,
     ) -> None:
@@ -28,7 +28,9 @@ class DefaultExceptionHandler:
         self.log_exception(exception)
         status_code = self.get_status_code(exception)
         response_data = self.format_response(exception, status_code)
-        await self.send_response(response_data, status_code, scope, receive, send, request)
+        await self.send_response(
+            response_data, status_code, scope, receive, send, request
+        )
 
     def get_status_code(self, exception: Exception) -> int:
         """Get HTTP status code from exception - Laravel style."""
@@ -46,7 +48,7 @@ class DefaultExceptionHandler:
         # Default to 500 for unknown exceptions
         return 500
 
-    def format_response(self, exception: Exception, status_code: int) -> Dict[str, Any]:
+    def format_response(self, exception: Exception, status_code: int) -> dict[str, Any]:
         """Format the exception into a response."""
         # If exception has its own to_dict method, use it
         if hasattr(exception, "to_dict") and callable(exception.to_dict):
@@ -60,7 +62,7 @@ class DefaultExceptionHandler:
     # internals (SQL errors, file paths, lib stack frames) to the caller.
     _GENERIC_5XX_MESSAGE = "Internal server error"
 
-    def format_error(self, exception: Exception, status_code: int) -> Dict[str, Any]:
+    def format_error(self, exception: Exception, status_code: int) -> dict[str, Any]:
         """Format general errors.
 
         ROOT-CAUSE (frontend stress scenario 4 / cycle 1): debug-mode
@@ -128,7 +130,7 @@ class DefaultExceptionHandler:
         except ImportError:
             pass
 
-    def _cors_headers_for_scope(self, scope: Dict[str, Any]) -> list:
+    def _cors_headers_for_scope(self, scope: dict[str, Any]) -> list:
         """Build CORS header pairs for an error response.
 
         Mirrors the credentials/wildcard guard in ``HandleCors``: when
@@ -199,7 +201,7 @@ class DefaultExceptionHandler:
 
         return headers
 
-    def _security_headers_for_scope(self, scope: Dict[str, Any]) -> list:
+    def _security_headers_for_scope(self, scope: dict[str, Any]) -> list:
         """Build defense-in-depth header pairs for an error response.
 
         ROOT-CAUSE (frontend stress scenario 7 / cycle 1): every error
@@ -224,11 +226,13 @@ class DefaultExceptionHandler:
         """
         from cara.middleware.http.SecurityHeaders import (
             _DEFAULT_HEADERS as _SH_DEFAULT_HEADERS,
+        )
+        from cara.middleware.http.SecurityHeaders import (
             _DEFAULT_HSTS as _SH_DEFAULT_HSTS,
         )
 
-        headers_dict: Dict[str, str] = dict(_SH_DEFAULT_HEADERS)
-        hsts: Optional[str] = _SH_DEFAULT_HSTS
+        headers_dict: dict[str, str] = dict(_SH_DEFAULT_HEADERS)
+        hsts: str | None = _SH_DEFAULT_HSTS
         hsts_preload = False
         try:
             from cara.configuration import config
@@ -269,7 +273,7 @@ class DefaultExceptionHandler:
 
         return out
 
-    def _request_id_header_for(self, request: Any, scope: Dict[str, Any]) -> list:
+    def _request_id_header_for(self, request: Any, scope: dict[str, Any]) -> list:
         """Return the X-Request-ID header pair for the error response.
 
         The ``AttachRequestID`` middleware sets this on success
@@ -279,7 +283,7 @@ class DefaultExceptionHandler:
         id, an ops engineer correlating a user complaint to a Sentry
         event has to fall back to timestamp matching.
         """
-        rid: Optional[str] = None
+        rid: str | None = None
         try:
             rid = getattr(request, "request_id", None) if request is not None else None
         except Exception:
@@ -301,9 +305,9 @@ class DefaultExceptionHandler:
 
     async def send_response(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         status_code: int,
-        scope: Dict[str, Any],
+        scope: dict[str, Any],
         receive: Any,
         send: Any,
         request: Any = None,
@@ -332,12 +336,12 @@ class DefaultExceptionHandler:
 
     async def send_manual_response(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         status_code: int,
-        scope: Dict[str, Any],
+        scope: dict[str, Any],
         receive: Any,
         send: Any,
-        extra_headers: Optional[list] = None,
+        extra_headers: list | None = None,
     ) -> None:
         """Manual response fallback."""
         import json
@@ -378,7 +382,7 @@ class DefaultExceptionHandler:
         except Exception:
             return False
 
-    def get_exception_file(self, exception: Exception) -> Optional[str]:
+    def get_exception_file(self, exception: Exception) -> str | None:
         """Get file where exception occurred."""
         try:
             tb = exception.__traceback__
@@ -390,7 +394,7 @@ class DefaultExceptionHandler:
             pass
         return None
 
-    def get_exception_line(self, exception: Exception) -> Optional[int]:
+    def get_exception_line(self, exception: Exception) -> int | None:
         """Get line where exception occurred."""
         try:
             tb = exception.__traceback__

@@ -5,6 +5,7 @@ Used to intercept 'uvicorn.error' and 'uvicorn.access' and send them through Log
 """
 
 import logging
+
 from loguru import logger as loguru_logger
 
 

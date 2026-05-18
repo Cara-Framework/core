@@ -7,7 +7,7 @@ This module provides utilities for configuring and managing logging channels.
 import os
 from inspect import signature
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from cara.configuration import config
 from cara.logging.channels import ConsoleChannel, FileChannel, SlackChannel
@@ -26,9 +26,9 @@ class ChannelConfigurator:
         3. Instantiate each channel's "sink" and call `_logger.add(...)`.
         """
         default_stack: str = config("logging.default", "daily")
-        stacks: Dict[str, Any] = config("logging.stacks", {})
-        channels_cfg: Dict[str, Any] = config("logging.channels", {})
-        slack_cfg: Dict[str, Any] = config("logging.slack", {})
+        stacks: dict[str, Any] = config("logging.stacks", {})
+        channels_cfg: dict[str, Any] = config("logging.channels", {})
+        slack_cfg: dict[str, Any] = config("logging.slack", {})
 
         # 1) Which channels belong to the default stack?
         if default_stack and default_stack in stacks:
@@ -36,9 +36,7 @@ class ChannelConfigurator:
         else:
             # Fallback: enable any channel whose config.ENABLED=True
             enabled_channels = [
-                name
-                for name, opts in channels_cfg.items()
-                if opts.get("ENABLED", False)
+                name for name, opts in channels_cfg.items() if opts.get("ENABLED", False)
             ]
 
         # 2) If "slack" is in that stack, register a Slack sink first (ERROR+)
@@ -64,16 +62,16 @@ class ChannelConfigurator:
 
         # 3) Loop through each enabled channel and call logger.add(...)
         for channel_name in enabled_channels:
-            opts: Dict[str, Any] = channels_cfg.get(channel_name, {})
+            opts: dict[str, Any] = channels_cfg.get(channel_name, {})
             if not opts.get("ENABLED", False):
                 continue
 
             level = opts.get("LEVEL", "DEBUG")
-            fmt = opts.get("FORMAT", None)
-            sink_spec = opts.get("SINK", None)
-            rotation = opts.get("ROTATION", None)
-            retention = opts.get("RETENTION", None)
-            compression = opts.get("COMPRESSION", None)
+            fmt = opts.get("FORMAT")
+            sink_spec = opts.get("SINK")
+            rotation = opts.get("ROTATION")
+            retention = opts.get("RETENTION")
+            compression = opts.get("COMPRESSION")
             serialize = opts.get("SERIALIZE", False)
 
             # Build the sink object from channels/
@@ -92,7 +90,7 @@ class ChannelConfigurator:
                 sink_obj = None
 
             # Build add_kwargs for logger.add(...)
-            add_kwargs: Dict[str, Any] = {"level": level}
+            add_kwargs: dict[str, Any] = {"level": level}
 
             # Use config format for console if available
             if channel_name == "console" and fmt:

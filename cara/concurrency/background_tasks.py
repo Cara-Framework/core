@@ -18,14 +18,14 @@ factory and supply a dedup key under their own naming convention
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Set
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.facades import Cache, Log
 
-
 # Strong references to in-flight tasks so the GC doesn't collect them
 # before completion. Each task removes itself via a done-callback.
-_background_tasks: Set[asyncio.Task] = set()
+_background_tasks: set[asyncio.Task] = set()
 
 # Default TTL for the "generation in flight" sentinel. Chosen to
 # comfortably exceed most slow background calls (~5s observed for AI

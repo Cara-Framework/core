@@ -5,7 +5,7 @@ This mixin provides validation functionality and convenience methods for handlin
 validated data and errors.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.exceptions.types.validation import ValidationException
 from cara.validation import Validation
@@ -25,10 +25,10 @@ class ValidationHelpersMixin:
 
     async def validate(
         self,
-        rules: Dict[str, str],
-        messages: Optional[Dict[str, str]] = None,
-        data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        rules: dict[str, str],
+        messages: dict[str, str] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Validate request data against a dict of field→rule_string.
 
@@ -59,13 +59,13 @@ class ValidationHelpersMixin:
             return False
         return self._validation_instance.fails()
 
-    async def errors(self) -> Dict[str, Any]:
+    async def errors(self) -> dict[str, Any]:
         """Return validation error messages if validation failed."""
         if self._validation_instance is None:
             return {}
         return self._validation_instance.errors()
 
-    async def only(self, *args) -> Dict[str, Any]:
+    async def only(self, *args) -> dict[str, Any]:
         """Return a dict containing only the specified keys from request data."""
         data = await self.all()
         # Handle Laravel-style usage: both list and variadic arguments
@@ -77,7 +77,7 @@ class ValidationHelpersMixin:
             key_list = args
         return {k: data[k] for k in key_list if k in data}
 
-    async def except_(self, *args) -> Dict[str, Any]:
+    async def except_(self, *args) -> dict[str, Any]:
         """Return a dict excluding the specified keys from request data."""
         data = await self.all()
         # Handle Laravel-style usage: both list and variadic arguments

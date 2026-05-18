@@ -9,8 +9,8 @@ Usage Examples:
     @policy("Post", "update")
 """
 
+from collections.abc import Callable
 from functools import wraps
-from typing import Callable, List
 
 from cara.exceptions import AuthorizationFailedException
 from cara.facades import Auth, Gate
@@ -63,7 +63,7 @@ def can(ability: str, *args) -> Callable:
     return decorator
 
 
-def can_any(abilities: List[str], *args) -> Callable:
+def can_any(abilities: list[str], *args) -> Callable:
     """
     🎯 Check multiple permissions (OR logic) - Laravel style
 

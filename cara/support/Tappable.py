@@ -18,7 +18,8 @@ Mirrors ``Illuminate\\Support\\Traits\\Tappable``.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 from .HigherOrderTapProxy import HigherOrderTapProxy
 
@@ -37,8 +38,8 @@ class Tappable:
     """
 
     def tap(
-        self, callback: Optional[Callable[["Tappable"], Any]] = None
-    ) -> Union["Tappable", HigherOrderTapProxy]:
+        self, callback: Callable[[Tappable], Any] | None = None
+    ) -> Tappable | HigherOrderTapProxy:
         """Pass ``self`` through ``callback`` and return ``self``.
 
         Mirrors Laravel's ``$obj->tap(fn ($x) => ...)``. With no
@@ -46,8 +47,8 @@ class Tappable:
         method call on ``self`` but returns ``self`` (single-shot,
         matching Laravel)::
 
-            user.tap().save()         # save() runs on user, chain → user
-            user.tap().save().reload() # reload() runs on user (proxy is one-shot)
+            user.tap().save()  # save() runs on user, chain → user
+            user.tap().save().reload()  # reload() runs on user (proxy is one-shot)
         """
         if callback is None:
             return HigherOrderTapProxy(self)

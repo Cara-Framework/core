@@ -12,7 +12,7 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.mail.contracts import Mail
 
@@ -20,7 +20,7 @@ from cara.mail.contracts import Mail
 class SmtpDriver(Mail):
     driver_name = "smtp"
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize SMTP driver with configuration.
 
@@ -35,7 +35,7 @@ class SmtpDriver(Mail):
         self.encryption = config.get("encryption", "tls")  # tls, ssl, none
         self.timeout = config.get("timeout", 30)
 
-    def send(self, mailable_data: Dict[str, Any]) -> bool:
+    def send(self, mailable_data: dict[str, Any]) -> bool:
         """
         Send email using SMTP.
         """
@@ -56,7 +56,7 @@ class SmtpDriver(Mail):
             self._log_error("SMTP send failed", e)
             return False
 
-    def _create_message(self, data: Dict[str, Any]) -> MIMEMultipart:
+    def _create_message(self, data: dict[str, Any]) -> MIMEMultipart:
         """
         Create email message from mailable data.
         """
@@ -106,7 +106,7 @@ class SmtpDriver(Mail):
 
         return msg
 
-    def _render_view(self, template: str, data: Dict[str, Any]) -> Optional[str]:
+    def _render_view(self, template: str, data: dict[str, Any]) -> str | None:
         """
         Render view template. This is a placeholder implementation.
         """
@@ -116,7 +116,7 @@ class SmtpDriver(Mail):
             f"<html><body><h1>Email Template: {template}</h1><p>{data}</p></body></html>"
         )
 
-    def _add_attachment(self, msg: MIMEMultipart, attachment: Dict[str, str]) -> None:
+    def _add_attachment(self, msg: MIMEMultipart, attachment: dict[str, str]) -> None:
         """
         Add file attachment to message.
         """

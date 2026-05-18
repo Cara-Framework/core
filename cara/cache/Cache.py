@@ -7,7 +7,7 @@ operations to the appropriate driver instance.
 Supports Laravel-style cache tags and cache locks for distributed systems.
 """
 
-from typing import Any, List, Optional
+from typing import Any
 
 from cara.cache.contracts import Cache
 from cara.exceptions import DriverNotRegisteredException
@@ -20,7 +20,7 @@ class CacheLock:
     Prevents race conditions in distributed systems using cache as storage.
     """
 
-    def __init__(self, cache, key: str, timeout: int = 86400, owner: Optional[str] = None):
+    def __init__(self, cache, key: str, timeout: int = 86400, owner: str | None = None):
         """
         Initialize a cache lock.
 
@@ -75,6 +75,7 @@ class CacheLock:
         while we wait.
         """
         import time
+
         start = time.time()
 
         while True:
@@ -97,6 +98,7 @@ class CacheLock:
         """
         import asyncio
         import time
+
         start = time.time()
 
         while True:
@@ -124,6 +126,7 @@ class CacheLock:
         # yet — preserves prior behaviour but has a TOCTOU race window.
         # Drivers should implement ``forget_if`` for safe distributed locks.
         import logging
+
         logging.getLogger("cara.cache").warning(
             "CacheLock: driver %s lacks forget_if(); using non-atomic fallback. "
             "Implement forget_if() for safe distributed lock release.",
@@ -175,7 +178,7 @@ class CacheTaggedStore:
     Allows grouping cache entries by tags for bulk invalidation.
     """
 
-    def __init__(self, cache, tags: List[str]):
+    def __init__(self, cache, tags: list[str]):
         """
         Initialize tagged cache store.
 
@@ -195,7 +198,7 @@ class CacheTaggedStore:
         """Get value from tagged cache."""
         return self.cache.get(self._build_tagged_key(key), default)
 
-    def put(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+    def put(self, key: str, value: Any, ttl: int | None = None) -> None:
         """Store value in tagged cache."""
         self.cache.put(self._build_tagged_key(key), value, ttl)
 
@@ -226,13 +229,13 @@ class Cache:
         self.application = application
         self._stores: dict[str, Cache] = {}
         self._default_driver: str = default_driver
-        self._tags: List[str] = []
+        self._tags: list[str] = []
 
     def add_driver(self, driver_name: str, driver: Cache) -> None:
         """Register a driver instance under `driver_name`."""
         self._stores[driver_name] = driver
 
-    def driver(self, name: Optional[str] = None) -> Cache:
+    def driver(self, name: str | None = None) -> Cache:
         """
         Get a cache driver instance by name.
 
@@ -251,7 +254,7 @@ class Cache:
         self,
         key: str,
         default: Any = None,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
     ) -> Any:
         """Retrieve a value from cache via the given driver (or default)."""
         return self.driver(driver_name).get(key, default)
@@ -260,8 +263,8 @@ class Cache:
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None,
-        driver_name: Optional[str] = None,
+        ttl: int | None = None,
+        driver_name: str | None = None,
     ) -> None:
         """Store a value under `key` with optional TTL (seconds) via the given driver."""
         self.driver(driver_name).put(key, value, ttl)
@@ -270,12 +273,12 @@ class Cache:
         self,
         key: str,
         value: Any,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
     ) -> None:
         """Store a value permanently (no expiration) via the given driver."""
         self.driver(driver_name).forever(key, value)
 
-    def forget(self, key: str, driver_name: Optional[str] = None) -> bool:
+    def forget(self, key: str, driver_name: str | None = None) -> bool:
         """
         Remove a key from cache via the given driver.
 
@@ -283,11 +286,11 @@ class Cache:
         """
         return self.driver(driver_name).forget(key)
 
-    def flush(self, driver_name: Optional[str] = None) -> None:
+    def flush(self, driver_name: str | None = None) -> None:
         """Flush (clear) all entries from the given driver."""
         self.driver(driver_name).flush()
 
-    def has(self, key: str, driver_name: Optional[str] = None) -> bool:
+    def has(self, key: str, driver_name: str | None = None) -> bool:
         """Check if a key exists in cache via the given driver."""
         return self.driver(driver_name).has(key)
 
@@ -295,8 +298,8 @@ class Cache:
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None,
-        driver_name: Optional[str] = None,
+        ttl: int | None = None,
+        driver_name: str | None = None,
     ) -> bool:
         """Add a value only if key doesn't exist via the given driver."""
         return self.driver(driver_name).add(key, value, ttl)
@@ -306,7 +309,7 @@ class Cache:
         key: str,
         ttl: int,
         callback,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         *,
         stampede_lock_seconds: int = 30,
     ) -> Any:
@@ -385,7 +388,7 @@ class Cache:
         driver.put(key, value, ttl)
         return value
 
-    def forget_pattern(self, pattern: str, driver_name: Optional[str] = None) -> int:
+    def forget_pattern(self, pattern: str, driver_name: str | None = None) -> int:
         """
         Delete multiple keys matching a pattern.
 
@@ -399,7 +402,9 @@ class Cache:
         return self.driver(driver_name).forget_pattern(pattern)
 
     def forget_by_prefix(
-        self, prefix: str, driver_name: Optional[str] = None,
+        self,
+        prefix: str,
+        driver_name: str | None = None,
     ) -> int:
         """
         Delete every key starting with ``prefix``.
@@ -411,7 +416,7 @@ class Cache:
         """
         return self.driver(driver_name).forget_pattern(f"{prefix}*")
 
-    def ttl(self, key: str, driver_name: Optional[str] = None) -> Optional[int]:
+    def ttl(self, key: str, driver_name: str | None = None) -> int | None:
         """
         Remaining seconds-to-live for ``key``.
 
@@ -439,8 +444,8 @@ class Cache:
         self,
         key: str,
         amount: int = 1,
-        ttl: Optional[int] = None,
-        driver_name: Optional[str] = None,
+        ttl: int | None = None,
+        driver_name: str | None = None,
     ) -> int:
         """
         Atomically increment a counter at ``key`` by ``amount``.
@@ -457,8 +462,8 @@ class Cache:
         self,
         key: str,
         amount: int = 1,
-        ttl: Optional[int] = None,
-        driver_name: Optional[str] = None,
+        ttl: int | None = None,
+        driver_name: str | None = None,
     ) -> int:
         """
         Atomically decrement a counter at ``key`` by ``amount``.
@@ -470,7 +475,7 @@ class Cache:
         """
         return self.driver(driver_name).increment(key, -int(amount), ttl)
 
-    def tags(self, *tags: str, driver_name: Optional[str] = None) -> "CacheTaggedStore":
+    def tags(self, *tags: str, driver_name: str | None = None) -> CacheTaggedStore:
         """
         Tag cache entries for bulk invalidation (Laravel-style).
 
@@ -492,8 +497,8 @@ class Cache:
         self,
         key: str,
         timeout: int = 86400,
-        owner: Optional[str] = None,
-        driver_name: Optional[str] = None,
+        owner: str | None = None,
+        driver_name: str | None = None,
     ) -> CacheLock:
         """
         Get a distributed cache lock (Laravel-style).

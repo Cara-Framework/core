@@ -6,17 +6,17 @@ extraction functionality in the Cara framework.
 """
 
 import re
-from typing import Dict, Any, List
+from typing import Any
 
 
 class RouteCompiler:
     """Handles route compilation and parameter extraction."""
 
-    def __init__(self, url: str, compilers: Dict[str, str]):
+    def __init__(self, url: str, compilers: dict[str, str]):
         self._compiled_regex = None
-        self.url_list: List[str] = []
+        self.url_list: list[str] = []
         # Maps parameter name → compiler type name (e.g. "id" → "int")
-        self.param_types: Dict[str, str] = {}
+        self.param_types: dict[str, str] = {}
         self.compilers = compilers or {"default": r"([^/]+)"}
         self.compile_route(url)
 
@@ -24,7 +24,7 @@ class RouteCompiler:
         """Compile a route URL into a regex, tracking parameter names."""
         parts = url.strip("/").split("/")
         regex = "^"
-        url_list: List[str] = []
+        url_list: list[str] = []
 
         for part in parts:
             if part == "":
@@ -60,7 +60,7 @@ class RouteCompiler:
         self._compiled_regex = re.compile(regex)
         return regex
 
-    def extract_parameters(self, path: str) -> Dict[str, Any]:
+    def extract_parameters(self, path: str) -> dict[str, Any]:
         """Extract parameters from a given path using the compiled regex."""
         if not self._compiled_regex:
             return {}
@@ -70,7 +70,7 @@ class RouteCompiler:
             return {}
 
         raw_groups = match.groups()
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         # Iterate over named positions. Optional params stay None when missing
         # (not empty string) so callers can distinguish "absent" from "empty".
         for idx, name in enumerate(self.url_list):

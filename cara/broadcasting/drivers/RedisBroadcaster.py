@@ -43,7 +43,7 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any
 
 try:
     import redis.asyncio as redis_async
@@ -58,7 +58,6 @@ from cara.broadcasting.contracts.Broadcaster import Broadcaster
 from cara.exceptions import BroadcastingConfigurationException
 from cara.facades import Log
 
-
 # Pubsub channel name for per-user broadcasts. ``broadcast_to_user``
 # publishes here; nodes auto-subscribe whenever they hold a connection
 # for the relevant user. The ``__user:`` prefix is private to the
@@ -70,8 +69,8 @@ class _SafeEncoder(json.JSONEncoder):
     """JSON encoder that handles Decimal/datetime values from ORM models."""
 
     def default(self, o):
-        from decimal import Decimal
         import datetime
+        from decimal import Decimal
 
         if isinstance(o, Decimal):
             return float(o)
@@ -90,7 +89,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
 
     driver_name = "redis"
 
-    def __init__(self, config: Dict[str, Any], redis_url: Optional[str] = None) -> None:
+    def __init__(self, config: dict[str, Any], redis_url: str | None = None) -> None:
         super().__init__(config)
 
         if redis_async is None:
@@ -114,18 +113,18 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
 
         # Currently-subscribed Redis channels (prefixed). Source of
         # truth for resubscribe-on-reconnect.
-        self._redis_subscribed: Set[str] = set()
+        self._redis_subscribed: set[str] = set()
 
         # Per-loop Redis clients. asyncio doesn't allow sharing a
         # client across event loops, so workers that briefly create
         # their own loop (queue runners, scripts) get their own.
-        self._redis_clients: Dict[int, Any] = {}
-        self._redis_pools: Dict[int, Any] = {}
+        self._redis_clients: dict[int, Any] = {}
+        self._redis_pools: dict[int, Any] = {}
 
         # Listener bookkeeping. ``_listener_task`` is the long-running
         # asyncio.Task that drains pubsub messages; ``_listener_pubsub``
         # is the active pubsub object it owns.
-        self._listener_task: Optional[asyncio.Task] = None
+        self._listener_task: asyncio.Task | None = None
         self._listener_pubsub: Any = None
         self._listener_ready: asyncio.Event = asyncio.Event()
         self._listener_lock: asyncio.Lock = asyncio.Lock()
@@ -171,18 +170,20 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         return channel if channel.startswith(self._prefix) else f"{self._prefix}{channel}"
 
     def _unprefixed(self, channel: str) -> str:
-        return channel[len(self._prefix) :] if channel.startswith(self._prefix) else channel
+        return (
+            channel[len(self._prefix) :] if channel.startswith(self._prefix) else channel
+        )
 
     # ------------------------------------------------------------------
     # Broadcast
     # ------------------------------------------------------------------
     async def broadcast(
         self,
-        channels: Union[str, List[str]],
+        channels: str | list[str],
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         if isinstance(channels, str):
             channels = [channels]
@@ -191,7 +192,9 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         # on the table.
         await asyncio.gather(
             *(
-                self._broadcast_one(channel, event, data, except_socket_id=except_socket_id)
+                self._broadcast_one(
+                    channel, event, data, except_socket_id=except_socket_id
+                )
                 for channel in channels
             )
         )
@@ -200,9 +203,9 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         self,
         channel: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         unprefixed = self._unprefixed(channel)
 
@@ -248,9 +251,9 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         self,
         user_id: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         # Local delivery first — same reasoning as ``_broadcast_one``.
         await self.broadcast_to_user_local(
@@ -269,7 +272,9 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 cls=_SafeEncoder,
             )
             client = await self._redis()
-            await client.publish(self._prefixed(f"{_USER_CHANNEL_PREFIX}{user_id}"), payload)
+            await client.publish(
+                self._prefixed(f"{_USER_CHANNEL_PREFIX}{user_id}"), payload
+            )
         except Exception as e:
             Log.debug(
                 f"Redis publish to user {user_id} failed (local delivery succeeded): {e}",
@@ -284,8 +289,8 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         self,
         connection_id: str,
         websocket: Any,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         await super().add_connection(connection_id, websocket, user_id, metadata)
         # First connection for this user → ensure our listener is on
@@ -360,7 +365,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 # when Redis is unreachable.
                 try:
                     await asyncio.wait_for(self._listener_ready.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     Log.warning(
                         "Redis listener didn't become ready within 5s; "
                         "broadcasts may briefly miss subscribers",
@@ -396,7 +401,11 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 )
         # Optimisation: if we no longer have any subscriptions, the
         # listener can shut down to free a connection.
-        if not self._redis_subscribed and self._listener_task and not self._listener_task.done():
+        if (
+            not self._redis_subscribed
+            and self._listener_task
+            and not self._listener_task.done()
+        ):
             Log.info(
                 "Redis listener idle (no subscriptions); shutting down",
                 category="cara.broadcasting",
@@ -445,7 +454,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                     self._listener_pubsub = None
                 self._listener_ready.clear()
 
-    async def _dispatch_pubsub_message(self, message: Dict[str, Any]) -> None:
+    async def _dispatch_pubsub_message(self, message: dict[str, Any]) -> None:
         """Decode an incoming pubsub frame and deliver it locally.
 
         Skips frames originated by this node (already delivered
@@ -524,7 +533,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             self._listener_task.cancel()
             try:
                 await self._listener_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError, Exception:
                 pass
 
         if self._listener_pubsub is not None:

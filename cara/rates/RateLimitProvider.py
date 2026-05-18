@@ -5,7 +5,7 @@ This module provides the deferred service provider that configures and registers
 functionality, making the RateLimiter available throughout the application based on configuration.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 from cara.configuration import config
 from cara.exceptions import RateLimitConfigurationException
@@ -21,12 +21,12 @@ class RateLimitProvider(DeferredProvider):
     """
 
     @classmethod
-    def provides(cls) -> List[str]:
+    def provides(cls) -> list[str]:
         return ["rate"]
 
     def register(self) -> None:
         default_driver = config("rate.default", None)
-        drivers_cfg: Dict[str, Any] = config("rate.drivers", {})
+        drivers_cfg: dict[str, Any] = config("rate.drivers", {})
 
         if not default_driver or default_driver not in drivers_cfg:
             raise RateLimitConfigurationException(

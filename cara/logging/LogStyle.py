@@ -76,9 +76,7 @@ class HttpColorizer:
         """Get color for HTTP status code."""
         if 200 <= status_code < 300:
             return "\x1b[38;5;114m"  # Green
-        elif 300 <= status_code < 400:
-            return "\x1b[38;5;220m"  # Yellow
-        elif 400 <= status_code < 500:
+        elif 300 <= status_code < 400 or 400 <= status_code < 500:
             return "\x1b[38;5;220m"  # Yellow
         else:
             return "\x1b[38;5;204m"  # Red

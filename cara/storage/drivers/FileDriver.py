@@ -47,9 +47,7 @@ class FileDriver(Storage):
             with open(file_path, "wb") as f:
                 f.write(data)
         except Exception as e:
-            raise StorageException(
-                f"Failed to write data for key '{key}': {e}"
-            ) from e
+            raise StorageException(f"Failed to write data for key '{key}': {e}") from e
 
     def get(self, key: str) -> bytes:
         file_path = self._file_path(key)
@@ -59,9 +57,7 @@ class FileDriver(Storage):
             with open(file_path, "rb") as f:
                 return f.read()
         except Exception as e:
-            raise StorageException(
-                f"Failed to read data for key '{key}': {e}"
-            ) from e
+            raise StorageException(f"Failed to read data for key '{key}': {e}") from e
 
     def delete(self, key: str) -> bool:
         file_path = self._file_path(key)

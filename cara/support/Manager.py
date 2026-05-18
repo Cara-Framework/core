@@ -17,19 +17,26 @@ unknown attribute access to the default driver, so callers can
 write ``cache.get(key)`` instead of ``cache.driver().get(key)``::
 
     class CacheManager(Manager):
-        def get_default_driver(self) -> str: return "redis"
-        def create_redis_driver(self): return RedisStore(...)
-        def create_array_driver(self): return ArrayStore()
+        def get_default_driver(self) -> str:
+            return "redis"
+
+        def create_redis_driver(self):
+            return RedisStore(...)
+
+        def create_array_driver(self):
+            return ArrayStore()
+
 
     cache = CacheManager(app)
-    cache.driver().get("k")          # uses redis (default)
+    cache.driver().get("k")  # uses redis (default)
     cache.driver("array").put("k", 1)  # explicit driver
-    cache.get("k")                   # auto-forwards to default
+    cache.get("k")  # auto-forwards to default
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 
 class Manager:
@@ -39,10 +46,10 @@ class Manager:
         self.application = application
         # Per-name memoised driver instances. Keys are normalised
         # driver names (the same value passed to :meth:`driver`).
-        self._drivers: Dict[str, Any] = {}
+        self._drivers: dict[str, Any] = {}
         # Custom driver factories registered at runtime via
         # :meth:`extend` — Laravel ``Manager::extend`` parity.
-        self._custom_creators: Dict[str, Callable[[Any], Any]] = {}
+        self._custom_creators: dict[str, Callable[[Any], Any]] = {}
 
     # ── Subclass contract ───────────────────────────────────────────
 
@@ -54,19 +61,17 @@ class Manager:
 
     # ── Public API ──────────────────────────────────────────────────
 
-    def driver(self, name: Optional[str] = None) -> Any:
+    def driver(self, name: str | None = None) -> Any:
         """Return (and lazily build) the named driver."""
         if name is None:
             name = self.get_default_driver()
         if not name:
-            raise ValueError(
-                f"{type(self).__name__} has no default driver configured"
-            )
+            raise ValueError(f"{type(self).__name__} has no default driver configured")
         if name not in self._drivers:
             self._drivers[name] = self._resolve(name)
         return self._drivers[name]
 
-    def extend(self, name: str, callback: Callable[[Any], Any]) -> "Manager":
+    def extend(self, name: str, callback: Callable[[Any], Any]) -> Manager:
         """Register a custom driver factory.
 
         ``callback(application) -> driver`` mirrors Laravel's
@@ -88,7 +93,7 @@ class Manager:
         """Discard every memoised driver — Laravel ``forgetDrivers``."""
         self._drivers.clear()
 
-    def get_drivers(self) -> Dict[str, Any]:
+    def get_drivers(self) -> dict[str, Any]:
         """Return a snapshot of currently-instantiated drivers."""
         return dict(self._drivers)
 

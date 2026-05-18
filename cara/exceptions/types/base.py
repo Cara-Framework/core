@@ -11,4 +11,3 @@ class CaraException(Exception):
 __all__ = [
     "CaraException",
 ]
-

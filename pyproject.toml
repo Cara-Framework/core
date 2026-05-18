@@ -1,0 +1,74 @@
+[project]
+name = "cara-framework"
+version = "0.1.0"
+description = "Cara — Laravel-inspired async ASGI Python framework"
+requires-python = ">=3.14"
+
+# Framework code is the foundation api/ and services/ build on, so the
+# lint surface MUST match the two consumer trees — drift here means a
+# pattern caught downstream slips upstream into the framework. Synced
+# with ``../../../services/pyproject.toml`` + ``../../../api/pyproject.toml``.
+
+[tool.ruff]
+line-length = 90
+target-version = "py314"
+fix = true
+exclude = [
+    "venv",
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".pytest_cache",
+    ".ruff_cache",
+    "cara_framework.egg-info",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+
+[tool.ruff.lint]
+# Matches the api + services selection: E/W (pycodestyle), F (pyflakes),
+# I (isort), B (bugbear), UP (pyupgrade), SIM (simplify). Framework-level
+# code should be EXEMPLARY — running the same rule set keeps the
+# foundation honest.
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+
+# Per-rule carve-outs match the consumer trees so the framework
+# doesn't accidentally enforce stricter or looser policy than its
+# users.
+#
+#   E501   — line-too-long; governed by ``line-length = 90`` already.
+#   B008   — function-call-in-default-argument; legit for
+#            ``param = Field(default_factory=...)`` patterns.
+#   B027   — empty-method-without-abstract-decorator; mixins that
+#            document extension points but don't enforce them.
+#   B904   — raise-without-from-inside-except; preserved via
+#            ``__cause__`` already.
+#   UP015  — redundant ``open(file, "r")`` mode; stylistic.
+#   SIM108 — ternary-vs-if-else; multi-line forms preferred in
+#            framework code for readability.
+ignore = ["E501", "B008", "B027", "B904", "UP015", "SIM108"]
+
+[tool.ruff.lint.isort]
+# Framework code only depends on stdlib + third-party — there is no
+# ``cara`` "framework" section from cara's own POV (cara IS the
+# framework). All cara modules are first-party from within this tree.
+known-first-party = ["cara"]
+
+[tool.ruff.lint.per-file-ignores]
+# __init__.py files often re-export symbols intentionally; the
+# unused-import + sort-imports rules would force redundant aliases or
+# break the documented load order.
+"__init__.py" = ["F401", "F403", "I001", "I002"]
+# Test fixtures legitimately use ``Exception`` as catch-all to assert
+# error surfaces; bugbear B017/B018 fire on intentional patterns.
+"tests/**/*.py" = ["B017", "B018"]
+# ``cara/eloquent/query/QueryBuilder.py`` is one of the framework's
+# two intentional circular-dependency unwinds (the other lives in
+# ``builders/SelectBuilder.py``). The late-imports are documented
+# inline; turning the lints on here would force a multi-day refactor
+# of the entire eloquent module.
+"cara/eloquent/query/QueryBuilder.py" = ["E402", "F401", "F403", "F405"]
+"cara/eloquent/query/builders/SelectBuilder.py" = ["F821", "F401"]

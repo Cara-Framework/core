@@ -24,7 +24,8 @@ threaded through unchanged.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Type, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -61,7 +62,7 @@ def it(description: str) -> Callable[[F], F]:
     return decorator
 
 
-def describe(description: str) -> Callable[[Type[Any]], Type[Any]]:
+def describe(description: str) -> Callable[[type[Any]], type[Any]]:
     """Mark a class as a Pest-style suite.
 
     Renames the class to ``Test<Slug>`` so pytest collects it as a
@@ -69,9 +70,11 @@ def describe(description: str) -> Callable[[Type[Any]], Type[Any]]:
     convention.
     """
 
-    def decorator(cls: Type[Any]) -> Type[Any]:
+    def decorator(cls: type[Any]) -> type[Any]:
         # Camel-case the slug so reporters look natural.
-        slug = "".join(word.capitalize() for word in re.split(r"[^0-9a-zA-Z]+", description))
+        slug = "".join(
+            word.capitalize() for word in re.split(r"[^0-9a-zA-Z]+", description)
+        )
         if not slug:
             slug = "Anonymous"
         cls.__name__ = f"Test{slug}"

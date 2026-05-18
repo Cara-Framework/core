@@ -5,7 +5,7 @@ Any cache driver (file, redis, etc.) must implement these methods. This ensures 
 (get, put, forever, forget, flush) across drivers.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class Cache:
@@ -29,7 +29,7 @@ class Cache:
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> None:
         raise NotImplementedError
 
@@ -50,7 +50,7 @@ class Cache:
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> bool:
         """Add a value only if key doesn't exist. Returns True if added."""
         raise NotImplementedError
@@ -89,7 +89,7 @@ class Cache:
         """
         raise NotImplementedError
 
-    def increment(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+    def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
         """Atomically increment a key by ``amount``. Returns the new value.
 
         If the key does not exist it is initialised to 0 before

@@ -2,7 +2,7 @@
 Policy - Base policy class for authorization policies.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from cara.authorization.contracts import Policy
 
@@ -18,7 +18,7 @@ class Policy(Policy):
         """
         pass
 
-    def before(self, user: Any, ability: str, *args) -> Optional[bool]:
+    def before(self, user: Any, ability: str, *args) -> bool | None:
         """
         Perform pre-authorization checks.
         This method runs before any ability checks.
@@ -27,7 +27,7 @@ class Policy(Policy):
         # No default authorization logic - this should be defined in app code
         return None
 
-    def after(self, user: Any, ability: str, result: bool, *args) -> Optional[bool]:
+    def after(self, user: Any, ability: str, result: bool, *args) -> bool | None:
         """
         Perform post-authorization checks.
         This method runs after the ability check is complete.

@@ -54,13 +54,13 @@ def humanize_seconds(seconds: int) -> str:
     Convert an integer number of seconds into a human-readable string.
 
     Breaks down into days, hours, minutes, seconds. Only includes non-zero components.
-    
+
     Args:
         seconds: Number of seconds to convert
-        
+
     Returns:
         Human-readable string representation
-        
+
     Examples:
         >>> humanize_seconds(273132)
         '3 days 3 hours 52 minutes 12 seconds'
@@ -95,13 +95,13 @@ def format_duration(seconds: int) -> str:
     Format seconds into a compact duration string.
 
     Uses format like "1h 23m 45s". Only includes non-zero components.
-    
+
     Args:
         seconds: Number of seconds to format
-        
+
     Returns:
         Compact duration string
-        
+
     Examples:
         >>> format_duration(273132)
         '3d 3h 52m 12s'
@@ -167,6 +167,7 @@ def to_pendulum(dt):
     except Exception as e:
         try:
             from cara.facades import Log
+
             Log.warning(
                 f"[Time.to_pendulum] coercion failed for value={dt!r}: "
                 f"{e.__class__.__name__}: {e}",

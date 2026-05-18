@@ -2,6 +2,7 @@
 OrderByClause - Simple ORDER BY clause component
 """
 
+
 class OrderByClause:
     """Simple ORDER BY clause representation."""
 
@@ -14,4 +15,3 @@ class OrderByClause:
 
     def to_sql(self) -> str:
         return str(self)
-

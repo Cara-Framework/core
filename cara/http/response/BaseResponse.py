@@ -6,7 +6,7 @@ Laravel-inspired design with clean separation of concerns.
 """
 
 import json
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 from cara.http.request import HeaderBag
 from cara.support.Http import HTTP_STATUS_CODES
@@ -34,7 +34,7 @@ class BaseResponse:
         self.header_bag = HeaderBag()
         self._sent = False
 
-    def clone_from(self, other: "BaseResponse") -> None:
+    def clone_from(self, other: BaseResponse) -> None:
         """Clone all attributes from another BaseResponse object."""
         self.application = other.application
         self.content = other.content
@@ -47,7 +47,7 @@ class BaseResponse:
         """Check if response has been sent."""
         return self._sent
 
-    async def __call__(self, scope: Dict, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         """Handle ASGI response."""
         if self._sent:
             return
@@ -64,7 +64,7 @@ class BaseResponse:
         if not isinstance(self.content, bytes):
             self.content = str(self.content).encode("utf-8")
 
-    async def _send_response(self, scope: Dict, receive: Any, send: Any) -> None:
+    async def _send_response(self, scope: dict, receive: Any, send: Any) -> None:
         """Send the response through ASGI interface."""
         headers = self.get_headers()
         await send(
@@ -153,7 +153,7 @@ class BaseResponse:
     # BASIC PROPERTIES AND METHODS
     # =============================================================================
 
-    def status(self, status: Union[str, int]) -> "BaseResponse":
+    def status(self, status: str | int) -> BaseResponse:
         """Laravel-style status setter."""
         self._status = int(status)
         return self
@@ -177,11 +177,11 @@ class BaseResponse:
             return self.content
         return str(self.content).encode("utf-8")
 
-    def get_headers(self) -> List[Tuple[bytes, bytes]]:
+    def get_headers(self) -> list[tuple[bytes, bytes]]:
         """Get all headers as list of byte tuples for ASGI."""
         return [(k.encode(), str(v).encode()) for k, v in self.header_bag.all().items()]
 
-    def set_content(self, content: Union[str, bytes]) -> "BaseResponse":
+    def set_content(self, content: str | bytes) -> BaseResponse:
         """
         Laravel-style content setter method.
 

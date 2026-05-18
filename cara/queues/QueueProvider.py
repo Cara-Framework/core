@@ -5,7 +5,7 @@ This module provides the deferred service provider that configures and registers
 subsystem, including various queue drivers.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from cara.configuration import config
 from cara.exceptions import QueueConfigurationException
@@ -16,7 +16,7 @@ from cara.queues.drivers import AMQPDriver, AsyncDriver, DatabaseDriver, RedisDr
 
 class QueueProvider(DeferredProvider):
     @classmethod
-    def provides(cls) -> List[str]:
+    def provides(cls) -> list[str]:
         return ["queue", "JobTracker"]
 
     def register(self) -> None:
@@ -110,6 +110,7 @@ class QueueProvider(DeferredProvider):
             driver.declare_dead_letter_exchange()
         except Exception as exc:
             from cara.facades import Log
+
             Log.warning(
                 f"Failed to declare dead-letter exchange at boot: {exc}. "
                 f"Failed messages will be silently dropped until the DLX "
@@ -136,7 +137,7 @@ class QueueProvider(DeferredProvider):
     def _add_redis_driver(
         self,
         queue_manager: Queue,
-        settings: Optional[Dict[str, Any]],
+        settings: dict[str, Any] | None,
     ) -> None:
         """Register Redis queue driver with configuration."""
         if not settings:

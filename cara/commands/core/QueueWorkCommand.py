@@ -14,7 +14,7 @@ import os
 import pickle
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.commands import CommandBase
 from cara.commands.AutoReloadMixin import AutoReloadMixin
@@ -31,7 +31,9 @@ except Exception:  # pragma: no cover
     _M = None  # type: ignore[assignment]
 
 
-def _queue_label(msg: Optional[dict], instance: Any = None, queue_name: Optional[str] = None) -> str:
+def _queue_label(
+    msg: dict | None, instance: Any = None, queue_name: str | None = None
+) -> str:
     """Best-effort queue label for the current message (bounded cardinality).
 
     Priority order:
@@ -53,7 +55,7 @@ def _queue_label(msg: Optional[dict], instance: Any = None, queue_name: Optional
     return "unknown"
 
 
-def _job_label(instance: Any, msg: Optional[dict]) -> str:
+def _job_label(instance: Any, msg: dict | None) -> str:
     """Class-name label for the running job."""
     if instance is not None:
         return instance.__class__.__name__
@@ -62,6 +64,7 @@ def _job_label(instance: Any, msg: Optional[dict]) -> str:
         if isinstance(obj_ref, str):
             return obj_ref.rsplit(".", 1)[-1] or "unknown"
     return "unknown"
+
 
 # Silence pika's remote Channel.Close (404) warnings — worker polls a
 # superset of queue names via wildcards, so "queue doesn't exist" on a
@@ -194,9 +197,7 @@ class JobProcessor:
             # Cancel the future (best-effort) and allow a short grace
             # period for thread cleanup (DB rollback, lock release).
             future.cancel()
-            raise TimeoutError(
-                f"Job exceeded timeout of {timeout_seconds}s"
-            )
+            raise TimeoutError(f"Job exceeded timeout of {timeout_seconds}s")
         finally:
             # Give worker thread up to 5s to release resources, then
             # abandon. True wait prevents the pool-leak that wait=False
@@ -208,7 +209,7 @@ class JobProcessor:
         """Execute async job with timeout enforcement."""
         try:
             asyncio.run(method_to_call(*init_args))
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
 
     @staticmethod
@@ -225,7 +226,9 @@ class JobProcessor:
         """NACK message with requeue to put it back in queue."""
         try:
             channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
-            Log.info(f"↻ Job requeued for retry (attempt {msg.get('attempt', 1)}/{msg.get('attempts', 1)})")
+            Log.info(
+                f"↻ Job requeued for retry (attempt {msg.get('attempt', 1)}/{msg.get('attempts', 1)})"
+            )
         except Exception as e:
             Log.error(f"Failed to NACK with requeue: {e}")
             # Fallback: ACK to prevent infinite loop
@@ -239,12 +242,16 @@ class JobProcessor:
             # Log to DLQ-style pattern for monitoring
             dlq_queue = f"{msg.get('queue', 'unknown')}.dlq" if msg else "unknown.dlq"
             job_id = msg.get("job_id", "unknown") if msg else "unknown"
-            Log.error(f"💀 Job moved to DLQ: {job_id} | Queue: {dlq_queue} | Error: {error_msg}")
+            Log.error(
+                f"💀 Job moved to DLQ: {job_id} | Queue: {dlq_queue} | Error: {error_msg}"
+            )
         except Exception as e:
             Log.error(f"Failed to ACK message: {e}")
 
     @staticmethod
-    def process_message(channel, method_frame, body, queue_name: Optional[str] = None) -> bool:
+    def process_message(
+        channel, method_frame, body, queue_name: str | None = None
+    ) -> bool:
         """Process a single queue message and return success status.
 
         ``queue_name`` is the queue the worker dequeued from. Used as
@@ -269,14 +276,18 @@ class JobProcessor:
             _mx_recorded = True
             try:
                 _M.queue_jobs_consumed_total.labels(
-                    queue=_mx_queue, job=_mx_job, outcome=outcome,
+                    queue=_mx_queue,
+                    job=_mx_job,
+                    outcome=outcome,
                 ).inc()
                 _M.queue_job_duration_seconds.labels(
-                    queue=_mx_queue, job=_mx_job,
+                    queue=_mx_queue,
+                    job=_mx_job,
                 ).observe(time.time() - _mx_start)
                 if _mx_inflight_entered:
                     _M.queue_jobs_in_flight.labels(
-                        queue=_mx_queue, job=_mx_job,
+                        queue=_mx_queue,
+                        job=_mx_job,
                     ).dec()
             except Exception:
                 pass
@@ -285,7 +296,9 @@ class JobProcessor:
 
         # CRITICAL FIX #4: Validate payload size before unpickling
         if len(body) > JobProcessor.MAX_PAYLOAD_SIZE:
-            Log.error(f"❌ Payload exceeds max size ({len(body)} > {JobProcessor.MAX_PAYLOAD_SIZE})")
+            Log.error(
+                f"❌ Payload exceeds max size ({len(body)} > {JobProcessor.MAX_PAYLOAD_SIZE})"
+            )
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
             _mx_record("oversized")
             return False
@@ -329,8 +342,14 @@ class JobProcessor:
                         if not init_kwargs:
                             # Try to extract constructor args from the
                             # payload itself (e.g. product_id, asin).
-                            for key in ("product_id", "asin", "container_id",
-                                        "url", "keyword", "category_id"):
+                            for key in (
+                                "product_id",
+                                "asin",
+                                "container_id",
+                                "url",
+                                "keyword",
+                                "category_id",
+                            ):
                                 if key in msg and key != "obj":
                                     init_kwargs[key] = msg[key]
                         try:
@@ -360,6 +379,7 @@ class JobProcessor:
             if _dispatched_at and isinstance(_dispatched_at, str):
                 try:
                     import pendulum
+
                     dt = pendulum.parse(_dispatched_at)
                     wait_secs = max((pendulum.now("UTC") - dt).total_seconds(), 0)
                     if hasattr(instance, "__dict__"):
@@ -375,7 +395,8 @@ class JobProcessor:
             if _M is not None:
                 try:
                     _M.queue_jobs_in_flight.labels(
-                        queue=_mx_queue, job=_mx_job,
+                        queue=_mx_queue,
+                        job=_mx_job,
                     ).inc()
                     _mx_inflight_entered = True
                 except Exception:
@@ -383,7 +404,8 @@ class JobProcessor:
                 if wait_secs is not None:
                     try:
                         _M.queue_wait_seconds.labels(
-                            queue=_mx_queue, job=_mx_job,
+                            queue=_mx_queue,
+                            job=_mx_job,
                         ).observe(wait_secs)
                     except Exception:
                         pass
@@ -431,6 +453,7 @@ class JobProcessor:
                 from cara.queues.middleware import run_through_middleware_async
 
                 if inspect.iscoroutinefunction(method_to_call):
+
                     async def _async_handler(_job, _m=method_to_call, _args=init_args):
                         if app_instance is not None:
                             return await app_instance.call(_m, *_args)
@@ -439,9 +462,12 @@ class JobProcessor:
                     try:
                         coro = run_through_middleware_async(instance, _async_handler)
                         asyncio.run(asyncio.wait_for(coro, timeout=job_timeout))
-                    except asyncio.TimeoutError as e:
-                        raise TimeoutError(f"Job exceeded timeout of {job_timeout}s") from e
+                    except TimeoutError as e:
+                        raise TimeoutError(
+                            f"Job exceeded timeout of {job_timeout}s"
+                        ) from e
                 else:
+
                     async def _sync_handler(_job, _m=method_to_call, _args=init_args):
                         if app_instance is not None:
                             return app_instance.call(_m, *_args)
@@ -496,7 +522,7 @@ class JobProcessor:
             # Try to call failed method
             try:
                 if instance and hasattr(instance, "failed"):
-                    failed_method = getattr(instance, "failed")
+                    failed_method = instance.failed
                     if inspect.iscoroutinefunction(failed_method):
                         asyncio.run(failed_method(msg, str(timeout_error)))
                     else:
@@ -509,6 +535,7 @@ class JobProcessor:
 
         except Exception as job_error:
             import traceback
+
             Log.error(f"❌ Job failed: {str(job_error)}")
             Log.error(f"   Traceback: {traceback.format_exc()}")
 
@@ -535,7 +562,7 @@ class JobProcessor:
             # Try to call failed method
             try:
                 if instance and hasattr(instance, "failed"):
-                    failed_method = getattr(instance, "failed")
+                    failed_method = instance.failed
                     if inspect.iscoroutinefunction(failed_method):
                         asyncio.run(failed_method(msg, str(job_error)))
                     else:
@@ -576,6 +603,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # workers don't hit the limit after a handful of scrapes.
         try:
             from cara.environment import env as _env
+
             default_mb = 512
             limit_mb = int(_env("WORKER_MEMORY_LIMIT_MB", default_mb))
         except Exception:
@@ -591,18 +619,18 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # (RabbitMQ returns 404) which triggers expensive reconnects every
         # poll tick. Cache the miss to avoid the loop and retry periodically
         # so newly-published queues are picked up.
-        self._missing_queues: Dict[str, float] = {}
+        self._missing_queues: dict[str, float] = {}
         self._missing_queue_retry_s: float = 5.0
 
     def handle(
         self,
-        driver: Optional[str] = None,
-        queue: Optional[str] = None,
-        pool: Optional[str] = None,
-        timeout: Optional[str] = None,
-        max_jobs: Optional[str] = None,
-        max_time: Optional[str] = None,
-        concurrency: Optional[str] = None,
+        driver: str | None = None,
+        queue: str | None = None,
+        pool: str | None = None,
+        timeout: str | None = None,
+        max_jobs: str | None = None,
+        max_time: str | None = None,
+        concurrency: str | None = None,
     ):
         """Handle queue worker execution with enhanced monitoring."""
         # ── Pool resolution ────────────────────────────────────────
@@ -628,6 +656,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # can scrape the worker. Opt out with METRICS_PORT=0.
         try:
             from app.support.Metrics import start_http_server as _start_metrics
+
             _port = _start_metrics()
             if _port:
                 Log.info(f"📈 Metrics server on :{_port}/metrics")
@@ -643,6 +672,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # dashboard never has to hit the database itself.
         try:
             from app.support.MetricsSampler import start as _start_sampler
+
             _start_sampler()
         except ImportError:
             # Module only exists in services project — silently skip in other projects.
@@ -686,12 +716,12 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
     def _prepare_config(
         self,
-        driver: Optional[str],
-        queue: Optional[str],
-        timeout: Optional[str],
-        max_jobs: Optional[str],
-        max_time: Optional[str],
-    ) -> Dict[str, Any]:
+        driver: str | None,
+        queue: str | None,
+        timeout: str | None,
+        max_jobs: str | None,
+        max_time: str | None,
+    ) -> dict[str, Any]:
         """Prepare and validate worker configuration."""
         # Determine driver
         driver_name = driver or config("queue.default")
@@ -744,22 +774,18 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             "max_time": max_time_val,
         }
 
-    def _resolve_pool(self, pool_name: str) -> Optional[Dict[str, Any]]:
+    def _resolve_pool(self, pool_name: str) -> dict[str, Any] | None:
         """Resolve a named worker pool from config/queue.py WORKER_POOLS.
 
         Returns the pool dict on success, or None after printing an error.
         """
         pools = config("queue.worker_pools", None)
         if not pools:
-            self.error(
-                "× No WORKER_POOLS defined in config/queue.py"
-            )
+            self.error("× No WORKER_POOLS defined in config/queue.py")
             return None
         if pool_name not in pools:
             available = ", ".join(sorted(pools.keys()))
-            self.error(
-                f"× Pool '{pool_name}' not found. Available: {available}"
-            )
+            self.error(f"× Pool '{pool_name}' not found. Available: {available}")
             return None
         pool_cfg = pools[pool_name]
         if not pool_cfg.get("queues"):
@@ -773,7 +799,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         )
         return pool_cfg
 
-    def _parse_queue_names(self, queue: Optional[str]) -> list:
+    def _parse_queue_names(self, queue: str | None) -> list:
         """Parse queue names from comma-separated string with wildcard support."""
         if not queue:
             return ["default"]
@@ -843,8 +869,9 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             return self._rabbitmq_queues_cache
 
         try:
-            import urllib.request
             import json
+            import urllib.request
+
             from cara.configuration import config
 
             host = config("queue.connections.amqp.host", "127.0.0.1")
@@ -854,12 +881,14 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             vhost = config("queue.connections.amqp.vhost", "/")
 
             import urllib.parse
+
             encoded_vhost = urllib.parse.quote(vhost, safe="")
             url = f"http://{host}:{mgmt_port}/api/queues/{encoded_vhost}"
 
             req = urllib.request.Request(url)
             credentials = f"{user}:{password}"
             import base64
+
             auth = base64.b64encode(credentials.encode()).decode()
             req.add_header("Authorization", f"Basic {auth}")
 
@@ -872,7 +901,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             self._rabbitmq_queues_cache = []
             return []
 
-    def _show_config(self, config: Dict[str, Any]):
+    def _show_config(self, config: dict[str, Any]):
         """Display worker configuration in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Configuration[/bold #e5c07b]")
 
@@ -936,7 +965,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         self.console.print("[#e5c07b]└─[/#e5c07b]")
         self.console.print()
 
-    def _run_worker(self, config: Dict[str, Any]) -> None:
+    def _run_worker(self, config: dict[str, Any]) -> None:
         """Run the queue worker with multiple queue priority support.
 
         When ``self._concurrency > 1`` we spin up N independent consumer
@@ -1031,9 +1060,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                         # log it and keep polling. The original _run_worker
                         # swallowed these via _handle_queue_error; we
                         # mirror that behaviour.
-                        Log.warning(
-                            f"[worker-{slot_idx}] cycle error: {e}"
-                        )
+                        Log.warning(f"[worker-{slot_idx}] cycle error: {e}")
                         outcome = False
 
                     # Per-slot counter increments. ``_stats_lock`` (set
@@ -1108,6 +1135,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         """
         try:
             import psutil
+
             process = psutil.Process(os.getpid())
             rss_bytes = process.memory_info().rss
 
@@ -1188,7 +1216,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         queue_names: list,
         connection_manager: AMQPConnectionManager,
         job_processor: JobProcessor,
-        config: Dict[str, Any],
+        config: dict[str, Any],
     ) -> bool:
         """Process one cycle through all queues in priority order."""
         # CRITICAL FIX #3: Check memory usage after each job
@@ -1268,7 +1296,10 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 # so metrics label it correctly instead of falling
                 # back to "unknown".
                 return job_processor.process_message(
-                    channel, method_frame, body, queue_name=queue_name,
+                    channel,
+                    method_frame,
+                    body,
+                    queue_name=queue_name,
                 )
 
             return False  # No message
@@ -1297,7 +1328,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             else:
                 self.error(f"Error checking queue {queue_name}: {error_msg}")
 
-    def _should_stop(self, config: Dict[str, Any]) -> bool:
+    def _should_stop(self, config: dict[str, Any]) -> bool:
         """Check if worker should stop due to configured limits.
 
         ``--max-jobs`` is a *terminal-attempt* cap, not a *successful-job*

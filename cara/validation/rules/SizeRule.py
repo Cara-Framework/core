@@ -2,20 +2,21 @@
 
 Usage: ``size:5``.
 """
-from typing import Any, Dict
+
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
 
 
 class SizeRule(BaseRule):
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         raw = params.get("size")
         if raw is None or value is None:
             return False
         try:
             target = int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
         chain = params.get("_rules", ())
@@ -23,7 +24,7 @@ class SizeRule(BaseRule):
         if "integer" in chain or "numeric" in chain:
             try:
                 return float(value) == target
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return False
         # Length-based for strings, lists, dicts.
         if hasattr(value, "__len__"):
@@ -31,9 +32,9 @@ class SizeRule(BaseRule):
         # Default to numeric comparison.
         try:
             return float(value) == target
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
         return f"The {attr.lower()} must be exactly {params.get('size', '')}."

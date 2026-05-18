@@ -48,6 +48,7 @@ def _emit_make_failure(job_class, error: Exception) -> None:
     """Log a container-resolution failure with stderr fallback."""
     try:
         from cara.facades import Log
+
         Log.warning(
             f"queues.instantiate_job: container.make({job_class.__name__}) "
             f"failed ({error.__class__.__name__}: {error}); falling back "
@@ -58,6 +59,7 @@ def _emit_make_failure(job_class, error: Exception) -> None:
         # Log facade itself blew up — happens only during partial-boot.
         # Last resort: stderr so the failure isn't completely silent.
         import sys
+
         print(
             f"[queues.instantiate_job] container.make({job_class.__name__}) "
             f"failed: {error.__class__.__name__}: {error}",

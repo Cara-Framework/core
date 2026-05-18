@@ -23,14 +23,13 @@ are production-safe for a JSON API:
       keeps working). Opt-out via config if you deliberately serve HTTP.
 """
 
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 from cara.configuration import config
 from cara.http import Request
 from cara.middleware import Middleware
 
-
-_DEFAULT_HEADERS: Dict[str, str] = {
+_DEFAULT_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
@@ -53,10 +52,7 @@ _DEFAULT_HEADERS: Dict[str, str] = {
     # ``security.security.headers`` config block. ``frame-ancestors
     # 'none'`` is a modern X-Frame-Options replacement.
     "Content-Security-Policy": (
-        "default-src 'none'; "
-        "frame-ancestors 'none'; "
-        "base-uri 'none'; "
-        "form-action 'none'"
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
     ),
     # Block legacy Adobe Flash / Acrobat cross-domain policy lookups
     # — they're a tiny attack surface but the header is free.
@@ -77,7 +73,7 @@ class SecurityHeaders(Middleware):
 
     def _load_config(self):
         headers = dict(_DEFAULT_HEADERS)
-        hsts: Optional[str] = _DEFAULT_HSTS
+        hsts: str | None = _DEFAULT_HSTS
         preload = False
 
         try:
@@ -98,8 +94,7 @@ class SecurityHeaders(Middleware):
             preload = bool(config("security.security.hsts_preload", False))
         except Exception as e:
             self._log_debug(
-                f"SecurityHeaders: failed to load config "
-                f"({e.__class__.__name__}: {e})"
+                f"SecurityHeaders: failed to load config ({e.__class__.__name__}: {e})"
             )
 
         return headers, hsts, preload
@@ -123,8 +118,7 @@ class SecurityHeaders(Middleware):
             # systematic header-setting bug becomes visible during
             # incident review.
             self._log_debug(
-                f"SecurityHeaders: failed to attach headers "
-                f"({e.__class__.__name__}: {e})"
+                f"SecurityHeaders: failed to attach headers ({e.__class__.__name__}: {e})"
             )
 
         return response
@@ -159,8 +153,7 @@ class SecurityHeaders(Middleware):
                     return True
         except Exception as e:
             self._log_debug(
-                f"SecurityHeaders: HTTPS detection raised "
-                f"({e.__class__.__name__}: {e})"
+                f"SecurityHeaders: HTTPS detection raised ({e.__class__.__name__}: {e})"
             )
         return False
 
@@ -178,7 +171,9 @@ class SecurityHeaders(Middleware):
             client_ip = client[0] if client else None
             if not client_ip:
                 return False
-            proxies = config("trustedproxies.proxies", config("security.security.trusted_proxies", []))
+            proxies = config(
+                "trustedproxies.proxies", config("security.security.trusted_proxies", [])
+            )
             if not proxies:
                 return False
             if "*" in proxies:
@@ -201,11 +196,13 @@ class SecurityHeaders(Middleware):
         """Best-effort debug log; survives partial-boot when Log facade is missing."""
         try:
             from cara.facades import Log
+
             Log.debug(msg, category="cara.http.security_headers")
         except Exception as e:
             # Don't recurse into Log if Log itself failed; emit a
             # last-resort stderr line so the issue isn't fully invisible.
             import sys
+
             print(
                 f"SecurityHeaders: log facade unavailable ({e.__class__.__name__}: {e}); "
                 f"original msg: {msg}",

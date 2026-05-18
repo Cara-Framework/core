@@ -4,7 +4,7 @@ Array validation rule.
 Validates that a value is a list/array.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
@@ -13,7 +13,7 @@ from cara.validation.rules.BaseRule import BaseRule
 class ArrayRule(BaseRule):
     """Validates that a value is a list/array."""
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """
         Check if the value is a list/array.
 
@@ -29,7 +29,7 @@ class ArrayRule(BaseRule):
             return False
         return isinstance(value, list)
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         """
         Get the validation error message.
 

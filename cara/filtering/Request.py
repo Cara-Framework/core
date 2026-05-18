@@ -8,8 +8,8 @@ The handwritten ``ProductIndexRequest`` and friends used to look like:
         def rules(self) -> dict:
             return {
                 "sort_by": PRODUCT_SORTS.validation_rule(),
-                "limit":   "nullable|integer|between:1,100",
-                "offset":  "nullable|integer|min:0",
+                "limit": "nullable|integer|between:1,100",
+                "offset": "nullable|integer|min:0",
                 **PRODUCT_FILTERS.validation_rules(),
             }
 
@@ -19,10 +19,9 @@ collapses that into class-level configuration:
 ::
 
     class ProductIndexRequest(FilteredFormRequest):
-        filter_set    = PRODUCT_FILTERS
+        filter_set = PRODUCT_FILTERS
         sort_registry = PRODUCT_SORTS
-        relations     = ("images", "current_price", "container",
-                         "details", "videos")
+        relations = ("images", "current_price", "container", "details", "videos")
         # ``extra_rules`` defaults to ``PAGING_RULES`` — opt out
         # by setting ``extra_rules = {}`` if your endpoint uses
         # cursor pagination instead.
@@ -32,9 +31,9 @@ Category- or brand-scoped endpoints layer on dynamic forced state:
 ::
 
     class CategoryProductsRequest(FilteredFormRequest):
-        filter_set    = PRODUCT_FILTERS
+        filter_set = PRODUCT_FILTERS
         sort_registry = PRODUCT_SORTS
-        default_sort  = "trending"   # used when caller omits sort_by
+        default_sort = "trending"  # used when caller omits sort_by
 
         async def merge_filters(self, request, validated):
             # Inject the route param so the pipeline always scopes
@@ -66,7 +65,8 @@ concrete filters know how to read its fields.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, Iterable, Mapping, Optional, Union
+from collections.abc import Iterable, Mapping
+from typing import Any, ClassVar, Union
 
 from cara.http import FormRequest
 
@@ -74,7 +74,6 @@ from .FilterSet import FilterSet
 from .Pipeline import FilterPipeline
 from .Relations import RelationSet
 from .Sorter import SortRegistry
-
 
 # Type alias — endpoint relations may be a canonical ``RelationSet``
 # (preferred) or a bare iterable of strings (back-compat for ad-hoc
@@ -94,6 +93,18 @@ Relations = Union[RelationSet, Iterable[str]]
 PAGING_RULES: Mapping[str, str] = {
     "limit": "nullable|integer|between:1,100",
     "offset": "nullable|integer|between:0,100000",
+    # ``page`` / ``per_page`` are the storefront-facing names for
+    # offset-style paging — every storefront endpoint accepts them
+    # alongside ``limit`` / ``offset``. Without explicit rules here
+    # the framework would silently clamp garbage (``page=0``,
+    # ``page=-1``, ``page=abc``, ``per_page=10000``, ``per_page=-5``)
+    # to safe defaults via ``Pagination.from_validated``: technically
+    # safe (no DB-scan vector, no DoS) but misleading — the client
+    # thinks it asked for 10 000 rows and got 24 with no error.
+    # Rejecting at the request boundary keeps the contract honest
+    # and gives clients a 422 instead of a quiet override.
+    "page": "nullable|integer|between:1,10000",
+    "per_page": "nullable|integer|between:1,100",
 }
 
 
@@ -135,8 +146,8 @@ class FilteredFormRequest(FormRequest):
             its registered default).
     """
 
-    filter_set: ClassVar[Optional[FilterSet]] = None
-    sort_registry: ClassVar[Optional[SortRegistry]] = None
+    filter_set: ClassVar[FilterSet | None] = None
+    sort_registry: ClassVar[SortRegistry | None] = None
     extra_rules: ClassVar[Mapping[str, str]] = PAGING_RULES
     filter_ctx: ClassVar[Any] = None
 
@@ -173,7 +184,7 @@ class FilteredFormRequest(FormRequest):
 
     # ── Subclass hook ──────────────────────────────────────────────
 
-    async def merge_filters(self, request, validated: Dict[str, Any]) -> Dict[str, Any]:
+    async def merge_filters(self, request, validated: dict[str, Any]) -> dict[str, Any]:
         """Dynamic forced-filter hook — return ``{key: value}`` to inject.
 
         Called after validation, *before* parsing. Use for scope
@@ -233,8 +244,7 @@ class FilteredFormRequest(FormRequest):
         # to ``"sort"`` so the param-name change flows through one
         # attribute instead of separate hand-rolled lookups.
         sort_name = (
-            validated.get(self.sort_param)
-            if self.sort_registry is not None else None
+            validated.get(self.sort_param) if self.sort_registry is not None else None
         )
         if (not sort_name) and self.default_sort and self.sort_registry is not None:
             sort_name = self.default_sort
@@ -254,7 +264,7 @@ class FilteredFormRequest(FormRequest):
         ):
             try:
                 setattr(request, attr, value)
-            except (AttributeError, TypeError):
+            except AttributeError, TypeError:
                 # Frozen / dataclass-like request; mirroring onto
                 # ``validated`` below covers callers that only see
                 # the dict, so the missing attribute isn't a problem.
@@ -272,7 +282,7 @@ class FilteredFormRequest(FormRequest):
         # without re-plumbing the filter set / sort registry / eager.
         try:
             request.pipeline = self._pipeline_factory(parsed, sort_name)
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             # Frozen request — callers can build a pipeline manually
             # using validated["_parsed_filters"] / _sort_name above.
             pass
@@ -281,7 +291,7 @@ class FilteredFormRequest(FormRequest):
 
     # ── Pipeline sugar ─────────────────────────────────────────────
 
-    def _pipeline_factory(self, parsed: dict, sort_name: Optional[str]):
+    def _pipeline_factory(self, parsed: dict, sort_name: str | None):
         """Return a ``builder -> FilterPipeline`` closure.
 
         Captures the already-parsed filter state, the resolved sort

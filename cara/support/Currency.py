@@ -26,8 +26,6 @@ follows. Callers can pass ``currency`` explicitly to bypass it.
 
 from __future__ import annotations
 
-from typing import Optional
-
 # NOTE: ``cara.configuration`` is imported lazily inside ``default_currency``
 # to avoid a circular import — ``cara.support`` is imported during
 # ``cara.foundation.Application`` boot (via ``PathManager``), which itself is
@@ -38,15 +36,15 @@ from typing import Optional
 
 # Cache the default per-process so we don't pay a config lookup on
 # every product card render.
-_DEFAULT_CACHE: Optional[str] = None
+_DEFAULT_CACHE: str | None = None
 
 # Symbol map for the currencies cheapa apps actually serve. Adding a
 # new market = one entry here. Codes not listed render with the ISO
 # code as a prefix (``"PLN 50.00"``) — explicit and unambiguous.
 _CURRENCY_SYMBOLS = {
     "USD": "$",
-    "CAD": "$",      # Canadian dollar shares the symbol — recipients
-                     # already see it on their localised storefront.
+    "CAD": "$",  # Canadian dollar shares the symbol — recipients
+    # already see it on their localised storefront.
     "AUD": "$",
     "MXN": "$",
     "EUR": "€",
@@ -56,7 +54,7 @@ _CURRENCY_SYMBOLS = {
     "TRY": "₺",
     "INR": "₹",
     "BRL": "R$",
-    "CHF": "CHF ",   # No common single-char symbol — prefix.
+    "CHF": "CHF ",  # No common single-char symbol — prefix.
 }
 
 
@@ -71,11 +69,12 @@ def default_currency() -> str:
     global _DEFAULT_CACHE
     if _DEFAULT_CACHE is None:
         from cara.configuration import config  # lazy: see module docstring note
+
         _DEFAULT_CACHE = str(config("app.default_currency", "USD") or "USD").upper()
     return _DEFAULT_CACHE
 
 
-def currency_symbol(currency: Optional[str] = None) -> str:
+def currency_symbol(currency: str | None = None) -> str:
     """Return the symbol prefix for ``currency``.
 
     Unknown / missing codes render as ``"<CODE> "`` (e.g. ``"PLN "``)
@@ -93,7 +92,7 @@ def currency_symbol(currency: Optional[str] = None) -> str:
 
 def format_money(
     amount: float,
-    currency: Optional[str] = None,
+    currency: str | None = None,
     *,
     decimals: int = 2,
 ) -> str:
@@ -122,7 +121,7 @@ def format_money(
     """
     try:
         value = float(amount)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         value = 0.0
     return f"{currency_symbol(currency)}{value:.{decimals}f}"
 

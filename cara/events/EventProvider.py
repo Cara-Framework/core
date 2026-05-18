@@ -5,16 +5,15 @@ This module provides the service provider that registers event handling and disp
 application.
 """
 
-from typing import List
-from cara.foundation import DeferredProvider
 from cara.events import Event
+from cara.foundation import DeferredProvider
 
 
 class EventProvider(DeferredProvider):
     """Deferred provider that binds Event under "events" key."""
 
     @classmethod
-    def provides(cls) -> List[str]:
+    def provides(cls) -> list[str]:
         return ["events"]
 
     def register(self) -> None:

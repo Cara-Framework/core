@@ -6,7 +6,7 @@ Provides explicit methods with priority over intelligent detection.
 """
 
 import json
-from typing import Any, Dict, List, Union, Optional
+from typing import Any
 
 from .BaseResponse import BaseResponse
 from .ContentTypeDetector import ContentTypeDetector
@@ -41,7 +41,7 @@ class ResponseFactory:
         self,
         payload: Any,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create a JSON response (Laravel-style explicit method).
@@ -68,7 +68,7 @@ class ResponseFactory:
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create an HTML response (Laravel-style explicit method).
@@ -95,7 +95,7 @@ class ResponseFactory:
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create a plain text response (Laravel-style explicit method).
@@ -122,7 +122,7 @@ class ResponseFactory:
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create an XML response (Laravel-style explicit method).
@@ -149,7 +149,7 @@ class ResponseFactory:
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create a CSS response (Laravel-style explicit method).
@@ -176,7 +176,7 @@ class ResponseFactory:
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create a JavaScript response (Laravel-style explicit method).
@@ -203,7 +203,7 @@ class ResponseFactory:
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create an SVG response (Laravel-style explicit method).
@@ -235,7 +235,7 @@ class ResponseFactory:
         data: Any = None,
         message: str = "Success",
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """Laravel-style success response."""
         payload = {"success": True, "message": message}
@@ -248,7 +248,7 @@ class ResponseFactory:
         message: str = "Error",
         errors: Any = None,
         status: int = 400,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """Laravel-style error response."""
         payload = {"success": False, "message": message}
@@ -258,9 +258,9 @@ class ResponseFactory:
 
     def validation_error(
         self,
-        errors: Dict[str, List[str]],
+        errors: dict[str, list[str]],
         message: str = "Validation failed",
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """Laravel-style validation error response."""
         return self.json(
@@ -270,7 +270,7 @@ class ResponseFactory:
     def not_found(
         self,
         message: str = "Resource not found",
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """Laravel-style 404 response."""
         return self.error(message, status=404, headers=headers)
@@ -278,7 +278,7 @@ class ResponseFactory:
     def unauthorized(
         self,
         message: str = "Unauthorized",
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """Laravel-style 401 response."""
         return self.error(message, status=401, headers=headers)
@@ -286,7 +286,7 @@ class ResponseFactory:
     def forbidden(
         self,
         message: str = "Forbidden",
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """Laravel-style 403 response."""
         return self.error(message, status=403, headers=headers)
@@ -294,7 +294,7 @@ class ResponseFactory:
     def server_error(
         self,
         message: str = "Internal Server Error",
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """Laravel-style 500 response."""
         return self.error(message, status=500, headers=headers)
@@ -307,7 +307,7 @@ class ResponseFactory:
         self,
         url: str,
         status: int = 302,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create a redirect response.
@@ -332,10 +332,10 @@ class ResponseFactory:
 
     def download(
         self,
-        content: Union[str, bytes],
+        content: str | bytes,
         filename: str,
         content_type: str = "application/octet-stream",
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> BaseResponse:
         """
         Create a file download response.
@@ -359,7 +359,7 @@ class ResponseFactory:
             self.headers.merge(headers)
         return self.response
 
-    def no_content(self, headers: Optional[Dict[str, str]] = None) -> BaseResponse:
+    def no_content(self, headers: dict[str, str] | None = None) -> BaseResponse:
         """
         Create a 204 No Content response.
 
@@ -378,13 +378,13 @@ class ResponseFactory:
 
     def paginated(
         self,
-        items: List[Any],
+        items: list[Any],
         total: int,
         limit: int,
         offset: int,
         status: int = 200,
-        base_url: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
+        base_url: str | None = None,
+        headers: dict[str, str] | None = None,
         **extra_meta,
     ) -> BaseResponse:
         """
@@ -431,8 +431,12 @@ class ResponseFactory:
             payload["links"] = {
                 "first": f"{base_url}?offset=0&limit={limit}",
                 "last": f"{base_url}?offset={max(0, (last_page - 1) * limit)}&limit={limit}",
-                "prev": f"{base_url}?offset={max(0, offset - limit)}&limit={limit}" if offset > 0 else None,
-                "next": f"{base_url}?offset={offset + limit}&limit={limit}" if offset + limit < total else None,
+                "prev": f"{base_url}?offset={max(0, offset - limit)}&limit={limit}"
+                if offset > 0
+                else None,
+                "next": f"{base_url}?offset={offset + limit}&limit={limit}"
+                if offset + limit < total
+                else None,
             }
 
         return self.json(payload, status, headers)
@@ -477,9 +481,9 @@ class ResponseFactory:
     def file(
         self,
         file_path: str,
-        filename: Optional[str] = None,
-        content_type: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
+        filename: str | None = None,
+        content_type: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """
         Laravel-style file response for controlled access.
@@ -528,6 +532,6 @@ class ResponseFactory:
             with open(file_path, "rb") as f:
                 file_content = f.read()
                 self.response.set_content(file_content)
-        except IOError:
+        except OSError:
             self.response.status(500)
             self.response.set_content("Error reading file")

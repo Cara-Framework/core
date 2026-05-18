@@ -2,8 +2,6 @@
 Explicit Route Loader for loading routes from routes.api, routes.web, and routes.websocket modules.
 """
 
-from typing import List
-
 from cara.exceptions import RouteRegistrationException
 from cara.facades import Log
 from cara.routing import Route
@@ -16,7 +14,7 @@ class ExplicitRouteLoader:
     def __init__(self, application):
         self.application = application
 
-    def load(self) -> List[Route]:
+    def load(self) -> list[Route]:
         """Load explicit routes from all route modules."""
         all_routes = []
 
@@ -34,7 +32,7 @@ class ExplicitRouteLoader:
 
         return all_routes
 
-    def _load_from_location(self, location_key: str, module_name: str) -> List[Route]:
+    def _load_from_location(self, location_key: str, module_name: str) -> list[Route]:
         """Load routes from a specific location."""
         try:
             module = load(self.application.make(location_key))

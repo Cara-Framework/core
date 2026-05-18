@@ -6,7 +6,7 @@ Similar to Laravel's job tracking but integrated into the Cara framework.
 """
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.facades import Log
 
@@ -41,21 +41,21 @@ class Trackable:
     def __init__(self, *args, **kwargs):
         """Initialize tracking properties."""
         super().__init__(*args, **kwargs)
-        self._job_uid: Optional[str] = None
-        self._tracking_metadata: Dict[str, Any] = {}
+        self._job_uid: str | None = None
+        self._tracking_metadata: dict[str, Any] = {}
         self._tracking_enabled: bool = True
-        self._job_tracker: Optional[Any] = None
+        self._job_tracker: Any | None = None
 
         # Ensure priority attribute exists for queue system
         if not hasattr(self, "priority"):
             self.priority = "default"
 
-    def with_tracking(self, enabled: bool = True) -> "Trackable":
+    def with_tracking(self, enabled: bool = True) -> Trackable:
         """Enable/disable job tracking (Laravel-style fluent method)."""
         self._tracking_enabled = enabled
         return self
 
-    def with_metadata(self, metadata: Dict[str, Any]) -> "Trackable":
+    def with_metadata(self, metadata: dict[str, Any]) -> Trackable:
         """Set metadata for job tracking (Laravel-style fluent method)."""
         self._tracking_metadata.update(metadata)
         return self
@@ -64,7 +64,7 @@ class Trackable:
         """Set individual metadata key for job tracking."""
         self._tracking_metadata[key] = value
 
-    def get_job_id(self) -> Optional[str]:
+    def get_job_id(self) -> str | None:
         """Get the current job tracking ID."""
         return self._job_uid
 
@@ -72,7 +72,7 @@ class Trackable:
         """Check if tracking is enabled for this job."""
         return self._tracking_enabled
 
-    def _start_tracking(self) -> Optional[str]:
+    def _start_tracking(self) -> str | None:
         """Start job tracking and return job_id."""
         if not self._tracking_enabled:
             return None
@@ -115,7 +115,7 @@ class Trackable:
         if job_tracker:
             job_tracker.track_job_processing(self._job_uid)
 
-    def _mark_success(self, result_data: Optional[Dict] = None) -> None:
+    def _mark_success(self, result_data: dict | None = None) -> None:
         """Mark job as successful."""
         if not self._tracking_enabled or not self._job_uid:
             return
@@ -124,7 +124,7 @@ class Trackable:
         if job_tracker:
             job_tracker.track_job_success(self._job_uid, result_data)
 
-    def _mark_failed(self, error: str, should_retry: bool = True) -> Optional[str]:
+    def _mark_failed(self, error: str, should_retry: bool = True) -> str | None:
         """Mark job as failed and handle retry logic."""
         if not self._tracking_enabled or not self._job_uid:
             return None
@@ -172,9 +172,9 @@ class Trackable:
 
     #: Class-level hook — override in subclasses to declare which attribute
     #: identifies the entity being worked on (Laravel-style convention).
-    trackable_entity_attr: Optional[str] = None
+    trackable_entity_attr: str | None = None
 
-    def _get_entity_id(self) -> Optional[str]:
+    def _get_entity_id(self) -> str | None:
         """
         Resolve entity ID for this job.
 

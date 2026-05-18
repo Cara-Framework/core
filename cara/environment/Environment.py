@@ -59,7 +59,7 @@ class LoadEnvironment:
         Keyword Arguments:
             override {bool} -- Whether the environment file should overwrite existing environment keys. (default: {False})
         """
-        env_path = str(Path(".") / ".env.{}".format(environment))
+        env_path = str(Path(".") / f".env.{environment}")
         if Path(env_path).exists():
             self.env(dotenv_path=env_path, override=override)
             LoadEnvironment.loaded_files.append(env_path)

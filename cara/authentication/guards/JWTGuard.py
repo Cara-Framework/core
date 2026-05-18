@@ -6,7 +6,7 @@ Clean, focused JWT authentication with all functionality in a single class.
 
 import hashlib
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.authentication.contracts import Authenticatable, Guard
 from cara.exceptions import (
@@ -17,7 +17,6 @@ from cara.exceptions import (
     UserNotFoundException,
 )
 from cara.facades import Cache
-
 
 # Token type claims — tokens carry `typ` so an access token can't be
 # swapped in where a refresh token is required (and vice versa).
@@ -79,8 +78,8 @@ class JWTGuard(Guard):
         self._user_class = self._load_user_class(user_model)
 
         # Authentication state
-        self._user: Optional[Authenticatable] = None
-        self._token: Optional[str] = None
+        self._user: Authenticatable | None = None
+        self._token: str | None = None
 
     def check(self) -> bool:
         """Check if the current request is authenticated."""
@@ -93,7 +92,7 @@ class JWTGuard(Guard):
         """Check if the current request is a guest."""
         return not self.check()
 
-    def user(self) -> Optional[Any]:
+    def user(self) -> Any | None:
         """Get the currently authenticated user."""
         if self._user:
             return self._user
@@ -115,7 +114,7 @@ class JWTGuard(Guard):
         # If we get here, token was provided but invalid
         raise TokenInvalidException("Invalid or expired JWT token")
 
-    def id(self) -> Optional[Any]:
+    def id(self) -> Any | None:
         """Get the ID of the authenticated user."""
         user = self.user()
         if user and hasattr(user, "get_auth_id"):
@@ -124,7 +123,7 @@ class JWTGuard(Guard):
             return user.get_auth_identifier()
         return None
 
-    def attempt(self, credentials: Dict[str, Any]) -> bool:
+    def attempt(self, credentials: dict[str, Any]) -> bool:
         """Attempt to authenticate using credentials."""
         username = credentials.get("email") or credentials.get("username")
         password = credentials.get("password")
@@ -171,7 +170,7 @@ class JWTGuard(Guard):
         except Exception:
             return False
 
-    def resolve_refresh_token_user(self, token: str) -> Optional[Any]:
+    def resolve_refresh_token_user(self, token: str) -> Any | None:
         """Decode a refresh token and return the associated user (or None)."""
         try:
             payload = self._decode_token(token, verify_exp=False)
@@ -243,9 +242,7 @@ class JWTGuard(Guard):
             # Reject access tokens passed to /refresh — defence in depth
             # against access-token leaks (logs, dev tools, XSS).
             if payload.get("typ") != TOKEN_TYPE_REFRESH:
-                raise TokenInvalidException(
-                    "Provided token is not a refresh token"
-                )
+                raise TokenInvalidException("Provided token is not a refresh token")
 
             # Check refresh window
             exp = payload.get("exp", 0)
@@ -277,7 +274,7 @@ class JWTGuard(Guard):
     # INTERNAL HELPER METHODS
     # ========================================================================
 
-    def _extract_token(self) -> Optional[str]:
+    def _extract_token(self) -> str | None:
         """Extract JWT token from request headers."""
         try:
             from cara.http.request.context import current_request
@@ -295,7 +292,7 @@ class JWTGuard(Guard):
         except Exception:
             return None
 
-    def _resolve_user_from_token(self, token: str) -> Optional[Any]:
+    def _resolve_user_from_token(self, token: str) -> Any | None:
         """Resolve user from JWT token payload."""
         try:
             payload = self._decode_token(token)
@@ -310,8 +307,8 @@ class JWTGuard(Guard):
             return None
 
     def _resolve_user_by_id(
-        self, user_id: str, context: Dict[str, Any] = None
-    ) -> Optional[Any]:
+        self, user_id: str, context: dict[str, Any] = None
+    ) -> Any | None:
         """Resolve user by ID with optional context - Generic JWT authentication."""
         try:
             # Generic JWT authentication - call authenticate_jwt if available
@@ -340,12 +337,13 @@ class JWTGuard(Guard):
                 return user.verify_password(password)
             elif hasattr(user, "get_auth_password"):
                 from cara.encryption import Hash
+
                 return Hash.check(password, user.get_auth_password())
             return False
         except Exception:
             return False
 
-    def _decode_token(self, token: str, verify_exp: bool = True) -> Dict[str, Any]:
+    def _decode_token(self, token: str, verify_exp: bool = True) -> dict[str, Any]:
         """
         Decode and validate JWT token.
 
@@ -400,7 +398,7 @@ class JWTGuard(Guard):
 
         return payload
 
-    def revoke_user_sessions(self, user_id: Any, ttl: Optional[int] = None) -> None:
+    def revoke_user_sessions(self, user_id: Any, ttl: int | None = None) -> None:
         """Revoke every JWT issued before now for the given user.
 
         Sets a per-user ``iat`` cutoff in cache so any token (access or
@@ -439,7 +437,7 @@ class JWTGuard(Guard):
         now = int(time.time())
 
         # Use user's custom payload if available
-        if hasattr(user, "to_jwt_payload") and callable(getattr(user, "to_jwt_payload")):
+        if hasattr(user, "to_jwt_payload") and callable(user.to_jwt_payload):
             payload = user.to_jwt_payload()
             payload.update({"iat": now, "exp": now + ttl, "typ": token_type})
         else:
@@ -463,9 +461,7 @@ class JWTGuard(Guard):
 
     def generate_refresh_token(self, user: Authenticatable) -> str:
         """Generate refresh token with configured refresh TTL."""
-        return self.generate_token_with_ttl(
-            user, self.refresh_ttl, TOKEN_TYPE_REFRESH
-        )
+        return self.generate_token_with_ttl(user, self.refresh_ttl, TOKEN_TYPE_REFRESH)
 
     def _generate_token(self, user: Authenticatable) -> str:
         """Generate JWT access token for user."""

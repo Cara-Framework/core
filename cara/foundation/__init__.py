@@ -21,6 +21,7 @@ def resolve(abstract: Any, *args: Any) -> Any:
         The resolved instance.
     """
     from bootstrap import application
+
     return application.make(abstract, *args)
 
 

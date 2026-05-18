@@ -1,6 +1,6 @@
 """Concrete event fired when a new user registers."""
 
-from typing import Any, Dict
+from typing import Any
 
 
 class UserRegisteredEvent:
@@ -14,14 +14,14 @@ class UserRegisteredEvent:
         self.extra = extra
         self._stopped = False
 
-    def payload(self) -> Dict[str, Any]:
+    def payload(self) -> dict[str, Any]:
         return {
             "user_id": self.user_id,
             "email": self.email,
             **self.extra,
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return self.payload()
 
     def stop_propagation(self) -> None:

@@ -5,8 +5,6 @@ This module provides the Notification class, which manages multiple notification
 notification operations to the appropriate channel instances.
 """
 
-from typing import List
-
 from cara.exceptions import DriverNotRegisteredException
 from cara.facades import Log, Queue
 from cara.notifications.contracts import NotificationChannel
@@ -20,7 +18,7 @@ class Notification:
     The default channels are injected via constructor (from NotificationProvider).
     """
 
-    def __init__(self, application, default_channels: List[str]):
+    def __init__(self, application, default_channels: list[str]):
         """
         Initialize notification manager.
 
@@ -30,7 +28,7 @@ class Notification:
         """
         self.application = application
         self._channels: dict[str, NotificationChannel] = {}
-        self._default_channels: List[str] = default_channels
+        self._default_channels: list[str] = default_channels
 
     def add_channel(self, name: str, channel: NotificationChannel) -> None:
         """Register a channel instance under `name`."""
@@ -201,7 +199,7 @@ class Notification:
             notification.delay(delay_seconds)
         return self.send(notifiable, notification)
 
-    def _get_channels(self, notifiable, notification) -> List[str]:
+    def _get_channels(self, notifiable, notification) -> list[str]:
         """
         Get the channels for a notification.
 
@@ -241,7 +239,7 @@ class Notification:
         """
         self.add_channel(name, channel)
 
-    def get_default_channels(self) -> List[str]:
+    def get_default_channels(self) -> list[str]:
         """
         Get default notification channels.
 
@@ -250,7 +248,7 @@ class Notification:
         """
         return self._default_channels.copy()
 
-    def set_default_channels(self, channels: List[str]) -> None:
+    def set_default_channels(self, channels: list[str]) -> None:
         """
         Set default notification channels.
 
@@ -259,7 +257,7 @@ class Notification:
         """
         self._default_channels = channels
 
-    def available_channels(self) -> List[str]:
+    def available_channels(self) -> list[str]:
         """
         Get list of available channels.
 

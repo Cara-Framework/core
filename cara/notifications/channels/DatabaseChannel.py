@@ -7,7 +7,7 @@ storing notifications in the database for later retrieval.
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.notifications.channels import BaseChannel
 
@@ -110,7 +110,7 @@ class DatabaseChannel(BaseChannel):
         else:
             return id(notifiable)
 
-    def _serialize_data(self, data: Dict[str, Any]) -> str:
+    def _serialize_data(self, data: dict[str, Any]) -> str:
         """
         Serialize notification data.
 
@@ -127,7 +127,7 @@ class DatabaseChannel(BaseChannel):
         except Exception:
             return str(data)
 
-    def _store_notification(self, record: Dict[str, Any]) -> bool:
+    def _store_notification(self, record: dict[str, Any]) -> bool:
         """
         Store notification record in database.
 
@@ -142,7 +142,7 @@ class DatabaseChannel(BaseChannel):
         query_builder.create(record)
         return True
 
-    def mark_as_read(self, notifiable, notification_ids: Optional[list] = None) -> bool:
+    def mark_as_read(self, notifiable, notification_ids: list | None = None) -> bool:
         """
         Mark notifications as read.
 
@@ -172,7 +172,7 @@ class DatabaseChannel(BaseChannel):
         query.update({"read_at": datetime.utcnow()})
         return True
 
-    def get_notifications(self, notifiable, read: Optional[bool] = None) -> list:
+    def get_notifications(self, notifiable, read: bool | None = None) -> list:
         """
         Get notifications for a notifiable entity.
 

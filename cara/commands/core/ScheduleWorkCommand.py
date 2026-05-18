@@ -7,7 +7,7 @@ This module provides a CLI command to process scheduled jobs with enhanced UX.
 import time
 import traceback
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from cara.commands import CommandBase
 from cara.commands.AutoReloadMixin import AutoReloadMixin
@@ -34,7 +34,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         super().__init__(application)
         self.start_time = None
 
-    def handle(self, driver: Optional[str] = None):
+    def handle(self, driver: str | None = None):
         """Handle schedule worker execution with enhanced monitoring."""
         self.console.print()  # Empty line for spacing
         self.console.print("[bold #e5c07b]╭─ Schedule Worker ─╮[/bold #e5c07b]")
@@ -52,6 +52,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             self._run_main_loop(driver)
         except Exception as e:
             import traceback
+
             self.error(f"× Scheduler error: {e}")
             self.error(f"× Stack trace: {traceback.format_exc()}")
         finally:
@@ -61,7 +62,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
     def _run_main_loop(self, *args, **kwargs):
         """Main scheduler loop - called by AutoReloadMixin on restart."""
         # Use stored parameters from store_restart_params
-        if hasattr(self, '_restart_params') and self._restart_params:
+        if hasattr(self, "_restart_params") and self._restart_params:
             driver = self._restart_params[0] if self._restart_params else None
         else:
             driver = args[0] if args else None
@@ -93,7 +94,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             if config("app.debug", False):
                 self.error(f"Stack trace: {traceback.format_exc()}")
 
-    def _prepare_config(self, driver: Optional[str]) -> Dict[str, Any]:
+    def _prepare_config(self, driver: str | None) -> dict[str, Any]:
         """Prepare and validate scheduler configuration."""
         driver_name = driver or config("scheduling.default")
         if not driver_name:
@@ -106,7 +107,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             "debug": config("app.debug", False),
         }
 
-    def _show_config(self, scheduler_config: Dict[str, Any]):
+    def _show_config(self, scheduler_config: dict[str, Any]):
         """Display scheduler configuration in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Configuration[/bold #e5c07b]")
 
@@ -116,8 +117,8 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         )
 
         # Run mode
-        run_mode = "Once" if scheduler_config['run_once'] else "Continuous"
-        mode_color = "#e5c07b" if scheduler_config['run_once'] else "#30e047"
+        run_mode = "Once" if scheduler_config["run_once"] else "Continuous"
+        mode_color = "#e5c07b" if scheduler_config["run_once"] else "#30e047"
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Run Mode:[/white] [{mode_color}]{run_mode}[/{mode_color}]"
         )
@@ -129,6 +130,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
 
         # Auto-reload status (default: enabled in development)
         from cara.configuration import config as global_config
+
         auto_reload = self.option("reload") or global_config("app.debug", True)
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]Auto-reload:[/white] [{'#30e047' if auto_reload else '#E21102'}]{'✓' if auto_reload else '×'}[/{'#30e047' if auto_reload else '#E21102'}]"
@@ -137,7 +139,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         self.console.print("[#e5c07b]└─[/#e5c07b]")
         self.console.print()
 
-    def _register_jobs(self) -> List[Dict[str, Any]]:
+    def _register_jobs(self) -> list[dict[str, Any]]:
         """Register all scheduled jobs and return summary."""
         jobs = config("scheduling.jobs", []) or []
         if not jobs:
@@ -183,12 +185,16 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
                     self.warning(f"⚠️  No schedule metadata found for '{job_name}'")
 
             except Exception as e:
-                job_name = getattr(job_target, "__name__", str(job_target)) if not isinstance(job_target, dict) else job_target.get("name", job_target.get("job", "?"))
+                job_name = (
+                    getattr(job_target, "__name__", str(job_target))
+                    if not isinstance(job_target, dict)
+                    else job_target.get("name", job_target.get("job", "?"))
+                )
                 self.warning(f"⚠️  Failed to register job '{job_name}': {e}")
 
         return job_entries
 
-    def _register_dict_job(self, spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _register_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] | None:
         """Register a job defined as a dict in config/scheduling.py.
 
         Expected keys:
@@ -306,8 +312,8 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         }
 
     def _register_spec_job(
-        self, job_target: Any, job_name: str, spec: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, job_target: Any, job_name: str, spec: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Register a job from schedule specification."""
         mode = spec["mode"]
         job_id = spec.get("identifier") or f"{job_name}_{uuid.uuid4().hex[:8]}"
@@ -368,7 +374,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         except Exception as e:
             raise Exception(f"Failed to configure schedule: {e}") from e
 
-    def _queue_command(self, command_target: Any, driver_name: Optional[str] = None):
+    def _queue_command(self, command_target: Any, driver_name: str | None = None):
         """Queue command for execution."""
         instance = (
             self.application.make(command_target)
@@ -381,7 +387,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         else:
             Queue.push(instance)
 
-    def _describe_schedule(self, spec: Dict[str, Any]) -> str:
+    def _describe_schedule(self, spec: dict[str, Any]) -> str:
         """Create human-readable schedule description."""
         schedule_type = spec["type"]
         args = spec.get("args", ())
@@ -417,12 +423,12 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         else:
             return schedule_type
 
-    def _show_jobs(self, job_entries: List[Dict[str, Any]]):
+    def _show_jobs(self, job_entries: list[dict[str, Any]]):
         """Display registered jobs in ServeCommand style."""
         self.console.print("[bold #e5c07b]┌─ Scheduled Jobs[/bold #e5c07b]")
 
         for i, job in enumerate(job_entries[:5], 1):  # Show first 5
-            job_type_color = "#30e047" if job['type'] == 'command' else "#e5c07b"
+            job_type_color = "#30e047" if job["type"] == "command" else "#e5c07b"
             self.console.print(
                 f"[#e5c07b]│[/#e5c07b]   [white]{i}.[/white] [{job_type_color}]{job['name']}[/{job_type_color}] [dim]({job['schedule']})[/dim]"
             )
@@ -448,7 +454,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         self.console.print("[dim]Press Ctrl+C to stop the scheduler[/dim]")
         self.console.print()
 
-    def _start_scheduler(self, scheduler_config: Dict[str, Any]):
+    def _start_scheduler(self, scheduler_config: dict[str, Any]):
         """Start the scheduler with the specified configuration."""
         self._show_scheduler_status()
         self.start_time = time.time()
@@ -480,7 +486,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
 
     def _show_final_stats(self):
         """Show final scheduler statistics."""
-        if not hasattr(self, 'start_time') or not self.start_time:
+        if not hasattr(self, "start_time") or not self.start_time:
             return
 
         runtime_seconds = int(time.time() - self.start_time)

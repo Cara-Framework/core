@@ -10,15 +10,15 @@ Generic, domain-free — apps bind their own jobs and routing keys.
 """
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 from cara.facades import Log
 
 
 async def safe_dispatch(
     job: Any,
-    routing_key: Optional[str] = None,
-    delay: Optional[float] = None,
+    routing_key: str | None = None,
+    delay: float | None = None,
     max_retries: int = 3,
 ) -> bool:
     """Dispatch a job to the queue with retry on transient failures.
@@ -52,7 +52,7 @@ async def safe_dispatch(
     # ``safe_dispatch``.  This pattern matches the original app helper.
     from cara.queues.Bus import Bus
 
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     for attempt in range(max_retries):
         try:
             kwargs: dict = {}

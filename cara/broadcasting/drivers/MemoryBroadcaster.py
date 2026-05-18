@@ -8,7 +8,7 @@ you want the Redis driver so events fan out across processes.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from cara.broadcasting.ConnectionManager import ConnectionManager
 from cara.broadcasting.contracts.Broadcaster import Broadcaster
@@ -20,16 +20,16 @@ class MemoryBroadcaster(ConnectionManager, Broadcaster):
 
     driver_name = "memory"
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
 
     async def broadcast(
         self,
-        channels: Union[str, List[str]],
+        channels: str | list[str],
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         if isinstance(channels, str):
             channels = [channels]
@@ -42,9 +42,9 @@ class MemoryBroadcaster(ConnectionManager, Broadcaster):
         self,
         user_id: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         await self.broadcast_to_user_local(
             user_id, event, data, except_socket_id=except_socket_id

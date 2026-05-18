@@ -5,7 +5,7 @@ This module provides the Notifiable mixin for entities that can receive notifica
 following Laravel-style notification system.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from cara.notifications.contracts import Notifiable
 
@@ -40,7 +40,7 @@ class Notifiable(Notifiable):
 
         NotificationFacade.send_now(self, notification)
 
-    def route_notification_for(self, channel: str) -> Optional[Any]:
+    def route_notification_for(self, channel: str) -> Any | None:
         """
         Get the notification routing information for the given channel.
 
@@ -55,7 +55,7 @@ class Notifiable(Notifiable):
             return getattr(self, method_name)()
         return None
 
-    def route_notification_for_mail(self) -> Optional[str]:
+    def route_notification_for_mail(self) -> str | None:
         """
         Get the email address for mail notifications.
 
@@ -66,7 +66,7 @@ class Notifiable(Notifiable):
             return self.email
         return None
 
-    def route_notification_for_sms(self) -> Optional[str]:
+    def route_notification_for_sms(self) -> str | None:
         """
         Get the phone number for SMS notifications.
 
@@ -79,7 +79,7 @@ class Notifiable(Notifiable):
             return self.phone_number
         return None
 
-    def route_notification_for_slack(self) -> Optional[str]:
+    def route_notification_for_slack(self) -> str | None:
         """
         Get the Slack webhook URL for Slack notifications.
 
@@ -90,7 +90,7 @@ class Notifiable(Notifiable):
             return self.slack_webhook_url
         return None
 
-    def notifications(self) -> List[Dict[str, Any]]:
+    def notifications(self) -> list[dict[str, Any]]:
         """
         Get all notifications for this notifiable entity.
 
@@ -99,6 +99,7 @@ class Notifiable(Notifiable):
         """
         try:
             from commons.models.core import Notification
+
             return list(
                 Notification.where("user_id", self.id)
                 .order_by("created_at", "desc")
@@ -107,7 +108,7 @@ class Notifiable(Notifiable):
         except Exception:
             return []
 
-    def unread_notifications(self) -> List[Dict[str, Any]]:
+    def unread_notifications(self) -> list[dict[str, Any]]:
         """
         Get all unread notifications for this notifiable entity.
 
@@ -116,6 +117,7 @@ class Notifiable(Notifiable):
         """
         try:
             from commons.models.core import Notification
+
             return list(
                 Notification.where("user_id", self.id)
                 .where_null("read_at")
@@ -125,7 +127,7 @@ class Notifiable(Notifiable):
         except Exception:
             return []
 
-    def read_notifications(self) -> List[Dict[str, Any]]:
+    def read_notifications(self) -> list[dict[str, Any]]:
         """
         Get all read notifications for this notifiable entity.
 
@@ -134,6 +136,7 @@ class Notifiable(Notifiable):
         """
         try:
             from commons.models.core import Notification
+
             return list(
                 Notification.where("user_id", self.id)
                 .where_not_null("read_at")
@@ -143,7 +146,7 @@ class Notifiable(Notifiable):
         except Exception:
             return []
 
-    def mark_as_read(self, notification_ids: Optional[List[str]] = None) -> None:
+    def mark_as_read(self, notification_ids: list[str] | None = None) -> None:
         """
         Mark notifications as read.
 
@@ -151,19 +154,21 @@ class Notifiable(Notifiable):
             notification_ids: List of notification IDs to mark as read.
                             If None, marks all as read.
         """
-        from commons.models.core import Notification
         import pendulum
+        from commons.models.core import Notification
 
-        query = Notification.where('user_id', self.id)
+        query = Notification.where("user_id", self.id)
 
         if notification_ids:
-            query = query.where_in('id', notification_ids)
+            query = query.where_in("id", notification_ids)
 
-        query.update({
-            'read_at': pendulum.now('UTC'),
-        })
+        query.update(
+            {
+                "read_at": pendulum.now("UTC"),
+            }
+        )
 
-    def mark_as_unread(self, notification_ids: Optional[List[str]] = None) -> None:
+    def mark_as_unread(self, notification_ids: list[str] | None = None) -> None:
         """
         Mark notifications as unread.
 
@@ -173,14 +178,16 @@ class Notifiable(Notifiable):
         """
         from commons.models.core import Notification
 
-        query = Notification.where('user_id', self.id)
+        query = Notification.where("user_id", self.id)
 
         if notification_ids:
-            query = query.where_in('id', notification_ids)
+            query = query.where_in("id", notification_ids)
 
-        query.update({
-            'read_at': None,
-        })
+        query.update(
+            {
+                "read_at": None,
+            }
+        )
 
     def get_notification_key(self) -> Any:
         """
@@ -205,7 +212,7 @@ class Notifiable(Notifiable):
         """
         return self.__class__.__name__
 
-    def notification_preferences(self, notification_type: str) -> List[str]:
+    def notification_preferences(self, notification_type: str) -> list[str]:
         """
         Get user's preferred channels for a notification type.
 
@@ -219,19 +226,22 @@ class Notifiable(Notifiable):
         Returns:
             List of preferred channel names, or empty list if no preference set
         """
-        from commons.models.core import UserPreference
         import json
 
-        pref = UserPreference.where('user_id', self.id).where(
-            'key', f'notification.{notification_type}'
-        ).first()
+        from commons.models.core import UserPreference
+
+        pref = (
+            UserPreference.where("user_id", self.id)
+            .where("key", f"notification.{notification_type}")
+            .first()
+        )
 
         if pref:
             try:
                 channels = json.loads(pref.value)
                 if isinstance(channels, list):
                     return channels
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 pass
 
         # Return empty list = use notification's default channels

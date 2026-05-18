@@ -6,7 +6,7 @@ and performance analytics. Similar to Laravel's job tracking but enhanced.
 """
 
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pendulum
 
@@ -45,8 +45,8 @@ class JobTracker:
     def __init__(
         self,
         job_model=None,
-        max_retries: Optional[Dict[str, int]] = None,
-        retry_delays: Optional[List[int]] = None,
+        max_retries: dict[str, int] | None = None,
+        retry_delays: list[int] | None = None,
     ):
         """
         Initialize JobTracker with dependency injection.
@@ -80,10 +80,10 @@ class JobTracker:
         self,
         job_uid: str,
         job_name: str,
-        job_id: Optional[int] = None,
-        entity_id: Optional[str] = None,
+        job_id: int | None = None,
+        entity_id: str | None = None,
         queue: str = "default",
-        metadata: Optional[Dict] = None,
+        metadata: dict | None = None,
     ) -> str:
         """
         Track job start - updates existing job record with tracking info.
@@ -144,7 +144,7 @@ class JobTracker:
                 job_record.processed_at = pendulum.now("UTC")
                 job_record.save()
 
-    def track_job_success(self, job_uid: str, result_data: Optional[Dict] = None) -> None:
+    def track_job_success(self, job_uid: str, result_data: dict | None = None) -> None:
         """Track successful job completion."""
         if not self.job_model:
             return
@@ -164,7 +164,7 @@ class JobTracker:
 
     def track_job_failed(
         self, job_uid: str, error: str, should_retry: bool = True
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Track job failure and handle retry logic.
 
@@ -214,7 +214,7 @@ class JobTracker:
             Log.warning(f"Failed to track job failure: {str(e)}")
             return None
 
-    def should_job_continue(self, job_uid: str, entity_id: Optional[str] = None) -> bool:
+    def should_job_continue(self, job_uid: str, entity_id: str | None = None) -> bool:
         """
         Check if job should continue processing based on job_uid.
 
@@ -243,7 +243,7 @@ class JobTracker:
             return True
 
     def validate_job_or_cancel(
-        self, job_uid: str, entity_id: Optional[str] = None, operation: str = "operation"
+        self, job_uid: str, entity_id: str | None = None, operation: str = "operation"
     ) -> None:
         """
         Validate job should continue or raise JobCancelledException.
@@ -265,8 +265,8 @@ class JobTracker:
             )
 
     def get_job_analytics(
-        self, entity_id: Optional[str] = None, job_name: Optional[str] = None, hours: int = 24
-    ) -> Dict[str, Any]:
+        self, entity_id: str | None = None, job_name: str | None = None, hours: int = 24
+    ) -> dict[str, Any]:
         """
         Get job performance analytics.
 
@@ -384,7 +384,7 @@ class JobTracker:
             Log.warning(f"Failed to cancel conflicting jobs: {str(e)}")
             return 0
 
-    def _schedule_retry(self, job_record, error: str) -> Optional[str]:
+    def _schedule_retry(self, job_record, error: str) -> str | None:
         """Schedule job retry with exponential backoff - updates existing job."""
         try:
             next_attempt = job_record.attempt + 1
@@ -439,11 +439,11 @@ class JobTracker:
         job_name: str,
         job_class: str,
         queue: str,
-        payload: Optional[Dict] = None,
-        metadata: Optional[Dict] = None,
-        job_uid: Optional[str] = None,
-        entity_id: Optional[str] = None,
-    ) -> Optional[int]:
+        payload: dict | None = None,
+        metadata: dict | None = None,
+        job_uid: str | None = None,
+        entity_id: str | None = None,
+    ) -> int | None:
         """
         Create unified job record with tracking fields.
 
@@ -521,9 +521,10 @@ class JobTracker:
         # Use model constants for conditional updates
         if status == self.job_model.STATUS_PROCESSING:
             job_record.started_at = pendulum.now("UTC")
-        elif status == self.job_model.STATUS_COMPLETED:
-            job_record.completed_at = pendulum.now("UTC")
-        elif status == self.job_model.STATUS_FAILED:
+        elif (
+            status == self.job_model.STATUS_COMPLETED
+            or status == self.job_model.STATUS_FAILED
+        ):
             job_record.completed_at = pendulum.now("UTC")
 
         # Save immediately (persists to database)

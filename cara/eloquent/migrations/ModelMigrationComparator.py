@@ -5,7 +5,6 @@ Uses migration files as source of truth.
 
 import re
 from pathlib import Path
-from typing import Dict, List
 
 from cara.support import paths
 
@@ -16,7 +15,7 @@ class ModelMigrationComparator:
     def __init__(self):
         self.migrations_dir = Path(paths("migrations"))
 
-    def compare_model_with_migrations(self, model_info: Dict) -> List[str]:
+    def compare_model_with_migrations(self, model_info: dict) -> list[str]:
         """Compare model definition with migration files to find differences."""
         table_name = model_info["table"]
 
@@ -62,7 +61,7 @@ class ModelMigrationComparator:
         migration_schema = self._parse_migration_schema(table_name)
         return migration_schema["table_exists"]
 
-    def _parse_migration_schema(self, table_name: str) -> Dict:
+    def _parse_migration_schema(self, table_name: str) -> dict:
         """Parse migration files to extract current schema state for a table."""
         schema = {
             "table_exists": False,
@@ -82,7 +81,7 @@ class ModelMigrationComparator:
 
         return schema
 
-    def _get_table_migration_files(self, table_name: str) -> List[Path]:
+    def _get_table_migration_files(self, table_name: str) -> list[Path]:
         """Get all migration files related to a specific table."""
         migration_files = []
 
@@ -96,7 +95,7 @@ class ModelMigrationComparator:
         return migration_files
 
     def _process_migration_file(
-        self, migration_file: Path, table_name: str, schema: Dict
+        self, migration_file: Path, table_name: str, schema: dict
     ):
         """Process a single migration file to update schema state."""
         try:
@@ -114,7 +113,7 @@ class ModelMigrationComparator:
             # Skip files that can't be read
             pass
 
-    def _process_create_migration(self, content: str, schema: Dict):
+    def _process_create_migration(self, content: str, schema: dict):
         """Process CREATE TABLE migration to extract initial fields."""
         schema["table_exists"] = True
 
@@ -125,7 +124,7 @@ class ModelMigrationComparator:
             # Blueprint-style migration
             self._parse_blueprint_create_table(content, schema)
 
-    def _parse_sql_create_table(self, content: str, schema: Dict):
+    def _parse_sql_create_table(self, content: str, schema: dict):
         """Parse SQL CREATE TABLE statement to extract fields."""
         # Try multiple patterns for extracting SQL
         patterns = [
@@ -183,7 +182,7 @@ class ModelMigrationComparator:
                             f'table.string("{field_name}")'
                         )
 
-    def _parse_blueprint_create_table(self, content: str, schema: Dict):
+    def _parse_blueprint_create_table(self, content: str, schema: dict):
         """Parse Blueprint-style CREATE TABLE migration."""
         # Extract fields from table.* calls with full definitions
         field_patterns = [
@@ -208,7 +207,7 @@ class ModelMigrationComparator:
             schema["field_definitions"]["created_at"] = 'table.timestamp("created_at")'
             schema["field_definitions"]["updated_at"] = 'table.timestamp("updated_at")'
 
-    def _process_update_migration(self, content: str, schema: Dict):
+    def _process_update_migration(self, content: str, schema: dict):
         """Process ALTER TABLE migration to update field list."""
         # Check if this is a SQL-style migration
         if "ALTER TABLE" in content and "self.schema.new_connection().query(" in content:
@@ -217,7 +216,7 @@ class ModelMigrationComparator:
             # Blueprint-style migration
             self._parse_blueprint_update_migration(content, schema)
 
-    def _parse_sql_update_migration(self, content: str, schema: Dict):
+    def _parse_sql_update_migration(self, content: str, schema: dict):
         """Parse SQL ALTER TABLE statements to update schema."""
         # Extract up() method content
         up_section = self._extract_up_method(content)
@@ -272,7 +271,7 @@ class ModelMigrationComparator:
                 schema["fields"].discard(field_name)
                 schema["field_definitions"].pop(field_name, None)
 
-    def _parse_blueprint_update_migration(self, content: str, schema: Dict):
+    def _parse_blueprint_update_migration(self, content: str, schema: dict):
         """Parse Blueprint-style ALTER TABLE migration."""
         # Extract added fields from table.* calls in up() method
         up_section = self._extract_up_method(content)

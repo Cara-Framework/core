@@ -30,4 +30,3 @@ __all__ = [
     "InvalidConfigurationLocationException",
     "InvalidConfigurationSetupException",
 ]
-

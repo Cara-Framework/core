@@ -20,9 +20,8 @@ Usage:
             return 3600  # seconds — lock expires after 1 hour
 """
 
-import time
 import threading
-
+import time
 
 # Fallback in-memory lock store (for single-process or boot scenarios)
 _unique_locks = {}
@@ -54,6 +53,7 @@ class UniqueJob:
         # Try Cache first (distributed)
         try:
             from cara.facades import Cache
+
             if Cache.get(cache_key) is not None:
                 return True
         except ImportError:
@@ -81,6 +81,7 @@ class UniqueJob:
         # Try Cache first (atomic add = acquire if not exists)
         try:
             from cara.facades import Cache
+
             # Cache.add returns True if key was not set (= acquired lock)
             if Cache.add(cache_key, "1", ttl):
                 return True
@@ -110,6 +111,7 @@ class UniqueJob:
         # Try Cache first
         try:
             from cara.facades import Cache
+
             Cache.forget(cache_key)
         except ImportError:
             pass
@@ -128,7 +130,8 @@ class UniqueJob:
         removed = 0
         with _unique_lock:
             expired = [
-                uid for uid, (lock_time, ttl) in _unique_locks.items()
+                uid
+                for uid, (lock_time, ttl) in _unique_locks.items()
                 if now - lock_time >= ttl
             ]
             for uid in expired:

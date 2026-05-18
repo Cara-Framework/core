@@ -6,7 +6,7 @@ for logging operations.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Any
+from typing import Any
 
 
 class Logger(ABC):
@@ -22,7 +22,7 @@ class Logger(ABC):
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
+        category: str | None = None,
     ) -> None:
         """
         Log a debug‐level message.
@@ -37,7 +37,7 @@ class Logger(ABC):
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
+        category: str | None = None,
     ) -> None:
         """
         Log an info‐level message.
@@ -52,7 +52,7 @@ class Logger(ABC):
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
+        category: str | None = None,
     ) -> None:
         """
         Log a warning‐level message.
@@ -67,8 +67,8 @@ class Logger(ABC):
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
-        exception: Optional[Exception] = None,
+        category: str | None = None,
+        exception: Exception | None = None,
     ) -> None:
         """
         Log an error‐level message.
@@ -84,7 +84,7 @@ class Logger(ABC):
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
+        category: str | None = None,
     ) -> None:
         """
         Log a critical‐level message.
@@ -99,7 +99,7 @@ class Logger(ABC):
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
+        category: str | None = None,
     ) -> None:
         """
         Log an exception‐level message (same as error + backtrace).

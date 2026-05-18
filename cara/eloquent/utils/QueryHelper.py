@@ -1,7 +1,6 @@
 """
 QueryHelper - Utility for query operations
 """
-from typing import Optional
 
 
 class QueryHelper:
@@ -28,7 +27,7 @@ class QueryHelper:
         return value.replace("%", r"\%").replace("_", r"\_")
 
     @staticmethod
-    def build_limit_clause(limit: int, offset: Optional[int] = None) -> str:
+    def build_limit_clause(limit: int, offset: int | None = None) -> str:
         """Build LIMIT clause."""
         if offset:
             return f"LIMIT {offset}, {limit}"

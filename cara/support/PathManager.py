@@ -42,7 +42,9 @@ class PathManager:
 
         Example::
 
-            PathManager.set_path_override('migrations', '/project/commons/database/migrations')
+            PathManager.set_path_override(
+                "migrations", "/project/commons/database/migrations"
+            )
         """
         PathManager._overrides[key] = path
 

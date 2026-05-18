@@ -5,7 +5,7 @@ Fluent middleware registration helper for clean, organized middleware configurat
 Users can easily register global middleware, groups, and aliases.
 """
 
-from typing import Any, Dict, List, Type, Union
+from typing import Any
 
 from .Middleware import Middleware
 
@@ -33,7 +33,7 @@ class MiddlewareRegistry:
             "priority": [],
         }
 
-    def priority(self, *middlewares: Type[Middleware]) -> "MiddlewareRegistry":
+    def priority(self, *middlewares: type[Middleware]) -> MiddlewareRegistry:
         """Set the middleware priority order (Laravel ``$middlewarePriority``).
 
         Middleware classes listed here are ordered as specified regardless
@@ -43,7 +43,7 @@ class MiddlewareRegistry:
         self.config["priority"] = list(middlewares)
         return self
 
-    def global_middleware(self, *middlewares: Type[Middleware]) -> "MiddlewareRegistry":
+    def global_middleware(self, *middlewares: type[Middleware]) -> MiddlewareRegistry:
         """
         Register global middleware (applied to all requests).
 
@@ -59,7 +59,7 @@ class MiddlewareRegistry:
         self.config["global"].extend(middlewares)
         return self
 
-    def group(self, name: str, *middlewares: Type[Middleware]) -> "MiddlewareRegistry":
+    def group(self, name: str, *middlewares: type[Middleware]) -> MiddlewareRegistry:
         """
         Register middleware group for easy route usage.
 
@@ -79,7 +79,7 @@ class MiddlewareRegistry:
         self.config["groups"][name].extend(middlewares)
         return self
 
-    def alias(self, name: str, middleware: Type[Middleware]) -> "MiddlewareRegistry":
+    def alias(self, name: str, middleware: type[Middleware]) -> MiddlewareRegistry:
         """
         Register middleware alias for convenient route usage.
 
@@ -98,8 +98,8 @@ class MiddlewareRegistry:
         return self
 
     def extend_group(
-        self, name: str, *middlewares: Type[Middleware]
-    ) -> "MiddlewareRegistry":
+        self, name: str, *middlewares: type[Middleware]
+    ) -> MiddlewareRegistry:
         """
         Add more middleware to an existing group.
 
@@ -113,8 +113,8 @@ class MiddlewareRegistry:
         return self.group(name, *middlewares)
 
     def remove_from_group(
-        self, group_name: str, middleware: Type[Middleware]
-    ) -> "MiddlewareRegistry":
+        self, group_name: str, middleware: type[Middleware]
+    ) -> MiddlewareRegistry:
         """
         Remove specific middleware from a group.
 
@@ -132,7 +132,7 @@ class MiddlewareRegistry:
                 pass  # Middleware not in group
         return self
 
-    def remove_alias(self, alias_name: str) -> "MiddlewareRegistry":
+    def remove_alias(self, alias_name: str) -> MiddlewareRegistry:
         """
         Remove a middleware alias.
 
@@ -145,7 +145,7 @@ class MiddlewareRegistry:
         self.config["aliases"].pop(alias_name, None)
         return self
 
-    def clear_group(self, group_name: str) -> "MiddlewareRegistry":
+    def clear_group(self, group_name: str) -> MiddlewareRegistry:
         """
         Clear all middleware from a group.
 
@@ -183,7 +183,7 @@ class MiddlewareRegistry:
         """
         return alias_name in self.config["aliases"]
 
-    def get_group_middleware(self, group_name: str) -> List[Type[Middleware]]:
+    def get_group_middleware(self, group_name: str) -> list[type[Middleware]]:
         """
         Get middleware for a specific group.
 
@@ -195,7 +195,7 @@ class MiddlewareRegistry:
         """
         return self.config["groups"].get(group_name, []).copy()
 
-    def get_alias_middleware(self, alias_name: str) -> Union[Type[Middleware], None]:
+    def get_alias_middleware(self, alias_name: str) -> type[Middleware] | None:
         """
         Get middleware for a specific alias.
 
@@ -207,7 +207,7 @@ class MiddlewareRegistry:
         """
         return self.config["aliases"].get(alias_name)
 
-    def merge(self, other: "MiddlewareRegistry") -> "MiddlewareRegistry":
+    def merge(self, other: MiddlewareRegistry) -> MiddlewareRegistry:
         """
         Merge another registry into this one.
 
@@ -234,7 +234,7 @@ class MiddlewareRegistry:
 
         return self
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """
         Validate the configuration and return any errors.
 
@@ -266,7 +266,7 @@ class MiddlewareRegistry:
 
         return errors
 
-    def build(self) -> Dict[str, Any]:
+    def build(self) -> dict[str, Any]:
         """
         Build final configuration dictionary.
 

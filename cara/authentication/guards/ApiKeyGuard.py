@@ -4,7 +4,7 @@ API Key Authentication Guard.
 Clean, focused API Key authentication with all functionality in a single class.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from cara.authentication.contracts import Authenticatable, Guard
 from cara.exceptions import TokenInvalidException
@@ -25,9 +25,9 @@ class ApiKeyGuard(Guard):
         header_name: str = "X-API-Key",
         header_prefix: str = "",
         # Static API key configuration
-        api_keys: Optional[Union[List[str], Dict[str, Any]]] = None,
+        api_keys: list[str] | dict[str, Any] | None = None,
         # Database user resolution
-        user_model: Optional[str] = None,
+        user_model: str | None = None,
         api_key_field: str = "api_key",
         # Rate limiting
         rate_limit_enabled: bool = False,
@@ -61,8 +61,8 @@ class ApiKeyGuard(Guard):
             self._user_class = None
 
         # Authentication state
-        self._user: Optional[Any] = None
-        self._token: Optional[str] = None
+        self._user: Any | None = None
+        self._token: str | None = None
 
     def check(self) -> bool:
         """Check if the current request is authenticated."""
@@ -75,7 +75,7 @@ class ApiKeyGuard(Guard):
         """Check if the current request is a guest."""
         return not self.check()
 
-    def user(self) -> Optional[Any]:
+    def user(self) -> Any | None:
         """Get the currently authenticated user."""
         if self._user:
             return self._user
@@ -100,7 +100,7 @@ class ApiKeyGuard(Guard):
         # If we get here, API key was provided but invalid
         raise TokenInvalidException("Invalid API key")
 
-    def id(self) -> Optional[Any]:
+    def id(self) -> Any | None:
         """Get the ID of the authenticated user."""
         user = self.user()
         if user and hasattr(user, "get_auth_id"):
@@ -111,7 +111,7 @@ class ApiKeyGuard(Guard):
             return user.get("api_key")
         return None
 
-    def attempt(self, credentials: Dict[str, Any]) -> bool:
+    def attempt(self, credentials: dict[str, Any]) -> bool:
         """API keys don't use credential-based authentication."""
         return False
 
@@ -152,7 +152,7 @@ class ApiKeyGuard(Guard):
         """Validate an API key (alias for validate_token)."""
         return self.validate_token(api_key)
 
-    def get_api_key_info(self, api_key: str) -> Optional[Dict[str, Any]]:
+    def get_api_key_info(self, api_key: str) -> dict[str, Any] | None:
         """
         Get detailed information about an API key.
 
@@ -178,7 +178,7 @@ class ApiKeyGuard(Guard):
     # INTERNAL HELPER METHODS
     # ========================================================================
 
-    def _extract_api_key(self) -> Optional[str]:
+    def _extract_api_key(self) -> str | None:
         """Extract API key from request headers."""
         try:
             from cara.http.request.context import current_request
@@ -199,7 +199,7 @@ class ApiKeyGuard(Guard):
         except Exception:
             return None
 
-    def _resolve_user_from_api_key(self, api_key: str) -> Optional[Any]:
+    def _resolve_user_from_api_key(self, api_key: str) -> Any | None:
         """
         Resolve user/info from API key - Generic API Key authentication.
 
@@ -225,7 +225,7 @@ class ApiKeyGuard(Guard):
         # Static API keys
         return self._resolve_static_api_key(api_key)
 
-    def _resolve_static_api_key(self, api_key: str) -> Optional[Any]:
+    def _resolve_static_api_key(self, api_key: str) -> Any | None:
         """Resolve API key from static configuration."""
         # Handle list of API keys
         if isinstance(self.api_keys, list):
@@ -283,6 +283,7 @@ class ApiKeyGuard(Guard):
             # block the request.  Silent pass here previously hid cache
             # outages that disabled rate limiting entirely.
             import logging
+
             logging.getLogger("cara.auth.apikey").warning(
                 "Rate limit cache write failed (rate limiting degraded): %s", exc
             )

@@ -5,7 +5,7 @@ This module provides a validation rule that checks if a value is numeric.
 """
 
 import math
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -32,7 +32,7 @@ class NumericRule(BaseRule):
       leaking semantics-altering values into the filter SQL.
     """
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value is a finite numeric."""
         if value is None:
             return False
@@ -56,7 +56,7 @@ class NumericRule(BaseRule):
 
         return False
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default numeric validation message."""
         attribute = MessageFormatter.format_attribute_name(field)
         return f"The {attribute.lower()} field must be numeric."

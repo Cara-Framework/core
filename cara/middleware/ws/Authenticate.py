@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 from cara.configuration import config
 from cara.exceptions.types.websocket import WebSocketException
@@ -12,7 +12,7 @@ from cara.websocket import Socket
 class Authenticate(Middleware):
     """JWT authentication middleware for WebSocket connections."""
 
-    def __init__(self, application, guards: Optional[List[str]] = None):
+    def __init__(self, application, guards: list[str] | None = None):
         super().__init__(application)
         self.guards = guards or [
             application.make("auth").get_default_guard()  # usually "jwt"
@@ -107,10 +107,13 @@ class Authenticate(Middleware):
         way to distinguish a malicious browser from a server-side client
         without UA fingerprinting."""
         try:
-            allowed = config(
-                "broadcasting.WEBSOCKET.allowed_origins",
-                config("websocket.allowed_origins", None),
-            ) or []
+            allowed = (
+                config(
+                    "broadcasting.WEBSOCKET.allowed_origins",
+                    config("websocket.allowed_origins", None),
+                )
+                or []
+            )
         except Exception:
             allowed = []
         if not allowed:
@@ -121,7 +124,7 @@ class Authenticate(Middleware):
             return True
         return origin in allowed
 
-    def _extract_token(self, socket: Socket) -> Optional[str]:
+    def _extract_token(self, socket: Socket) -> str | None:
         """Extract JWT token from Authorization header or subprotocol."""
         headers = {k.decode(): v.decode() for k, v in socket.scope.get("headers", [])}
         token_val: str | None = None

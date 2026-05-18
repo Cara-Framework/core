@@ -5,8 +5,6 @@ Laravel-inspired header management for HTTP responses with case-insensitive oper
 Clean, robust header handling with explicit content-type tracking.
 """
 
-from typing import Dict, List, Optional, Tuple, Union
-
 from cara.http.request import Header, HeaderBag
 
 
@@ -47,7 +45,7 @@ class HeaderManager:
         # HeaderBag automatically handles case-insensitive and duplicates
         self.header_bag.add(Header(name, value))
 
-    def get(self, name: str, default: Optional[str] = None) -> Optional[str]:
+    def get(self, name: str, default: str | None = None) -> str | None:
         """
         Get header value by name (Laravel-style).
 
@@ -83,7 +81,7 @@ class HeaderManager:
         if name_lower in self.header_bag.bag:
             del self.header_bag.bag[name_lower]
 
-    def merge(self, headers: Dict[str, str]) -> None:
+    def merge(self, headers: dict[str, str]) -> None:
         """
         Merge multiple headers (Laravel-style).
 
@@ -93,7 +91,7 @@ class HeaderManager:
         for name, value in headers.items():
             self.set(name, value)
 
-    def all(self) -> Dict[str, str]:
+    def all(self) -> dict[str, str]:
         """
         Get all headers as dictionary (Laravel-style).
 
@@ -102,7 +100,7 @@ class HeaderManager:
         """
         return self.header_bag.to_dict()
 
-    def to_asgi(self) -> List[Tuple[bytes, bytes]]:
+    def to_asgi(self) -> list[tuple[bytes, bytes]]:
         """
         Get headers formatted for ASGI.
 
@@ -120,7 +118,7 @@ class HeaderManager:
     # CONTENT-TYPE MANAGEMENT (Laravel-style)
     # =============================================================================
 
-    def content_type(self, type_: Optional[str] = None) -> Union[Optional[str], None]:
+    def content_type(self, type_: str | None = None) -> str | None | None:
         """
         Get or set Content-Type header (Laravel-style).
 
@@ -238,7 +236,9 @@ class HeaderManager:
     # UTILITY METHODS
     # =============================================================================
 
-    def finalize(self, content_length: int, default_content_type: Optional[str] = None) -> None:
+    def finalize(
+        self, content_length: int, default_content_type: str | None = None
+    ) -> None:
         """
         Finalize headers before sending (Laravel-style).
 
@@ -253,7 +253,7 @@ class HeaderManager:
         if not self._content_type_explicitly_set and default_content_type:
             self.content_type(default_content_type)
 
-    def copy_from(self, other: "HeaderManager") -> None:
+    def copy_from(self, other: HeaderManager) -> None:
         """
         Copy headers and state from another HeaderManager instance.
 

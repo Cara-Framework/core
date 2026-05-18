@@ -4,7 +4,7 @@ Array driver for Cara Framework mail system.
 This driver stores emails in memory for testing purposes.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 from cara.mail.contracts import Mail
 
@@ -12,14 +12,14 @@ from cara.mail.contracts import Mail
 class ArrayDriver(Mail):
     driver_name = "array"
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize array driver.
         """
         self.config = config
-        self.sent_mails: List[Dict[str, Any]] = []
+        self.sent_mails: list[dict[str, Any]] = []
 
-    def send(self, mailable_data: Dict[str, Any]) -> bool:
+    def send(self, mailable_data: dict[str, Any]) -> bool:
         """
         Store email in array for testing.
         """
@@ -33,7 +33,7 @@ class ArrayDriver(Mail):
         self.sent_mails.append(email_data)
         return True
 
-    def get_sent_mails(self) -> List[Dict[str, Any]]:
+    def get_sent_mails(self) -> list[dict[str, Any]]:
         """
         Get sent mails for testing.
         """

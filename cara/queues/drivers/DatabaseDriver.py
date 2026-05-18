@@ -10,14 +10,14 @@ import pickle
 import re
 import time
 import uuid
-from typing import Any, Dict, List, Union, Optional
+from typing import Any
 
 import pendulum
 
 from cara.exceptions import QueueException
 from cara.queues.contracts import JobCancelledException, Queue
-from cara.queues.JobStateManager import get_job_state_manager
 from cara.queues.job_instantiation import instantiate_job
+from cara.queues.JobStateManager import get_job_state_manager
 from cara.support.Console import HasColoredOutput
 from cara.support.Time import parse_human_time
 
@@ -73,12 +73,12 @@ class DatabaseDriver(HasColoredOutput, Queue):
 
     driver_name = "database"
 
-    def __init__(self, application, options: Dict[str, Any]):
+    def __init__(self, application, options: dict[str, Any]):
         super().__init__(module="queue.database")
         self.application = application
         self.options = options
 
-    def push(self, *jobs: Any, options: Dict[str, Any]) -> Union[str, List[str]]:
+    def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push jobs to database queue and return job ID(s) for tracking."""
         merged = {**self.options, **options}
         builder = self._get_builder(merged)
@@ -116,7 +116,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
 
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
-    def consume(self, options: Dict[str, Any]) -> None:
+    def consume(self, options: dict[str, Any]) -> None:
         """Continuously fetch and process jobs from database.
 
         Two correctness fixes vs. the previous implementation:
@@ -180,7 +180,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                         # Retry with exponential backoff delay
                         # Delay: 2^attempt * base_delay (5s, 10s, 20s, 40s...)
                         base_delay = int(merged.get("retry_base_delay", 5))
-                        backoff_seconds = base_delay * (2 ** attempts_done)
+                        backoff_seconds = base_delay * (2**attempts_done)
                         retry_at = pendulum.now(tz=tz).add(seconds=backoff_seconds)
                         builder.where("id", job["id"]).update(
                             {
@@ -195,7 +195,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                     elif failed_table:
                         # Still has retries but failed_table configured — retry with backoff
                         base_delay = int(merged.get("retry_base_delay", 5))
-                        backoff_seconds = base_delay * (2 ** attempts_done)
+                        backoff_seconds = base_delay * (2**attempts_done)
                         retry_at = pendulum.now(tz=tz).add(seconds=backoff_seconds)
                         builder.where("id", job["id"]).update(
                             {
@@ -209,7 +209,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                             {"attempts": attempts_done + 1}
                         )
 
-    def retry(self, options: Dict[str, Any]) -> None:
+    def retry(self, options: dict[str, Any]) -> None:
         """Move failed jobs back to main queue for retry."""
         merged = {**self.options, **options}
         failed_table = merged.get("failed_table")
@@ -240,7 +240,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         self.info(f"Added {len(jobs)} failed job(s) back to the queue")
         builder.where_in("id", [j["id"] for j in jobs]).delete()
 
-    def chain(self, jobs: list, options: Dict[str, Any]) -> None:
+    def chain(self, jobs: list, options: dict[str, Any]) -> None:
         """Chain jobs by scheduling sequentially with incremental delay."""
         if not jobs:
             return
@@ -253,11 +253,11 @@ class DatabaseDriver(HasColoredOutput, Queue):
             )
             delay_seconds += 1
 
-    def batch(self, *jobs: Any, options: Dict[str, Any]) -> None:
+    def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
         """Batch push: push all jobs at once."""
         self.push(*jobs, options=options)
 
-    def schedule(self, job: Any, when: Any, options: Dict[str, Any]) -> None:
+    def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> None:
         """Schedule job for future execution."""
         merged = {**self.options, **options}
         available_at = parse_human_time(when)
@@ -282,14 +282,14 @@ class DatabaseDriver(HasColoredOutput, Queue):
         }
         builder.create(record)
 
-    def _get_builder(self, opts: Dict[str, Any], table: Optional[str] = None):
+    def _get_builder(self, opts: dict[str, Any], table: str | None = None):
         """Get database query builder for specified table."""
         tbl = table or opts.get("table")
         return self.application.make("DB").query(opts.get("connection")).table(tbl)
 
     def _claim_batch(
         self,
-        merged: Dict[str, Any],
+        merged: dict[str, Any],
         table: str,
         tz: str,
     ) -> list:
@@ -348,7 +348,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             )
             try:
                 won = bool(int(affected)) if affected is not None else False
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 won = bool(affected)
             if won:
                 claimed.append(job)
@@ -356,13 +356,13 @@ class DatabaseDriver(HasColoredOutput, Queue):
 
     def _claim_batch_skip_locked(
         self,
-        merged: Dict[str, Any],
+        merged: dict[str, Any],
         table: str,
         queue: str,
         now: str,
         batch_size: int,
         driver: str,
-        connection_name: Optional[str],
+        connection_name: str | None,
     ) -> list:
         """Claim a batch via SELECT ... FOR UPDATE SKIP LOCKED.
 
@@ -393,9 +393,9 @@ class DatabaseDriver(HasColoredOutput, Queue):
         db = self.application.make("DB")
         try:
             with db.transaction(connection_name):
-                rows = db.select(
-                    select_sql, [queue, now, batch_size], connection_name
-                ) or []
+                rows = (
+                    db.select(select_sql, [queue, now, batch_size], connection_name) or []
+                )
                 if not rows:
                     return []
                 ids = [r["id"] for r in rows]
@@ -414,7 +414,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
 
     def _reap_stuck_reservations(
         self,
-        merged: Dict[str, Any],
+        merged: dict[str, Any],
         table: str,
         visibility_timeout: int,
         tz: str,
@@ -428,9 +428,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         next poll.
         """
         cutoff = (
-            pendulum.now(tz=tz)
-            .subtract(seconds=visibility_timeout)
-            .to_datetime_string()
+            pendulum.now(tz=tz).subtract(seconds=visibility_timeout).to_datetime_string()
         )
         try:
             builder = self._get_builder(merged, table)
@@ -449,7 +447,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             # worker loop.
             self.danger(f"Reaper sweep failed: {e}")
 
-    def _process_job(self, job: Dict[str, Any], opts: Dict[str, Any]):
+    def _process_job(self, job: dict[str, Any], opts: dict[str, Any]):
         """Unpickle payload, instantiate job, and execute callback."""
         job_state_manager = get_job_state_manager()
         job_db_id = str(job["id"])
@@ -488,14 +486,14 @@ class DatabaseDriver(HasColoredOutput, Queue):
                 try:
                     context = instance.get_cancellation_context()
                     job_state_manager.register_job(job_db_id, context)
-                    self._update_job_status(
-                        job_db_id, "processing", {"context": context}
-                    )
+                    self._update_job_status(job_db_id, "processing", {"context": context})
                 except Exception as exc:
                     import logging
+
                     logging.getLogger("cara.queue.database").warning(
                         "Failed to register cancellation context for job %s: %s",
-                        job_db_id, exc,
+                        job_db_id,
+                        exc,
                     )
 
         try:
@@ -570,7 +568,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             # every retry / re-dispatch in the meantime.
             _release_unique_lock_if_any(instance)
 
-    def _update_job_status(self, job_id: str, status: str, metadata: Optional[dict] = None):
+    def _update_job_status(self, job_id: str, status: str, metadata: dict | None = None):
         """Update job status and metadata in database."""
         try:
             update_data = {"status": status}
@@ -613,8 +611,8 @@ class DatabaseDriver(HasColoredOutput, Queue):
 
     def _handle_failed_job(
         self,
-        job: Dict[str, Any],
-        opts: Dict[str, Any],
+        job: dict[str, Any],
+        opts: dict[str, Any],
         exception: Exception,
     ):
         """Handle failed job execution."""
@@ -644,8 +642,8 @@ class DatabaseDriver(HasColoredOutput, Queue):
     def _move_to_failed(
         self,
         builder,
-        job: Dict[str, Any],
-        opts: Dict[str, Any],
+        job: dict[str, Any],
+        opts: dict[str, Any],
         exception: str,
         tz: str,
     ):
@@ -670,7 +668,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             f"Job Successfully Processed (Job ID: {job_id_from_payload})"
         )
 
-    def _extract_job_id(self, job: Dict[str, Any]) -> str:
+    def _extract_job_id(self, job: dict[str, Any]) -> str:
         """Extract job ID from payload."""
         decoded_payload = base64.b64decode(job["payload"])
         data = pickle.loads(decoded_payload)

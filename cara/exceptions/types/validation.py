@@ -10,7 +10,7 @@ __all__ = [
     "InvalidRuleFormatException",
 ]
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .base import CaraException
 
@@ -28,9 +28,9 @@ class ValidationException(CaraException):
     def __init__(
         self,
         validation_errors=None,
-        message: Optional[str] = None,
-        errors: Optional[Dict[str, Any]] = None,
-        status_code: Optional[int] = None,
+        message: str | None = None,
+        errors: dict[str, Any] | None = None,
+        status_code: int | None = None,
     ):
         self.validation_errors = validation_errors
         self._extracted_errors = {}
@@ -100,7 +100,7 @@ class ValidationException(CaraException):
             except Exception:
                 pass
 
-    def _extract_first_error_from_dict(self, errors_dict: Dict[str, Any]) -> None:
+    def _extract_first_error_from_dict(self, errors_dict: dict[str, Any]) -> None:
         """Extract first error message from errors dictionary."""
         for field_name, field_errors in errors_dict.items():
             if field_errors:
@@ -110,7 +110,7 @@ class ValidationException(CaraException):
                     self._extracted_message = field_errors
                 break
 
-    def get_all_errors(self) -> Dict[str, List[str]]:
+    def get_all_errors(self) -> dict[str, list[str]]:
         """Get all validation errors in normalized format."""
         return self.errors
 
@@ -118,7 +118,7 @@ class ValidationException(CaraException):
         """Get the first validation error message."""
         return str(self)
 
-    def get_errors_for_field(self, field: str) -> List[str]:
+    def get_errors_for_field(self, field: str) -> list[str]:
         """Get all errors for a specific field."""
         return self.errors.get(field, [])
 
@@ -130,11 +130,11 @@ class ValidationException(CaraException):
         """Get total number of validation errors."""
         return sum(len(errors) for errors in self.errors.values())
 
-    def get_failed_fields(self) -> List[str]:
+    def get_failed_fields(self) -> list[str]:
         """Get list of field names that failed validation."""
         return [field for field, errors in self.errors.items() if errors]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert exception to dictionary for JSON response with all errors."""
         response = {
             "error": self.get_first_error(),

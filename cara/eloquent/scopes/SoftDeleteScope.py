@@ -106,6 +106,7 @@ class SoftDeleteScope(BaseScope):
             timestamp = builder._model.get_new_datetime_string()
         else:
             import pendulum
+
             timestamp = pendulum.now("UTC").to_datetime_string()
 
         return builder.update({self.deleted_at_column: timestamp})

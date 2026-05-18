@@ -11,11 +11,7 @@ single-shot, matching Laravel's parity::
     user = User.create(payload).tap().save()
 
     # For multi-step chains, tap() each step:
-    user = (
-        User.create(payload)
-        .tap().save()
-        .tap().send_welcome_email()
-    )
+    user = User.create(payload).tap().save().tap().send_welcome_email()
 
 Without higher-order tap, every chainable side-effect method has
 to remember to ``return self`` — which is the kind of discipline

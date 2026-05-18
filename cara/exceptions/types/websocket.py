@@ -4,8 +4,6 @@ WebSocket Exception Types for the Cara framework.
 This module defines exception types related to WebSocket operations.
 """
 
-from typing import Optional
-
 from .base import CaraException
 
 
@@ -28,7 +26,7 @@ class WebSocketException(CaraException):
     - 4011: Server error
     """
 
-    def __init__(self, message: str, code: Optional[int] = 4000):
+    def __init__(self, message: str, code: int | None = 4000):
         super().__init__(message)
         self.code = code
 
@@ -39,4 +37,3 @@ class WebSocketException(CaraException):
 __all__ = [
     "WebSocketException",
 ]
-

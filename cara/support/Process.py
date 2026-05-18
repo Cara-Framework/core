@@ -4,12 +4,7 @@ Laravel 10's ``Illuminate\\Process\\Factory`` parity. Builds a
 ``subprocess`` invocation through a chainable API and returns a
 :class:`ProcessResult` with structured success / output access::
 
-    result = (
-        Process.command(["git", "rev-parse", "HEAD"])
-        .path("/repo")
-        .timeout(5)
-        .run()
-    )
+    result = Process.command(["git", "rev-parse", "HEAD"]).path("/repo").timeout(5).run()
     assert result.successful()
     sha = result.output().strip()
 
@@ -29,7 +24,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import Mapping, Optional, Sequence, Union
+from collections.abc import Mapping, Sequence
 
 
 class ProcessResult:
@@ -69,7 +64,7 @@ class ProcessResult:
     def failed(self) -> bool:
         return self._exit_code != 0
 
-    def throw_on_failure(self) -> "ProcessResult":
+    def throw_on_failure(self) -> ProcessResult:
         """Raise :class:`ProcessFailedException` if the process failed."""
         if self.failed():
             raise ProcessFailedException(self)
@@ -99,13 +94,13 @@ class Process:
         if not command:
             raise ValueError("Process.command(...) needs at least one argument")
         self._command: list = list(command)
-        self._path: Optional[str] = None
-        self._env: Optional[dict] = None
-        self._timeout: Optional[float] = None
-        self._input: Optional[str] = None
+        self._path: str | None = None
+        self._env: dict | None = None
+        self._timeout: float | None = None
+        self._input: str | None = None
 
     @classmethod
-    def command(cls, command: Union[str, Sequence[str]]) -> "Process":
+    def command(cls, command: str | Sequence[str]) -> Process:
         """Start building a process from ``command``.
 
         Accepts a string (split on whitespace) or a pre-tokenised
@@ -118,12 +113,12 @@ class Process:
 
     # ── Builders ────────────────────────────────────────────────────
 
-    def path(self, cwd: str) -> "Process":
+    def path(self, cwd: str) -> Process:
         """Set the working directory."""
         self._path = cwd
         return self
 
-    def env(self, env: Mapping[str, str], *, replace: bool = False) -> "Process":
+    def env(self, env: Mapping[str, str], *, replace: bool = False) -> Process:
         """Set / merge environment variables.
 
         ``replace=True`` discards the inherited environment entirely
@@ -138,12 +133,12 @@ class Process:
             self._env = merged
         return self
 
-    def timeout(self, seconds: float) -> "Process":
+    def timeout(self, seconds: float) -> Process:
         """Set a wall-clock timeout. ``0`` / negative disables."""
         self._timeout = seconds if seconds and seconds > 0 else None
         return self
 
-    def input(self, data: str) -> "Process":
+    def input(self, data: str) -> Process:
         """Pipe ``data`` to the process's stdin."""
         self._input = data
         return self
@@ -170,7 +165,9 @@ class Process:
             return ProcessResult(
                 self._command,
                 exit_code=124,  # GNU timeout convention
-                stdout=(e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")),
+                stdout=(
+                    e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+                ),
                 stderr=f"Timeout after {self._timeout}s",
             )
 

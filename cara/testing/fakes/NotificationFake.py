@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, List, Optional, Union
+from typing import Any
 
 
 @dataclass
 class SentNotification:
     notifiable: Any
     notification: Any
-    channels: Optional[List[str]] = None
+    channels: list[str] | None = None
 
 
 class NotificationFake:
     def __init__(self) -> None:
-        self.sent: List[SentNotification] = []
+        self.sent: list[SentNotification] = []
 
     # Production-side surface — every method that the real
     # ``Notification`` facade exposes (commons/cara/cara/notifications/Notification.py)
@@ -24,9 +25,9 @@ class NotificationFake:
     # methods all return ``bool`` — the fake mirrors that.
     def send(
         self,
-        notifiable: Union[Any, Iterable[Any]],
+        notifiable: Any | Iterable[Any],
         notification: Any,
-        channels: Optional[List[str]] = None,
+        channels: list[str] | None = None,
     ) -> bool:
         targets = (
             list(notifiable)
@@ -49,17 +50,21 @@ class NotificationFake:
         the previous fake omitted this and any test that hit that
         path crashed with AttributeError.
         """
-        self.sent.append(SentNotification(notifiable=notifiable, notification=notification))
+        self.sent.append(
+            SentNotification(notifiable=notifiable, notification=notification)
+        )
         return True
 
     def send_delayed(
         self, notifiable: Any, notification: Any, delay_seconds: int
     ) -> bool:
         """Mirror ``Notification.send_delayed`` — queued delivery."""
-        self.sent.append(SentNotification(notifiable=notifiable, notification=notification))
+        self.sent.append(
+            SentNotification(notifiable=notifiable, notification=notification)
+        )
         return True
 
-    def channel(self, channel_name: str) -> "NotificationFake":
+    def channel(self, channel_name: str) -> NotificationFake:
         """Mirror ``Notification.channel(name)`` — returns a channel.
 
         Real implementation returns a ``NotificationChannel``; the
@@ -68,7 +73,7 @@ class NotificationFake:
         """
         return self
 
-    def route(self, *args: Any, **kwargs: Any) -> "NotificationFake":
+    def route(self, *args: Any, **kwargs: Any) -> NotificationFake:
         # ``Notification.route('mail', 'foo@x').notify(...)`` — return self
         # so chained ``.notify`` lands here.
         return self
@@ -79,10 +84,10 @@ class NotificationFake:
 
     # ── Assertions ───────────────────────────────────────────────────
 
-    def all(self) -> List[SentNotification]:
+    def all(self) -> list[SentNotification]:
         return list(self.sent)
 
-    def count(self, of_type: Optional[type] = None) -> int:
+    def count(self, of_type: type | None = None) -> int:
         if of_type is None:
             return len(self.sent)
         return len([n for n in self.sent if isinstance(n.notification, of_type)])
@@ -92,7 +97,7 @@ class NotificationFake:
         notifiable: Any,
         of_type: type,
         *,
-        where: Optional[Callable[[SentNotification], bool]] = None,
+        where: Callable[[SentNotification], bool] | None = None,
     ) -> None:
         matches = [
             n
@@ -106,7 +111,7 @@ class NotificationFake:
                 f"Expected {of_type.__name__} notification to {notifiable!r}; none matched"
             )
 
-    def assert_sent(self, of_type: type, times: Optional[int] = None) -> None:
+    def assert_sent(self, of_type: type, times: int | None = None) -> None:
         matches = [n for n in self.sent if isinstance(n.notification, of_type)]
         if times is not None and len(matches) != times:
             raise AssertionError(

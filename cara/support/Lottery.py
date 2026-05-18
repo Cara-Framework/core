@@ -24,7 +24,8 @@ Stateless / threadsafe — pure-function over ``random.random``.
 from __future__ import annotations
 
 import random
-from typing import Any, Callable, ClassVar, Optional
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 
 class Lottery:
@@ -34,7 +35,7 @@ class Lottery:
 
     # When set, every ``choose()`` returns this outcome regardless of
     # the actual roll — for deterministic tests.
-    _forced: ClassVar[Optional[bool]] = None
+    _forced: ClassVar[bool | None] = None
 
     def __init__(self, chances: int, total: int) -> None:
         if total <= 0:
@@ -43,20 +44,20 @@ class Lottery:
             raise ValueError("chances must be non-negative")
         self._chances = chances
         self._total = total
-        self._winner: Optional[Callable[[], Any]] = None
-        self._loser: Optional[Callable[[], Any]] = None
+        self._winner: Callable[[], Any] | None = None
+        self._loser: Callable[[], Any] | None = None
 
     @classmethod
-    def odds(cls, chances: int, total: int = 100) -> "Lottery":
+    def odds(cls, chances: int, total: int = 100) -> Lottery:
         """Construct a lottery with ``chances`` in ``total`` odds."""
         return cls(chances, total)
 
-    def winner(self, callback: Callable[[], Any]) -> "Lottery":
+    def winner(self, callback: Callable[[], Any]) -> Lottery:
         """Set the callback to run when the lottery wins — chainable."""
         self._winner = callback
         return self
 
-    def loser(self, callback: Callable[[], Any]) -> "Lottery":
+    def loser(self, callback: Callable[[], Any]) -> Lottery:
         """Set the callback to run when the lottery loses — chainable."""
         self._loser = callback
         return self
@@ -78,7 +79,7 @@ class Lottery:
         return self.choose()
 
     @classmethod
-    def force(cls, outcome: Optional[bool]) -> None:
+    def force(cls, outcome: bool | None) -> None:
         """Pin every future roll to ``True``, ``False``, or unset (``None``).
 
         Lifetime is process-wide — call from test setup/teardown to

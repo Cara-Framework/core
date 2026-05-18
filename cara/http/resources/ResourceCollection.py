@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Type, Optional
+from typing import Any
 
 
 class ResourceCollection:
@@ -17,13 +17,13 @@ class ResourceCollection:
 
     wrap = "data"
 
-    def __init__(self, items: Any, resource_class: Optional[Type] = None):
+    def __init__(self, items: Any, resource_class: type | None = None):
         self.items = items if items is not None else []
         self.resource_class = resource_class
-        self._additional: Dict[str, Any] = {}
-        self._meta: Dict[str, Any] = {}
+        self._additional: dict[str, Any] = {}
+        self._meta: dict[str, Any] = {}
         self._status: int = 200
-        self._headers: Dict[str, str] = {}
+        self._headers: dict[str, str] = {}
 
     def to_array(self, request=None) -> list:
         """Transform each item using the resource class."""
@@ -32,24 +32,21 @@ class ResourceCollection:
                 item.serialize() if hasattr(item, "serialize") else item
                 for item in self.items
             ]
-        return [
-            self.resource_class(item).to_array(request)
-            for item in self.items
-        ]
+        return [self.resource_class(item).to_array(request) for item in self.items]
 
     def with_status(self, status: int) -> ResourceCollection:
         self._status = status
         return self
 
-    def with_headers(self, headers: Dict[str, str]) -> ResourceCollection:
+    def with_headers(self, headers: dict[str, str]) -> ResourceCollection:
         self._headers.update(headers)
         return self
 
-    def additional(self, data: Dict[str, Any]) -> ResourceCollection:
+    def additional(self, data: dict[str, Any]) -> ResourceCollection:
         self._additional.update(data)
         return self
 
-    def with_meta(self, meta: Dict[str, Any]) -> ResourceCollection:
+    def with_meta(self, meta: dict[str, Any]) -> ResourceCollection:
         self._meta.update(meta)
         return self
 

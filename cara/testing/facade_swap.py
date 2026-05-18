@@ -12,13 +12,14 @@ per process, so one switchboard works for the whole test suite.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator
+from typing import Any
 
 from cara.facades.Facade import Facade as _FacadeMeta
 
 # Class-level dict of ``key -> fake instance``. Empty in normal runs.
-_FAKES: Dict[str, Any] = {}
+_FAKES: dict[str, Any] = {}
 
 # Save the original metaclass __getattr__ once on first patch so we can
 # unpatch cleanly.

@@ -6,7 +6,7 @@ Pure infrastructure code - completely generic and reusable.
 """
 
 from contextvars import ContextVar
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class JobContext:
@@ -27,7 +27,7 @@ class JobContext:
             await job.handle()
     """
 
-    _container: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    _container: ContextVar[dict[str, Any] | None] = ContextVar(
         "job_context_container", default=None
     )
 
@@ -87,7 +87,7 @@ class JobContext:
         return container is not None and key in container
 
     @classmethod
-    def all(cls) -> Dict[str, Any]:
+    def all(cls) -> dict[str, Any]:
         """Get all dependencies (useful for debugging)."""
         return cls._container.get() or {}
 

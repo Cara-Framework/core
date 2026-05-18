@@ -5,7 +5,7 @@ Single Responsibility: Handle model events for Eloquent models.
 Clean separation of event logic following SRP.
 """
 
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cara.eloquent.models.Model import Model
@@ -26,7 +26,7 @@ class HasEvents:
     # the actual dict is created per-subclass in ``__init_subclass__`` so
     # ``ModelA.observe(Obs)`` does NOT silently register the same observer
     # against ``ModelB`` via a shared mutable class attribute.
-    __observers__: Dict[type, Dict[str, list]] = {}
+    __observers__: dict[type, dict[str, list]] = {}
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -101,7 +101,7 @@ class HasEvents:
 
         return True
 
-    def _get_model_events(self) -> Dict[str, list]:
+    def _get_model_events(self) -> dict[str, list]:
         """Get all event methods defined on the model."""
         events = {
             "creating": [],
@@ -129,7 +129,7 @@ class HasEvents:
     # ===== Event Management =====
 
     @classmethod
-    def observe(cls, observer: "Model") -> None:
+    def observe(cls, observer: Model) -> None:
         """Register an observer for this model."""
         if cls not in cls.__observers__:
             cls.__observers__[cls] = {}
@@ -154,25 +154,25 @@ class HasEvents:
                     cls.__observers__[cls][event_name].append(method)
 
     @classmethod
-    def without_events(cls) -> "HasEvents":
+    def without_events(cls) -> HasEvents:
         """Disable events for subsequent operations."""
         instance = cls()
         instance.__has_events__ = False
         return instance
 
     @classmethod
-    def with_events(cls) -> "HasEvents":
+    def with_events(cls) -> HasEvents:
         """Enable events for subsequent operations."""
         instance = cls()
         instance.__has_events__ = True
         return instance
 
-    def disable_events(self) -> "HasEvents":
+    def disable_events(self) -> HasEvents:
         """Disable events on this instance."""
         self.__has_events__ = False
         return self
 
-    def enable_events(self) -> "HasEvents":
+    def enable_events(self) -> HasEvents:
         """Enable events on this instance."""
         self.__has_events__ = True
         return self
@@ -203,7 +203,7 @@ class HasEvents:
 
         return result
 
-    def update_quietly(self, attributes: Dict[str, Any], **kwargs) -> bool:
+    def update_quietly(self, attributes: dict[str, Any], **kwargs) -> bool:
         """Update the model without firing events."""
         original_events = self.__has_events__
         self.__has_events__ = False

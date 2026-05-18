@@ -2,9 +2,10 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pendulum
+
 from cara.commands import CommandBase
 from cara.configuration import config
 from cara.decorators import command
@@ -29,11 +30,11 @@ class JWTGenerateCommand(CommandBase):
 
     def handle(
         self,
-        user: Optional[str] = None,
-        email: Optional[str] = None,
-        ttl: Optional[str] = None,
-        payload: Optional[str] = None,
-        save: Optional[str] = None,
+        user: str | None = None,
+        email: str | None = None,
+        ttl: str | None = None,
+        payload: str | None = None,
+        save: str | None = None,
     ):
         """Handle JWT token generation with enhanced options."""
         self.info("🔐 JWT Token Generation")
@@ -67,9 +68,7 @@ class JWTGenerateCommand(CommandBase):
 
         # Generate token
         try:
-            token_info = self._generate_token(
-                target_user, token_ttl, additional_payload
-            )
+            token_info = self._generate_token(target_user, token_ttl, additional_payload)
             self._show_token_info(token_info, target_user)
 
             # Save token if requested
@@ -80,7 +79,7 @@ class JWTGenerateCommand(CommandBase):
             self.error(f"❌ Token generation failed: {e}")
             return
 
-    def _validate_parameters(self, user: Optional[str], email: Optional[str]) -> str:
+    def _validate_parameters(self, user: str | None, email: str | None) -> str:
         """Validate and return user identifier."""
         if not user and not email:
             raise ValueError("Either --user or --email parameter is required")
@@ -90,7 +89,7 @@ class JWTGenerateCommand(CommandBase):
 
         return user or email
 
-    def _parse_ttl(self, ttl: Optional[str]) -> Optional[int]:
+    def _parse_ttl(self, ttl: str | None) -> int | None:
         """Parse and validate TTL parameter."""
         if ttl is None:
             return None
@@ -109,7 +108,7 @@ class JWTGenerateCommand(CommandBase):
         except ValueError as e:
             raise ValueError(f"Invalid TTL value: {e}") from e
 
-    def _parse_payload(self, payload: Optional[str]) -> Dict[str, Any]:
+    def _parse_payload(self, payload: str | None) -> dict[str, Any]:
         """Parse additional payload JSON."""
         if not payload:
             return {}
@@ -175,9 +174,9 @@ class JWTGenerateCommand(CommandBase):
     def _show_dry_run(
         self,
         user,
-        ttl: Optional[int],
-        additional_payload: Dict[str, Any],
-        save_path: Optional[str],
+        ttl: int | None,
+        additional_payload: dict[str, Any],
+        save_path: str | None,
     ):
         """Show what would be generated in dry run mode."""
         self.info("🔍 DRY RUN MODE - No token will be generated")
@@ -206,8 +205,8 @@ class JWTGenerateCommand(CommandBase):
             self.info(f"   Would save to: {save_path}")
 
     def _generate_token(
-        self, user, ttl: Optional[int], additional_payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, user, ttl: int | None, additional_payload: dict[str, Any]
+    ) -> dict[str, Any]:
         """Generate JWT token for user."""
         self.info("⚡ Generating JWT token...")
 
@@ -219,9 +218,7 @@ class JWTGenerateCommand(CommandBase):
         now = pendulum.now("UTC").int_timestamp
 
         # Get user's default payload if available
-        if hasattr(user, "to_jwt_payload") and callable(
-            getattr(user, "to_jwt_payload")
-        ):
+        if hasattr(user, "to_jwt_payload") and callable(user.to_jwt_payload):
             payload = user.to_jwt_payload()
         else:
             # Default payload
@@ -265,7 +262,7 @@ class JWTGenerateCommand(CommandBase):
             "expires_at": payload.get("exp"),
         }
 
-    def _show_token_info(self, token_info: Dict[str, Any], user):
+    def _show_token_info(self, token_info: dict[str, Any], user):
         """Display generated token information."""
         self.info("✅ JWT token generated successfully!")
         self.info("")
@@ -331,7 +328,7 @@ class JWTGenerateCommand(CommandBase):
         self.info("     }")
         self.info("     response = requests.get('/api/user/resolve', headers=headers)")
 
-    def _save_token(self, token_info: Dict[str, Any], file_path: str):
+    def _save_token(self, token_info: dict[str, Any], file_path: str):
         """Save token to file."""
         try:
             save_path = Path(file_path)

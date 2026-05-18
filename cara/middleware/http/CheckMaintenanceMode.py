@@ -6,7 +6,7 @@ enabled.
 """
 
 import os
-from typing import Callable
+from collections.abc import Callable
 
 from cara.http import Request, Response
 from cara.middleware import Middleware

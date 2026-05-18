@@ -17,7 +17,8 @@ makes them straightforward to mock in tests.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Optional, Type
+from collections.abc import Callable
+from typing import Any
 
 
 class Reflector:
@@ -29,7 +30,7 @@ class Reflector:
         return callable(target)
 
     @staticmethod
-    def signature(target: Callable) -> Optional[inspect.Signature]:
+    def signature(target: Callable) -> inspect.Signature | None:
         """Return the signature, or ``None`` if not introspectable.
 
         Builtins and C-extension callables sometimes don't expose
@@ -38,7 +39,7 @@ class Reflector:
         """
         try:
             return inspect.signature(target)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     @staticmethod
@@ -48,7 +49,7 @@ class Reflector:
         return list(sig.parameters.values()) if sig else []
 
     @staticmethod
-    def parameter_class(target: Callable, name: str) -> Optional[type]:
+    def parameter_class(target: Callable, name: str) -> type | None:
         """Return the annotated class for parameter ``name``, or ``None``.
 
         Only resolves when the annotation is an actual class object —
@@ -64,7 +65,7 @@ class Reflector:
         return annotation if isinstance(annotation, type) else None
 
     @staticmethod
-    def parameter_class_name(target: Callable, name: str) -> Optional[str]:
+    def parameter_class_name(target: Callable, name: str) -> str | None:
         """Return ``parameter_class(...).__name__`` or the raw annotation if string."""
         sig = Reflector.signature(target)
         if sig is None or name not in sig.parameters:
@@ -79,9 +80,7 @@ class Reflector:
         return None
 
     @staticmethod
-    def is_parameter_subclass_of(
-        target: Callable, name: str, base: Type
-    ) -> bool:
+    def is_parameter_subclass_of(target: Callable, name: str, base: type) -> bool:
         """True if parameter ``name`` is annotated as a subclass of ``base``."""
         cls = Reflector.parameter_class(target, name)
         if cls is None:
@@ -92,7 +91,7 @@ class Reflector:
             return False
 
     @staticmethod
-    def get_class_method_owner(cls: Type, method_name: str) -> Optional[Type]:
+    def get_class_method_owner(cls: type, method_name: str) -> type | None:
         """Return the class in the MRO that defined ``method_name``."""
         for klass in cls.__mro__:
             if method_name in klass.__dict__:

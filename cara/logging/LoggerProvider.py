@@ -6,7 +6,7 @@ It configures Loguru through Cara's channel system and provides centralized logg
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from cara.configuration import config
 from cara.foundation import Provider
@@ -30,7 +30,7 @@ class LoggerProvider(Provider):
         if config("logging.intercept", True):
             self._configure_logging_interception()
 
-    def _validate_logging_config(self, logging_config: Dict[str, Any]) -> None:
+    def _validate_logging_config(self, logging_config: dict[str, Any]) -> None:
         """
         Validate logging configuration early to fail fast on startup.
 
@@ -60,7 +60,7 @@ class LoggerProvider(Provider):
                     f"Check your .env file or config/logging.py"
                 )
 
-    def _configure_cara_logger(self, logging_config: Dict[str, Any]) -> None:
+    def _configure_cara_logger(self, logging_config: dict[str, Any]) -> None:
         """
         Configure Cara Logger with channel-based configuration.
 

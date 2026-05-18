@@ -5,7 +5,7 @@ This module provides a logging channel that sends log records to a Slack webhook
 """
 
 import json
-from typing import Any, Dict
+from typing import Any
 
 import requests
 
@@ -13,7 +13,7 @@ import requests
 class SlackChannel:
     """Sends ERROR+ messages to a Slack channel via webhook."""
 
-    def __init__(self, slack_cfg: Dict[str, Any], webhook_url: str) -> None:
+    def __init__(self, slack_cfg: dict[str, Any], webhook_url: str) -> None:
         self._slack_cfg = slack_cfg
         self._webhook_url = webhook_url
 
@@ -40,6 +40,7 @@ class SlackChannel:
             # Log delivery to Slack is best-effort — but don't swallow
             # completely since repeated failures indicate a config issue.
             import sys
+
             print(f"[SlackChannel] delivery failed: {exc}", file=sys.stderr)
 
     def flush(self) -> None:

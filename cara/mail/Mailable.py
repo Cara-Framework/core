@@ -7,7 +7,7 @@ Includes automatic serialization support for queue jobs.
 """
 
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from cara.queues.contracts import SerializesModels
 
@@ -16,21 +16,21 @@ class Mailable(SerializesModels):
     def __init__(self):
         """Initialize mailable with default values."""
         super().__init__()
-        self._to: List[str] = []
-        self._from: Optional[str] = None
-        self._cc: List[str] = []
-        self._bcc: List[str] = []
-        self._subject: Optional[str] = None
-        self._reply_to: Optional[str] = None
-        self._text: Optional[str] = None
-        self._html: Optional[str] = None
-        self._view: Optional[str] = None
-        self._view_data: Dict[str, Any] = {}
+        self._to: list[str] = []
+        self._from: str | None = None
+        self._cc: list[str] = []
+        self._bcc: list[str] = []
+        self._subject: str | None = None
+        self._reply_to: str | None = None
+        self._text: str | None = None
+        self._html: str | None = None
+        self._view: str | None = None
+        self._view_data: dict[str, Any] = {}
         self._priority: int = 3  # Normal priority (1-5)
-        self._attachments: List[Dict[str, str]] = []
+        self._attachments: list[dict[str, str]] = []
         self._application = None
 
-    def to(self, address: Union[str, List[str]]) -> "Mailable":
+    def to(self, address: str | list[str]) -> Mailable:
         """
         Set the recipient address(es).
         """
@@ -40,14 +40,14 @@ class Mailable(SerializesModels):
             self._to.extend(address)
         return self
 
-    def from_(self, address: str) -> "Mailable":
+    def from_(self, address: str) -> Mailable:
         """
         Set the sender address.
         """
         self._from = address
         return self
 
-    def cc(self, addresses: Union[str, List[str]]) -> "Mailable":
+    def cc(self, addresses: str | list[str]) -> Mailable:
         """
         Set CC addresses.
         """
@@ -57,7 +57,7 @@ class Mailable(SerializesModels):
             self._cc.extend(addresses)
         return self
 
-    def bcc(self, addresses: Union[str, List[str]]) -> "Mailable":
+    def bcc(self, addresses: str | list[str]) -> Mailable:
         """
         Set BCC addresses.
         """
@@ -67,35 +67,35 @@ class Mailable(SerializesModels):
             self._bcc.extend(addresses)
         return self
 
-    def subject(self, subject: str) -> "Mailable":
+    def subject(self, subject: str) -> Mailable:
         """
         Set the email subject.
         """
         self._subject = subject
         return self
 
-    def reply_to(self, address: str) -> "Mailable":
+    def reply_to(self, address: str) -> Mailable:
         """
         Set the reply-to address.
         """
         self._reply_to = address
         return self
 
-    def text(self, content: str) -> "Mailable":
+    def text(self, content: str) -> Mailable:
         """
         Set the plain text content.
         """
         self._text = content
         return self
 
-    def html(self, content: str) -> "Mailable":
+    def html(self, content: str) -> Mailable:
         """
         Set the HTML content.
         """
         self._html = content
         return self
 
-    def view(self, template: str, data: Dict[str, Any] = None) -> "Mailable":
+    def view(self, template: str, data: dict[str, Any] = None) -> Mailable:
         """
         Set the view template for the email.
         """
@@ -103,26 +103,26 @@ class Mailable(SerializesModels):
         self._view_data = data or {}
         return self
 
-    def priority(self, level: int) -> "Mailable":
+    def priority(self, level: int) -> Mailable:
         """
         Set the email priority.
         """
         self._priority = max(1, min(5, level))
         return self
 
-    def high_priority(self) -> "Mailable":
+    def high_priority(self) -> Mailable:
         """
         Set high priority (1).
         """
         return self.priority(1)
 
-    def low_priority(self) -> "Mailable":
+    def low_priority(self) -> Mailable:
         """
         Set low priority (5).
         """
         return self.priority(5)
 
-    def attach(self, name: str, path: str) -> "Mailable":
+    def attach(self, name: str, path: str) -> Mailable:
         """
         Attach a file to the email.
         """
@@ -130,14 +130,14 @@ class Mailable(SerializesModels):
             self._attachments.append({"name": name, "path": path})
         return self
 
-    def set_application(self, application) -> "Mailable":
+    def set_application(self, application) -> Mailable:
         """
         Set the application instance (for template rendering).
         """
         self._application = application
         return self
 
-    def build(self) -> "Mailable":
+    def build(self) -> Mailable:
         """
         Build the mailable. Override this method in subclasses.
         """
@@ -177,6 +177,7 @@ class Mailable(SerializesModels):
                 pass
             except Exception as exc:
                 import logging
+
                 logging.getLogger("cara.mail").debug(
                     "View facade render failed for '%s': %s", self._view, exc
                 )
@@ -188,6 +189,7 @@ class Mailable(SerializesModels):
                 return result
             except Exception as exc:
                 import logging
+
                 logging.getLogger("cara.mail").warning(
                     "View render failed for '%s': %s", self._view, exc
                 )

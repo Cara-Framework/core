@@ -29,13 +29,14 @@ from __future__ import annotations
 
 import inspect
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type
+from collections.abc import Callable
+from typing import Any
 
 
 class _Call:
     __slots__ = ("args", "kwargs")
 
-    def __init__(self, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> None:
+    def __init__(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
         self.args = args
         self.kwargs = kwargs
 
@@ -51,33 +52,33 @@ class _Behavior:
     def __init__(self) -> None:
         # Either a single ``return_value`` *or* a queue of ``returns``.
         self._return_value: Any = None
-        self._return_queue: List[Any] = []
-        self._raises: Optional[BaseException] = None
-        self._side_effect: Optional[Callable[..., Any]] = None
-        self._matchers: List[Tuple[Tuple[Any, ...], Dict[str, Any], Any]] = []
+        self._return_queue: list[Any] = []
+        self._raises: BaseException | None = None
+        self._side_effect: Callable[..., Any] | None = None
+        self._matchers: list[tuple[tuple[Any, ...], dict[str, Any], Any]] = []
 
-    def returns(self, value: Any) -> "_Behavior":
+    def returns(self, value: Any) -> _Behavior:
         self._return_value = value
         return self
 
-    def returns_in_order(self, *values: Any) -> "_Behavior":
+    def returns_in_order(self, *values: Any) -> _Behavior:
         self._return_queue.extend(values)
         return self
 
-    def raises(self, exc: BaseException) -> "_Behavior":
+    def raises(self, exc: BaseException) -> _Behavior:
         self._raises = exc
         return self
 
-    def then(self, fn: Callable[..., Any]) -> "_Behavior":
+    def then(self, fn: Callable[..., Any]) -> _Behavior:
         """Custom callable; receives the same ``*args, **kwargs``."""
         self._side_effect = fn
         return self
 
-    def with_args(self, *args: Any, **kwargs: Any) -> "_ArgMatcher":
+    def with_args(self, *args: Any, **kwargs: Any) -> _ArgMatcher:
         """Return-value branch: ``.with_args(1).returns(10)``."""
         return _ArgMatcher(self, args, kwargs)
 
-    def _resolve(self, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+    def _resolve(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         for ma, mk, mv in self._matchers:
             if ma == args and mk == kwargs:
                 if isinstance(mv, BaseException):
@@ -96,8 +97,8 @@ class _ArgMatcher:
     def __init__(
         self,
         behavior: _Behavior,
-        args: Tuple[Any, ...],
-        kwargs: Dict[str, Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
     ) -> None:
         self._behavior = behavior
         self._args = args
@@ -115,10 +116,10 @@ class _ArgMatcher:
 class _MockBase:
     """Shared machinery for :class:`Mock` and :class:`Spy`."""
 
-    def __init__(self, contract: Optional[Type[Any]] = None) -> None:
+    def __init__(self, contract: type[Any] | None = None) -> None:
         self._contract = contract
-        self._behaviors: Dict[str, _Behavior] = {}
-        self._calls: Dict[str, List[_Call]] = defaultdict(list)
+        self._behaviors: dict[str, _Behavior] = {}
+        self._calls: dict[str, list[_Call]] = defaultdict(list)
         self._strict = False  # Subclasses set this.
 
     # ── Public API ───────────────────────────────────────────────────
@@ -129,7 +130,7 @@ class _MockBase:
         beh = self._behaviors.setdefault(name, _Behavior())
         return beh
 
-    def returning(self, **mapping: Any) -> "_MockBase":
+    def returning(self, **mapping: Any) -> _MockBase:
         """Sugar: ``Mock(C).returning(method_a=1, method_b="x")``."""
         for name, value in mapping.items():
             self.expects(name).returns(value)
@@ -137,7 +138,7 @@ class _MockBase:
 
     # ── Call assertions ──────────────────────────────────────────────
 
-    def calls_to(self, name: str) -> List[_Call]:
+    def calls_to(self, name: str) -> list[_Call]:
         return list(self._calls.get(name, []))
 
     def call_count(self, name: str) -> int:
@@ -146,7 +147,7 @@ class _MockBase:
     def was_called(self, name: str) -> bool:
         return self.call_count(name) > 0
 
-    def assert_called(self, name: str, times: Optional[int] = None) -> None:
+    def assert_called(self, name: str, times: int | None = None) -> None:
         n = self.call_count(name)
         if times is None and n == 0:
             raise AssertionError(f"Expected {name}() to be called at least once; was 0x")
@@ -174,7 +175,7 @@ class _MockBase:
     # ── Internal hooks ───────────────────────────────────────────────
 
     def _record_and_resolve(
-        self, name: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+        self, name: str, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
         self._calls[name].append(_Call(args, kwargs))
         beh = self._behaviors.get(name)
@@ -229,7 +230,7 @@ class _MockBase:
 class Mock(_MockBase):
     """Strict mock — undeclared methods raise."""
 
-    def __init__(self, contract: Optional[Type[Any]] = None) -> None:
+    def __init__(self, contract: type[Any] | None = None) -> None:
         super().__init__(contract)
         self._strict = True
 
@@ -237,7 +238,7 @@ class Mock(_MockBase):
 class Spy(_MockBase):
     """Permissive mock — any attribute is a no-op recorder."""
 
-    def __init__(self, contract: Optional[Type[Any]] = None) -> None:
+    def __init__(self, contract: type[Any] | None = None) -> None:
         super().__init__(contract)
         self._strict = False
 

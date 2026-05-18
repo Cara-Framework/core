@@ -6,7 +6,6 @@ Clean and simple date management following DRY and KISS principles.
 """
 
 from datetime import datetime
-from typing import Optional
 
 import pendulum
 
@@ -30,7 +29,7 @@ class HasTimestamps:
     __timestamps__ = True
     __timezone__ = "UTC"
 
-    def touch(self, date: Optional[datetime] = None, query: bool = True) -> bool:
+    def touch(self, date: datetime | None = None, query: bool = True) -> bool:
         """Touch the model's timestamps."""
         if not self.__timestamps__:
             return False
@@ -42,7 +41,7 @@ class HasTimestamps:
 
         return True
 
-    def _update_timestamps(self, date: Optional[datetime] = None) -> None:
+    def _update_timestamps(self, date: datetime | None = None) -> None:
         """Update the model's timestamps."""
         current_time = date or self._current_timestamp()
 
@@ -53,7 +52,7 @@ class HasTimestamps:
         """Get current timestamp in UTC."""
         return pendulum.now("UTC").to_datetime_string()
 
-    def get_new_datetime_string(self, _datetime: Optional[datetime] = None) -> str:
+    def get_new_datetime_string(self, _datetime: datetime | None = None) -> str:
         """Get a new datetime string in the correct format."""
         if _datetime is None:
             _datetime = pendulum.now("UTC")
@@ -107,12 +106,12 @@ class HasTimestamps:
         """Determine if timestamps should be updated."""
         return self.__timestamps__ and not getattr(self, "_skip_timestamps", False)
 
-    def skip_timestamps(self) -> "HasTimestamps":
+    def skip_timestamps(self) -> HasTimestamps:
         """Skip timestamp updates for this operation."""
         self._skip_timestamps = True
         return self
 
-    def enable_timestamps(self) -> "HasTimestamps":
+    def enable_timestamps(self) -> HasTimestamps:
         """Enable timestamp updates."""
         self._skip_timestamps = False
         return self

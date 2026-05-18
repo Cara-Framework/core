@@ -7,12 +7,11 @@ This is the primary HTTP access log middleware and must be first in the middlewa
 
 import re
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from cara.facades import Log
 from cara.http import Request
 from cara.middleware import Middleware
-
 
 # Query params whose values must never land in access logs. Hitting any of
 # these by accident (links, redirects, mis-placed auth) leaks the secret to
@@ -38,16 +37,18 @@ _SENSITIVE_PARAM_RE = re.compile(
 )
 
 # HTTP headers that must never appear in access logs unredacted.
-_SENSITIVE_HEADERS = frozenset({
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-    "set-cookie",
-    "x-api-key",
-    "x-auth-token",
-    "x-csrf-token",
-    "x-xsrf-token",
-})
+_SENSITIVE_HEADERS = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "x-auth-token",
+        "x-csrf-token",
+        "x-xsrf-token",
+    }
+)
 
 
 def _redact_query_string(query: str) -> str:
@@ -65,11 +66,17 @@ def _redact_headers(headers: list) -> dict:
     """
     redacted: dict = {}
     for raw_name, raw_value in headers:
-        name = raw_name.decode("latin-1").lower() if isinstance(raw_name, bytes) else raw_name.lower()
+        name = (
+            raw_name.decode("latin-1").lower()
+            if isinstance(raw_name, bytes)
+            else raw_name.lower()
+        )
         if name in _SENSITIVE_HEADERS:
             redacted[name] = "[REDACTED]"
         else:
-            redacted[name] = raw_value.decode("latin-1") if isinstance(raw_value, bytes) else raw_value
+            redacted[name] = (
+                raw_value.decode("latin-1") if isinstance(raw_value, bytes) else raw_value
+            )
     return redacted
 
 

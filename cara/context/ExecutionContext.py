@@ -5,14 +5,13 @@ Manages global execution context for the application, including sync/async mode.
 """
 
 from contextvars import ContextVar
-from typing import Optional
 
 # Context variable for sync mode (thread-safe)
 _sync_mode: ContextVar[bool] = ContextVar("sync_mode", default=False)
 _debug_mode: ContextVar[bool] = ContextVar("debug_mode", default=False)
-_job_id: ContextVar[Optional[str]] = ContextVar("job_id", default=None)
-_batch_id: ContextVar[Optional[str]] = ContextVar("batch_id", default=None)
-_correlation_id: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
+_job_id: ContextVar[str | None] = ContextVar("job_id", default=None)
+_batch_id: ContextVar[str | None] = ContextVar("batch_id", default=None)
+_correlation_id: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 
 
 class ExecutionContext:
@@ -53,7 +52,7 @@ class ExecutionContext:
         return _debug_mode.get()
 
     @staticmethod
-    def get_job_id() -> Optional[str]:
+    def get_job_id() -> str | None:
         """
         Get current job ID from context.
 
@@ -68,7 +67,7 @@ class ExecutionContext:
         _job_id.set(job_id)
 
     @staticmethod
-    def get_batch_id() -> Optional[str]:
+    def get_batch_id() -> str | None:
         """Get current batch ID — groups related jobs dispatched together."""
         return _batch_id.get()
 
@@ -78,7 +77,7 @@ class ExecutionContext:
         _batch_id.set(batch_id)
 
     @staticmethod
-    def get_correlation_id() -> Optional[str]:
+    def get_correlation_id() -> str | None:
         """Get correlation ID — traces a causal chain across job generations."""
         return _correlation_id.get()
 
@@ -88,7 +87,7 @@ class ExecutionContext:
         _correlation_id.set(correlation_id)
 
     @staticmethod
-    def sync(debug: bool = False, job_id: Optional[str] = None):
+    def sync(debug: bool = False, job_id: str | None = None):
         """
         Context manager for synchronous execution.
 
@@ -110,7 +109,7 @@ class ExecutionContext:
         return _ExecutionContextManager(sync=True, debug=debug, job_id=job_id)
 
     @staticmethod
-    def queue(debug: bool = False, job_id: Optional[str] = None):
+    def queue(debug: bool = False, job_id: str | None = None):
         """
         Context manager for queue execution (explicit).
 
@@ -159,9 +158,9 @@ class _ExecutionContextManager:
         self,
         sync: bool,
         debug: bool,
-        job_id: Optional[str] = None,
-        batch_id: Optional[str] = None,
-        correlation_id: Optional[str] = None,
+        job_id: str | None = None,
+        batch_id: str | None = None,
+        correlation_id: str | None = None,
     ):
         self.sync = sync
         self.debug = debug

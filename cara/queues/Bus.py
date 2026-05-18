@@ -5,7 +5,7 @@ Automatically decides whether to run jobs synchronously or dispatch to queue
 based on execution context. Inspired by Laravel's Bus facade.
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cara.queues.contracts import Queueable
@@ -33,10 +33,10 @@ class Bus:
 
     @staticmethod
     async def dispatch(
-        job: "Queueable",
-        routing_key: Optional[str] = None,
-        delay: Optional[float] = None,
-        queue: Optional[str] = None,
+        job: Queueable,
+        routing_key: str | None = None,
+        delay: float | None = None,
+        queue: str | None = None,
     ) -> Any:
         """
         Dispatch job with automatic sync/async handling.
@@ -83,20 +83,26 @@ class Bus:
             # Check if job is UniqueJob — use a single atomic acquire
             # instead of check-then-acquire (TOCTOU race).
             from cara.queues.contracts import UniqueJob
+
             if isinstance(job, UniqueJob):
                 uid = job.unique_id()
                 if not UniqueJob.acquire_unique_lock(uid, job.unique_for):
                     # Lock already held — another instance is pending/processing.
                     from cara.facades import Log
+
                     Log.debug(f"UniqueJob skipped (lock held): {uid}")
                     try:
                         from app.support.Metrics import Metrics as _M
-                        _M.idempotency_total.labels(scope="unique_job", outcome="collision").inc()
+
+                        _M.idempotency_total.labels(
+                            scope="unique_job", outcome="collision"
+                        ).inc()
                     except ImportError:
                         pass
                     return None
                 try:
                     from app.support.Metrics import Metrics as _M
+
                     _M.idempotency_total.labels(scope="unique_job", outcome="fresh").inc()
                 except ImportError:
                     pass
@@ -153,6 +159,7 @@ class Bus:
             # isn't available (e.g. cara imported standalone in tests).
             try:
                 from app.support.Metrics import Metrics as _M
+
                 _queue_lbl = (
                     queue or routing_key or getattr(job, "queue", None) or "unknown"
                 )
@@ -165,7 +172,7 @@ class Bus:
             return None
 
     @staticmethod
-    async def _run_sync_with_tracking(job: "Queueable") -> Any:
+    async def _run_sync_with_tracking(job: Queueable) -> Any:
         """
         Run job synchronously with full tracking support.
 
@@ -187,8 +194,8 @@ class Bus:
         # Check if job has tracking enabled (Trackable trait)
         has_tracking = hasattr(job, "_tracking_enabled") and job._tracking_enabled
 
-        tracker: Optional["JobTracker"] = None
-        job_id: Optional[int] = None
+        tracker: JobTracker | None = None
+        job_id: int | None = None
 
         if has_tracking:
             # Resolve JobTracker from container (registered in ApplicationProvider)
@@ -283,7 +290,7 @@ class Bus:
             return None
 
     @staticmethod
-    def _resolve_job_tracker() -> Optional["JobTracker"]:
+    def _resolve_job_tracker() -> JobTracker | None:
         """
         Resolve JobTracker from container.
 
@@ -299,7 +306,7 @@ class Bus:
         return None
 
     @staticmethod
-    def get_dispatch_params(job: "Queueable") -> dict:
+    def get_dispatch_params(job: Queueable) -> dict:
         """
         Extract dispatch parameters from job instance.
 

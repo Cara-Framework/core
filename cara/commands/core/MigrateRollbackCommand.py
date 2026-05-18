@@ -93,6 +93,7 @@ class MigrateRollbackCommand(CommandBase):
         """Check if we're running in production environment."""
         try:
             from cara.configuration import config
+
             env = str(config("app.ENV", "")).lower()
         except Exception:
             env = os.getenv("APP_ENV", "").lower()

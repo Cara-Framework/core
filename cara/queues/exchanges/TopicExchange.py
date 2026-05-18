@@ -6,7 +6,6 @@ queue binding and message routing via routing keys.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 from cara.facades import Log
 
@@ -14,6 +13,7 @@ from cara.facades import Log
 @dataclass
 class QueueBinding:
     """Queue binding configuration."""
+
     queue_name: str
     routing_pattern: str
     domain: str
@@ -24,6 +24,7 @@ class QueueBinding:
 @dataclass
 class RoutingKey:
     """Parsed routing key components."""
+
     domain: str
     subtype: str
     priority: str
@@ -34,11 +35,13 @@ class RoutingKey:
         return f"{self.domain}.{self.subtype}.{self.priority}"
 
     @classmethod
-    def parse(cls, routing_key: str) -> "RoutingKey":
+    def parse(cls, routing_key: str) -> RoutingKey:
         """Parse routing key string into components."""
-        parts = routing_key.split('.')
+        parts = routing_key.split(".")
         if len(parts) != 3:
-            raise ValueError(f"Invalid routing key format: {routing_key}. Expected: domain.subtype.priority")
+            raise ValueError(
+                f"Invalid routing key format: {routing_key}. Expected: domain.subtype.priority"
+            )
 
         return cls(domain=parts[0], subtype=parts[1], priority=parts[2])
 
@@ -46,14 +49,14 @@ class RoutingKey:
 class TopicExchange:
     """
     RabbitMQ Topic Exchange for Cara Framework.
-    
+
     Features:
     - Automatic queue creation and binding
     - Routing key pattern matching
     - Domain-based job categorization
     - Priority-based message routing
     - Singleton pattern to prevent re-initialization
-    
+
     Usage:
         exchange = TopicExchange()  # Reads name from config('queue.topic_exchange_name')
 
@@ -72,10 +75,10 @@ class TopicExchange:
         )
     """
 
-    _instances: Dict[str, "TopicExchange"] = {}  # Class-level instances cache
+    _instances: dict[str, TopicExchange] = {}  # Class-level instances cache
 
     @staticmethod
-    def _resolve_exchange_name(exchange_name: Optional[str]) -> str:
+    def _resolve_exchange_name(exchange_name: str | None) -> str:
         """Resolve exchange name from argument or config."""
         if exchange_name:
             return exchange_name
@@ -90,7 +93,7 @@ class TopicExchange:
             )
         return resolved
 
-    def __new__(cls, exchange_name: Optional[str] = None):
+    def __new__(cls, exchange_name: str | None = None):
         """Singleton pattern per-exchange-name to prevent duplicate instances."""
         name = cls._resolve_exchange_name(exchange_name)
         if name not in cls._instances:
@@ -98,7 +101,7 @@ class TopicExchange:
             cls._instances[name] = instance
         return cls._instances[name]
 
-    def __init__(self, exchange_name: Optional[str] = None):
+    def __init__(self, exchange_name: str | None = None):
         """
         Initialize TopicExchange.
 
@@ -108,13 +111,13 @@ class TopicExchange:
         """
         exchange_name = self._resolve_exchange_name(exchange_name)
         # Prevent re-initialization
-        if hasattr(self, '_initialized'):
+        if hasattr(self, "_initialized"):
             return
 
         self.exchange_name = exchange_name
-        self.bindings: Dict[str, QueueBinding] = {}
-        self.queue_bindings: Dict[str, List[str]] = {}
-        self._queue_patterns: Dict[str, List[str]] = {}
+        self.bindings: dict[str, QueueBinding] = {}
+        self.queue_bindings: dict[str, list[str]] = {}
+        self._queue_patterns: dict[str, list[str]] = {}
         self._logged_bindings = set()
 
         # Auto-bind standard queues
@@ -127,6 +130,7 @@ class TopicExchange:
         """Setup queue bindings from app configuration."""
         # Load app-specific bindings from config (required)
         from cara.configuration import config
+
         app_bindings = config("queue.topic_exchange_bindings", None)
 
         if not app_bindings:
@@ -143,7 +147,7 @@ class TopicExchange:
     def bind_queue(self, queue_name: str, routing_pattern: str) -> None:
         """
         Bind a queue to a routing pattern.
-        
+
         Args:
             queue_name: Name of the queue to bind
             routing_pattern: Routing pattern (e.g., "enrichment.*.high")
@@ -159,17 +163,17 @@ class TopicExchange:
             if binding_key not in self._logged_bindings:
                 Log.debug(
                     f"Queue bound: {queue_name} -> {routing_pattern}",
-                    category="cara.queue.exchange"
+                    category="cara.queue.exchange",
                 )
                 self._logged_bindings.add(binding_key)
 
-    def get_matching_queues(self, routing_key: str) -> List[str]:
+    def get_matching_queues(self, routing_key: str) -> list[str]:
         """
         Get queues that match the routing key.
-        
+
         Args:
             routing_key: Full routing key (e.g., "enrichment.product.high")
-            
+
         Returns:
             List of matching queue names
         """
@@ -186,19 +190,19 @@ class TopicExchange:
     def _matches_pattern(self, routing_key: str, pattern: str) -> bool:
         """
         Check if routing key matches the pattern.
-        
+
         Supports:
         - * matches exactly one word
         - # matches zero or more words (not implemented for simplicity)
         """
-        routing_parts = routing_key.split('.')
-        pattern_parts = pattern.split('.')
+        routing_parts = routing_key.split(".")
+        pattern_parts = pattern.split(".")
 
         if len(routing_parts) != len(pattern_parts):
             return False
 
         for routing_part, pattern_part in zip(routing_parts, pattern_parts):
-            if pattern_part != '*' and pattern_part != routing_part:
+            if pattern_part != "*" and pattern_part != routing_part:
                 return False
 
         return True
@@ -206,7 +210,9 @@ class TopicExchange:
     _DISPATCH_MAX_RETRIES = 3
     _DISPATCH_BACKOFF_BASE = 0.5
 
-    def dispatch_job(self, routing_key: str, job_instance, payload: Optional[Dict] = None) -> str:
+    def dispatch_job(
+        self, routing_key: str, job_instance, payload: dict | None = None
+    ) -> str:
         """
         Dispatch job to appropriate queue based on routing key.
 
@@ -260,9 +266,9 @@ class TopicExchange:
 
         target_queue = self._select_best_queue(matching_queues, parsed_key.priority)
 
-        if hasattr(job_instance, 'queue'):
+        if hasattr(job_instance, "queue"):
             job_instance.queue = target_queue
-        if hasattr(job_instance, 'routing_key'):
+        if hasattr(job_instance, "routing_key"):
             job_instance.routing_key = routing_key
 
         from cara.facades import Queue
@@ -272,17 +278,20 @@ class TopicExchange:
                 job_id = Queue.push(job_instance)
                 Log.debug(
                     f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
-                    category="cara.queue.exchange"
+                    category="cara.queue.exchange",
                 )
                 return str(job_id)
             except Exception as publish_err:
-                if attempt < self._DISPATCH_MAX_RETRIES - 1 and self._is_connection_error(publish_err):
+                if attempt < self._DISPATCH_MAX_RETRIES - 1 and self._is_connection_error(
+                    publish_err
+                ):
                     import time
-                    wait = self._DISPATCH_BACKOFF_BASE * (2 ** attempt)
+
+                    wait = self._DISPATCH_BACKOFF_BASE * (2**attempt)
                     Log.warning(
                         f"Dispatch attempt {attempt + 1} failed for {routing_key}, "
                         f"retrying in {wait:.1f}s: {publish_err}",
-                        category="cara.queue.exchange"
+                        category="cara.queue.exchange",
                     )
                     time.sleep(wait)
                     continue
@@ -304,22 +313,36 @@ class TopicExchange:
     def _is_connection_error(exc: Exception) -> bool:
         """Check if the exception is a recoverable AMQP connection error."""
         err_str = str(exc).lower()
-        if any(kw in err_str for kw in ("stream", "broken pipe", "connection", "reset", "refused", "timeout")):
+        if any(
+            kw in err_str
+            for kw in (
+                "stream",
+                "broken pipe",
+                "connection",
+                "reset",
+                "refused",
+                "timeout",
+            )
+        ):
             return True
         try:
             import pika.exceptions
-            return isinstance(exc, (pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError))
+
+            return isinstance(
+                exc,
+                (pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError),
+            )
         except ImportError:
             return False
 
-    def _select_best_queue(self, matching_queues: List[str], priority: str) -> str:
+    def _select_best_queue(self, matching_queues: list[str], priority: str) -> str:
         """
         Select the best queue from matching queues based on priority.
-        
+
         Args:
             matching_queues: List of matching queue names
             priority: Requested priority level
-            
+
         Returns:
             Best matching queue name
         """
@@ -331,23 +354,24 @@ class TopicExchange:
         # Fallback to first available queue
         return matching_queues[0]
 
-    def get_queue_info(self) -> Dict[str, Dict]:
+    def get_queue_info(self) -> dict[str, dict]:
         """Get information about all bound queues."""
         queue_info = {}
 
         for queue_name, binding in self.bindings.items():
             queue_info[queue_name] = {
-                'routing_pattern': binding.routing_pattern,
-                'domain': binding.domain,
-                'priority': binding.priority,
-                'exchange': self.exchange_name
+                "routing_pattern": binding.routing_pattern,
+                "domain": binding.domain,
+                "priority": binding.priority,
+                "exchange": self.exchange_name,
             }
 
         return queue_info
 
-    def list_queues_for_domain(self, domain: str) -> List[str]:
+    def list_queues_for_domain(self, domain: str) -> list[str]:
         """Get all queues for a specific domain."""
         return [
-            queue_name for queue_name, binding in self.bindings.items()
+            queue_name
+            for queue_name, binding in self.bindings.items()
             if binding.domain == domain
         ]

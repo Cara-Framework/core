@@ -5,16 +5,17 @@ This module provides the service provider that configures and registers the sche
 making scheduling services available throughout the application.
 """
 
-from typing import Any, Dict, List
-from cara.foundation import DeferredProvider
+from typing import Any
+
 from cara.configuration import config
-from cara.scheduling import Scheduling
-from cara.scheduling.drivers import APSchedulerDriver
 from cara.exceptions import (
-    SchedulingConfigurationException,
     DriverLibraryNotFoundException,
+    SchedulingConfigurationException,
     SchedulingException,
 )
+from cara.foundation import DeferredProvider
+from cara.scheduling import Scheduling
+from cara.scheduling.drivers import APSchedulerDriver
 
 
 class SchedulingProvider(DeferredProvider):
@@ -25,12 +26,12 @@ class SchedulingProvider(DeferredProvider):
     """
 
     @classmethod
-    def provides(cls) -> List[str]:
+    def provides(cls) -> list[str]:
         return ["scheduling"]
 
     def register(self) -> None:
         default_driver = config("scheduling.default", None)
-        drivers_cfg: Dict[str, Any] = config("scheduling.drivers", {}) or {}
+        drivers_cfg: dict[str, Any] = config("scheduling.drivers", {}) or {}
 
         if not default_driver or default_driver not in drivers_cfg:
             raise SchedulingConfigurationException(

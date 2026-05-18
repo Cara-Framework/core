@@ -5,7 +5,6 @@ This module provides a CLI command to generate Eloquent model classes with enhan
 """
 
 from pathlib import Path
-from typing import Optional
 
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -28,8 +27,8 @@ class MakeModelCommand(CommandBase):
     def handle(
         self,
         name: str,
-        table: Optional[str] = None,
-        fillable: Optional[str] = None,
+        table: str | None = None,
+        fillable: str | None = None,
     ):
         """Handle model generation with enhanced options."""
         self.info("🏗️  Model Generation")
@@ -58,7 +57,7 @@ class MakeModelCommand(CommandBase):
             return
 
     def _prepare_model_info(
-        self, name: str, table: Optional[str], fillable: Optional[str]
+        self, name: str, table: str | None, fillable: str | None
     ) -> dict:
         """Prepare and validate model information."""
         if not name:

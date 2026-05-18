@@ -1,7 +1,6 @@
 """Application-level exceptions that don't fit elsewhere."""
 
 from .base import CaraException
-from typing import Optional
 
 
 class AppException(CaraException):
@@ -14,7 +13,10 @@ class RouteRegistrationException(AppException):
     """Thrown when route registration fails during application startup."""
 
     def __init__(
-        self, message: str, controller_path: Optional[str] = None, method_name: Optional[str] = None
+        self,
+        message: str,
+        controller_path: str | None = None,
+        method_name: str | None = None,
     ):
         super().__init__(message)
         self.controller_path = controller_path
@@ -35,7 +37,10 @@ class ControllerMethodNotFoundException(RouteRegistrationException):
     """Thrown when a controller method referenced in routes doesn't exist."""
 
     def __init__(
-        self, controller_name: str, method_name: str, available_methods: Optional[list] = None
+        self,
+        controller_name: str,
+        method_name: str,
+        available_methods: list | None = None,
     ):
         message = f"Method '{method_name}' not found in controller '{controller_name}'"
         if available_methods:
@@ -44,11 +49,8 @@ class ControllerMethodNotFoundException(RouteRegistrationException):
         self.available_methods = available_methods or []
 
 
-
-
 __all__ = [
     "AppException",
     "RouteRegistrationException",
     "ControllerMethodNotFoundException",
 ]
-

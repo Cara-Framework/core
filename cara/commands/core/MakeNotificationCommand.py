@@ -7,7 +7,6 @@ from pathlib import Path
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.support import paths
-from typing import Optional
 
 
 @command(
@@ -22,7 +21,7 @@ from typing import Optional
 class MakeNotificationCommand(CommandBase):
     """Generate Notification classes with enhanced configuration."""
 
-    def handle(self, name: str, channels: Optional[str] = None):
+    def handle(self, name: str, channels: str | None = None):
         """Handle notification generation."""
         self.info("🏗️  Notification Generation")
 
@@ -44,7 +43,7 @@ class MakeNotificationCommand(CommandBase):
         except Exception as e:
             self.error(f"❌ Failed to generate notification: {e}")
 
-    def _prepare_notification_info(self, name: str, channels: Optional[str] = None) -> dict:
+    def _prepare_notification_info(self, name: str, channels: str | None = None) -> dict:
         """Prepare notification information."""
         if not name:
             raise ValueError("Notification name is required")

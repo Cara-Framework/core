@@ -5,7 +5,7 @@ Use JsonJobSerializer for new projects (more secure and portable).
 """
 
 import pickle
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class PickleJobSerializer:
@@ -20,7 +20,7 @@ class PickleJobSerializer:
 
     @staticmethod
     def serialize(
-        job_class: type, init_args: tuple = (), init_kwargs: Optional[dict] = None
+        job_class: type, init_args: tuple = (), init_kwargs: dict | None = None
     ) -> bytes:
         """
         Serialize job to pickle bytes.
@@ -45,7 +45,7 @@ class PickleJobSerializer:
         return pickle.dumps(payload)
 
     @staticmethod
-    def deserialize(pickle_bytes: bytes) -> Dict[str, Any]:
+    def deserialize(pickle_bytes: bytes) -> dict[str, Any]:
         """
         Deserialize pickle bytes to job specification.
 

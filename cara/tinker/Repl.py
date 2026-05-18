@@ -5,7 +5,7 @@ This file provides REPL functionality for executing commands in the Cara framewo
 """
 
 import ast
-from typing import Any, Dict, Optional
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -15,7 +15,7 @@ from rich.syntax import Syntax
 class Repl:
     """Read-Eval-Print Loop for Cara Tinker with Rich integration."""
 
-    def __init__(self, namespace: Dict[str, Any]):
+    def __init__(self, namespace: dict[str, Any]):
         """Initialize REPL with given namespace and Rich console."""
         self.namespace = namespace
         self.history = []
@@ -49,7 +49,7 @@ class Repl:
             self.print_error(e, code)
             return None
 
-    def print_error(self, error: Exception, code: Optional[str] = None):
+    def print_error(self, error: Exception, code: str | None = None):
         """Print error in a beautiful Rich format."""
         error_type = type(error).__name__
         error_message = str(error)
@@ -97,7 +97,7 @@ class Repl:
         """Add variable to namespace."""
         self.namespace[name] = value
 
-    def get_namespace(self) -> Dict[str, Any]:
+    def get_namespace(self) -> dict[str, Any]:
         """Get current namespace."""
         return self.namespace.copy()
 

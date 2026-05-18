@@ -9,7 +9,7 @@ Mirrors the surface used across the codebase: ``debug``, ``info``,
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -18,7 +18,7 @@ class LogRecord:
 
     level: str
     message: str
-    category: Optional[str] = None
+    category: str | None = None
     extra: dict = field(default_factory=dict)
 
 
@@ -28,7 +28,7 @@ class LogFake:
     LEVELS = ("debug", "info", "warning", "error", "critical", "exception")
 
     def __init__(self) -> None:
-        self.records: List[LogRecord] = []
+        self.records: list[LogRecord] = []
 
     # ── Facade-compatible methods ────────────────────────────────────
 
@@ -56,7 +56,7 @@ class LogFake:
     def exception(self, message: Any, **kwargs: Any) -> None:
         self._record("exception", message, **kwargs)
 
-    def withContext(self, **context: Any) -> "_FakeContextualLogger":
+    def withContext(self, **context: Any) -> _FakeContextualLogger:
         """Return a scoped fake logger that appends context tags.
 
         Mirrors the real ``Logger.withContext`` so production code paths
@@ -68,7 +68,7 @@ class LogFake:
 
     # ── Test-time helpers ────────────────────────────────────────────
 
-    def recorded(self, level: Optional[str] = None) -> List[LogRecord]:
+    def recorded(self, level: str | None = None) -> list[LogRecord]:
         """Return all records, optionally filtered by level."""
         if level is None:
             return list(self.records)
@@ -78,7 +78,7 @@ class LogFake:
         """``True`` if any record at ``level`` contains the substring."""
         return any(contains in r.message for r in self.records if r.level == level)
 
-    def count(self, level: Optional[str] = None) -> int:
+    def count(self, level: str | None = None) -> int:
         return len(self.recorded(level))
 
     def assert_logged(self, level: str, contains: str) -> None:

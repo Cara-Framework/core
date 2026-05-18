@@ -4,7 +4,8 @@ View - Main view factory for Cara framework
 This file provides the main View factory functionality.
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from cara.view import ViewEngine, ViewInstance
 
@@ -12,18 +13,18 @@ from cara.view import ViewEngine, ViewInstance
 class View:
     """Main View factory for creating and managing views."""
 
-    def __init__(self, engine: Optional[ViewEngine] = None):
+    def __init__(self, engine: ViewEngine | None = None):
         """Initialize view factory."""
         self.engine = engine or ViewEngine()
         self.shared_data = {}
         self.composers = {}
         self.creators = {}
 
-    def make(self, view: str, data: Dict[str, Any] = None) -> ViewInstance:
+    def make(self, view: str, data: dict[str, Any] = None) -> ViewInstance:
         """Create a view instance."""
         return ViewInstance(view, data or {}, self.engine, self)
 
-    def render(self, view: str, data: Dict[str, Any] = None) -> str:
+    def render(self, view: str, data: dict[str, Any] = None) -> str:
         """Render a view template."""
         data = data or {}
 
@@ -32,7 +33,7 @@ class View:
 
         return self.engine.render(view, data, factory=self)
 
-    def render_string(self, template: str, data: Dict[str, Any] = None) -> str:
+    def render_string(self, template: str, data: dict[str, Any] = None) -> str:
         """Render template string directly."""
         data = data or {}
 
@@ -46,32 +47,32 @@ class View:
         """Check if view template exists."""
         return self.engine.exists(view)
 
-    def render_mail(self, view: str, data: Dict[str, Any] = None) -> str:
+    def render_mail(self, view: str, data: dict[str, Any] = None) -> str:
         """Render mail template with mail-specific data."""
         renderer = self.engine.get_renderer(factory=self)
         return renderer.render_mail_template(view, data)
 
-    def render_mail_template(self, view: str, data: Dict[str, Any] = None) -> str:
+    def render_mail_template(self, view: str, data: dict[str, Any] = None) -> str:
         """Alias for render_mail method."""
         return self.render_mail(view, data)
 
-    def share(self, key: str, value: Any) -> "View":
+    def share(self, key: str, value: Any) -> View:
         """Share data globally across all views."""
         self.shared_data[key] = value
         return self
 
-    def get_shared_data(self) -> Dict[str, Any]:
+    def get_shared_data(self) -> dict[str, Any]:
         """Get all shared data."""
         return self.shared_data.copy()
 
-    def composer(self, pattern: str, callback: Callable) -> "View":
+    def composer(self, pattern: str, callback: Callable) -> View:
         """Register view composer for specific view patterns."""
         if pattern not in self.composers:
             self.composers[pattern] = []
         self.composers[pattern].append(callback)
         return self
 
-    def get_composers(self, view: str) -> List[Callable]:
+    def get_composers(self, view: str) -> list[Callable]:
         """Get composers for a specific view."""
         composers = []
         for pattern, callbacks in self.composers.items():
@@ -79,12 +80,12 @@ class View:
                 composers.extend(callbacks)
         return composers
 
-    def creator(self, view: str, callback: Callable) -> "View":
+    def creator(self, view: str, callback: Callable) -> View:
         """Register view creator."""
         self.creators[view] = callback
         return self
 
-    def directive(self, name: str, handler: Callable) -> "View":
+    def directive(self, name: str, handler: Callable) -> View:
         """Register custom directive."""
         self.engine.directive(name, handler)
         return self
@@ -97,34 +98,34 @@ class View:
         """Get renderer instance with factory reference."""
         return self.engine.get_renderer(factory=factory or self)
 
-    def clear_cache(self) -> "View":
+    def clear_cache(self) -> View:
         """Clear compiled template cache."""
         self.engine.clear_cache()
         return self
 
-    def flush_state(self) -> "View":
+    def flush_state(self) -> View:
         """Flush the factory state."""
         self.shared_data.clear()
         self.composers.clear()
         self.creators.clear()
         return self
 
-    def flush_state_if_done_for_request(self) -> "View":
+    def flush_state_if_done_for_request(self) -> View:
         """Flush state if done for current request."""
         return self.flush_state()
 
-    def add_namespace(self, namespace: str, hints: List[str]) -> "View":
+    def add_namespace(self, namespace: str, hints: list[str]) -> View:
         """Add namespace for view location."""
         # TODO: Implementation for view namespaces
         return self
 
-    def replace_namespace(self, namespace: str, hints: List[str]) -> "View":
+    def replace_namespace(self, namespace: str, hints: list[str]) -> View:
         """Replace namespace hints."""
         # TODO: Implementation for replacing view namespaces
         return self
 
     # Private helper methods
-    def _apply_composers(self, view: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_composers(self, view: str, data: dict[str, Any]) -> dict[str, Any]:
         """Apply view composers to data."""
         composers = self.get_composers(view)
 
@@ -135,7 +136,7 @@ class View:
 
         return data
 
-    def _create_view_object(self, data: Dict[str, Any]):
+    def _create_view_object(self, data: dict[str, Any]):
         """Create view object for composer."""
 
         class ViewObject:

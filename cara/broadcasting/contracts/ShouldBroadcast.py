@@ -17,7 +17,8 @@ when implementing their event.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Union
 
 # Forward-imported lazily to avoid a circular import — the Channel
 # module has no other deps but ShouldBroadcast lives in `contracts`
@@ -29,7 +30,7 @@ class ShouldBroadcast(ABC):
     """Interface for events that should be broadcast over WebSocket."""
 
     @abstractmethod
-    def broadcast_on(self) -> Union[ChannelLike, Sequence[ChannelLike]]:
+    def broadcast_on(self) -> ChannelLike | Sequence[ChannelLike]:
         """Channel(s) the event should broadcast on. May return a
         string, a ``Channel`` instance, or a list/tuple of either."""
 
@@ -38,7 +39,7 @@ class ShouldBroadcast(ABC):
         """Wire-side event name (e.g. ``"price.updated"``). Defaults
         to the class name when ``BroadcastEvent`` is the base."""
 
-    def broadcast_with(self) -> Dict[str, Any]:
+    def broadcast_with(self) -> dict[str, Any]:
         """Payload dict broadcast to subscribers. Defaults to empty."""
         return {}
 
@@ -54,13 +55,13 @@ class ShouldBroadcast(ABC):
         phrased."""
         return False
 
-    def broadcast_via(self) -> Optional[str]:
+    def broadcast_via(self) -> str | None:
         """Driver name override. Return ``None`` to use the default
         broadcaster, or a registered driver name (``"redis"``,
         ``"log"``, ...) to route this event to a specific transport."""
         return None
 
-    def except_socket_id(self) -> Optional[str]:
+    def except_socket_id(self) -> str | None:
         """Connection ``socket_id`` to skip when delivering this
         event — the "don't echo back to sender" pattern. Set this to
         the value of the request's ``X-Socket-Id`` header so the

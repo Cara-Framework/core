@@ -7,8 +7,9 @@ Laravel-inspired pipeline pattern with async support and priority routing.
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from cara.facades import Log
 
@@ -28,12 +29,12 @@ class PipelineStep:
         self,
         step_class,
         args: tuple = (),
-        kwargs: Optional[dict] = None,
-        routing_key: Optional[str] = None,
+        kwargs: dict | None = None,
+        routing_key: str | None = None,
         priority: str = "default",
-        condition: Optional[Callable] = None,
-        on_success: Optional[Callable] = None,
-        on_failure: Optional[Callable] = None,
+        condition: Callable | None = None,
+        on_success: Callable | None = None,
+        on_failure: Callable | None = None,
     ):
         """
         Initialize pipeline step.
@@ -98,16 +99,16 @@ class Pipeline:
             .dispatch()
     """
 
-    def __init__(self, pipeline_type: PipelineType, name: Optional[str] = None):
+    def __init__(self, pipeline_type: PipelineType, name: str | None = None):
         """Initialize pipeline."""
         self.pipeline_type = pipeline_type
         self.name = name or f"pipeline_{uuid.uuid4().hex[:8]}"
-        self.steps: List[PipelineStep] = []
-        self.context: Dict[str, Any] = {}
-        self.results: List[Dict[str, Any]] = []
+        self.steps: list[PipelineStep] = []
+        self.context: dict[str, Any] = {}
+        self.results: list[dict[str, Any]] = []
 
     @classmethod
-    def create(cls, pipeline_type: PipelineType, name: Optional[str] = None) -> "Pipeline":
+    def create(cls, pipeline_type: PipelineType, name: str | None = None) -> Pipeline:
         """Create a new pipeline."""
         return cls(pipeline_type, name)
 
@@ -116,12 +117,12 @@ class Pipeline:
         step_class,
         *args,
         priority: str = "default",
-        routing_key: Optional[str] = None,
-        condition: Optional[Callable] = None,
-        on_success: Optional[Callable] = None,
-        on_failure: Optional[Callable] = None,
+        routing_key: str | None = None,
+        condition: Callable | None = None,
+        on_success: Callable | None = None,
+        on_failure: Callable | None = None,
         **kwargs,
-    ) -> "Pipeline":
+    ) -> Pipeline:
         """
         Add a step to the pipeline.
 
@@ -149,11 +150,11 @@ class Pipeline:
         self.steps.append(step)
         return self
 
-    def when(self, condition: Callable) -> "ConditionalPipeline":
+    def when(self, condition: Callable) -> ConditionalPipeline:
         """Add conditional step."""
         return ConditionalPipeline(self, condition)
 
-    def set_context(self, key: str, value: Any) -> "Pipeline":
+    def set_context(self, key: str, value: Any) -> Pipeline:
         """Set context variable."""
         self.context[key] = value
         return self
@@ -162,7 +163,7 @@ class Pipeline:
         """Get context variable."""
         return self.context.get(key, default)
 
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self) -> dict[str, Any]:
         """Execute the pipeline based on type."""
         Log.info(
             f"🚀 Executing pipeline: {self.name} Type: {self.pipeline_type.value}",
@@ -178,7 +179,7 @@ class Pipeline:
         else:
             raise ValueError(f"Unknown pipeline type: {self.pipeline_type}")
 
-    def dispatch(self) -> Dict[str, Any]:
+    def dispatch(self) -> dict[str, Any]:
         """Dispatch async pipeline (non-blocking)."""
         if self.pipeline_type == PipelineType.SYNC:
             raise ValueError("Cannot dispatch sync pipeline. Use execute() instead.")
@@ -194,7 +195,7 @@ class Pipeline:
         elif self.pipeline_type == PipelineType.ASYNC_PARALLEL:
             return self._dispatch_parallel()
 
-    async def _execute_sync(self) -> Dict[str, Any]:
+    async def _execute_sync(self) -> dict[str, Any]:
         """Execute pipeline synchronously (for commands)."""
         successful_steps = 0
         total_steps = len(self.steps)
@@ -292,7 +293,7 @@ class Pipeline:
         )
         return result
 
-    async def _execute_async_chain(self) -> Dict[str, Any]:
+    async def _execute_async_chain(self) -> dict[str, Any]:
         """Execute pipeline as async chain (sequential job execution)."""
         if not self.steps:
             return {"success": False, "error": "No steps to execute"}
@@ -390,11 +391,11 @@ class Pipeline:
         )
         return result
 
-    async def _execute_async_parallel(self) -> Dict[str, Any]:
+    async def _execute_async_parallel(self) -> dict[str, Any]:
         """Execute pipeline as async parallel (parallel job execution)."""
         return self._dispatch_parallel()
 
-    def _dispatch_chain(self) -> Dict[str, Any]:
+    def _dispatch_chain(self) -> dict[str, Any]:
         """Dispatch job chain with Laravel-style ``.chain([...])`` continuation.
 
         We dispatch the first step normally and attach the remaining steps as
@@ -456,7 +457,7 @@ class Pipeline:
             )
             return {"success": False, "error": str(e)}
 
-    def _dispatch_parallel(self) -> Dict[str, Any]:
+    def _dispatch_parallel(self) -> dict[str, Any]:
         """Dispatch jobs in parallel."""
         job_ids = []
 

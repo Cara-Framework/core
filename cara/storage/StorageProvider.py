@@ -5,8 +5,6 @@ This module provides the deferred service provider that configures and registers
 subsystem, including file-based storage drivers.
 """
 
-from typing import List
-
 from cara.configuration import config
 from cara.exceptions import StorageConfigurationException
 from cara.foundation import DeferredProvider
@@ -23,7 +21,7 @@ class StorageProvider(DeferredProvider):
     """
 
     @classmethod
-    def provides(cls) -> List[str]:
+    def provides(cls) -> list[str]:
         return ["storage"]
 
     def register(self) -> None:

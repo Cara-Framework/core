@@ -6,6 +6,7 @@ for schedule eligibility.
 """
 
 from abc import ABC, abstractmethod
+
 from cara.scheduling import Scheduling
 
 

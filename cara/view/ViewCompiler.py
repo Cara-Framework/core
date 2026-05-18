@@ -5,7 +5,6 @@ This file provides template compilation functionality.
 """
 
 import re
-from typing import Dict, List, Optional
 
 
 class ViewCompiler:
@@ -55,7 +54,7 @@ class ViewCompiler:
         pattern = r"@comment.*?@endcomment"
         return re.sub(pattern, "", template, flags=re.DOTALL)
 
-    def compile_line(self, line: str, directives) -> List[str]:
+    def compile_line(self, line: str, directives) -> list[str]:
         """Compile a single line of template."""
         compiled_lines = []
 
@@ -136,7 +135,7 @@ class ViewCompiler:
         """Check if line has raw echo statements {!! !!}."""
         return "{!!" in line and "!!}" in line
 
-    def compile_directive_line(self, line: str, directives) -> List[str]:
+    def compile_directive_line(self, line: str, directives) -> list[str]:
         """Compile line containing directives."""
         compiled_lines = []
 
@@ -209,7 +208,7 @@ class ViewCompiler:
 
         return compiled_lines
 
-    def compile_echo_line(self, line: str) -> List[str]:
+    def compile_echo_line(self, line: str) -> list[str]:
         """Compile line with echo statements {{ }}."""
         compiled_lines = []
 
@@ -243,7 +242,7 @@ class ViewCompiler:
 
         return compiled_lines
 
-    def compile_raw_echo_line(self, line: str) -> List[str]:
+    def compile_raw_echo_line(self, line: str) -> list[str]:
         """Compile line with raw echo statements {!! !!}."""
         compiled_lines = []
 
@@ -273,7 +272,7 @@ class ViewCompiler:
 
         return compiled_lines
 
-    def compile_mixed_echo_line(self, line: str) -> List[str]:
+    def compile_mixed_echo_line(self, line: str) -> list[str]:
         """Compile line with both echo and raw echo statements."""
         compiled_lines = []
 
@@ -350,7 +349,7 @@ class ViewCompiler:
 
         return compiled_lines
 
-    def extract_sections(self, template: str) -> Dict[str, str]:
+    def extract_sections(self, template: str) -> dict[str, str]:
         """Extract sections from template."""
         sections = {}
 
@@ -365,7 +364,7 @@ class ViewCompiler:
 
         return sections
 
-    def extract_extends(self, template: str) -> Optional[str]:
+    def extract_extends(self, template: str) -> str | None:
         """Extract extends directive from template, or ``None`` if not present."""
         extends_pattern = r'@extends\([\'"]([^\'"]+)[\'"]\)'
         match = re.search(extends_pattern, template)
@@ -387,7 +386,7 @@ class ViewCompiler:
 
         return re.sub(include_pattern, replace_include, template)
 
-    def process_yields(self, template: str, sections: Dict[str, str]) -> str:
+    def process_yields(self, template: str, sections: dict[str, str]) -> str:
         """Process yield directives with section content."""
 
         def replace_yield(match):

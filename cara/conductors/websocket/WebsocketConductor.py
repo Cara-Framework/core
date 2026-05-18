@@ -8,7 +8,7 @@ Follows HttpConductor architecture with proper route resolution and middleware.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Dict
+from typing import Any
 
 from cara.exceptions import MiddlewareNotFoundException, WebSocketException
 from cara.facades import Log
@@ -34,7 +34,7 @@ class WebsocketConductor:
         self.socket: Socket = None
         self.router = None
 
-    async def handle(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
+    async def handle(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         """
         Main entry point for WebSocket connections.
 
@@ -47,7 +47,7 @@ class WebsocketConductor:
         await self.handle_request(scope, receive, send)
 
     async def handle_request(
-        self, scope: Dict[str, Any], receive: Any, send: Any
+        self, scope: dict[str, Any], receive: Any, send: Any
     ) -> None:
         """
         Handle WebSocket request with Laravel-style lifecycle.
@@ -276,15 +276,18 @@ class WebsocketConductor:
             try:
                 sig = inspect.signature(terminate_fn)
                 positional = [
-                    p for p in sig.parameters.values()
+                    p
+                    for p in sig.parameters.values()
                     if p.kind
-                    in (inspect.Parameter.POSITIONAL_ONLY,
-                        inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
                 ]
                 if len(positional) >= 2:
                     # (request, response) — HTTP shape, not for us.
                     continue
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 # Builtin or otherwise non-introspectable — try the
                 # call and let the except block log if it fails.
                 pass

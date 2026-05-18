@@ -9,14 +9,15 @@ Usage:
   ``unique:users,email,5``              # ignore row with id=5
   ``unique:users,email,5,user_id``      # ignore row where user_id=5
 """
-from typing import Any, Dict
+
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
 
 
 class UniqueRule(BaseRule):
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         raw = params.get("unique")
         if not raw or value is None:
             return True
@@ -44,6 +45,7 @@ class UniqueRule(BaseRule):
         except Exception as exc:
             try:
                 from cara.facades import Log
+
                 Log.error(
                     f"UniqueRule: DB query failed for {table}.{column}: "
                     f"{exc.__class__.__name__}: {exc}",
@@ -53,6 +55,6 @@ class UniqueRule(BaseRule):
                 pass
             return False
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
         return f"The {attr.lower()} has already been taken."

@@ -22,8 +22,7 @@ import socket
 import subprocess
 import sys
 import threading
-from typing import Any, Optional
-
+from typing import Any
 
 _setup_done = False
 _setup_lock = threading.Lock()
@@ -57,8 +56,8 @@ def _env(key: str, default: Any = "") -> str:
 def setup_sentry(
     *,
     service_name: str,
-    release: Optional[str] = None,
-    git_repo_dir: Optional[str] = None,
+    release: str | None = None,
+    git_repo_dir: str | None = None,
 ) -> None:
     """Initialise Sentry / GlitchTip if a DSN is configured.
 
@@ -98,8 +97,7 @@ def _try(fn, *args, **kwargs) -> None:
             from cara.facades import Log
 
             Log.warning(
-                f"[cara.observability] {fn.__name__} failed: "
-                f"{e.__class__.__name__}: {e}",
+                f"[cara.observability] {fn.__name__} failed: {e.__class__.__name__}: {e}",
                 category="observability",
             )
         except Exception as log_err:
@@ -139,9 +137,7 @@ def _init_sentry(service_name: str, release: str) -> None:
     try:
         from cara.facades import Log
 
-        Log.info(
-            f"Sentry/GlitchTip enabled (service={service_name}, release={release})"
-        )
+        Log.info(f"Sentry/GlitchTip enabled (service={service_name}, release={release})")
     except Exception as e:
         print(
             f"[cara.observability] Sentry enabled but Log.info failed: {e}",
@@ -149,7 +145,7 @@ def _init_sentry(service_name: str, release: str) -> None:
         )
 
 
-def set_request_user(user_id: Any, email: Optional[str] = None) -> None:
+def set_request_user(user_id: Any, email: str | None = None) -> None:
     """Attach the resolved user to the current Sentry scope.
 
     Called from the auth middleware after ``request.set_user(...)``;
@@ -190,6 +186,7 @@ def set_request_tag(key: str, value: Any) -> None:
         return
     try:
         import sentry_sdk
+
         sentry_sdk.set_tag(key, str(value)[:200])
     except Exception:
         pass
@@ -201,6 +198,7 @@ def clear_scope() -> None:
     """
     try:
         import sentry_sdk
+
         scope = sentry_sdk.Scope.get_isolation_scope()
         scope.set_user(None)
         scope.clear_breadcrumbs()
@@ -208,7 +206,7 @@ def clear_scope() -> None:
         pass
 
 
-def _git_short_sha(repo_dir: Optional[str] = None) -> Optional[str]:
+def _git_short_sha(repo_dir: str | None = None) -> str | None:
     """Resolve the current git short-SHA in ``repo_dir`` (or cwd).
 
     Returns ``None`` when git is unavailable, the directory isn't a

@@ -1,6 +1,6 @@
 """Authentication-related exceptions for the Cara framework."""
 
-from typing import Any, Dict
+from typing import Any
 
 from .base import CaraException
 
@@ -14,7 +14,7 @@ class AuthenticationException(CaraException):
     is_http_exception = True
     status_code = 401
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert exception to dictionary for JSON response."""
         return {
             "error": str(self),
@@ -89,4 +89,3 @@ __all__ = [
     "UserNotFoundException",
     "ApiKeyInvalidException",
 ]
-

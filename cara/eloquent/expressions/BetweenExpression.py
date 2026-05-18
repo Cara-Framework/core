@@ -10,7 +10,9 @@ Compatible with BaseGrammar.process_wheres which reads .equality,
 class BetweenExpression:
     """Represents a BETWEEN / NOT BETWEEN condition in SQL."""
 
-    def __init__(self, column: str, min_value, max_value, not_between: bool = False, keyword=None):
+    def __init__(
+        self, column: str, min_value, max_value, not_between: bool = False, keyword=None
+    ):
         self.column = column
         self.min_value = min_value
         self.max_value = max_value

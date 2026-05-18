@@ -6,7 +6,6 @@ Laravel Intervention Image style fluent API.
 
 import os
 from io import BytesIO
-from typing import Union
 
 from PIL import ExifTags
 from PIL import Image as PILImage
@@ -23,7 +22,7 @@ class ImageProcessor:
         self.image = image
         self._orientated = False
 
-    def orientate(self) -> "ImageProcessor":
+    def orientate(self) -> ImageProcessor:
         """Auto-rotate based on EXIF data."""
         if self._orientated:
             return self
@@ -42,13 +41,13 @@ class ImageProcessor:
                         self.image = self.image.rotate(270, expand=True)
                     elif exif[orientation] == 8:
                         self.image = self.image.rotate(90, expand=True)
-        except (AttributeError, KeyError, IndexError, TypeError):
+        except AttributeError, KeyError, IndexError, TypeError:
             pass
 
         self._orientated = True
         return self
 
-    def resize(self, width: int, height: int) -> "ImageProcessor":
+    def resize(self, width: int, height: int) -> ImageProcessor:
         """Resize image maintaining aspect ratio."""
         self.image.thumbnail((width, height), PILImage.Resampling.LANCZOS)
         return self
@@ -76,7 +75,7 @@ class ImageProcessor:
         self.image.save(path, "JPEG", quality=quality)
         return path
 
-    def thumbnail(self, width: int, height: int) -> "ImageProcessor":
+    def thumbnail(self, width: int, height: int) -> ImageProcessor:
         """Create thumbnail with simple resize - no cropping."""
         # Resize to fit within max dimensions while maintaining aspect ratio
         max_width = 140
@@ -100,7 +99,7 @@ class ImageProcessor:
 
     def scaled_down_original(
         self, max_width: int = 800, max_height: int = 1200
-    ) -> "ImageProcessor":
+    ) -> ImageProcessor:
         """
         Create a scaled-down version of the original image.
 
@@ -132,7 +131,7 @@ class Image:
     """
 
     @staticmethod
-    def make(source: Union[str, bytes]) -> ImageProcessor:
+    def make(source: str | bytes) -> ImageProcessor:
         """
         Create image processor from source.
 

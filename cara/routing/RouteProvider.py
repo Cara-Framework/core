@@ -5,8 +5,6 @@ This module handles route registration, controller discovery, and route group ma
 framework. It supports controller-based routing and route decorators.
 """
 
-from typing import List
-
 from cara.foundation import DeferredProvider
 from cara.routing import Router
 from cara.routing.loaders import (
@@ -24,7 +22,7 @@ class RouteProvider(DeferredProvider):
     """
 
     @classmethod
-    def provides(cls) -> List[str]:
+    def provides(cls) -> list[str]:
         return ["router"]
 
     def register(self) -> None:
@@ -43,7 +41,7 @@ class RouteProvider(DeferredProvider):
         router = Router(self.application)
         self.application.bind("router", router)
 
-    def _load_all_routes(self) -> List:
+    def _load_all_routes(self) -> list:
         """Load routes from all sources."""
         explicit_loader = ExplicitRouteLoader(self.application)
         controller_loader = ControllerRouteLoader(self.application)

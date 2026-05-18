@@ -7,7 +7,7 @@ Laravel-style approach: inject our logger into external libraries with category 
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.facades import Log
 
@@ -69,7 +69,7 @@ class CaraPythonLoggerAdapter(logging.Logger):
 
     # Pretty display names for external libraries so the log module column
     # shows a meaningful service name instead of "CaraPythonLoggerAdapter".
-    _LIBRARY_DISPLAY_NAMES: Dict[str, str] = {
+    _LIBRARY_DISPLAY_NAMES: dict[str, str] = {
         "httpx": "Httpx",
         "httpcore": "Httpx",
         "urllib3": "Urllib3",
@@ -103,7 +103,7 @@ class CaraPythonLoggerAdapter(logging.Logger):
         msg: Any,
         args: tuple,
         exc_info=None,
-        extra: Optional[Dict] = None,
+        extra: dict | None = None,
         stack_info: bool = False,
     ):
         """Internal log method that forwards to Cara Logger."""
@@ -134,7 +134,7 @@ class CaraPythonLoggerAdapter(logging.Logger):
         if args:
             try:
                 message = msg % args
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 message = str(msg)
         else:
             message = str(msg)

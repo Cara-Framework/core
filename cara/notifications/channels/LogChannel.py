@@ -7,7 +7,7 @@ logging notifications instead of sending them, useful for debugging.
 
 import json
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 from cara.notifications.channels import BaseChannel
 
@@ -113,7 +113,7 @@ class LogChannel(BaseChannel):
         else:
             return str(data)
 
-    def _log_notification(self, log_data: Dict[str, Any]) -> None:
+    def _log_notification(self, log_data: dict[str, Any]) -> None:
         """
         Log the notification data.
 

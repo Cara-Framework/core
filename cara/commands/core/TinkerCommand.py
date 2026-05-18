@@ -5,7 +5,6 @@ This module provides a CLI command to start the interactive Tinker shell with en
 """
 
 from pathlib import Path
-from typing import List, Optional
 
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -28,9 +27,9 @@ class TinkerCommand(CommandBase):
 
     def handle(
         self,
-        include: Optional[str] = None,
-        execute: Optional[str] = None,
-        file: Optional[str] = None,
+        include: str | None = None,
+        execute: str | None = None,
+        file: str | None = None,
     ):
         """Handle Tinker shell startup with enhanced options."""
         self.info("🔧 Starting Cara Tinker...")
@@ -63,7 +62,7 @@ class TinkerCommand(CommandBase):
 
                 self.error(f"Stack trace: {traceback.format_exc()}")
 
-    def _start_interactive_shell(self, include: Optional[str] = None):
+    def _start_interactive_shell(self, include: str | None = None):
         """Start interactive Tinker shell."""
         from cara.tinker import Shell
 
@@ -330,7 +329,9 @@ class TinkerCommand(CommandBase):
                             table.add_row(*[str(v) for v in row.values()])
 
                         console.print(table)
-                        return f"✅ Displayed {len(data)} {model_class_name.lower()} records"
+                        return (
+                            f"✅ Displayed {len(data)} {model_class_name.lower()} records"
+                        )
                     else:
                         console.print(f"Results: {data}")
                         return data
@@ -370,7 +371,7 @@ class TinkerCommand(CommandBase):
             except Exception as e:
                 return f"❌ Stats Error: {str(e)}"
 
-        def show_config(key: Optional[str] = None):
+        def show_config(key: str | None = None):
             """Show configuration values."""
             if key:
                 value = Config.get(key)
@@ -522,9 +523,7 @@ class TinkerCommand(CommandBase):
                 # Test notification configuration
                 console.print("🔔 Testing notification configuration...")
 
-                notification_driver = str(
-                    Config.get("notification.default", "database")
-                )
+                notification_driver = str(Config.get("notification.default", "database"))
 
                 table = Table(title="🔔 Notification Configuration")
                 table.add_column("Setting", style="cyan")
@@ -714,9 +713,7 @@ class TinkerCommand(CommandBase):
         self.info("  🗄️  Database: query('users', 10), model_stats()")
         self.info("  💾 Cache: clear_cache(), test_cache()")
         self.info("  🔧 Config: show_config('app.name'), config_get(...)")
-        self.info(
-            "  📋 Development: logs(20), benchmark(func), craft('migrate:status')"
-        )
+        self.info("  📋 Development: logs(20), benchmark(func), craft('migrate:status')")
         self.info("  📧 Mail: test_mail(), send_test_mail(...)")
         self.info("  ⚡ Queue: test_queue(), queue_test_job(...)")
         self.info("  🔔 Notification: test_notification(), send_test_notification(...)")
@@ -739,7 +736,7 @@ class TinkerCommand(CommandBase):
 
         self.info("-" * 60)
 
-    def _include_modules(self, modules: List[str], shell):
+    def _include_modules(self, modules: list[str], shell):
         """Include additional modules."""
         for module_name in modules:
             module_name = module_name.strip()

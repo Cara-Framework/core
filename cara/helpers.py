@@ -7,25 +7,27 @@ Importing from ``cara.helpers`` lets application code write::
 without needing to know the canonical module path of each helper.
 """
 
-from typing import Any, Callable, Dict, Optional, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from cara.configuration import config
 from cara.environment.Environment import env
 from cara.exceptions.types.http import HttpException
 
 
-def route(name: str, params: Optional[Dict[str, Any]] = None) -> str:
+def route(name: str, params: dict[str, Any] | None = None) -> str:
     """Generate the URL for a named route (Laravel ``route('users.show', {id:1})``).
 
     Resolves the application router through the container and delegates to
     ``Router.url()``. Raises ``RouteNotFoundException`` if the name is unknown.
     """
     from bootstrap import application
+
     router = application.make("router")
     return router.url(name, params)
 
 
-def abort(status_code: int, message: Optional[str] = None, **extra: Any) -> None:
+def abort(status_code: int, message: str | None = None, **extra: Any) -> None:
     """Immediately stop request handling and return an HTTP error response.
 
     Laravel-style ``abort(404)`` / ``abort(403, 'Forbidden')``. The framework's
@@ -52,13 +54,17 @@ def abort(status_code: int, message: Optional[str] = None, **extra: Any) -> None
     raise HttpException(msg, status_code=status_code, **extra)
 
 
-def abort_if(condition: Any, status_code: int, message: Optional[str] = None, **extra: Any) -> None:
+def abort_if(
+    condition: Any, status_code: int, message: str | None = None, **extra: Any
+) -> None:
     """Abort with the given status code if ``condition`` is truthy."""
     if condition:
         abort(status_code, message, **extra)
 
 
-def abort_unless(condition: Any, status_code: int, message: Optional[str] = None, **extra: Any) -> None:
+def abort_unless(
+    condition: Any, status_code: int, message: str | None = None, **extra: Any
+) -> None:
     """Abort with the given status code unless ``condition`` is truthy."""
     if not condition:
         abort(status_code, message, **extra)
@@ -70,11 +76,11 @@ T = TypeVar("T")
 def safe_call(
     fn: Callable[..., T],
     *args: Any,
-    default: Optional[T] = None,
-    log_message: Optional[str] = None,
-    reraise: Optional[tuple] = None,
+    default: T | None = None,
+    log_message: str | None = None,
+    reraise: tuple | None = None,
     **kwargs: Any,
-) -> Optional[T]:
+) -> T | None:
     """Run ``fn(*args, **kwargs)`` and swallow exceptions, returning ``default``.
 
     Wraps the ubiquitous::
@@ -97,16 +103,22 @@ def safe_call(
         if log_message is not None:
             try:
                 from cara.facades import Log
-                msg = log_message.format(error=error) if "{error}" in log_message else f"{log_message}: {error}"
+
+                msg = (
+                    log_message.format(error=error)
+                    if "{error}" in log_message
+                    else f"{log_message}: {error}"
+                )
                 Log.warning(msg)
             except Exception as e:
                 from cara.facades import Log
+
                 Log.warning(f"safe_call swallowed: {e}")
                 return None
         return default
 
 
-def tap(value: T, callback: Optional[Callable[[T], Any]] = None) -> T:
+def tap(value: T, callback: Callable[[T], Any] | None = None) -> T:
     """Pass ``value`` through ``callback`` then return ``value``.
 
     Mirrors Laravel's global ``tap()`` — useful for fluent chains
@@ -128,15 +140,15 @@ def value(target: Any, *args: Any, **kwargs: Any) -> Any:
     Mirrors Laravel's ``value()`` helper — lets APIs accept either a
     static value or a thunk in the same parameter slot::
 
-        ttl = value(config_ttl)        # int   → int
-        ttl = value(lambda: 30)        # thunk → 30
+        ttl = value(config_ttl)  # int   → int
+        ttl = value(lambda: 30)  # thunk → 30
     """
     if callable(target):
         return target(*args, **kwargs)
     return target
 
 
-def data_get(target: Any, key: Optional[str], default: Any = None) -> Any:
+def data_get(target: Any, key: str | None, default: Any = None) -> Any:
     """Read ``key`` from a nested dict / list using dot-notation.
 
     Thin alias around :meth:`cara.support.Arr.get` so the canonical
@@ -148,7 +160,7 @@ def data_get(target: Any, key: Optional[str], default: Any = None) -> Any:
     return Arr.get(target, key, default)
 
 
-def data_set(target: Dict[str, Any], key: str, value: Any) -> Dict[str, Any]:
+def data_set(target: dict[str, Any], key: str, value: Any) -> dict[str, Any]:
     """Write ``key`` into a nested dict using dot-notation.
 
     Thin alias around :meth:`cara.support.Arr.set`. Mutates ``target``
@@ -189,7 +201,7 @@ class _OptionalProxy:
             return _OptionalProxy(None)
         try:
             return wrapped[key]
-        except (KeyError, IndexError, TypeError):
+        except KeyError, IndexError, TypeError:
             return _OptionalProxy(None)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -225,14 +237,16 @@ def optional(target: Any) -> Any:
     Truthiness, equality, and call-through forward to the wrapped
     value, so callers can mix proxied and raw access freely::
 
-        if optional(user).is_active:        # falls back to False when None
+        if optional(user).is_active:  # falls back to False when None
             ...
-        assert optional(42) == 42           # equality forwards
+        assert optional(42) == 42  # equality forwards
     """
     return _OptionalProxy(target)
 
 
-def dispatch(job: Any, *, routing_key: Optional[str] = None, delay: Optional[float] = None) -> Any:
+def dispatch(
+    job: Any, *, routing_key: str | None = None, delay: float | None = None
+) -> Any:
     """Dispatch a queue job through ``Bus`` — Laravel global helper parity.
 
     Convenience over ``from cara.queues import Bus; await Bus.dispatch(...)``
@@ -241,7 +255,7 @@ def dispatch(job: Any, *, routing_key: Optional[str] = None, delay: Optional[flo
     """
     from cara.queues import Bus
 
-    kwargs: Dict[str, Any] = {}
+    kwargs: dict[str, Any] = {}
     if routing_key is not None:
         kwargs["routing_key"] = routing_key
     if delay is not None:
@@ -286,6 +300,7 @@ def tomorrow(tz: str = "UTC") -> Any:
 
 
 # ── Predicates ────────────────────────────────────────────────────────────
+
 
 def blank(value: Any) -> bool:
     """Return True for ``None``, empty / whitespace strings, or empty containers.
@@ -335,7 +350,7 @@ def head(items: Any) -> Any:
         return items[0] if items else None
     try:
         return next(iter(items))
-    except (StopIteration, TypeError):
+    except StopIteration, TypeError:
         return None
 
 
@@ -358,11 +373,12 @@ def last(items: Any) -> Any:
         return items[-1] if items else None
     try:
         return list(items)[-1]
-    except (TypeError, IndexError):
+    except TypeError, IndexError:
         return None
 
 
 # ── Throw / report shortcuts ──────────────────────────────────────────────
+
 
 def throw_if(condition: Any, exception: Any, *args: Any, **kwargs: Any) -> Any:
     """Raise ``exception`` if ``condition`` is truthy, else return condition.
@@ -424,7 +440,8 @@ def report_if(condition: Any, exception: BaseException) -> Any:
 
 # ── Container / facade access ─────────────────────────────────────────────
 
-def app(name: Optional[str] = None) -> Any:
+
+def app(name: str | None = None) -> Any:
     """Resolve ``name`` from the IoC container, or return the container itself.
 
     Mirrors Laravel's ``app()`` global. Without ``name``, returns the
@@ -469,7 +486,7 @@ def logger() -> Any:
     return Log
 
 
-def auth(guard: Optional[str] = None) -> Any:
+def auth(guard: str | None = None) -> Any:
     """Resolve the auth manager (or a specific guard).
 
     Mirrors Laravel's ``auth()`` / ``auth('api')`` overload. Returns
@@ -498,14 +515,15 @@ def bcrypt(password: str, *, rounds: int = 12) -> str:
 
 # ── Misc ──────────────────────────────────────────────────────────────────
 
+
 def class_basename(class_or_obj: Any) -> str:
     """Return the unqualified class name — Laravel ``class_basename`` parity.
 
     Accepts a class or any instance::
 
-        class_basename(SomeService)      == "SomeService"
-        class_basename(some_service())   == "SomeService"
-        class_basename("a.b.C")          == "C"   # dotted-string also works
+        class_basename(SomeService) == "SomeService"
+        class_basename(some_service()) == "SomeService"
+        class_basename("a.b.C") == "C"  # dotted-string also works
     """
     if isinstance(class_or_obj, str):
         return class_or_obj.rsplit(".", 1)[-1].rsplit("\\", 1)[-1]

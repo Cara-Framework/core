@@ -16,10 +16,11 @@ Features:
 import copy
 import inspect
 import json
+from collections.abc import Callable
 from datetime import date as datetimedate
 from datetime import datetime
 from datetime import time as datetimetime
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any
 
 import pendulum
 from inflection import tableize, underscore
@@ -51,12 +52,12 @@ class ModelMeta(type):
     """
 
     def __new__(
-        mcs: Type["ModelMeta"],
+        mcs: type[ModelMeta],
         name: str,
         bases: tuple,
-        namespace: Dict[str, Any],
+        namespace: dict[str, Any],
         **kwargs: Any,
-    ) -> "ModelMeta":
+    ) -> ModelMeta:
         """Create new Model class with automatic scope method generation.
 
         Args:
@@ -71,13 +72,11 @@ class ModelMeta(type):
         cls = super().__new__(mcs, name, bases, namespace, **kwargs)
 
         # Auto-register scope methods (Laravel style)
-        cls._class_scopes: Dict[str, Callable] = {}
+        cls._class_scopes: dict[str, Callable] = {}
 
         # Find all scope_ methods and create corresponding class methods
         for attr_name in dir(cls):
-            if attr_name.startswith("scope_") and callable(
-                getattr(cls, attr_name, None)
-            ):
+            if attr_name.startswith("scope_") and callable(getattr(cls, attr_name, None)):
                 scope_method = getattr(cls, attr_name)
 
                 # Extract scope name (remove 'scope_' prefix)
@@ -87,7 +86,9 @@ class ModelMeta(type):
                 def create_scope_method(
                     scope_func: Callable, scope_name: str
                 ) -> classmethod:
-                    def scope_wrapper(cls_inner: Type, *args: Any, **kwargs: Any) -> QueryBuilder:
+                    def scope_wrapper(
+                        cls_inner: type, *args: Any, **kwargs: Any
+                    ) -> QueryBuilder:
                         # Create new instance and get fresh query builder
                         instance = cls_inner()
                         builder = instance.get_builder()
@@ -108,7 +109,7 @@ class ModelMeta(type):
 
         return cls
 
-    def __getattribute__(cls: Type, attribute: str) -> Any:
+    def __getattribute__(cls: type, attribute: str) -> Any:
         """Enhanced meta method with Laravel-style scope handling.
 
         Enables static method calls on models by instantiating and delegating.
@@ -168,25 +169,25 @@ class Model(
     """
 
     # Mass assignment and serialization
-    __fillable__: List[str] = ["*"]
-    __guarded__: List[str] = []
-    __hidden__: List[str] = []
-    __visible__: List[str] = []
-    __appends__: List[str] = []
+    __fillable__: list[str] = ["*"]
+    __guarded__: list[str] = []
+    __hidden__: list[str] = []
+    __visible__: list[str] = []
+    __appends__: list[str] = []
 
     # Database configuration
-    __table__: Optional[str] = None
+    __table__: str | None = None
     __connection__: str = "default"
-    __resolved_connection__: Optional[Any] = None
+    __resolved_connection__: Any | None = None
     __primary_key__: str = "id"
     __primary_key_type__: str = "int"
-    __selects__: List[str] = []
+    __selects__: list[str] = []
 
     # Attribute casting and dates
-    __casts__: Dict[str, Union[str, Type]] = {}
-    __dates__: List[str] = []
-    __cast_map__: Dict[str, Type] = {}
-    __internal_cast_map__: Dict[str, Type] = {}
+    __casts__: dict[str, str | type] = {}
+    __dates__: list[str] = []
+    __cast_map__: dict[str, type] = {}
+    __internal_cast_map__: dict[str, type] = {}
 
     # Timestamps
     __timestamps__: bool = True
@@ -196,10 +197,10 @@ class Model(
 
     # Relationships and eager loading
     __with__: tuple = ()
-    __relationship_hidden__: Dict[str, List[str]] = {}
+    __relationship_hidden__: dict[str, list[str]] = {}
 
     # Events and observers
-    __observers__: Dict[str, Any] = {}
+    __observers__: dict[str, Any] = {}
     __has_events__: bool = True
 
     # Query execution
@@ -208,7 +209,7 @@ class Model(
 
     # Internal state
     _booted: bool = False
-    _scopes: Dict[Type, Dict[str, Callable]] = {}
+    _scopes: dict[type, dict[str, Callable]] = {}
 
     builder: QueryBuilder
     """Passthrough delegates to QueryBuilder for query method calls."""
@@ -336,7 +337,7 @@ class Model(
 
     __cast_map__ = {}
 
-    __internal_cast_map__: Dict[str, Type] = {
+    __internal_cast_map__: dict[str, type] = {
         "bool": BoolCast,
         "json": JsonCast,
         "int": IntCast,
@@ -364,21 +365,21 @@ class Model(
         super().__init__(**kwargs)
 
         # Initialize attribute storage
-        self.__attributes__: Dict[str, Any] = {}
-        self.__original_attributes__: Dict[str, Any] = {}
-        self.__dirty_attributes__: Dict[str, Any] = {}
+        self.__attributes__: dict[str, Any] = {}
+        self.__original_attributes__: dict[str, Any] = {}
+        self.__dirty_attributes__: dict[str, Any] = {}
 
         # Initialize appends if not already present
         if not hasattr(self, "__appends__"):
             self.__appends__ = []
 
         # Initialize relationships storage
-        self._relations: Dict[str, Any] = {}
-        self._relationships: Dict[str, Any] = {}
-        self._global_scopes: Dict[str, Any] = {}
+        self._relations: dict[str, Any] = {}
+        self._relationships: dict[str, Any] = {}
+        self._global_scopes: dict[str, Any] = {}
 
         # Initialize model events cache
-        self._model_events: Optional[Dict[str, List[Callable]]] = None
+        self._model_events: dict[str, list[Callable]] | None = None
 
         # Set attributes from kwargs
         for key, value in kwargs.items():
@@ -654,16 +655,20 @@ class Model(
         """Touch parent models listed in __touches__."""
         for relation_name in self.__touches__:
             related = getattr(self, relation_name, None)
-            if related and hasattr(related, 'touch'):
+            if related and hasattr(related, "touch"):
                 related.touch()
 
     def touch(self):
         """Update the model's updated_at timestamp."""
         # Get the timestamp column name
-        timestamp_col = 'updated_at'
-        if hasattr(self, '__timestamps__') and self.__timestamps__:
+        timestamp_col = "updated_at"
+        if hasattr(self, "__timestamps__") and self.__timestamps__:
             if isinstance(self.__timestamps__, (list, tuple)):
-                timestamp_col = self.__timestamps__[1] if len(self.__timestamps__) > 1 else 'updated_at'
+                timestamp_col = (
+                    self.__timestamps__[1]
+                    if len(self.__timestamps__) > 1
+                    else "updated_at"
+                )
 
         # Get the current datetime in the appropriate format
         current_time = self.get_new_datetime_string()
@@ -693,10 +698,10 @@ class Model(
 
     @classmethod
     def find(
-        cls: Type["Model"],
-        record_id: Union[Any, List[Any], tuple],
+        cls: type[Model],
+        record_id: Any | list[Any] | tuple,
         query: bool = False,
-    ) -> Union["Model", List["Model"], QueryBuilder, None]:
+    ) -> Model | list[Model] | QueryBuilder | None:
         """Find a row by the primary key ID.
 
         Args:
@@ -723,10 +728,10 @@ class Model(
 
     @classmethod
     def find_or_fail(
-        cls: Type["Model"],
-        record_id: Union[Any, List[Any], tuple],
+        cls: type[Model],
+        record_id: Any | list[Any] | tuple,
         query: bool = False,
-    ) -> Union["Model", List["Model"], QueryBuilder]:
+    ) -> Model | list[Model] | QueryBuilder:
         """Find a row by the primary key ID or raise ModelNotFoundException.
 
         Args:
@@ -742,9 +747,7 @@ class Model(
         result = cls.find(record_id, query)
 
         if not result:
-            raise ModelNotFoundException(
-                f"{cls.__name__} with ID {record_id} not found"
-            )
+            raise ModelNotFoundException(f"{cls.__name__} with ID {record_id} not found")
 
         return result
 
@@ -834,12 +837,12 @@ class Model(
 
     @classmethod
     def create(
-        cls: Type["Model"],
-        dictionary: Optional[Dict[str, Any]] = None,
+        cls: type[Model],
+        dictionary: dict[str, Any] | None = None,
         query: bool = False,
         cast: bool = True,
         **kwargs: Any,
-    ) -> Union["Model", QueryBuilder]:
+    ) -> Model | QueryBuilder:
         """Create a new record in the database.
 
         Args:
@@ -852,9 +855,7 @@ class Model(
             A new Model instance, or a QueryBuilder if query=True
         """
         if query:
-            return cls().get_builder().create(
-                dictionary, query=True, cast=cast, **kwargs
-            )
+            return cls().get_builder().create(dictionary, query=True, cast=cast, **kwargs)
 
         return cls().get_builder().create(dictionary, cast=cast, **kwargs)
 
@@ -887,7 +888,7 @@ class Model(
         return value
 
     @classmethod
-    def cast_values(cls, dictionary: Dict[str, Any]) -> Dict[str, Any]:
+    def cast_values(cls, dictionary: dict[str, Any]) -> dict[str, Any]:
         """
         Runs provided dictionary through all model casters and returns the result.
 
@@ -1166,7 +1167,7 @@ class Model(
         return clone
 
     @classmethod
-    def first_or_create(cls, wheres, creates: Optional[dict] = None):
+    def first_or_create(cls, wheres, creates: dict | None = None):
         """
         Get the first record matching the attributes or create it.
 
@@ -1185,7 +1186,7 @@ class Model(
         return record
 
     @classmethod
-    def first_or_new(cls, wheres, values: Optional[dict] = None):
+    def first_or_new(cls, wheres, values: dict | None = None):
         """
         Laravel-style firstOrNew.
         Get the first record matching the attributes, or a new (unpersisted)
@@ -1516,9 +1517,7 @@ class Model(
             # Import the enhanced registry that has registered casts
             from ..casts import cast_registry as enhanced_registry
 
-            cast_instance = enhanced_registry.get_cast_instance(
-                self.__casts__[attribute]
-            )
+            cast_instance = enhanced_registry.get_cast_instance(self.__casts__[attribute])
             if cast_instance:
                 return cast_instance.get(value)
         return value
@@ -1770,7 +1769,7 @@ class Model(
         return self.attach(relation, related_record)
 
     @classmethod
-    def filter_fillable(cls, dictionary: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_fillable(cls, dictionary: dict[str, Any]) -> dict[str, Any]:
         """
         Filters provided dictionary to only include fields specified in the model's __fillable__
         property.
@@ -1782,7 +1781,7 @@ class Model(
         return dictionary
 
     @classmethod
-    def filter_mass_assignment(cls, dictionary: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_mass_assignment(cls, dictionary: dict[str, Any]) -> dict[str, Any]:
         """
         Filters the provided dictionary in preparation for a mass-assignment operation.
 
@@ -1791,7 +1790,7 @@ class Model(
         return cls.filter_guarded(cls.filter_fillable(dictionary))
 
     @classmethod
-    def filter_guarded(cls, dictionary: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_guarded(cls, dictionary: dict[str, Any]) -> dict[str, Any]:
         """
         Filters provided dictionary to exclude fields specified in the model's __guarded__ property.
 
@@ -1805,9 +1804,9 @@ class Model(
     @classmethod
     def upsert(
         cls,
-        values: List[Dict[str, Any]],
-        unique_by: List[str],
-        update: Optional[List[str]] = None,
+        values: list[dict[str, Any]],
+        unique_by: list[str],
+        update: list[str] | None = None,
         cast: bool = True,
     ):
         """

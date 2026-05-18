@@ -9,8 +9,8 @@ The provider follows Laravel's service provider pattern, allowing for clean sepa
 handling concerns.
 """
 
-from cara.foundation import DeferredProvider
 from cara.conductors.http import HttpConductor
+from cara.foundation import DeferredProvider
 
 
 class HttpConductorProvider(DeferredProvider):

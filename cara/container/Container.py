@@ -11,7 +11,8 @@ container functionality.
 
 import inspect
 import threading
-from typing import Any, Callable, Dict, List, Union
+from collections.abc import Callable
+from typing import Any, Union
 
 # Lazy import exceptions to avoid circular imports
 
@@ -42,7 +43,7 @@ class Container:
 
     def __init__(self) -> None:
         # (1) Direct bindings: name → value (could be a class, callable, or instance)
-        self.objects: Dict[Any, Any] = {}
+        self.objects: dict[Any, Any] = {}
 
         # (2) If strict=True, existing bindings cannot be overridden
         self.strict: bool = False
@@ -67,32 +68,32 @@ class Container:
         self._deferred_lock = threading.RLock()
 
         # (6) Resolution stack for circular dependency detection
-        self._resolving_stack: List[Any] = []
+        self._resolving_stack: list[Any] = []
 
         # (5) Hooks: callback lists for bind / make / resolve events
-        self._hooks: Dict[str, Dict[Any, List[Callable]]] = {
+        self._hooks: dict[str, dict[Any, list[Callable]]] = {
             "bind": {},
             "make": {},
             "resolve": {},
         }
 
         # (6) Temporary swap bindings for testing or mocking
-        self.swaps: Dict[Any, Any] = {}
+        self.swaps: dict[Any, Any] = {}
 
         # (7) Cached constructor arguments when remember=True
-        self._remembered: Dict[Any, List[Any]] = {}
+        self._remembered: dict[Any, list[Any]] = {}
 
         # (8) Deferred providers: key (string or class) → provider class
-        self._deferred: Dict[Any, Any] = {}
+        self._deferred: dict[Any, Any] = {}
 
         # (9) List of instantiated provider objects (for optional tracking)
-        self.providers: List[Any] = []
+        self.providers: list[Any] = []
 
     # -------------------------------------
     # Public Binding and Resolving Methods
     # -------------------------------------
 
-    def bind(self, name: Any, class_obj: Any) -> "Container":
+    def bind(self, name: Any, class_obj: Any) -> Container:
         """
         Bind a key (string or class) to a class, factory (callable), or instance.
 
@@ -166,7 +167,7 @@ class Container:
         del self.objects[name]
         return True
 
-    def simple(self, obj: Any) -> "Container":
+    def simple(self, obj: Any) -> Container:
         """Bind an object or class under its own class as the key."""
         key = obj if inspect.isclass(obj) else obj.__class__
         self.bind(key, obj)
@@ -246,7 +247,9 @@ class Container:
 
                     # If found is a callable factory, call it
                     if callable(found):
-                        result = found(self) if self._accepts_container(found) else found()
+                        result = (
+                            found(self) if self._accepts_container(found) else found()
+                        )
                         return result
 
                     # Otherwise return the bound value (already an instance)
@@ -361,8 +364,8 @@ class Container:
 
     def _do_resolve(self, obj: Any, *resolving_arguments: Any) -> Any:
         """Internal resolve implementation."""
-        objects: List[Any] = []
-        keyword_objects: Dict[str, Any] = {}
+        objects: list[Any] = []
+        keyword_objects: dict[str, Any] = {}
         passing_args = list(resolving_arguments)
         (
             GenericContainerException,
@@ -419,8 +422,10 @@ class Container:
             # Treat typing.Any as an untyped slot: pull from passed args
             # or fall back to None/default handling below.
             if ann is Any:
-                value = passing_args.pop(0) if passing_args else (
-                    param.default if param.default is not inspect._empty else None
+                value = (
+                    passing_args.pop(0)
+                    if passing_args
+                    else (param.default if param.default is not inspect._empty else None)
                 )
                 if is_keyword_only:
                     keyword_objects[param.name] = value
@@ -563,7 +568,7 @@ class Container:
             sig = inspect.signature(func)
             params = list(sig.parameters.keys())
             return len(params) > 0 and params[0] in ("app", "container", "self")
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
     def fire_hook(self, action: str, key: Any, obj: Any):
@@ -578,16 +583,16 @@ class Container:
             for fn in self._hooks[action][obj.__class__]:
                 fn(obj, self)
 
-    def on_bind(self, key: Any, fn: Callable) -> "Container":
+    def on_bind(self, key: Any, fn: Callable) -> Container:
         return self._bind_hook("bind", key, fn)
 
-    def on_make(self, key: Any, fn: Callable) -> "Container":
+    def on_make(self, key: Any, fn: Callable) -> Container:
         return self._bind_hook("make", key, fn)
 
-    def on_resolve(self, key: Any, fn: Callable) -> "Container":
+    def on_resolve(self, key: Any, fn: Callable) -> Container:
         return self._bind_hook("resolve", key, fn)
 
-    def _bind_hook(self, hook: str, key: Any, fn: Callable) -> "Container":
+    def _bind_hook(self, hook: str, key: Any, fn: Callable) -> Container:
         """Add a callback to the specified hook (bind/make/resolve) for the given key."""
         self._hooks[hook].setdefault(key, []).append(fn)
         return self
@@ -599,7 +604,7 @@ class Container:
     def _find_obj(self, obj: Any) -> Any:
         """
         Locate a bound object with multi-strategy resolution:
-        
+
         Strategy 1: Direct key lookup in self.objects
         Strategy 2: Try full module path (e.g., "app.contracts.CategoryContract.CategoryContract")
         Strategy 3: Try simple class name (e.g., "CategoryContract")
@@ -612,7 +617,11 @@ class Container:
             return provider_obj
 
         # Strategy 2: Try full module path
-        if inspect.isclass(obj) and hasattr(obj, '__module__') and hasattr(obj, '__name__'):
+        if (
+            inspect.isclass(obj)
+            and hasattr(obj, "__module__")
+            and hasattr(obj, "__name__")
+        ):
             full_path = f"{obj.__module__}.{obj.__name__}"
             if full_path in self.objects:
                 provider_obj = self.objects[full_path]
@@ -620,7 +629,7 @@ class Container:
                 return provider_obj
 
         # Strategy 3: Try simple class name
-        if inspect.isclass(obj) and hasattr(obj, '__name__'):
+        if inspect.isclass(obj) and hasattr(obj, "__name__"):
             if obj.__name__ in self.objects:
                 provider_obj = self.objects[obj.__name__]
                 self.fire_hook("resolve", obj, provider_obj)
@@ -684,9 +693,8 @@ class Container:
         for provider_obj in self.objects.values():
             if inspect.isclass(provider_obj):
                 try:
-                    if (
-                        issubclass(provider_obj, abstract_obj)
-                        and not inspect.isabstract(provider_obj)
+                    if issubclass(provider_obj, abstract_obj) and not inspect.isabstract(
+                        provider_obj
                     ):
                         return provider_obj
                 except TypeError:
@@ -697,7 +705,7 @@ class Container:
                     provider_obj.__class__
                 ):
                     return provider_obj.__class__
-            except (TypeError, AttributeError):
+            except TypeError, AttributeError:
                 pass
 
         return None
@@ -713,7 +721,9 @@ class Container:
 
         origin = getattr(ann, "__origin__", None)
         _union_type = getattr(types, "UnionType", None)
-        is_union = origin is Union or (_union_type is not None and isinstance(ann, _union_type))
+        is_union = origin is Union or (
+            _union_type is not None and isinstance(ann, _union_type)
+        )
         if is_union:
             type_args = [a for a in ann.__args__ if a is not type(None)]
             if len(type_args) == 1:
@@ -735,7 +745,7 @@ class Container:
         the annotation is a domain class with required init args).
         """
         sig = inspect.signature(callable_or_method)
-        resolved: Dict[str, Any] = {}
+        resolved: dict[str, Any] = {}
 
         # Names occupied by positional args — those must NOT be resolved.
         positional_names: set[str] = set()
@@ -791,7 +801,10 @@ class Container:
                     found = func_globals.get(raw_name)
                     if found is None:
                         for bound_key in self._bindings:
-                            if inspect.isclass(bound_key) and bound_key.__name__ == raw_name:
+                            if (
+                                inspect.isclass(bound_key)
+                                and bound_key.__name__ == raw_name
+                            ):
                                 found = bound_key
                                 break
                     ann = found if found is not None else ann
@@ -826,14 +839,14 @@ class Container:
     # Wildcard Binding Search (collect)
     # ----------------------------
 
-    def collect(self, search: Any) -> Dict[Any, Any]:
+    def collect(self, search: Any) -> dict[Any, Any]:
         """
         Collect bindings by wildcard (e.g., '*Service') or by class type.
 
         - If search is a string containing '*', return any key that matches prefix/suffix.
         - If search is a class, return any bound value that is instance or subclass.
         """
-        results: Dict[Any, Any] = {}
+        results: dict[Any, Any] = {}
         if isinstance(search, str):
             if "*" not in search:
                 raise AttributeError(
@@ -861,7 +874,7 @@ class Container:
     # Testing / Mocking Support (swap)
     # ----------------------------
 
-    def swap(self, obj: Any, callback: Any) -> "Container":
+    def swap(self, obj: Any, callback: Any) -> Container:
         """Temporarily override a binding for testing or mocking."""
         self.swaps[obj] = callback
         return self

@@ -6,7 +6,7 @@ request limits per key within a time window. It supports named limiters (Laravel
 for flexible per-user, per-endpoint rate limiting.
 """
 
-from typing import Callable, Optional, Tuple
+from collections.abc import Callable
 
 from cara.facades import Cache
 from cara.rates.contracts import RateLimit
@@ -15,7 +15,7 @@ from cara.rates.contracts import RateLimit
 class Limit:
     """
     Represents a rate limit configuration.
-    
+
     Provides builder pattern methods to configure rate limits with custom keys and responses.
     Inspired by Laravel's Limit class for flexible rate limiting definitions.
     """
@@ -34,45 +34,45 @@ class Limit:
         self._response = None
 
     @classmethod
-    def per_minute(cls, max_attempts: int) -> "Limit":
+    def per_minute(cls, max_attempts: int) -> Limit:
         """Create a rate limit for a 1-minute window."""
         return cls(max_attempts=max_attempts, decay_minutes=1)
 
     @classmethod
-    def per_hour(cls, max_attempts: int) -> "Limit":
+    def per_hour(cls, max_attempts: int) -> Limit:
         """Create a rate limit for a 1-hour window."""
         return cls(max_attempts=max_attempts, decay_minutes=60)
 
     @classmethod
-    def per_day(cls, max_attempts: int) -> "Limit":
+    def per_day(cls, max_attempts: int) -> Limit:
         """Create a rate limit for a 24-hour window."""
         return cls(max_attempts=max_attempts, decay_minutes=1440)
 
     @classmethod
-    def none(cls) -> "Limit":
+    def none(cls) -> Limit:
         """Create an unlimited rate limit (no rate limiting)."""
         return cls(max_attempts=0, decay_minutes=0)
 
-    def by(self, key: str) -> "Limit":
+    def by(self, key: str) -> Limit:
         """
         Set the rate limit key (e.g., user ID, IP address, endpoint).
-        
+
         Args:
             key: Unique identifier for this rate limit
-            
+
         Returns:
             self for method chaining
         """
         self._key = key
         return self
 
-    def response(self, callback: Callable) -> "Limit":
+    def response(self, callback: Callable) -> Limit:
         """
         Set a custom response handler for when rate limit is exceeded.
-        
+
         Args:
             callback: Function to call when rate limited
-            
+
         Returns:
             self for method chaining
         """
@@ -105,7 +105,7 @@ class RateLimiter(RateLimit):
         self.prefix = options.get("cache_prefix", "rate_")
         self._limiters = {}  # Named limiter definitions (name -> callback)
 
-    def attempt(self, key: str) -> Tuple[bool, int, int]:
+    def attempt(self, key: str) -> tuple[bool, int, int]:
         """
         Record one attempt.
 
@@ -168,10 +168,10 @@ class RateLimiter(RateLimit):
 
         return allowed, remaining, reset_in
 
-    def for_(self, name: str, callback: Callable) -> "RateLimiter":
+    def for_(self, name: str, callback: Callable) -> RateLimiter:
         """
         Register a named rate limiter with a callback.
-        
+
         The callback receives a request object and should return a Limit object
         or list of Limit objects defining the rate limit configuration.
 
@@ -185,7 +185,7 @@ class RateLimiter(RateLimit):
         self._limiters[name] = callback
         return self
 
-    def limiter(self, name: str) -> Optional[Callable]:
+    def limiter(self, name: str) -> Callable | None:
         """
         Get a registered named limiter callback.
 

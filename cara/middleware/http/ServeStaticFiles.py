@@ -86,7 +86,7 @@ class ServeStaticFiles(Middleware):
             # os.path.commonpath avoids prefix-match false positives (e.g.
             # /public vs /publicfoo).
             return os.path.commonpath([public_dir, requested_path]) == public_dir
-        except (ValueError, OSError):
+        except ValueError, OSError:
             return False
 
     def _serve_file(self, file_path: str, head_only: bool = False) -> Response:
@@ -129,7 +129,7 @@ class ServeStaticFiles(Middleware):
                 file_content = f.read()
                 # Directly set content attribute
                 response.content = file_content
-        except IOError:
+        except OSError:
             response.status(404)
             response.content = b"File not found"
 

@@ -7,7 +7,7 @@ actually wiring up redis or browser clients.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from cara.broadcasting.contracts.Broadcaster import Broadcaster
 from cara.facades import Log
@@ -18,16 +18,16 @@ class LogBroadcaster(Broadcaster):
 
     driver_name = "log"
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
 
     async def broadcast(
         self,
-        channels: Union[str, List[str]],
+        channels: str | list[str],
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         if isinstance(channels, str):
             channels = [channels]
@@ -42,8 +42,8 @@ class LogBroadcaster(Broadcaster):
         self,
         connection_id: str,
         websocket: Any,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         Log.info(
             f"🔗 [log] Connection added: {connection_id} (user={user_id or '-'})",
@@ -74,9 +74,9 @@ class LogBroadcaster(Broadcaster):
         self,
         user_id: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         Log.info(
             f"👤 [log] Broadcasting '{event}' to user {user_id}",
@@ -87,10 +87,10 @@ class LogBroadcaster(Broadcaster):
     def get_connection_count(self) -> int:
         return 0
 
-    def get_channel_subscribers(self, channel: str) -> List[str]:
+    def get_channel_subscribers(self, channel: str) -> list[str]:
         return []
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {
             "driver": "log",
             "connections": 0,

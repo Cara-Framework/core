@@ -118,11 +118,7 @@ class PostgresPlatform(Platform):
                 # and dies with ``syntax error at or near "order"``.
                 quoted_cols = ",".join(f'"{c}"' for c in index.column)
                 sql.append(
-                    "CREATE INDEX {name} ON {table}({column})".format(
-                        name=index.name,
-                        table=self.wrap_table(table.name),
-                        column=quoted_cols,
-                    )
+                    f"CREATE INDEX {index.name} ON {self.wrap_table(table.name)}({quoted_cols})"
                 )
 
         for (
@@ -396,11 +392,7 @@ class PostgresPlatform(Platform):
                 # and dies with ``syntax error at or near "order"``.
                 quoted_cols = ",".join(f'"{c}"' for c in index.column)
                 sql.append(
-                    "CREATE INDEX {name} ON {table}({column})".format(
-                        name=index.name,
-                        table=self.wrap_table(table.name),
-                        column=quoted_cols,
-                    )
+                    f"CREATE INDEX {index.name} ON {self.wrap_table(table.name)}({quoted_cols})"
                 )
 
         if hasattr(table, "added_constraints") and table.added_constraints:
@@ -526,7 +518,11 @@ class PostgresPlatform(Platform):
         return f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' and column_name='{column}'"
 
     def compile_get_all_tables(self, database=None, schema=None):
-        database = self._validate_identifier(database, "database name") if database else "postgres"
+        database = (
+            self._validate_identifier(database, "database name")
+            if database
+            else "postgres"
+        )
         return f"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_catalog = '{database}'"
 
     def get_current_schema(self, connection, table_name, schema=None):

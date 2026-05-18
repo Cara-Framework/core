@@ -4,7 +4,7 @@ Trim Strings Middleware for the Cara framework.
 This module provides middleware that trims whitespace from all string inputs in HTTP requests.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from cara.http import Request
 from cara.middleware import Middleware

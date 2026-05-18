@@ -6,8 +6,9 @@ Framework-level component, independent of application logic.
 """
 
 import threading
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 
 class JobStateManager:
@@ -19,15 +20,15 @@ class JobStateManager:
 
     def __init__(self):
         """Initialize job state manager."""
-        self._active_jobs: Dict[str, Dict[str, Any]] = {}
-        self._cancellation_callbacks: Dict[str, Callable] = {}
+        self._active_jobs: dict[str, dict[str, Any]] = {}
+        self._cancellation_callbacks: dict[str, Callable] = {}
         self._lock = threading.RLock()
 
     def register_job(
         self,
         job_id: str,
-        context: Dict[str, Any],
-        cancellation_callback: Optional[Callable] = None,
+        context: dict[str, Any],
+        cancellation_callback: Callable | None = None,
     ) -> None:
         """
         Register an active job for tracking.
@@ -105,7 +106,7 @@ class JobStateManager:
 
     def cancel_jobs_by_context(
         self,
-        context_filter: Callable[[Dict[str, Any]], bool],
+        context_filter: Callable[[dict[str, Any]], bool],
         reason: str = "Job superseded",
     ) -> int:
         """
@@ -135,7 +136,7 @@ class JobStateManager:
 
         return cancelled_count
 
-    def get_active_jobs(self) -> Dict[str, Dict[str, Any]]:
+    def get_active_jobs(self) -> dict[str, dict[str, Any]]:
         """
         Get all active jobs.
 
@@ -149,7 +150,7 @@ class JobStateManager:
                 if job_data.get("status") == "running"
             }
 
-    def get_job_status(self, job_id: str) -> Optional[str]:
+    def get_job_status(self, job_id: str) -> str | None:
         """
         Get status of a specific job.
 

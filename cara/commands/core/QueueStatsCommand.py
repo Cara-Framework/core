@@ -125,14 +125,10 @@ class QueueStatsCommand(CommandBase):
                 job_model.where("queue", queue_name).where("status", "pending").count()
             )
             processing = (
-                job_model.where("queue", queue_name)
-                .where("status", "processing")
-                .count()
+                job_model.where("queue", queue_name).where("status", "processing").count()
             )
             completed = (
-                job_model.where("queue", queue_name)
-                .where("status", "completed")
-                .count()
+                job_model.where("queue", queue_name).where("status", "completed").count()
             )
             failed = (
                 job_model.where("queue", queue_name).where("status", "failed").count()

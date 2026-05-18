@@ -2,7 +2,8 @@
 Authorization Gate - Centralized authorization logic for Cara framework.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 from cara.authorization.AuthorizationResponse import AuthorizationResponse
 from cara.authorization.contracts import Gate
@@ -12,13 +13,13 @@ from cara.exceptions import AuthorizationFailedException
 class Gate(Gate):
     """Gate for authorization checks with Laravel-style API."""
 
-    def __init__(self, user_resolver: Optional[Callable] = None):
+    def __init__(self, user_resolver: Callable | None = None):
         self._user_resolver = user_resolver
-        self._abilities: Dict[str, Union[Callable, str]] = {}
-        self._policies: Dict[str, str] = {}
-        self._before_callbacks: List[Callable] = []
-        self._after_callbacks: List[Callable] = []
-        self._current_user: Optional[Any] = None
+        self._abilities: dict[str, Callable | str] = {}
+        self._policies: dict[str, str] = {}
+        self._before_callbacks: list[Callable] = []
+        self._after_callbacks: list[Callable] = []
+        self._current_user: Any | None = None
 
     def before(self, callback: Callable) -> None:
         """Register a callback to be called before authorization checks."""
@@ -28,11 +29,11 @@ class Gate(Gate):
         """Register a callback to be called after authorization checks."""
         self._after_callbacks.append(callback)
 
-    def define(self, ability: str, callback: Union[Callable, str]) -> None:
+    def define(self, ability: str, callback: Callable | str) -> None:
         """Define a new ability."""
         self._abilities[ability] = callback
 
-    def register_policies(self, policies: List[tuple]) -> None:
+    def register_policies(self, policies: list[tuple]) -> None:
         """
         Register multiple policies with model binding.
 
@@ -95,11 +96,11 @@ class Gate(Gate):
         """Check if the current user is denied the given ability."""
         return not self.allows(ability, *args)
 
-    def any(self, abilities: List[str], *args) -> bool:
+    def any(self, abilities: list[str], *args) -> bool:
         """Check if the current user has any of the given abilities."""
         return any(self.allows(ability, *args) for ability in abilities)
 
-    def none(self, abilities: List[str], *args) -> bool:
+    def none(self, abilities: list[str], *args) -> bool:
         """Check if the current user has none of the given abilities."""
         return not any(self.allows(ability, *args) for ability in abilities)
 
@@ -137,7 +138,7 @@ class Gate(Gate):
                 resource=resource,
             )
 
-    def for_user(self, user: Any) -> "Gate":
+    def for_user(self, user: Any) -> Gate:
         """Get a gate instance for the given user."""
         gate = Gate(self._user_resolver)
         gate._abilities = self._abilities.copy()
@@ -170,7 +171,7 @@ class Gate(Gate):
 
         return False
 
-    def _resolve_user(self) -> Optional[Any]:
+    def _resolve_user(self) -> Any | None:
         """Resolve the current user."""
         if self._current_user is not None:
             return self._current_user
@@ -192,7 +193,7 @@ class Gate(Gate):
                 continue
 
     def _call_ability(
-        self, callback: Union[Callable, str], user: Any, ability: str, *args
+        self, callback: Callable | str, user: Any, ability: str, *args
     ) -> bool:
         """Call an ability callback."""
         try:
@@ -259,9 +260,7 @@ class Gate(Gate):
     ) -> None:
         """Log a failure in a policy before/after hook with stderr fallback."""
         policy_name = type(policy_instance).__name__
-        message = (
-            f"Policy {hook}-hook for '{method}' on {policy_name} raised: {exc}"
-        )
+        message = f"Policy {hook}-hook for '{method}' on {policy_name} raised: {exc}"
         try:
             from cara.facades import Log
 
@@ -280,7 +279,7 @@ class Gate(Gate):
                 try:
                     module = __import__("app.policies", fromlist=[policy_class])
                     policy_cls = getattr(module, policy_class)
-                except (ImportError, AttributeError):
+                except ImportError, AttributeError:
                     raise ImportError(f"Policy class {policy_class} not found")
 
             return policy_cls()

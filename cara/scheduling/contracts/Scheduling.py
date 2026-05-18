@@ -5,7 +5,8 @@ This module defines the contract for scheduling drivers, specifying the required
 scheduling implementations.
 """
 
-from typing import Any, Dict, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 
 class Scheduling:
@@ -15,8 +16,8 @@ class Scheduling:
         self,
         identifier: str,
         callback: Any,
-        schedule_spec: Dict[str, Any],
-        options: Dict[str, Any],
+        schedule_spec: dict[str, Any],
+        options: dict[str, Any],
     ) -> None:
         """
         Register a job according to schedule_spec.

@@ -33,4 +33,3 @@ __all__ = [
     "DriverLibraryNotFoundException",
     "QueueException",
 ]
-

@@ -11,8 +11,7 @@ Wire protocol
 -------------
 On connect (after the auth middleware accepts), the framework sends::
 
-    { "event": "connection.established",
-      "data":  { "socket_id": "<uuid>" } }
+    {"event": "connection.established", "data": {"socket_id": "<uuid>"}}
 
 The client should echo ``socket_id`` as the ``X-Socket-Id`` header on
 HTTP requests that trigger broadcasts so the originating connection
@@ -34,7 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, Dict, Optional, Set
+from typing import Any
 from urllib.parse import parse_qs
 
 from cara.exceptions.types.websocket import WebSocketException
@@ -48,14 +47,16 @@ class Socket:
     # ``socket.receive_timeout = N``.
     receive_timeout: int = 120
 
-    def __init__(self, application: Any, scope: Dict[str, Any], receive: Any, send: Any) -> None:
+    def __init__(
+        self, application: Any, scope: dict[str, Any], receive: Any, send: Any
+    ) -> None:
         self.application = application
-        self.scope: Dict[str, Any] = scope
+        self.scope: dict[str, Any] = scope
         self._receive = receive
         self._send = send
 
         self.route: Any = None
-        self.params: Dict[str, Any] = {}
+        self.params: dict[str, Any] = {}
         self._user: Any = None
 
         # ``connection_id`` is the internal identifier the broadcasting
@@ -67,10 +68,10 @@ class Socket:
 
         self._ws_connected: bool = False
         self._closed: bool = False
-        self._error: Optional[str] = None
-        self._close_code: Optional[int] = None
+        self._error: str | None = None
+        self._close_code: int | None = None
 
-        self._subscribed_channels: Set[str] = set()
+        self._subscribed_channels: set[str] = set()
         self._connection_registered: bool = False
 
         # Cached broadcast driver reference. Resolved lazily on first
@@ -81,23 +82,23 @@ class Socket:
         # tab that's pure overhead. ``None`` means "not yet resolved".
         # The cached value is a (driver, touch_callable) pair so we
         # avoid even the getattr-on-every-message after the first hit.
-        self._broadcast_touch_cache: Optional[Any] = None
+        self._broadcast_touch_cache: Any | None = None
 
     # ------------------------------------------------------------------
     # Routing/state setup — called by the WebsocketConductor.
     # ------------------------------------------------------------------
-    def load(self, route: Any = None, params: Optional[Dict[str, Any]] = None) -> "Socket":
+    def load(self, route: Any = None, params: dict[str, Any] | None = None) -> Socket:
         if route is not None:
             self.route = route
         if params is not None:
             self.params = params
         return self
 
-    def set_route(self, route: Any) -> "Socket":
+    def set_route(self, route: Any) -> Socket:
         self.route = route
         return self
 
-    def load_params(self, params: Dict[str, Any]) -> "Socket":
+    def load_params(self, params: dict[str, Any]) -> Socket:
         self.params = params
         return self
 
@@ -109,7 +110,7 @@ class Socket:
         return self.scope.get("path", "/")
 
     @property
-    def query_params(self) -> Dict[str, Any]:
+    def query_params(self) -> dict[str, Any]:
         raw = self.scope.get("query_string", b"").decode()
         parsed = parse_qs(raw)
         return {k: (v[0] if len(v) == 1 else v) for k, v in parsed.items()}
@@ -117,14 +118,14 @@ class Socket:
     def param(self, name: str, default: Any = "") -> Any:
         return self.params.get(name, default)
 
-    def header(self, name: str, default: Optional[str] = None) -> Optional[str]:
+    def header(self, name: str, default: str | None = None) -> str | None:
         """Look up a connection header (case-insensitive)."""
         for k, v in self.scope.get("headers", []):
             if k.decode().lower() == name.lower():
                 return v.decode()
         return default
 
-    def set_user(self, user: Any) -> "Socket":
+    def set_user(self, user: Any) -> Socket:
         self._user = user
         return self
 
@@ -152,11 +153,11 @@ class Socket:
         return self._closed
 
     @property
-    def error(self) -> Optional[str]:
+    def error(self) -> str | None:
         return self._error
 
     @property
-    def close_code(self) -> Optional[int]:
+    def close_code(self) -> int | None:
         return self._close_code
 
     @property
@@ -164,21 +165,21 @@ class Socket:
         return self._ws_connected and not self._closed
 
     @property
-    def subscribed_channels(self) -> Set[str]:
+    def subscribed_channels(self) -> set[str]:
         """Read-only view of channels this socket is subscribed to."""
         return set(self._subscribed_channels)
 
     # ------------------------------------------------------------------
     # Connection lifecycle (ASGI verbs).
     # ------------------------------------------------------------------
-    async def accept(self, subprotocol: Optional[str] = None) -> None:
+    async def accept(self, subprotocol: str | None = None) -> None:
         """Accept the incoming WebSocket handshake."""
         if self._ws_connected:
             raise WebSocketException("WebSocket already accepted", 4003)
         if self._closed:
             raise WebSocketException("WebSocket already closed", 4003)
 
-        msg: Dict[str, Any] = {"type": "websocket.accept"}
+        msg: dict[str, Any] = {"type": "websocket.accept"}
         if subprotocol is not None:
             msg["subprotocol"] = subprotocol
         try:
@@ -210,7 +211,7 @@ class Socket:
     async def close(self, code: int = 1000, reason: str = "") -> None:
         if self._closed:
             return
-        msg: Dict[str, Any] = {"type": "websocket.close", "code": code}
+        msg: dict[str, Any] = {"type": "websocket.close", "code": code}
         if reason:
             msg["reason"] = reason
         try:
@@ -220,7 +221,7 @@ class Socket:
             self._close_code = code
             self._error = reason or None
 
-    async def receive_message(self) -> Optional[Dict[str, Any]]:
+    async def receive_message(self) -> dict[str, Any] | None:
         """Read the next ASGI message.
 
         Returns ``None`` when the client disconnects. Pings are
@@ -233,8 +234,10 @@ class Socket:
             raise WebSocketException("WebSocket closed", 4000)
 
         try:
-            message = await asyncio.wait_for(self._receive(), timeout=self.receive_timeout)
-        except asyncio.TimeoutError:
+            message = await asyncio.wait_for(
+                self._receive(), timeout=self.receive_timeout
+            )
+        except TimeoutError:
             self._closed = True
             raise WebSocketException(
                 f"Client idle for {self.receive_timeout}s, closing", 4000
@@ -365,7 +368,11 @@ class Socket:
 
         if not allowed:
             await self.send_json(
-                {"event": "subscription_denied", "channel": channel, "reason": "unauthorized"}
+                {
+                    "event": "subscription_denied",
+                    "channel": channel,
+                    "reason": "unauthorized",
+                }
             )
             return False
 
@@ -392,9 +399,7 @@ class Socket:
             self._subscribed_channels.discard(channel)
         return success
 
-    async def handle_subscription_request(
-        self, data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def handle_subscription_request(self, data: dict[str, Any]) -> dict[str, Any]:
         """Process a client-sent ``{"action": ...}`` frame and return
         the response frame to be sent back."""
         if not isinstance(data, dict):
@@ -464,7 +469,7 @@ class Socket:
     # ------------------------------------------------------------------
     # Helpers.
     # ------------------------------------------------------------------
-    def _resolve_user_id(self) -> Optional[str]:
+    def _resolve_user_id(self) -> str | None:
         if self._user is None:
             return None
         for attr in ("id", "user_id"):
@@ -483,7 +488,7 @@ class Socket:
             return 25
 
     # Compatibility surface for code that still uses the old name.
-    async def send(self, message: Dict[str, Any]) -> None:
+    async def send(self, message: dict[str, Any]) -> None:
         """Direct ASGI send. Use ``send_text`` / ``send_json`` /
         ``close`` instead — kept to avoid breaking custom middleware
         that expects the raw send."""

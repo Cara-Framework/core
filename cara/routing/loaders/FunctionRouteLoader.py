@@ -2,8 +2,6 @@
 Function Route Loader for loading routes from decorated standalone functions.
 """
 
-from typing import List
-
 from cara.decorators.route import all_pending, clear
 from cara.facades import Log
 from cara.routing import Route
@@ -15,9 +13,9 @@ class FunctionRouteLoader:
     def __init__(self, application):
         self.application = application
 
-    def load(self) -> List[Route]:
+    def load(self) -> list[Route]:
         """Load routes from decorated standalone functions."""
-        collected: List[Route] = []
+        collected: list[Route] = []
 
         for pending in all_pending():
             handler = pending["handler"]
@@ -51,7 +49,7 @@ class FunctionRouteLoader:
         """Clear pending route decorators."""
         clear()
 
-    def _check_duplicate_names(self, routes: List[Route]) -> None:
+    def _check_duplicate_names(self, routes: list[Route]) -> None:
         """Check for duplicate route names and warn."""
         seen_names = set()
         for route in routes:

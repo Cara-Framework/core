@@ -5,8 +5,8 @@ Binds a default exception handler and ensures that any exception
 escaping the HTTP conductor is forwarded to that handler.
 """
 
-from cara.foundation import Provider
 from cara.exceptions.handlers import DefaultExceptionHandler
+from cara.foundation import Provider
 
 
 class ExceptionProvider(Provider):
@@ -36,7 +36,9 @@ class ExceptionProvider(Provider):
             from handle() — NOT stored on self (concurrency-safe).
             """
             try:
-                await original_handle_request(self, scope, receive, send, request, response)
+                await original_handle_request(
+                    self, scope, receive, send, request, response
+                )
             except Exception as exc:
                 handler = self.application.make("exception.handler")
                 await handler.handle(exc, request, scope, receive, send)

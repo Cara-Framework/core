@@ -26,7 +26,9 @@ class CursorPaginator(BasePaginator):
 
     def serialize(self, *args, **kwargs):
         return {
-            "data": self.result.serialize(*args, **kwargs) if self.result is not None else [],
+            "data": self.result.serialize(*args, **kwargs)
+            if self.result is not None
+            else [],
             "meta": {
                 "per_page": self.per_page,
                 "count": self.count,

@@ -5,8 +5,8 @@ This module provides the service provider that binds the WebsocketConductor into
 container.
 """
 
-from cara.foundation import DeferredProvider
 from cara.conductors.websocket import WebsocketConductor
+from cara.foundation import DeferredProvider
 
 
 class WebsocketConductorProvider(DeferredProvider):

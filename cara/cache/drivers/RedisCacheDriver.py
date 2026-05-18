@@ -7,20 +7,19 @@ supporting TTL-based expiration and all standard cache operations.
 
 from __future__ import annotations
 
-from cara.facades import Log
-import pickle
-from typing import Any, Optional
-
-from cara.cache.contracts import Cache
-from cara.cache.observer import notify_cache_event
-from cara.exceptions import CacheConfigurationException
-
-
 # Payloads above this size emit a one-time warning per key so operators
 # notice runaway cache-as-blob patterns (e.g. caching a full search
 # response that ballooned past 1 MB). Configurable via the
 # ``CARA_CACHE_LARGE_VALUE_BYTES`` environment variable; default 256 KB.
 import os
+import pickle
+from typing import Any
+
+from cara.cache.contracts import Cache
+from cara.cache.observer import notify_cache_event
+from cara.exceptions import CacheConfigurationException
+from cara.facades import Log
+
 try:
     _LARGE_VALUE_BYTES = int(os.environ.get("CARA_CACHE_LARGE_VALUE_BYTES", "262144"))
 except (TypeError, ValueError):
@@ -42,7 +41,7 @@ class RedisCacheDriver(Cache):
         host: str,
         port: int,
         db: int,
-        password: Optional[str],
+        password: str | None,
         prefix: str = "",
         default_ttl: int = 60,
         *,
@@ -53,11 +52,11 @@ class RedisCacheDriver(Cache):
         # health pings so a Redis blip doesn't permanently poison the
         # pool, and a hard ceiling on connection count so a slow
         # downstream can't grow the pool unboundedly under load.
-        socket_connect_timeout: Optional[float] = 5.0,
-        socket_timeout: Optional[float] = 5.0,
+        socket_connect_timeout: float | None = 5.0,
+        socket_timeout: float | None = 5.0,
         socket_keepalive: bool = True,
         health_check_interval: int = 30,
-        max_connections: Optional[int] = 32,
+        max_connections: int | None = 32,
         retry_on_timeout: bool = True,
     ):
         self._prefix = prefix or ""
@@ -95,7 +94,9 @@ class RedisCacheDriver(Cache):
             redis_kwargs["max_connections"] = max_connections
         # Drop None entries so we don't override redis-py's own defaults
         # (e.g. for ``password``) with explicit None values.
-        redis_kwargs = {k: v for k, v in redis_kwargs.items() if v is not None or k == "password"}
+        redis_kwargs = {
+            k: v for k, v in redis_kwargs.items() if v is not None or k == "password"
+        }
         self._client = redis.Redis(**redis_kwargs)
 
     def _validate_connection_params(self, host: str, port: int, db: int) -> None:
@@ -157,7 +158,7 @@ class RedisCacheDriver(Cache):
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> None:
         redis_key = f"{self._prefix}{key}"
         try:
@@ -171,8 +172,7 @@ class RedisCacheDriver(Cache):
             from cara.exceptions import CacheConfigurationException
 
             raise CacheConfigurationException(
-                f"Cannot pickle value for cache key '{key}' "
-                f"({type(value).__name__}): {e}"
+                f"Cannot pickle value for cache key '{key}' ({type(value).__name__}): {e}"
             ) from e
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
@@ -263,7 +263,7 @@ class RedisCacheDriver(Cache):
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> bool:
         """Add a value only if the key doesn't exist. Returns True if
         the value was added, False if a value was already present.
@@ -398,7 +398,7 @@ class RedisCacheDriver(Cache):
             Log.warning(f"[RedisCacheDriver] forget_if failed: {e}", category="cache")
             return False
 
-    def ttl(self, key: str) -> Optional[int]:
+    def ttl(self, key: str) -> int | None:
         """Remaining time-to-live for ``key`` in seconds.
 
         Returns ``None`` when the key doesn't exist or has no expiry,

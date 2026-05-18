@@ -5,7 +5,7 @@ This module provides advanced message formatting capabilities for validation rul
 including placeholder replacement and attribute name formatting.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 
 class MessageFormatter:
@@ -16,7 +16,7 @@ class MessageFormatter:
     """
 
     @staticmethod
-    def format_message(custom_message: str, field: str, params: Dict[str, Any]) -> str:
+    def format_message(custom_message: str, field: str, params: dict[str, Any]) -> str:
         """
         Format custom message with advanced placeholder replacement.
 
@@ -64,11 +64,11 @@ class MessageFormatter:
         return " ".join(word.capitalize() for word in words)
 
     @staticmethod
-    def has_custom_message(params: Dict[str, Any]) -> bool:
+    def has_custom_message(params: dict[str, Any]) -> bool:
         """Check if custom message is available in params."""
         return "_custom_message" in params and params["_custom_message"]
 
     @staticmethod
-    def get_custom_message(params: Dict[str, Any]) -> str:
+    def get_custom_message(params: dict[str, Any]) -> str:
         """Get custom message from params."""
         return params.get("_custom_message", "")

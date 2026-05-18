@@ -8,7 +8,7 @@ import os
 import pickle
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import pendulum
 
@@ -65,7 +65,7 @@ class RedisDriver(HasColoredOutput, Queue):
         "return #items"
     )
 
-    def __init__(self, application, options: Dict[str, Any]):
+    def __init__(self, application, options: dict[str, Any]):
         """
         Initialize Redis driver.
 
@@ -121,7 +121,7 @@ class RedisDriver(HasColoredOutput, Queue):
         self.blocking_timeout = int(self.options.get("blocking_timeout", 5))
         self.tz = self.options.get("tz", "UTC")
 
-    def push(self, *jobs: Any, options: Dict[str, Any]) -> Union[str, List[str]]:
+    def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push jobs immediately to Redis list and return job ID(s)."""
         merged = {**self.options, **(options or {})}
         queue_name = merged.get("queue", "default")
@@ -149,21 +149,17 @@ class RedisDriver(HasColoredOutput, Queue):
             try:
                 data = pickle.dumps(payload_obj)
             except Exception as e:
-                raise QueueException(
-                    f"RedisDriver: could not pickle payload: {e}"
-                ) from e
+                raise QueueException(f"RedisDriver: could not pickle payload: {e}") from e
 
             try:
                 # RPUSH to append job to queue
                 self._redis.rpush(key, data)
             except Exception as e:
-                raise QueueException(
-                    f"RedisDriver: error pushing to Redis: {e}"
-                ) from e
+                raise QueueException(f"RedisDriver: error pushing to Redis: {e}") from e
 
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
-    def consume(self, options: Dict[str, Any]) -> None:
+    def consume(self, options: dict[str, Any]) -> None:
         """
         Continuously consume jobs from Redis queue.
 
@@ -251,7 +247,7 @@ class RedisDriver(HasColoredOutput, Queue):
                 self.danger(f"RedisDriver.consume encountered error: {e}")
                 time.sleep(self.poll_interval)
 
-    def retry(self, options: Dict[str, Any]) -> None:
+    def retry(self, options: dict[str, Any]) -> None:
         """Move valid jobs from failed list back to main queue.
 
         Payloads that cannot be unpickled are dead-lettered instead of
@@ -285,16 +281,16 @@ class RedisDriver(HasColoredOutput, Queue):
 
         self.info(f"RedisDriver.retry: {count} re-enqueued, {dead} dead-lettered")
 
-    def chain(self, jobs: list, options: Dict[str, Any]) -> None:
+    def chain(self, jobs: list, options: dict[str, Any]) -> None:
         """Chain jobs: push each job in sequence."""
         for job in jobs:
             self.push(job, options=options)
 
-    def batch(self, *jobs: Any, options: Dict[str, Any]) -> None:
+    def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
         """Batch push: push all jobs at once."""
         self.push(*jobs, options=options)
 
-    def schedule(self, job: Any, when: Any, options: Dict[str, Any]) -> None:
+    def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> None:
         """
         Schedule job for future execution.
 
@@ -316,9 +312,7 @@ class RedisDriver(HasColoredOutput, Queue):
                 run_dt = pendulum.parse(str(when))
                 run_ts = run_dt.int_timestamp
             except Exception as e:
-                raise QueueException(
-                    f"RedisDriver.schedule: invalid time: {e}"
-                ) from e
+                raise QueueException(f"RedisDriver.schedule: invalid time: {e}") from e
 
         # Prepare payload. Include a fresh uuid envelope so two
         # ``schedule()`` calls with the same callable + same args + same
@@ -390,7 +384,7 @@ class RedisDriver(HasColoredOutput, Queue):
         host = socket.gethostname()
         return f"{self.queue_prefix}{queue_name}:processing:{host}:{os.getpid()}"
 
-    def _brpoplpush_compat(self, src: str, dst: str) -> Optional[bytes]:
+    def _brpoplpush_compat(self, src: str, dst: str) -> bytes | None:
         """Atomic blocking pop-and-push from ``src`` to ``dst``.
 
         Redis 6.2+ replaces ``BRPOPLPUSH`` with ``BLMOVE``; both are
@@ -408,7 +402,7 @@ class RedisDriver(HasColoredOutput, Queue):
                 return self._redis.blmove(
                     src, dst, timeout=self.blocking_timeout, src="RIGHT", dest="LEFT"
                 )
-            except (AttributeError, TypeError):
+            except AttributeError, TypeError:
                 pass
             except Exception:
                 return None
@@ -417,7 +411,7 @@ class RedisDriver(HasColoredOutput, Queue):
         except Exception:
             return None
 
-    def _maybe_reap_processing(self, merged: Dict[str, Any], queue_name: str) -> None:
+    def _maybe_reap_processing(self, merged: dict[str, Any], queue_name: str) -> None:
         """Move stale processing-list entries back to the main queue.
 
         Called from the consume loop. We only run the sweep at most
@@ -446,14 +440,10 @@ class RedisDriver(HasColoredOutput, Queue):
             requeue_key = self._queue_key(queue_name)
             recovered = 0
             while True:
-                cursor, keys = self._redis.scan(
-                    cursor=cursor, match=pattern, count=200
-                )
+                cursor, keys = self._redis.scan(cursor=cursor, match=pattern, count=200)
                 for raw_key in keys:
                     proc_key = (
-                        raw_key.decode("utf-8")
-                        if isinstance(raw_key, bytes)
-                        else raw_key
+                        raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
                     )
                     if proc_key.endswith(my_suffix):
                         # Our own list — leave it alone. We'll clean
@@ -485,9 +475,7 @@ class RedisDriver(HasColoredOutput, Queue):
                         )
                         recovered += int(moved or 0)
                     except Exception as e:
-                        self.danger(
-                            f"Reaper: atomic move failed for {proc_key}: {e}"
-                        )
+                        self.danger(f"Reaper: atomic move failed for {proc_key}: {e}")
                 if cursor == 0:
                     break
             if recovered:

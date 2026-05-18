@@ -4,7 +4,7 @@ Authentication Manager for Cara Framework.
 Manages authentication guards and user sessions.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.authentication.contracts import Authenticatable
 
@@ -17,14 +17,14 @@ class Authentication:
     def __init__(self, application, default_guard: str = "jwt"):
         self.application = application
         self.default_guard = default_guard
-        self.guards: Dict[str, Any] = {}
-        self._user: Optional[Authenticatable] = None
+        self.guards: dict[str, Any] = {}
+        self._user: Authenticatable | None = None
 
     def add_guard(self, name: str, guard) -> None:
         """Add a guard to the authentication manager."""
         self.guards[name] = guard
 
-    def guard(self, name: Optional[str] = None):
+    def guard(self, name: str | None = None):
         """Get a guard by name or detect from request."""
         if name:
             # Explicit guard name provided
@@ -37,7 +37,7 @@ class Authentication:
             raise ValueError(f"Guard '{guard_name}' not found")
         return self.guards[guard_name]
 
-    def _detect_guard_from_request(self) -> Optional[str]:
+    def _detect_guard_from_request(self) -> str | None:
         """Detect which guard should be used from route middleware, not headers."""
         try:
             from cara.http.request.context import current_request
@@ -65,7 +65,7 @@ class Authentication:
         """Check if the current request is a guest."""
         return not self.check()
 
-    def user(self) -> Optional[Any]:
+    def user(self) -> Any | None:
         """Get the currently authenticated user."""
         if self._user is not None:
             return self._user
@@ -77,7 +77,7 @@ class Authentication:
 
         return user
 
-    def id(self) -> Optional[Any]:
+    def id(self) -> Any | None:
         """Get the ID of the authenticated user."""
         user = self.user()
         if user and hasattr(user, "get_auth_id"):
@@ -86,7 +86,7 @@ class Authentication:
             return user.get_auth_identifier()
         return None
 
-    def attempt(self, credentials: Dict[str, Any]) -> bool:
+    def attempt(self, credentials: dict[str, Any]) -> bool:
         """Attempt to authenticate using credentials."""
         return self.guard().attempt(credentials)
 

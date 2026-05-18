@@ -30,7 +30,7 @@ class MorphOne(BaseRelationship):
         IMPORTANT: Always return a FRESH builder instance to avoid
         query condition accumulation across multiple calls.
         """
-        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
+        func = getattr(self, "_func", None) or getattr(self, "fn", None)
         if func:
             related_model = func(self)
             if related_model:
@@ -74,9 +74,8 @@ class MorphOne(BaseRelationship):
 
         # Return QueryBuilder with proper morph filters for method chaining
         polymorphic_key = self.get_record_key_lookup(instance)
-        return (
-            self.polymorphic_builder.where(self.morph_key, polymorphic_key)
-            .where(self.morph_id, instance.get_primary_key_value())
+        return self.polymorphic_builder.where(self.morph_key, polymorphic_key).where(
+            self.morph_id, instance.get_primary_key_value()
         )
 
     def __getattr__(self, attribute):

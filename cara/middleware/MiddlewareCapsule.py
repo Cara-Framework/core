@@ -3,12 +3,12 @@ Middleware capsule for managing middleware execution.
 Laravel-style middleware management with parameter parsing support.
 """
 
-from typing import Dict, Iterator, List, Optional, Set, Type, Union
+from collections.abc import Iterator
 
 from cara.exceptions import RouteMiddlewareNotFoundException
 from cara.middleware import Middleware
 
-MiddlewareType = Type[Middleware]
+MiddlewareType = type[Middleware]
 
 
 class MiddlewareCapsule:
@@ -16,15 +16,15 @@ class MiddlewareCapsule:
 
     def __init__(self, application):
         self.application = application
-        self._global_middleware: List[MiddlewareType] = []
-        self._route_middleware: Dict[str, List[MiddlewareType]] = {}
-        self._middleware_aliases: Dict[str, MiddlewareType] = {}
-        self._terminable_middleware: Set[MiddlewareType] = set()
+        self._global_middleware: list[MiddlewareType] = []
+        self._route_middleware: dict[str, list[MiddlewareType]] = {}
+        self._middleware_aliases: dict[str, MiddlewareType] = {}
+        self._terminable_middleware: set[MiddlewareType] = set()
         # Laravel-style middleware priority ordering. Middleware classes in
         # this list will be sorted into the order specified regardless of
         # how they were registered. Unknown middleware keep registration
         # order and appear after all prioritized ones.
-        self._priority: List[MiddlewareType] = []
+        self._priority: list[MiddlewareType] = []
 
     def __iter__(self) -> Iterator[MiddlewareType]:
         return iter(self._global_middleware)
@@ -35,28 +35,28 @@ class MiddlewareCapsule:
     def __contains__(self, item: MiddlewareType) -> bool:
         return item in self._global_middleware
 
-    def __getitem__(self, key: str) -> List[MiddlewareType]:
+    def __getitem__(self, key: str) -> list[MiddlewareType]:
         if key in self._route_middleware:
             return self._route_middleware[key]
         raise RouteMiddlewareNotFoundException(f"Middleware group '{key}' not found")
 
-    def add_global(self, middleware: MiddlewareType) -> "MiddlewareCapsule":
+    def add_global(self, middleware: MiddlewareType) -> MiddlewareCapsule:
         """Add global middleware."""
         if middleware not in self._global_middleware:
             self._global_middleware.append(middleware)
         return self
 
-    def add(self, middleware: MiddlewareType) -> "MiddlewareCapsule":
+    def add(self, middleware: MiddlewareType) -> MiddlewareCapsule:
         """Add global middleware (alias for add_global)."""
         return self.add_global(middleware)
 
-    def create_group(self, name: str) -> "MiddlewareCapsule":
+    def create_group(self, name: str) -> MiddlewareCapsule:
         """Create a new middleware group."""
         if name not in self._route_middleware:
             self._route_middleware[name] = []
         return self
 
-    def add_to_group(self, group: str, middleware: MiddlewareType) -> "MiddlewareCapsule":
+    def add_to_group(self, group: str, middleware: MiddlewareType) -> MiddlewareCapsule:
         """Add middleware to a specific group."""
         if group not in self._route_middleware:
             self.create_group(group)
@@ -65,16 +65,16 @@ class MiddlewareCapsule:
             self._route_middleware[group].append(middleware)
         return self
 
-    def add_route_middleware(self, group: str, mw: MiddlewareType) -> "MiddlewareCapsule":
+    def add_route_middleware(self, group: str, mw: MiddlewareType) -> MiddlewareCapsule:
         """Add route middleware (alias for add_to_group)."""
         return self.add_to_group(group, mw)
 
-    def add_alias(self, name: str, middleware: MiddlewareType) -> "MiddlewareCapsule":
+    def add_alias(self, name: str, middleware: MiddlewareType) -> MiddlewareCapsule:
         """Add middleware alias for easier reference in routes."""
         self._middleware_aliases[name] = middleware
         return self
 
-    def register_terminable(self, middleware: MiddlewareType) -> "MiddlewareCapsule":
+    def register_terminable(self, middleware: MiddlewareType) -> MiddlewareCapsule:
         """Register middleware as terminable (runs after response is sent)."""
         self._terminable_middleware.add(middleware)
         return self
@@ -98,17 +98,17 @@ class MiddlewareCapsule:
             return True
         return False
 
-    def get_terminable_middleware(self) -> Set[MiddlewareType]:
+    def get_terminable_middleware(self) -> set[MiddlewareType]:
         """Get all registered terminable middleware."""
         return self._terminable_middleware
 
-    def resolve_alias(self, name: str) -> Optional[MiddlewareType]:
+    def resolve_alias(self, name: str) -> MiddlewareType | None:
         """Resolve middleware alias to actual middleware class."""
         return self._middleware_aliases.get(name)
 
     def resolve_middleware(
-        self, middleware: Union[str, MiddlewareType]
-    ) -> Union[MiddlewareType, List[MiddlewareType], None]:
+        self, middleware: str | MiddlewareType
+    ) -> MiddlewareType | list[MiddlewareType] | None:
         """
         Resolve middleware from string alias, group name, or class.
         Supports Laravel-style parameters: 'auth:jwt', 'throttle:60,1'
@@ -135,7 +135,7 @@ class MiddlewareCapsule:
 
     def _resolve_middleware_with_params(
         self, middleware_name: str, params: str
-    ) -> Optional[MiddlewareType]:
+    ) -> MiddlewareType | None:
         """Resolve middleware with Laravel-style parameters."""
         # Get the base middleware class
         base_middleware = self.resolve_alias(middleware_name)
@@ -154,7 +154,7 @@ class MiddlewareCapsule:
         return self._create_parameterized_middleware(base_middleware, param_list)
 
     def _create_parameterized_middleware(
-        self, base_middleware: MiddlewareType, parameters: List[str]
+        self, base_middleware: MiddlewareType, parameters: list[str]
     ) -> MiddlewareType:
         """Create a parameterized middleware class using Laravel-style parameter parsing."""
 
@@ -181,7 +181,7 @@ class MiddlewareCapsule:
         ParameterizedMiddleware.__base_middleware__ = base_middleware
         return ParameterizedMiddleware
 
-    def remove(self, mw: Union[str, MiddlewareType]) -> "MiddlewareCapsule":
+    def remove(self, mw: str | MiddlewareType) -> MiddlewareCapsule:
         """Remove middleware from global list or clear a group."""
         if isinstance(mw, str):
             if mw in self._route_middleware:
@@ -195,11 +195,11 @@ class MiddlewareCapsule:
                 self._terminable_middleware.remove(mw)
         return self
 
-    def get_global_middleware(self) -> List[MiddlewareType]:
+    def get_global_middleware(self) -> list[MiddlewareType]:
         """Get global middleware sorted by priority."""
         return self.sort_by_priority(self._global_middleware.copy())
 
-    def set_priority(self, priority: List[MiddlewareType]) -> "MiddlewareCapsule":
+    def set_priority(self, priority: list[MiddlewareType]) -> MiddlewareCapsule:
         """Set the middleware priority order (Laravel ``$middlewarePriority``).
 
         Middleware classes present in ``priority`` are always ordered as
@@ -209,11 +209,11 @@ class MiddlewareCapsule:
         self._priority = list(priority)
         return self
 
-    def get_priority(self) -> List[MiddlewareType]:
+    def get_priority(self) -> list[MiddlewareType]:
         """Return the configured priority list."""
         return list(self._priority)
 
-    def sort_by_priority(self, middleware: List[MiddlewareType]) -> List[MiddlewareType]:
+    def sort_by_priority(self, middleware: list[MiddlewareType]) -> list[MiddlewareType]:
         """Sort a middleware stack according to the configured priority.
 
         Classes present in ``_priority`` are emitted in that order, followed
@@ -228,8 +228,8 @@ class MiddlewareCapsule:
             """Unwrap a ParameterizedMiddleware back to its base class."""
             return getattr(mw, "__base_middleware__", mw)
 
-        prioritized: List[MiddlewareType] = []
-        remainder: List[MiddlewareType] = []
+        prioritized: list[MiddlewareType] = []
+        remainder: list[MiddlewareType] = []
         for mw in middleware:
             if _base(mw) in priority_index:
                 prioritized.append(mw)
@@ -238,21 +238,21 @@ class MiddlewareCapsule:
         prioritized.sort(key=lambda m: priority_index[_base(m)])
         return prioritized + remainder
 
-    def get_route_middleware(self, group: str) -> List[MiddlewareType]:
+    def get_route_middleware(self, group: str) -> list[MiddlewareType]:
         """Get middleware for a specific route group."""
         if group in self._route_middleware:
             return self._route_middleware[group].copy()
         raise RouteMiddlewareNotFoundException(f"Middleware group '{group}' not found")
 
-    def get_groups(self) -> List[str]:
+    def get_groups(self) -> list[str]:
         """Get all available middleware group names."""
         return list(self._route_middleware.keys())
 
-    def get_aliases(self) -> Dict[str, MiddlewareType]:
+    def get_aliases(self) -> dict[str, MiddlewareType]:
         """Get all registered middleware aliases."""
         return self._middleware_aliases.copy()
 
-    def load_from_registry(self, registry_config: Dict) -> "MiddlewareCapsule":
+    def load_from_registry(self, registry_config: dict) -> MiddlewareCapsule:
         """Load middleware configuration from MiddlewareRegistry build output."""
         # Load global middleware
         for middleware in registry_config.get("global", []):

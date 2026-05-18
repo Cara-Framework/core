@@ -1,6 +1,6 @@
 """Authorization-related exceptions for the Cara framework."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .base import CaraException
 
@@ -17,9 +17,9 @@ class AuthorizationException(CaraException):
     def __init__(
         self,
         message: str = "This action is unauthorized.",
-        ability: Optional[str] = None,
-        user: Optional[Any] = None,
-        resource: Optional[Any] = None,
+        ability: str | None = None,
+        user: Any | None = None,
+        resource: Any | None = None,
         status_code: int = 403,
     ):
         """
@@ -38,7 +38,7 @@ class AuthorizationException(CaraException):
         """
         return self.message
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert exception to dictionary for JSON response."""
         return {
             "error": str(self),
@@ -55,9 +55,9 @@ class AuthorizationFailedException(AuthorizationException):
     def __init__(
         self,
         message: str = "This action is unauthorized.",
-        ability: Optional[str] = None,
-        user: Optional[Any] = None,
-        resource: Optional[Any] = None,
+        ability: str | None = None,
+        user: Any | None = None,
+        resource: Any | None = None,
         status_code: int = 403,
     ):
         """
@@ -81,4 +81,3 @@ __all__ = [
     "AuthorizationException",
     "AuthorizationFailedException",
 ]
-

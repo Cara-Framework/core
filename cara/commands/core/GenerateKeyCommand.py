@@ -7,7 +7,6 @@ This module provides a CLI command to generate and set secure application keys w
 import os
 import secrets
 from pathlib import Path
-from typing import Optional
 
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -35,8 +34,8 @@ class GenerateKeyCommand(CommandBase):
 
     def handle(
         self,
-        length: Optional[str] = None,
-        encoding: Optional[str] = None,
+        length: str | None = None,
+        encoding: str | None = None,
     ):
         """Handle application key generation with enhanced UX."""
         self.info("🔐 Application Key Generation")
@@ -96,7 +95,7 @@ class GenerateKeyCommand(CommandBase):
             self.error(f"❌ {e}")
             return
 
-    def _parse_length(self, length: Optional[str]) -> int:
+    def _parse_length(self, length: str | None) -> int:
         """Parse and validate key length parameter."""
         if length is None:
             return 32
@@ -113,7 +112,7 @@ class GenerateKeyCommand(CommandBase):
         except ValueError as e:
             raise Exception(f"Invalid length parameter: {e}") from e
 
-    def _parse_encoding(self, encoding: Optional[str]) -> str:
+    def _parse_encoding(self, encoding: str | None) -> str:
         """Parse and validate encoding parameter."""
         if encoding is None:
             return "base64"
@@ -135,7 +134,7 @@ class GenerateKeyCommand(CommandBase):
         else:
             raise ValueError(f"Unsupported encoding: {encoding}")
 
-    def _get_current_key(self) -> Optional[str]:
+    def _get_current_key(self) -> str | None:
         """Get current APP_KEY value from .env file."""
         if not self.env_file.exists():
             return None
@@ -153,7 +152,7 @@ class GenerateKeyCommand(CommandBase):
         return None
 
     def _show_dry_run(
-        self, new_key: str, current_key: Optional[str], length: int, encoding: str
+        self, new_key: str, current_key: str | None, length: int, encoding: str
     ):
         """Show what would be generated in dry run mode."""
         self.info("🔍 DRY RUN MODE - No changes will be made")
@@ -177,7 +176,7 @@ class GenerateKeyCommand(CommandBase):
             )
 
     def _update_env_file(
-        self, new_key: str, current_key: Optional[str], length: int, encoding: str
+        self, new_key: str, current_key: str | None, length: int, encoding: str
     ):
         """Update the application key in .env file."""
         self.info("🔧 Configuration:")
@@ -248,6 +247,7 @@ class GenerateKeyCommand(CommandBase):
         """Check if running in production environment."""
         try:
             from cara.configuration import config
+
             env = str(config("app.ENV", "")).lower()
         except Exception:
             env = os.getenv("APP_ENV", "").lower()

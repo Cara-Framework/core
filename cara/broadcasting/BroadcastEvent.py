@@ -12,7 +12,8 @@ so subclasses can declare channels however reads naturally.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Union
 
 from cara.broadcasting.Channel import Channel, channel_name
 from cara.broadcasting.contracts import ShouldBroadcast
@@ -41,26 +42,26 @@ class BroadcastEvent(ShouldBroadcast):
 
     def __init__(
         self,
-        channels: Union[ChannelLike, Sequence[ChannelLike]],
-        event_name: Optional[str] = None,
-        data: Optional[Dict[str, Any]] = None,
+        channels: ChannelLike | Sequence[ChannelLike],
+        event_name: str | None = None,
+        data: dict[str, Any] | None = None,
     ) -> None:
-        self.channels: List[str] = self._normalize_channels(channels)
+        self.channels: list[str] = self._normalize_channels(channels)
         self.event_name: str = event_name or self.__class__.__name__
-        self.data: Dict[str, Any] = data or {}
+        self.data: dict[str, Any] = data or {}
         # Consumers set this to the value of the inbound HTTP request's
         # X-Socket-Id header to avoid echoing the event back to the
         # connection that triggered it.
-        self._except_socket_id: Optional[str] = None
-        self._broadcast_via: Optional[str] = None
+        self._except_socket_id: str | None = None
+        self._broadcast_via: str | None = None
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     @staticmethod
     def _normalize_channels(
-        channels: Union[ChannelLike, Sequence[ChannelLike]],
-    ) -> List[str]:
+        channels: ChannelLike | Sequence[ChannelLike],
+    ) -> list[str]:
         """Flatten a string / Channel / list-of-either into a list of
         canonical wire-form strings."""
         if isinstance(channels, (str, Channel)):
@@ -74,7 +75,7 @@ class BroadcastEvent(ShouldBroadcast):
     # ------------------------------------------------------------------
     # Fluent setters — chainable for readability at dispatch site.
     # ------------------------------------------------------------------
-    def to_others(self, socket_id: Optional[str]) -> "BroadcastEvent":
+    def to_others(self, socket_id: str | None) -> BroadcastEvent:
         """Skip the connection identified by ``socket_id`` when
         fanning this event out. Returns self so chains read naturally::
 
@@ -84,7 +85,7 @@ class BroadcastEvent(ShouldBroadcast):
         self._except_socket_id = socket_id
         return self
 
-    def via(self, driver: Optional[str]) -> "BroadcastEvent":
+    def via(self, driver: str | None) -> BroadcastEvent:
         """Pin this event to a specific broadcasting driver."""
         self._broadcast_via = driver
         return self
@@ -92,17 +93,17 @@ class BroadcastEvent(ShouldBroadcast):
     # ------------------------------------------------------------------
     # ShouldBroadcast contract
     # ------------------------------------------------------------------
-    def broadcast_on(self) -> List[str]:
+    def broadcast_on(self) -> list[str]:
         return self.channels
 
     def broadcast_as(self) -> str:
         return self.event_name
 
-    def broadcast_with(self) -> Dict[str, Any]:
+    def broadcast_with(self) -> dict[str, Any]:
         return self.data
 
-    def except_socket_id(self) -> Optional[str]:
+    def except_socket_id(self) -> str | None:
         return self._except_socket_id
 
-    def broadcast_via(self) -> Optional[str]:
+    def broadcast_via(self) -> str | None:
         return self._broadcast_via

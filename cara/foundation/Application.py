@@ -9,7 +9,7 @@ and coordinating all its components.
 
 import inspect
 import threading
-from typing import Any, Dict, List, Optional, Type
+from typing import Any
 
 from cara.container import Container
 from cara.environment import LoadEnvironment
@@ -32,7 +32,7 @@ class Application(Container):
     Implements the ASGI interface and exposes `make(...)` for dependency resolution.
     """
 
-    def __init__(self, base_path: Optional[str] = None):
+    def __init__(self, base_path: str | None = None):
         """Initialize the application (and its underlying Container)."""
         super().__init__()  # Initialize Container internals
 
@@ -47,7 +47,7 @@ class Application(Container):
             PathManager.set_base_path(base_path)
 
         # All providers that have been eagerly instantiated & registered
-        self.providers: List[Provider] = []
+        self.providers: list[Provider] = []
         # Lock around deferred provider resolution.
         #
         # ROOT CAUSE (2026-04-23): ``Application.make()`` has the same
@@ -65,9 +65,9 @@ class Application(Container):
         # section. Same RLock pattern.
         self._deferred_providers_lock = threading.RLock()
         # Map of deferred binding key (string) → provider class
-        self.deferred_providers: Dict[str, Type[DeferredProvider]] = {}
+        self.deferred_providers: dict[str, type[DeferredProvider]] = {}
 
-    def register_providers(self, *providers: Type[Any]) -> "Application":
+    def register_providers(self, *providers: type[Any]) -> Application:
         """
         Register framework‐internal service providers.
 
@@ -87,7 +87,7 @@ class Application(Container):
 
         return self
 
-    def add_providers(self, *providers: Type[Any]) -> "Application":
+    def add_providers(self, *providers: type[Any]) -> Application:
         """
         Register application‐specific providers.
 

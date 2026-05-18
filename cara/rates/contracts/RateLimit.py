@@ -6,14 +6,13 @@ limiting implementations.
 """
 
 from abc import ABC, abstractmethod
-from typing import Tuple
 
 
 class RateLimit(ABC):
     """Contract for a rate‐limiter driver."""
 
     @abstractmethod
-    def attempt(self, key: str) -> Tuple[bool, int, int]:
+    def attempt(self, key: str) -> tuple[bool, int, int]:
         """
         Record one "hit" against the given key (e.g. client IP or route).
         Returns a tuple: (allowed: bool, remaining: int, reset_in: int)

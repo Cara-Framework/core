@@ -10,7 +10,8 @@ Wire-up lives in :mod:`cara.queues.Bus`, which runs jobs through
 """
 
 import asyncio
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from .RateLimited import RateLimited, WithoutOverlapping
 from .ThrottlesExceptions import ThrottlesExceptions

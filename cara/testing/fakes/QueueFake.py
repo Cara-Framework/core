@@ -7,23 +7,24 @@ Laravel's ``Queue::fake()``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional
+from typing import Any
 
 
 @dataclass
 class QueuedJob:
     job: Any
-    queue: Optional[str] = None
-    delay: Optional[float] = None
-    payload: Optional[dict] = None
+    queue: str | None = None
+    delay: float | None = None
+    payload: dict | None = None
 
 
 class QueueFake:
     """Drop-in replacement for the ``Queue`` facade in tests."""
 
     def __init__(self) -> None:
-        self.jobs: List[QueuedJob] = []
+        self.jobs: list[QueuedJob] = []
 
     # Production-side surface — accept any kwargs we don't model so a
     # caller using a ``priority=`` or ``options=`` flag still works.
@@ -37,14 +38,15 @@ class QueueFake:
     @staticmethod
     def _next_id() -> str:
         import uuid
+
         return f"fake-job-{uuid.uuid4().hex[:12]}"
 
-    def push(self, job: Any, queue: Optional[str] = None, **kwargs: Any) -> str:
+    def push(self, job: Any, queue: str | None = None, **kwargs: Any) -> str:
         self.jobs.append(QueuedJob(job=job, queue=queue, payload=kwargs or None))
         return self._next_id()
 
     def later(
-        self, delay: float, job: Any, queue: Optional[str] = None, **kwargs: Any
+        self, delay: float, job: Any, queue: str | None = None, **kwargs: Any
     ) -> str:
         self.jobs.append(
             QueuedJob(job=job, queue=queue, delay=delay, payload=kwargs or None)
@@ -56,21 +58,21 @@ class QueueFake:
 
     # ── Assertions ───────────────────────────────────────────────────
 
-    def all(self) -> List[QueuedJob]:
+    def all(self) -> list[QueuedJob]:
         return list(self.jobs)
 
     def count(self) -> int:
         return len(self.jobs)
 
-    def pushed(self, predicate: Callable[[QueuedJob], bool]) -> List[QueuedJob]:
+    def pushed(self, predicate: Callable[[QueuedJob], bool]) -> list[QueuedJob]:
         return [j for j in self.jobs if predicate(j)]
 
     def assert_pushed(
         self,
-        of_type: Optional[type] = None,
+        of_type: type | None = None,
         *,
-        where: Optional[Callable[[QueuedJob], bool]] = None,
-        times: Optional[int] = None,
+        where: Callable[[QueuedJob], bool] | None = None,
+        times: int | None = None,
     ) -> None:
         matches = self.jobs
         if of_type is not None:

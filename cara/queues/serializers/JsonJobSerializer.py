@@ -9,7 +9,7 @@ Serializes jobs as JSON instead of pickle for:
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class JsonJobSerializer:
@@ -26,7 +26,7 @@ class JsonJobSerializer:
 
     @staticmethod
     def serialize(
-        job_class: type, init_args: tuple = (), init_kwargs: Optional[dict] = None
+        job_class: type, init_args: tuple = (), init_kwargs: dict | None = None
     ) -> str:
         """
         Serialize job to JSON string.
@@ -62,7 +62,7 @@ class JsonJobSerializer:
             ) from e
 
     @staticmethod
-    def deserialize(json_string: str) -> Dict[str, Any]:
+    def deserialize(json_string: str) -> dict[str, Any]:
         """
         Deserialize JSON string to job specification.
 

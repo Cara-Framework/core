@@ -4,7 +4,7 @@ Max Length Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a string value does not exceed a maximum length.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -16,7 +16,7 @@ class MaxLengthRule(BaseRule):
     Usage: "max_length:255"
     """
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if string value does not exceed maximum length."""
         if value is None or not isinstance(value, str):
             return False
@@ -28,7 +28,7 @@ class MaxLengthRule(BaseRule):
         threshold = int(max_length)
         return len(value) <= threshold
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default maximum length validation message."""
         attribute = MessageFormatter.format_attribute_name(field)
         max_val = params.get("max_length", 0)

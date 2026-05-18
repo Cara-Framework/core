@@ -5,7 +5,6 @@ This file contains the main tinker console command with Typer and Rich integrati
 """
 
 from pathlib import Path
-from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -40,7 +39,7 @@ class Command:
         no_ipython: bool = typer.Option(
             False, "--no-ipython", help="Use basic Python shell instead of IPython"
         ),
-        include: Optional[List[str]] = typer.Option(
+        include: list[str] | None = typer.Option(
             None, "--include", help="Additional modules to include"
         ),
         verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
@@ -190,7 +189,7 @@ class Command:
         )
         self.console.print(banner)
 
-    def _include_modules(self, modules: List[str], shell: Shell, verbose: bool = False):
+    def _include_modules(self, modules: list[str], shell: Shell, verbose: bool = False):
         """Include additional modules with Rich feedback."""
         for module_name in modules:
             try:
@@ -210,7 +209,7 @@ class Command:
                     f"⚠️  [yellow]Could not import {module_name}:[/yellow] {e}"
                 )
 
-    def run(self, args: Optional[List[str]] = None):
+    def run(self, args: list[str] | None = None):
         """Run the Typer application."""
         try:
             self.app(args)

@@ -5,8 +5,6 @@ This module provides the main mail management functionality,
 handling different drivers and mail sending operations.
 """
 
-from typing import Optional, Type
-
 from cara.facades import Log, Queue
 from cara.mail import Mailable
 from cara.mail.contracts import Mail
@@ -25,7 +23,7 @@ class Mail:
         self,
         application,
         default_driver: str = "log",
-        drivers_config: Optional[dict] = None,
+        drivers_config: dict | None = None,
     ):
         """
         Initialize mail manager.
@@ -36,12 +34,12 @@ class Mail:
             drivers_config: Mail drivers configuration
         """
         self.application = application
-        self.drivers: dict[str, Type[Mail]] = {}
+        self.drivers: dict[str, type[Mail]] = {}
         self.driver_instances: dict[str, Mail] = {}
         self.default_driver = default_driver
         self.drivers_config = drivers_config or {}
 
-    def add_driver(self, name: str, driver_class: Type[Mail]) -> None:
+    def add_driver(self, name: str, driver_class: type[Mail]) -> None:
         """
         Add a driver to the manager.
 
@@ -51,7 +49,7 @@ class Mail:
         """
         self.drivers[name] = driver_class
 
-    def driver(self, name: Optional[str] = None) -> Mail:
+    def driver(self, name: str | None = None) -> Mail:
         """
         Get mail driver instance.
 
@@ -81,7 +79,7 @@ class Mail:
 
         return driver_instance
 
-    def send(self, mailable: Mailable, driver_name: Optional[str] = None) -> bool:
+    def send(self, mailable: Mailable, driver_name: str | None = None) -> bool:
         """
         Send a mailable.
 
@@ -114,9 +112,7 @@ class Mail:
         """
         return isinstance(mailable, ShouldQueue)
 
-    def _queue_mailable(
-        self, mailable: Mailable, driver_name: Optional[str] = None
-    ) -> bool:
+    def _queue_mailable(self, mailable: Mailable, driver_name: str | None = None) -> bool:
         """
         Queue a mailable for background processing.
 
@@ -142,7 +138,7 @@ class Mail:
             Log.error(f"Failed to queue mailable: {e}")
             return False
 
-    def _send_now(self, mailable: Mailable, driver_name: Optional[str] = None) -> bool:
+    def _send_now(self, mailable: Mailable, driver_name: str | None = None) -> bool:
         """
         Send a mailable immediately (synchronously).
 

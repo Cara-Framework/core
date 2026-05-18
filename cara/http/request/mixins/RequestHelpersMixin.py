@@ -6,7 +6,7 @@ and query parameter access.
 """
 
 import re
-from typing import Any, List, Optional
+from typing import Any
 
 from cara.exceptions.types.authentication import AuthenticationException
 from cara.exceptions.types.validation import ValidationException
@@ -26,7 +26,7 @@ class RequestHelpersMixin:
             return default
         try:
             return int(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return default
 
     async def float_val(self, key: str, default: float = 0.0) -> float:
@@ -36,10 +36,10 @@ class RequestHelpersMixin:
             return default
         try:
             return float(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return default
 
-    async def array_or_csv(self, key: str, default: Optional[List[Any]] = None) -> List[Any]:
+    async def array_or_csv(self, key: str, default: list[Any] | None = None) -> list[Any]:
         """Retrieve input that may arrive as a JSON array OR a comma-separated string.
 
         Common for query/body params that can be either ``?ids=1,2,3`` or
@@ -60,7 +60,7 @@ class RequestHelpersMixin:
         key: str,
         max_ids: int = 100,
         required: bool = False,
-    ) -> List[int]:
+    ) -> list[int]:
         """Parse input as a list of positive integers (JSON array OR CSV).
 
         Raises ``ValidationException`` (HTTP 422) if the input contains
@@ -70,9 +70,7 @@ class RequestHelpersMixin:
         raw = await self.array_or_csv(key)
         if not raw:
             if required:
-                raise ValidationException(
-                    validation_errors={key: [f"{key} is required"]}
-                )
+                raise ValidationException(validation_errors={key: [f"{key} is required"]})
             return []
         if len(raw) > max_ids:
             raise ValidationException(
@@ -80,11 +78,11 @@ class RequestHelpersMixin:
                     key: [f"{key} may contain at most {max_ids} ids"],
                 }
             )
-        out: List[int] = []
+        out: list[int] = []
         for item in raw:
             try:
                 n = int(item)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 raise ValidationException(
                     validation_errors={key: [f"{key} must contain integers"]}
                 )
@@ -107,7 +105,7 @@ class RequestHelpersMixin:
             raise AuthenticationException("Authentication required")
         return user
 
-    def query(self, key: Optional[str] = None, default: Any = None) -> Any:
+    def query(self, key: str | None = None, default: Any = None) -> Any:
         """
         Query parameter access.
 

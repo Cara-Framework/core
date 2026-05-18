@@ -21,7 +21,6 @@ import re
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -50,7 +49,7 @@ class RouteGeneratorCommand(CommandBase):
         self.parsed_routes = []
         self.backup_file = None
 
-    def handle(self, type: Optional[str] = None):
+    def handle(self, type: str | None = None):
         """
         Generate route definitions from enhanced controller docstring annotations.
 
@@ -165,8 +164,8 @@ class RouteGeneratorCommand(CommandBase):
         return 0
 
     def _filter_routes_by_type(
-        self, route_data: List[Dict], route_type: str
-    ) -> List[Dict]:
+        self, route_data: list[dict], route_type: str
+    ) -> list[dict]:
         """Filter routes by type (api, web, websocket)."""
         filtered_data = []
 
@@ -193,7 +192,7 @@ class RouteGeneratorCommand(CommandBase):
         return filtered_data
 
     def _generate_routes_content_by_type(
-        self, route_data: List[Dict], route_type: str
+        self, route_data: list[dict], route_type: str
     ) -> str:
         """Generate routes content for specific type."""
         content_lines = []
@@ -241,9 +240,7 @@ class RouteGeneratorCommand(CommandBase):
                             "uuid",
                             "bool",
                             "any",
-                        ]:
-                            regex_rules.append(rule.strip())
-                        elif rule.strip().startswith("regex:"):
+                        ] or rule.strip().startswith("regex:"):
                             regex_rules.append(rule.strip())
                         else:
                             validation_rules.append(rule.strip())
@@ -318,7 +315,7 @@ class RouteGeneratorCommand(CommandBase):
         return "\n".join(content_lines)
 
     def _show_dry_run(
-        self, output_file: str, content: str, route_data: List[Dict], route_type: str
+        self, output_file: str, content: str, route_data: list[dict], route_type: str
     ):
         """Show dry run output for specific route type."""
         self.info(
@@ -344,7 +341,7 @@ class RouteGeneratorCommand(CommandBase):
 
         return True
 
-    def _find_controllers(self) -> List[Path]:
+    def _find_controllers(self) -> list[Path]:
         """Find all controller files in app/controllers directory."""
         controllers_dir = Path(paths("controllers"))
 
@@ -358,7 +355,7 @@ class RouteGeneratorCommand(CommandBase):
 
         return controllers
 
-    def _parse_controllers_enhanced(self, controller_files: List[Path]) -> List[Dict]:
+    def _parse_controllers_enhanced(self, controller_files: list[Path]) -> list[dict]:
         """Parse controller files with enhanced validation."""
         route_data = []
 
@@ -387,7 +384,7 @@ class RouteGeneratorCommand(CommandBase):
 
         return route_data
 
-    def _parse_controller_file_enhanced(self, file_path: Path) -> Optional[Dict]:
+    def _parse_controller_file_enhanced(self, file_path: Path) -> dict | None:
         """Parse a single controller file with enhanced features."""
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -421,7 +418,7 @@ class RouteGeneratorCommand(CommandBase):
 
     def _parse_enhanced_docstring(
         self, docstring: str, class_name: str, file_path: Path
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """Parse enhanced docstring format with full Laravel-style features."""
         original_lines = docstring.split("\n")
 
@@ -549,7 +546,7 @@ class RouteGeneratorCommand(CommandBase):
         ]
         return method in valid_methods
 
-    def _parse_routes_group(self, line: str, line_num: int, file_path: Path) -> Dict:
+    def _parse_routes_group(self, line: str, line_num: int, file_path: Path) -> dict:
         """Parse @routes.api(prefix="/api", middleware=["auth"]) definition."""
         group = {
             "type": "api",  # Default to api
@@ -579,7 +576,7 @@ class RouteGeneratorCommand(CommandBase):
 
         return group
 
-    def _parse_route_group(self, line: str, line_num: int, file_path: Path) -> Dict:
+    def _parse_route_group(self, line: str, line_num: int, file_path: Path) -> dict:
         """Parse @RouteGroup(type="api", prefix="/api", middleware=["auth"]) definition. (Legacy support)"""
         group = {
             "type": "api",  # Default to api
@@ -609,7 +606,7 @@ class RouteGeneratorCommand(CommandBase):
 
         return group
 
-    def _parse_route_definition(self, line: str, line_num: int, file_path: Path) -> Dict:
+    def _parse_route_definition(self, line: str, line_num: int, file_path: Path) -> dict:
         """Parse @Route(name="/users/{id}", middleware=["auth"]) definition."""
         route = {
             "name": "",
@@ -640,7 +637,7 @@ class RouteGeneratorCommand(CommandBase):
 
     def _parse_http_method(
         self, line: str, line_num: int, file_path: Path
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """Parse @get(path="/path", method="method", as="route.name") or @connect(path="/path", method="method", as="ws.name") definition."""
 
         # Extract and validate HTTP method
@@ -668,7 +665,7 @@ class RouteGeneratorCommand(CommandBase):
 
     def _extract_http_method(
         self, line: str, line_num: int, file_path: Path
-    ) -> Optional[str]:
+    ) -> str | None:
         """Extract and validate HTTP method from decorator line."""
         method_match = re.match(r"@(\w+)\(", line)
         if not method_match:
@@ -702,7 +699,7 @@ class RouteGeneratorCommand(CommandBase):
 
     def _parse_route_parameters(
         self, line: str, line_num: int, file_path: Path
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """Parse explicit route parameters: path="/path", method="method", as="name", middleware=["auth"]"""
         params = {}
 
@@ -740,7 +737,7 @@ class RouteGeneratorCommand(CommandBase):
         return params
 
     def _parse_compiler_variable(
-        self, line: str, compiler_vars: Dict, line_num: int, file_path: Path
+        self, line: str, compiler_vars: dict, line_num: int, file_path: Path
     ):
         """Parse compiler variable: user_id: (int|min:1)"""
         var_match = re.match(r"(\w+):\s*\(([^)]+)\)", line)
@@ -753,7 +750,7 @@ class RouteGeneratorCommand(CommandBase):
             )
 
     def _validate_controller_methods(
-        self, route_info: Dict, file_content: str, file_path: Path
+        self, route_info: dict, file_content: str, file_path: Path
     ):
         """Validate that controller methods actually exist."""
         # Extract method names from the file
@@ -779,7 +776,7 @@ class RouteGeneratorCommand(CommandBase):
         except Exception as e:
             self.warnings.append(f"Could not validate methods in {file_path.name}: {e}")
 
-    def _validate_parsed_data(self, result: Dict, file_path: Path):
+    def _validate_parsed_data(self, result: dict, file_path: Path):
         """Validate the parsed route data for consistency."""
         # Check for duplicate route names
         route_names = set()
@@ -795,7 +792,7 @@ class RouteGeneratorCommand(CommandBase):
                             )
                         route_names.add(route_name)
 
-    def _generate_enhanced_routes_content(self, route_data: List[Dict]) -> str:
+    def _generate_enhanced_routes_content(self, route_data: list[dict]) -> str:
         """Generate enhanced routes content with route groups."""
         content_lines = []
 
@@ -841,9 +838,7 @@ class RouteGeneratorCommand(CommandBase):
                             "uuid",
                             "bool",
                             "any",
-                        ]:
-                            regex_rules.append(rule.strip())
-                        elif rule.strip().startswith("regex:"):
+                        ] or rule.strip().startswith("regex:"):
                             regex_rules.append(rule.strip())
                         else:
                             validation_rules.append(rule.strip())
@@ -900,7 +895,7 @@ class RouteGeneratorCommand(CommandBase):
 
         return "\n".join(content_lines)
 
-    def _generate_controller_route_groups(self, controller_info: Dict):
+    def _generate_controller_route_groups(self, controller_info: dict):
         """Generate route groups for a single controller."""
         class_name = controller_info["class_name"]
         route_groups = []
@@ -911,7 +906,7 @@ class RouteGeneratorCommand(CommandBase):
 
         return route_groups
 
-    def _generate_route_group(self, group: Dict, class_name: str):
+    def _generate_route_group(self, group: dict, class_name: str):
         """Generate a single route group instance."""
         prefix = group["prefix"]
         middleware = group["middleware"]
@@ -949,16 +944,16 @@ class RouteGeneratorCommand(CommandBase):
 
     def _generate_route_methods_for_group(
         self,
-        route: Dict,
+        route: dict,
         class_name: str,
-        group_middleware: List[str],
+        group_middleware: list[str],
     ):
         """Generate HTTP/WebSocket methods for a route within a group."""
         return [
             self._build_route_instance(method, class_name) for method in route["methods"]
         ]
 
-    def _build_route_instance(self, method: Dict, class_name: str) -> str:
+    def _build_route_instance(self, method: dict, class_name: str) -> str:
         """Build a single Route instance string."""
         http_method = method["http_method"].lower()
         controller_method = method["controller_method"]
@@ -985,8 +980,12 @@ class RouteGeneratorCommand(CommandBase):
         return re.sub(r"\{(\w+)\}", r"@\1", path)
 
     def _build_route_params(
-        self, path: str, controller: str, name: Optional[str] = None, middleware: Optional[List[str]] = None
-    ) -> List[str]:
+        self,
+        path: str,
+        controller: str,
+        name: str | None = None,
+        middleware: list[str] | None = None,
+    ) -> list[str]:
         """Build route parameters list."""
         params = [f'"{path}"', f'"{controller}"']
 
@@ -1031,7 +1030,7 @@ class RouteGeneratorCommand(CommandBase):
             self.warning(f"  • {warning}")
 
     def _show_enhanced_dry_run(
-        self, output_file: str, content: str, route_data: List[Dict]
+        self, output_file: str, content: str, route_data: list[dict]
     ):
         """Show enhanced dry run information."""
         self.info("🔍 DRY RUN MODE - No files will be created")

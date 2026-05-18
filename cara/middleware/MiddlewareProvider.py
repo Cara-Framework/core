@@ -4,7 +4,6 @@ Binds the configured MiddlewareCapsule under the key 'middleware_http' and 'midd
 """
 
 import inspect
-from typing import Dict, List, Type
 
 from cara.configuration import config
 from cara.facades import Log
@@ -20,16 +19,16 @@ from cara.middleware.http import (
 )
 from cara.middleware.ws import Authenticate, LogWSRequests
 
-MiddlewareClass = Type[Middleware]
+MiddlewareClass = type[Middleware]
 
 
 class MiddlewareProvider(DeferredProvider):
     @classmethod
-    def provides(cls) -> List[str]:
+    def provides(cls) -> list[str]:
         return ["middleware_http", "middleware_ws"]
 
     @property
-    def default_http_middleware(self) -> List[MiddlewareClass]:
+    def default_http_middleware(self) -> list[MiddlewareClass]:
         """
         Core HTTP middleware that's always available.
         These are framework-level middleware, not user middleware.
@@ -42,7 +41,7 @@ class MiddlewareProvider(DeferredProvider):
         ]
 
     @property
-    def default_ws_middleware(self) -> List[MiddlewareClass]:
+    def default_ws_middleware(self) -> list[MiddlewareClass]:
         """
         Core WebSocket middleware that runs globally on every connection.
 
@@ -82,7 +81,7 @@ class MiddlewareProvider(DeferredProvider):
                 f"Middleware {middleware_class.__name__} must implement 'handle(request, next)' method"
             )
 
-        handle_method = getattr(middleware_class, "handle")
+        handle_method = middleware_class.handle
         if not callable(handle_method):
             raise ValueError(
                 f"Middleware {middleware_class.__name__}.handle must be callable"
@@ -100,7 +99,7 @@ class MiddlewareProvider(DeferredProvider):
             )
 
     @staticmethod
-    def validate_all_middleware(config_dict: Dict) -> None:
+    def validate_all_middleware(config_dict: dict) -> None:
         """
         Validate all middleware classes in configuration.
 
@@ -128,7 +127,7 @@ class MiddlewareProvider(DeferredProvider):
     def build_capsule_from_config(
         application,
         config_key: str,
-        default_middleware: List[MiddlewareClass],
+        default_middleware: list[MiddlewareClass],
         bind_name: str,
     ) -> None:
         """

@@ -129,6 +129,7 @@ from .types.middleware import (
     MiddlewareException,
     MiddlewareNotFoundException,
 )
+
 # Canonical shared names come from ``types.model`` (matches legacy last-wins).
 from .types.model import (
     DriverNotFoundException,

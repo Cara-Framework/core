@@ -7,7 +7,7 @@ Includes automatic serialization support for queue jobs.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from cara.queues.contracts import SerializesModels
 
@@ -26,13 +26,13 @@ class BaseNotification(ABC, SerializesModels):
     def __init__(self):
         """Initialize notification with default values."""
         super().__init__()
-        self._id: Optional[str] = None
-        self._data: Dict[str, Any] = {}
-        self._delay: Optional[int] = None
-        self._queue: Optional[str] = None
+        self._id: str | None = None
+        self._data: dict[str, Any] = {}
+        self._delay: int | None = None
+        self._queue: str | None = None
 
     @abstractmethod
-    def via(self, notifiable) -> List[str]:
+    def via(self, notifiable) -> list[str]:
         """
         Get the notification's delivery channels.
 
@@ -44,7 +44,7 @@ class BaseNotification(ABC, SerializesModels):
         """
         pass
 
-    def to_mail(self, notifiable) -> Optional[Any]:
+    def to_mail(self, notifiable) -> Any | None:
         """
         Get the mail representation of the notification.
 
@@ -56,7 +56,7 @@ class BaseNotification(ABC, SerializesModels):
         """
         return None
 
-    def to_database(self, notifiable) -> Optional[Dict[str, Any]]:
+    def to_database(self, notifiable) -> dict[str, Any] | None:
         """
         Get the database representation of the notification.
 
@@ -68,7 +68,7 @@ class BaseNotification(ABC, SerializesModels):
         """
         return None
 
-    def to_array(self, notifiable) -> Dict[str, Any]:
+    def to_array(self, notifiable) -> dict[str, Any]:
         """
         Get the array representation of the notification.
 
@@ -80,7 +80,7 @@ class BaseNotification(ABC, SerializesModels):
         """
         return self._data
 
-    def to_slack(self, notifiable) -> Optional[Dict[str, Any]]:
+    def to_slack(self, notifiable) -> dict[str, Any] | None:
         """
         Get the Slack representation of the notification.
 
@@ -92,7 +92,7 @@ class BaseNotification(ABC, SerializesModels):
         """
         return None
 
-    def to_log(self, notifiable) -> Optional[Dict[str, Any]]:
+    def to_log(self, notifiable) -> dict[str, Any] | None:
         """
         Get the log representation of the notification.
 
@@ -104,7 +104,7 @@ class BaseNotification(ABC, SerializesModels):
         """
         return None
 
-    def id(self, notification_id: str) -> "BaseNotification":
+    def id(self, notification_id: str) -> BaseNotification:
         """
         Set the notification ID.
 
@@ -117,7 +117,7 @@ class BaseNotification(ABC, SerializesModels):
         self._id = notification_id
         return self
 
-    def delay(self, seconds: int) -> "BaseNotification":
+    def delay(self, seconds: int) -> BaseNotification:
         """
         Set the notification delay.
 
@@ -130,7 +130,7 @@ class BaseNotification(ABC, SerializesModels):
         self._delay = seconds
         return self
 
-    def on_queue(self, queue: str) -> "BaseNotification":
+    def on_queue(self, queue: str) -> BaseNotification:
         """
         Set the queue for the notification.
 
@@ -143,7 +143,7 @@ class BaseNotification(ABC, SerializesModels):
         self._queue = queue
         return self
 
-    def with_data(self, data: Dict[str, Any]) -> "BaseNotification":
+    def with_data(self, data: dict[str, Any]) -> BaseNotification:
         """
         Set additional data for the notification.
 
@@ -156,19 +156,19 @@ class BaseNotification(ABC, SerializesModels):
         self._data.update(data)
         return self
 
-    def get_id(self) -> Optional[str]:
+    def get_id(self) -> str | None:
         """Get the notification ID."""
         return self._id
 
-    def get_data(self) -> Dict[str, Any]:
+    def get_data(self) -> dict[str, Any]:
         """Get the notification data."""
         return self._data
 
-    def get_delay(self) -> Optional[int]:
+    def get_delay(self) -> int | None:
         """Get the notification delay."""
         return self._delay
 
-    def get_queue(self) -> Optional[str]:
+    def get_queue(self) -> str | None:
         """Get the notification queue."""
         return self._queue
 

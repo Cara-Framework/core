@@ -3,9 +3,10 @@ from __future__ import annotations
 import inspect
 import json
 import re
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # ``order_by`` SQL injection guard: accept ``column`` or
 # ``table.column`` identifiers only. Anything fancier (functions,
@@ -40,7 +41,6 @@ from ..pagination import LengthAwarePaginator, SimplePaginator
 from ..schema import Schema
 from ..scopes import BaseScope
 from .EagerRelation import EagerRelations
-
 
 
 class TransactionContext:
@@ -124,8 +124,7 @@ class QueryBuilder(ObservesEvents):
             # query only. Shallow copy of both layers is enough; the
             # inner values are callables we never rewrite.
             self._global_scopes = {
-                action: dict(scopes)
-                for action, scopes in model._global_scopes.items()
+                action: dict(scopes) for action, scopes in model._global_scopes.items()
             }
             if model.__with__:
                 self.with_(model.__with__)
@@ -294,13 +293,13 @@ class QueryBuilder(ObservesEvents):
 
     def commit(self):
         """Commit the active database transaction."""
-        if not hasattr(self, '_connection') or self._connection is None:
+        if not hasattr(self, "_connection") or self._connection is None:
             raise RuntimeError("No active transaction to commit.")
         return self._connection.commit()
 
     def rollback(self):
         """Roll back the active database transaction."""
-        if not hasattr(self, '_connection') or self._connection is None:
+        if not hasattr(self, "_connection") or self._connection is None:
             raise RuntimeError("No active transaction to roll back.")
         self._connection.rollback()
         return self
@@ -416,9 +415,7 @@ class QueryBuilder(ObservesEvents):
             self
         """
         if attribute == "__setstate__":
-            raise AttributeError(
-                "'QueryBuilder' object has no attribute '{}'".format(attribute)
-            )
+            raise AttributeError(f"'QueryBuilder' object has no attribute '{attribute}'")
 
         if attribute in self._scopes:
 
@@ -434,9 +431,7 @@ class QueryBuilder(ObservesEvents):
 
             return method
 
-        raise AttributeError(
-            "'QueryBuilder' object has no attribute '{}'".format(attribute)
-        )
+        raise AttributeError(f"'QueryBuilder' object has no attribute '{attribute}'")
 
     def on(self, connection):
         """Use DatabaseManager for connection resolution"""
@@ -456,9 +451,7 @@ class QueryBuilder(ObservesEvents):
             self._db_manager.validate_connection(self.connection)
 
             # Get connection class and grammar from DatabaseManager
-            self.connection_class = self._db_manager.get_connection_class(
-                self.connection
-            )
+            self.connection_class = self._db_manager.get_connection_class(self.connection)
             self.grammar = self._db_manager.get_grammar(self.connection)
 
         return self
@@ -523,7 +516,7 @@ class QueryBuilder(ObservesEvents):
 
     def bulk_create(
         self,
-        creates: List[Dict[str, Any]],
+        creates: list[dict[str, Any]],
         query: bool = False,
         cast: bool = True,
     ):
@@ -540,7 +533,7 @@ class QueryBuilder(ObservesEvents):
         # independently, then BaseGrammar took columns from row[0]
         # only — so heterogeneous rows ({a,b} mixed with {a,c}) silently
         # corrupted: row 2's value for column "c" landed in column "b".
-        prepared: List[Dict[str, Any]] = []
+        prepared: list[dict[str, Any]] = []
         column_set: set = set()
         for unsorted_create in creates:
             if model:
@@ -554,9 +547,7 @@ class QueryBuilder(ObservesEvents):
         # filled with ``None`` so every row has the same shape under
         # the generated INSERT.
         all_columns = sorted(column_set)
-        self._creates = [
-            {col: row.get(col) for col in all_columns} for row in prepared
-        ]
+        self._creates = [{col: row.get(col) for col in all_columns} for row in prepared]
 
         if query:
             return self
@@ -578,7 +569,7 @@ class QueryBuilder(ObservesEvents):
 
     def create(
         self,
-        creates: Optional[Dict[str, Any]] = None,
+        creates: dict[str, Any] | None = None,
         query: bool = False,
         id_key: str = "id",
         cast: bool = True,
@@ -683,6 +674,7 @@ class QueryBuilder(ObservesEvents):
         # prevent accidental mass-deletion.  Use truncate() instead.
         if not self._wheres:
             from cara.exceptions import QueryException
+
             raise QueryException(
                 "delete() without a WHERE clause would remove all rows. "
                 "Use truncate() for intentional mass-deletion."
@@ -913,7 +905,17 @@ class QueryBuilder(ObservesEvents):
         """
         # Two-arg form: where_json_path(column, path, value) with operator defaulted to "="
         if value is None and operator not in (
-            "=", "!=", "<>", ">", ">=", "<", "<=", "LIKE", "ILIKE", "NOT LIKE", "NOT ILIKE",
+            "=",
+            "!=",
+            "<>",
+            ">",
+            ">=",
+            "<",
+            "<=",
+            "LIKE",
+            "ILIKE",
+            "NOT LIKE",
+            "NOT ILIKE",
         ):
             value = operator
             operator = "="
@@ -923,7 +925,17 @@ class QueryBuilder(ObservesEvents):
     def or_where_json_path(self, column: str, path, operator: str = "=", value=None):
         """OR-joined variant of where_json_path."""
         if value is None and operator not in (
-            "=", "!=", "<>", ">", ">=", "<", "<=", "LIKE", "ILIKE", "NOT LIKE", "NOT ILIKE",
+            "=",
+            "!=",
+            "<>",
+            ">",
+            ">=",
+            "<",
+            "<=",
+            "LIKE",
+            "ILIKE",
+            "NOT LIKE",
+            "NOT ILIKE",
         ):
             value = operator
             operator = "="
@@ -942,9 +954,7 @@ class QueryBuilder(ObservesEvents):
             operator, val = "=", operator_or_value
         else:
             operator, val = operator_or_value, value
-        return self.where_raw(
-            f"jsonb_array_length({column}) {operator} %s", [val]
-        )
+        return self.where_raw(f"jsonb_array_length({column}) {operator} %s", [val])
 
     def where_json_key_exists(self, column: str, key: str):
         """
@@ -1007,7 +1017,7 @@ class QueryBuilder(ObservesEvents):
             )
         return self
 
-    def where_exists(self, value: "str|int|QueryBuilder"):
+    def where_exists(self, value: str | int | QueryBuilder):
         """
         Specifies a where exists expression.
 
@@ -1042,7 +1052,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def or_where_exists(self, value: "str|int|QueryBuilder"):
+    def or_where_exists(self, value: str | int | QueryBuilder):
         """
         Specifies a where exists expression.
 
@@ -1089,7 +1099,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def where_not_exists(self, value: "str|int|QueryBuilder"):
+    def where_not_exists(self, value: str | int | QueryBuilder):
         """
         Specifies a where exists expression.
 
@@ -1125,7 +1135,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def or_where_not_exists(self, value: "str|int|QueryBuilder"):
+    def or_where_not_exists(self, value: str | int | QueryBuilder):
         """
         Specifies a where exists expression.
 
@@ -1255,7 +1265,7 @@ class QueryBuilder(ObservesEvents):
         elif hasattr(date, "strftime"):
             return date.strftime("%m-%d-%Y")
 
-    def where_date(self, column: str, date: "str|datetime"):
+    def where_date(self, column: str, date: str | datetime):
         """
         Specifies a where DATE expression.
 
@@ -1277,7 +1287,7 @@ class QueryBuilder(ObservesEvents):
         )
         return self
 
-    def or_where_date(self, column: str, date: "str|datetime"):
+    def or_where_date(self, column: str, date: str | datetime):
         """
         Specifies a where DATE expression.
 
@@ -1394,7 +1404,10 @@ class QueryBuilder(ObservesEvents):
         # (lazy-load from ``__attributes__``) and KeyErrors on the local key.
         # Resolve via the descriptor on the class (walking the MRO).
         import inspect as _inspect
-        owner = builder._model if _inspect.isclass(builder._model) else type(builder._model)
+
+        owner = (
+            builder._model if _inspect.isclass(builder._model) else type(builder._model)
+        )
         rel = owner.__dict__.get(relationship)
         if rel is None:
             for base in owner.__mro__:
@@ -1582,9 +1595,7 @@ class QueryBuilder(ObservesEvents):
                     )
                     continue
 
-                last_builder = related.query_has(
-                    last_builder, method="where_not_exists"
-                )
+                last_builder = related.query_has(last_builder, method="where_not_exists")
         else:
             related = self._resolve_relation_descriptor(relationship)
             related.query_where_exists(self, callback, method="where_not_exists")
@@ -1664,7 +1675,6 @@ class QueryBuilder(ObservesEvents):
             builder = rel.get_with_count_query(builder, callback=cb, relation_name=name)
         return builder
 
-
     def _resolve_relation_descriptor(self, name):
         """Fetch the relationship *descriptor* (not an instance-level proxy).
 
@@ -1673,6 +1683,7 @@ class QueryBuilder(ObservesEvents):
         subquery building. Walk the MRO to find it.
         """
         import inspect as _inspect
+
         owner = self._model if _inspect.isclass(self._model) else type(self._model)
         rel = owner.__dict__.get(name)
         if rel is None:
@@ -1681,9 +1692,7 @@ class QueryBuilder(ObservesEvents):
                     rel = base.__dict__[name]
                     break
         if rel is None:
-            raise AttributeError(
-                f"Relation '{name}' is not defined on {owner.__name__}"
-            )
+            raise AttributeError(f"Relation '{name}' is not defined on {owner.__name__}")
         return rel
 
     def with_sum(self, relationship, column, callback=None):
@@ -1949,7 +1958,7 @@ class QueryBuilder(ObservesEvents):
 
     def update(
         self,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         dry: bool = False,
         force: bool = False,
         cast: bool = True,
@@ -2092,9 +2101,7 @@ class QueryBuilder(ObservesEvents):
 
             self.observe_events(model, "updating")
 
-        self._updates += (
-            UpdateQueryExpression(column, value, update_type="increment"),
-        )
+        self._updates += (UpdateQueryExpression(column, value, update_type="increment"),)
 
         if dry or self.dry:
             return self.get_grammar().compile("update").to_sql()
@@ -2138,9 +2145,7 @@ class QueryBuilder(ObservesEvents):
 
             self.observe_events(model, "updating")
 
-        self._updates += (
-            UpdateQueryExpression(column, value, update_type="decrement"),
-        )
+        self._updates += (UpdateQueryExpression(column, value, update_type="decrement"),)
 
         if dry or self.dry:
             return self.get_grammar().compile("update").to_sql()
@@ -2253,9 +2258,7 @@ class QueryBuilder(ObservesEvents):
         """
         if bindings is None:
             bindings = []
-        self._group_by += (
-            GroupByExpression(column=query, raw=True, bindings=bindings),
-        )
+        self._group_by += (GroupByExpression(column=query, raw=True, bindings=bindings),)
 
         return self
 
@@ -2333,7 +2336,7 @@ class QueryBuilder(ObservesEvents):
 
         return self.prepare_result(result)
 
-    def first_or_create(self, wheres, creates: Optional[dict] = None):
+    def first_or_create(self, wheres, creates: dict | None = None):
         """
         Get the first record matching the attributes or create it.
 
@@ -2568,9 +2571,7 @@ class QueryBuilder(ObservesEvents):
                     try:
                         if inspect.isclass(self._model):
                             related = getattr(self._model, relation)
-                            if callable(related) and not hasattr(
-                                related, "get_related"
-                            ):
+                            if callable(related) and not hasattr(related, "get_related"):
                                 related = related()
                         else:
                             related = self._model.get_related(relation)
@@ -2614,12 +2615,13 @@ class QueryBuilder(ObservesEvents):
 
         Accepted spec shapes::
 
-            "product"                              # simple
-            "product.current_price"                # dotted
-            ["product", "product.images"]          # list/tuple
-            {"product": callback_fn}               # callback
-            {"product": ["current_price"]}         # list of nested
-            {"product.current_price": callback_fn} # dotted+callback
+            "product"  # simple
+
+            "product.current_price"  # dotted
+            ["product", "product.images"]  # list/tuple
+            {"product": callback_fn}  # callback
+            {"product": ["current_price"]}  # list of nested
+            {"product.current_price": callback_fn}  # dotted+callback
 
         Duplicates are deduped, preserving insertion order. Calling
         ``with_(["product", "product.images"])`` produces
@@ -2767,11 +2769,11 @@ class QueryBuilder(ObservesEvents):
         # Sanitise inputs — coerce to int, clamp to safe bounds.
         try:
             per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             per_page = 15
         try:
             page = max(1, min(int(page), self._MAX_PAGE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             page = 1
 
         if page == 1:
@@ -2807,11 +2809,11 @@ class QueryBuilder(ObservesEvents):
         # Sanitise inputs — coerce to int, clamp to safe bounds.
         try:
             per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             per_page = 15
         try:
             page = max(1, min(int(page), self._MAX_PAGE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             page = 1
 
         if page == 1:
@@ -2949,9 +2951,7 @@ class QueryBuilder(ObservesEvents):
         # is frozen for the duration of ``scope(self)`` calls. Any
         # scopes registered mid-iteration will apply on the next query,
         # which matches Laravel's semantics.
-        scopes = list(
-            self._global_scopes.get(self._action, {}).items()
-        )
+        scopes = list(self._global_scopes.get(self._action, {}).items())
         for name, scope in scopes:
             scope(self)
 
@@ -3279,7 +3279,7 @@ class QueryBuilder(ObservesEvents):
             return result.get(column)
         return getattr(result, column, None)
 
-    def pluck(self, column: str, key_by: Optional[str] = None):
+    def pluck(self, column: str, key_by: str | None = None):
         """Get a Collection containing the values of a given column.
 
         Like Laravel's pluck(), returns a flat list of column values,
@@ -3350,7 +3350,7 @@ class QueryBuilder(ObservesEvents):
             builder = self.clone()
             results = builder.limit(chunk_size).offset(offset).get()
 
-            if not results or (hasattr(results, 'is_empty') and results.is_empty()):
+            if not results or (hasattr(results, "is_empty") and results.is_empty()):
                 break
 
             result = callback(results)
@@ -3358,7 +3358,7 @@ class QueryBuilder(ObservesEvents):
             if result is False:
                 return False
 
-            count = len(results) if hasattr(results, '__len__') else results.count()
+            count = len(results) if hasattr(results, "__len__") else results.count()
             if count < chunk_size:
                 break
 
@@ -3368,9 +3368,9 @@ class QueryBuilder(ObservesEvents):
 
     def upsert(
         self,
-        values: List[Dict[str, Any]],
-        unique_by: List[str],
-        update: Optional[List[str]] = None,
+        values: list[dict[str, Any]],
+        unique_by: list[str],
+        update: list[str] | None = None,
         cast: bool = True,
     ):
         """
@@ -3459,9 +3459,9 @@ class QueryBuilder(ObservesEvents):
 
     def bulk_update(
         self,
-        records: List[Dict[str, Any]],
+        records: list[dict[str, Any]],
         key: str = "id",
-        update_columns: Optional[List[str]] = None,
+        update_columns: list[str] | None = None,
     ):
         """Bulk update multiple records in a single query using PostgreSQL VALUES + UPDATE FROM.
 
@@ -3500,10 +3500,10 @@ class QueryBuilder(ObservesEvents):
                 row_placeholders.append("%s")
             placeholders.append(f"({', '.join(row_placeholders)})")
 
-        values_clause = ', '.join(placeholders)
-        col_defs = ', '.join(f'"{c}"' for c in all_columns)
-        set_clause = ', '.join(f'"{c}" = _bulk."{c}"' for c in update_columns)
-        table = self._table.name if hasattr(self._table, 'name') else str(self._table)
+        values_clause = ", ".join(placeholders)
+        col_defs = ", ".join(f'"{c}"' for c in all_columns)
+        set_clause = ", ".join(f'"{c}" = _bulk."{c}"' for c in update_columns)
+        table = self._table.name if hasattr(self._table, "name") else str(self._table)
 
         sql = f'''
             UPDATE "{table}" SET {set_clause}
@@ -3702,7 +3702,9 @@ class QueryBuilder(ObservesEvents):
                 break
 
     # ===== CURSOR PAGINATE =====
-    def cursor_paginate(self, per_page: int, cursor=None, column: str = "id", direction: str = "asc"):
+    def cursor_paginate(
+        self, per_page: int, cursor=None, column: str = "id", direction: str = "asc"
+    ):
         """Laravel-style cursor pagination.
 
         Returns a CursorPaginator carrying the rows and next/prev cursor strings.
@@ -3727,9 +3729,7 @@ class QueryBuilder(ObservesEvents):
             builder = builder.where(column, op, decoded)
 
         # Fetch one extra to know whether a next page exists.
-        results = (
-            builder.order_by(column, direction).limit(per_page + 1).get()
-        )
+        results = builder.order_by(column, direction).limit(per_page + 1).get()
 
         has_more = len(results) > per_page
         if has_more:

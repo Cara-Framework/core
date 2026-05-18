@@ -5,7 +5,7 @@ This class provides DRY functionality specifically for mail operations
 that need to be queued for background processing.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.queues.contracts.BaseQueueable import BaseQueueable
 
@@ -35,27 +35,27 @@ class QueueableMail(BaseQueueable):
         # Setup mail delivery options
         self.delivery_options = kwargs.get("delivery_options", {})
 
-    def high_priority(self) -> "QueueableMail":
+    def high_priority(self) -> QueueableMail:
         """Mark this mail as high priority."""
         self.priority = "high"
         self.queue_name = "emails-priority"
         return self
 
-    def low_priority(self) -> "QueueableMail":
+    def low_priority(self) -> QueueableMail:
         """Mark this mail as low priority."""
         self.priority = "low"
         self.queue_name = "emails-low"
         return self
 
-    def delay_minutes(self, minutes: int) -> "QueueableMail":
+    def delay_minutes(self, minutes: int) -> QueueableMail:
         """Delay mail delivery by specified minutes."""
         return self.delay(minutes * 60)
 
-    def delay_hours(self, hours: int) -> "QueueableMail":
+    def delay_hours(self, hours: int) -> QueueableMail:
         """Delay mail delivery by specified hours."""
         return self.delay(hours * 3600)
 
-    def get_queue_options(self) -> Dict[str, Any]:
+    def get_queue_options(self) -> dict[str, Any]:
         """Get mail-specific queue options."""
         options = super().get_queue_options()
 

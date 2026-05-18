@@ -4,16 +4,14 @@ Queue job for handling event listeners in background.
 This job is automatically created when event listeners implement ShouldQueue.
 """
 
-from typing import Any, Dict, Type
+from typing import Any
 
 from cara.events import Event as EventDispatcher
 from cara.events.contracts import Listener
 from cara.queues.contracts import BaseJob
 
 
-def _resolve_event_class(
-    dispatcher: EventDispatcher, event_class_name: str
-) -> Type[Any]:
+def _resolve_event_class(dispatcher: EventDispatcher, event_class_name: str) -> type[Any]:
     for cls in dispatcher._registered_events.values():
         if cls.__name__ == event_class_name:
             return cls
@@ -25,7 +23,7 @@ def _resolve_event_class(
 
 def _resolve_listener_class(
     dispatcher: EventDispatcher, listener_class_name: str
-) -> Type[Any]:
+) -> type[Any]:
     seen: set[int] = set()
     for bucket in (dispatcher._listeners, dispatcher._wildcard_listeners):
         for listeners in bucket.values():
@@ -40,7 +38,7 @@ def _resolve_listener_class(
     )
 
 
-def _instantiate_event(event_cls: Type[Any], data: Dict[str, Any]) -> Any:
+def _instantiate_event(event_cls: type[Any], data: dict[str, Any]) -> Any:
     from_dict = getattr(event_cls, "from_dict", None)
     if callable(from_dict):
         return from_dict(data)
@@ -68,7 +66,7 @@ class HandleListenerJob(BaseJob):
     def __init__(
         self,
         listener_class: str,
-        event_data: Dict[str, Any],
+        event_data: dict[str, Any],
         event_class: str,
         **kwargs: Any,
     ) -> None:

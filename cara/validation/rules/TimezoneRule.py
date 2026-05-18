@@ -1,5 +1,6 @@
 """Timezone rule (IANA name, e.g. ``Europe/Istanbul``). Usage: ``timezone``."""
-from typing import Any, Dict
+
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -15,7 +16,7 @@ except ImportError:  # py < 3.9 fallback (shouldn't hit in this codebase)
 
 
 class TimezoneRule(BaseRule):
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         if not isinstance(value, str) or ZoneInfo is None:
             return False
         try:
@@ -24,6 +25,6 @@ class TimezoneRule(BaseRule):
         except Exception:
             return False
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
         return f"The {attr.lower()} must be a valid timezone."

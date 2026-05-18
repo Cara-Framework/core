@@ -5,7 +5,6 @@ This module provides a filter for categorizing log records by category.
 """
 
 import logging as pylogging
-from typing import Optional
 
 from cara.configuration import config
 
@@ -18,7 +17,7 @@ class CategoryFilter:
     """
 
     @staticmethod
-    def should_log(level: str, category: Optional[str]) -> bool:
+    def should_log(level: str, category: str | None) -> bool:
         """
         Check if a log message should be logged based on category configuration.
 

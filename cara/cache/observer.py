@@ -21,14 +21,14 @@ swallows exceptions so a broken observer cannot break the cache.
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
-CacheObserver = Callable[[str, str, str, Optional[int]], None]
+CacheObserver = Callable[[str, str, str, int | None], None]
 
-_OBSERVER: Optional[CacheObserver] = None
+_OBSERVER: CacheObserver | None = None
 
 
-def set_cache_observer(observer: Optional[CacheObserver]) -> None:
+def set_cache_observer(observer: CacheObserver | None) -> None:
     """Register (or clear with ``None``) the process-wide observer."""
     global _OBSERVER
     _OBSERVER = observer
@@ -38,7 +38,7 @@ def notify_cache_event(
     operation: str,
     outcome: str,
     key: str,
-    size_bytes: Optional[int] = None,
+    size_bytes: int | None = None,
 ) -> None:
     """Best-effort notification — never raises into the driver."""
     cb = _OBSERVER

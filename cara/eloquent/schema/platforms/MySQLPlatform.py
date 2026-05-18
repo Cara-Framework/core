@@ -419,7 +419,9 @@ class MySQLPlatform(Platform):
 
     def compile_table_exists(self, table, database=None, schema=None):
         table = self._validate_identifier(table, "table name")
-        database = self._validate_identifier(database, "database name") if database else database
+        database = (
+            self._validate_identifier(database, "database name") if database else database
+        )
         return f"SELECT * from information_schema.tables where table_name='{table}' AND table_schema = '{database}'"
 
     def compile_truncate(self, table, foreign_keys=False):

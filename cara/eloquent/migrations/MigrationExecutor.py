@@ -109,7 +109,9 @@ class MigrationExecutor:
         except Exception as e:
             import traceback
 
-            Log.error(f"Error running migration {file_path}: {e}\n{traceback.format_exc()}")
+            Log.error(
+                f"Error running migration {file_path}: {e}\n{traceback.format_exc()}"
+            )
             raise
 
     def _migration_is_transactional(self, file_path) -> bool:

@@ -8,7 +8,6 @@ class and object loading with support for module discovery, class filtering, and
 import inspect
 import os
 import pkgutil
-from typing import Dict
 
 from cara.exceptions import LoaderNotFoundException
 from cara.support.ModuleLoader import load
@@ -115,7 +114,7 @@ class Loader:
         Returns:
             Dict[str, class]: Mapping of class name → class object
         """
-        classes: Dict[str, type] = {}
+        classes: dict[str, type] = {}
         for module in self.get_modules(paths, raise_exception).values():
             for obj_name, obj in inspect.getmembers(module):
                 if inspect.isclass(obj) and issubclass(obj, class_instance):

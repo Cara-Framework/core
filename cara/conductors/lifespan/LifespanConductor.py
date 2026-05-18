@@ -8,7 +8,7 @@ startup and shutdown events.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict
+from typing import Any
 
 from cara.facades import Log
 
@@ -20,7 +20,7 @@ class LifespanConductor:
         """Initialize conductor with application instance."""
         self.application = application
 
-    async def handle(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
+    async def handle(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         """
         Orchestrate lifespan event handling.
 

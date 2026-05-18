@@ -6,7 +6,7 @@ registered driver instances.
 """
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.exceptions import DriverNotRegisteredException
 from cara.queues.contracts import Queue, ShouldQueue
@@ -21,13 +21,13 @@ class Queue:
 
     def __init__(self, application, default_driver: str):
         self.application = application
-        self._drivers: Dict[str, Queue] = {}
+        self._drivers: dict[str, Queue] = {}
         self._default_driver: str = default_driver
 
     def add_driver(self, name: str, driver: Queue) -> None:
         self._drivers[name] = driver
 
-    def driver(self, name: Optional[str] = None) -> Queue:
+    def driver(self, name: str | None = None) -> Queue:
         chosen = name or self._default_driver
         inst = self._drivers.get(chosen)
         if not inst:
@@ -39,7 +39,7 @@ class Queue:
     def push(
         self,
         *jobs: Any,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **options: Any,
     ):
         """Push jobs to queue and return job ID(s) for tracking."""
@@ -48,7 +48,7 @@ class Queue:
 
     def consume(
         self,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **options: Any,
     ) -> None:
         driver = self.driver(driver_name)
@@ -56,7 +56,7 @@ class Queue:
 
     def retry(
         self,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **options: Any,
     ) -> None:
         driver = self.driver(driver_name)
@@ -65,7 +65,7 @@ class Queue:
     def chain(
         self,
         jobs: list,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **options: Any,
     ) -> None:
         driver = self.driver(driver_name)
@@ -74,7 +74,7 @@ class Queue:
     def batch(
         self,
         *jobs: Any,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **options: Any,
     ) -> None:
         driver = self.driver(driver_name)
@@ -84,7 +84,7 @@ class Queue:
         self,
         job: Any,
         when: Any,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **options: Any,
     ) -> None:
         driver = self.driver(driver_name)
@@ -121,7 +121,7 @@ class Queue:
 
         return get_job_state_manager().cancel_jobs_by_context(context_filter, reason)
 
-    def get_active_jobs(self) -> Dict[str, Dict[str, Any]]:
+    def get_active_jobs(self) -> dict[str, dict[str, Any]]:
         """
         Get all active jobs.
 
@@ -136,7 +136,7 @@ class Queue:
         self,
         delay: Any,
         job: Any,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **options: Any,
     ):
         """Dispatch a job with a delay — Laravel ``Queue::later()`` parity.
@@ -159,7 +159,7 @@ class Queue:
         self,
         job: Any,
         *args: Any,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **kwargs: Any,
     ):
         """
@@ -203,7 +203,7 @@ class Queue:
         else:
             instance = job
 
-        if hasattr(instance, "handle") and callable(getattr(instance, "handle")):
+        if hasattr(instance, "handle") and callable(instance.handle):
             if hasattr(app, "call"):
                 result = app.call(instance.handle)
             else:
@@ -225,7 +225,7 @@ class Queue:
         job: Any,
         delay: Any,
         *args: Any,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **kwargs: Any,
     ):
         """Laravel-style delayed job dispatch."""
@@ -255,7 +255,7 @@ class Queue:
         else:
             instance = job
 
-        if hasattr(instance, "handle") and callable(getattr(instance, "handle")):
+        if hasattr(instance, "handle") and callable(instance.handle):
             if hasattr(self.application, "call"):
                 return self.application.call(instance.handle)
             result = instance.handle()
@@ -275,13 +275,11 @@ class Queue:
         job: Any,
         delay: Any,
         *args: Any,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
         **kwargs: Any,
     ):
         """Python naming alias for :meth:`dispatchAfter`."""
-        return self.dispatchAfter(
-            job, delay, *args, driver_name=driver_name, **kwargs
-        )
+        return self.dispatchAfter(job, delay, *args, driver_name=driver_name, **kwargs)
 
     def dispatch_now(self, job: Any, *args: Any, **kwargs: Any):
         """Python naming alias for :meth:`dispatchNow`."""

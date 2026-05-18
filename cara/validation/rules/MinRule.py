@@ -4,7 +4,7 @@ Minimum Value Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value meets a minimum threshold.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -18,7 +18,7 @@ class MinRule(BaseRule):
     Usage: "min:5"
     """
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value meets minimum threshold."""
         if value is None:
             return False
@@ -29,7 +29,7 @@ class MinRule(BaseRule):
 
         try:
             min_threshold = float(params.get("min"))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
         if isinstance(value, bool):
@@ -58,10 +58,10 @@ class MinRule(BaseRule):
         # Last-ditch numeric conversion.
         try:
             return float(value) >= min_threshold
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default minimum value message."""
         min_val = params.get("min", "")
         attribute = MessageFormatter.format_attribute_name(field)

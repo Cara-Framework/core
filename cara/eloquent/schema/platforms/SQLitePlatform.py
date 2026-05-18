@@ -160,7 +160,7 @@ class SQLitePlatform(Platform):
             indexes = diff.removed_indexes
             indexes += diff.removed_unique_indexes
             for name in indexes:
-                sql.append("DROP INDEX {name}".format(name=name))
+                sql.append(f"DROP INDEX {name}")
 
         if diff.added_columns:
             for name, column in diff.added_columns.items():
@@ -222,7 +222,7 @@ class SQLitePlatform(Platform):
                 )
             )
 
-            sql.append("DROP TABLE {table}".format(table=self.wrap_table(diff.name)))
+            sql.append(f"DROP TABLE {self.wrap_table(diff.name)}")
 
             columns = diff.from_table.added_columns
 
@@ -264,14 +264,11 @@ class SQLitePlatform(Platform):
                     original_column_names=", ".join(diff.from_table.added_columns.keys()),
                 )
             )
-            sql.append("DROP TABLE __temp__{table}".format(table=diff.name))
+            sql.append(f"DROP TABLE __temp__{diff.name}")
 
         if diff.new_name:
             sql.append(
-                "ALTER TABLE {old_name} RENAME TO {new_name}".format(
-                    old_name=self.wrap_table(diff.name),
-                    new_name=self.wrap_table(diff.new_name),
-                )
+                f"ALTER TABLE {self.wrap_table(diff.name)} RENAME TO {self.wrap_table(diff.new_name)}"
             )
 
         if diff.added_indexes:

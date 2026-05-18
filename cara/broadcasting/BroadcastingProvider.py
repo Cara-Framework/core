@@ -8,6 +8,7 @@ host application::
     # routes/broadcasting.py
     from cara.facades import Broadcast
 
+
     @Broadcast.channel("user.{user_id}.alerts")
     async def authorize_user_alerts(user, user_id: str) -> bool:
         return user is not None and str(user.id) == str(user_id)
@@ -118,7 +119,9 @@ class BroadcastingProvider(DeferredProvider):
         ws_cfg = config("broadcasting.WEBSOCKET")
         if ws_cfg:
             driver_config["websocket"] = ws_cfg
-        manager.add_driver(MemoryBroadcaster.driver_name, MemoryBroadcaster(driver_config))
+        manager.add_driver(
+            MemoryBroadcaster.driver_name, MemoryBroadcaster(driver_config)
+        )
 
     def _add_log_driver(self, manager: Broadcasting) -> None:
         settings = config("broadcasting.drivers.log")

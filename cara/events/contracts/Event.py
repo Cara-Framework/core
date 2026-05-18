@@ -5,7 +5,7 @@ This module defines the contract that any event class must implement, specifying
 for event handling.
 """
 
-from typing import Any, Dict, Protocol
+from typing import Any, Protocol
 
 
 class Event(Protocol):
@@ -15,7 +15,7 @@ class Event(Protocol):
     def name(self) -> str:
         """Return a unique string name for this event."""
 
-    def payload(self) -> Dict[str, Any]:
+    def payload(self) -> dict[str, Any]:
         """Return a dict of any data carried by this event."""
 
     def meta(self, key: str, default: Any = None) -> Any:
@@ -25,7 +25,11 @@ class Event(Protocol):
 
             # Before (inconsistent across listeners):
             priority = (event.metadata or {}).get("priority", "default")
-            priority = event.metadata.get("priority", "default") if hasattr(event, "metadata") and event.metadata else "default"
+            priority = (
+                event.metadata.get("priority", "default")
+                if hasattr(event, "metadata") and event.metadata
+                else "default"
+            )
 
             # After:
             priority = event.meta("priority", "default")

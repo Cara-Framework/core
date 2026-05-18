@@ -1,7 +1,8 @@
 """
 InsertBuilder - Single Responsibility for INSERT operations
 """
-from typing import Any, Dict, List
+
+from typing import Any
 
 
 class InsertBuilder:
@@ -17,16 +18,16 @@ class InsertBuilder:
         self._table = table
         return self
 
-    def values(self, data: Dict[str, Any]):
+    def values(self, data: dict[str, Any]):
         """Add values to insert."""
         self._values.append(data)
         return self
 
-    def get_values(self) -> List[Dict[str, Any]]:
+    def get_values(self) -> list[dict[str, Any]]:
         """Get all values."""
         return self._values.copy()
 
-    def get_bindings(self) -> List[Any]:
+    def get_bindings(self) -> list[Any]:
         """Get all bindings."""
         return self._bindings.copy()
 
@@ -36,4 +37,3 @@ class InsertBuilder:
         self._values = []
         self._bindings = []
         return self
-

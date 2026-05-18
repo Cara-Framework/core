@@ -17,7 +17,7 @@ application reference and router (both immutable across requests).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from cara.exceptions import MiddlewareNotFoundException
 from cara.facades import Log
@@ -43,7 +43,7 @@ class HttpConductor:
         self.application = application
         self.router = None
 
-    async def handle(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
+    async def handle(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         """
         Main entry for HTTP requests.
 
@@ -59,7 +59,7 @@ class HttpConductor:
 
     async def _handle_request(
         self,
-        scope: Dict[str, Any],
+        scope: dict[str, Any],
         receive: Any,
         send: Any,
         request: Request,
@@ -83,7 +83,7 @@ class HttpConductor:
         # instances that processed the request (not fresh copies).
         # These are LOCAL — not stored on self.
         global_pipeline = Pipeline(request, application=self.application)
-        route_pipeline_holder: List[Pipeline] = []  # mutable container for closure
+        route_pipeline_holder: list[Pipeline] = []  # mutable container for closure
 
         async def full_handler(req: Request):
             """
@@ -113,15 +113,13 @@ class HttpConductor:
             route_middleware = self.get_route_middleware(route)
             rp = Pipeline(req, application=self.application)
             route_pipeline_holder.append(rp)
-            return await rp.through(
-                route_middleware
-            )(route_dispatch)
+            return await rp.through(route_middleware)(route_dispatch)
 
         final_response: Response | None = None
         try:
-            final_response = await global_pipeline.through(
-                global_middleware
-            )(full_handler)
+            final_response = await global_pipeline.through(global_middleware)(
+                full_handler
+            )
         except Exception as e:
             # 4xx exceptions (not-found, validation, auth) are expected
             # application behaviour — let the exception handler deal with
@@ -145,7 +143,9 @@ class HttpConductor:
             # finally block exists purely to guarantee terminate runs.
             try:
                 resp_for_term = final_response or response
-                route_pipeline = route_pipeline_holder[0] if route_pipeline_holder else None
+                route_pipeline = (
+                    route_pipeline_holder[0] if route_pipeline_holder else None
+                )
                 await self._run_terminable_middleware(
                     request, resp_for_term, global_pipeline, route_pipeline
                 )

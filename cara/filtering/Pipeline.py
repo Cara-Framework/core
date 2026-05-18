@@ -5,8 +5,7 @@ Laravel-style chaining for the read path:
 ::
 
     result = (
-        FilterPipeline(Product.active(),
-                       filters=PRODUCT_FILTERS, sorts=PRODUCT_SORTS)
+        FilterPipeline(Product.active(), filters=PRODUCT_FILTERS, sorts=PRODUCT_SORTS)
         .filter_by(payload)
         .sort_by(payload.get("sort_by"))
         .with_("images", "current_price", "container")
@@ -24,7 +23,8 @@ identical behavior across every list endpoint.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Callable, Dict, Iterable, List, Optional, Type
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from .FilterSet import FilterSet
 from .Sorter import SortRegistry
@@ -48,8 +48,8 @@ class FilterPipeline:
         self,
         builder: Any,
         *,
-        filters: Optional[FilterSet] = None,
-        sorts: Optional[SortRegistry] = None,
+        filters: FilterSet | None = None,
+        sorts: SortRegistry | None = None,
         ctx: Any = None,
         product_id_column: str = "id",
     ) -> None:
@@ -59,14 +59,14 @@ class FilterPipeline:
         self._ctx = ctx
         self._product_id_column = product_id_column
 
-        self._payload: Optional[Dict[str, Any]] = None
-        self._parsed: Optional[Dict[str, Any]] = None
-        self._sort_name: Optional[str] = None
-        self._eager: List[str] = []
+        self._payload: dict[str, Any] | None = None
+        self._parsed: dict[str, Any] | None = None
+        self._sort_name: str | None = None
+        self._eager: list[str] = []
 
     # ── Fluent builders ─────────────────────────────────────────────
 
-    def filter_by(self, payload: Optional[Dict[str, Any]]) -> "FilterPipeline":
+    def filter_by(self, payload: dict[str, Any] | None) -> FilterPipeline:
         """Apply the configured ``FilterSet`` to a raw payload.
 
         The payload is stored as-is — the actual SQL composition
@@ -90,7 +90,7 @@ class FilterPipeline:
         self._parsed = self._filters.parse(self._payload)
         return self
 
-    def filtered_by(self, parsed: Optional[Dict[str, Any]]) -> "FilterPipeline":
+    def filtered_by(self, parsed: dict[str, Any] | None) -> FilterPipeline:
         """Use an already-parsed canonical filter dict (skip parsing).
 
         Identical end state to ``filter_by`` but bypasses
@@ -113,7 +113,7 @@ class FilterPipeline:
         self._payload = dict(self._parsed)
         return self
 
-    def sort_by(self, name: Optional[str]) -> "FilterPipeline":
+    def sort_by(self, name: str | None) -> FilterPipeline:
         """Layer the configured ``SortRegistry`` ORDER BY (+ JOIN/SELECT)."""
         if self._sorts is None:
             raise RuntimeError(
@@ -123,7 +123,7 @@ class FilterPipeline:
         self._sort_name = name
         return self
 
-    def with_(self, *relations: Any) -> "FilterPipeline":
+    def with_(self, *relations: Any) -> FilterPipeline:
         """Eager-load the given relations on the materialised rows.
 
         Accepts either bare relation-name strings::
@@ -142,7 +142,7 @@ class FilterPipeline:
         Duplicates are dropped while preserving first-seen order so
         composing a base preset with extras never reorders the base.
         """
-        flat: List[str] = []
+        flat: list[str] = []
         seen: set = set()
         for item in relations:
             if isinstance(item, str):
@@ -165,18 +165,17 @@ class FilterPipeline:
         prefix: str,
         *,
         ttl: int,
-        when: Optional[Callable[["FilterPipeline"], bool]] = None,
-    ) -> "_CachedPipeline":
+        when: Callable[[FilterPipeline], bool] | None = None,
+    ) -> _CachedPipeline:
         """Wrap the next terminal op in ``Cache.remember(...)``.
 
         ::
 
-            result = (
-                pipe.cached("products", ttl=300,
-                            when=lambda p: p.sort_name in CACHEABLE_SORTS
-                                           and not p.parsed)
-                    .paginate(limit=24, offset=0)
-            )
+            result = pipe.cached(
+                "products",
+                ttl=300,
+                when=lambda p: p.sort_name in CACHEABLE_SORTS and not p.parsed,
+            ).paginate(limit=24, offset=0)
 
         The cache key is auto-derived from ``prefix`` +
         ``sort_name`` + ``limit`` + ``offset`` + the canonical
@@ -205,12 +204,12 @@ class FilterPipeline:
     # ── Introspection ──────────────────────────────────────────────
 
     @property
-    def parsed(self) -> Dict[str, Any]:
+    def parsed(self) -> dict[str, Any]:
         """Canonical parsed-filter dict (empty if ``filter_by`` not called)."""
         return dict(self._parsed or {})
 
     @property
-    def payload(self) -> Dict[str, Any]:
+    def payload(self) -> dict[str, Any]:
         """Raw payload as-supplied (empty when ``filter_by`` not called)."""
         return dict(self._payload or {})
 
@@ -220,7 +219,7 @@ class FilterPipeline:
         return self._resolved_sort_name()
 
     @property
-    def relations(self) -> List[str]:
+    def relations(self) -> list[str]:
         """Eager-load relation names (empty when ``with_`` not called)."""
         return list(self._eager)
 
@@ -235,7 +234,7 @@ class FilterPipeline:
             return "no_filters"
         return self._filters.cache_key(self._parsed)
 
-    def explain(self) -> Dict[str, Any]:
+    def explain(self) -> dict[str, Any]:
         """Render the pipeline's effective state without running SQL.
 
         Useful for ``/admin/debug/listing?...`` style introspection
@@ -247,24 +246,21 @@ class FilterPipeline:
         and their parameters, the resolved sort name, and the
         eager-load list.
         """
-        where_sqls: List[str] = []
-        where_params: List[Any] = []
+        where_sqls: list[str] = []
+        where_params: list[Any] = []
         if self._filters is not None and self._parsed:
             where_sqls, where_params = self._filters.where_clauses(
-                self._parsed, ctx=self._ctx,
+                self._parsed,
+                ctx=self._ctx,
             )
         return {
-            "filter_set": (
-                self._filters.names() if self._filters is not None else []
-            ),
+            "filter_set": (self._filters.names() if self._filters is not None else []),
             "filter_state": dict(self._parsed or {}),
             "filter_payload": dict(self._payload or {}),
             "filter_cache_key": self.cache_key,
             "where_sqls": where_sqls,
             "where_params": where_params,
-            "sort_registry": (
-                self._sorts.names() if self._sorts is not None else []
-            ),
+            "sort_registry": (self._sorts.names() if self._sorts is not None else []),
             "sort_name": self._resolved_sort_name(),
             "eager": list(self._eager),
             "ctx": repr(self._ctx),
@@ -276,7 +272,7 @@ class FilterPipeline:
         """Materialise the count of matching rows under WHERE only."""
         return self._with_filters().count(self._product_id_column)
 
-    def get(self, *, limit: Optional[int] = None, offset: Optional[int] = None) -> List[Any]:
+    def get(self, *, limit: int | None = None, offset: int | None = None) -> list[Any]:
         """Materialise the rows under filter + sort + (optional) paging."""
         b = self._fully_composed()
         if limit is not None:
@@ -290,8 +286,8 @@ class FilterPipeline:
         *,
         limit: int,
         offset: int,
-        resource: Optional[Type] = None,
-    ) -> Dict[str, Any]:
+        resource: type | None = None,
+    ) -> dict[str, Any]:
         """Materialise rows + count + transform into the standard list shape.
 
         Returns ``{"data": [...], "total": int, "limit": int,
@@ -399,7 +395,7 @@ class _CachedPipeline:
         *,
         prefix: str,
         ttl: int,
-        when: Optional[Callable[[FilterPipeline], bool]] = None,
+        when: Callable[[FilterPipeline], bool] | None = None,
     ) -> None:
         self._pipe = pipe
         self._prefix = prefix
@@ -429,8 +425,8 @@ class _CachedPipeline:
         *,
         limit: int,
         offset: int,
-        resource: Optional[Type] = None,
-    ) -> Dict[str, Any]:
+        resource: type | None = None,
+    ) -> dict[str, Any]:
         """Cached ``paginate`` — same kwargs, transparent caching."""
         if not self._when(self._pipe):
             return self._pipe.paginate(limit=limit, offset=offset, resource=resource)
@@ -441,7 +437,8 @@ class _CachedPipeline:
 
         key = self._build_key("paginate", limit=limit, offset=offset)
         return Cache.remember(
-            key, self._ttl,
+            key,
+            self._ttl,
             lambda: self._pipe.paginate(limit=limit, offset=offset, resource=resource),
         )
 
@@ -458,8 +455,8 @@ class _CachedPipeline:
 def pipeline(
     builder: Any,
     *,
-    filters: Optional[FilterSet] = None,
-    sorts: Optional[SortRegistry] = None,
+    filters: FilterSet | None = None,
+    sorts: SortRegistry | None = None,
     ctx: Any = None,
     product_id_column: str = "id",
 ) -> FilterPipeline:

@@ -34,8 +34,7 @@ from __future__ import annotations
 import json
 import math
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any
 
 # ── UI control vocabulary ───────────────────────────────────────────
 # Stable string values the frontend wizard / form renderer matches
@@ -55,13 +54,13 @@ UI_CONTROL_HIDDEN: str = "hidden"
 # ── Filter group vocabulary ─────────────────────────────────────────
 # Wizards group filters into steps; each filter declares which group
 # it belongs to so the frontend renders one step per group.
-FILTER_GROUP_SCOPE: str = "scope"                 # category / search anchors
-FILTER_GROUP_BRAND: str = "brand"                 # brand selection
-FILTER_GROUP_PRICE: str = "price"                 # price / on-sale
-FILTER_GROUP_AVAILABILITY: str = "availability"   # in-stock toggle
-FILTER_GROUP_QUALITY: str = "quality"             # condition, rating
+FILTER_GROUP_SCOPE: str = "scope"  # category / search anchors
+FILTER_GROUP_BRAND: str = "brand"  # brand selection
+FILTER_GROUP_PRICE: str = "price"  # price / on-sale
+FILTER_GROUP_AVAILABILITY: str = "availability"  # in-stock toggle
+FILTER_GROUP_QUALITY: str = "quality"  # condition, rating
 FILTER_GROUP_MARKETPLACE: str = "marketplace"
-FILTER_GROUP_SPECS: str = "specs"                 # attributes
+FILTER_GROUP_SPECS: str = "specs"  # attributes
 
 
 class Filter(ABC):
@@ -127,17 +126,17 @@ class Filter(ABC):
     #: Hint for the frontend on where to fetch dynamic options
     #: (``"facet:brand_counts"`` etc.). ``None`` for self-describing
     #: filters that don't need a separate options query.
-    options_source: Optional[str] = None
+    options_source: str | None = None
 
     #: Names of OTHER filters that must be present in the parsed
     #: state before this one is meaningful. The wizard uses this to
     #: gate step visibility.
-    requires: Tuple[str, ...] = ()
+    requires: tuple[str, ...] = ()
 
     # ── Required by every concrete subclass ─────────────────────────
 
     @abstractmethod
-    def validation_rules(self) -> Dict[str, str]:
+    def validation_rules(self) -> dict[str, str]:
         """Cara validation rule strings keyed by raw payload field name.
 
         Most filters return a single key (the same as ``self.name``).
@@ -148,7 +147,7 @@ class Filter(ABC):
         """
 
     @abstractmethod
-    def parse(self, payload: Dict[str, Any]) -> Any:
+    def parse(self, payload: dict[str, Any]) -> Any:
         """Extract + canonicalize this filter's value from the payload.
 
         Returns ``None`` when the filter is not active for this
@@ -166,9 +165,7 @@ class Filter(ABC):
         """
 
     @abstractmethod
-    def where_sql(
-        self, value: Any, *, ctx: Any = None
-    ) -> Tuple[str, List[Any]]:
+    def where_sql(self, value: Any, *, ctx: Any = None) -> tuple[str, list[Any]]:
         """Render this filter as SQL.
 
         Returns a ``(sql_fragment, params)`` pair. The fragment is a
@@ -193,7 +190,7 @@ class Filter(ABC):
         """
         return f"{self.name}={self._serialize_value(value)}"
 
-    def encode_value(self, value: Any) -> Dict[str, str]:
+    def encode_value(self, value: Any) -> dict[str, str]:
         """Render the canonical value back to URL-friendly query params.
 
         Returns ``{payload_key: string}`` mapping — typically
@@ -207,7 +204,7 @@ class Filter(ABC):
         """
         return {self.name: self._serialize_value(value)}
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """Return a JSON-serialisable spec for this filter.
 
         Used by ``FilterSet.describe()`` to build the wizard /
@@ -252,8 +249,7 @@ class Filter(ABC):
             return ",".join(items)
         if isinstance(value, dict):
             parts = [
-                f"{k}={Filter._serialize_value(value[k])}"
-                for k in sorted(value.keys())
+                f"{k}={Filter._serialize_value(value[k])}" for k in sorted(value.keys())
             ]
             return "{" + ";".join(parts) + "}"
         return str(value).strip()
@@ -272,7 +268,7 @@ class Filter(ABC):
     _CSV_LIST_HARD_CAP = 256
 
     @staticmethod
-    def _parse_csv_or_json(raw: Any) -> List[str]:
+    def _parse_csv_or_json(raw: Any) -> list[str]:
         """Coerce a CSV string or JSON array into a deduped, sorted, capped list.
 
         Centralises the pattern that used to exist as ``_csv_or_json``
@@ -299,7 +295,7 @@ class Filter(ABC):
                         cleaned = [str(x).strip() for x in parsed if str(x).strip()]
                     else:
                         cleaned = []
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     cleaned = []
             else:
                 cleaned = [x.strip() for x in text.split(",") if x.strip()]
@@ -330,10 +326,10 @@ class Filter(ABC):
     def _coerce_float(
         raw: Any,
         *,
-        min_val: Optional[float] = None,
-        max_val: Optional[float] = None,
+        min_val: float | None = None,
+        max_val: float | None = None,
         label: str = "filter",
-    ) -> Optional[float]:
+    ) -> float | None:
         """Parse a numeric filter value, returning None when inactive.
 
         Consolidates the try/except + bounds-check pattern that was
@@ -351,14 +347,17 @@ class Filter(ABC):
 
             def parse(self, payload):
                 return self._coerce_float(
-                    payload.get("min_rating"), min_val=0.01, max_val=5, label="rating",
+                    payload.get("min_rating"),
+                    min_val=0.01,
+                    max_val=5,
+                    label="rating",
                 )
         """
         if raw is None or raw == "":
             return None
         try:
             value = float(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         # ``math.isfinite`` rejects ``inf``, ``-inf``, and ``NaN``.
         # ROOT-CAUSE NOTE (frontend_stress_log scenario 2, cycle 1):
@@ -376,15 +375,15 @@ class Filter(ABC):
     def _coerce_int(
         raw: Any,
         *,
-        min_val: Optional[int] = None,
-        max_val: Optional[int] = None,
-    ) -> Optional[int]:
+        min_val: int | None = None,
+        max_val: int | None = None,
+    ) -> int | None:
         """Parse an integer filter value, returning None when inactive."""
         if raw is None or raw == "":
             return None
         try:
             value = int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         if min_val is not None and value < min_val:
             return None

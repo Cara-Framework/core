@@ -19,7 +19,7 @@ Usage:
 
 import asyncio
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 class ConcurrencyLimited:
@@ -36,7 +36,7 @@ class ConcurrencyLimited:
     def __init__(
         self,
         max_concurrent: int = 10,
-        key: Optional[str] = None,
+        key: str | None = None,
         retry_delay: int = 5,
         slot_ttl: int = DEFAULT_SLOT_TTL,
     ):
@@ -139,6 +139,7 @@ class ConcurrencyLimited:
     def _resolve_cache():
         try:
             from bootstrap import application
+
             cache_service = application.make("cache")
             if cache_service is None:
                 return None
@@ -150,6 +151,7 @@ class ConcurrencyLimited:
     def _log_throttled(key: str) -> None:
         try:
             from cara.facades import Log
+
             Log.debug(
                 f"Concurrency limit reached for {key}, requeueing with delay",
                 category="cara.queue.middleware",
@@ -165,4 +167,5 @@ class ConcurrencyExceeded(Exception):
     does NOT count against max_attempts since it's a transient throttle,
     not a job failure.
     """
+
     pass

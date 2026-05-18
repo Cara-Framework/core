@@ -17,8 +17,9 @@ Two API surfaces are exposed:
 """
 
 import inspect
+from collections.abc import Awaitable, Callable
 from functools import reduce
-from typing import Any, Awaitable, Callable, List, Optional, Type, Union
+from typing import Any
 
 
 class Pipeline:
@@ -37,9 +38,7 @@ class Pipeline:
     # below that to leave room for application code.
     MAX_DEPTH = 200
 
-    def __init__(
-        self, passable: Any = None, application: Optional[Any] = None
-    ) -> None:
+    def __init__(self, passable: Any = None, application: Any | None = None) -> None:
         """Initialize the pipeline.
 
         Args:
@@ -51,16 +50,16 @@ class Pipeline:
         """
         self.passable = passable
         self.application = application
-        self.pipes: List[Union[Type, Any]] = []
+        self.pipes: list[type | Any] = []
         self.method = "handle"
         # Track instantiated pipe instances so terminate() can reuse them
         # instead of creating fresh objects that lack request-time state.
-        self.executed_instances: List[Any] = []
+        self.executed_instances: list[Any] = []
 
     # ── Laravel-canonical fluent API ────────────────────────────────
 
     @classmethod
-    def send(cls, passable: Any, application: Optional[Any] = None) -> "Pipeline":
+    def send(cls, passable: Any, application: Any | None = None) -> Pipeline:
         """Set the object that gets passed through the pipeline.
 
         Mirrors Laravel's ``Pipeline::send($payload)`` static entry point.
@@ -75,7 +74,7 @@ class Pipeline:
         instance = cls(passable, application)
         return instance
 
-    def via(self, method: str) -> "Pipeline":
+    def via(self, method: str) -> Pipeline:
         """Override the method name pipes are called with.
 
         Mirrors Laravel's ``Pipeline::via('method')``. Default is
@@ -86,7 +85,7 @@ class Pipeline:
         self.method = method
         return self
 
-    def then(self, destination: Optional[Callable[[Any], Any]] = None) -> Any:
+    def then(self, destination: Callable[[Any], Any] | None = None) -> Any:
         """Run the pipeline and pass the result to ``destination``.
 
         Mirrors Laravel's ``Pipeline::then(fn)``. Auto-detects whether
@@ -147,9 +146,7 @@ class Pipeline:
     def _resolve_pipe(self, pipe: Any) -> Any:
         """Materialise a pipe — instantiate classes, leave callables alone."""
         if isinstance(pipe, type):
-            instance = (
-                pipe(self.application) if self.application else pipe()
-            )
+            instance = pipe(self.application) if self.application else pipe()
             self.executed_instances.append(instance)
             return instance
         return pipe
@@ -163,7 +160,9 @@ class Pipeline:
         * Object with ``self.method`` (default ``handle``):
           ``pipe.handle(request, next)``.
         """
-        method_attr = getattr(pipe, self.method, None) if not callable_only(pipe) else None
+        method_attr = (
+            getattr(pipe, self.method, None) if not callable_only(pipe) else None
+        )
         if method_attr is not None and not isinstance(pipe, type):
             return method_attr(request, next_callable)
         # Plain callable (function / lambda / class without bound method)
@@ -171,11 +170,13 @@ class Pipeline:
 
     def _then_sync(self, destination: Callable[[Any], Any]) -> Any:
         """Synchronous run-through using ``functools.reduce``."""
+
         # Build the pipeline backwards: each closure wraps the next.
         def carry(stack, pipe):
             def closure(payload):
                 resolved = self._resolve_pipe(pipe)
                 return self._invoke(resolved, payload, stack)
+
             return closure
 
         # ``reduce(carry, reversed(pipes), destination)`` collapses the
@@ -204,7 +205,7 @@ class Pipeline:
 
     # ── Legacy async API (preserved for middleware capsule callers) ────
 
-    def through(self, pipes: List[Union[Type, Any]]) -> "Pipeline":
+    def through(self, pipes: list[type | Any]) -> Pipeline:
         """Set the objects to send through the pipeline.
 
         Args:
@@ -217,7 +218,7 @@ class Pipeline:
         return self
 
     async def __call__(
-        self, final_handler: Optional[Callable[[Any], Awaitable[Any]]] = None
+        self, final_handler: Callable[[Any], Awaitable[Any]] | None = None
     ) -> Any:
         """Execute the pipeline.
 

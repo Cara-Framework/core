@@ -72,7 +72,7 @@ class BaseConnection:
         # the driver skips parameter parsing entirely.
         self._cursor.execute(query, bindings if bindings else None)
         elapsed_ms = (timer() - start) * 1000  # Convert to ms
-        elapsed_formatted = "{:.2f}".format(elapsed_ms / 1000)
+        elapsed_formatted = f"{elapsed_ms / 1000:.2f}"
 
         # Slow query detection
         threshold = (self.full_details or {}).get(
@@ -87,7 +87,11 @@ class BaseConnection:
             # inside a long-running tx (level > 1), or a one-shot.
             # Bindings themselves are NOT logged — they may carry PII.
             n_bindings = len(bindings) if bindings else 0
-            tx_level = self.get_transaction_level() if hasattr(self, "get_transaction_level") else 0
+            tx_level = (
+                self.get_transaction_level()
+                if hasattr(self, "get_transaction_level")
+                else 0
+            )
             Log.warning(
                 f"SLOW QUERY ({elapsed_ms:.0f}ms, "
                 f"params={n_bindings}, tx={tx_level}): "

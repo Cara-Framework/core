@@ -5,7 +5,8 @@ Laravel-inspired modular response system with clean separation of concerns.
 Orchestrates BaseResponse, ResponseFactory, HeaderManager, ContentTypeDetector, and StreamingResponse.
 """
 
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
+from collections.abc import AsyncGenerator, Callable
+from typing import Any
 
 from .BaseResponse import BaseResponse
 from .ContentTypeDetector import ContentTypeDetector
@@ -40,7 +41,7 @@ class Response(BaseResponse):
         self.factory = ResponseFactory(self)
         self.streaming = StreamingResponse(self)
 
-    def clone_from(self, other: "Response") -> None:
+    def clone_from(self, other: Response) -> None:
         """
         Clone all attributes from another Response object.
 
@@ -85,7 +86,7 @@ class Response(BaseResponse):
             if other_content_type_explicit and other_content_type_value:
                 self.headers._content_type_explicitly_set = True
 
-    async def __call__(self, scope: Dict, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         """Handle ASGI response with finalization."""
         if self._sent:
             return
@@ -117,8 +118,8 @@ class Response(BaseResponse):
         self,
         payload: Any,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style JSON response."""
         self.factory.json(payload, status, headers)
         return self
@@ -130,9 +131,9 @@ class Response(BaseResponse):
         limit: int,
         offset: int = 0,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         **extra_meta: Any,
-    ) -> "Response":
+    ) -> Response:
         """JSON response for paginated list endpoints.
 
         Wraps ``data`` under ``"data"`` and emits the standard pagination
@@ -150,7 +151,7 @@ class Response(BaseResponse):
         else:
             serialized = data
 
-        meta: Dict[str, Any] = {
+        meta: dict[str, Any] = {
             "total": int(total),
             "limit": int(limit),
             "offset": int(offset),
@@ -165,8 +166,8 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style HTML response."""
         self.factory.html(content, status, headers)
         return self
@@ -175,8 +176,8 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style plain text response."""
         self.factory.text(content, status, headers)
         return self
@@ -185,8 +186,8 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style XML response."""
         self.factory.xml(content, status, headers)
         return self
@@ -195,8 +196,8 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style CSS response."""
         self.factory.css(content, status, headers)
         return self
@@ -205,8 +206,8 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style JavaScript response."""
         self.factory.javascript(content, status, headers)
         return self
@@ -215,8 +216,8 @@ class Response(BaseResponse):
         self,
         content: str,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style SVG response."""
         self.factory.svg(content, status, headers)
         return self
@@ -230,8 +231,8 @@ class Response(BaseResponse):
         data: Any = None,
         message: str = "Success",
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style success response."""
         self.factory.success(data, message, status, headers)
         return self
@@ -241,18 +242,18 @@ class Response(BaseResponse):
         message: str = "Error",
         errors: Any = None,
         status: int = 400,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style error response."""
         self.factory.error(message, errors, status, headers)
         return self
 
     def validation_error(
         self,
-        errors: Dict[str, List[str]],
+        errors: dict[str, list[str]],
         message: str = "Validation failed",
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style validation error response."""
         self.factory.validation_error(errors, message, headers)
         return self
@@ -260,8 +261,8 @@ class Response(BaseResponse):
     def not_found(
         self,
         message: str = "Resource not found",
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style 404 response."""
         self.factory.not_found(message, headers)
         return self
@@ -269,8 +270,8 @@ class Response(BaseResponse):
     def unauthorized(
         self,
         message: str = "Unauthorized",
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style 401 response."""
         self.factory.unauthorized(message, headers)
         return self
@@ -278,8 +279,8 @@ class Response(BaseResponse):
     def forbidden(
         self,
         message: str = "Forbidden",
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style 403 response."""
         self.factory.forbidden(message, headers)
         return self
@@ -287,8 +288,8 @@ class Response(BaseResponse):
     def server_error(
         self,
         message: str = "Internal Server Error",
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style 500 response."""
         self.factory.server_error(message, headers)
         return self
@@ -301,19 +302,19 @@ class Response(BaseResponse):
         self,
         url: str,
         status: int = 302,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style redirect response."""
         self.factory.redirect(url, status, headers)
         return self
 
     def download(
         self,
-        content: Union[str, bytes],
+        content: str | bytes,
         filename: str,
         content_type: str = "application/octet-stream",
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style download response."""
         self.factory.download(content, filename, content_type, headers)
         return self
@@ -321,15 +322,15 @@ class Response(BaseResponse):
     def file(
         self,
         file_path: str,
-        filename: Optional[str] = None,
-        content_type: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> "Response":
+        filename: str | None = None,
+        content_type: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Response:
         """Laravel-style file response for controlled access."""
         self.factory.file(file_path, filename, content_type, headers)
         return self
 
-    def no_content(self, headers: Optional[Dict[str, str]] = None) -> "Response":
+    def no_content(self, headers: dict[str, str] | None = None) -> Response:
         """Laravel-style 204 No Content response."""
         self.factory.no_content(headers)
         return self
@@ -338,7 +339,7 @@ class Response(BaseResponse):
     # HEADER MANAGEMENT (Laravel-style) - FORCED NEW API
     # =============================================================================
 
-    def header(self, name: str, value: Optional[str] = None) -> Union["Response", Optional[str]]:
+    def header(self, name: str, value: str | None = None) -> Response | str | None:
         """
         Laravel-style header method - get or set header.
 
@@ -360,17 +361,17 @@ class Response(BaseResponse):
         self.headers.set(name, value)
         return self
 
-    def with_headers(self, headers: Dict[str, str]) -> "Response":
+    def with_headers(self, headers: dict[str, str]) -> Response:
         """Laravel-style method to set multiple headers."""
         self.headers.merge(headers)
         return self
 
-    def content_type(self, type_: str) -> "Response":
+    def content_type(self, type_: str) -> Response:
         """Laravel-style content-type setter."""
         self.headers.content_type(type_)
         return self
 
-    def cache_control(self, cache_control: str) -> "Response":
+    def cache_control(self, cache_control: str) -> Response:
         """Set Cache-Control header."""
         self.headers.cache_control(cache_control)
         return self
@@ -380,29 +381,27 @@ class Response(BaseResponse):
         origin: str = "*",
         methods: str = "GET, POST, PUT, DELETE, OPTIONS",
         headers: str = "Content-Type, Authorization",
-    ) -> "Response":
+    ) -> Response:
         """Set CORS headers."""
         self.headers.cors(origin, methods, headers)
         return self
 
-    def secure(self) -> "Response":
+    def secure(self) -> Response:
         """Set security headers."""
         self.headers.secure()
         return self
 
-    def no_cache(self) -> "Response":
+    def no_cache(self) -> Response:
         """Set no-cache headers."""
         self.headers.no_cache()
         return self
 
-    def csp(self, policy: str) -> "Response":
+    def csp(self, policy: str) -> Response:
         """Set Content Security Policy header."""
         self.headers.csp(policy)
         return self
 
-    def hsts(
-        self, max_age: int = 31536000, include_subdomains: bool = True
-    ) -> "Response":
+    def hsts(self, max_age: int = 31536000, include_subdomains: bool = True) -> Response:
         """Set HTTP Strict Transport Security header."""
         self.headers.hsts(max_age, include_subdomains)
         return self
@@ -413,31 +412,31 @@ class Response(BaseResponse):
 
     async def stream(
         self,
-        generator: AsyncGenerator[bytes, None],
+        generator: AsyncGenerator[bytes],
         send: Callable,
         status: int = 200,
         content_type: str = "application/octet-stream",
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """Laravel-style streaming response."""
         await self.streaming.stream(generator, send, status, content_type, headers)
 
     async def stream_json_lines(
         self,
-        data_generator: AsyncGenerator[Any, None],
+        data_generator: AsyncGenerator[Any],
         send: Callable,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """Stream JSON Lines (JSONL) format."""
         await self.streaming.stream_json_lines(data_generator, send, status, headers)
 
     async def stream_sse(
         self,
-        event_generator: AsyncGenerator[Dict[str, Any], None],
+        event_generator: AsyncGenerator[dict[str, Any]],
         send: Callable,
         status: int = 200,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """Stream Server-Sent Events."""
         await self.streaming.stream_server_sent_events(
@@ -446,12 +445,12 @@ class Response(BaseResponse):
 
     async def stream_download(
         self,
-        file_generator: AsyncGenerator[bytes, None],
+        file_generator: AsyncGenerator[bytes],
         filename: str,
         send: Callable,
         content_type: str = "application/octet-stream",
-        content_length: Optional[int] = None,
-        headers: Optional[Dict[str, str]] = None,
+        content_length: int | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """Stream file download."""
         await self.streaming.stream_file_download(
@@ -460,10 +459,10 @@ class Response(BaseResponse):
 
     async def stream_csv(
         self,
-        data_generator: AsyncGenerator[List[str], None],
+        data_generator: AsyncGenerator[list[str]],
         filename: str,
         send: Callable,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """Stream CSV data."""
         await self.streaming.stream_csv(data_generator, filename, send, headers)
@@ -472,7 +471,7 @@ class Response(BaseResponse):
     # COMPATIBILITY AND UTILITY METHODS
     # =============================================================================
 
-    def get_headers(self) -> List[tuple]:
+    def get_headers(self) -> list[tuple]:
         """Get headers for ASGI compatibility."""
         return self.headers.to_asgi()
 

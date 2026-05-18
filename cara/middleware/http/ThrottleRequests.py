@@ -6,7 +6,7 @@ If the client exceeds the limit, returns a 429 Response with appropriate headers
 knows when to retry. Otherwise, adds rate-limit info in response headers.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from cara.facades import Log, RateLimiter
 from cara.http import Request, Response
@@ -41,7 +41,7 @@ class ThrottleRequests(Middleware):
         elif limit is not None:
             try:
                 self.custom_limit = int(limit)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 self.custom_limit = limit
         else:
             self.custom_limit = None
@@ -49,7 +49,7 @@ class ThrottleRequests(Middleware):
         if window is not None:
             try:
                 self.custom_window_minutes = int(window)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 self.custom_window_minutes = window
         else:
             self.custom_window_minutes = None
@@ -112,7 +112,7 @@ class ThrottleRequests(Middleware):
             resp.json(body, 429)
 
             # Attach rate-limit headers
-            max_attempts = getattr(limit_config, 'max_attempts', self.custom_limit or 60)
+            max_attempts = getattr(limit_config, "max_attempts", self.custom_limit or 60)
             resp.header("X-RateLimit-Limit", str(max_attempts))
             resp.header("X-RateLimit-Remaining", "0")
             resp.header("X-RateLimit-Reset", str(reset_in))
@@ -126,7 +126,7 @@ class ThrottleRequests(Middleware):
         response = await next(request)
 
         # Attach headers so clients can see their quota
-        max_attempts = getattr(limit_config, 'max_attempts', self.custom_limit or 60)
+        max_attempts = getattr(limit_config, "max_attempts", self.custom_limit or 60)
         response.header("X-RateLimit-Limit", str(max_attempts))
         response.header("X-RateLimit-Remaining", str(remaining))
         response.header("X-RateLimit-Reset", str(reset_in))
@@ -156,6 +156,7 @@ class ThrottleRequests(Middleware):
         """
         try:
             from cara.facades import Config
+
             trusted = Config.get("rate.trusted_ips", None)
             if trusted is None:
                 # Defensive fallback — if a caller registered the
@@ -163,7 +164,11 @@ class ThrottleRequests(Middleware):
                 trusted = Config.get("rate.TRUSTED_IPS", [])
             if not trusted:
                 return False
-            client_ip = request.ip() if callable(getattr(request, "ip", None)) else getattr(request, "ip", None)
+            client_ip = (
+                request.ip()
+                if callable(getattr(request, "ip", None))
+                else getattr(request, "ip", None)
+            )
             return str(client_ip) in trusted
         except Exception as e:
             Log.warning(f"ThrottleRequests internal failure: {e}")
@@ -172,12 +177,12 @@ class ThrottleRequests(Middleware):
     def _resolve_limit_config(self, request: Request):
         """
         Resolve the limit configuration for this request.
-        
+
         Checks in order:
         1. Named limiter (if middleware parameter matches a registered limiter name)
         2. Custom numeric parameters (throttle:60,1 format)
         3. Global rate limiter configuration
-        
+
         Returns a Limit object or None if no rate limiting applies.
         """
         from cara.rates import Limit
@@ -195,24 +200,26 @@ class ThrottleRequests(Middleware):
 
         # Fall back to global RateLimiter config (if available)
         # RateLimiter.window is in seconds; convert to minutes for Limit
-        return Limit(max_attempts=RateLimiter.limit, decay_minutes=RateLimiter.window / 60)
+        return Limit(
+            max_attempts=RateLimiter.limit, decay_minutes=RateLimiter.window / 60
+        )
 
     def _resolve_key(self, request: Request, limit_config) -> str:
         """
         Resolve the rate limit key for this request and limit config.
-        
+
         Uses the limit's _key attribute if set, otherwise constructs a default key
         from endpoint + user_id (or IP address).
-        
+
         Args:
             request: The HTTP request object
             limit_config: The Limit object
-            
+
         Returns:
             A unique rate limit key
         """
         # If the Limit has a custom key set, use that
-        if hasattr(limit_config, '_key') and limit_config._key:
+        if hasattr(limit_config, "_key") and limit_config._key:
             return limit_config._key
 
         # Default: method:route_template:user_id_or_ip
@@ -244,10 +251,7 @@ class ThrottleRequests(Middleware):
         try:
             user = request.user() if callable(getattr(request, "user", None)) else None
             if user is not None:
-                user_id = (
-                    getattr(user, "id", None)
-                    or getattr(user, "user_id", None)
-                )
+                user_id = getattr(user, "id", None) or getattr(user, "user_id", None)
         except Exception:
             user_id = None
 

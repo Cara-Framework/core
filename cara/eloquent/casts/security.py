@@ -7,7 +7,7 @@ container by :class:`EncryptionProvider`.
 """
 
 import hashlib
-from typing import Any, Optional
+from typing import Any
 
 from .base import BaseCast
 
@@ -38,7 +38,7 @@ class HashCast(BaseCast):
         """Return the hash as-is; hashes are one-way."""
         return value
 
-    def set(self, value: Any) -> Optional[str]:
+    def set(self, value: Any) -> str | None:
         """Hash the value using the configured algorithm."""
         if value is None:
             return None
@@ -79,7 +79,7 @@ class EncryptedCast(BaseCast):
     Values are encrypted on write and decrypted on read.
     """
 
-    def __init__(self, key: Optional[str] = None):
+    def __init__(self, key: str | None = None):
         # ``key`` is accepted for Laravel parity (``__casts__ = {"field": "encrypted:my_key"}``)
         # and, when provided, creates an ad-hoc Crypt instance instead of the
         # container-bound default. When None, the bound Crypt facade is used.
@@ -101,7 +101,7 @@ class EncryptedCast(BaseCast):
             return None
         return self._cipher().decrypt(value)
 
-    def set(self, value: Any) -> Optional[str]:
+    def set(self, value: Any) -> str | None:
         """Encrypt the value before persisting."""
         if value is None:
             return None

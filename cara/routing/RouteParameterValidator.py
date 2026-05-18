@@ -5,7 +5,7 @@ This module provides a robust validation system for route parameters using autom
 rule discovery and intelligent type conversion.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class CompilerRuleMapper:
@@ -41,8 +41,8 @@ class CompilerRuleMapper:
 
     @classmethod
     def get_validation_rules_for_compiler(
-        cls, compiler_type: str, pattern: Optional[str] = None
-    ) -> List[str]:
+        cls, compiler_type: str, pattern: str | None = None
+    ) -> list[str]:
         """Get validation rules for a compiler type/pattern."""
         # First try direct compiler type mapping
         if compiler_type in cls.COMPILER_TYPE_RULES:
@@ -57,7 +57,7 @@ class CompilerRuleMapper:
         return []
 
     @classmethod
-    def get_type_converter_for_compiler(cls, compiler_type: str) -> Optional[callable]:
+    def get_type_converter_for_compiler(cls, compiler_type: str) -> callable | None:
         """Get type converter function for a compiler type."""
         converters = {
             "int": cls._convert_to_int,
@@ -117,9 +117,9 @@ class RouteParameterValidator:
     - Extensible compiler → validation rule mapping
     """
 
-    _validation_rules: Dict[str, str] = {}
-    _compile_rules: Dict[str, str] = {}
-    _compile_patterns: Dict[str, str] = {}
+    _validation_rules: dict[str, str] = {}
+    _compile_rules: dict[str, str] = {}
+    _compile_patterns: dict[str, str] = {}
 
     @classmethod
     def set_validation_rules(cls, parameter: str, rules: str) -> None:
@@ -128,7 +128,7 @@ class RouteParameterValidator:
 
     @classmethod
     def set_compile_rule(
-        cls, parameter: str, compiler_type: str, pattern: Optional[str] = None
+        cls, parameter: str, compiler_type: str, pattern: str | None = None
     ) -> None:
         """Set compile rule for a route parameter (from Route.compile())."""
         cls._compile_rules[parameter] = compiler_type
@@ -177,12 +177,12 @@ class RouteParameterValidator:
         # Try to convert, return original value if conversion fails
         try:
             return converter(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # Conversion failed - validation will catch this later
             return value
 
     @classmethod
-    def validate_parameters(cls, parameters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def validate_parameters(cls, parameters: dict[str, Any]) -> dict[str, Any] | None:
         """
         Validate route parameters against their rules.
 
@@ -226,7 +226,7 @@ class RouteParameterValidator:
         return cls._extract_validation_errors(validation_errors)
 
     @classmethod
-    def _extract_validation_errors(cls, validation_errors) -> Dict[str, Any]:
+    def _extract_validation_errors(cls, validation_errors) -> dict[str, Any]:
         """Extract clean error structure from ValidationErrors object."""
         # Extract errors using ValidationErrors' interface
         error_dict = validation_errors.errors()
@@ -246,7 +246,7 @@ class RouteParameterValidator:
         cls._compile_patterns.clear()
 
     @classmethod
-    def get_debug_info(cls, parameter: Optional[str] = None) -> Dict[str, Any]:
+    def get_debug_info(cls, parameter: str | None = None) -> dict[str, Any]:
         """Get debug information about rules and mappings."""
         if parameter:
             return {

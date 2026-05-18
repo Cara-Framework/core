@@ -6,7 +6,7 @@ from .BaseRelationship import BaseRelationship
 class HasMany(BaseRelationship):
     """
     Has Many Relationship Class.
-    
+
     Works as both decorator and property (Laravel-style).
     When accessed as property, returns self (relationship instance).
     """
@@ -25,12 +25,12 @@ class HasMany(BaseRelationship):
         if instance is None:
             return self
 
-        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
-        attr_name = func.__name__ if func and hasattr(func, '__name__') else None
+        func = getattr(self, "_func", None) or getattr(self, "fn", None)
+        attr_name = func.__name__ if func and hasattr(func, "__name__") else None
 
         # Return cached relation if already loaded (eager or previous lazy load)
         if attr_name:
-            relations = getattr(instance, '_relations', None)
+            relations = getattr(instance, "_relations", None)
             if relations is not None and attr_name in relations:
                 return relations[attr_name]
 
@@ -43,8 +43,8 @@ class HasMany(BaseRelationship):
 
         # Cache in _relations so subsequent access doesn't re-query
         if attr_name:
-            if not hasattr(instance, '_relations') or instance._relations is None:
-                instance.__dict__.setdefault('_relations', {})
+            if not hasattr(instance, "_relations") or instance._relations is None:
+                instance.__dict__.setdefault("_relations", {})
             instance._relations[attr_name] = result
 
         return result
@@ -144,6 +144,7 @@ class HasMany(BaseRelationship):
         related_table = self.get_builder().get_table_name()
         if not builder._columns:
             builder = builder.select("*")
+
         # Laravel parity: build the correlated subquery from the RELATED
         # model's own query (so its global scopes apply, not the parent's).
         def _make_sub(_unused_new):
@@ -156,6 +157,7 @@ class HasMany(BaseRelationship):
                 )
                 .when(callback, lambda qq: callback(qq))
             )
+
         return builder.add_select(alias, _make_sub)
 
     def _alias_base(self, relation_name):

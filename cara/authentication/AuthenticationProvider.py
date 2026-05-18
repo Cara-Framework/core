@@ -63,7 +63,9 @@ class AuthenticationProvider(DeferredProvider):
             header_name=config("auth.guards.api_key.header_name", "X-API-Key"),
             header_prefix=config("auth.guards.api_key.header_prefix", ""),
             rate_limit_enabled=config("auth.guards.api_key.rate_limit_enabled", False),
-            rate_limit_max_attempts=config("auth.guards.api_key.rate_limit_max_attempts", 100),
+            rate_limit_max_attempts=config(
+                "auth.guards.api_key.rate_limit_max_attempts", 100
+            ),
             rate_limit_window=config("auth.guards.api_key.rate_limit_window", 3600),
             cache_enabled=config("auth.guards.api_key.cache_enabled", True),
             cache_ttl=config("auth.guards.api_key.cache_ttl", 3600),

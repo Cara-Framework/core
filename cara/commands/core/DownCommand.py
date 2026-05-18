@@ -6,9 +6,10 @@ This module provides a CLI command to enable maintenance mode with enhanced UX.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pendulum
+
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.support import paths
@@ -36,10 +37,10 @@ class DownCommand(CommandBase):
 
     def handle(
         self,
-        message: Optional[str] = None,
-        retry: Optional[str] = None,
-        allow: Optional[str] = None,
-        secret: Optional[str] = None,
+        message: str | None = None,
+        retry: str | None = None,
+        allow: str | None = None,
+        secret: str | None = None,
     ):
         """Handle maintenance mode activation with enhanced UX."""
         self.info("🔧 Maintenance Mode Activation")
@@ -87,11 +88,11 @@ class DownCommand(CommandBase):
 
     def _build_configuration(
         self,
-        message: Optional[str],
-        retry: Optional[str],
-        allow: Optional[str],
-        secret: Optional[str],
-    ) -> Dict[str, Any]:
+        message: str | None,
+        retry: str | None,
+        allow: str | None,
+        secret: str | None,
+    ) -> dict[str, Any]:
         """Build maintenance configuration with validation."""
         config = {
             "enabled": True,
@@ -121,7 +122,7 @@ class DownCommand(CommandBase):
 
         return config
 
-    def _show_dry_run(self, config: Dict[str, Any]) -> None:
+    def _show_dry_run(self, config: dict[str, Any]) -> None:
         """Show what would be configured in dry run mode."""
         self.info("🔍 DRY RUN MODE - No changes will be made")
         self.info("📋 Maintenance configuration that would be created:")
@@ -140,7 +141,7 @@ class DownCommand(CommandBase):
 
         self.info(f"   File Location: {self.maintenance_file}")
 
-    def _activate_maintenance(self, config: Dict[str, Any]) -> None:
+    def _activate_maintenance(self, config: dict[str, Any]) -> None:
         """Activate maintenance mode with the given configuration."""
         self.info("🔧 Configuration:")
         self.info(f"   Message: {config['message']}")
@@ -177,7 +178,7 @@ class DownCommand(CommandBase):
         """Check if maintenance file exists."""
         return self.maintenance_file.exists()
 
-    def _get_file_info(self) -> Optional[Dict[str, Any]]:
+    def _get_file_info(self) -> dict[str, Any] | None:
         """Get maintenance file information."""
         if not self._file_exists():
             return None
@@ -185,13 +186,13 @@ class DownCommand(CommandBase):
         try:
             with open(self.maintenance_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, Exception):
+        except json.JSONDecodeError, Exception:
             return {
                 "message": "Application is in maintenance mode",
                 "created_at": "Unknown",
             }
 
-    def _create_file(self, config: Dict[str, Any]) -> None:
+    def _create_file(self, config: dict[str, Any]) -> None:
         """Create maintenance file with configuration."""
         try:
             with open(self.maintenance_file, "w", encoding="utf-8") as f:

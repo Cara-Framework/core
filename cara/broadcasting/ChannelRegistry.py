@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import inspect
 import re
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 # A channel auth callback receives (user, **placeholders) and returns
 # bool / dict / None / Awaitable[same].
-ChannelAuthCallback = Callable[..., Union[bool, dict, None, Awaitable[Union[bool, dict, None]]]]
+ChannelAuthCallback = Callable[..., bool | dict | None | Awaitable[bool | dict | None]]
 
 
 class ChannelRegistry:
@@ -51,7 +52,7 @@ class ChannelRegistry:
     # Compiled (pattern_str, regex, var_names, callback) tuples. List
     # rather than dict so registration order is preserved — first match
     # wins, mirroring Laravel's behaviour.
-    _patterns: List[Tuple[str, re.Pattern, List[str], ChannelAuthCallback]]
+    _patterns: list[tuple[str, re.Pattern, list[str], ChannelAuthCallback]]
 
     # Sentinels for parsing the {var} placeholders.
     _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -70,7 +71,9 @@ class ChannelRegistry:
         details, not channel-name details.
         """
         if not pattern or not isinstance(pattern, str):
-            raise ValueError(f"Channel pattern must be a non-empty string, got {pattern!r}")
+            raise ValueError(
+                f"Channel pattern must be a non-empty string, got {pattern!r}"
+            )
         if not callable(callback):
             raise TypeError(f"Callback must be callable, got {type(callback).__name__}")
 
@@ -78,9 +81,13 @@ class ChannelRegistry:
         # Build a regex from the pattern: each {var} becomes (?P<var>[^.]+)
         # — segments are dot-separated, so a placeholder cannot greedily
         # eat segments it shouldn't.
-        regex_str = "^" + self._PLACEHOLDER_RE.sub(r"(?P<\1>[^.]+)", re.escape(pattern)).replace(
-            r"\(\?P<", "(?P<"
-        ).replace(r">[^.]+\)", ">[^.]+)") + "$"
+        regex_str = (
+            "^"
+            + self._PLACEHOLDER_RE.sub(r"(?P<\1>[^.]+)", re.escape(pattern))
+            .replace(r"\(\?P<", "(?P<")
+            .replace(r">[^.]+\)", ">[^.]+)")
+            + "$"
+        )
         # The above replace dance is needed because re.escape() escapes
         # the angle brackets in our placeholder substitution. Reconstruct
         # the pattern more explicitly:
@@ -95,7 +102,9 @@ class ChannelRegistry:
 
         self._patterns.append((pattern, regex, var_names, callback))
 
-    def channel(self, pattern: str) -> Callable[[ChannelAuthCallback], ChannelAuthCallback]:
+    def channel(
+        self, pattern: str
+    ) -> Callable[[ChannelAuthCallback], ChannelAuthCallback]:
         """Decorator form of ``register``. Mirrors Laravel's
         ``Broadcast::channel`` when used as ``@Broadcast.channel(...)``::
 
@@ -110,7 +119,7 @@ class ChannelRegistry:
 
         return _wrap
 
-    def find(self, channel: str) -> Optional[Tuple[ChannelAuthCallback, Dict[str, str]]]:
+    def find(self, channel: str) -> tuple[ChannelAuthCallback, dict[str, str]] | None:
         """Look up the auth callback for a channel name.
 
         Returns ``(callback, placeholders)`` on the first matching
@@ -130,7 +139,7 @@ class ChannelRegistry:
         user: Any,
         *,
         require_callback: bool = True,
-    ) -> Union[bool, Dict[str, Any]]:
+    ) -> bool | dict[str, Any]:
         """Run the matching callback for ``channel``.
 
         Args:

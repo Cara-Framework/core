@@ -5,13 +5,13 @@ This module defines the contract that any mail driver must implement, specifying
 for email operations.
 """
 
-from typing import Any, Dict, Protocol
+from typing import Any, Protocol
 
 
 class Mail(Protocol):
     """Contract that any mail driver must implement."""
 
-    def send(self, mailable_data: Dict[str, Any]) -> bool:
+    def send(self, mailable_data: dict[str, Any]) -> bool:
         """
         Send email using the driver's implementation.
 

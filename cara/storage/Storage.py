@@ -5,8 +5,6 @@ This module provides the Storage class, which manages multiple storage drivers a
 operations to the appropriate driver instance.
 """
 
-from typing import Optional
-
 from cara.exceptions import DriverNotRegisteredException
 from cara.storage.contracts import Storage
 
@@ -27,7 +25,7 @@ class Storage:
         """Register a driver instance under `name`."""
         self._drivers[name] = driver
 
-    def driver(self, name: Optional[str] = None) -> Storage:
+    def driver(self, name: str | None = None) -> Storage:
         """
         Return the named driver, or the default if `name` is None.
 
@@ -36,23 +34,25 @@ class Storage:
         chosen = name or self._default_driver
         inst = self._drivers.get(chosen)
         if not inst:
-            raise DriverNotRegisteredException(f"Storage driver '{chosen}' not registered.")
+            raise DriverNotRegisteredException(
+                f"Storage driver '{chosen}' not registered."
+            )
         return inst
 
     def put(
         self,
         key: str,
         data: bytes,
-        driver_name: Optional[str] = None,
+        driver_name: str | None = None,
     ) -> None:
         """Store raw bytes under `key` via selected driver."""
         self.driver(driver_name).put(key, data)
 
-    def get(self, key: str, driver_name: Optional[str] = None) -> bytes:
+    def get(self, key: str, driver_name: str | None = None) -> bytes:
         """Retrieve bytes for `key` via selected driver."""
         return self.driver(driver_name).get(key)
 
-    def delete(self, key: str, driver_name: Optional[str] = None) -> bool:
+    def delete(self, key: str, driver_name: str | None = None) -> bool:
         """
         Delete `key` via selected driver.
 
@@ -60,6 +60,6 @@ class Storage:
         """
         return self.driver(driver_name).delete(key)
 
-    def exists(self, key: str, driver_name: Optional[str] = None) -> bool:
+    def exists(self, key: str, driver_name: str | None = None) -> bool:
         """Return True if `key` exists in selected driver."""
         return self.driver(driver_name).exists(key)

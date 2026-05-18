@@ -37,23 +37,27 @@ class CommandPipeline:
 
         for i, command in enumerate(self.commands):
             try:
-                bound_logger.info(f"Executing command {i+1}/{len(self.commands)}: {command.__name__}")
+                bound_logger.info(
+                    f"Executing command {i + 1}/{len(self.commands)}: {command.__name__}"
+                )
 
                 # Execute command with context
-                if hasattr(command, 'handle'):
+                if hasattr(command, "handle"):
                     result = await command.handle(current_context, self._next_step)
                     if result:
                         current_context.update(result)
                 else:
-                    bound_logger.warning(f"Command {command.__name__} has no handle method")
+                    bound_logger.warning(
+                        f"Command {command.__name__} has no handle method"
+                    )
 
             except Exception as e:
                 bound_logger.error(f"Command {command.__name__} failed: {str(e)}")
-                current_context['pipeline_error'] = str(e)
-                current_context['pipeline_success'] = False
+                current_context["pipeline_error"] = str(e)
+                current_context["pipeline_success"] = False
                 break
         else:
-            current_context['pipeline_success'] = True
+            current_context["pipeline_success"] = True
 
         bound_logger.info("Pipeline execution completed")
         return current_context

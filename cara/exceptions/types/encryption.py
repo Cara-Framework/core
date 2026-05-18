@@ -14,4 +14,3 @@ class EncryptionException(CaraException):
 __all__ = [
     "EncryptionException",
 ]
-

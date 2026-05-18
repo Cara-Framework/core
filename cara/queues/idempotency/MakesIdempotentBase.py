@@ -29,7 +29,8 @@ Subclasses MUST set ``_idempotency_key`` indirectly by calling
 import asyncio
 import hashlib
 import json
-from typing import Any, Awaitable, Callable, Dict, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import pendulum
 
@@ -67,7 +68,7 @@ class MakesIdempotentBase:
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._idempotency_key: Optional[str] = None
+        self._idempotency_key: str | None = None
 
     # ── Public orchestrator ─────────────────────────────────────────
 
@@ -89,17 +90,14 @@ class MakesIdempotentBase:
             prior result, or ``None`` when the run was deliberately
             skipped (cooldown / lifecycle-already-ran).
         """
-        if (
-            ExecutionContext.is_sync()
-            and not getattr(self, "enforce_sync_idempotency", True)
+        if ExecutionContext.is_sync() and not getattr(
+            self, "enforce_sync_idempotency", True
         ):
             Log.debug("Sync mode idempotency bypass enabled", category="idempotency")
             return await callback()
 
         self._idempotency_key = self.generate_idempotency_key()
-        Log.debug(
-            f"Job idempotency key: {self._idempotency_key}", category="idempotency"
-        )
+        Log.debug(f"Job idempotency key: {self._idempotency_key}", category="idempotency")
 
         job_force = getattr(self, "force", False)
         is_forced = force_execution or job_force
@@ -148,9 +146,7 @@ class MakesIdempotentBase:
         force_execution: bool = False,
     ) -> Any:
         """Alias for :meth:`wrap_with_idempotency`."""
-        return await self.wrap_with_idempotency(
-            callback, force_execution=force_execution
-        )
+        return await self.wrap_with_idempotency(callback, force_execution=force_execution)
 
     # ── Key generation + parameter normalization ───────────────────
 
@@ -164,14 +160,14 @@ class MakesIdempotentBase:
         key_string = json.dumps(job_data, sort_keys=True)
         return hashlib.sha256(key_string.encode()).hexdigest()[:16]
 
-    def get_job_parameters(self) -> Dict[str, Any]:
+    def get_job_parameters(self) -> dict[str, Any]:
         """Return job parameters for idempotency key generation.
 
         Default behaviour: include every public, non-callable instance
         attribute (excluding queue-runner internals). Subclasses
         commonly override to pin a smaller / different set.
         """
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         for key, value in vars(self).items():
             if key.startswith("_"):
                 continue
@@ -192,21 +188,21 @@ class MakesIdempotentBase:
             normalized_items = [self._normalize_param_value(v) for v in value]
             return [v for v in normalized_items if v is not None]
         if isinstance(value, dict):
-            normalized_dict: Dict[str, Any] = {}
+            normalized_dict: dict[str, Any] = {}
             for key in sorted(value.keys(), key=lambda k: str(k)):
                 nv = self._normalize_param_value(value[key])
                 if nv is not None:
                     normalized_dict[str(key)] = nv
             return normalized_dict
         if hasattr(value, "id"):
-            return getattr(value, "id")
+            return value.id
         if hasattr(value, "public_id"):
-            return getattr(value, "public_id")
+            return value.public_id
         return None
 
     # ── Cache / lock primitives ────────────────────────────────────
 
-    def get_cached_result(self) -> Optional[Any]:
+    def get_cached_result(self) -> Any | None:
         cache_key = f"job_result:{self._idempotency_key}"
         return Cache.get(cache_key)
 
@@ -234,7 +230,7 @@ class MakesIdempotentBase:
 
     # ── Lifecycle / cooldown hooks (override in subclass) ──────────
 
-    def get_lifecycle_step(self) -> Optional[str]:
+    def get_lifecycle_step(self) -> str | None:
         """Return the app-defined lifecycle step name for this job, or
         ``None`` when no lifecycle gating applies. Subclass override."""
         return None
@@ -320,7 +316,7 @@ class MakesIdempotentBase:
         finally:
             self.release_job_lock()
 
-    async def wait_for_completion(self) -> Optional[Any]:
+    async def wait_for_completion(self) -> Any | None:
         """Wait for another worker's run to finish; return cached result.
 
         ``max_wait_time`` / ``check_interval`` are deliberately fixed —

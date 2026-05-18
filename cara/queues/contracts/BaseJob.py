@@ -5,7 +5,7 @@ This class provides DRY functionality specifically for job operations
 that need to be queued for background processing.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from .BaseQueueable import BaseQueueable
 
@@ -38,7 +38,7 @@ class BaseJob(BaseQueueable):
         # Set job tags for monitoring
         self.tags = kwargs.get("tags", [])
 
-    def with_payload(self, payload: Dict[str, Any]) -> "BaseJob":
+    def with_payload(self, payload: dict[str, Any]) -> BaseJob:
         """Set or update job payload."""
         if isinstance(payload, dict):
             self.payload.update(payload)
@@ -46,19 +46,19 @@ class BaseJob(BaseQueueable):
             self.payload = payload
         return self
 
-    def with_tag(self, tag: str) -> "BaseJob":
+    def with_tag(self, tag: str) -> BaseJob:
         """Add a tag to this job."""
         if tag not in self.tags:
             self.tags.append(tag)
         return self
 
-    def with_tags(self, tags: list) -> "BaseJob":
+    def with_tags(self, tags: list) -> BaseJob:
         """Add multiple tags to this job."""
         for tag in tags:
             self.with_tag(tag)
         return self
 
-    def priority(self, level: str) -> "BaseJob":
+    def priority(self, level: str) -> BaseJob:
         """Set job priority level."""
         self.job_priority = level
 
@@ -70,20 +70,20 @@ class BaseJob(BaseQueueable):
 
         return self
 
-    def high_priority(self) -> "BaseJob":
+    def high_priority(self) -> BaseJob:
         """Mark this job as high priority."""
         return self.priority("high")
 
-    def low_priority(self) -> "BaseJob":
+    def low_priority(self) -> BaseJob:
         """Mark this job as low priority."""
         return self.priority("low")
 
-    def timeout_minutes(self, minutes: int) -> "BaseJob":
+    def timeout_minutes(self, minutes: int) -> BaseJob:
         """Set job timeout in minutes."""
         self.timeout = minutes * 60
         return self
 
-    def timeout_hours(self, hours: int) -> "BaseJob":
+    def timeout_hours(self, hours: int) -> BaseJob:
         """Set job timeout in hours."""
         self.timeout = hours * 3600
         return self
@@ -98,7 +98,7 @@ class BaseJob(BaseQueueable):
 
         return f"{class_name}: job"
 
-    def get_queue_options(self) -> Dict[str, Any]:
+    def get_queue_options(self) -> dict[str, Any]:
         """Get job-specific queue options."""
         options = super().get_queue_options()
 

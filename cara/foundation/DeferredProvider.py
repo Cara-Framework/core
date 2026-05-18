@@ -8,7 +8,6 @@ requested), which all concrete providers should extend.
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import List
 
 from cara.foundation import Provider
 
@@ -30,7 +29,7 @@ class DeferredProvider(Provider):
 
     @classmethod
     @abstractmethod
-    def provides(cls) -> List[str]:
+    def provides(cls) -> list[str]:
         """
         Return the list of string keys that this provider will bind into the container.
 

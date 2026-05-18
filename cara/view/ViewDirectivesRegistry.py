@@ -89,7 +89,9 @@ class ViewDirectivesRegistry:
         """Register form directives."""
         directives.register(
             "csrf",
-            lambda expr: '__output__ += \'<input type="hidden" name="_token" value="csrf_token_here">\'',
+            lambda expr: (
+                '__output__ += \'<input type="hidden" name="_token" value="csrf_token_here">\''
+            ),
         )
 
         def method_directive(expr):

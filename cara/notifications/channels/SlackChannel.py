@@ -8,7 +8,7 @@ sending notifications to Slack webhooks.
 import json
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.notifications.channels import BaseChannel
 
@@ -25,7 +25,7 @@ class SlackChannel(BaseChannel):
     def __init__(
         self,
         webhook_url: str,
-        default_channel: Optional[str] = None,
+        default_channel: str | None = None,
         username: str = "Cara Bot",
         icon: str = ":robot_face:",
     ):
@@ -76,9 +76,7 @@ class SlackChannel(BaseChannel):
             self._emit_error("Slack channel error", e)
             return False
 
-    def _get_webhook_url(
-        self, notifiable, slack_message: Dict[str, Any]
-    ) -> Optional[str]:
+    def _get_webhook_url(self, notifiable, slack_message: dict[str, Any]) -> str | None:
         """
         Get the Slack webhook URL.
 
@@ -102,7 +100,7 @@ class SlackChannel(BaseChannel):
         # Fallback to configured webhook
         return self.webhook_url
 
-    def _prepare_payload(self, slack_message: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_payload(self, slack_message: dict[str, Any]) -> dict[str, Any]:
         """
         Prepare the Slack payload.
 
@@ -149,7 +147,7 @@ class SlackChannel(BaseChannel):
 
         return {"text": str(slack_message)}
 
-    def _send_to_slack(self, webhook_url: str, payload: Dict[str, Any]) -> bool:
+    def _send_to_slack(self, webhook_url: str, payload: dict[str, Any]) -> bool:
         """
         Send payload to Slack webhook.
 
@@ -192,7 +190,7 @@ class SlackChannel(BaseChannel):
 
     def format_simple_message(
         self, title: str, message: str, color: str = "good"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Format a simple Slack message with attachment.
 
@@ -215,7 +213,7 @@ class SlackChannel(BaseChannel):
             ]
         }
 
-    def format_rich_message(self, blocks: list) -> Dict[str, Any]:
+    def format_rich_message(self, blocks: list) -> dict[str, Any]:
         """
         Format a rich Slack message with blocks.
 

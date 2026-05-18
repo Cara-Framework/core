@@ -3,7 +3,7 @@ Controller Route Loader for loading routes from decorated controller methods.
 """
 
 import inspect
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from cara.routing import Route
 from cara.support import get_classes
@@ -21,18 +21,18 @@ class ControllerRouteLoader:
         controllers_location = self.application.make("controllers.location")
         Route.set_controller_locations(controllers_location)
 
-    def load(self) -> List[Route]:
+    def load(self) -> list[Route]:
         """Load routes from controller methods."""
-        collected: List[Route] = []
+        collected: list[Route] = []
 
         for cls in self._all_controller_classes():
             for meta in self._get_decorated_methods(cls):
                 instance = cls()
                 handler = getattr(instance, meta["method_name"])
 
-                name: Optional[str] = meta.get("name")
-                prefix: Optional[str] = meta.get("prefix")
-                namespace: Optional[str] = meta.get("namespace")
+                name: str | None = meta.get("name")
+                prefix: str | None = meta.get("prefix")
+                namespace: str | None = meta.get("namespace")
                 middleware = meta.get("middleware")
                 methods = meta["methods"]
                 path = meta["path"]
@@ -53,9 +53,9 @@ class ControllerRouteLoader:
 
         return collected
 
-    def _get_decorated_methods(self, controller_cls: Any) -> List[Dict[str, Any]]:
+    def _get_decorated_methods(self, controller_cls: Any) -> list[dict[str, Any]]:
         """Get methods decorated with @route from controller class."""
-        found: List[Dict[str, Any]] = []
+        found: list[dict[str, Any]] = []
         for name, method in inspect.getmembers(
             controller_cls, predicate=inspect.isfunction
         ):
@@ -65,7 +65,7 @@ class ControllerRouteLoader:
                 found.append(meta)
         return found
 
-    def _all_controller_classes(self) -> List[Any]:
+    def _all_controller_classes(self) -> list[Any]:
         """Get all controller classes from configured controllers module."""
         try:
             # Get controllers module path from configuration

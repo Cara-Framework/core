@@ -6,7 +6,7 @@ fire-and-forget work that should run *after* the response is sent
 adding a queue job for trivially-quick tasks::
 
     def list_products(request):
-        defer(lambda: log_search(request.query))   # runs after return
+        defer(lambda: log_search(request.query))  # runs after return
         return paginated_view(...)
 
 The runtime hook is provided by :func:`flush` — call it from the
@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Callable, List
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 _state = threading.local()
 
 
-def _queue() -> List[Callable[[], None]]:
+def _queue() -> list[Callable[[], None]]:
     if not hasattr(_state, "queue"):
         _state.queue = []
     return _state.queue

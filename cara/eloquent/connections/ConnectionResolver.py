@@ -22,8 +22,6 @@ the ORM suite; see ``tests/cara/eloquent/test_concurrent_transactions.py``.
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Dict
-
 
 # Per-context registry of "currently inside-transaction" connections.
 # Keyed by connection name (``"app"``, ``"mysql"``, …) so a single
@@ -31,12 +29,12 @@ from typing import Dict
 # simultaneously without them clobbering each other. The default is
 # ``None``; we lazily build the per-context dict on first write so
 # contexts that never touch a transaction don't pay the allocation.
-_ACTIVE_CONNECTIONS: "ContextVar[Dict[str, object] | None]" = ContextVar(
+_ACTIVE_CONNECTIONS: ContextVar[dict[str, object] | None] = ContextVar(
     "cara.eloquent.connection_resolver.active_connections", default=None
 )
 
 
-def _get_registry() -> Dict[str, object]:
+def _get_registry() -> dict[str, object]:
     """Return the current context's active-transaction dict, creating it on demand.
 
     ContextVar initializes lazily: child threads / asyncio tasks inherit
@@ -197,6 +195,7 @@ class ConnectionResolver:
             # Silent pass here previously hid connection leaks that
             # eventually starved the pool.
             import logging
+
             logging.getLogger("cara.database.pool").warning(
                 "Connection close failed (potential pool leak): %s", exc
             )
@@ -240,7 +239,7 @@ class ConnectionResolver:
     # context's registry so those callers keep working without being able to
     # mutate cross-context state.
     @property
-    def _active_connections(self) -> Dict[str, object]:
+    def _active_connections(self) -> dict[str, object]:
         return dict(_get_registry())
 
     def _get_active_connection(self, connection_name):

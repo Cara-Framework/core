@@ -12,10 +12,6 @@ covers every existing call site cleanly; we'll grow the surface only
 when an app actually needs configurable rules.
 """
 
-from typing import Optional
-
-
-
 # Common-password prefixes — lowercased. Match by prefix rather than
 # exact equality so trivial decorations ("password123", "qwerty!")
 # still get caught. Sourced from the SecLists "10k-most-common.txt"
@@ -24,13 +20,29 @@ from typing import Optional
 # laziest passwords, not to be a comprehensive denylist (entropy
 # checks already gate the rest).
 _COMMON_PASSWORD_PREFIXES = (
-    "password", "qwerty", "123456", "111111", "abc123", "letmein", "admin",
-    "welcome", "monkey", "dragon", "iloveyou", "sunshine", "princess",
-    "football", "baseball", "master", "trustno1", "1q2w3e4r", "changeme",
+    "password",
+    "qwerty",
+    "123456",
+    "111111",
+    "abc123",
+    "letmein",
+    "admin",
+    "welcome",
+    "monkey",
+    "dragon",
+    "iloveyou",
+    "sunshine",
+    "princess",
+    "football",
+    "baseball",
+    "master",
+    "trustno1",
+    "1q2w3e4r",
+    "changeme",
 )
 
 
-def check_password_strength(password: str) -> Optional[str]:
+def check_password_strength(password: str) -> str | None:
     """Return an error message if ``password`` is too weak, ``None`` otherwise.
 
     Unified policy used across every auth flow (register / reset /

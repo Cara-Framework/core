@@ -12,7 +12,8 @@ event loop should always use the ``_async`` versions.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Dict, Optional, Sequence, Union
+from collections.abc import Awaitable, Sequence
+from typing import Any, Union
 
 from cara.broadcasting.Channel import Channel
 from cara.broadcasting.contracts import ShouldBroadcast
@@ -25,11 +26,11 @@ ChannelLike = Union[str, Channel]
 # Async — preferred API.
 # ---------------------------------------------------------------------
 async def broadcast_async(
-    channels: Union[ChannelLike, Sequence[ChannelLike]],
+    channels: ChannelLike | Sequence[ChannelLike],
     event: str = "message",
-    data: Optional[Dict[str, Any]] = None,
+    data: dict[str, Any] | None = None,
     *,
-    except_socket_id: Optional[str] = None,
+    except_socket_id: str | None = None,
 ) -> None:
     """Fan out an ad-hoc event to one or more channels.
 
@@ -50,9 +51,9 @@ async def broadcast_event_async(event: ShouldBroadcast) -> None:
 async def broadcast_to_user_async(
     user_id: str,
     event: str = "message",
-    data: Optional[Dict[str, Any]] = None,
+    data: dict[str, Any] | None = None,
     *,
-    except_socket_id: Optional[str] = None,
+    except_socket_id: str | None = None,
 ) -> None:
     """Push an event to every (cross-process) connection of a user."""
     await Broadcast.broadcast_to_user(
@@ -69,7 +70,7 @@ async def broadcast_to_user_async(
 # down per-loop Redis pools that other callers in this thread may
 # still be using.
 # ---------------------------------------------------------------------
-def _run_or_schedule(coro: Awaitable[None]) -> Optional[asyncio.Task]:
+def _run_or_schedule(coro: Awaitable[None]) -> asyncio.Task | None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -80,12 +81,12 @@ def _run_or_schedule(coro: Awaitable[None]) -> Optional[asyncio.Task]:
 
 
 def broadcast(
-    channels: Union[ChannelLike, Sequence[ChannelLike]],
+    channels: ChannelLike | Sequence[ChannelLike],
     event: str = "message",
-    data: Optional[Dict[str, Any]] = None,
+    data: dict[str, Any] | None = None,
     *,
-    except_socket_id: Optional[str] = None,
-) -> Optional[asyncio.Task]:
+    except_socket_id: str | None = None,
+) -> asyncio.Task | None:
     """Sync entry-point — async callers should prefer ``broadcast_async``.
 
     Returns the scheduled ``asyncio.Task`` when invoked inside a
@@ -97,7 +98,7 @@ def broadcast(
     )
 
 
-def broadcast_event(event: ShouldBroadcast) -> Optional[asyncio.Task]:
+def broadcast_event(event: ShouldBroadcast) -> asyncio.Task | None:
     """Sync entry-point — async callers should prefer
     ``broadcast_event_async``."""
     return _run_or_schedule(broadcast_event_async(event))

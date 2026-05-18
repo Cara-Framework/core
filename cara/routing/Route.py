@@ -9,7 +9,7 @@ Mirrors Laravel-style syntax for HTTP and WebSocket routes with support for:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any
 
 from cara.http import Response
 from cara.routing import (
@@ -29,7 +29,7 @@ class Route:
     """
 
     # Default parameter compiler patterns - Laravel-compatible regex patterns
-    compilers: Dict[str, str] = {
+    compilers: dict[str, str] = {
         "int": r"(\d+)",
         "integer": r"(\d+)",
         "string": r"([a-zA-Z]+)",
@@ -42,16 +42,16 @@ class Route:
         "default": r"([^/]+)",
     }
 
-    controllers_locations: List[str] = []
+    controllers_locations: list[str] = []
 
     def __init__(
         self,
         url: str,
         controller: Any,
-        request_method: List[str],
-        name: Optional[str] = None,
-        compilers: Optional[Dict[str, str]] = None,
-        controllers_locations: Optional[List[str]] = None,
+        request_method: list[str],
+        name: str | None = None,
+        compilers: dict[str, str] | None = None,
+        controllers_locations: list[str] | None = None,
         **options: Any,
     ) -> None:
         """Initialize a new Route instance.
@@ -68,8 +68,8 @@ class Route:
         self.url = self._normalize_url(url)
         self.request_method = [m.lower() for m in request_method]
         self._name = name
-        self._middleware: List[str] = []
-        self._model_bindings: Dict[str, Type[Any]] = {}
+        self._middleware: list[str] = []
+        self._model_bindings: dict[str, type[Any]] = {}
         self.compiler = RouteCompiler(self.url, compilers or Route.compilers)
         self.controller = RouteResolver(
             controller,
@@ -80,7 +80,7 @@ class Route:
         """String representation of the route."""
         return f"<Route [{self._name}]: {self.url}>"
 
-    def get_name(self) -> Optional[str]:
+    def get_name(self) -> str | None:
         """Get the route name.
 
         Returns:
@@ -88,7 +88,7 @@ class Route:
         """
         return self._name
 
-    def name(self, name: str) -> "Route":
+    def name(self, name: str) -> Route:
         """Set the route name.
 
         Args:
@@ -100,7 +100,7 @@ class Route:
         self._name = name
         return self
 
-    def model(self, param: str, model_class: Type[Any]) -> "Route":
+    def model(self, param: str, model_class: type[Any]) -> Route:
         """Register implicit route model binding.
 
         Args:
@@ -113,7 +113,7 @@ class Route:
         self._model_bindings[param] = model_class
         return self
 
-    def get_model_bindings(self) -> Dict[str, Type[Any]]:
+    def get_model_bindings(self) -> dict[str, type[Any]]:
         """Get all model bindings for this route.
 
         Returns:
@@ -132,13 +132,13 @@ class Route:
         """
         return "/" + "/".join(filter(None, url.split("/")))
 
-    def extract_parameters(self, path: str) -> Dict[str, Any]:
+    def extract_parameters(self, path: str) -> dict[str, Any]:
         return self.compiler.extract_parameters(path)
 
-    def set_params(self, params: Dict[str, Any]):
+    def set_params(self, params: dict[str, Any]):
         self._params = params
 
-    def get_params(self) -> Dict[str, Any]:
+    def get_params(self) -> dict[str, Any]:
         return getattr(self, "_params", {})
 
     def set_params_from_path(self, path: str) -> dict:
@@ -146,14 +146,14 @@ class Route:
         self.set_params(params)
         return params
 
-    def middleware(self, middleware: str | List[str]) -> "Route":
+    def middleware(self, middleware: str | list[str]) -> Route:
         if isinstance(middleware, list):
             self._middleware.extend(middleware)
         else:
             self._middleware.append(middleware)
         return self
 
-    def prepend_middleware(self, middleware: str | List[str]) -> "Route":
+    def prepend_middleware(self, middleware: str | list[str]) -> Route:
         """Prepend middleware so it runs BEFORE the route's existing
         chain. Used by ``Route.group`` to apply group middleware
         outer-to-inner — Laravel runs group middleware first so a
@@ -167,7 +167,7 @@ class Route:
             self._middleware = [middleware] + self._middleware
         return self
 
-    def get_middleware(self) -> List[str]:
+    def get_middleware(self) -> list[str]:
         return self._middleware
 
     def matches(self, path: str, method: str) -> bool:
@@ -193,7 +193,7 @@ class Route:
             if param_name in params:
                 try:
                     # Resolve model using find() method if available
-                    if hasattr(model_class, 'find'):
+                    if hasattr(model_class, "find"):
                         params[param_name] = model_class.find(params[param_name])
                 except Exception:
                     # Keep original value if model resolution fails
@@ -217,7 +217,7 @@ class Route:
 
     def _convert_parameter_type(
         self, param_name: str, param_value: str
-    ) -> Union[int, bool, str]:
+    ) -> int | bool | str:
         """Convert route parameter to appropriate type based on its compiler type.
 
         Uses the ``param_types`` map populated during route compilation so
@@ -242,14 +242,14 @@ class Route:
         if compiler_type in ("int", "integer"):
             try:
                 return int(param_value)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 return param_value
         elif compiler_type == "bool":
             return param_value.lower() in ("true", "1")
         elif compiler_type == "float":
             try:
                 return float(param_value)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 return param_value
 
         return param_value
@@ -259,9 +259,9 @@ class Route:
         cls,
         url: str,
         controller: Any,
-        request_method: List[str],
+        request_method: list[str],
         **options,
-    ) -> "Route":
+    ) -> Route:
         name = options.pop("name", None)
         prefix = options.pop("prefix", None)
         if prefix:
@@ -277,32 +277,32 @@ class Route:
         )
 
     @classmethod
-    def get(cls, url: str, controller: Any, **options) -> "Route":
+    def get(cls, url: str, controller: Any, **options) -> Route:
         """Create a GET route."""
         return cls.factory(url, controller, ["get", "head"], **options)
 
     @classmethod
-    def post(cls, url: str, controller: Any, **options) -> "Route":
+    def post(cls, url: str, controller: Any, **options) -> Route:
         """Create a POST route."""
         return cls.factory(url, controller, ["post"], **options)
 
     @classmethod
-    def put(cls, url: str, controller: Any, **options) -> "Route":
+    def put(cls, url: str, controller: Any, **options) -> Route:
         """Create a PUT route."""
         return cls.factory(url, controller, ["put"], **options)
 
     @classmethod
-    def patch(cls, url: str, controller: Any, **options) -> "Route":
+    def patch(cls, url: str, controller: Any, **options) -> Route:
         """Create a PATCH route."""
         return cls.factory(url, controller, ["patch"], **options)
 
     @classmethod
-    def delete(cls, url: str, controller: Any, **options) -> "Route":
+    def delete(cls, url: str, controller: Any, **options) -> Route:
         """Create a DELETE route."""
         return cls.factory(url, controller, ["delete"], **options)
 
     @classmethod
-    def ws(cls, url: str, controller: Any, **options) -> "Route":
+    def ws(cls, url: str, controller: Any, **options) -> Route:
         """
         Create a WebSocket route.
 
@@ -311,12 +311,12 @@ class Route:
         return cls.factory(url, controller, ["ws"], **options)
 
     @classmethod
-    def options(cls, url: str, controller: Any, **options) -> "Route":
+    def options(cls, url: str, controller: Any, **options) -> Route:
         """Create an OPTIONS route."""
         return cls.factory(url, controller, ["options"], **options)
 
     @classmethod
-    def any(cls, url: str, controller: Any, **options) -> "Route":
+    def any(cls, url: str, controller: Any, **options) -> Route:
         """Create a route matching any HTTP verb."""
         return cls.factory(
             url,
@@ -332,9 +332,9 @@ class Route:
         controller: Any,
         param: str = "id",
         param_type: str = "int",
-        only: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
-    ) -> List["Route"]:
+        only: list[str] | None = None,
+        exclude: list[str] | None = None,
+    ) -> list[Route]:
         """Laravel-style ``apiResource``.
 
         Auto-registers the standard REST actions on ``controller``:
@@ -359,7 +359,7 @@ class Route:
 
         base = cls._join_paths(base)
         param_segment = f"/@{param}:{param_type}" if param_type else f"/@{param}"
-        routes: List[Route] = []
+        routes: list[Route] = []
 
         if "index" in actions:
             routes.append(cls.get(base, f"{controller}@index"))
@@ -380,7 +380,7 @@ class Route:
         base: str,
         controller: Any,
         **kwargs,
-    ) -> List["Route"]:
+    ) -> list[Route]:
         """Alias for :meth:`api_resource` (Laravel uses ``resource`` for
         web-side routes; for API-only apps the semantics are identical)."""
         return cls.api_resource(base, controller, **kwargs)
@@ -393,7 +393,7 @@ class Route:
         return "/" + "/".join(segments)
 
     @classmethod
-    def group(cls, *routes: "Route", **options) -> List["Route"]:
+    def group(cls, *routes: Route, **options) -> list[Route]:
         """Group multiple routes under a shared prefix and/or middleware.
 
         Two correctness fixes vs. the previous implementation:
@@ -415,7 +415,7 @@ class Route:
            the URL is recompiled idempotently regardless of whether
            it already starts with the prefix.
         """
-        inner: List[Route] = []
+        inner: list[Route] = []
         prefix = options.get("prefix")
         name_prefix = options.get("name")
         group_middleware = options.get("middleware")
@@ -440,12 +440,12 @@ class Route:
         return inner
 
     @classmethod
-    def set_controller_locations(cls, *controllers_locations: str) -> "Route":
+    def set_controller_locations(cls, *controllers_locations: str) -> Route:
         cls.controllers_locations = list(controllers_locations)
         return cls
 
     @classmethod
-    def compile(cls, key: str, to: str = "") -> "Route":
+    def compile(cls, key: str, to: str = "") -> Route:
         cls.compilers.update({key: to})
         # Get the pattern for this compiler type
         pattern = cls.compilers.get(to, to)
@@ -454,7 +454,7 @@ class Route:
         return cls
 
     @classmethod
-    def validate(cls, parameter: str, rules: str) -> "Route":
+    def validate(cls, parameter: str, rules: str) -> Route:
         """Set validation rules for a route parameter."""
         RouteParameterValidator.set_validation_rules(parameter, rules)
         return cls
@@ -464,7 +464,7 @@ class Route:
         return RouteGroup(prefix=prefix)
 
     @classmethod
-    def routes(cls, *routes: "Route") -> List["Route"]:
+    def routes(cls, *routes: Route) -> list[Route]:
         return list(flatten(routes))
 
     def is_ws(self) -> bool:

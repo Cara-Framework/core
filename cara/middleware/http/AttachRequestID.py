@@ -5,7 +5,7 @@ This module provides middleware that attaches a unique request ID to each HTTP r
 traceability.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from cara.context import ExecutionContext
 from cara.http import Request
@@ -42,6 +42,7 @@ class AttachRequestID(Middleware):
         # to correlate a user-reported incident to the Sentry event.
         try:
             from cara.observability.Sentry import set_request_tag
+
             set_request_tag("request_id", request.request_id)
         except Exception:
             pass

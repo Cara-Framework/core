@@ -4,8 +4,6 @@ Serializer Factory - Creates appropriate serializer based on config.
 Generic factory pattern for pluggable serialization.
 """
 
-from typing import Union, Optional
-
 from .serializers import JsonJobSerializer, PickleJobSerializer
 
 
@@ -24,8 +22,8 @@ class SerializerFactory:
 
     @classmethod
     def create(
-        cls, serializer_type: Optional[str] = None
-    ) -> Union[JsonJobSerializer, PickleJobSerializer]:
+        cls, serializer_type: str | None = None
+    ) -> JsonJobSerializer | PickleJobSerializer:
         """
         Create serializer instance based on type.
 
@@ -59,6 +57,6 @@ class SerializerFactory:
             import config.queue as queue_config
 
             return queue_config.JOB_SERIALIZER
-        except (ImportError, AttributeError):
+        except ImportError, AttributeError:
             # Default to JSON (modern, secure, enforces clean architecture)
             return "json"

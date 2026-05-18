@@ -13,7 +13,8 @@ the canonical set.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 from .Filter import Filter
 
@@ -22,9 +23,9 @@ class FilterSet:
     """An ordered, name-unique bundle of ``Filter`` instances."""
 
     def __init__(self, filters: Iterable[Filter]) -> None:
-        self._filters: List[Filter] = list(filters)
+        self._filters: list[Filter] = list(filters)
 
-        seen: Dict[str, Filter] = {}
+        seen: dict[str, Filter] = {}
         for f in self._filters:
             if not f.name:
                 raise ValueError(
@@ -37,7 +38,7 @@ class FilterSet:
                     f"{f.__class__.__name__})"
                 )
             seen[f.name] = f
-        self._by_name: Dict[str, Filter] = seen
+        self._by_name: dict[str, Filter] = seen
 
     # ── Introspection ───────────────────────────────────────────────
 
@@ -54,13 +55,13 @@ class FilterSet:
         """Return the named filter or raise ``KeyError``."""
         return self._by_name[name]
 
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         """Filter names in declaration order."""
         return [f.name for f in self._filters]
 
     # ── Composition ────────────────────────────────────────────────
 
-    def with_(self, *filters: Filter) -> "FilterSet":
+    def with_(self, *filters: Filter) -> FilterSet:
         """Return a new set with extra filters appended.
 
         Caller can override an existing filter by passing one with
@@ -69,13 +70,13 @@ class FilterSet:
         (e.g. an admin endpoint that wants a stricter price range).
         """
         replaced = {f.name: f for f in filters}
-        merged: List[Filter] = []
+        merged: list[Filter] = []
         for existing in self._filters:
             merged.append(replaced.pop(existing.name, existing))
         merged.extend(replaced.values())
         return FilterSet(merged)
 
-    def without(self, *names: str) -> "FilterSet":
+    def without(self, *names: str) -> FilterSet:
         """Return a new set with the named filters removed.
 
         Used for self-skip facet queries — when computing options
@@ -88,7 +89,7 @@ class FilterSet:
 
     # ── Parsing & validation ───────────────────────────────────────
 
-    def validation_rules(self) -> Dict[str, str]:
+    def validation_rules(self) -> dict[str, str]:
         """Merged Cara validation rules for every filter in the set.
 
         Caller wires this into a FormRequest's ``rules()`` so the
@@ -96,7 +97,7 @@ class FilterSet:
         no opportunity for a typo (``attributes_raw`` vs
         ``attributes``) to silently no-op a filter.
         """
-        merged: Dict[str, str] = {}
+        merged: dict[str, str] = {}
         for f in self._filters:
             for key, rule in f.validation_rules().items():
                 if key in merged:
@@ -107,7 +108,7 @@ class FilterSet:
                 merged[key] = rule
         return merged
 
-    def parse(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def parse(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Extract the canonical value for each filter that has one.
 
         Returns ``{filter_name: canonical_value}`` for active filters
@@ -115,7 +116,7 @@ class FilterSet:
         the returned dict — that's how downstream consumers
         (where_clauses, cache_key) skip them uniformly.
         """
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for f in self._filters:
             value = f.parse(payload or {})
             if value is None:
@@ -127,17 +128,17 @@ class FilterSet:
 
     def where_clauses(
         self,
-        parsed: Dict[str, Any],
+        parsed: dict[str, Any],
         *,
         ctx: Any = None,
-    ) -> Tuple[List[str], List[Any]]:
+    ) -> tuple[list[str], list[Any]]:
         """Return ``(sqls, params)`` lists for joining with ``AND``.
 
         ``parsed`` is the dict returned by ``parse()``. Filters not
         in ``parsed`` are skipped — the inactive-filter contract.
         """
-        sqls: List[str] = []
-        params: List[Any] = []
+        sqls: list[str] = []
+        params: list[Any] = []
         for f in self._filters:
             value = parsed.get(f.name)
             if value is None:
@@ -152,7 +153,7 @@ class FilterSet:
     def apply_to_builder(
         self,
         builder: Any,
-        parsed: Dict[str, Any],
+        parsed: dict[str, Any],
         *,
         ctx: Any = None,
     ) -> Any:
@@ -173,7 +174,7 @@ class FilterSet:
 
     # ── Cache identity ─────────────────────────────────────────────
 
-    def cache_key(self, parsed: Dict[str, Any]) -> str:
+    def cache_key(self, parsed: dict[str, Any]) -> str:
         """Deterministic, content-addressed key fragment.
 
         Two filter parses that differ only in payload-key insertion
@@ -181,18 +182,14 @@ class FilterSet:
         hit doesn't depend on which order the storefront serialised
         its query string.
         """
-        parts = [
-            f.cache_key(parsed[f.name])
-            for f in self._filters
-            if f.name in parsed
-        ]
+        parts = [f.cache_key(parsed[f.name]) for f in self._filters if f.name in parsed]
         if not parts:
             return "no_filters"
         return "|".join(sorted(parts))
 
     # ── URL codec ──────────────────────────────────────────────────
 
-    def encode(self, parsed: Dict[str, Any]) -> Dict[str, str]:
+    def encode(self, parsed: dict[str, Any]) -> dict[str, str]:
         """Render the parsed state back to query-string-friendly params.
 
         Returns ``{payload_key: string}`` ready to be passed to
@@ -206,7 +203,7 @@ class FilterSet:
         through URLs (shared links, bookmarks, deep-linked wizard
         steps).
         """
-        out: Dict[str, str] = {}
+        out: dict[str, str] = {}
         for f in self._filters:
             if f.name not in parsed:
                 continue
@@ -216,7 +213,7 @@ class FilterSet:
                 out[key] = encoded
         return out
 
-    def decode(self, query: Dict[str, Any]) -> Dict[str, Any]:
+    def decode(self, query: dict[str, Any]) -> dict[str, Any]:
         """Parse a raw query-string dict back into canonical parsed form.
 
         Convenience alias for ``parse`` named to mirror ``encode``.
@@ -228,7 +225,7 @@ class FilterSet:
 
     # ── Introspection / wizard schema ───────────────────────────────
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """JSON-serialisable spec for the entire set.
 
         Frontend wizards / docs generators consume this to render
@@ -249,8 +246,8 @@ class FilterSet:
         filter set in declaration order — frontends use it to order
         the wizard steps.
         """
-        descriptions: List[Dict[str, Any]] = [f.describe() for f in self._filters]
-        groups: List[str] = []
+        descriptions: list[dict[str, Any]] = [f.describe() for f in self._filters]
+        groups: list[str] = []
         seen: set = set()
         for d in descriptions:
             g = d.get("group")

@@ -6,7 +6,7 @@ failure handling. Includes automatic serialization support and job cancellation.
 """
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 from cara.queues.JobStateManager import get_job_state_manager
 
@@ -30,32 +30,32 @@ class PendingDispatch:
         self._connection = None
         self._routing_key = None
         self._use_exchange = False
-        self._exchange_name: Optional[str] = None
+        self._exchange_name: str | None = None
         # Idempotency guard — __del__ must not redispatch or raise during GC.
         self._dispatched = False
 
-    def onQueue(self, queue: str) -> "PendingDispatch":
+    def onQueue(self, queue: str) -> PendingDispatch:
         """Set the queue name (Laravel naming convention)."""
         self._queue_name = queue
         if hasattr(self.job, "queue"):
             self.job.queue = queue
         return self
 
-    def on_queue(self, queue: str) -> "PendingDispatch":
+    def on_queue(self, queue: str) -> PendingDispatch:
         """Python naming alias for onQueue."""
         return self.onQueue(queue)
 
-    def delay(self, seconds: int) -> "PendingDispatch":
+    def delay(self, seconds: int) -> PendingDispatch:
         """Set delay in seconds."""
         self._delay = seconds
         return self
 
-    def onConnection(self, connection: str) -> "PendingDispatch":
+    def onConnection(self, connection: str) -> PendingDispatch:
         """Set connection (Laravel naming)."""
         self._connection = connection
         return self
 
-    def withRoutingKey(self, routing_key: str) -> "PendingDispatch":
+    def withRoutingKey(self, routing_key: str) -> PendingDispatch:
         """
         Set routing key for topic exchange dispatch.
 
@@ -69,11 +69,11 @@ class PendingDispatch:
         self._use_exchange = True
         return self
 
-    def with_routing_key(self, routing_key: str) -> "PendingDispatch":
+    def with_routing_key(self, routing_key: str) -> PendingDispatch:
         """Python naming alias for withRoutingKey."""
         return self.withRoutingKey(routing_key)
 
-    def toExchange(self, exchange_name: Optional[str] = None) -> "PendingDispatch":
+    def toExchange(self, exchange_name: str | None = None) -> PendingDispatch:
         """
         Force dispatch to specific exchange.
 
@@ -85,7 +85,7 @@ class PendingDispatch:
         self._use_exchange = True
         return self
 
-    def to_exchange(self, exchange_name: Optional[str] = None) -> "PendingDispatch":
+    def to_exchange(self, exchange_name: str | None = None) -> PendingDispatch:
         """Python naming alias for toExchange."""
         return self.toExchange(exchange_name)
 
@@ -194,17 +194,17 @@ class Queueable(SerializesModels, CancellableJob):
     def __init__(self, *args, **kwargs):
         """Initialize queueable job."""
         super().__init__()  # CancellableJob.__init__() handles its own initialization
-        self.job_tracking_id: Optional[str] = None
+        self.job_tracking_id: str | None = None
         self._job_state_manager = get_job_state_manager()
-        self._job_tracker: Optional[Any] = None  # Lazy-loaded from container
-        self._db_job_id: Optional[int] = None  # Database job ID for unified tracking
+        self._job_tracker: Any | None = None  # Lazy-loaded from container
+        self._db_job_id: int | None = None  # Database job ID for unified tracking
 
         # Laravel-style properties
         self.queue = "default"
         self.delay = None
         self.connection = None
 
-    def set_tracking_id(self, tracking_id: str) -> "Queueable":
+    def set_tracking_id(self, tracking_id: str) -> Queueable:
         """
         Set job tracking ID for cancellation management.
 

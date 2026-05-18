@@ -16,8 +16,8 @@ Usage:
 import asyncio
 import threading
 import time
-from typing import Any, Callable, Optional
-
+from collections.abc import Callable
+from typing import Any
 
 _rate_buckets: dict = {}
 _rate_lock = threading.Lock()
@@ -75,7 +75,9 @@ async def _call_next(next_fn: Callable, job) -> Any:
 class RateLimited:
     """Skip execution when more than ``max_attempts`` runs happen in ``decay_seconds``."""
 
-    def __init__(self, max_attempts: int = 60, decay_seconds: int = 60, key: Optional[str] = None):
+    def __init__(
+        self, max_attempts: int = 60, decay_seconds: int = 60, key: str | None = None
+    ):
         self.max_attempts = max_attempts
         self.decay_seconds = decay_seconds
         self.key = key
@@ -135,7 +137,7 @@ class WithoutOverlapping:
 
     REDIS_KEY_PREFIX = "cara:overlap:"
 
-    def __init__(self, key: Optional[str] = None, expire_after: int = 300):
+    def __init__(self, key: str | None = None, expire_after: int = 300):
         self.key = key
         self.expire_after = expire_after
 

@@ -4,7 +4,8 @@ Provides Laravel-style dependency injection by analyzing method signatures and a
 """
 
 import inspect
-from typing import Any, Callable, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from cara.exceptions import (
     ControllerMethodNotFoundException,
@@ -22,7 +23,7 @@ class RouteResolver:
     def __init__(
         self,
         handler: Any,
-        controller_paths: Optional[List[str]] = None,
+        controller_paths: list[str] | None = None,
         container: Any = None,  # container may be None at route‐registration time
     ) -> None:
         """
@@ -36,8 +37,8 @@ class RouteResolver:
         """
         self._controller_paths = controller_paths
         self._container = container  # store container (may be None for now)
-        self._route_handler: Optional[Callable] = None
-        self._handler_signature: Optional[inspect.Signature] = None
+        self._route_handler: Callable | None = None
+        self._handler_signature: inspect.Signature | None = None
         self._controller_class = None
         self._controller_method_name = None
 
@@ -51,7 +52,7 @@ class RouteResolver:
         try:
             # Try normal signature first
             return inspect.signature(callable_obj)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # Handle builtin type annotation issues
             from typing import get_type_hints
 
@@ -68,7 +69,7 @@ class RouteResolver:
                 type_hints = {}
                 try:
                     type_hints = get_type_hints(callable_obj)
-                except (NameError, AttributeError, TypeError):
+                except NameError, AttributeError, TypeError:
                     # If type hints fail, try to get them from annotations
                     if hasattr(callable_obj, "__annotations__"):
                         type_hints = callable_obj.__annotations__
@@ -116,7 +117,7 @@ class RouteResolver:
         # Get constructor signature
         try:
             sig = inspect.signature(controller_class.__init__)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # No signature available, instantiate without args
             return controller_class()
 
@@ -124,7 +125,7 @@ class RouteResolver:
         params = {}
         for param_name, param in sig.parameters.items():
             # Skip 'self'
-            if param_name == 'self':
+            if param_name == "self":
                 continue
 
             # Get type annotation
@@ -215,7 +216,7 @@ class RouteResolver:
             else:
                 # For other types, try direct conversion
                 return expected_type(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # If conversion fails, return original value
             return value
 
@@ -245,7 +246,7 @@ class RouteResolver:
                 self._route_handler = instance.__call__
                 self._handler_signature = self._safe_signature(self._route_handler)
             elif hasattr(instance, "index"):
-                self._route_handler = getattr(instance, "index")
+                self._route_handler = instance.index
                 self._handler_signature = self._safe_signature(self._route_handler)
             else:
                 raise RuntimeError(f"Cannot resolve handler from class: {handler}")
@@ -322,7 +323,7 @@ class RouteResolver:
 
             self._handler_signature = self._safe_signature(method)
 
-        except (ControllerMethodNotFoundException, RouteRegistrationException):
+        except ControllerMethodNotFoundException, RouteRegistrationException:
             # Re-raise our custom exceptions
             raise
         except Exception as e:
@@ -440,10 +441,10 @@ class RouteResolver:
     async def handle(self, context: Any) -> Any:
         """
         Resolves dependencies and executes the route handler for any supported context.
-        
+
         Args:
             context: HTTP (Request, Response) or WS (Socket, dict) context
-        
+
         Returns:
             Handler result (automatically awaited if async)
         """

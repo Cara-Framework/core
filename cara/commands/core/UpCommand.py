@@ -7,7 +7,7 @@ This module provides a CLI command to disable maintenance mode with enhanced UX.
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -66,7 +66,7 @@ class UpCommand(CommandBase):
 
         return True
 
-    def _show_dry_run(self, maintenance_info: Optional[Dict[str, Any]]) -> None:
+    def _show_dry_run(self, maintenance_info: dict[str, Any] | None) -> None:
         """Show current maintenance status in dry run mode."""
         self.info("🔍 DRY RUN MODE - No changes will be made")
         self.info("📋 Current maintenance mode status:")
@@ -103,7 +103,7 @@ class UpCommand(CommandBase):
 
         return False
 
-    def _deactivate_maintenance(self, maintenance_info: Optional[Dict[str, Any]]) -> None:
+    def _deactivate_maintenance(self, maintenance_info: dict[str, Any] | None) -> None:
         """Deactivate maintenance mode."""
         self.info("📋 Current maintenance configuration:")
 
@@ -139,7 +139,7 @@ class UpCommand(CommandBase):
         """Check if maintenance mode is currently active."""
         return self.maintenance_file.exists()
 
-    def _get_maintenance_info(self) -> Optional[Dict[str, Any]]:
+    def _get_maintenance_info(self) -> dict[str, Any] | None:
         """Get current maintenance configuration."""
         if not self._is_maintenance_active():
             return None
@@ -147,7 +147,7 @@ class UpCommand(CommandBase):
         try:
             with open(self.maintenance_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, Exception):
+        except json.JSONDecodeError, Exception:
             # Fallback for simple text files
             return {
                 "message": "Application is in maintenance mode",
@@ -166,6 +166,7 @@ class UpCommand(CommandBase):
         """Check if running in production environment."""
         try:
             from cara.configuration import config
+
             env = str(config("app.ENV", "")).lower()
         except Exception:
             env = os.getenv("APP_ENV", "").lower()

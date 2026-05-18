@@ -5,7 +5,7 @@ This class eliminates code repetition across Mail, Notification, Job
 and other queueable classes by providing common functionality.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .Queueable import Queueable
 from .ShouldQueue import ShouldQueue
@@ -24,7 +24,7 @@ class BaseQueueable(Queueable, ShouldQueue):
 
     # Default queue settings
     default_queue: str = "default"
-    default_delay: Optional[int] = None
+    default_delay: int | None = None
     default_retry_attempts: int = 3
 
     def __init__(self, *args, **kwargs):
@@ -54,22 +54,22 @@ class BaseQueueable(Queueable, ShouldQueue):
         """Set the queue name for this job."""
         self._queue_name = name
 
-    def delay(self, seconds: int) -> "BaseQueueable":
+    def delay(self, seconds: int) -> BaseQueueable:
         """Delay the job execution by specified seconds."""
         self._delay = seconds
         self._chained = True
         return self
 
-    def attempts(self, count: int) -> "BaseQueueable":
+    def attempts(self, count: int) -> BaseQueueable:
         """Set the number of retry attempts."""
         self._retry_attempts = count
         self._chained = True
         return self
 
-    def on_queue(self, queue: str) -> "BaseQueueable":
+    def on_queue(self, queue: str) -> BaseQueueable:
         """
         Set the queue for this job and auto-dispatch (Laravel pattern).
-        
+
         In Laravel, method chaining automatically queues the job.
         This maintains the same behavior.
         """
@@ -87,18 +87,21 @@ class BaseQueueable(Queueable, ShouldQueue):
 
         try:
             from cara.facades import Queue
+
             Queue.push(self)
         except Exception as e:
             # Fallback to sync execution if queue fails
             try:
                 from cara.facades import Log
+
                 Log.warning(f"Queue failed, running synchronously: {str(e)}")
             except ImportError:
                 pass
 
             # Run synchronously as fallback
-            if hasattr(self, 'handle'):
+            if hasattr(self, "handle"):
                 import asyncio
+
                 result = self.handle()
                 if asyncio.iscoroutine(result):
                     # Async handle in sync fallback — run via event loop
@@ -137,7 +140,7 @@ class BaseQueueable(Queueable, ShouldQueue):
         # Default fallback
         return class_name
 
-    def get_queue_options(self) -> Dict[str, Any]:
+    def get_queue_options(self) -> dict[str, Any]:
         """Get queue configuration options."""
         options = {
             "queue": self.queue_name,

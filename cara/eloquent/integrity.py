@@ -20,10 +20,7 @@ Generic — no domain assumptions. Apps pass their own constraint /
 column names; the helper just knows the Postgres error shape.
 """
 
-from typing import Optional
-
 import psycopg2
-
 
 # Postgres error code for ``unique_violation`` — the only kind of
 # IntegrityError these helpers care about. Other 23xxx codes
@@ -35,8 +32,8 @@ _PG_UNIQUE_VIOLATION = "23505"
 def is_unique_violation(
     exc: Exception,
     *,
-    constraint: Optional[str] = None,
-    column: Optional[str] = None,
+    constraint: str | None = None,
+    column: str | None = None,
 ) -> bool:
     """Return True if ``exc`` is a Postgres unique-constraint violation.
 

@@ -47,7 +47,9 @@ class PostgresConnection(BaseConnection):
 
         self.prefix = prefix
         self.full_details = full_details or {}
-        self.connection_pool_size = self.full_details.get("connection_pooling_max_size", 100)
+        self.connection_pool_size = self.full_details.get(
+            "connection_pooling_max_size", 100
+        )
         self.options = options or {}
         self._cursor = None
         self.transaction_level = 0
@@ -109,7 +111,7 @@ class PostgresConnection(BaseConnection):
         if connect_timeout is not None:
             try:
                 kw["connect_timeout"] = int(connect_timeout)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 pass
 
         # ``server_settings`` is the asyncpg-style nested dict for GUCs
@@ -156,6 +158,7 @@ class PostgresConnection(BaseConnection):
             min_size = self.full_details.get("connection_pooling_min_size", 0)
             if min_size:
                 import psycopg2
+
                 for _ in range(min_size):
                     try:
                         conn = psycopg2.connect(**self._connect_kwargs())
@@ -225,8 +228,11 @@ class PostgresConnection(BaseConnection):
                 return psycopg2.connect(**self._connect_kwargs())
             except psycopg2.OperationalError as e:
                 last_err = e
-                if "too many clients" in str(e) and attempt < self._MAX_CONNECT_RETRIES - 1:
-                    wait = self._RETRY_BACKOFF_BASE * (2 ** attempt)
+                if (
+                    "too many clients" in str(e)
+                    and attempt < self._MAX_CONNECT_RETRIES - 1
+                ):
+                    wait = self._RETRY_BACKOFF_BASE * (2**attempt)
                     time.sleep(wait)
                     continue
                 raise
@@ -260,7 +266,10 @@ class PostgresConnection(BaseConnection):
 
     def close_connection(self):
         if self._connection is None:
-            if getattr(self, "_pool_slot_acquired", False) and _pool_semaphore is not None:
+            if (
+                getattr(self, "_pool_slot_acquired", False)
+                and _pool_semaphore is not None
+            ):
                 _pool_semaphore.release()
                 self._pool_slot_acquired = False
             return
@@ -286,7 +295,10 @@ class PostgresConnection(BaseConnection):
                     except Exception:
                         pass
 
-            if getattr(self, "_pool_slot_acquired", False) and _pool_semaphore is not None:
+            if (
+                getattr(self, "_pool_slot_acquired", False)
+                and _pool_semaphore is not None
+            ):
                 _pool_semaphore.release()
                 self._pool_slot_acquired = False
         else:
@@ -423,7 +435,10 @@ class PostgresConnection(BaseConnection):
                     # "SELECT N" even though it yields no rowset, which would
                     # previously blow up in `fetchall()` with "no results to
                     # fetch". Guarding on description keeps the behaviour safe.
-                    if "SELECT" in cursor.statusmessage and cursor.description is not None:
+                    if (
+                        "SELECT" in cursor.statusmessage
+                        and cursor.description is not None
+                    ):
                         return cursor.fetchall()
                     return {}
         except Exception as e:

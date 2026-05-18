@@ -6,7 +6,7 @@ Immediate asynchronous execution without queuing.
 
 import asyncio
 import uuid
-from typing import Any, Dict, List, Union
+from typing import Any
 
 from cara.exceptions import QueueException
 from cara.queues.contracts.Queue import Queue
@@ -19,7 +19,7 @@ class AsyncDriver(HasColoredOutput, Queue):
     # only weakly tracks tasks in the loop registry; without a strong
     # reference the GC can collect mid-flight tasks. Tasks remove
     # themselves from this set on completion.
-    _pending_tasks: "set[asyncio.Task]" = set()
+    _pending_tasks: set[asyncio.Task] = set()
 
     @classmethod
     def _track(cls, task: asyncio.Task) -> None:
@@ -38,11 +38,11 @@ class AsyncDriver(HasColoredOutput, Queue):
 
     driver_name = "async"
 
-    def __init__(self, application, options: Dict[str, Any]):
+    def __init__(self, application, options: dict[str, Any]):
         self.application = application
         self.options = options
 
-    def push(self, *jobs: Any, options: Dict[str, Any]) -> Union[str, List[str]]:
+    def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Execute jobs immediately and return job ID(s) for tracking."""
         merged_opts = {**self.options, **options}
         job_ids = []
@@ -57,28 +57,28 @@ class AsyncDriver(HasColoredOutput, Queue):
 
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
-    def batch(self, *jobs: Any, options: Dict[str, Any]) -> None:
+    def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
         """Batch execution: execute all jobs immediately."""
         self.push(*jobs, options=options)
 
-    def chain(self, jobs: list, options: Dict[str, Any]) -> None:
+    def chain(self, jobs: list, options: dict[str, Any]) -> None:
         """Chain execution: execute jobs in sequence."""
         for job in jobs:
             self.push(job, options=options)
 
-    def schedule(self, job: Any, when: Any, options: Dict[str, Any]) -> None:
+    def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> None:
         """Scheduling not supported; runs immediately."""
         self.push(job, options=options)
 
-    def consume(self, options: Dict[str, Any]) -> None:
+    def consume(self, options: dict[str, Any]) -> None:
         """Consume not supported for async driver."""
         raise QueueException("AsyncDriver.consume() not supported.")
 
-    def retry(self, options: Dict[str, Any]) -> None:
+    def retry(self, options: dict[str, Any]) -> None:
         """Retry not supported for async driver."""
         raise QueueException("AsyncDriver.retry() not supported.")
 
-    def _execute_job(self, job: Any, options: Dict[str, Any], job_id: str):
+    def _execute_job(self, job: Any, options: dict[str, Any], job_id: str):
         """Execute a single job immediately."""
         try:
             callback = options.get("callback", "handle")
@@ -97,9 +97,11 @@ class AsyncDriver(HasColoredOutput, Queue):
             # docstring on ``_track``.
             if asyncio.iscoroutinefunction(method_to_call):
                 if hasattr(self.application, "call"):
-                    AsyncDriver._track(asyncio.create_task(
-                        self.application.call(method_to_call, *init_args)
-                    ))
+                    AsyncDriver._track(
+                        asyncio.create_task(
+                            self.application.call(method_to_call, *init_args)
+                        )
+                    )
                 else:
                     AsyncDriver._track(asyncio.create_task(method_to_call(*init_args)))
             else:

@@ -17,23 +17,26 @@ class HasColoredOutput:
     def success(self, message):
         try:
             from cara.facades import Log
+
             Log.info(message)
         except Exception:
-            print("\033[92m {0} \033[0m".format(message))
+            print(f"\033[92m {message} \033[0m")
 
     def warning(self, message):
         try:
             from cara.facades import Log
+
             Log.warning(message)
         except Exception:
-            print("\033[93m {0} \033[0m".format(message))
+            print(f"\033[93m {message} \033[0m")
 
     def danger(self, message):
         try:
             from cara.facades import Log
+
             Log.error(message)
         except Exception:
-            print("\033[91m {0} \033[0m".format(message))
+            print(f"\033[91m {message} \033[0m")
 
     def info(self, message):
         return self.success(message)

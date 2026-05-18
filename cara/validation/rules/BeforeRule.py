@@ -1,5 +1,6 @@
 """Before-date rule. Usage: ``before:2030-01-01`` or ``before:other_field``."""
-from typing import Any, Dict
+
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -7,7 +8,7 @@ from cara.validation.rules.DateRule import _parse_date
 
 
 class BeforeRule(BaseRule):
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         target = params.get("before")
         if not target or value is None:
             return False
@@ -18,6 +19,6 @@ class BeforeRule(BaseRule):
             return False
         return v < compare
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
         return f"The {attr.lower()} must be a date before {params.get('before', '')}."

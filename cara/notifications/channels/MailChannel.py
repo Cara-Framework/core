@@ -5,8 +5,6 @@ This module provides email notification channel functionality,
 integrating with Cara's mail system.
 """
 
-from typing import Optional
-
 from cara.notifications.channels import BaseChannel
 
 
@@ -22,9 +20,9 @@ class MailChannel(BaseChannel):
     def __init__(
         self,
         mail_manager,
-        from_address: Optional[str] = None,
-        from_name: Optional[str] = None,
-        reply_to: Optional[str] = None,
+        from_address: str | None = None,
+        from_name: str | None = None,
+        reply_to: str | None = None,
     ):
         """
         Initialize mail channel.
@@ -181,7 +179,7 @@ class MailChannel(BaseChannel):
         except ImportError:
             pass
 
-    def _get_recipient(self, notifiable, notification) -> Optional[str]:
+    def _get_recipient(self, notifiable, notification) -> str | None:
         """
         Get the recipient email address.
 

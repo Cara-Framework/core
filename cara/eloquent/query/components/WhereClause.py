@@ -2,6 +2,7 @@
 WhereClause - Simple WHERE clause component
 """
 
+
 class WhereClause:
     """Simple WHERE clause representation."""
 
@@ -16,4 +17,3 @@ class WhereClause:
 
     def to_sql(self) -> str:
         return str(self)
-

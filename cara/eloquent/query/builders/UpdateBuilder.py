@@ -1,7 +1,8 @@
 """
 UpdateBuilder - Single Responsibility for UPDATE operations
 """
-from typing import Any, Dict, List
+
+from typing import Any
 
 
 class UpdateBuilder:
@@ -29,23 +30,19 @@ class UpdateBuilder:
             value = operator
             operator = "="
 
-        self._conditions.append({
-            "column": column,
-            "operator": operator,
-            "value": value
-        })
+        self._conditions.append({"column": column, "operator": operator, "value": value})
         self._bindings.append(value)
         return self
 
-    def get_sets(self) -> Dict[str, Any]:
+    def get_sets(self) -> dict[str, Any]:
         """Get all SET values."""
         return self._sets.copy()
 
-    def get_conditions(self) -> List[Dict[str, Any]]:
+    def get_conditions(self) -> list[dict[str, Any]]:
         """Get all WHERE conditions."""
         return self._conditions.copy()
 
-    def get_bindings(self) -> List[Any]:
+    def get_bindings(self) -> list[Any]:
         """Get all bindings."""
         return self._bindings.copy()
 
@@ -56,4 +53,3 @@ class UpdateBuilder:
         self._conditions = []
         self._bindings = []
         return self
-

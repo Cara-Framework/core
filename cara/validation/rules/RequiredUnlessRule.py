@@ -4,14 +4,15 @@ RequiredUnless Validation Rule.
 Field is required unless another field equals a given value.
 Usage: ``required_unless:other_field,value``.
 """
-from typing import Any, Dict
+
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
 
 
 class RequiredUnlessRule(BaseRule):
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         raw = params.get("required_unless") or params.get("requiredunless")
         if not raw:
             return True
@@ -28,6 +29,6 @@ class RequiredUnlessRule(BaseRule):
             return False
         return True
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
         return f"The {attr.lower()} field is required unless the given condition is met."

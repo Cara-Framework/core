@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 from multiprocessing import cpu_count
-from typing import Optional
 
 from cara.commands import CommandBase
 from cara.configuration import config
@@ -38,9 +37,9 @@ class ServeCommand(CommandBase):
 
     def handle(
         self,
-        host: Optional[str] = None,
-        port: Optional[str] = None,
-        workers: Optional[str] = None,
+        host: str | None = None,
+        port: str | None = None,
+        workers: str | None = None,
     ):
         """Handle development server startup with enhanced options."""
         self.console.print()  # Empty line for spacing
@@ -67,7 +66,7 @@ class ServeCommand(CommandBase):
             self.error(f"× Server error: {e}")
 
     def _prepare_server_config(
-        self, host: Optional[str], port: Optional[str], workers: Optional[str]
+        self, host: str | None, port: str | None, workers: str | None
     ) -> dict:
         """Prepare and validate server configuration."""
         # Get host
@@ -93,7 +92,7 @@ class ServeCommand(CommandBase):
             "app_env": config("app.env", "local"),
         }
 
-    def _parse_port(self, port: Optional[str]) -> int:
+    def _parse_port(self, port: str | None) -> int:
         """Parse and validate port number."""
         if port:
             try:
@@ -106,7 +105,7 @@ class ServeCommand(CommandBase):
 
         return config("server.port", 8000)
 
-    def _parse_workers(self, workers: Optional[str]) -> int:
+    def _parse_workers(self, workers: str | None) -> int:
         """Parse and validate worker count."""
         if workers:
             try:
@@ -301,6 +300,15 @@ class ServeCommand(CommandBase):
             "--no-access-log",  # Disable uvicorn's HTTP access logging
             "--ws",
             "websockets",
+            # Strip ``Server: uvicorn`` from every response. Stack
+            # fingerprinting via the Server header lets a scanner pin
+            # the framework + version and look up known CVEs without
+            # any custom probing — small but free information disclosure.
+            # The SecurityHeaders middleware already covers the other
+            # baseline hardening (X-Content-Type-Options, X-Frame-Options,
+            # CSP, …); this closes the one header uvicorn injects below
+            # the middleware layer where Cara can't filter it.
+            "--no-server-header",
         ]
 
         if config["reload"]:

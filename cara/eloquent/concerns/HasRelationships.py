@@ -5,7 +5,7 @@ Single Responsibility: Handle relationship operations for Eloquent models.
 Clean separation of relationship logic from main model class.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 
 class HasRelationships:
@@ -27,7 +27,7 @@ class HasRelationships:
 
     # ===== Relationship Access =====
 
-    def add_relation(self, relations: Dict[str, Any]) -> "HasRelationships":
+    def add_relation(self, relations: dict[str, Any]) -> HasRelationships:
         """Add loaded relationships to the model."""
         if not hasattr(self, "_relations"):
             self.__dict__["_relations"] = {}
@@ -45,7 +45,7 @@ class HasRelationships:
         """Alias for get_related."""
         return self.get_related(relation)
 
-    def set_relation(self, relation: str, value: Any) -> "HasRelationships":
+    def set_relation(self, relation: str, value: Any) -> HasRelationships:
         """Set a relationship value."""
         if not hasattr(self, "_relations"):
             self.__dict__["_relations"] = {}
@@ -53,7 +53,7 @@ class HasRelationships:
         self._relations[relation] = value
         return self
 
-    def unset_relation(self, relation: str) -> "HasRelationships":
+    def unset_relation(self, relation: str) -> HasRelationships:
         """Remove a relationship."""
         if hasattr(self, "_relations") and relation in self._relations:
             del self._relations[relation]
@@ -84,7 +84,7 @@ class HasRelationships:
 
         return False
 
-    def save_many(self, relation: str, relating_records: List[Any]) -> bool:
+    def save_many(self, relation: str, relating_records: list[Any]) -> bool:
         """Save multiple related records."""
         success = True
 
@@ -94,7 +94,7 @@ class HasRelationships:
 
         return success
 
-    def detach_many(self, relation: str, relating_records: List[Any]) -> bool:
+    def detach_many(self, relation: str, relating_records: list[Any]) -> bool:
         """Detach multiple related records."""
         success = True
 
@@ -171,6 +171,7 @@ class HasRelationships:
         # Flatten specs to a concrete list of top-level relation strings
         # (with nested paths preserved) that we actually need to fetch.
         flat = []
+
         def _expand(spec):
             if spec is None:
                 return
@@ -183,6 +184,7 @@ class HasRelationships:
                 for key in spec.keys():
                     if isinstance(key, str):
                         flat.append(key)
+
         for r in relations:
             _expand(r)
 
@@ -193,7 +195,7 @@ class HasRelationships:
                 missing.append(rel_path)
                 continue
             # Head is loaded; check nested tail on the loaded child
-            tail = rel_path[len(head) + 1:]
+            tail = rel_path[len(head) + 1 :]
             if tail:
                 child = self.get_related(head)
                 if child is None:
@@ -202,11 +204,15 @@ class HasRelationships:
                 if hasattr(child, "__iter__") and not hasattr(child, "_relations"):
                     # Collection
                     for elem in child:
-                        if hasattr(elem, "is_relation_loaded") and not elem.is_relation_loaded(tail.split(".")[0]):
+                        if hasattr(
+                            elem, "is_relation_loaded"
+                        ) and not elem.is_relation_loaded(tail.split(".")[0]):
                             missing.append(rel_path)
                             break
                 else:
-                    if hasattr(child, "is_relation_loaded") and not child.is_relation_loaded(tail.split(".")[0]):
+                    if hasattr(
+                        child, "is_relation_loaded"
+                    ) and not child.is_relation_loaded(tail.split(".")[0]):
                         missing.append(rel_path)
 
         if missing:
@@ -232,7 +238,7 @@ class HasRelationships:
 
     # ===== Serialization Support =====
 
-    def _serialize_relations(self) -> Dict[str, Any]:
+    def _serialize_relations(self) -> dict[str, Any]:
         """Serialize loaded relationships."""
         if not hasattr(self, "_relations"):
             return {}
@@ -259,11 +265,11 @@ class HasRelationships:
 
         return result
 
-    def relations_to_dict(self) -> Dict[str, Any]:
+    def relations_to_dict(self) -> dict[str, Any]:
         """Convert relationships to dictionary."""
         return self._serialize_relations()
 
-    def without_relations(self) -> Dict[str, Any]:
+    def without_relations(self) -> dict[str, Any]:
         """Get model data without relationships."""
         # This will use the parent to_array but exclude relations
         data = super().to_array() if hasattr(super(), "to_array") else {}
@@ -275,7 +281,7 @@ class HasRelationships:
 
         return data
 
-    def with_relations(self, *relations) -> "HasRelationships":
+    def with_relations(self, *relations) -> HasRelationships:
         """Include specific relations in serialization."""
         # This would be used to control which relations are serialized
         clone = (
@@ -286,7 +292,7 @@ class HasRelationships:
         clone.__dict__["_serialize_relations_only"] = set(relations)
         return clone
 
-    def without_relation(self, *relations) -> "HasRelationships":
+    def without_relation(self, *relations) -> HasRelationships:
         """Exclude specific relations from serialization."""
         clone = (
             self._clone_for_visibility()
@@ -298,7 +304,7 @@ class HasRelationships:
 
     # ===== Helper Methods =====
 
-    def get_relationship_names(self) -> List[str]:
+    def get_relationship_names(self) -> list[str]:
         """Get all relationship names defined on the model."""
         relationships = []
 
@@ -313,7 +319,7 @@ class HasRelationships:
         """Check if a relationship is defined on the model."""
         return relation in self.get_relationship_names()
 
-    def refresh_relation(self, relation: str) -> "HasRelationships":
+    def refresh_relation(self, relation: str) -> HasRelationships:
         """Refresh a specific relationship."""
         if self.has_relationship(relation):
             # Remove the cached relationship
@@ -323,7 +329,7 @@ class HasRelationships:
 
         return self
 
-    def refresh_relations(self, *relations) -> "HasRelationships":
+    def refresh_relations(self, *relations) -> HasRelationships:
         """Refresh multiple relationships."""
         if not relations:
             # Refresh all loaded relations

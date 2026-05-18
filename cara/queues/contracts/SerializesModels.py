@@ -5,7 +5,7 @@ This mixin provides automatic serialization/deserialization of models and comple
 for queue jobs, avoiding circular reference issues.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 
 class SerializesModels:
@@ -18,7 +18,7 @@ class SerializesModels:
     3. Avoiding circular references and pickle issues
     """
 
-    def __getstate__(self) -> Dict[str, Any]:
+    def __getstate__(self) -> dict[str, Any]:
         """
         Custom serialization for queue jobs.
 
@@ -32,7 +32,7 @@ class SerializesModels:
 
         return state
 
-    def __setstate__(self, state: Dict[str, Any]) -> None:
+    def __setstate__(self, state: dict[str, Any]) -> None:
         """
         Custom deserialization for queue jobs.
 
@@ -86,7 +86,7 @@ class SerializesModels:
         except Exception:
             return None
 
-    def _serialize_object(self, obj: Any) -> Dict[str, Any]:
+    def _serialize_object(self, obj: Any) -> dict[str, Any]:
         """
         Serialize a complex object.
 
@@ -153,7 +153,7 @@ class SerializesModels:
 
         return value
 
-    def _deserialize_class(self, data: Dict[str, Any]) -> type:
+    def _deserialize_class(self, data: dict[str, Any]) -> type:
         """
         Deserialize a class reference.
 
@@ -172,7 +172,7 @@ class SerializesModels:
         except Exception:  # Fallback: return a dummy class
             return type("DummyClass", (), {})
 
-    def _deserialize_object(self, data: Dict[str, Any]) -> Any:
+    def _deserialize_object(self, data: dict[str, Any]) -> Any:
         """
         Deserialize a complex object.
 

@@ -17,7 +17,8 @@ Semantics: validation passes only when EVERY value in the array exists in
 filter). A single missing or extra value fails the field.
 """
 
-from typing import Any, Dict, Iterable, List
+from collections.abc import Iterable
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -32,7 +33,7 @@ class BatchExistsRule(BaseRule):
     fail-closed — validation rejects rather than silently passing.
     """
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         raw = params.get("batch_exists")
         if not raw:
             return False
@@ -59,7 +60,7 @@ class BatchExistsRule(BaseRule):
         # ``count == len(unique)`` is the right correctness check. The
         # caller may have a separate ``distinct`` rule; we don't depend
         # on it here.
-        unique: List[Any] = list(dict.fromkeys(value))
+        unique: list[Any] = list(dict.fromkeys(value))
 
         # 1) Try the model-class path (cleaner than raw SQL when the
         # framework already knows the table).
@@ -108,11 +109,12 @@ class BatchExistsRule(BaseRule):
         """Best-effort debug log; survives when Log facade isn't yet booted."""
         try:
             from cara.facades import Log
+
             Log.debug(msg, category="cara.validation.batch_exists")
         except ImportError:  # pragma: no cover
             pass
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attribute = MessageFormatter.format_attribute_name(field)
         return f"One or more selected {attribute.lower()} are invalid."
 

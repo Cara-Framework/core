@@ -8,7 +8,7 @@ so apps can swap it in without changing call sites.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from cara.broadcasting.contracts.Broadcaster import Broadcaster
 
@@ -18,16 +18,16 @@ class NullBroadcaster(Broadcaster):
 
     driver_name = "null"
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
 
     async def broadcast(
         self,
-        channels: Union[str, List[str]],
+        channels: str | list[str],
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         return
 
@@ -35,8 +35,8 @@ class NullBroadcaster(Broadcaster):
         self,
         connection_id: str,
         websocket: Any,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         return
 
@@ -53,19 +53,19 @@ class NullBroadcaster(Broadcaster):
         self,
         user_id: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         return
 
     def get_connection_count(self) -> int:
         return 0
 
-    def get_channel_subscribers(self, channel: str) -> List[str]:
+    def get_channel_subscribers(self, channel: str) -> list[str]:
         return []
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {
             "driver": "null",
             "connections": 0,

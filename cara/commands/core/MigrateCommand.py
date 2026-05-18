@@ -4,7 +4,6 @@ from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.migrations import Migration
 from cara.support import paths
-from typing import Optional
 
 
 @command(
@@ -67,6 +66,7 @@ class MigrateCommand(CommandBase):
         """Check if we're running in production environment."""
         try:
             from cara.configuration import config
+
             env = str(config("app.ENV", "")).lower()
         except Exception:
             env = os.getenv("APP_ENV", "").lower()
@@ -107,7 +107,11 @@ class MigrateCommand(CommandBase):
         )
 
     def _show_configuration(
-        self, connection: str, directory: str, schema: Optional[str] = None, show_mode: bool = False
+        self,
+        connection: str,
+        directory: str,
+        schema: str | None = None,
+        show_mode: bool = False,
     ):
         """Display migration configuration."""
         self.info("Configuration:")

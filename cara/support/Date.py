@@ -13,7 +13,7 @@ without each test having to know about pendulum's
     assert Date.now().to_iso8601_string().startswith("2026-01-01")
     Date.travel(hours=2)
     assert Date.now().hour == 2
-    Date.set_test_now(None)            # release the freeze
+    Date.set_test_now(None)  # release the freeze
 
 The point of routing through this facade — instead of letting
 every call site reach for ``pendulum.now()`` — is auditability:
@@ -23,12 +23,12 @@ impossible to "forget" in tests.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Union
+from typing import Any
 
 import pendulum
 
 # Module-level frozen time. ``None`` means "use real wall clock".
-_test_now: Optional[pendulum.DateTime] = None
+_test_now: pendulum.DateTime | None = None
 
 
 class Date:
@@ -67,7 +67,7 @@ class Date:
 
     @classmethod
     def parse(
-        cls, value: Union[str, int, float, pendulum.DateTime], tz: str = DEFAULT_TIMEZONE
+        cls, value: str | int | float | pendulum.DateTime, tz: str = DEFAULT_TIMEZONE
     ) -> pendulum.DateTime:
         """Coerce ``value`` (string / unix timestamp / DateTime) → DateTime."""
         if isinstance(value, pendulum.DateTime):
@@ -133,13 +133,15 @@ class Date:
     @classmethod
     def freeze(cls, value: Any = None) -> pendulum.DateTime:
         """Freeze at ``value`` (default = right now). Returns the frozen instant."""
-        cls.set_test_now(value if value is not None else pendulum.now(cls.DEFAULT_TIMEZONE))
+        cls.set_test_now(
+            value if value is not None else pendulum.now(cls.DEFAULT_TIMEZONE)
+        )
         return _test_now  # type: ignore[return-value]
 
     # ── Internal: best-effort pendulum integration ────────────────
 
     @staticmethod
-    def _pendulum_freeze(instant: "pendulum.DateTime") -> None:
+    def _pendulum_freeze(instant: pendulum.DateTime) -> None:
         """Pin ``pendulum.now()`` to ``instant`` if the test extra exists.
 
         Pendulum 3.x ships ``travel_to`` only when installed with the
@@ -149,7 +151,7 @@ class Date:
         """
         try:
             pendulum.travel_to(instant, freeze=True)
-        except (NotImplementedError, AttributeError, Exception):
+        except NotImplementedError, AttributeError, Exception:
             pass
 
     @staticmethod
@@ -157,7 +159,7 @@ class Date:
         """Release any pendulum-side freeze if the test extra exists."""
         try:
             pendulum.travel_back()
-        except (NotImplementedError, AttributeError, Exception):
+        except NotImplementedError, AttributeError, Exception:
             pass
 
 

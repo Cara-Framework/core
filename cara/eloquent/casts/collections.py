@@ -5,7 +5,6 @@ Handles arrays, lists, and Cara Collection objects.
 """
 
 import json
-from typing import Optional
 
 from .base import BaseCast
 
@@ -13,7 +12,7 @@ from .base import BaseCast
 class ArrayCast(BaseCast):
     """Cast to/from Python arrays with JSON storage."""
 
-    def __init__(self, item_cast: Optional[str] = None):
+    def __init__(self, item_cast: str | None = None):
         self.item_cast = item_cast
 
     def get(self, value):
@@ -30,7 +29,7 @@ class ArrayCast(BaseCast):
                 if not isinstance(parsed, list):
                     return []
                 return parsed
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 return []
 
         return []
@@ -72,7 +71,7 @@ class CollectionCast(BaseCast):
                 parsed = json.loads(value)
                 if isinstance(parsed, list):
                     return Collection(parsed)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
 
         return Collection([])
@@ -90,7 +89,7 @@ class CollectionCast(BaseCast):
                 parsed = json.loads(value)
                 if isinstance(parsed, list):
                     return parsed
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
 
         return []

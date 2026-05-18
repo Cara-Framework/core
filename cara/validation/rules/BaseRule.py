@@ -4,7 +4,7 @@ Base Validation Rule for the Cara framework.
 This module provides the base class for all validation rules in the application.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.contracts import Rule
@@ -18,7 +18,7 @@ class BaseRule(Rule):
     Handles all message logic centrally to eliminate code duplication.
     """
 
-    def _parse_params(self, raw: str) -> Dict[str, Any]:
+    def _parse_params(self, raw: str) -> dict[str, Any]:
         """
         Parse rule parameters from string format.
 
@@ -33,7 +33,7 @@ class BaseRule(Rule):
             return {key: val}
         return {}
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """
         Validate the field value against the rule.
 
@@ -43,7 +43,7 @@ class BaseRule(Rule):
             f"{self.__class__.__name__} must implement validate method"
         )
 
-    def message(self, field: str, params: Dict[str, Any]) -> str:
+    def message(self, field: str, params: dict[str, Any]) -> str:
         """
         Generate error message for validation failure.
 
@@ -58,7 +58,7 @@ class BaseRule(Rule):
         # Fall back to default message from subclass
         return self.default_message(field, params)
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         """
         Generate default error message for this rule.
 
@@ -69,7 +69,7 @@ class BaseRule(Rule):
             f"{self.__class__.__name__} must implement default_message method"
         )
 
-    def get_default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def get_default_message(self, field: str, params: dict[str, Any]) -> str:
         """
         Should be overridden by subclasses to provide default error message.
         This method should return the default message for the rule.
@@ -77,7 +77,7 @@ class BaseRule(Rule):
         rule_name = self.__class__.__name__.replace("Rule", "").lower()
         return f"The {self._format_attribute_name(field).lower()} field failed {rule_name} validation."
 
-    def _format_message(self, message: str, field: str, params: Dict[str, Any]) -> str:
+    def _format_message(self, message: str, field: str, params: dict[str, Any]) -> str:
         """
         Advanced placeholder replacement for custom messages.
 

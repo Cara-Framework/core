@@ -4,7 +4,7 @@ Boolean Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is a boolean.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation.rules import BaseRule
 
@@ -12,7 +12,7 @@ from cara.validation.rules import BaseRule
 class BooleanRule(BaseRule):
     """Validates that a value is a boolean or boolean-like string."""
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         if value is None:
             return False
 
@@ -27,5 +27,5 @@ class BooleanRule(BaseRule):
 
         return False
 
-    def message(self, field: str, params: Dict[str, Any]) -> str:
+    def message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must be a boolean value."

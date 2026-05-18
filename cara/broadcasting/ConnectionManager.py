@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from cara.facades import Log
 
@@ -42,54 +42,56 @@ class ConnectionManager:
     specific behaviour without re-implementing the bookkeeping.
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
 
         # connection_id → websocket-like object (anything with .send_json).
-        self.connections: Dict[str, Any] = {}
+        self.connections: dict[str, Any] = {}
 
         # Reverse index: which connection_ids are subscribed to a channel.
         # ``defaultdict(set)`` simplifies subscribe/unsubscribe but means
         # ``"foo" in self.channel_subscribers`` is True even for empty
         # entries — clean-up code below explicitly deletes empty keys.
-        self.channel_subscribers: Dict[str, Set[str]] = defaultdict(set)
+        self.channel_subscribers: dict[str, set[str]] = defaultdict(set)
 
         # Forward index: which channels a connection is on. Lets us
         # find every channel a dropped connection needs to leave in O(1).
-        self.connection_channels: Dict[str, Set[str]] = defaultdict(set)
+        self.connection_channels: dict[str, set[str]] = defaultdict(set)
 
         # Per-connection metadata: user_id, IP, connected_at, last_activity.
         # Kept separate from ``self.connections`` so we can preserve a
         # post-mortem trail (e.g. for telemetry) briefly after a
         # connection drops without leaking its websocket object.
-        self.connection_metadata: Dict[str, Dict[str, Any]] = {}
+        self.connection_metadata: dict[str, dict[str, Any]] = {}
 
         # User → set of connection_ids index. Lets ``broadcast_to_user``
         # avoid scanning ``connection_metadata`` on every call. Index is
         # maintained by ``add_connection`` / ``remove_connection``.
-        self.user_connections: Dict[str, Set[str]] = defaultdict(set)
+        self.user_connections: dict[str, set[str]] = defaultdict(set)
 
         # connection_id → public socket_id (UUID-like). Exposed to the
         # client as the ``connection.established`` payload so it can
         # echo it back via ``X-Socket-Id`` for skip-self broadcasts.
-        self.socket_ids: Dict[str, str] = {}
+        self.socket_ids: dict[str, str] = {}
 
         # Reverse: socket_id → connection_id. Cheap lookup for the
         # except_socket_id filter at broadcast time.
-        self.connections_by_socket_id: Dict[str, str] = {}
+        self.connections_by_socket_id: dict[str, str] = {}
 
         ws_cfg = config.get("websocket", {})
         self.max_connections: int = int(ws_cfg.get("max_connections", 1000))
         self.heartbeat_interval: int = int(ws_cfg.get("heartbeat_interval", 30))
         self.idle_timeout: float = float(ws_cfg.get("idle_timeout", 300))
         self.cleanup_interval: int = int(ws_cfg.get("cleanup_interval", 60))
-        self.max_connections_per_user: int = int(ws_cfg.get("max_connections_per_user", 10))
+        self.max_connections_per_user: int = int(
+            ws_cfg.get("max_connections_per_user", 10)
+        )
 
         # Background tasks. Indexed by connection_id so we can cancel
         # the heartbeat for a single dropped connection without
         # touching the others.
-        self._heartbeat_tasks: Dict[str, asyncio.Task] = {}
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._heartbeat_tasks: dict[str, asyncio.Task] = {}
+        self._cleanup_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -98,8 +100,8 @@ class ConnectionManager:
         self,
         connection_id: str,
         websocket: Any,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Register a new WebSocket connection.
 
@@ -165,7 +167,9 @@ class ConnectionManager:
                 f"Max connections ({self.max_connections}) reached, rejecting {connection_id}",
                 category="cara.broadcasting",
             )
-            raise ConnectionError(f"Maximum connections ({self.max_connections}) exceeded")
+            raise ConnectionError(
+                f"Maximum connections ({self.max_connections}) exceeded"
+            )
 
         now = time.time()
         self.connections[connection_id] = websocket
@@ -304,9 +308,9 @@ class ConnectionManager:
         self,
         channel: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> int:
         """Deliver ``event`` to every local subscriber of ``channel``.
 
@@ -335,7 +339,7 @@ class ConnectionManager:
             return 0
 
         # Resolve the connection_id to skip once, outside the loop.
-        skip_conn_id: Optional[str] = None
+        skip_conn_id: str | None = None
         if except_socket_id:
             skip_conn_id = self.connections_by_socket_id.get(except_socket_id)
 
@@ -348,9 +352,9 @@ class ConnectionManager:
         self,
         user_id: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> int:
         """Deliver to every LOCAL connection belonging to ``user_id``.
 
@@ -362,7 +366,7 @@ class ConnectionManager:
         if not connection_ids:
             return 0
 
-        skip_conn_id: Optional[str] = None
+        skip_conn_id: str | None = None
         if except_socket_id:
             skip_conn_id = self.connections_by_socket_id.get(except_socket_id)
 
@@ -373,10 +377,10 @@ class ConnectionManager:
 
     async def _fan_out_send(
         self,
-        connection_ids: List[str],
-        message: Dict[str, Any],
+        connection_ids: list[str],
+        message: dict[str, Any],
         *,
-        skip_conn_id: Optional[str],
+        skip_conn_id: str | None,
         label: str,
     ) -> int:
         """Concurrently dispatch ``message`` to every connection id.
@@ -387,7 +391,7 @@ class ConnectionManager:
         """
         # Pair each (connection_id, websocket) so we can map gather
         # results back to ids without re-looking-up after the await.
-        targets: List[tuple] = []
+        targets: list[tuple] = []
         for connection_id in connection_ids:
             if skip_conn_id and connection_id == skip_conn_id:
                 continue
@@ -409,7 +413,7 @@ class ConnectionManager:
         )
 
         delivered = 0
-        failed: List[str] = []
+        failed: list[str] = []
         for (connection_id, _), result in zip(targets, results):
             if isinstance(result, Exception):
                 if _is_connection_closed_error(result):
@@ -445,13 +449,13 @@ class ConnectionManager:
     # ------------------------------------------------------------------
     # Read-only accessors
     # ------------------------------------------------------------------
-    def get_channel_subscribers(self, channel: str) -> List[str]:
+    def get_channel_subscribers(self, channel: str) -> list[str]:
         return list(self.channel_subscribers.get(channel, set()))
 
-    def get_connection_channels(self, connection_id: str) -> List[str]:
+    def get_connection_channels(self, connection_id: str) -> list[str]:
         return list(self.connection_channels.get(connection_id, set()))
 
-    def get_user_connection_ids(self, user_id: str) -> List[str]:
+    def get_user_connection_ids(self, user_id: str) -> list[str]:
         return list(self.user_connections.get(user_id, set()))
 
     def get_connection_count(self) -> int:
@@ -460,10 +464,10 @@ class ConnectionManager:
     def get_channel_count(self) -> int:
         return len(self.channel_subscribers)
 
-    def get_socket_id(self, connection_id: str) -> Optional[str]:
+    def get_socket_id(self, connection_id: str) -> str | None:
         return self.socket_ids.get(connection_id)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {
             "total_connections": self.get_connection_count(),
             "total_channels": self.get_channel_count(),
@@ -546,7 +550,7 @@ class ConnectionManager:
             self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError, Exception:
                 pass
         for task in list(self._heartbeat_tasks.values()):
             if task and not task.done():

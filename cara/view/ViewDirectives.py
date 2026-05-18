@@ -4,7 +4,7 @@ View Directives - Directive management for Cara view engine
 This file provides directive registration and management functionality.
 """
 
-from typing import Callable, Dict
+from collections.abc import Callable
 
 
 class ViewDirectives:
@@ -31,7 +31,7 @@ class ViewDirectives:
         if name in self.directives:
             del self.directives[name]
 
-    def all(self) -> Dict[str, Callable]:
+    def all(self) -> dict[str, Callable]:
         """Get all registered directives."""
         return self.directives.copy()
 
@@ -39,6 +39,6 @@ class ViewDirectives:
         """Clear all directives."""
         self.directives.clear()
 
-    def extend(self, directives: Dict[str, Callable]):
+    def extend(self, directives: dict[str, Callable]):
         """Extend with multiple directives."""
         self.directives.update(directives)

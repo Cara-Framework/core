@@ -8,7 +8,7 @@ including job status tracking, performance metrics, and failure handling.
 import json
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from cara.facades import Log
 
@@ -26,8 +26,8 @@ class QueueMonitor:
 
     def __init__(self):
         """Initialize queue monitor."""
-        self.job_stats: Dict[str, Dict[str, Any]] = {}
-        self.queue_stats: Dict[str, Dict[str, Any]] = {}
+        self.job_stats: dict[str, dict[str, Any]] = {}
+        self.queue_stats: dict[str, dict[str, Any]] = {}
         self.start_time = time.time()
 
     def job_started(self, job, queue_name: str = "default") -> str:
@@ -68,7 +68,7 @@ class QueueMonitor:
         return job_id
 
     def job_completed(
-        self, job_id: str, success: bool = True, error: Optional[Exception] = None
+        self, job_id: str, success: bool = True, error: Exception | None = None
     ):
         """
         Track when a job completes (success or failure).
@@ -114,7 +114,7 @@ class QueueMonitor:
             for old_job_id in oldest_jobs:
                 del self.job_stats[old_job_id]
 
-    def get_queue_stats(self, queue_name: Optional[str] = None) -> Dict[str, Any]:
+    def get_queue_stats(self, queue_name: str | None = None) -> dict[str, Any]:
         """
         Get queue statistics.
 
@@ -128,7 +128,7 @@ class QueueMonitor:
             return self.queue_stats.get(queue_name, {})
         return self.queue_stats
 
-    def get_job_stats(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_job_stats(self, limit: int = 50) -> list[dict[str, Any]]:
         """
         Get recent job statistics.
 
@@ -150,7 +150,7 @@ class QueueMonitor:
 
         return recent_jobs
 
-    def get_failed_jobs(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_failed_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
         """
         Get recent failed jobs.
 
@@ -176,7 +176,7 @@ class QueueMonitor:
 
         return recent_failed
 
-    def get_performance_summary(self) -> Dict[str, Any]:
+    def get_performance_summary(self) -> dict[str, Any]:
         """
         Get overall performance summary.
 
@@ -227,7 +227,7 @@ class QueueMonitor:
         else:
             raise ValueError(f"Unsupported export format: {format}")
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self) -> dict[str, Any]:
         """
         Get overall queue system health status.
 
@@ -282,7 +282,7 @@ class QueueMonitor:
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-    def get_throughput(self, window_minutes: int = 60) -> Dict[str, Any]:
+    def get_throughput(self, window_minutes: int = 60) -> dict[str, Any]:
         """
         Get jobs processed per minute over a time window.
 
@@ -292,7 +292,9 @@ class QueueMonitor:
         Returns:
             Dict with throughput metrics per queue
         """
-        cutoff_time = datetime.now() - __import__("datetime").timedelta(minutes=window_minutes)
+        cutoff_time = datetime.now() - __import__("datetime").timedelta(
+            minutes=window_minutes
+        )
 
         throughput = {}
         for job_id, job_stat in self.job_stats.items():
@@ -326,7 +328,7 @@ class QueueMonitor:
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-    def get_error_breakdown(self) -> Dict[str, Any]:
+    def get_error_breakdown(self) -> dict[str, Any]:
         """
         Get failure counts grouped by error type and job class.
 
@@ -384,12 +386,15 @@ class QueueMonitor:
 
             error_type_for_queue = job_stat.get("error_type", "unknown")
             error_stats["by_queue"][queue_name]["errors"][error_type_for_queue] = (
-                error_stats["by_queue"][queue_name]["errors"].get(error_type_for_queue, 0) + 1
+                error_stats["by_queue"][queue_name]["errors"].get(error_type_for_queue, 0)
+                + 1
             )
 
         return {
             "error_breakdown": error_stats,
-            "total_failed": len([j for j in self.job_stats.values() if j["status"] == "failed"]),
+            "total_failed": len(
+                [j for j in self.job_stats.values() if j["status"] == "failed"]
+            ),
             "timestamp": datetime.utcnow().isoformat(),
         }
 

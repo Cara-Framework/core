@@ -54,9 +54,7 @@ class ResetAuth(Middleware):
 
             # Clear all registered guard caches — query the actual guard
             # dict so new guards are always covered automatically.
-            guard_names = list(
-                getattr(auth_manager, "guards", {}).keys()
-            ) or ["jwt"]
+            guard_names = list(getattr(auth_manager, "guards", {}).keys()) or ["jwt"]
             for guard_name in guard_names:
                 try:
                     guard = auth_manager.guard(guard_name)

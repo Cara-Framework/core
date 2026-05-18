@@ -6,7 +6,7 @@ Extracted from Model.py to follow SRP and DRY principles.
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.support.Collection import Collection
 
@@ -118,7 +118,7 @@ class HasAttributes:
 
     # ===== Mass Assignment =====
 
-    def fill(self, attributes: Dict[str, Any]) -> "HasAttributes":
+    def fill(self, attributes: dict[str, Any]) -> HasAttributes:
         """Fill model with attributes respecting mass assignment protection."""
         filtered_attributes = self.filter_mass_assignment(attributes)
 
@@ -127,7 +127,7 @@ class HasAttributes:
 
         return self
 
-    def fill_original(self, attributes: Dict[str, Any]) -> "HasAttributes":
+    def fill_original(self, attributes: dict[str, Any]) -> HasAttributes:
         """Fill original attributes (for loaded models)."""
         if not hasattr(self, "_original"):
             self.__dict__["_original"] = {}
@@ -139,26 +139,24 @@ class HasAttributes:
         return self
 
     @classmethod
-    def filter_mass_assignment(cls, attributes: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_mass_assignment(cls, attributes: dict[str, Any]) -> dict[str, Any]:
         """Filter attributes through mass assignment protection."""
         return cls.filter_guarded(cls.filter_fillable(attributes))
 
     @classmethod
-    def filter_fillable(cls, attributes: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_fillable(cls, attributes: dict[str, Any]) -> dict[str, Any]:
         """Filter attributes through fillable whitelist."""
         if "*" in cls.__fillable__:
             return attributes
 
-        dropped = [
-            key for key in attributes if key not in cls.__fillable__
-        ]
+        dropped = [key for key in attributes if key not in cls.__fillable__]
         if dropped:
             try:
                 from cara.facades import Log
+
                 model_name = cls.__name__ if hasattr(cls, "__name__") else str(cls)
                 Log.warning(
-                    f"[MassAssignment] {model_name}: dropped non-fillable keys "
-                    f"{dropped}"
+                    f"[MassAssignment] {model_name}: dropped non-fillable keys {dropped}"
                 )
             except Exception:
                 pass
@@ -168,7 +166,7 @@ class HasAttributes:
         }
 
     @classmethod
-    def filter_guarded(cls, attributes: Dict[str, Any]) -> Dict[str, Any]:
+    def filter_guarded(cls, attributes: dict[str, Any]) -> dict[str, Any]:
         """Filter attributes through guarded blacklist."""
         if "*" in cls.__guarded__:
             return {}
@@ -179,7 +177,7 @@ class HasAttributes:
 
     # ===== Serialization =====
 
-    def to_array(self, exclude=None, include=None) -> Dict[str, Any]:
+    def to_array(self, exclude=None, include=None) -> dict[str, Any]:
         """
         Convert model to array with Laravel-style visibility control.
 
@@ -211,19 +209,19 @@ class HasAttributes:
         """Convert model to JSON string."""
         return json.dumps(self.to_array(), default=str, **kwargs)
 
-    def serialize(self, exclude=None, include=None) -> Dict[str, Any]:
+    def serialize(self, exclude=None, include=None) -> dict[str, Any]:
         """Legacy method - uses to_array internally."""
         return self.to_array(exclude=exclude, include=include)
 
     # ===== Visibility Control =====
 
-    def make_hidden(self, *attributes) -> "HasAttributes":
+    def make_hidden(self, *attributes) -> HasAttributes:
         """Hide attributes from serialization."""
         clone = self._clone_for_visibility()
         clone._hidden_cache.update(attributes)
         return clone
 
-    def make_visible(self, *attributes) -> "HasAttributes":
+    def make_visible(self, *attributes) -> HasAttributes:
         """Make attributes visible in serialization."""
         clone = self._clone_for_visibility()
         clone._visible_cache.update(attributes)
@@ -231,19 +229,19 @@ class HasAttributes:
         clone._hidden_cache.difference_update(attributes)
         return clone
 
-    def without_timestamps(self) -> "HasAttributes":
+    def without_timestamps(self) -> HasAttributes:
         """Exclude timestamps from serialization."""
         clone = self._clone_for_visibility()
         clone._without_timestamps = True
         return clone
 
-    def append(self, *attributes) -> "HasAttributes":
+    def append(self, *attributes) -> HasAttributes:
         """Add computed attributes to serialization."""
         clone = self._clone_for_visibility()
         clone._appends_cache.update(attributes)
         return clone
 
-    def only(self, *attributes) -> Dict[str, Any]:
+    def only(self, *attributes) -> dict[str, Any]:
         """Get only specified attributes using Collection.only()."""
         data = self.to_array()
         return Collection(data).only(*attributes)
@@ -254,11 +252,11 @@ class HasAttributes:
         """Check if model has unsaved changes."""
         return bool(getattr(self, "_changes", {}))
 
-    def get_dirty_attributes(self) -> Dict[str, Any]:
+    def get_dirty_attributes(self) -> dict[str, Any]:
         """Get all dirty attributes."""
         return getattr(self, "_changes", {}).copy()
 
-    def get_original(self, key: Optional[str] = None) -> Any:
+    def get_original(self, key: str | None = None) -> Any:
         """Get original attribute value(s)."""
         original = getattr(self, "_original", {})
 
@@ -269,13 +267,13 @@ class HasAttributes:
 
     # ===== Internal Helper Methods =====
 
-    def _get_base_attributes(self) -> Dict[str, Any]:
+    def _get_base_attributes(self) -> dict[str, Any]:
         """Get base model attributes."""
         return getattr(self, "_attributes", {}).copy()
 
     def _apply_visibility_rules(
-        self, data: Dict[str, Any], exclude=None, include=None
-    ) -> Dict[str, Any]:
+        self, data: dict[str, Any], exclude=None, include=None
+    ) -> dict[str, Any]:
         """Apply visibility rules to data."""
         # Handle include parameter (highest priority)
         if include:
@@ -304,7 +302,7 @@ class HasAttributes:
 
         return data
 
-    def _apply_casts_and_dates(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_casts_and_dates(self, data: dict[str, Any]) -> dict[str, Any]:
         """Apply casts and date formatting to data."""
         result = {}
 
@@ -356,12 +354,12 @@ class HasAttributes:
             # Fallback to UTC
             return "UTC"
 
-    def _serialize_relations(self) -> Dict[str, Any]:
+    def _serialize_relations(self) -> dict[str, Any]:
         """Serialize model relationships."""
         # This will be implemented in HasRelationships concern
         return {}
 
-    def _serialize_appends(self) -> Dict[str, Any]:
+    def _serialize_appends(self) -> dict[str, Any]:
         """Serialize appended attributes."""
         result = {}
         appends = set(self.__appends__) | getattr(self, "_appends_cache", set())
@@ -375,7 +373,7 @@ class HasAttributes:
 
         return result
 
-    def _clone_for_visibility(self) -> "HasAttributes":
+    def _clone_for_visibility(self) -> HasAttributes:
         """Create a shallow clone for visibility modifications."""
         import copy
 
@@ -409,7 +407,7 @@ class HasAttributes:
         return value
 
     @classmethod
-    def cast_value(cls, attribute: str, value: Any, cast_type: Optional[str] = None) -> Any:
+    def cast_value(cls, attribute: str, value: Any, cast_type: str | None = None) -> Any:
         """Cast a value using the specified cast type."""
         if cast_type is None and attribute in cls.__casts__:
             cast_type = cls.__casts__[attribute]

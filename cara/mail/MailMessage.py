@@ -5,8 +5,6 @@ This class provides a quick way to send emails without
 creating custom Mailable classes.
 """
 
-from typing import Optional
-
 from cara.mail import Mailable
 
 
@@ -63,13 +61,13 @@ class MailMessage:
         self.mailable.attach(name, path)
         return self
 
-    def send(self, driver_name: Optional[str] = None) -> bool:
+    def send(self, driver_name: str | None = None) -> bool:
         """
         Send the message.
         """
         return self.manager.send(self.mailable, driver_name)
 
-    def queue(self, driver_name: Optional[str] = None) -> bool:
+    def queue(self, driver_name: str | None = None) -> bool:
         """
         Queue the message for background processing.
         """

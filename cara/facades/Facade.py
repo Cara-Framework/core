@@ -32,12 +32,13 @@ class Facade(type):
         """
         try:
             from bootstrap import application
-        except (ImportError, ModuleNotFoundError, TypeError):
+        except ImportError, ModuleNotFoundError, TypeError:
             # Handle bootstrap unavailability with targeted fallbacks
             # (e.g. running stress tests outside the full Cara framework,
             # or Python version mismatch causing TypeError on 3.10+ syntax)
             if cls.key == "logger":
                 import logging
+
                 _fallback = logging.getLogger("cara.fallback")
                 if not _fallback.handlers:
                     _h = logging.StreamHandler()
@@ -45,27 +46,34 @@ class Facade(type):
                     _fallback.addHandler(_h)
                     _fallback.setLevel(logging.DEBUG)
                 _orig = getattr(_fallback, attribute)
+
                 # Wrap to strip extra kwargs (e.g. category=) that stdlib doesn't support
                 def _safe_log(*args, _orig_fn=_orig, **kwargs):
                     # Forward Cara's ``category`` kwarg as ``extra`` so
                     # stdlib formatters can still access it if desired.
-                    safe_kwargs = {k: v for k, v in kwargs.items()
-                                   if k in ("exc_info", "stack_info", "stacklevel", "extra")}
+                    safe_kwargs = {
+                        k: v
+                        for k, v in kwargs.items()
+                        if k in ("exc_info", "stack_info", "stacklevel", "extra")
+                    }
                     category = kwargs.get("category")
                     if category:
                         extra = safe_kwargs.get("extra", {})
                         extra["category"] = category
                         safe_kwargs["extra"] = extra
                     return _orig_fn(*args, **safe_kwargs)
+
                 return _safe_log
             if cls.key == "DB":
                 # Fallback: use DatabaseManager directly when bootstrap fails
                 from cara.eloquent.DatabaseManager import DatabaseManager
+
                 _db = DatabaseManager.get_instance()
                 return getattr(_db, attribute)
             if cls.key == "validation":
                 # Fallback: use Validation directly when bootstrap fails (common in scripts)
                 from cara.validation import Validation
+
                 return getattr(Validation, attribute)
             # No fallback available - raise clear error
             raise RuntimeError(
@@ -111,9 +119,11 @@ class Facade(type):
             "_repr_jpeg_",
             "_repr_svg_",
         }
-        return attribute.startswith("_ipython_") or attribute.startswith(
-            "_repr_"
-        ) or attribute in private_methods
+        return (
+            attribute.startswith("_ipython_")
+            or attribute.startswith("_repr_")
+            or attribute in private_methods
+        )
 
     def __repr__(cls) -> str:
         """Provide a clean representation for IPython."""
@@ -124,7 +134,7 @@ class Facade(type):
         return f"Facade({cls.key})"
 
     @classmethod
-    def get_logger(cls) -> "Logger":
+    def get_logger(cls) -> Logger:
         """Get a logger instance for this facade.
 
         Returns:
@@ -132,8 +142,10 @@ class Facade(type):
         """
         try:
             from cara.logging import Logger
+
             return Logger(name=cls.key)
         except ImportError:
             # Fallback if logging is not available
             import logging
+
             return logging.getLogger(cls.key)

@@ -29,14 +29,17 @@ Pattern
     # Storefront product card — minimum needed for ProductResource
     # to render an image, a price, and a container link.
     PRODUCT_CARD_RELATIONS = RelationSet(
-        "images", "current_price", "container",
+        "images",
+        "current_price",
+        "container",
         name="product.card",
     )
 
     # Storefront product detail — card + the heavy fields needed
     # for the show / detail endpoint.
     PRODUCT_DETAIL_RELATIONS = PRODUCT_CARD_RELATIONS.with_(
-        "details", "videos",
+        "details",
+        "videos",
         name="product.detail",
     )
 
@@ -49,8 +52,6 @@ also accepts it directly. Adopt the canonical preset and let
 """
 
 from __future__ import annotations
-
-from typing import Tuple
 
 
 class RelationSet(tuple):
@@ -65,7 +66,7 @@ class RelationSet(tuple):
 
     name: str
 
-    def __new__(cls, *relations: str, name: str = "") -> "RelationSet":
+    def __new__(cls, *relations: str, name: str = "") -> RelationSet:
         cleaned: list = []
         seen: set = set()
         for r in relations:
@@ -87,7 +88,7 @@ class RelationSet(tuple):
 
     # ── Composition ────────────────────────────────────────────────
 
-    def with_(self, *relations: str, name: str = "") -> "RelationSet":
+    def with_(self, *relations: str, name: str = "") -> RelationSet:
         """Return a new set with extra relations appended.
 
         Duplicates are silently dropped — the canonical order of
@@ -103,7 +104,7 @@ class RelationSet(tuple):
         """
         return RelationSet(*self, *relations, name=name)
 
-    def without(self, *drop: str, name: str = "") -> "RelationSet":
+    def without(self, *drop: str, name: str = "") -> RelationSet:
         """Return a new set with the named relations removed.
 
         Used for endpoint-specific trimming (a skinny widget that
@@ -116,7 +117,7 @@ class RelationSet(tuple):
             name=name,
         )
 
-    def only(self, *keep: str, name: str = "") -> "RelationSet":
+    def only(self, *keep: str, name: str = "") -> RelationSet:
         """Return a new set keeping ONLY the named relations.
 
         Order matches the canonical preset, not ``keep``'s order —
@@ -131,7 +132,7 @@ class RelationSet(tuple):
 
     # ── Conversion ─────────────────────────────────────────────────
 
-    def to_tuple(self) -> Tuple[str, ...]:
+    def to_tuple(self) -> tuple[str, ...]:
         """Materialise as a plain ``tuple`` (for callers that want a non-RelationSet)."""
         return tuple(self)
 

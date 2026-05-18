@@ -5,8 +5,8 @@ string in ``HtmlString(s)`` signals to the rendering layer
 ("trust me, this is safe HTML, don't escape it again")::
 
     safe = HtmlString("<strong>bold</strong>")
-    e(safe)              # passes through unchanged
-    e("<x>")             # escaped to "&lt;x&gt;"
+    e(safe)  # passes through unchanged
+    e("<x>")  # escaped to "&lt;x&gt;"
 
 The :func:`e` helper at :mod:`cara.helpers` honours this marker —
 if the value is an :class:`HtmlString` it returns the underlying

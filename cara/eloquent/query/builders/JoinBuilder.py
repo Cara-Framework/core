@@ -5,7 +5,8 @@ Handles all JOIN-related query building operations cleanly and efficiently.
 Follows DRY and KISS principles.
 """
 
-from typing import Any, Callable, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from cara.eloquent.expressions.JoinClause import JoinClause
 from cara.eloquent.expressions.OnClause import OnClause
@@ -31,36 +32,36 @@ class JoinBuilder:
     # ===== Basic JOINs =====
 
     def join(
-        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
-    ) -> "JoinBuilder":
+        self, table: str, first: str, operator: str = "=", second: str | None = None
+    ) -> JoinBuilder:
         """Add INNER JOIN."""
         return self._add_join("INNER", table, first, operator, second)
 
     def left_join(
-        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
-    ) -> "JoinBuilder":
+        self, table: str, first: str, operator: str = "=", second: str | None = None
+    ) -> JoinBuilder:
         """Add LEFT JOIN."""
         return self._add_join("LEFT", table, first, operator, second)
 
     def right_join(
-        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
-    ) -> "JoinBuilder":
+        self, table: str, first: str, operator: str = "=", second: str | None = None
+    ) -> JoinBuilder:
         """Add RIGHT JOIN."""
         return self._add_join("RIGHT", table, first, operator, second)
 
     def inner_join(
-        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
-    ) -> "JoinBuilder":
+        self, table: str, first: str, operator: str = "=", second: str | None = None
+    ) -> JoinBuilder:
         """Add INNER JOIN (alias for join)."""
         return self.join(table, first, operator, second)
 
     def full_join(
-        self, table: str, first: str, operator: str = "=", second: Optional[str] = None
-    ) -> "JoinBuilder":
+        self, table: str, first: str, operator: str = "=", second: str | None = None
+    ) -> JoinBuilder:
         """Add FULL OUTER JOIN."""
         return self._add_join("FULL OUTER", table, first, operator, second)
 
-    def cross_join(self, table: str) -> "JoinBuilder":
+    def cross_join(self, table: str) -> JoinBuilder:
         """Add CROSS JOIN."""
         join_clause = JoinClause(join_type="CROSS", table=table, on_clauses=[])
 
@@ -71,7 +72,7 @@ class JoinBuilder:
 
     def join_where(
         self, table: str, column: str, operator: str, value: Any, join_type: str = "INNER"
-    ) -> "JoinBuilder":
+    ) -> JoinBuilder:
         """Add JOIN with WHERE condition."""
         join_clause = JoinClause(join_type=join_type, table=table, on_clauses=[])
 
@@ -92,7 +93,7 @@ class JoinBuilder:
 
     def join_on_callback(
         self, table: str, callback: Callable, join_type: str = "INNER"
-    ) -> "JoinBuilder":
+    ) -> JoinBuilder:
         """Add JOIN with callback for complex ON conditions."""
         join_clause = JoinClause(join_type=join_type, table=table, on_clauses=[])
 
@@ -114,9 +115,9 @@ class JoinBuilder:
         alias: str,
         first: str,
         operator: str = "=",
-        second: Optional[str] = None,
+        second: str | None = None,
         join_type: str = "INNER",
-    ) -> "JoinBuilder":
+    ) -> JoinBuilder:
         """Add JOIN with subquery."""
         subquery_table = f"({subquery}) AS {alias}"
         return self._add_join(join_type, subquery_table, first, operator, second)
@@ -127,8 +128,8 @@ class JoinBuilder:
         alias: str,
         first: str,
         operator: str = "=",
-        second: Optional[str] = None,
-    ) -> "JoinBuilder":
+        second: str | None = None,
+    ) -> JoinBuilder:
         """Add LEFT JOIN with subquery."""
         return self.join_subquery(subquery, alias, first, operator, second, "LEFT")
 
@@ -140,8 +141,8 @@ class JoinBuilder:
         table: str,
         first: str,
         operator: str = "=",
-        second: Optional[str] = None,
-    ) -> "JoinBuilder":
+        second: str | None = None,
+    ) -> JoinBuilder:
         """Internal method to add JOIN."""
         if second is None:
             second = operator
@@ -162,11 +163,11 @@ class JoinBuilder:
 
     # ===== Getters =====
 
-    def get_joins(self) -> List:
+    def get_joins(self) -> list:
         """Get all JOIN clauses."""
         return self._joins.copy()
 
-    def get_bindings(self) -> List:
+    def get_bindings(self) -> list:
         """Get all bindings."""
         return self._bindings.copy()
 
@@ -178,7 +179,7 @@ class JoinBuilder:
         """Get number of JOINs."""
         return len(self._joins)
 
-    def get_join_tables(self) -> List[str]:
+    def get_join_tables(self) -> list[str]:
         """Get list of joined table names."""
         tables = []
         for join in self._joins:
@@ -186,7 +187,7 @@ class JoinBuilder:
                 tables.append(join.table)
         return tables
 
-    def reset(self) -> "JoinBuilder":
+    def reset(self) -> JoinBuilder:
         """Reset all JOINs."""
         self._joins = []
         self._bindings = []
@@ -202,7 +203,7 @@ class JoinOnBuilder:
         self._conditions = []
         self._bindings = []
 
-    def on(self, first: str, operator: str, second: str) -> "JoinOnBuilder":
+    def on(self, first: str, operator: str, second: str) -> JoinOnBuilder:
         """Add ON condition for column comparison."""
         condition = OnClause(
             first=first,
@@ -215,7 +216,7 @@ class JoinOnBuilder:
         self._conditions.append(condition)
         return self
 
-    def or_on(self, first: str, operator: str, second: str) -> "JoinOnBuilder":
+    def or_on(self, first: str, operator: str, second: str) -> JoinOnBuilder:
         """Add OR ON condition."""
         condition = OnClause(
             first=first,
@@ -228,7 +229,7 @@ class JoinOnBuilder:
         self._conditions.append(condition)
         return self
 
-    def on_where(self, column: str, operator: str, value: Any) -> "JoinOnBuilder":
+    def on_where(self, column: str, operator: str, value: Any) -> JoinOnBuilder:
         """Add ON condition with value comparison."""
         condition = OnClause(
             first=column,
@@ -242,7 +243,7 @@ class JoinOnBuilder:
         self._bindings.append(value)
         return self
 
-    def or_on_where(self, column: str, operator: str, value: Any) -> "JoinOnBuilder":
+    def or_on_where(self, column: str, operator: str, value: Any) -> JoinOnBuilder:
         """Add OR ON condition with value comparison."""
         condition = OnClause(
             first=column,
@@ -256,7 +257,7 @@ class JoinOnBuilder:
         self._bindings.append(value)
         return self
 
-    def on_null(self, column: str) -> "JoinOnBuilder":
+    def on_null(self, column: str) -> JoinOnBuilder:
         """Add ON IS NULL condition."""
         condition = OnClause(
             first=column,
@@ -269,7 +270,7 @@ class JoinOnBuilder:
         self._conditions.append(condition)
         return self
 
-    def on_not_null(self, column: str) -> "JoinOnBuilder":
+    def on_not_null(self, column: str) -> JoinOnBuilder:
         """Add ON IS NOT NULL condition."""
         condition = OnClause(
             first=column,
@@ -282,10 +283,10 @@ class JoinOnBuilder:
         self._conditions.append(condition)
         return self
 
-    def get_conditions(self) -> List:
+    def get_conditions(self) -> list:
         """Get all ON conditions."""
         return self._conditions.copy()
 
-    def get_bindings(self) -> List:
+    def get_bindings(self) -> list:
         """Get all bindings."""
         return self._bindings.copy()

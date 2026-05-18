@@ -37,12 +37,12 @@ class BaseRelationship:
 
     def get_builder(self):
         """Get query builder for the related model.
-        
+
         IMPORTANT: Always return a FRESH builder instance to avoid
         query condition accumulation across multiple calls.
         """
         # Get the related model class from the decorated function
-        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
+        func = getattr(self, "_func", None) or getattr(self, "fn", None)
         if func:
             # Call the function to get the model class
             related_model = func(self)
@@ -86,11 +86,13 @@ class BaseRelationship:
 
     def __getattr__(self, attribute):
         # Use _func if set by decorator, otherwise fn
-        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
+        func = getattr(self, "_func", None) or getattr(self, "fn", None)
         if func:
             relationship = func(self)()
             return getattr(relationship.builder, attribute)
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{attribute}'")
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{attribute}'"
+        )
 
     def apply_query(self, foreign, owner):
         """
@@ -133,7 +135,6 @@ class BaseRelationship:
         raise NotImplementedError(
             f"{klass} relationship does not implement the 'get_with_count_query' method"
         )
-
 
     def get_with_sum_query(self, builder, column, callback, relation_name=None):
         """Adds a clause to the query to get the sum of a column in the relationship."""

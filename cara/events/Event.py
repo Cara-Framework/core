@@ -13,8 +13,8 @@ Supports:
 
 import asyncio
 import inspect
+from collections.abc import Callable
 from threading import Lock
-from typing import Callable, Dict, List, Type, Optional
 
 from cara.events.contracts import Event, Listener
 from cara.exceptions import EventNameConflictException
@@ -44,7 +44,7 @@ class EventSubscriber:
                 pass
     """
 
-    def subscribe(self, dispatcher: "Event") -> None:
+    def subscribe(self, dispatcher: Event) -> None:
         """
         Subscribe to events in the dispatcher.
 
@@ -81,11 +81,11 @@ class Event:
 
     def __init__(self):
         # Mapping: event_name -> list of Listener instances
-        self._listeners: Dict[str, List[Listener]] = {}
+        self._listeners: dict[str, list[Listener]] = {}
         # Wildcard listeners: pattern -> list of listeners
-        self._wildcard_listeners: Dict[str, List[Listener]] = {}
+        self._wildcard_listeners: dict[str, list[Listener]] = {}
         # Keep track of registered event names to avoid conflicts
-        self._registered_events: Dict[str, Type[Event]] = {}
+        self._registered_events: dict[str, type[Event]] = {}
         self._lock = Lock()
 
     @classmethod
@@ -94,12 +94,13 @@ class Event:
             return cls._app
         try:
             from bootstrap import application
+
             cls._app = application
             return application
         except Exception:
             return None
 
-    def register_event(self, event_class: Type[Event]) -> None:
+    def register_event(self, event_class: type[Event]) -> None:
         """
         Register an Event class by its name() method.
 
@@ -127,7 +128,7 @@ class Event:
 
         self._registered_events[event_name] = event_class
 
-    def subscribe(self, event_name: str, listener: Optional[Listener] = None) -> None:
+    def subscribe(self, event_name: str, listener: Listener | None = None) -> None:
         """
         Subscribe a Listener instance or EventSubscriber to events.
 
@@ -186,6 +187,7 @@ class Event:
             event_name: Event name to listen for
             callback: Function to call when event is dispatched
         """
+
         # Create a simple listener wrapper for the callback
         class CallbackListener(Listener):
             def handle(self, event):
@@ -248,7 +250,7 @@ class Event:
             return
 
         for listener in all_listeners:
-            if hasattr(event, 'is_propagation_stopped') and event.is_propagation_stopped:
+            if hasattr(event, "is_propagation_stopped") and event.is_propagation_stopped:
                 break
 
             # Laravel-style queue check: If listener implements ShouldQueue, queue it
@@ -275,6 +277,7 @@ class Event:
             # class name; bounded cardinality regardless of event
             # volume.
             import time as _t
+
             try:
                 from app.support.Metrics import Metrics as _M
             except Exception:
@@ -298,6 +301,7 @@ class Event:
                 _lst_outcome = "failure"
                 try:
                     from cara.facades import Log
+
                     Log.error(
                         f"Event listener {_lst_name} failed: "
                         f"{_listener_exc.__class__.__name__}: {_listener_exc}",
@@ -321,15 +325,16 @@ class Event:
                 if _M is not None:
                     try:
                         _M.listener_invocations_total.labels(
-                            listener=_lst_name, outcome=_lst_outcome,
+                            listener=_lst_name,
+                            outcome=_lst_outcome,
                         ).inc()
                         _M.listener_duration_seconds.labels(
                             listener=_lst_name,
                         ).observe(_t.time() - _lst_start)
-                    except (ImportError, AttributeError):
+                    except ImportError, AttributeError:
                         pass
 
-    def _get_matching_wildcard_listeners(self, event_name: str) -> List[Listener]:
+    def _get_matching_wildcard_listeners(self, event_name: str) -> list[Listener]:
         """
         Find all wildcard listeners that match the given event name.
 
@@ -364,6 +369,7 @@ class Event:
             True if event_name matches the pattern, False otherwise
         """
         import fnmatch
+
         return fnmatch.fnmatch(event_name, pattern)
 
     def _should_queue(self, listener: Listener) -> bool:
@@ -393,7 +399,9 @@ class Event:
         except asyncio.CancelledError:
             pass  # Task was cancelled, ignore
         except Exception as e:
-            Log.error(f"Fire-and-forget listener failed with exception: {str(e)}", exc_info=True)
+            Log.error(
+                f"Fire-and-forget listener failed with exception: {str(e)}", exc_info=True
+            )
 
     def _queue_listener(self, listener: Listener, event: Event) -> bool:
         """
@@ -437,7 +445,7 @@ class Event:
     # strong ref the GC can collect a Task whose owning code went
     # out of scope, and the coroutine simply vanishes mid-flight.
     # Tasks remove themselves from this set when done.
-    _pending_tasks: "set[asyncio.Task]" = set()
+    _pending_tasks: set[asyncio.Task] = set()
 
     @classmethod
     def _track(cls, task: asyncio.Task) -> None:

@@ -6,7 +6,7 @@ This module provides a CLI command to list application routes with enhanced UX.
 
 import inspect
 import re
-from typing import Any, List, Optional
+from typing import Any
 
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -23,7 +23,7 @@ from cara.routing import RouteResolver
 class RouteListCommand(CommandBase):
     """List application routes with enhanced display."""
 
-    def handle(self, filter: Optional[str] = None):
+    def handle(self, filter: str | None = None):
         """Handle route listing with basic filtering."""
         self.info("🛣️  Application Routes")
 
@@ -44,7 +44,7 @@ class RouteListCommand(CommandBase):
         # Show routes
         self._show_routes(routes)
 
-    def _get_routes(self) -> List[Any]:
+    def _get_routes(self) -> list[Any]:
         """Get all registered routes."""
         router = self.application.make("router")
         routes = list(router.routes)
@@ -54,7 +54,7 @@ class RouteListCommand(CommandBase):
 
         return routes
 
-    def _filter_routes(self, routes: List[Any], pattern: str) -> List[Any]:
+    def _filter_routes(self, routes: list[Any], pattern: str) -> list[Any]:
         """Filter routes by pattern matching URI or name."""
         try:
             regex = re.compile(pattern, re.IGNORECASE)
@@ -78,7 +78,7 @@ class RouteListCommand(CommandBase):
             self.error(f"❌ Invalid filter pattern '{pattern}': {e}")
             return []
 
-    def _show_routes(self, routes: List[Any]) -> None:
+    def _show_routes(self, routes: list[Any]) -> None:
         """Display routes in a table."""
         headers = ["URI", "Name", "Methods", "Controller", "Middleware"]
         rows = []
@@ -184,7 +184,7 @@ class RouteListCommand(CommandBase):
 
         return "—"
 
-    def _show_stats(self, routes: List[Any]) -> None:
+    def _show_stats(self, routes: list[Any]) -> None:
         """Show enhanced route statistics."""
         methods = set()
         named_count = 0

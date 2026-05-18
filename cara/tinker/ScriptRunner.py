@@ -5,7 +5,7 @@ This file contains the script runner for executing Tinker scripts with Rich inte
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -20,7 +20,7 @@ from .Shell import Shell
 class ScriptRunner:
     """Tinker script runner with Rich integration."""
 
-    def __init__(self, shell: Optional[Shell] = None):
+    def __init__(self, shell: Shell | None = None):
         """Initialize script runner with Rich console."""
         self.shell = shell or Shell()
         self.repl = Repl(self.shell.namespace)
@@ -29,7 +29,7 @@ class ScriptRunner:
     def run_script(
         self,
         script_content: str,
-        context: Dict[str, Any] = None,
+        context: dict[str, Any] = None,
         show_progress: bool = True,
     ):
         """Run script content with Rich progress tracking."""
@@ -67,7 +67,7 @@ class ScriptRunner:
         return results
 
     def run_file(
-        self, file_path: str, context: Dict[str, Any] = None, show_progress: bool = True
+        self, file_path: str, context: dict[str, Any] = None, show_progress: bool = True
     ):
         """Run script from file with Rich formatting."""
         path = Path(file_path)
@@ -89,7 +89,7 @@ class ScriptRunner:
 
         return self.run_script(content, context, show_progress)
 
-    def _execute_line(self, line: str, line_num: int) -> Dict[str, Any]:
+    def _execute_line(self, line: str, line_num: int) -> dict[str, Any]:
         """Execute a single line and return result info."""
         try:
             result = self.repl.execute(line)

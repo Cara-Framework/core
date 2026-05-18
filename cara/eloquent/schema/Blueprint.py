@@ -105,7 +105,9 @@ class Blueprint:
 
     def unsigned_big_integer(self, column, length=32, nullable=False):
         """Create unsigned big integer column - delegates to ColumnFactory"""
-        self._last_column = self.column_factory.unsigned_big_integer(column, length, nullable)
+        self._last_column = self.column_factory.unsigned_big_integer(
+            column, length, nullable
+        )
         return self
 
     def binary(self, column, nullable=False):
@@ -455,4 +457,3 @@ class Blueprint:
     def get_sql(self):
         """Get generated SQL"""
         return getattr(self, "_generated_sql", self.to_sql())
-

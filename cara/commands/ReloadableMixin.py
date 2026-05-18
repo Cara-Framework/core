@@ -98,11 +98,11 @@ class ReloadableMixin:
 
         # Modules to purge for hot reload
         purge_patterns = [
-            'app.',           # Application modules
-            'packages.',      # Package modules
-            'config.',        # Config modules
-            'routes.',        # Route modules
-            'database.',      # Database modules
+            "app.",  # Application modules
+            "packages.",  # Package modules
+            "config.",  # Config modules
+            "routes.",  # Route modules
+            "database.",  # Database modules
         ]
 
         modules_to_remove = []

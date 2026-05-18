@@ -16,8 +16,8 @@ Usage:
 import asyncio
 import threading
 import time
-from typing import Any, Callable, Optional
-
+from collections.abc import Callable
+from typing import Any
 
 _exception_buckets: dict = {}
 _throttle_gates: dict = {}
@@ -45,7 +45,7 @@ class ThrottlesExceptions:
         max_exceptions: int = 3,
         decay_seconds: int = 60,
         retry_after: int = 300,
-        key: Optional[str] = None,
+        key: str | None = None,
     ):
         self.max_exceptions = max_exceptions
         self.decay_seconds = decay_seconds

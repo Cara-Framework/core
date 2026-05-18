@@ -6,7 +6,7 @@ This file provides the interactive shell functionality with Rich integration.
 
 import os
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -162,7 +162,9 @@ class Shell:
                                     self.namespace[model_name] = model_class
                                     loaded_models.append(model_name)
                             except Exception as e:
-                                print(f"[tinker] swallowed model-load error for {model_name}: {e}")
+                                print(
+                                    f"[tinker] swallowed model-load error for {model_name}: {e}"
+                                )
 
             except ImportError:
                 continue
@@ -872,7 +874,7 @@ class Shell:
         # Start interactive session
         try:
             console.interact()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             print("\n👋 Goodbye!")
 
     def execute_command(self, command: str):
@@ -896,10 +898,10 @@ class Shell:
         """Add variable to namespace."""
         self.namespace[name] = value
 
-    def get_namespace(self) -> Dict[str, Any]:
+    def get_namespace(self) -> dict[str, Any]:
         """Get current namespace."""
         return self.namespace.copy()
 
-    def update_namespace(self, updates: Dict[str, Any]):
+    def update_namespace(self, updates: dict[str, Any]):
         """Update namespace with new variables."""
         self.namespace.update(updates)

@@ -5,7 +5,8 @@ This module provides a validation rule that checks if a value matches a given re
 """
 
 import re
-from typing import Any, Dict
+from typing import Any
+
 from cara.validation.rules import BaseRule
 
 
@@ -16,7 +17,7 @@ class RegexRule(BaseRule):
     Usage: "regex:^[A-Z0-9_]+$"
     """
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         raw_pattern = params.get("regex")
         if not raw_pattern or not isinstance(value, str):
             return False
@@ -28,5 +29,5 @@ class RegexRule(BaseRule):
 
         return bool(pattern.match(value))
 
-    def message(self, field: str, params: Dict[str, Any]) -> str:
+    def message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' format is invalid."

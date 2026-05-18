@@ -6,10 +6,12 @@ more callables and returns / prints the elapsed milliseconds::
     elapsed = Benchmark.measure(lambda: heavy_query())
     # → 124.3   (ms)
 
-    results = Benchmark.measure({
-        "query": lambda: heavy_query(),
-        "render": lambda: render_page(),
-    })
+    results = Benchmark.measure(
+        {
+            "query": lambda: heavy_query(),
+            "render": lambda: render_page(),
+        }
+    )
     # → {"query": 124.3, "render": 18.7}
 
     Benchmark.dd(lambda: heavy_query())
@@ -23,7 +25,8 @@ once and uses :func:`time.perf_counter` for monotonic precision.
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Dict, Mapping, Union
+from collections.abc import Callable, Mapping
+from typing import Any
 
 
 class Benchmark:
@@ -31,9 +34,9 @@ class Benchmark:
 
     @staticmethod
     def measure(
-        target: Union[Callable[[], Any], Mapping[str, Callable[[], Any]]],
+        target: Callable[[], Any] | Mapping[str, Callable[[], Any]],
         iterations: int = 1,
-    ) -> Union[float, Dict[str, float]]:
+    ) -> float | dict[str, float]:
         """Time ``target`` and return milliseconds.
 
         * Single callable → returns ``float`` milliseconds.
@@ -59,7 +62,7 @@ class Benchmark:
         return result, elapsed_ms
 
     @staticmethod
-    def dd(target: Union[Callable[[], Any], Mapping[str, Callable[[], Any]]]) -> None:
+    def dd(target: Callable[[], Any] | Mapping[str, Callable[[], Any]]) -> None:
         """Measure, print formatted result, and exit (Laravel parity).
 
         ``dd`` = "dump and die". Useful for one-off profiling where

@@ -36,19 +36,19 @@ Configurable via ``config/compression.py`` → ``COMPRESSION`` dict:
 from __future__ import annotations
 
 import gzip
-from typing import Any, Callable, Iterable, Optional, Tuple
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from cara.configuration import config
 from cara.http import Request
 from cara.middleware import Middleware
-
 
 # Default compressible MIME prefixes. Match conservatively: anything
 # already compressed (image/*, video/*, audio/*, application/zip,
 # application/gzip, application/x-bzip2, application/x-7z-compressed,
 # font/woff2) is excluded by absence, not by an explicit blocklist —
 # easier to extend than to maintain a denylist that lags new formats.
-_DEFAULT_COMPRESSIBLE_PREFIXES: Tuple[str, ...] = (
+_DEFAULT_COMPRESSIBLE_PREFIXES: tuple[str, ...] = (
     "text/",
     "application/json",
     "application/ld+json",
@@ -64,7 +64,7 @@ _DEFAULT_COMPRESSIBLE_PREFIXES: Tuple[str, ...] = (
 )
 
 _DEFAULT_MIN_SIZE = 1024  # 1 KB — below this gzip overhead dominates.
-_DEFAULT_LEVEL = 6        # nginx's gzip_comp_level default.
+_DEFAULT_LEVEL = 6  # nginx's gzip_comp_level default.
 
 
 class CompressResponses(Middleware):
@@ -76,11 +76,11 @@ class CompressResponses(Middleware):
         self._enabled, self._min_size, self._level, self._prefixes = self._load_config()
 
     @staticmethod
-    def _load_config() -> Tuple[bool, int, int, Tuple[str, ...]]:
+    def _load_config() -> tuple[bool, int, int, tuple[str, ...]]:
         enabled = True
         min_size = _DEFAULT_MIN_SIZE
         level = _DEFAULT_LEVEL
-        prefixes: Tuple[str, ...] = _DEFAULT_COMPRESSIBLE_PREFIXES
+        prefixes: tuple[str, ...] = _DEFAULT_COMPRESSIBLE_PREFIXES
         try:
             cfg_enabled = config("compression.compression.enabled", None)
             if cfg_enabled is not None:
@@ -89,7 +89,7 @@ class CompressResponses(Middleware):
             if cfg_min is not None:
                 try:
                     min_size = max(0, int(cfg_min))
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     pass
             cfg_level = config("compression.compression.level", None)
             if cfg_level is not None:
@@ -97,7 +97,7 @@ class CompressResponses(Middleware):
                     lvl = int(cfg_level)
                     if 1 <= lvl <= 9:
                         level = lvl
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     pass
             cfg_types = config("compression.compression.content_types", None)
             if isinstance(cfg_types, (list, tuple)) and cfg_types:
@@ -106,8 +106,7 @@ class CompressResponses(Middleware):
                 )
         except Exception as e:
             CompressResponses._log_debug(
-                f"CompressResponses: config load failed "
-                f"({e.__class__.__name__}: {e})"
+                f"CompressResponses: config load failed ({e.__class__.__name__}: {e})"
             )
         return enabled, min_size, level, prefixes
 
@@ -147,8 +146,7 @@ class CompressResponses(Middleware):
             # through with the original bytes. Log at debug so a
             # systematic issue is visible during incident review.
             self._log_debug(
-                f"CompressResponses: gzip failed "
-                f"({e.__class__.__name__}: {e})"
+                f"CompressResponses: gzip failed ({e.__class__.__name__}: {e})"
             )
 
         return response
@@ -212,7 +210,7 @@ class CompressResponses(Middleware):
         return any(content_type.startswith(prefix) for prefix in self._prefixes)
 
     @staticmethod
-    def _response_bytes(response: Any) -> Optional[bytes]:
+    def _response_bytes(response: Any) -> bytes | None:
         try:
             content = getattr(response, "content", None)
             if isinstance(content, bytes):
@@ -224,9 +222,7 @@ class CompressResponses(Middleware):
             # Streaming / generator bodies — refuse. Compressing a
             # streaming response would buffer the whole payload, which
             # defeats the streaming and risks OOM on large feeds.
-            if isinstance(content, (Iterable,)) and not isinstance(
-                content, (bytes, str)
-            ):
+            if isinstance(content, (Iterable,)) and not isinstance(content, (bytes, str)):
                 return None
         except Exception:
             return None
@@ -252,7 +248,9 @@ class CompressResponses(Middleware):
     def _log_debug(msg: str) -> None:
         try:
             from cara.facades import Log
+
             Log.debug(msg, category="cara.http.compress_responses")
         except Exception:
             import sys
+
             print(msg, file=sys.stderr)

@@ -4,21 +4,22 @@ Command Decorator for the Cara framework.
 This module provides a decorator for registering command-line commands in the application.
 """
 
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, List, Optional, Type
+from typing import Any
 
 # Registry of decorated command classes
-_command_registry: List[Type[Any]] = []
+_command_registry: list[type[Any]] = []
 
 # Hook lists
-_before_hooks: List[Callable[[str], None]] = []
-_after_hooks: List[Callable[[str], None]] = []
-_on_error_hooks: List[Callable[[str, Exception], None]] = []
+_before_hooks: list[Callable[[str], None]] = []
+_after_hooks: list[Callable[[str], None]] = []
+_on_error_hooks: list[Callable[[str, Exception], None]] = []
 
 
 def command(
-    name: str, help: str = "", options: Optional[dict[str, str]] = None
-) -> Callable[[Type[Any]], Type[Any]]:
+    name: str, help: str = "", options: dict[str, str] | None = None
+) -> Callable[[type[Any]], type[Any]]:
     """
     Decorator to mark a class as a CLI command.
 
@@ -32,10 +33,10 @@ def command(
              Value: help description string.
     """
 
-    def decorator(cls: Type[Any]) -> Type[Any]:
-        setattr(cls, "name", name)
-        setattr(cls, "help", help)
-        setattr(cls, "_cli_options", options or {})
+    def decorator(cls: type[Any]) -> type[Any]:
+        cls.name = name
+        cls.help = help
+        cls._cli_options = options or {}
         _command_registry.append(cls)
         _wrap_init(cls)
         _wrap_handle(cls)
@@ -44,7 +45,7 @@ def command(
     return decorator
 
 
-def _wrap_init(cls: Type[Any]) -> None:
+def _wrap_init(cls: type[Any]) -> None:
     orig = cls.__init__
 
     @wraps(orig)
@@ -57,7 +58,7 @@ def _wrap_init(cls: Type[Any]) -> None:
     cls.__init__ = wrapped
 
 
-def _wrap_handle(cls: Type[Any]) -> None:
+def _wrap_handle(cls: type[Any]) -> None:
     if not hasattr(cls, "handle"):
         return
     orig = cls.handle
@@ -71,7 +72,7 @@ def _wrap_handle(cls: Type[Any]) -> None:
     cls.handle = wrapped
 
 
-def get_registered_commands() -> List[Type[Any]]:
+def get_registered_commands() -> list[type[Any]]:
     return _command_registry
 
 

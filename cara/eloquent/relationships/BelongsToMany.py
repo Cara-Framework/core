@@ -57,12 +57,12 @@ class BelongsToMany(BaseRelationship):
         if instance is None:
             return self
 
-        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
-        attr_name = func.__name__ if func and hasattr(func, '__name__') else None
+        func = getattr(self, "_func", None) or getattr(self, "fn", None)
+        attr_name = func.__name__ if func and hasattr(func, "__name__") else None
 
         # Return cached relation if already loaded (eager or previous lazy load)
         if attr_name:
-            relations = getattr(instance, '_relations', None)
+            relations = getattr(instance, "_relations", None)
             if relations is not None and attr_name in relations:
                 return relations[attr_name]
 
@@ -71,8 +71,8 @@ class BelongsToMany(BaseRelationship):
 
         # Cache in _relations so subsequent access doesn't re-query
         if attr_name:
-            if not hasattr(instance, '_relations') or instance._relations is None:
-                instance.__dict__.setdefault('_relations', {})
+            if not hasattr(instance, "_relations") or instance._relations is None:
+                instance.__dict__.setdefault("_relations", {})
             instance._relations[attr_name] = result
 
         return result
@@ -93,7 +93,6 @@ class BelongsToMany(BaseRelationship):
         """
         self.with_fields = list(columns)
         return self
-
 
     def apply_query(self, query, owner):
         """
@@ -168,14 +167,16 @@ class BelongsToMany(BaseRelationship):
         for model in result:
             pivot_data = {
                 self.local_key: getattr(model, f"{self._table}_id"),
-                self.foreign_key: getattr(model, "m_reserved2"),
+                self.foreign_key: model.m_reserved2,
             }
 
             if self.with_timestamps:
-                pivot_data.update({
-                    "created_at": getattr(model, "m_reserved5"),
-                    "updated_at": getattr(model, "m_reserved4"),
-                })
+                pivot_data.update(
+                    {
+                        "created_at": model.m_reserved5,
+                        "updated_at": model.m_reserved4,
+                    }
+                )
 
                 model.delete_attribute("m_reserved4")
                 model.delete_attribute("m_reserved5")
@@ -183,7 +184,7 @@ class BelongsToMany(BaseRelationship):
             model.delete_attribute("m_reserved2")
 
             if self.pivot_id:
-                pivot_data.update({self.pivot_id: getattr(model, "m_reserved3")})
+                pivot_data.update({self.pivot_id: model.m_reserved3})
                 model.delete_attribute("m_reserved3")
 
             if self.with_fields:
@@ -310,7 +311,7 @@ class BelongsToMany(BaseRelationship):
         for model in final_result:
             pivot_data = {
                 self.local_key: getattr(model, f"{self._table}_id"),
-                self.foreign_key: getattr(model, "m_reserved2"),
+                self.foreign_key: model.m_reserved2,
             }
 
             model.delete_attribute("m_reserved2")
@@ -318,13 +319,13 @@ class BelongsToMany(BaseRelationship):
             if self.with_timestamps:
                 pivot_data.update(
                     {
-                        "updated_at": getattr(model, "m_reserved4"),
-                        "created_at": getattr(model, "m_reserved5"),
+                        "updated_at": model.m_reserved4,
+                        "created_at": model.m_reserved5,
                     }
                 )
 
             if self.pivot_id:
-                pivot_data.update({self.pivot_id: getattr(model, "m_reserved3")})
+                pivot_data.update({self.pivot_id: model.m_reserved3})
                 model.delete_attribute("m_reserved3")
 
             if self.with_fields:
@@ -548,18 +549,15 @@ class BelongsToMany(BaseRelationship):
                 .table(self._table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(query.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(query.select(self.other_owner_key)),
                     ),
                 )
             ),
         )
 
         return return_query
-
 
     def get_with_sum_query(self, builder, column, callback, relation_name=None):
         query = self.get_builder()
@@ -580,11 +578,9 @@ class BelongsToMany(BaseRelationship):
                 .table(self._table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(query.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(query.select(self.other_owner_key)),
                     ),
                 )
             ),
@@ -611,11 +607,9 @@ class BelongsToMany(BaseRelationship):
                 .table(self._table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(query.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(query.select(self.other_owner_key)),
                     ),
                 )
             ),
@@ -642,11 +636,9 @@ class BelongsToMany(BaseRelationship):
                 .table(self._table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(query.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(query.select(self.other_owner_key)),
                     ),
                 )
             ),
@@ -673,11 +665,9 @@ class BelongsToMany(BaseRelationship):
                 .table(self._table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(query.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(query.select(self.other_owner_key)),
                     ),
                 )
             ),

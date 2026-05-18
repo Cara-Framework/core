@@ -2,7 +2,7 @@
 Can middleware for authorization checks.
 """
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from cara.exceptions import AuthorizationFailedException
 from cara.http import Request, Response
@@ -12,9 +12,7 @@ from cara.middleware import Middleware
 class CanPerform(Middleware):
     """Middleware for checking authorization abilities with automatic parameter parsing."""
 
-    def __init__(
-        self, application, ability: str = "view", resource: Optional[str] = None
-    ):
+    def __init__(self, application, ability: str = "view", resource: str | None = None):
         super().__init__(application)
         self.ability = ability
         self.resource = resource

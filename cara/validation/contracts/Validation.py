@@ -6,7 +6,7 @@ methods for validation operations.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class Validation(ABC):
@@ -15,10 +15,10 @@ class Validation(ABC):
     @staticmethod
     @abstractmethod
     def make(
-        data: Dict[str, Any],
-        rules: Dict[str, str],
-        messages: Optional[Dict[str, str]] = None,
-    ) -> "Validation":
+        data: dict[str, Any],
+        rules: dict[str, str],
+        messages: dict[str, str] | None = None,
+    ) -> Validation:
         """
         Run validation on `data` according to `rules` (Laravel-style).
 
@@ -49,5 +49,5 @@ class Validation(ABC):
         """
 
     @abstractmethod
-    def validated(self) -> Dict[str, Any]:
+    def validated(self) -> dict[str, Any]:
         """Return only the key/value pairs that passed all rules."""

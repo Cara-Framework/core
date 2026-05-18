@@ -4,20 +4,20 @@ ViewInstance - Individual view instance for Cara framework
 This file provides individual view instance functionality.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 
 class ViewInstance:
     """Individual view instance."""
 
-    def __init__(self, view: str, data: Dict[str, Any], engine, factory):
+    def __init__(self, view: str, data: dict[str, Any], engine, factory):
         """Initialize view instance."""
         self.view = view
         self.data = data
         self.engine = engine
         self.factory = factory
 
-    def with_data(self, key: str, value: Any = None) -> "ViewInstance":
+    def with_data(self, key: str, value: Any = None) -> ViewInstance:
         """Add data to view."""
         if isinstance(key, dict):
             self.data.update(key)
@@ -25,7 +25,7 @@ class ViewInstance:
             self.data[key] = value
         return self
 
-    def with_shared_data(self) -> "ViewInstance":
+    def with_shared_data(self) -> ViewInstance:
         """Add shared data to view."""
         shared_data = self.factory.get_shared_data()
         self.data = {**shared_data, **self.data}

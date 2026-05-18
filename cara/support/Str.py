@@ -8,7 +8,6 @@ import unicodedata
 from typing import Any
 from urllib import parse
 
-
 # --- Sanitization ---------------------------------------------------------
 # These patterns target the "user-supplied free text → JSON → HTML context"
 # pipeline. Reviews, comments, profile bios etc. should never carry markup
@@ -140,7 +139,7 @@ def add_query_params(url: str, query_params: dict) -> str:
     return f"{base_url}{base_path}"
 
 
-def get_controller_name(controller: "str|Any") -> str:
+def get_controller_name(controller: str | Any) -> str:
     """Get a controller string name from a controller argument used in routes."""
     # controller is a class or class.method
     if hasattr(controller, "__qualname__"):
@@ -171,14 +170,40 @@ def slugify(text: str, separator: str = "-") -> str:
 
     # Common character transliterations
     char_map = {
-        "ç": "c", "ğ": "g", "ı": "i", "ş": "s", "ö": "o", "ü": "u",
-        "Ç": "C", "Ğ": "G", "İ": "I", "Ş": "S", "Ö": "O", "Ü": "U",
-        "à": "a", "á": "a", "â": "a", "ã": "a", "ä": "a",
-        "è": "e", "é": "e", "ê": "e", "ë": "e",
-        "ì": "i", "í": "i", "î": "i", "ï": "i",
-        "ò": "o", "ó": "o", "ô": "o", "õ": "o",
-        "ù": "u", "ú": "u", "û": "u",
-        "ñ": "n", "ß": "ss",
+        "ç": "c",
+        "ğ": "g",
+        "ı": "i",
+        "ş": "s",
+        "ö": "o",
+        "ü": "u",
+        "Ç": "C",
+        "Ğ": "G",
+        "İ": "I",
+        "Ş": "S",
+        "Ö": "O",
+        "Ü": "U",
+        "à": "a",
+        "á": "a",
+        "â": "a",
+        "ã": "a",
+        "ä": "a",
+        "è": "e",
+        "é": "e",
+        "ê": "e",
+        "ë": "e",
+        "ì": "i",
+        "í": "i",
+        "î": "i",
+        "ï": "i",
+        "ò": "o",
+        "ó": "o",
+        "ô": "o",
+        "õ": "o",
+        "ù": "u",
+        "ú": "u",
+        "û": "u",
+        "ñ": "n",
+        "ß": "ss",
     }
     for char, replacement in char_map.items():
         text = text.replace(char, replacement)
@@ -260,8 +285,12 @@ def format_money_cents(cents: int, currency: str = "USD") -> str:
 
     currency = currency.upper()
     symbols = {
-        "USD": "$", "EUR": "€", "GBP": "£", "TRY": "₺",
-        "AUD": "A$", "CAD": "C$",
+        "USD": "$",
+        "EUR": "€",
+        "GBP": "£",
+        "TRY": "₺",
+        "AUD": "A$",
+        "CAD": "C$",
     }
     if currency not in symbols:
         raise ValueError(f"unsupported currency: {currency}")
@@ -462,6 +491,7 @@ def pluralize(word: str) -> str:
 # needle support so callers can pass a list of candidates instead of
 # rolling their own ``any()``.
 
+
 def uuid() -> str:
     """Generate a random UUID v4 string — Laravel ``Str::uuid()`` parity.
 
@@ -486,7 +516,7 @@ def ulid() -> str:
         import ulid as _ulid_mod  # type: ignore
     except ImportError:
         return uuid()
-    if hasattr(_ulid_mod, 'new'):
+    if hasattr(_ulid_mod, "new"):
         return str(_ulid_mod.new())
     return str(_ulid_mod.ULID())
 
@@ -565,7 +595,7 @@ def after(haystack: str, needle: str) -> str:
     if not haystack or not needle:
         return haystack or ""
     idx = haystack.find(needle)
-    return haystack if idx < 0 else haystack[idx + len(needle):]
+    return haystack if idx < 0 else haystack[idx + len(needle) :]
 
 
 def between(haystack: str, start: str, end: str) -> str:

@@ -5,7 +5,6 @@ MigrationGenerator: Generate migration content from model definitions.
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
 
 from cara.support import paths
 
@@ -22,7 +21,7 @@ class MigrationGenerator:
         if self.counter_file.exists():
             try:
                 return int(self.counter_file.read_text().strip())
-            except (ValueError, FileNotFoundError):
+            except ValueError, FileNotFoundError:
                 return 0
         return 0
 
@@ -40,7 +39,7 @@ class MigrationGenerator:
         self.counter_file.write_text("0")
 
     def generate_create_migration(
-        self, model_info: Dict, style: str = "blueprint"
+        self, model_info: dict, style: str = "blueprint"
     ) -> str:
         """Generate CREATE TABLE migration content."""
         # Check if model has fields method
@@ -71,7 +70,7 @@ class MigrationGenerator:
             return self._generate_blueprint_create_migration(model_info)
 
     def generate_update_migration(
-        self, model_info: Dict, diff: List[str], style: str = "blueprint"
+        self, model_info: dict, diff: list[str], style: str = "blueprint"
     ) -> str:
         """Generate ALTER TABLE migration content."""
         if style == "sql":
@@ -111,7 +110,7 @@ class MigrationGenerator:
 
         return filepath
 
-    def _generate_blueprint_create_migration(self, model_info: Dict) -> str:
+    def _generate_blueprint_create_migration(self, model_info: dict) -> str:
         """Generate blueprint-style CREATE TABLE migration."""
         stub_path = self._get_create_stub_path()
         stub_content = stub_path.read_text()
@@ -190,7 +189,7 @@ class MigrationGenerator:
         return result
 
     def _generate_blueprint_update_migration(
-        self, model_info: Dict, diff: List[str]
+        self, model_info: dict, diff: list[str]
     ) -> str:
         """Generate blueprint-style ALTER TABLE migration."""
         stub_path = self._get_update_stub_path()
@@ -310,7 +309,7 @@ class MigrationGenerator:
         lines = [line.strip() for line in sql.split("\n") if line.strip()]
         return "\n".join(lines)
 
-    def _generate_sql_create_migration(self, model_info: Dict) -> str:
+    def _generate_sql_create_migration(self, model_info: dict) -> str:
         """Generate SQL-style CREATE TABLE migration using Blueprint's to_sql()."""
         from cara.eloquent.schema import Schema
 
@@ -352,7 +351,7 @@ class {class_name}(Migration):
         self.schema.new_connection().query("DROP TABLE IF EXISTS {table_name};")
 '''
 
-    def _generate_sql_update_migration(self, model_info: Dict, diff: List[str]) -> str:
+    def _generate_sql_update_migration(self, model_info: dict, diff: list[str]) -> str:
         """Generate SQL-style ALTER TABLE migration using Blueprint's to_sql()."""
         from cara.eloquent.schema import Schema
 
@@ -430,7 +429,7 @@ class {class_name}(Migration):
         )
 '''
 
-    def _add_field_to_blueprint(self, table, field_name: str, field_info: Dict):
+    def _add_field_to_blueprint(self, table, field_name: str, field_info: dict):
         """Add a field to Blueprint table using field info."""
         field_type = field_info.get("type", "string")
         params = field_info.get("params", {})
@@ -526,7 +525,7 @@ class {class_name}(Migration):
                     on_delete
                 )
 
-    def _generate_field_line(self, field_name: str, field_info: Dict) -> str:
+    def _generate_field_line(self, field_name: str, field_info: dict) -> str:
         """Generate blueprint field line from field info."""
         field_method = field_info.get("type", "string")
         params = field_info.get("params", {})
@@ -558,9 +557,7 @@ class {class_name}(Migration):
                 blueprint_call = f'table.{field_method}("{field_name}", [{options_str}])'
             else:
                 blueprint_call = f'table.{field_method}("{field_name}", [])'
-        elif field_method in ["increments", "big_increments"]:
-            blueprint_call = f'table.{field_method}("{field_name}")'
-        elif field_method in [
+        elif field_method in ["increments", "big_increments"] or field_method in [
             "integer",
             "tiny_integer",
             "small_integer",
@@ -602,7 +599,7 @@ class {class_name}(Migration):
 
         return blueprint_call
 
-    def _generate_foreign_key_line(self, foreign_key_info: Dict) -> str:
+    def _generate_foreign_key_line(self, foreign_key_info: dict) -> str:
         """Generate foreign key constraint line from foreign key info."""
         field = foreign_key_info.get("field")
         references = foreign_key_info.get("references")
@@ -644,7 +641,6 @@ class {class_name}(Migration):
             / "UpdateMigration.stub"
         )
 
-
     def _get_raw_sql_stub_path(self) -> Path:
         """Get path to raw SQL migration stub."""
         return (
@@ -659,14 +655,12 @@ class {class_name}(Migration):
         stub_path = self._get_raw_sql_stub_path()
         return stub_path.read_text(encoding="utf-8")
 
-
-
-    def _generate_raw_sql_migration(self, model_info: Dict) -> str:
+    def _generate_raw_sql_migration(self, model_info: dict) -> str:
         """Generate migration using stub template."""
         model_name = model_info["name"]
 
         # Determine import path dynamically from file location
-        model_file = model_info.get('file', '')
+        model_file = model_info.get("file", "")
         model_import_path = self._generate_import_path(model_file, model_name)
 
         # Read stub template
@@ -674,7 +668,9 @@ class {class_name}(Migration):
 
         # Replace placeholders
         migration_content = stub_content.replace("{{ model_name }}", model_name)
-        migration_content = migration_content.replace("{{ model_import_path }}", model_import_path)
+        migration_content = migration_content.replace(
+            "{{ model_import_path }}", model_import_path
+        )
 
         return migration_content
 
@@ -686,9 +682,8 @@ class {class_name}(Migration):
         models_location = modules("models")
         return models_location
 
-
     def _inject_views_into_migration(
-        self, migration_content: str, views: List[Dict], table_name: str
+        self, migration_content: str, views: list[dict], table_name: str
     ) -> str:
         """Inject VIEW SQL statements into a generated migration.
 
@@ -705,9 +700,7 @@ class {class_name}(Migration):
             view_up_lines.append(
                 f'\n        DB.statement("""\n            {sql}\n        """)'
             )
-            view_down_lines.append(
-                f'        DB.statement("DROP VIEW IF EXISTS {name}")'
-            )
+            view_down_lines.append(f'        DB.statement("DROP VIEW IF EXISTS {name}")')
 
         # Ensure ``from cara.facades import DB`` is present
         if "from cara.facades import DB" not in migration_content:
@@ -722,8 +715,8 @@ class {class_name}(Migration):
         # We look for the blank line between up() body end and down() def.
         up_view_block = "\n".join(view_up_lines)
         migration_content = migration_content.replace(
-            '\n    def down(self):',
-            f'{up_view_block}\n\n    def down(self):',
+            "\n    def down(self):",
+            f"{up_view_block}\n\n    def down(self):",
         )
 
         # Insert VIEW drops before ``self.schema.drop(...)``

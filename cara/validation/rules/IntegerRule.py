@@ -4,7 +4,7 @@ Integer Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is an integer.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -13,7 +13,7 @@ from cara.validation.rules import BaseRule
 class IntegerRule(BaseRule):
     """Validates that a value is an integer or integer string."""
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value is an integer."""
         if value is None:
             return False
@@ -33,7 +33,7 @@ class IntegerRule(BaseRule):
 
         return False
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default integer validation message."""
         attribute = MessageFormatter.format_attribute_name(field)
         return f"The {attribute.lower()} field must be an integer."

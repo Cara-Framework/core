@@ -8,7 +8,7 @@ Prints full traceback on errors for easier debugging.
 import asyncio
 import inspect
 import traceback
-from typing import Any, Dict, List, Tuple, Type
+from typing import Any
 
 import typer
 from rich import print as rprint
@@ -27,7 +27,7 @@ class CommandRunner:
         """Run the Typer application."""
         self.console_app()
 
-    def register(self, cmd_cls: Type[Any]):
+    def register(self, cmd_cls: type[Any]):
         """
         Register a command class with Typer, building its signature from handle()
         and decorator options, and wiring before/after/error hooks.
@@ -61,7 +61,7 @@ class CommandRunner:
 
     def _split_handle_params(
         self, sig: inspect.Signature, handle_fn: Any = None
-    ) -> Tuple[List[inspect.Parameter], List[inspect.Parameter]]:
+    ) -> tuple[list[inspect.Parameter], list[inspect.Parameter]]:
         """
         Split handle() parameters into CLI parameters (primitive types or no annotation)
         and DI parameters (other annotated types).
@@ -87,7 +87,7 @@ class CommandRunner:
         # against the right module globals/locals. Falls back to the raw
         # signature on any failure so a single bad annotation can't take
         # the whole CLI out.
-        resolved_hints: Dict[str, Any] = {}
+        resolved_hints: dict[str, Any] = {}
         target_fn = handle_fn
         if target_fn is None:
             # Best-effort recovery for callers that didn't pass the fn.
@@ -99,8 +99,8 @@ class CommandRunner:
                 resolved_hints = _get_type_hints(target_fn) or {}
             except Exception:
                 resolved_hints = {}
-        cli_params: List[inspect.Parameter] = []
-        di_params: List[inspect.Parameter] = []
+        cli_params: list[inspect.Parameter] = []
+        di_params: list[inspect.Parameter] = []
         for param in sig.parameters.values():
             if param.name == "self":
                 continue
@@ -137,7 +137,7 @@ class CommandRunner:
 
     def _parse_decorator_options(
         self, raw_options
-    ) -> List[Tuple[str, List[str], Any, str, type]]:
+    ) -> list[tuple[str, list[str], Any, str, type]]:
         """
         Parse decorator options into a list of tuples:
         (param_name, flags_list, default_value, help_text, annotation).
@@ -171,7 +171,7 @@ class CommandRunner:
         # Normalize input → list of per-option dicts so we keep the
         # rich metadata (``type``, ``default``, ``is_flag``) instead of
         # collapsing to ``{name: help}``.
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         if isinstance(raw_options, list):
             for item in raw_options:
                 if isinstance(item, dict) and item.get("name"):
@@ -184,23 +184,28 @@ class CommandRunner:
 
         # Map ``"integer"``/``"string"``/``"bool"`` to real types so the
         # legacy string spellings still work alongside ``type=int``.
-        _TYPE_ALIASES: Dict[str, type] = {
-            "int": int, "integer": int,
-            "str": str, "string": str, "text": str,
-            "float": float, "double": float, "number": float,
-            "bool": bool, "boolean": bool, "flag": bool,
+        _TYPE_ALIASES: dict[str, type] = {
+            "int": int,
+            "integer": int,
+            "str": str,
+            "string": str,
+            "text": str,
+            "float": float,
+            "double": float,
+            "number": float,
+            "bool": bool,
+            "boolean": bool,
+            "flag": bool,
         }
 
         _SENTINEL = object()
-        parsed: List[Tuple[str, List[str], Any, str, type]] = []
+        parsed: list[tuple[str, list[str], Any, str, type]] = []
         for item in items:
             key = item.get("name", "")
             desc = item.get("help", "") or ""
             explicit_type = item.get("type")
             if isinstance(explicit_type, str):
-                explicit_type = _TYPE_ALIASES.get(
-                    explicit_type.strip().lower(), str
-                )
+                explicit_type = _TYPE_ALIASES.get(explicit_type.strip().lower(), str)
             explicit_default = item.get("default", _SENTINEL)
             is_flag = bool(item.get("is_flag", False))
 
@@ -232,9 +237,7 @@ class CommandRunner:
                 elif has_inline:
                     try:
                         final_default = (
-                            ann(inline_default)
-                            if inline_default is not None
-                            else None
+                            ann(inline_default) if inline_default is not None else None
                         )
                     except Exception:
                         final_default = inline_default
@@ -264,7 +267,7 @@ class CommandRunner:
                 final_default = False
 
             flag_tokens = flags_part.split("|")
-            flags: List[str] = []
+            flags: list[str] = []
             param_name: str | None = None
             for tok in flag_tokens:
                 tok = tok.strip()
@@ -286,9 +289,9 @@ class CommandRunner:
 
     def _build_signature_parameters(
         self,
-        cli_params: List[inspect.Parameter],
-        parsed_options: List[Tuple[str, List[str], Any, str, type]],
-    ) -> List[inspect.Parameter]:
+        cli_params: list[inspect.Parameter],
+        parsed_options: list[tuple[str, list[str], Any, str, type]],
+    ) -> list[inspect.Parameter]:
         """
         Build a list of inspect.Parameter for Typer, wrapping handle() params
         with typer.Argument or typer.Option, binding decorator options where names match,
@@ -296,7 +299,7 @@ class CommandRunner:
         """
         from inspect import Parameter
 
-        parameters: List[inspect.Parameter] = []
+        parameters: list[inspect.Parameter] = []
         existing_names = {param.name for param in cli_params}
         # Map option names to their flags/default/help/annotation for
         # quick lookup. The annotation is sourced from the decorator's
@@ -304,7 +307,7 @@ class CommandRunner:
         # ``_parse_decorator_options`` and propagated here so Typer/Click
         # picks the right click_type (scenario 12 fix — see the
         # ``_parse_decorator_options`` ROOT CAUSE comment).
-        option_map: Dict[str, Tuple[List[str], Any, str, type]] = {
+        option_map: dict[str, tuple[list[str], Any, str, type]] = {
             name_opt: (flags, default, help_text, ann)
             for name_opt, flags, default, help_text, ann in parsed_options
         }
@@ -370,7 +373,7 @@ class CommandRunner:
         return parameters
 
     def _make_callback(
-        self, cmd_cls: Type[Any], name: str, _di_params: List[inspect.Parameter]
+        self, cmd_cls: type[Any], name: str, _di_params: list[inspect.Parameter]
     ):
         """
         Create the Typer callback that:
@@ -405,22 +408,32 @@ class CommandRunner:
             # regardless of whether it runs sync or async. Bounded
             # cardinality (``name`` is a static registered command).
             import time as _t
+
             try:
                 from app.support.Metrics import Metrics as _M
+
                 # Optionally push metrics to a gateway so short-lived CLI
                 # commands show up in Grafana. The autopush helper may not
                 # exist (it's opt-in); that's fine — the important thing
                 # is that _M is set so counters still work for scrape-
                 # based collection.
                 try:
-                    from app.support.Metrics import start_pushgateway_autopush as _start_autopush
+                    from app.support.Metrics import (
+                        start_pushgateway_autopush as _start_autopush,
+                    )
+
                     try:
                         from cara.configuration import config
+
                         _push_interval = int(config("metrics.pushgateway_interval_s", 15))
                     except Exception:
-                        _push_interval = int(__import__("os").environ.get("METRICS_PUSHGATEWAY_INTERVAL_S", "15"))
+                        _push_interval = int(
+                            __import__("os").environ.get(
+                                "METRICS_PUSHGATEWAY_INTERVAL_S", "15"
+                            )
+                        )
                     _start_autopush(interval_seconds=_push_interval)
-                except (ImportError, AttributeError):
+                except ImportError, AttributeError:
                     pass
             except Exception:
                 _M = None  # type: ignore[assignment]
@@ -440,7 +453,8 @@ class CommandRunner:
                 if _M is not None:
                     try:
                         _M.command_invocations_total.labels(
-                            command=name, outcome=_cmd_outcome,
+                            command=name,
+                            outcome=_cmd_outcome,
                         ).inc()
                         _M.command_duration_seconds.labels(
                             command=name,
@@ -452,7 +466,8 @@ class CommandRunner:
             if _M is not None:
                 try:
                     _M.command_invocations_total.labels(
-                        command=name, outcome=_cmd_outcome,
+                        command=name,
+                        outcome=_cmd_outcome,
                     ).inc()
                     _M.command_duration_seconds.labels(
                         command=name,

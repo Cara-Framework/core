@@ -27,8 +27,9 @@ Usage:
 
 import threading
 import time
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 from cara.facades import Log
 
@@ -139,7 +140,7 @@ class CircuitBreaker:
                     f"Circuit '{self.name}' OPENED after {self._failure_count} failures: {error}"
                 )
 
-    def __enter__(self) -> "CircuitBreaker":
+    def __enter__(self) -> CircuitBreaker:
         if not self.is_available:
             raise CircuitOpenError(f"Circuit '{self.name}' is OPEN")
         with self._lock:

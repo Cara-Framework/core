@@ -5,7 +5,7 @@ This module provides utilities for building and configuring job schedules in a f
 Supports Laravel-style schedule features including overlapping prevention and maintenance mode.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 
 class ScheduleBuilder:
@@ -101,7 +101,7 @@ class ScheduleBuilder:
         )
         return self
 
-    def without_overlapping(self, timeout: int = 1440) -> "ScheduleBuilder":
+    def without_overlapping(self, timeout: int = 1440) -> ScheduleBuilder:
         """
         Prevent this scheduled task from overlapping executions (Laravel-style).
 
@@ -121,7 +121,7 @@ class ScheduleBuilder:
         self.options["lock_timeout"] = timeout
         return self
 
-    def skip_if_maintenance(self) -> "ScheduleBuilder":
+    def skip_if_maintenance(self) -> ScheduleBuilder:
         """
         Skip this scheduled task during maintenance mode (Laravel-style).
 
@@ -137,7 +137,7 @@ class ScheduleBuilder:
         self.options["skip_if_maintenance"] = True
         return self
 
-    def timezone(self, tz: str) -> "ScheduleBuilder":
+    def timezone(self, tz: str) -> ScheduleBuilder:
         """
         Set the timezone for this scheduled task (Laravel-style).
 
@@ -156,7 +156,7 @@ class ScheduleBuilder:
         self.options["timezone"] = tz
         return self
 
-    def on_success(self, callback: Callable) -> "ScheduleBuilder":
+    def on_success(self, callback: Callable) -> ScheduleBuilder:
         """
         Register a callback to run if the task succeeds (Laravel-style).
 
@@ -172,7 +172,7 @@ class ScheduleBuilder:
         self.options["on_success"] = callback
         return self
 
-    def on_failure(self, callback: Callable) -> "ScheduleBuilder":
+    def on_failure(self, callback: Callable) -> ScheduleBuilder:
         """
         Register a callback to run if the task fails (Laravel-style).
 

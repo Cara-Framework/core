@@ -6,7 +6,7 @@ supporting all Mailgun features including regions and attachments.
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 
@@ -18,7 +18,7 @@ class MailgunDriver(Mail):
 
     driver_name = "mailgun"
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize Mailgun driver.
 
@@ -42,7 +42,7 @@ class MailgunDriver(Mail):
         }
         return endpoints.get(self.region.lower(), endpoints["us"])
 
-    def send(self, mailable_data: Dict[str, Any]) -> bool:
+    def send(self, mailable_data: dict[str, Any]) -> bool:
         """
         Send email using Mailgun API.
 
@@ -90,9 +90,9 @@ class MailgunDriver(Mail):
                     if hasattr(handle, "close"):
                         handle.close()
                 except Exception:
-                        pass
+                    pass
 
-    def _prepare_data(self, mailable_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_data(self, mailable_data: dict[str, Any]) -> dict[str, Any]:
         """
         Prepare email data for Mailgun API.
 
@@ -155,7 +155,7 @@ class MailgunDriver(Mail):
 
         return data
 
-    def _format_recipients(self, recipients: List[str]) -> str:
+    def _format_recipients(self, recipients: list[str]) -> str:
         """
         Format recipient list for Mailgun.
 
@@ -169,7 +169,7 @@ class MailgunDriver(Mail):
             return recipients
         return ", ".join(recipients)
 
-    def _prepare_attachments(self, mailable_data: Dict[str, Any]) -> List[tuple]:
+    def _prepare_attachments(self, mailable_data: dict[str, Any]) -> list[tuple]:
         """
         Prepare attachments for Mailgun.
 
@@ -195,7 +195,7 @@ class MailgunDriver(Mail):
 
         return files
 
-    def _render_view(self, template: str, data: Dict[str, Any]) -> Optional[str]:
+    def _render_view(self, template: str, data: dict[str, Any]) -> str | None:
         """
         Render view template. This is a placeholder implementation.
 

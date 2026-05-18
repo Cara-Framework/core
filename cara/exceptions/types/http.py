@@ -4,7 +4,7 @@ HTTP Exception Type for the Cara framework.
 This module defines exception types related to HTTP operations.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .base import CaraException
 
@@ -34,7 +34,7 @@ class HttpException(CaraException):
     status_code = 500
 
     def __init__(
-        self, message: str = "An error occurred", status_code: Optional[int] = None, **kwargs
+        self, message: str = "An error occurred", status_code: int | None = None, **kwargs
     ):
         super().__init__(message)
         # Use provided status_code or fall back to class attribute
@@ -44,18 +44,35 @@ class HttpException(CaraException):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert exception to dictionary for JSON response."""
-        result = {
+    def to_dict(self) -> dict[str, Any]:
+        """Convert exception to dictionary for JSON response.
+
+        Canonical error shape: ``{error, type, ...optional context}``.
+
+        ``type`` is the machine-readable discriminator clients branch
+        on. Pre-fix, ``to_dict`` emitted only ``{error}`` for plain
+        HTTP exceptions while validation errors emitted
+        ``{error, type, errors, meta}`` and the auth middleware emitted
+        ``{error, message}`` — same status code returned two or three
+        different shapes from different framework paths, and clients
+        had to substring-match the human-readable error to tell them
+        apart. Homogenising on ``type`` makes a single client switch
+        work for every framework-raised error.
+        """
+        result: dict[str, Any] = {
             "error": str(self),
+            "type": self.__class__.__name__,
         }
 
-        # Add any extra attributes that don't start with underscore
+        # Add any extra attributes that don't start with underscore.
+        # ``type`` was already set above; never let a subclass override
+        # it via __dict__ (would defeat the canonical-shape guarantee).
         for key, value in self.__dict__.items():
             if not key.startswith("_") and key not in [
                 "args",
                 "status_code",
                 "is_http_exception",
+                "type",
             ]:
                 result[key] = value
 
@@ -100,4 +117,3 @@ __all__ = [
     "RouteMiddlewareNotFoundException",
     "ResponseException",
 ]
-

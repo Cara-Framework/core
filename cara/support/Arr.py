@@ -14,7 +14,8 @@ with manual None-guards.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
 
 class Arr:
@@ -28,7 +29,7 @@ class Arr:
     # ── Dot-notation accessors ──────────────────────────────────────
 
     @staticmethod
-    def get(target: Any, key: Optional[str], default: Any = None) -> Any:
+    def get(target: Any, key: str | None, default: Any = None) -> Any:
         """Read ``key`` from a nested dict / list using dot-notation.
 
         ``key=None`` returns the target unchanged. Missing keys (or
@@ -55,7 +56,7 @@ class Arr:
                 # Wildcard: map the rest of the path across each item.
                 if not isinstance(current, (list, tuple)):
                     return default
-                rest = ".".join(segments[i + 1:])
+                rest = ".".join(segments[i + 1 :])
                 if not rest:
                     return list(current)
                 return [Arr.get(item, rest, default) for item in current]
@@ -76,7 +77,7 @@ class Arr:
         return current
 
     @staticmethod
-    def set(target: Dict[str, Any], key: str, value: Any) -> Dict[str, Any]:
+    def set(target: dict[str, Any], key: str, value: Any) -> dict[str, Any]:
         """Write ``key`` into a nested dict using dot-notation.
 
         Creates intermediate dicts as needed. Mutates ``target`` (and
@@ -107,7 +108,7 @@ class Arr:
         return Arr.get(target, key, sentinel) is not sentinel
 
     @staticmethod
-    def forget(target: Dict[str, Any], key: str) -> Dict[str, Any]:
+    def forget(target: dict[str, Any], key: str) -> dict[str, Any]:
         """Remove ``key`` from a nested dict using dot-notation."""
         if not key:
             return target
@@ -124,13 +125,13 @@ class Arr:
     # ── Slicing / picking ───────────────────────────────────────────
 
     @staticmethod
-    def only(target: Dict[str, Any], keys: Iterable[str]) -> Dict[str, Any]:
+    def only(target: dict[str, Any], keys: Iterable[str]) -> dict[str, Any]:
         """Return a new dict containing only ``keys`` from ``target``."""
         wanted = set(keys)
         return {k: v for k, v in target.items() if k in wanted}
 
     @staticmethod
-    def except_(target: Dict[str, Any], keys: Iterable[str]) -> Dict[str, Any]:
+    def except_(target: dict[str, Any], keys: Iterable[str]) -> dict[str, Any]:
         """Return a new dict with ``keys`` excluded.
 
         Named ``except_`` because ``except`` is reserved in Python.
@@ -143,8 +144,8 @@ class Arr:
     def pluck(
         items: Iterable[Any],
         value_key: str,
-        index_key: Optional[str] = None,
-    ) -> Union[List[Any], Dict[Any, Any]]:
+        index_key: str | None = None,
+    ) -> list[Any] | dict[Any, Any]:
         """Extract one field from each row.
 
         With ``index_key`` returns a dict keyed by that field; without
@@ -165,7 +166,7 @@ class Arr:
     @staticmethod
     def first(
         items: Iterable[Any],
-        predicate: Optional[Callable[[Any], bool]] = None,
+        predicate: Callable[[Any], bool] | None = None,
         default: Any = None,
     ) -> Any:
         """Return the first item (matching ``predicate`` if given), else ``default``."""
@@ -177,7 +178,7 @@ class Arr:
     @staticmethod
     def last(
         items: Sequence[Any],
-        predicate: Optional[Callable[[Any], bool]] = None,
+        predicate: Callable[[Any], bool] | None = None,
         default: Any = None,
     ) -> Any:
         """Return the last item (matching ``predicate`` if given), else ``default``."""
@@ -189,9 +190,9 @@ class Arr:
         return default
 
     @staticmethod
-    def collapse(items: Iterable[Iterable[Any]]) -> List[Any]:
+    def collapse(items: Iterable[Iterable[Any]]) -> list[Any]:
         """Flatten one level — list of lists → flat list."""
-        out: List[Any] = []
+        out: list[Any] = []
         for sub in items:
             if isinstance(sub, (list, tuple)):
                 out.extend(sub)
@@ -200,13 +201,13 @@ class Arr:
         return out
 
     @staticmethod
-    def flatten(items: Iterable[Any], depth: int = -1) -> List[Any]:
+    def flatten(items: Iterable[Any], depth: int = -1) -> list[Any]:
         """Recursively flatten nested lists.
 
         ``depth=-1`` flattens fully; ``depth=1`` collapses one level
         (equivalent to :meth:`collapse`).
         """
-        out: List[Any] = []
+        out: list[Any] = []
         for item in items:
             if isinstance(item, (list, tuple)) and depth != 0:
                 out.extend(Arr.flatten(item, depth - 1 if depth > 0 else -1))
@@ -215,12 +216,12 @@ class Arr:
         return out
 
     @staticmethod
-    def divide(target: Dict[Any, Any]) -> tuple:
+    def divide(target: dict[Any, Any]) -> tuple:
         """Split a dict into ``(keys_list, values_list)`` — Laravel parity."""
         return list(target.keys()), list(target.values())
 
     @staticmethod
-    def wrap(value: Any) -> List[Any]:
+    def wrap(value: Any) -> list[Any]:
         """Coerce ``value`` to a list — None → [], scalar → [scalar],
         list/tuple → list. Mirrors Laravel's ``Arr::wrap``.
         """

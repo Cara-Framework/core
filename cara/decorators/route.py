@@ -10,18 +10,19 @@ Supported extras (passed as kwargs):
   - middleware: List[Any]      # list of middleware classes or callables
 """
 
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, List, Optional, TypedDict, Union
+from typing import Any, TypedDict
 
 
 # Strongly‐typed metadata shape for clarity
 class RouteMeta(TypedDict, total=False):
-    methods: List[str]
+    methods: list[str]
     path: str
-    name: Optional[str]
-    prefix: Optional[str]
-    namespace: Optional[str]
-    middleware: Optional[List[Any]]
+    name: str | None
+    prefix: str | None
+    namespace: str | None
+    middleware: list[Any] | None
     handler: Callable[..., Any]
 
 
@@ -31,8 +32,8 @@ class RouteDecorator:
     def get(
         self,
         path: str,
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """GET route decorator"""
         return self._route(path, ["GET"], name, middleware)
@@ -40,8 +41,8 @@ class RouteDecorator:
     def post(
         self,
         path: str,
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """POST route decorator"""
         return self._route(path, ["POST"], name, middleware)
@@ -49,8 +50,8 @@ class RouteDecorator:
     def put(
         self,
         path: str,
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """PUT route decorator"""
         return self._route(path, ["PUT"], name, middleware)
@@ -58,8 +59,8 @@ class RouteDecorator:
     def patch(
         self,
         path: str,
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """PATCH route decorator"""
         return self._route(path, ["PATCH"], name, middleware)
@@ -67,8 +68,8 @@ class RouteDecorator:
     def delete(
         self,
         path: str,
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """DELETE route decorator"""
         return self._route(path, ["DELETE"], name, middleware)
@@ -76,8 +77,8 @@ class RouteDecorator:
     def options(
         self,
         path: str,
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """OPTIONS route decorator"""
         return self._route(path, ["OPTIONS"], name, middleware)
@@ -85,8 +86,8 @@ class RouteDecorator:
     def any(
         self,
         path: str,
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """ANY route decorator (all HTTP methods)"""
         return self._route(
@@ -95,10 +96,10 @@ class RouteDecorator:
 
     def match(
         self,
-        methods: List[str],
+        methods: list[str],
         path: str,
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """MATCH route decorator for specific methods"""
         return self._route(path, methods, name, middleware)
@@ -106,9 +107,9 @@ class RouteDecorator:
     def _route(
         self,
         path: str,
-        methods: List[str],
-        name: Optional[str] = None,
-        middleware: Optional[Union[str, list]] = None,
+        methods: list[str],
+        name: str | None = None,
+        middleware: str | list | None = None,
     ):
         """Internal route method"""
 
@@ -145,10 +146,10 @@ class RouteDecorator:
 route = RouteDecorator()
 
 
-_pending_routes: List[dict] = []
+_pending_routes: list[dict] = []
 
 
-def all_pending() -> List[dict]:
+def all_pending() -> list[dict]:
     """Return pending routes collected from @route decorators."""
     return _pending_routes.copy()
 

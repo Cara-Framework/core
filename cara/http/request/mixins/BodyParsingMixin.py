@@ -7,7 +7,7 @@ and multipart file uploads with Laravel-like validation and error handling.
 
 import json
 from functools import lru_cache
-from typing import Any, Dict, Optional
+from typing import Any
 
 from multipart import MultipartParser
 from multipart.multipart import parse_options_header
@@ -23,7 +23,7 @@ from cara.http.request import UploadedFile
 # ``app.body.MAX_FILES`` at boot.
 # ---------------------------------------------------------------------
 @lru_cache(maxsize=1)
-def _body_limits() -> Dict[str, int]:
+def _body_limits() -> dict[str, int]:
     """Resolve body-parsing limits from config with sane fallbacks.
 
     Cached for the life of the process — the values come from boot
@@ -163,7 +163,7 @@ class BodyParsingMixin:
         self._body_consumed = True
         return body
 
-    async def json(self) -> Dict[str, Any]:
+    async def json(self) -> dict[str, Any]:
         """
         Parse and cache JSON body.
 
@@ -183,7 +183,7 @@ class BodyParsingMixin:
         except json.JSONDecodeError as exc:
             raise BadRequestException(f"Invalid JSON body: {exc}") from exc
 
-    async def json_dict(self) -> Dict[str, Any]:
+    async def json_dict(self) -> dict[str, Any]:
         """Parse JSON body, always returning a dict.
 
         Replaces the repeated controller pattern::
@@ -198,7 +198,7 @@ class BodyParsingMixin:
         data = await self.json()
         return data if isinstance(data, dict) else {}
 
-    def _validate_multipart_structure(self, content_type: str) -> Optional[bytes]:
+    def _validate_multipart_structure(self, content_type: str) -> bytes | None:
         """Validate multipart content type and extract boundary."""
         if "multipart/form-data" not in content_type:
             return None
@@ -405,7 +405,7 @@ class BodyParsingMixin:
         except Exception as exc:
             raise BadRequestException(f"Failed to parse multipart data: {exc}") from exc
 
-    async def form(self) -> Dict[str, Any]:
+    async def form(self) -> dict[str, Any]:
         """
         Return form parameters parsed from body.
 
@@ -415,7 +415,7 @@ class BodyParsingMixin:
             await self._parse_multipart()
         return self._form_params or {}
 
-    async def files(self) -> Dict[str, UploadedFile]:
+    async def files(self) -> dict[str, UploadedFile]:
         """
         Return uploaded files; triggers multipart parsing if needed.
 
@@ -425,7 +425,7 @@ class BodyParsingMixin:
             await self._parse_multipart()
         return self._files or {}
 
-    async def file(self, name: str) -> Optional[UploadedFile]:
+    async def file(self, name: str) -> UploadedFile | None:
         """
         Get a specific uploaded file by field name.
 
@@ -451,7 +451,7 @@ class BodyParsingMixin:
         file = await self.file(name)
         return file is not None and file.is_valid()
 
-    async def validate_file(self, field_name: str, **rules) -> Optional[str]:
+    async def validate_file(self, field_name: str, **rules) -> str | None:
         """
         Simple file validation - Laravel style.
 
@@ -482,14 +482,14 @@ class BodyParsingMixin:
 
         return None
 
-    async def all(self) -> Dict[str, Any]:
+    async def all(self) -> dict[str, Any]:
         """
         Combine all inputs (query, form, JSON) with priority: JSON > form > query.
 
         Returns a flat dict with Laravel-like behavior.
         """
         # Get query params with proper flattening
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         for key, value in self._input.all_as_values().items():
             if isinstance(value, list) and len(value) == 1 and not key.endswith("[]"):
                 result[key] = value[0]  # Flatten single-item lists

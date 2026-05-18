@@ -4,7 +4,7 @@ Defines the core contract for notifiable entities in the Cara framework.
 Any entity that can receive notifications must implement these methods.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class Notifiable:
@@ -12,7 +12,7 @@ class Notifiable:
     A contract for entities that can receive notifications.
     """
 
-    def route_notification_for(self, channel: str) -> Optional[Any]:
+    def route_notification_for(self, channel: str) -> Any | None:
         """
         Get the notification routing information for the given channel.
 

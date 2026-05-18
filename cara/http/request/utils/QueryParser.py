@@ -7,7 +7,7 @@ structures, arrays, and Laravel-style bracket notation.
 
 import re
 from collections import defaultdict
-from typing import Any, Dict
+from typing import Any
 from urllib.parse import unquote_plus
 
 
@@ -21,7 +21,7 @@ class QueryStringParser:
     - tags[0]=python&tags[1]=web -> {'tags': ['python', 'web']}
     """
 
-    def parse(self, query_string: str) -> Dict[str, Any]:
+    def parse(self, query_string: str) -> dict[str, Any]:
         """
         Parse query string into nested data structure.
 
@@ -50,7 +50,7 @@ class QueryStringParser:
             flat_dict[key].append(value)
 
         # Process array notation and single values
-        processed_dict: Dict[str, Any] = {}
+        processed_dict: dict[str, Any] = {}
         for key, values in flat_dict.items():
             if key.endswith("[]"):
                 # Array syntax: key[] => always store as list
@@ -62,7 +62,7 @@ class QueryStringParser:
         # Parse nested structures
         return self._parse_nested_input(processed_dict)
 
-    def _parse_nested_input(self, flat_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def _parse_nested_input(self, flat_dict: dict[str, Any]) -> dict[str, Any]:
         """
         Parse flat dictionary with bracket notation into nested structure.
 
@@ -78,14 +78,14 @@ class QueryStringParser:
         Returns:
             Nested dictionary structure
         """
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
 
         for key, value in flat_dict.items():
             self._set_nested_value(result, key, value)
 
         return result
 
-    def _set_nested_value(self, result: Dict[str, Any], key: str, value: Any) -> None:
+    def _set_nested_value(self, result: dict[str, Any], key: str, value: Any) -> None:
         """
         Set a nested value in the result dictionary based on the key path.
 

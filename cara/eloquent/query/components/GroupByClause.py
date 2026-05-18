@@ -2,6 +2,7 @@
 GroupByClause - Simple GROUP BY clause component
 """
 
+
 class GroupByClause:
     """Simple GROUP BY clause representation."""
 
@@ -18,4 +19,3 @@ class GroupByClause:
 
     def to_sql(self) -> str:
         return str(self)
-

@@ -6,7 +6,6 @@ This is framework-level functionality, not app-specific.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 
 class CancellableJob(ABC):
@@ -19,10 +18,10 @@ class CancellableJob(ABC):
     def __init__(self, *args, **kwargs):
         """Initialize cancellable job with tracking ID."""
         super().__init__()  # object.__init__() takes no arguments
-        self.job_tracking_id: Optional[str] = None
+        self.job_tracking_id: str | None = None
         self.is_cancelled: bool = False
 
-    def set_tracking_id(self, tracking_id: str) -> "CancellableJob":
+    def set_tracking_id(self, tracking_id: str) -> CancellableJob:
         """
         Set job tracking ID for cancellation management.
 
@@ -101,7 +100,7 @@ class JobCancelledException(Exception):
     """Exception raised when a job is cancelled during execution."""
 
     def __init__(
-        self, message: str = "Job was cancelled", tracking_id: Optional[str] = None
+        self, message: str = "Job was cancelled", tracking_id: str | None = None
     ):
         super().__init__(message)
         self.tracking_id = tracking_id

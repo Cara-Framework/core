@@ -19,7 +19,8 @@ import importlib
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Any, Type
+from typing import Any
+
 
 def _find_services_root() -> Path:
     """Locate the services project root.
@@ -60,7 +61,7 @@ def _load_file(dotted: str, file_path: Path) -> Any:
     return module
 
 
-def load_service(name: str) -> Type[Any]:
+def load_service(name: str) -> type[Any]:
     """Load ``app.services.<name>`` and return the class of the same name.
 
     Example::
@@ -77,7 +78,7 @@ def load_service(name: str) -> Type[Any]:
     return getattr(module, name)
 
 
-def load_contract(name: str) -> Type[Any]:
+def load_contract(name: str) -> type[Any]:
     """Load ``app.contracts.<name>`` and return the class of the same name."""
     dotted = f"app.contracts.{name}"
     path = _SERVICES_ROOT / "app" / "contracts" / f"{name}.py"
@@ -107,8 +108,8 @@ def stub_modules(*dotted_names: str) -> None:
         sys.modules[name] = types.ModuleType(name)
 
 
+from collections.abc import Iterator  # noqa: E402
 from contextlib import contextmanager  # noqa: E402
-from typing import Iterator  # noqa: E402
 
 
 @contextmanager

@@ -4,7 +4,8 @@ RequiredWithout Validation Rule.
 Field becomes required when any of the listed fields is NOT present.
 Usage: ``required_without:field1,field2,...``.
 """
-from typing import Any, Dict
+
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -19,7 +20,7 @@ def _is_present(v) -> bool:
 
 
 class RequiredWithoutRule(BaseRule):
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         raw = params.get("required_without") or params.get("requiredwithout")
         if not raw:
             return True
@@ -29,7 +30,7 @@ class RequiredWithoutRule(BaseRule):
             return True
         return _is_present(value)
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
         raw = params.get("required_without") or params.get("requiredwithout", "")
         return f"The {attr.lower()} field is required when {raw} is not present."

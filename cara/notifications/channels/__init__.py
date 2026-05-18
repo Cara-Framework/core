@@ -12,9 +12,9 @@ from .SlackChannel import SlackChannel
 from .LogChannel import LogChannel
 
 __all__ = [
-    'BaseChannel',
-    'MailChannel',
-    'DatabaseChannel',
-    'SlackChannel',
-    'LogChannel',
+    "BaseChannel",
+    "MailChannel",
+    "DatabaseChannel",
+    "SlackChannel",
+    "LogChannel",
 ]

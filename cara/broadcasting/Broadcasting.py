@@ -17,13 +17,13 @@ whether redis or memory is the active broadcaster).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Union
-
-from cara.exceptions import BroadcastingConfigurationException
-from cara.facades import Log
+from collections.abc import Sequence
+from typing import Any, Union
 
 from cara.broadcasting.Channel import Channel, channel_name
 from cara.broadcasting.ChannelRegistry import ChannelAuthCallback, ChannelRegistry
+from cara.exceptions import BroadcastingConfigurationException
+from cara.facades import Log
 
 ChannelLike = Union[str, Channel]
 
@@ -39,13 +39,13 @@ class Broadcasting:
     def __init__(self, application: Any, default_driver: str) -> None:
         self.application = application
         self.default_driver = default_driver
-        self._drivers: Dict[str, Any] = {}
+        self._drivers: dict[str, Any] = {}
         self._channels = ChannelRegistry()
 
     # ------------------------------------------------------------------
     # Driver management
     # ------------------------------------------------------------------
-    def driver(self, name: Optional[str] = None) -> Any:
+    def driver(self, name: str | None = None) -> Any:
         """Resolve a driver by name. Falls back to the default driver
         when ``name`` is omitted. Raises if the driver isn't registered
         — callers should configure the driver they intend to use."""
@@ -71,7 +71,7 @@ class Broadcasting:
     # ------------------------------------------------------------------
     # Channel authorization (Laravel ``Broadcast::channel``)
     # ------------------------------------------------------------------
-    def channel(self, pattern: str, callback: Optional[ChannelAuthCallback] = None):
+    def channel(self, pattern: str, callback: ChannelAuthCallback | None = None):
         """Register a channel auth callback.
 
         Usable as either::
@@ -97,7 +97,7 @@ class Broadcasting:
         self,
         channel: str,
         user: Any,
-    ) -> Union[bool, Dict[str, Any]]:
+    ) -> bool | dict[str, Any]:
         """Decide whether ``user`` may subscribe to ``channel``.
 
         Public channels (no recognised auth prefix) always pass.
@@ -131,12 +131,12 @@ class Broadcasting:
     # ------------------------------------------------------------------
     async def broadcast(
         self,
-        channels: Union[ChannelLike, Sequence[ChannelLike]],
+        channels: ChannelLike | Sequence[ChannelLike],
         event: str,
-        data: Optional[Dict[str, Any]] = None,
+        data: dict[str, Any] | None = None,
         *,
-        except_socket_id: Optional[str] = None,
-        driver: Optional[str] = None,
+        except_socket_id: str | None = None,
+        driver: str | None = None,
     ) -> None:
         """Fan out ``event`` to ``channels`` via the (optional) named
         driver or the default."""
@@ -160,7 +160,9 @@ class Broadcasting:
         # must pass. Mirrors Laravel where both methods exist and
         # both must allow the broadcast.
         try:
-            should_fire = bool(event.broadcast_when()) and not bool(event.broadcast_unless())
+            should_fire = bool(event.broadcast_when()) and not bool(
+                event.broadcast_unless()
+            )
         except Exception as e:
             Log.warning(
                 f"broadcast_when/unless on {type(event).__name__} raised: {e}",
@@ -218,8 +220,8 @@ class Broadcasting:
         self,
         connection_id: str,
         websocket: Any,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         await self.driver().add_connection(connection_id, websocket, user_id, metadata)
 
@@ -236,9 +238,9 @@ class Broadcasting:
         self,
         user_id: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         await self.driver().broadcast_to_user(
             user_id, event, data, except_socket_id=except_socket_id
@@ -250,10 +252,10 @@ class Broadcasting:
     def get_connection_count(self) -> int:
         return self.driver().get_connection_count()
 
-    def get_channel_subscribers(self, channel: ChannelLike) -> List[str]:
+    def get_channel_subscribers(self, channel: ChannelLike) -> list[str]:
         return self.driver().get_channel_subscribers(channel_name(channel))
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return self.driver().get_stats()
 
     # ------------------------------------------------------------------
@@ -261,8 +263,8 @@ class Broadcasting:
     # ------------------------------------------------------------------
     @staticmethod
     def _normalize_channels(
-        channels: Union[ChannelLike, Sequence[ChannelLike]],
-    ) -> List[str]:
+        channels: ChannelLike | Sequence[ChannelLike],
+    ) -> list[str]:
         if isinstance(channels, (str, Channel)):
             return [channel_name(channels)]
         if isinstance(channels, (list, tuple)):

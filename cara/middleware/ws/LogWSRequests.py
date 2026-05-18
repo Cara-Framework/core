@@ -1,5 +1,5 @@
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from cara.facades import Log
 from cara.middleware import Middleware
@@ -37,10 +37,7 @@ class LogWSRequests(Middleware):
             name = type(e).__name__
             code = getattr(e, "code", None)
             is_benign = name == "WebSocketException" and code == 4002
-            msg = (
-                f"🔌 WS: {ip}:{port} -> CLOSE {path} ✗ {name} "
-                f"| {elapsed:.2f}ms"
-            )
+            msg = f"🔌 WS: {ip}:{port} -> CLOSE {path} ✗ {name} | {elapsed:.2f}ms"
             if is_benign:
                 Log.debug(msg, category="cara.websocket")
             else:

@@ -5,7 +5,6 @@ Provides comprehensive date and time handling with timezone support.
 """
 
 from datetime import datetime
-from typing import Optional
 
 import pendulum
 
@@ -61,11 +60,11 @@ class DateTimeCast(BaseCast):
         "H:i:s d.m.Y": "HH:mm:ss DD.MM.YYYY",  # 21:53:03 26.06.2025
     }
 
-    def __init__(self, format_string: Optional[str] = None, timezone: str = "UTC"):
+    def __init__(self, format_string: str | None = None, timezone: str = "UTC"):
         self.format_string = self._convert_format(format_string)
         self.timezone = timezone
 
-    def _convert_format(self, format_str: Optional[str]) -> Optional[str]:
+    def _convert_format(self, format_str: str | None) -> str | None:
         """Convert PHP-style format to Pendulum format."""
         if not format_str:
             return None
@@ -131,8 +130,7 @@ class DateTimeCast(BaseCast):
                 # Cheap heuristic for "this string carries timezone
                 # info" — if it ends in Z, +HH:MM, -HH:MM, etc.
                 has_tz = bool(s) and (
-                    s.endswith("Z")
-                    or any(ch in s[10:] for ch in ("+", "-"))
+                    s.endswith("Z") or any(ch in s[10:] for ch in ("+", "-"))
                 )
                 dt = pendulum.parse(s, tz=None if has_tz else app_timezone)
 

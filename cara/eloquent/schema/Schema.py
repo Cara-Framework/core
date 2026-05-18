@@ -273,11 +273,15 @@ class Schema:
             schema.gin_index("product", "search_vector")
             schema.gin_index("brand", "aliases", opclass="jsonb_path_ops")
         """
-        return self._create_using_index("GIN", table, column, opclass, name, if_not_exists)
+        return self._create_using_index(
+            "GIN", table, column, opclass, name, if_not_exists
+        )
 
     def gist_index(self, table, column, opclass=None, name=None, if_not_exists=True):
         """Create a Postgres GiST index. Same signature as gin_index."""
-        return self._create_using_index("GIST", table, column, opclass, name, if_not_exists)
+        return self._create_using_index(
+            "GIST", table, column, opclass, name, if_not_exists
+        )
 
     def _create_using_index(self, method, table, column, opclass, name, if_not_exists):
         columns = column if isinstance(column, (list, tuple)) else [column]

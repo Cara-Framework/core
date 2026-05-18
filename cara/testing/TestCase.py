@@ -13,10 +13,10 @@ Each test gets a clean fake registry; nothing leaks between tests.
 from __future__ import annotations
 
 import unittest
-from typing import Any, Optional, Type
+from typing import Any
 
-from .Expectation import expect as _expect
 from .Expectation import Expectation
+from .Expectation import expect as _expect
 from .facade_swap import register, reset, uninstall_patch
 from .fakes import (
     CacheFake,
@@ -124,13 +124,13 @@ class TestCase(unittest.TestCase):
 
     # ── Mocking ──────────────────────────────────────────────────────
 
-    def mock(self, contract: Optional[Type[Any]] = None) -> Mock:
+    def mock(self, contract: type[Any] | None = None) -> Mock:
         return Mock(contract)
 
-    def spy(self, contract: Optional[Type[Any]] = None) -> Spy:
+    def spy(self, contract: type[Any] | None = None) -> Spy:
         return Spy(contract)
 
     # ── Expectation sugar ────────────────────────────────────────────
 
-    def expect(self, value: Any, *, label: Optional[str] = None) -> Expectation:
+    def expect(self, value: Any, *, label: str | None = None) -> Expectation:
         return _expect(value, label=label)

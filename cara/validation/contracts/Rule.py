@@ -5,7 +5,7 @@ This module defines the contract that any validation rule must implement, specif
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any
 
 
 class Rule(ABC):
@@ -14,7 +14,7 @@ class Rule(ABC):
     """
 
     @abstractmethod
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """
         Execute validation logic.
 
@@ -25,7 +25,7 @@ class Rule(ABC):
         """
 
     @abstractmethod
-    def message(self, field: str, params: Dict[str, Any]) -> str:
+    def message(self, field: str, params: dict[str, Any]) -> str:
         """
         Return the error message for this rule, using field name and params.
 

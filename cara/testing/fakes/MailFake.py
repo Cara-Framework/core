@@ -6,23 +6,24 @@ who got what without touching SMTP.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, List, Optional, Union
+from typing import Any
 
 
 @dataclass
 class SentMail:
-    to: List[str] = field(default_factory=list)
-    cc: List[str] = field(default_factory=list)
-    bcc: List[str] = field(default_factory=list)
-    subject: Optional[str] = None
-    body: Optional[str] = None
-    template: Optional[str] = None
+    to: list[str] = field(default_factory=list)
+    cc: list[str] = field(default_factory=list)
+    bcc: list[str] = field(default_factory=list)
+    subject: str | None = None
+    body: str | None = None
+    template: str | None = None
     context: dict = field(default_factory=dict)
-    mailable: Optional[Any] = None
+    mailable: Any | None = None
 
 
-def _as_list(x: Union[None, str, Iterable[str]]) -> List[str]:
+def _as_list(x: None | str | Iterable[str]) -> list[str]:
     if x is None:
         return []
     if isinstance(x, str):
@@ -33,17 +34,17 @@ def _as_list(x: Union[None, str, Iterable[str]]) -> List[str]:
 class _PendingMail:
     """The fluent ``Mail.to(...).send(...)`` chain target."""
 
-    def __init__(self, fake: "MailFake", to: List[str]) -> None:
+    def __init__(self, fake: MailFake, to: list[str]) -> None:
         self._fake = fake
         self._to = to
-        self._cc: List[str] = []
-        self._bcc: List[str] = []
+        self._cc: list[str] = []
+        self._bcc: list[str] = []
 
-    def cc(self, addrs: Union[str, Iterable[str]]) -> "_PendingMail":
+    def cc(self, addrs: str | Iterable[str]) -> _PendingMail:
         self._cc.extend(_as_list(addrs))
         return self
 
-    def bcc(self, addrs: Union[str, Iterable[str]]) -> "_PendingMail":
+    def bcc(self, addrs: str | Iterable[str]) -> _PendingMail:
         self._bcc.extend(_as_list(addrs))
         return self
 
@@ -71,16 +72,16 @@ class MailFake:
     """A drop-in fake for the ``Mail`` facade."""
 
     def __init__(self) -> None:
-        self.sent: List[SentMail] = []
+        self.sent: list[SentMail] = []
 
     def _record(self, mail: SentMail) -> None:
         self.sent.append(mail)
 
     # Production-side surface
-    def to(self, addrs: Union[str, Iterable[str]]) -> _PendingMail:
+    def to(self, addrs: str | Iterable[str]) -> _PendingMail:
         return _PendingMail(self, _as_list(addrs))
 
-    def raw(self, body: str, to: Union[str, Iterable[str]], **kwargs: Any) -> bool:
+    def raw(self, body: str, to: str | Iterable[str], **kwargs: Any) -> bool:
         self._record(
             SentMail(
                 to=_as_list(to),
@@ -110,7 +111,7 @@ class MailFake:
 
     # ── Assertions ───────────────────────────────────────────────────
 
-    def all(self) -> List[SentMail]:
+    def all(self) -> list[SentMail]:
         return list(self.sent)
 
     def count(self) -> int:
@@ -119,10 +120,10 @@ class MailFake:
     def assert_sent(
         self,
         *,
-        to: Optional[str] = None,
-        subject: Optional[str] = None,
-        where: Optional[Callable[[SentMail], bool]] = None,
-        times: Optional[int] = None,
+        to: str | None = None,
+        subject: str | None = None,
+        where: Callable[[SentMail], bool] | None = None,
+        times: int | None = None,
     ) -> None:
         matches = self.sent
         if to is not None:

@@ -189,7 +189,7 @@ class Collection(Macroable):
         items = self._get_value(key) or self._items
         try:
             result = sum(items) / len(items)
-        except (TypeError, ZeroDivisionError):
+        except TypeError, ZeroDivisionError:
             pass
         return result
 
@@ -224,7 +224,7 @@ class Collection(Macroable):
             else:
                 # If odd number of items, return the middle value
                 return sorted_items[middle]
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
     def mode(self, key=None):
@@ -263,7 +263,7 @@ class Collection(Macroable):
                     mode_value = value
 
             return mode_value
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     def max(self, key=None):
@@ -285,7 +285,7 @@ class Collection(Macroable):
             if not items:
                 return 0
             return max(items)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             pass
         return result
 
@@ -307,7 +307,7 @@ class Collection(Macroable):
             if not items:
                 return 0
             return min(items)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
     def chunk(self, size: int):
@@ -720,7 +720,7 @@ class Collection(Macroable):
         """
         try:
             return self[key]
-        except (IndexError, KeyError):
+        except IndexError, KeyError:
             pass
 
         return self._value(default)
@@ -1257,6 +1257,7 @@ class Collection(Macroable):
         if callable(key):
             grouper = key
         else:
+
             def grouper(x):
                 """Resolve the group key from ``x`` via dotted-path lookup."""
                 return self._data_get(x, key)
@@ -1696,7 +1697,7 @@ class Collection(Macroable):
 
                 if next_data is not None:
                     return self._extract_wildcard_path(next_data, remaining)
-            except (KeyError, IndexError, AttributeError, TypeError, ValueError):
+            except KeyError, IndexError, AttributeError, TypeError, ValueError:
                 pass
 
             return []
@@ -2026,7 +2027,7 @@ class Collection(Macroable):
             return self._items.items()
         return self._items
 
-    def where_in(self, key, args: list) -> "Collection":
+    def where_in(self, key, args: list) -> Collection:
         """
         Alias for whereIn method for compatibility.
 
@@ -2039,7 +2040,7 @@ class Collection(Macroable):
         """
         return self.whereIn(key, args)
 
-    def where_not_in(self, key, args: list) -> "Collection":
+    def where_not_in(self, key, args: list) -> Collection:
         """
         Alias for whereNotIn method for compatibility.
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .MissingValue import MissingValue
 
@@ -25,6 +26,7 @@ class JsonResource:
                     ),
                 }
 
+
         # Single resource
         return ProductResource(product).to_response(response)
 
@@ -36,10 +38,10 @@ class JsonResource:
 
     def __init__(self, resource: Any):
         self.resource = resource
-        self._additional: Dict[str, Any] = {}
-        self._meta: Dict[str, Any] = {}
+        self._additional: dict[str, Any] = {}
+        self._meta: dict[str, Any] = {}
         self._status: int = 200
-        self._headers: Dict[str, str] = {}
+        self._headers: dict[str, str] = {}
 
     def to_array(self, request=None) -> dict:
         """Transform the resource into a dict.
@@ -58,17 +60,17 @@ class JsonResource:
         self._status = status
         return self
 
-    def with_headers(self, headers: Dict[str, str]) -> JsonResource:
+    def with_headers(self, headers: dict[str, str]) -> JsonResource:
         """Set additional response headers."""
         self._headers.update(headers)
         return self
 
-    def additional(self, data: Dict[str, Any]) -> JsonResource:
+    def additional(self, data: dict[str, Any]) -> JsonResource:
         """Merge extra top-level keys into the response envelope."""
         self._additional.update(data)
         return self
 
-    def with_meta(self, meta: Dict[str, Any]) -> JsonResource:
+    def with_meta(self, meta: dict[str, Any]) -> JsonResource:
         """Add pagination or other meta to the response."""
         self._meta.update(meta)
         return self
@@ -93,7 +95,9 @@ class JsonResource:
         return default() if callable(default) else default
 
     @staticmethod
-    def when_loaded(resource: Any, relation: str, value_fn: Optional[Callable] = None) -> Any:
+    def when_loaded(
+        resource: Any, relation: str, value_fn: Callable | None = None
+    ) -> Any:
         """Include a relation only when it has been eager-loaded.
 
         Args:
@@ -121,23 +125,23 @@ class JsonResource:
     # for every numeric field. These helpers eliminate that noise.
 
     @staticmethod
-    def opt_float(value: Any) -> Optional[float]:
+    def opt_float(value: Any) -> float | None:
         """Coerce to float, preserving None."""
         if value is None:
             return None
         try:
             return float(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     @staticmethod
-    def opt_int(value: Any) -> Optional[int]:
+    def opt_int(value: Any) -> int | None:
         """Coerce to int, preserving None."""
         if value is None:
             return None
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     @staticmethod
@@ -148,7 +152,7 @@ class JsonResource:
         return str(value).strip() or default
 
     @staticmethod
-    def opt_datetime(value: Any) -> Optional[str]:
+    def opt_datetime(value: Any) -> str | None:
         """Coerce a datetime-like value to an ISO-8601 string, preserving None."""
         if value is None:
             return None
@@ -199,7 +203,7 @@ class JsonResource:
     def collection(
         cls,
         items: Any,
-        meta: Dict[str, Any] = None,
+        meta: dict[str, Any] = None,
     ) -> ResourceCollection:
         """Create a ResourceCollection using this resource class."""
         from .ResourceCollection import ResourceCollection

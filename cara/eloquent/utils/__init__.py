@@ -12,8 +12,8 @@ from .DateManager import DateManager
 from .QueryHelper import QueryHelper
 
 __all__ = [
-    'DateManager',
-    'CastManager',
-    'QueryHelper',
-    'AttributeHelper',
+    "DateManager",
+    "CastManager",
+    "QueryHelper",
+    "AttributeHelper",
 ]

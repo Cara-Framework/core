@@ -9,7 +9,7 @@ import ipaddress
 import os
 import uuid
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import parse_qs
 
 from cara.http.request import UploadedFile
@@ -32,6 +32,7 @@ def _trusted_proxy_networks() -> tuple:
     """
     try:
         from cara.configuration import config
+
         raw = str(config("app.TRUSTED_PROXIES", "") or "")
     except Exception:
         raw = os.environ.get("TRUSTED_PROXIES", "")
@@ -50,7 +51,7 @@ def _is_trusted_proxy(addr: str) -> bool:
     """True if `addr` is inside any configured trusted-proxy network."""
     try:
         ip_obj = ipaddress.ip_address(addr)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return False
     return any(ip_obj in net for net in _trusted_proxy_networks())
 
@@ -66,25 +67,25 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
 
     def __init__(self, application):
         self.application = application
-        self.scope: Dict[str, Any] = {}
+        self.scope: dict[str, Any] = {}
         self.receive: Any = None
 
         self.headers = HeaderBag()
         self._input = InputBag()
-        self.params: Dict[str, Any] = {}
+        self.params: dict[str, Any] = {}
         self.route = None
 
         self._user: Any = None
-        self._ip: Optional[str] = None
-        self._body: Optional[bytes] = None
+        self._ip: str | None = None
+        self._body: bytes | None = None
         self._body_consumed = False
 
-        self._query_params: Optional[Dict[str, List[str]]] = None
-        self._form_params: Optional[Dict[str, Any]] = None
-        self._json_data: Optional[Dict[str, Any]] = None
-        self._files: Optional[Dict[str, UploadedFile]] = None
+        self._query_params: dict[str, list[str]] | None = None
+        self._form_params: dict[str, Any] | None = None
+        self._json_data: dict[str, Any] | None = None
+        self._files: dict[str, UploadedFile] | None = None
 
-        self.validated: Dict[str, Any] = {}
+        self.validated: dict[str, Any] = {}
         self._request_id = str(uuid.uuid4())
 
         current_request.set(self)
@@ -95,9 +96,9 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
 
     def load(
         self,
-        scope: Dict[str, Any] = None,
+        scope: dict[str, Any] = None,
         receive: Any = None,
-    ) -> "Request":
+    ) -> Request:
         """
         Initialize request data from ASGI scope and receive function.
 
@@ -132,7 +133,7 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         """Return request path."""
         return self.scope.get("path", "/")
 
-    def header(self, name: str, default: Any = None) -> Optional[str]:
+    def header(self, name: str, default: Any = None) -> str | None:
         """
         Retrieve a header value (case‐insensitive).
 
@@ -145,7 +146,7 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         """Return the Host header value."""
         return self.header("host", "")
 
-    def ip(self) -> Optional[str]:
+    def ip(self) -> str | None:
         """Return client IP address.
 
         X-Forwarded-For is only honored if the immediate peer is a trusted
@@ -179,14 +180,14 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         return self._ip
 
     @property
-    def query_params(self) -> Dict[str, List[str]]:
+    def query_params(self) -> dict[str, list[str]]:
         """Return parsed query parameters as a dict of lists."""
         if self._query_params is None:
             raw_qs = self.scope.get("query_string", b"").decode()
             self._query_params = parse_qs(raw_qs)
         return self._query_params
 
-    def get_query_param(self, key: str, default: Any = None) -> Optional[str]:
+    def get_query_param(self, key: str, default: Any = None) -> str | None:
         """Return first value for given query parameter, or default if missing."""
         values = self.query_params.get(key, [default])
         return values[0] if values else default
@@ -208,7 +209,7 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         """
         return self.params.get(name, default)
 
-    def load_params(self, params: Dict[str, Any] = None) -> "Request":
+    def load_params(self, params: dict[str, Any] = None) -> Request:
         """Load route parameters after routing was matched."""
         if params:
             self.params = params
@@ -222,7 +223,7 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         """Return matched route object."""
         return self.route
 
-    def set_route(self, route: Any) -> "Request":
+    def set_route(self, route: Any) -> Request:
         """Set matched route object."""
         self.route = route
         return self
@@ -231,7 +232,7 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         """Return authenticated user, if set."""
         return self._user
 
-    def set_user(self, user: Any) -> "Request":
+    def set_user(self, user: Any) -> Request:
         """Set authenticated user object."""
         self._user = user
         return self

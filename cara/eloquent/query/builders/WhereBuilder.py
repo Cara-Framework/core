@@ -5,7 +5,7 @@ Handles all WHERE-related query building operations cleanly and efficiently.
 Follows DRY and KISS principles.
 """
 
-from typing import Any, List
+from typing import Any
 
 from cara.eloquent.expressions.BetweenExpression import BetweenExpression
 from cara.eloquent.expressions.QueryExpression import QueryExpression
@@ -33,7 +33,7 @@ class WhereBuilder:
 
     # ===== Basic WHERE =====
 
-    def where(self, column: str, *args) -> "WhereBuilder":
+    def where(self, column: str, *args) -> WhereBuilder:
         """Add a basic WHERE condition."""
         operator, value = self._extract_operator_value(*args)
 
@@ -52,7 +52,7 @@ class WhereBuilder:
 
         return self
 
-    def or_where(self, column: str, *args) -> "WhereBuilder":
+    def or_where(self, column: str, *args) -> WhereBuilder:
         """Add an OR WHERE condition."""
         operator, value = self._extract_operator_value(*args)
 
@@ -73,7 +73,7 @@ class WhereBuilder:
 
     # ===== WHERE IN/NOT IN =====
 
-    def where_in(self, column: str, values: List[Any]) -> "WhereBuilder":
+    def where_in(self, column: str, values: list[Any]) -> WhereBuilder:
         """Add WHERE IN condition."""
         if not values:
             # Empty list should match nothing
@@ -96,7 +96,7 @@ class WhereBuilder:
         self._bindings.extend(cleaned_values)
         return self
 
-    def where_not_in(self, column: str, values: List[Any]) -> "WhereBuilder":
+    def where_not_in(self, column: str, values: list[Any]) -> WhereBuilder:
         """Add WHERE NOT IN condition."""
         if not values:
             # Empty list should match everything
@@ -120,7 +120,7 @@ class WhereBuilder:
 
     # ===== NULL CONDITIONS =====
 
-    def where_null(self, column: str) -> "WhereBuilder":
+    def where_null(self, column: str) -> WhereBuilder:
         """Add WHERE column IS NULL condition."""
         self._wheres.append(
             QueryExpression(
@@ -133,7 +133,7 @@ class WhereBuilder:
         )
         return self
 
-    def where_not_null(self, column: str) -> "WhereBuilder":
+    def where_not_null(self, column: str) -> WhereBuilder:
         """Add WHERE column IS NOT NULL condition."""
         self._wheres.append(
             QueryExpression(
@@ -146,7 +146,7 @@ class WhereBuilder:
         )
         return self
 
-    def or_where_null(self, column: str) -> "WhereBuilder":
+    def or_where_null(self, column: str) -> WhereBuilder:
         """Add OR WHERE column IS NULL condition."""
         self._wheres.append(
             QueryExpression(
@@ -161,7 +161,7 @@ class WhereBuilder:
 
     # ===== BETWEEN CONDITIONS =====
 
-    def where_between(self, column: str, low: Any, high: Any) -> "WhereBuilder":
+    def where_between(self, column: str, low: Any, high: Any) -> WhereBuilder:
         """Add WHERE BETWEEN condition."""
         self._wheres.append(
             BetweenExpression(
@@ -172,7 +172,7 @@ class WhereBuilder:
         self._bindings.extend([low, high])
         return self
 
-    def where_not_between(self, column: str, low: Any, high: Any) -> "WhereBuilder":
+    def where_not_between(self, column: str, low: Any, high: Any) -> WhereBuilder:
         """Add WHERE NOT BETWEEN condition."""
         self._wheres.append(
             BetweenExpression(
@@ -185,7 +185,7 @@ class WhereBuilder:
 
     # ===== RAW CONDITIONS =====
 
-    def where_raw(self, query: str, bindings: tuple = ()) -> "WhereBuilder":
+    def where_raw(self, query: str, bindings: tuple = ()) -> WhereBuilder:
         """Add raw WHERE condition."""
         self._wheres.append(
             QueryExpression(
@@ -206,7 +206,7 @@ class WhereBuilder:
 
     def where_column(
         self, column1: str, column2: str, operator: str = "="
-    ) -> "WhereBuilder":
+    ) -> WhereBuilder:
         """Add WHERE column comparison."""
         self._wheres.append(
             QueryExpression(
@@ -222,11 +222,11 @@ class WhereBuilder:
 
     # ===== Getters =====
 
-    def get_wheres(self) -> List:
+    def get_wheres(self) -> list:
         """Get all WHERE conditions."""
         return self._wheres.copy()
 
-    def get_bindings(self) -> List:
+    def get_bindings(self) -> list:
         """Get all bindings."""
         return self._bindings.copy()
 
@@ -245,7 +245,7 @@ class WhereBuilder:
         else:
             raise ValueError("Invalid number of arguments for WHERE condition")
 
-    def reset(self) -> "WhereBuilder":
+    def reset(self) -> WhereBuilder:
         """Reset all WHERE conditions."""
         self._wheres = []
         self._bindings = []

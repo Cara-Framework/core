@@ -15,13 +15,14 @@ scheduler to sit idle for hours.
 
 import inspect
 import time as _time
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from cara.facades import Log
 from cara.scheduling.contracts import Scheduling
 
-
 # ── Prometheus instrumentation wrapper ────────────────────────────────
+
 
 def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
     """Wrap a scheduled callback with Prometheus counter + histogram."""
@@ -36,10 +37,11 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
         try:
             _M.scheduled_tasks_total.labels(task=identifier, outcome=outcome).inc()
             _M.scheduled_task_duration_seconds.labels(task=identifier).observe(duration)
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             pass
 
     if inspect.iscoroutinefunction(callback):
+
         async def _async_wrapped(*a, **kw):
             start = _time.time()
             try:
@@ -49,6 +51,7 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
             except Exception:
                 _observe("failure", _time.time() - start)
                 raise
+
         _async_wrapped.__name__ = getattr(callback, "__name__", f"scheduled_{identifier}")
         return _async_wrapped
 
@@ -61,11 +64,13 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
         except Exception:
             _observe("failure", _time.time() - start)
             raise
+
     _sync_wrapped.__name__ = getattr(callback, "__name__", f"scheduled_{identifier}")
     return _sync_wrapped
 
 
 # ── Error listener ────────────────────────────────────────────────────
+
 
 def _job_error_listener(event) -> None:
     """Forward APScheduler job errors to Cara's Log facade."""
@@ -88,19 +93,20 @@ def _job_error_listener(event) -> None:
 
 # ── Driver ────────────────────────────────────────────────────────────
 
+
 class APSchedulerDriver(Scheduling):
     """APScheduler driver — always BackgroundScheduler, auto-reload safe."""
 
     driver_name = "apscheduler"
 
-    def __init__(self, settings: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, settings: dict[str, Any] | None = None) -> None:
         settings = settings or {}
         self._settings = settings
         self._configure_logging()
 
         # Registry: list of (identifier, instrumented_callback, trigger, job_opts)
         # Survives scheduler restarts — jobs are re-applied on start().
-        self._job_registry: List[Tuple[str, Callable, Any, Dict]] = []
+        self._job_registry: list[tuple[str, Callable, Any, dict]] = []
 
         self.scheduler = self._create_scheduler()
 
@@ -108,6 +114,7 @@ class APSchedulerDriver(Scheduling):
 
     def _configure_logging(self) -> None:
         import logging
+
         # Let warnings through so misfire notices are visible.
         logging.getLogger("apscheduler").setLevel(logging.WARNING)
         # Executor errors are forwarded via our event listener, so keep
@@ -117,7 +124,7 @@ class APSchedulerDriver(Scheduling):
     def _create_scheduler(self):
         from apscheduler.schedulers.background import BackgroundScheduler
 
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         for key in ("jobstores", "executors", "job_defaults", "timezone"):
             if key in self._settings:
                 kwargs[key] = self._settings[key]
@@ -134,7 +141,10 @@ class APSchedulerDriver(Scheduling):
         # Wire error listener so job failures appear in Cara logs.
         try:
             from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
-            scheduler.add_listener(_job_error_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
+
+            scheduler.add_listener(
+                _job_error_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR
+            )
         except ImportError:
             pass
 
@@ -146,14 +156,18 @@ class APSchedulerDriver(Scheduling):
         self,
         identifier: str,
         callback: Callable,
-        schedule_spec: Dict[str, Any],
-        options: Dict[str, Any],
+        schedule_spec: dict[str, Any],
+        options: dict[str, Any],
     ) -> None:
         silent = bool(options.get("silent", False))
 
         trigger = self._build_trigger(schedule_spec)
         instrumented = _instrument_scheduled(identifier, callback)
-        job_opts = options.get("apscheduler_job_options", {}) if isinstance(options, dict) else {}
+        job_opts = (
+            options.get("apscheduler_job_options", {})
+            if isinstance(options, dict)
+            else {}
+        )
 
         # Remove any previous entry with the same id.
         self._job_registry = [
@@ -240,7 +254,7 @@ class APSchedulerDriver(Scheduling):
 
     # ── Trigger builders ──────────────────────────────────────────────
 
-    def _build_trigger(self, spec: Dict[str, Any]):
+    def _build_trigger(self, spec: dict[str, Any]):
         sched_type = spec.get("type")
         if not sched_type:
             raise ValueError("schedule_spec must include 'type' key.")
@@ -266,11 +280,17 @@ class APSchedulerDriver(Scheduling):
                 raise ValueError("Cron type requires 'expression' string.")
             parts = expr.split()
             if len(parts) != 5:
-                raise ValueError("Cron expression must have 5 fields: minute hour day month day_of_week")
+                raise ValueError(
+                    "Cron expression must have 5 fields: minute hour day month day_of_week"
+                )
             minute, hour, day, month, day_of_week = parts
             return CronTrigger(
-                minute=minute, hour=hour, day=day,
-                month=month, day_of_week=day_of_week, timezone=tz,
+                minute=minute,
+                hour=hour,
+                day=day,
+                month=month,
+                day_of_week=day_of_week,
+                timezone=tz,
             )
         elif sched_type == "daily":
             return CronTrigger(
@@ -284,7 +304,8 @@ class APSchedulerDriver(Scheduling):
             return CronTrigger(
                 minute=spec.get("minute", 0),
                 hour=spec.get("hour", 0),
-                day="*", month="*",
+                day="*",
+                month="*",
                 day_of_week=spec.get("day_of_week"),
                 timezone=tz,
             )

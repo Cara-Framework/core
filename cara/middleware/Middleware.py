@@ -7,14 +7,9 @@ Laravel-style middleware with automatic parameter parsing and dependency injecti
 
 import inspect
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import (
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Type,
     Union,
     get_args,
     get_origin,
@@ -49,8 +44,8 @@ class Middleware(ABC):
 
     @classmethod
     def create_with_parameters(
-        cls, application: Any, parameters: Optional[List[str]] = None
-    ) -> "Middleware":
+        cls, application: Any, parameters: list[str] | None = None
+    ) -> Middleware:
         """
         Factory method to create middleware instance with automatic parameter parsing.
         Uses method signature inspection for type-safe parameter injection.
@@ -60,10 +55,10 @@ class Middleware(ABC):
         )
 
     @classmethod
-    def with_parameters(cls, *parameters: Any) -> Callable[[Any], "Middleware"]:
+    def with_parameters(cls, *parameters: Any) -> Callable[[Any], Middleware]:
         """Laravel-style factory for manual parameter setting."""
 
-        def factory(application: Any) -> "Middleware":
+        def factory(application: Any) -> Middleware:
             return cls.create_with_parameters(application, [str(p) for p in parameters])
 
         return factory
@@ -77,7 +72,7 @@ class MiddlewareParameterParser:
 
     @staticmethod
     def parse_and_create(
-        middleware_class: Type[Middleware], application: Any, parameters: List[str]
+        middleware_class: type[Middleware], application: Any, parameters: list[str]
     ) -> Middleware:
         """Create middleware instance with automatic parameter parsing."""
         # Get __init__ signature
@@ -99,7 +94,7 @@ class MiddlewareParameterParser:
     @staticmethod
     def _extract_parameter_definitions(
         signature: inspect.Signature,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]]:
         """Extract parameter definitions from __init__ signature."""
         definitions = {}
 
@@ -127,8 +122,8 @@ class MiddlewareParameterParser:
 
     @staticmethod
     def _parse_parameters(
-        definitions: Dict[str, Dict[str, Any]], raw_parameters: List[str]
-    ) -> Dict[str, Any]:
+        definitions: dict[str, dict[str, Any]], raw_parameters: list[str]
+    ) -> dict[str, Any]:
         """Parse raw parameters according to signature definitions."""
         parsed = {}
 
@@ -155,15 +150,13 @@ class MiddlewareParameterParser:
                 parsed[param_name] = parsed_value
             except Exception as e:
                 if is_required:
-                    raise ValueError(
-                        f"Cannot parse parameter '{param_name}': {e}"
-                    ) from e
+                    raise ValueError(f"Cannot parse parameter '{param_name}': {e}") from e
                 parsed[param_name] = default_value
 
         return parsed
 
     @staticmethod
-    def _convert_value(raw_value: str, target_type: Type) -> Any:
+    def _convert_value(raw_value: str, target_type: type) -> Any:
         """Convert raw string value to target type with support for complex types."""
         if not raw_value:
             return None
@@ -190,7 +183,7 @@ class MiddlewareParameterParser:
         return MiddlewareParameterParser._convert_basic_type(raw_value, target_type)
 
     @staticmethod
-    def _convert_basic_type(value: str, target_type: Type) -> Any:
+    def _convert_basic_type(value: str, target_type: type) -> Any:
         """Convert string to basic type."""
         if target_type == str or target_type is str:
             return value

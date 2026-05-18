@@ -5,7 +5,7 @@ Core authentication logic with easy customization points.
 Users can extend this in their app for custom authentication needs.
 """
 
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 from cara.facades import Log
 from cara.http import Request, Response
@@ -15,7 +15,7 @@ from cara.middleware import Middleware
 class ShouldAuthenticate(Middleware):
     """Base authentication middleware with automatic parameter parsing."""
 
-    def __init__(self, application, guards: Optional[List[str]] = None):
+    def __init__(self, application, guards: list[str] | None = None):
         super().__init__(application)
 
         if guards:
@@ -28,7 +28,9 @@ class ShouldAuthenticate(Middleware):
             auth_manager = application.make("auth")
             self.guards = [auth_manager.get_default_guard()]
         except Exception as e:
-            Log.warning(f"ShouldAuthenticate: failed to resolve default guard, falling back to jwt: {e}")
+            Log.warning(
+                f"ShouldAuthenticate: failed to resolve default guard, falling back to jwt: {e}"
+            )
             self.guards = ["jwt"]
 
     async def handle(self, request: Request, next_fn: Callable) -> Response:
@@ -74,10 +76,23 @@ class ShouldAuthenticate(Middleware):
         return response
 
     def authentication_failed(
-        self, request: Request, last_error: Optional[Exception] = None
+        self, request: Request, last_error: Exception | None = None
     ) -> Response:
         """Handle authentication failure."""
         response = Response(self.application)
+
+        # Canonical error shape: ``{error, type, ...}`` (see
+        # ``HttpException.to_dict``). Pre-fix this middleware used
+        # ``{error: "Unauthorized", message: "..."}`` which broke the
+        # ``response.type`` switch every other framework path uses;
+        # clients had to special-case 401 responses by looking at a
+        # different key than every other error. ``type`` carries the
+        # specific guard exception class name so consumers can tell
+        # ``TokenInvalidException`` apart from ``TokenExpiredException``
+        # without inspecting the human-readable detail string.
+        guard_type = (
+            last_error.__class__.__name__ if last_error is not None else "Unauthorized"
+        )
 
         if (
             last_error
@@ -86,18 +101,29 @@ class ShouldAuthenticate(Middleware):
         ):
             # Guard threw a custom authentication exception
             return response.json(
-                {"error": "Unauthorized", "message": last_error.message},
+                {
+                    "error": last_error.message,
+                    "type": guard_type,
+                },
                 last_error.status_code,
             )
         elif last_error:
             # Generic exception from guard
             return response.json(
-                {"error": "Unauthorized", "message": str(last_error)}, 401
+                {
+                    "error": str(last_error) or "Unauthorized",
+                    "type": guard_type,
+                },
+                401,
             )
         else:
             # No specific error
             return response.json(
-                {"error": "Unauthorized", "message": "Authentication required"}, 401
+                {
+                    "error": "Authentication required",
+                    "type": "Unauthorized",
+                },
+                401,
             )
 
     def should_skip_authentication(self, request: Request) -> bool:

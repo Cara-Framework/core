@@ -14,7 +14,7 @@ class Cors:
     validating origins, and managing CORS headers in both preflight and actual requests.
     """
 
-    def __init__(self, application: "Application", options=None):
+    def __init__(self, application: Application, options=None):
         """
         Initialize CORS service.
 
@@ -30,7 +30,7 @@ class Cors:
 
         self.set_options(options or {})
 
-    def set_options(self, options: dict) -> "Cors":
+    def set_options(self, options: dict) -> Cors:
         """
         Set CORS options.
 
@@ -75,7 +75,7 @@ class Cors:
             return False
         return len(self.options.get("allowed_origins", [])) == 1
 
-    def is_preflight(self, request: "Request") -> bool:
+    def is_preflight(self, request: Request) -> bool:
         """
         Check if given request is a preflight request.
 
@@ -89,7 +89,7 @@ class Cors:
         has_method = request.header("Access-Control-Request-Method")
         return is_options and has_method
 
-    def is_cors(self, request: "Request") -> bool:
+    def is_cors(self, request: Request) -> bool:
         """
         Check if given request is CORS request by inspecting 'Origin' header.
 
@@ -101,7 +101,7 @@ class Cors:
         """
         return request.header("Origin")
 
-    def is_allowed(self, request: "Request") -> bool:
+    def is_allowed(self, request: Request) -> bool:
         """
         Check if request 'Origin' is allowed regarding CORS config.
 
@@ -117,9 +117,7 @@ class Cors:
         origin = request.header("Origin")
         return origin in self.options.get("allowed_origins", [])
 
-    def build_preflight_response(
-        self, request: "Request", response: "Response"
-    ) -> "Response":
+    def build_preflight_response(self, request: Request, response: Response) -> Response:
         """
         Build a preflight response for the given request.
 
@@ -141,7 +139,7 @@ class Cors:
 
         return response
 
-    def set_allowed_origin(self, request: "Request", response: "Response") -> "Response":
+    def set_allowed_origin(self, request: Request, response: Response) -> Response:
         """
         Set the Access-Control-Allow-Origin header.
 
@@ -169,7 +167,7 @@ class Cors:
             self.update_vary_header(response, "Origin")
         return response
 
-    def update_vary_header(self, response: "Response", value: str) -> "Response":
+    def update_vary_header(self, response: Response, value: str) -> Response:
         """
         Update the Vary header.
 
@@ -189,7 +187,7 @@ class Cors:
                 response.header("Vary", ", ".join(vary_header))
         return response
 
-    def set_allowed_headers(self, request: "Request", response: "Response") -> "Response":
+    def set_allowed_headers(self, request: Request, response: Response) -> Response:
         """
         Set the Access-Control-Allow-Headers header.
 
@@ -206,6 +204,7 @@ class Cors:
             # character (RFC 7230 token chars) or comma/space separators.
             # This prevents header injection via newlines or control chars.
             import re
+
             allowed_headers = re.sub(r"[^\w\-., ]+", "", raw)
             response = self.update_vary_header(response, "Access-Control-Request-Headers")
         else:
@@ -213,7 +212,7 @@ class Cors:
         response.header("Access-Control-Allow-Headers", allowed_headers)
         return response
 
-    def set_allowed_methods(self, request: "Request", response: "Response") -> "Response":
+    def set_allowed_methods(self, request: Request, response: Response) -> Response:
         """
         Set the Access-Control-Allow-Methods header.
 
@@ -228,6 +227,7 @@ class Cors:
             raw_method = request.header("Access-Control-Request-Method") or ""
             # Sanitise: HTTP method names are uppercase alpha only.
             import re
+
             allowed_methods = re.sub(r"[^A-Z, ]+", "", raw_method.upper())
             response = self.update_vary_header(response, "Access-Control-Request-Method")
         else:
@@ -235,7 +235,7 @@ class Cors:
         response.header("Access-Control-Allow-Methods", allowed_methods)
         return response
 
-    def set_max_age(self, response: "Response") -> "Response":
+    def set_max_age(self, response: Response) -> Response:
         """
         Set the Access-Control-Max-Age header.
 
@@ -250,7 +250,7 @@ class Cors:
             response.header("Access-Control-Max-Age", str(max_age))
         return response
 
-    def set_exposed_headers(self, response: "Response") -> "Response":
+    def set_exposed_headers(self, response: Response) -> Response:
         """
         Set the Access-Control-Expose-Headers header.
 
@@ -268,7 +268,7 @@ class Cors:
             )
         return response
 
-    def set_allowed_credentials(self, response: "Response") -> "Response":
+    def set_allowed_credentials(self, response: Response) -> Response:
         """
         Set the Access-Control-Allow-Credentials header.
 
@@ -283,8 +283,8 @@ class Cors:
         return response
 
     def add_actual_request_headers(
-        self, request: "Request", response: "Response"
-    ) -> "Response":
+        self, request: Request, response: Response
+    ) -> Response:
         """
         Add CORS headers for actual request.
 

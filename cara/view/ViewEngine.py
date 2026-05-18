@@ -5,7 +5,7 @@ This file provides the main view engine functionality.
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from cara.view import ViewCompiler, ViewDirectives, ViewDirectivesRegistry
 
@@ -13,7 +13,9 @@ from cara.view import ViewCompiler, ViewDirectives, ViewDirectivesRegistry
 class ViewEngine:
     """Core view engine for template processing."""
 
-    def __init__(self, view_paths: Optional[List[str]] = None, cache_path: Optional[str] = None):
+    def __init__(
+        self, view_paths: list[str] | None = None, cache_path: str | None = None
+    ):
         """Initialize view engine."""
         from cara.support import paths
 
@@ -29,7 +31,7 @@ class ViewEngine:
         """Register custom directive."""
         self.directives.register(name, handler)
 
-    def render(self, view: str, data: Dict[str, Any] = None, factory=None) -> str:
+    def render(self, view: str, data: dict[str, Any] = None, factory=None) -> str:
         """Render a view template."""
         data = data or {}
 
@@ -51,7 +53,7 @@ class ViewEngine:
 
         return context.get("__output__", "")
 
-    def find_view(self, view: str) -> Optional[str]:
+    def find_view(self, view: str) -> str | None:
         """Find view template file."""
         view_path = view.replace(".", os.sep)
         extensions = [".cara.html", ".html", ".htm"]
@@ -131,8 +133,8 @@ class ViewEngine:
         ViewDirectivesRegistry.register_defaults(self.directives)
 
     def _apply_factory_composers(
-        self, view: str, data: Dict[str, Any], factory
-    ) -> Dict[str, Any]:
+        self, view: str, data: dict[str, Any], factory
+    ) -> dict[str, Any]:
         """Apply factory composers to data."""
         if not hasattr(factory, "get_composers"):
             return data
@@ -145,7 +147,7 @@ class ViewEngine:
 
         return data
 
-    def _create_view_object(self, data: Dict[str, Any]):
+    def _create_view_object(self, data: dict[str, Any]):
         """Create view object for composer."""
 
         class ViewObject:
@@ -163,7 +165,7 @@ class ViewEngine:
 
         return ViewObject(data)
 
-    def _create_execution_context(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_execution_context(self, data: dict[str, Any]) -> dict[str, Any]:
         """Create template execution context."""
 
         class DataWrapper:

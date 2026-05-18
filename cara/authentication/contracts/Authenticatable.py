@@ -2,7 +2,7 @@
 Authenticatable Interface for users.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class Authenticatable:
@@ -24,7 +24,7 @@ class Authenticatable:
         """Get the password for the user. Default empty for JWT-only auth."""
         return ""
 
-    def get_remember_token(self) -> Optional[str]:
+    def get_remember_token(self) -> str | None:
         """Get the remember token for the user."""
         return getattr(self, "remember_token", None)
 

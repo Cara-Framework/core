@@ -6,7 +6,7 @@ Follows DRY and KISS principles for date management.
 """
 
 from datetime import datetime
-from typing import Any, Optional, Union
+from typing import Any
 
 import pendulum
 
@@ -40,7 +40,7 @@ class DateManager:
     ]
 
     @classmethod
-    def now(cls, timezone_str: Optional[str] = None) -> pendulum.DateTime:
+    def now(cls, timezone_str: str | None = None) -> pendulum.DateTime:
         """
         Get current timestamp in specified timezone.
 
@@ -55,8 +55,8 @@ class DateManager:
 
     @classmethod
     def parse(
-        cls, date_value: Any, timezone_str: Optional[str] = None
-    ) -> Optional[pendulum.DateTime]:
+        cls, date_value: Any, timezone_str: str | None = None
+    ) -> pendulum.DateTime | None:
         """
         Parse a date value into a pendulum DateTime.
 
@@ -93,10 +93,10 @@ class DateManager:
     @classmethod
     def format(
         cls,
-        date_value: Union[pendulum.DateTime, datetime, str, int, float],
-        format_str: Optional[str] = None,
-        timezone_str: Optional[str] = None,
-    ) -> Optional[str]:
+        date_value: pendulum.DateTime | datetime | str | int | float,
+        format_str: str | None = None,
+        timezone_str: str | None = None,
+    ) -> str | None:
         """
         Format a date value to string.
 
@@ -121,8 +121,8 @@ class DateManager:
 
     @classmethod
     def to_database_format(
-        cls, date_value: Any, timezone_str: Optional[str] = None
-    ) -> Optional[str]:
+        cls, date_value: Any, timezone_str: str | None = None
+    ) -> str | None:
         """
         Convert date to database storage format.
 
@@ -137,8 +137,8 @@ class DateManager:
 
     @classmethod
     def to_iso_format(
-        cls, date_value: Any, timezone_str: Optional[str] = None
-    ) -> Optional[str]:
+        cls, date_value: Any, timezone_str: str | None = None
+    ) -> str | None:
         """
         Convert date to ISO format.
 
@@ -157,8 +157,8 @@ class DateManager:
 
     @classmethod
     def add_days(
-        cls, date_value: Any, days: int, timezone_str: Optional[str] = None
-    ) -> Optional[pendulum.DateTime]:
+        cls, date_value: Any, days: int, timezone_str: str | None = None
+    ) -> pendulum.DateTime | None:
         """
         Add days to a date.
 
@@ -178,8 +178,8 @@ class DateManager:
 
     @classmethod
     def subtract_days(
-        cls, date_value: Any, days: int, timezone_str: Optional[str] = None
-    ) -> Optional[pendulum.DateTime]:
+        cls, date_value: Any, days: int, timezone_str: str | None = None
+    ) -> pendulum.DateTime | None:
         """
         Subtract days from a date.
 
@@ -199,8 +199,8 @@ class DateManager:
 
     @classmethod
     def diff_in_days(
-        cls, date1: Any, date2: Any, timezone_str: Optional[str] = None
-    ) -> Optional[int]:
+        cls, date1: Any, date2: Any, timezone_str: str | None = None
+    ) -> int | None:
         """
         Get difference between two dates in days.
 
@@ -221,9 +221,7 @@ class DateManager:
         return parsed_date1.diff(parsed_date2).in_days()
 
     @classmethod
-    def is_past(
-        cls, date_value: Any, timezone_str: Optional[str] = None
-    ) -> Optional[bool]:
+    def is_past(cls, date_value: Any, timezone_str: str | None = None) -> bool | None:
         """
         Check if date is in the past.
 
@@ -241,9 +239,7 @@ class DateManager:
         return parsed_date < cls.now(timezone_str)
 
     @classmethod
-    def is_future(
-        cls, date_value: Any, timezone_str: Optional[str] = None
-    ) -> Optional[bool]:
+    def is_future(cls, date_value: Any, timezone_str: str | None = None) -> bool | None:
         """
         Check if date is in the future.
 
@@ -261,9 +257,7 @@ class DateManager:
         return parsed_date > cls.now(timezone_str)
 
     @classmethod
-    def is_today(
-        cls, date_value: Any, timezone_str: Optional[str] = None
-    ) -> Optional[bool]:
+    def is_today(cls, date_value: Any, timezone_str: str | None = None) -> bool | None:
         """
         Check if date is today.
 
@@ -288,14 +282,14 @@ class DateManager:
     @classmethod
     def _parse_string(
         cls, date_string: str, timezone_str: str
-    ) -> Optional[pendulum.DateTime]:
+    ) -> pendulum.DateTime | None:
         """Parse a string date using multiple format attempts."""
         date_string = date_string.strip()
 
         # Try pendulum's built-in parsing first
         try:
             return pendulum.parse(date_string, tz=timezone_str)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             pass
 
         # Try each supported format
@@ -346,8 +340,8 @@ class DateManager:
 
     @classmethod
     def to_user_timezone(
-        cls, date_value: Any, user_timezone: Optional[str] = None
-    ) -> Optional[pendulum.DateTime]:
+        cls, date_value: Any, user_timezone: str | None = None
+    ) -> pendulum.DateTime | None:
         """
         Convert UTC date to user timezone for display.
 
@@ -379,8 +373,8 @@ class DateManager:
 
     @classmethod
     def to_utc_for_database(
-        cls, date_value: Any, user_timezone: Optional[str] = None
-    ) -> Optional[pendulum.DateTime]:
+        cls, date_value: Any, user_timezone: str | None = None
+    ) -> pendulum.DateTime | None:
         """
         Convert user timezone date to UTC for database storage.
 
@@ -412,8 +406,11 @@ class DateManager:
 
     @classmethod
     def format_for_api(
-        cls, date_value: Any, user_timezone: Optional[str] = None, format_str: Optional[str] = None
-    ) -> Optional[str]:
+        cls,
+        date_value: Any,
+        user_timezone: str | None = None,
+        format_str: str | None = None,
+    ) -> str | None:
         """
         Format date for API response in user timezone.
 

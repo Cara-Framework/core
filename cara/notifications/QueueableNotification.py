@@ -5,7 +5,7 @@ This class provides DRY functionality specifically for notification operations
 that need to be queued for background processing.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 from cara.queues.contracts.BaseQueueable import BaseQueueable
 
@@ -39,40 +39,40 @@ class QueueableNotification(BaseQueueable):
         # Set delay for each channel if needed
         self.channel_delays = kwargs.get("channel_delays", {})
 
-    def _get_default_channels(self) -> List[str]:
+    def _get_default_channels(self) -> list[str]:
         """Get default notification channels."""
         if self.notifiable:
             return self.via(self.notifiable)
         return ["database"]  # Default fallback
 
-    def via_channels(self, channels: List[str]) -> "QueueableNotification":
+    def via_channels(self, channels: list[str]) -> QueueableNotification:
         """Set specific channels for this notification."""
         self.channels = channels
         return self
 
-    def via_database(self) -> "QueueableNotification":
+    def via_database(self) -> QueueableNotification:
         """Send only via database channel."""
         return self.via_channels(["database"])
 
-    def via_mail(self) -> "QueueableNotification":
+    def via_mail(self) -> QueueableNotification:
         """Send only via mail channel."""
         return self.via_channels(["mail"])
 
-    def via_sms(self) -> "QueueableNotification":
+    def via_sms(self) -> QueueableNotification:
         """Send only via SMS channel."""
         return self.via_channels(["sms"])
 
-    def with_data(self, data: Dict[str, Any]) -> "QueueableNotification":
+    def with_data(self, data: dict[str, Any]) -> QueueableNotification:
         """Add data to notification."""
         self.notification_data.update(data)
         return self
 
-    def delay_for_channel(self, channel: str, seconds: int) -> "QueueableNotification":
+    def delay_for_channel(self, channel: str, seconds: int) -> QueueableNotification:
         """Set delay for specific channel."""
         self.channel_delays[channel] = seconds
         return self
 
-    def get_queue_options(self) -> Dict[str, Any]:
+    def get_queue_options(self) -> dict[str, Any]:
         """Get notification-specific queue options."""
         options = super().get_queue_options()
 
@@ -125,7 +125,7 @@ class QueueableNotification(BaseQueueable):
                 f"Channel {channel} not implemented for {self.__class__.__name__}"
             )
 
-    def via(self, notifiable) -> List[str]:
+    def via(self, notifiable) -> list[str]:
         """
         Get notification channels for given notifiable.
         Must be implemented by subclasses.

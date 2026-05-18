@@ -5,7 +5,7 @@ This module provides a CLI command to list all registered commands with enhanced
 """
 
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from cara.commands import CommandBase
 from cara.decorators import command, get_registered_commands
@@ -29,8 +29,8 @@ class ListCommandsCommand(CommandBase):
 
     def handle(
         self,
-        filter: Optional[str] = None,
-        category: Optional[str] = None,
+        filter: str | None = None,
+        category: str | None = None,
     ):
         """Handle command listing with enhanced options."""
         self.info("📋 Available CLI Commands")
@@ -63,7 +63,7 @@ class ListCommandsCommand(CommandBase):
         else:
             self._output_basic(filtered_commands)
 
-    def _get_command_data(self) -> List[Dict[str, Any]]:
+    def _get_command_data(self) -> list[dict[str, Any]]:
         """Get command data from registered commands."""
         registered_commands = get_registered_commands()
 
@@ -82,7 +82,7 @@ class ListCommandsCommand(CommandBase):
         commands.sort(key=lambda x: x["name"])
         return commands
 
-    def _get_command_info(self, cmd_class) -> Dict[str, Any]:
+    def _get_command_info(self, cmd_class) -> dict[str, Any]:
         """Extract information from a command class."""
         return {
             "name": getattr(cmd_class, "name", "<unknown>"),
@@ -93,8 +93,8 @@ class ListCommandsCommand(CommandBase):
         }
 
     def _apply_filters(
-        self, commands: List[Dict[str, Any]], name_filter: str, category_filter: str
-    ) -> List[Dict[str, Any]]:
+        self, commands: list[dict[str, Any]], name_filter: str, category_filter: str
+    ) -> list[dict[str, Any]]:
         """Apply all requested filters to commands."""
         filtered = commands
 
@@ -113,15 +113,15 @@ class ListCommandsCommand(CommandBase):
         return filtered
 
     def _filter_by_name(
-        self, commands: List[Dict[str, Any]], pattern: str
-    ) -> List[Dict[str, Any]]:
+        self, commands: list[dict[str, Any]], pattern: str
+    ) -> list[dict[str, Any]]:
         """Filter commands by name pattern."""
         pattern = pattern.lower()
         return [cmd for cmd in commands if pattern in cmd["name"].lower()]
 
     def _filter_by_category(
-        self, commands: List[Dict[str, Any]], category: str
-    ) -> List[Dict[str, Any]]:
+        self, commands: list[dict[str, Any]], category: str
+    ) -> list[dict[str, Any]]:
         """Filter commands by category."""
         category = category.lower()
         return [
@@ -132,14 +132,14 @@ class ListCommandsCommand(CommandBase):
         ]
 
     def _filter_without_help(
-        self, commands: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, commands: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Filter commands that don't have help text."""
         return [cmd for cmd in commands if not cmd["help"]]
 
     def _categorize_commands(
-        self, commands: List[Dict[str, Any]]
-    ) -> Dict[str, List[Dict[str, Any]]]:
+        self, commands: list[dict[str, Any]]
+    ) -> dict[str, list[dict[str, Any]]]:
         """Categorize commands by their namespace/prefix."""
         categories = defaultdict(list)
 
@@ -158,7 +158,7 @@ class ListCommandsCommand(CommandBase):
 
         return dict(categories)
 
-    def _get_statistics(self, commands: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _get_statistics(self, commands: list[dict[str, Any]]) -> dict[str, Any]:
         """Get statistics about registered commands."""
         categories = self._categorize_commands(commands)
 
@@ -171,7 +171,7 @@ class ListCommandsCommand(CommandBase):
         }
 
     def _show_statistics(
-        self, all_commands: List[Dict[str, Any]], filtered_commands: List[Dict[str, Any]]
+        self, all_commands: list[dict[str, Any]], filtered_commands: list[dict[str, Any]]
     ) -> None:
         """Show command statistics."""
         all_stats = self._get_statistics(all_commands)
@@ -189,13 +189,13 @@ class ListCommandsCommand(CommandBase):
             for category, count in sorted(all_stats["category_breakdown"].items()):
                 self.info(f"   {category}: {count} command(s)")
 
-    def _output_json(self, commands: List[Dict[str, Any]]) -> None:
+    def _output_json(self, commands: list[dict[str, Any]]) -> None:
         """Output commands in JSON format."""
         import json
 
         self.console.print_json(json.dumps(commands, indent=2))
 
-    def _output_categorized(self, commands: List[Dict[str, Any]]) -> None:
+    def _output_categorized(self, commands: list[dict[str, Any]]) -> None:
         """Output commands grouped by category."""
         categories = self._categorize_commands(commands)
 
@@ -211,7 +211,7 @@ class ListCommandsCommand(CommandBase):
             ]
             self.table(headers, rows)
 
-    def _output_detailed(self, commands: List[Dict[str, Any]]) -> None:
+    def _output_detailed(self, commands: list[dict[str, Any]]) -> None:
         """Output commands with detailed information."""
         headers = ["Command", "Description", "Class", "Options"]
         rows = []
@@ -232,7 +232,7 @@ class ListCommandsCommand(CommandBase):
         self.info(f"📋 Found {len(commands)} command(s) with detailed information:")
         self.table(headers, rows)
 
-    def _output_basic(self, commands: List[Dict[str, Any]]) -> None:
+    def _output_basic(self, commands: list[dict[str, Any]]) -> None:
         """Output commands in basic format."""
         headers = ["Command", "Description"]
         rows = [

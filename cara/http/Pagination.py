@@ -30,7 +30,7 @@ clamp at the framework layer too. Page is recomputed from the
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ class Pagination:
     @classmethod
     def from_validated(
         cls,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
         default_limit: int = 24,
         max_limit: int = 500,
@@ -118,5 +118,5 @@ class Pagination:
             return default
         try:
             return int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return default

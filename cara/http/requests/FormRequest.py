@@ -66,13 +66,19 @@ class FormRequest:
         # Check authorization first
         if not self.authorize(request):
             from cara.exceptions import AuthorizationFailedException
+
             raise AuthorizationFailedException("This action is unauthorized.")
 
         # Get request data
-        data = await request.all() if hasattr(request, "all") and callable(request.all) else {}
+        data = (
+            await request.all()
+            if hasattr(request, "all") and callable(request.all)
+            else {}
+        )
 
         # Create validator
         from cara.validation import Validation
+
         validator = Validation.make(data, self.rules(), self.messages())
 
         # Register after hook
@@ -81,6 +87,7 @@ class FormRequest:
         # Run validation
         if validator.fails():
             from cara.exceptions import ValidationException
+
             raise ValidationException(validation_errors=validator.errors())
 
         # Extract validated data

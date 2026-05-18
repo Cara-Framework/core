@@ -9,7 +9,6 @@ import importlib
 import os
 import sys
 import time
-from typing import List, Optional
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -53,14 +52,21 @@ class AutoReloadHandler(FileSystemEventHandler):
 
     def _should_watch_file(self, file_path: str) -> bool:
         """Check if file should trigger reload."""
-        watch_extensions = ['.py', '.yaml', '.yml', '.json', '.toml', '.env', '.txt']
+        watch_extensions = [".py", ".yaml", ".yml", ".json", ".toml", ".env", ".txt"]
         return any(file_path.endswith(ext) for ext in watch_extensions)
 
     def _is_temp_file(self, file_path: str) -> bool:
         """Check if file is temporary and should be ignored."""
         ignore_patterns = [
-            "__pycache__", ".pyc", ".pyo", ".tmp", ".swp",
-            ".DS_Store", ".git", ".pytest_cache", "node_modules"
+            "__pycache__",
+            ".pyc",
+            ".pyo",
+            ".tmp",
+            ".swp",
+            ".DS_Store",
+            ".git",
+            ".pytest_cache",
+            "node_modules",
         ]
         return any(pattern in file_path for pattern in ignore_patterns)
 
@@ -68,13 +74,13 @@ class AutoReloadHandler(FileSystemEventHandler):
 class AutoReloadMixin:
     """
     Universal auto-reload mixin for Cara commands.
-    
+
     Usage:
         class MyLongRunningCommand(AutoReloadMixin, CommandBase):
             def handle(self):
                 self.enable_auto_reload()  # Enable hot reload
                 self._run_main_loop()      # Your main loop
-                
+
             def _run_main_loop(self):
                 while not self.shutdown_requested:
                     # Your blocking operation here
@@ -85,11 +91,11 @@ class AutoReloadMixin:
         super().__init__(*args, **kwargs)
         self.shutdown_requested = False
         self._auto_reload_enabled = False
-        self._observer: Optional[Observer] = None
+        self._observer: Observer | None = None
         self._restart_params = ()
         self._restart_kwargs = {}
 
-    def enable_auto_reload(self, watch_paths: Optional[List[str]] = None):
+    def enable_auto_reload(self, watch_paths: list[str] | None = None):
         """Enable auto-reload for this command."""
         if self._auto_reload_enabled:
             return
@@ -105,7 +111,7 @@ class AutoReloadMixin:
         self._auto_reload_enabled = False
         self._stop_file_watcher()
 
-    def _start_file_watcher(self, watch_paths: Optional[List[str]] = None):
+    def _start_file_watcher(self, watch_paths: list[str] | None = None):
         """Start the file watcher."""
         if self._observer is not None:
             return  # Already watching
@@ -125,7 +131,7 @@ class AutoReloadMixin:
             self._observer.daemon = True
             self._observer.start()
 
-    def _get_default_watch_paths(self) -> List[str]:
+    def _get_default_watch_paths(self) -> list[str]:
         """Get default paths to watch for changes."""
         from cara.support import paths
 
@@ -179,11 +185,11 @@ class AutoReloadMixin:
 
         # Modules to purge for hot reload
         purge_patterns = [
-            'app.',           # Application modules
-            'packages.',      # Package modules
-            'config.',        # Config modules
-            'routes.',        # Route modules
-            'database.',      # Database modules
+            "app.",  # Application modules
+            "packages.",  # Package modules
+            "config.",  # Config modules
+            "routes.",  # Route modules
+            "database.",  # Database modules
         ]
 
         modules_to_remove = []

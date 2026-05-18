@@ -44,4 +44,3 @@ __all__ = [
     "BroadcastingConnectionException",
     "BroadcastingChannelException",
 ]
-

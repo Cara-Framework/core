@@ -5,7 +5,6 @@ This module provides a CLI command to clear the application cache with enhanced 
 """
 
 import os
-from typing import Optional
 
 from cara.cache import Cache
 from cara.commands import CommandBase
@@ -23,7 +22,7 @@ from cara.queues import Queue
     },
 )
 class CacheClearCommand(CommandBase):
-    def handle(self, cache: Cache, queue: Queue, tags: Optional[str] = None):
+    def handle(self, cache: Cache, queue: Queue, tags: str | None = None):
         """Clear application cache with enhanced user experience."""
         self.info("🧹 Cache Clear Operation")
 
@@ -86,6 +85,7 @@ class CacheClearCommand(CommandBase):
         """Check if we're running in production environment."""
         try:
             from cara.configuration import config
+
             env = str(config("app.ENV", "")).lower()
         except Exception:
             env = os.getenv("APP_ENV", "").lower()

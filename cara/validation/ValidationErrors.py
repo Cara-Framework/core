@@ -4,16 +4,14 @@ Validation Errors for the Cara framework.
 This module provides the ValidationErrors class to handle validation errors in Laravel style.
 """
 
-from typing import Dict, List, Optional
-
 
 class ValidationErrors:
     """Helper class to handle validation errors in Laravel style."""
 
-    def __init__(self, errors: Dict[str, list[str]]):
+    def __init__(self, errors: dict[str, list[str]]):
         self._errors = errors
 
-    def first(self, field: Optional[str] = None) -> str:
+    def first(self, field: str | None = None) -> str:
         """Get the first error message for a field, or the first error overall."""
         if field:
             field_errors = self._errors.get(field, [])
@@ -28,11 +26,11 @@ class ValidationErrors:
         """Get the first error message overall (alias for first() without field)."""
         return self.first()
 
-    def all(self) -> Dict[str, list[str]]:
+    def all(self) -> dict[str, list[str]]:
         """Get all error messages."""
         return self._errors.copy()
 
-    def errors(self) -> Dict[str, list[str]]:
+    def errors(self) -> dict[str, list[str]]:
         """Get all error messages (Laravel-style alias for all())."""
         return self.all()
 
@@ -40,24 +38,24 @@ class ValidationErrors:
         """Check if field has errors."""
         return field in self._errors and bool(self._errors[field])
 
-    def get(self, field: str) -> List[str]:
+    def get(self, field: str) -> list[str]:
         """Get all error messages for a specific field."""
         return self._errors.get(field, [])
 
-    def count(self, field: Optional[str] = None) -> int:
+    def count(self, field: str | None = None) -> int:
         """Count errors for a field or total error count."""
         if field:
             return len(self._errors.get(field, []))
         return sum(len(field_errors) for field_errors in self._errors.values())
 
-    def messages(self) -> List[str]:
+    def messages(self) -> list[str]:
         """Get all error messages as a flat list."""
         all_messages = []
         for field_errors in self._errors.values():
             all_messages.extend(field_errors)
         return all_messages
 
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         """Get all field names that have errors."""
         return list(self._errors.keys())
 
@@ -73,7 +71,7 @@ class ValidationErrors:
         """Append a new error message for ``field`` (used by after-hooks)."""
         self._errors.setdefault(field, []).append(message)
 
-    def only(self, *fields: str) -> Dict[str, List[str]]:
+    def only(self, *fields: str) -> dict[str, list[str]]:
         """Get errors for only specified fields."""
         return {
             field: self._errors.get(field, [])
@@ -81,13 +79,13 @@ class ValidationErrors:
             if field in self._errors
         }
 
-    def except_(self, *fields: str) -> Dict[str, List[str]]:
+    def except_(self, *fields: str) -> dict[str, list[str]]:
         """Get errors except for specified fields."""
         return {
             field: errors for field, errors in self._errors.items() if field not in fields
         }
 
-    def to_dict(self) -> Dict[str, List[str]]:
+    def to_dict(self) -> dict[str, list[str]]:
         """Convert to dictionary (alias for all())."""
         return self.all()
 

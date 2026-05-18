@@ -5,8 +5,6 @@ This module provides classes for managing HTTP headers in the Cara framework, im
 insensitive header handling, header bags, and proper header formatting for ASGI compatibility.
 """
 
-from typing import Dict, List, Optional, Tuple
-
 from inflection import titleize
 
 
@@ -48,9 +46,9 @@ class HeaderBag:
 
     def __init__(self):
         """Initialize an empty header bag."""
-        self.bag: Dict[str, Header] = {}
+        self.bag: dict[str, Header] = {}
 
-    def add(self, header: "Header") -> None:
+    def add(self, header: Header) -> None:
         """
         Add or update a header in the bag.
 
@@ -76,7 +74,7 @@ class HeaderBag:
         """
         self.add(Header(name, value))
 
-    def add_if_not_exists(self, header: "Header") -> None:
+    def add_if_not_exists(self, header: Header) -> None:
         """
         Add a header only if it doesn't exist.
 
@@ -86,7 +84,7 @@ class HeaderBag:
         name_lower = header.name.lower()
         self.bag.setdefault(name_lower, header)
 
-    def get_raw(self, name: str) -> Optional["Header"]:
+    def get_raw(self, name: str) -> Header | None:
         """
         Get a raw header object by name.
 
@@ -98,7 +96,7 @@ class HeaderBag:
         """
         return self.bag.get(name.lower())
 
-    def get(self, name: str, default: Optional[str] = None) -> Optional[str]:
+    def get(self, name: str, default: str | None = None) -> str | None:
         """
         Get a header value by name with optional default.
 
@@ -140,7 +138,7 @@ class HeaderBag:
             return True
         return False
 
-    def all(self) -> Dict[str, str]:
+    def all(self) -> dict[str, str]:
         """
         Get all headers as a dictionary.
 
@@ -149,7 +147,7 @@ class HeaderBag:
         """
         return {name: header.value for name, header in self.bag.items()}
 
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         """
         Get all header names.
 
@@ -158,7 +156,7 @@ class HeaderBag:
         """
         return list(self.bag.keys())
 
-    def values(self) -> List[str]:
+    def values(self) -> list[str]:
         """
         Get all header values.
 
@@ -167,7 +165,7 @@ class HeaderBag:
         """
         return [header.value for header in self.bag.values()]
 
-    def items(self) -> List[Tuple[str, str]]:
+    def items(self) -> list[tuple[str, str]]:
         """
         Get all headers as tuples.
 
@@ -176,7 +174,7 @@ class HeaderBag:
         """
         return [(name, header.value) for name, header in self.bag.items()]
 
-    def render(self) -> List[Tuple[bytes, bytes]]:
+    def render(self) -> list[tuple[bytes, bytes]]:
         """
         Render headers in ASGI format.
 
@@ -258,7 +256,7 @@ class HeaderBag:
         else:
             return titleize(name.replace("_", " ")).replace(" ", "-")
 
-    def load(self, headers: Dict[str, str]) -> None:
+    def load(self, headers: dict[str, str]) -> None:
         """
         Load headers from a dictionary.
 
@@ -271,7 +269,7 @@ class HeaderBag:
                 value = value.decode("latin-1")
             self.add(Header(name_lower, value))
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         """
         Convert headers to a dictionary.
 
@@ -280,7 +278,7 @@ class HeaderBag:
         """
         return self.all()
 
-    def copy(self) -> "HeaderBag":
+    def copy(self) -> HeaderBag:
         """
         Create a deep copy of the header bag.
 

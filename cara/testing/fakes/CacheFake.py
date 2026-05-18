@@ -8,19 +8,20 @@ purely tracked so ``forever``/``put(ttl=...)`` round-trip correctly.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 
 class CacheFake:
     def __init__(self) -> None:
-        self._store: Dict[str, Any] = {}
-        self._ttls: Dict[str, Optional[int]] = {}
+        self._store: dict[str, Any] = {}
+        self._ttls: dict[str, int | None] = {}
 
     # Production-side surface
     def get(self, key: str, default: Any = None) -> Any:
         return self._store.get(key, default)
 
-    def put(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+    def put(self, key: str, value: Any, ttl: int | None = None) -> None:
         # Contract returns None — Redis/File drivers all return None on
         # put. The fake used to return ``True`` so any test asserting
         # on the return value silently passed against the fake and
@@ -28,13 +29,13 @@ class CacheFake:
         self._store[key] = value
         self._ttls[key] = ttl
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         self.put(key, value, ttl)
 
     def forever(self, key: str, value: Any) -> None:
         self.put(key, value, None)
 
-    def add(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+    def add(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Put-if-absent. Returns True iff key was newly added.
 
         Mirrors the real Redis/File driver semantics so atomic-claim
@@ -77,14 +78,14 @@ class CacheFake:
         self._store.clear()
         self._ttls.clear()
 
-    def remember(self, key: str, ttl: Optional[int], factory: Callable[[], Any]) -> Any:
+    def remember(self, key: str, ttl: int | None, factory: Callable[[], Any]) -> Any:
         if key in self._store:
             return self._store[key]
         value = factory()
         self.put(key, value, ttl)
         return value
 
-    def increment(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+    def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
         """Atomically increment ``key`` by ``amount``.
 
         Signature now matches the Cache contract — callers passing
@@ -101,7 +102,7 @@ class CacheFake:
             self._ttls[key] = ttl
         return value
 
-    def decrement(self, key: str, amount: int = 1, ttl: Optional[int] = None) -> int:
+    def decrement(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
         return self.increment(key, -amount, ttl)
 
     def forget_pattern(self, pattern: str) -> int:
@@ -133,10 +134,10 @@ class CacheFake:
 
     # ── Test-time helpers ────────────────────────────────────────────
 
-    def all(self) -> Dict[str, Any]:
+    def all(self) -> dict[str, Any]:
         return dict(self._store)
 
-    def ttl_of(self, key: str) -> Optional[int]:
+    def ttl_of(self, key: str) -> int | None:
         return self._ttls.get(key)
 
     def assert_has(self, key: str, value: Any = ...) -> None:

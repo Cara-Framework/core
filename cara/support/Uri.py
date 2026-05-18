@@ -24,7 +24,7 @@ methods (:meth:`with_query`, :meth:`merge_query`,
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping, Optional, Union
+from collections.abc import Iterable, Mapping
 from urllib.parse import (
     parse_qsl,
     quote,
@@ -37,7 +37,16 @@ from urllib.parse import (
 class Uri:
     """Immutable fluent URL builder."""
 
-    __slots__ = ("_scheme", "_user", "_password", "_host", "_port", "_path", "_query", "_fragment")
+    __slots__ = (
+        "_scheme",
+        "_user",
+        "_password",
+        "_host",
+        "_port",
+        "_path",
+        "_query",
+        "_fragment",
+    )
 
     def __init__(
         self,
@@ -45,7 +54,7 @@ class Uri:
         user: str = "",
         password: str = "",
         host: str = "",
-        port: Optional[int] = None,
+        port: int | None = None,
         path: str = "",
         query: str = "",
         fragment: str = "",
@@ -62,7 +71,7 @@ class Uri:
     # ── Construction ────────────────────────────────────────────────
 
     @classmethod
-    def of(cls, url: str) -> "Uri":
+    def of(cls, url: str) -> Uri:
         """Parse a URL string into a :class:`Uri`."""
         parsed = urlparse(url)
         return cls(
@@ -84,7 +93,7 @@ class Uri:
     def host(self) -> str:
         return self._host
 
-    def port(self) -> Optional[int]:
+    def port(self) -> int | None:
         return self._port
 
     def path(self) -> str:
@@ -109,39 +118,39 @@ class Uri:
 
     # ── Mutators (return new Uri) ───────────────────────────────────
 
-    def with_scheme(self, scheme: str) -> "Uri":
+    def with_scheme(self, scheme: str) -> Uri:
         return self._replace(scheme=scheme)
 
-    def with_host(self, host: str) -> "Uri":
+    def with_host(self, host: str) -> Uri:
         return self._replace(host=host)
 
-    def with_port(self, port: Optional[int]) -> "Uri":
+    def with_port(self, port: int | None) -> Uri:
         return self._replace(port=port)
 
-    def with_user(self, user: str, password: str = "") -> "Uri":
+    def with_user(self, user: str, password: str = "") -> Uri:
         return self._replace(user=user, password=password)
 
-    def with_path(self, path: str) -> "Uri":
+    def with_path(self, path: str) -> Uri:
         # Normalise so callers don't have to remember leading-slash rules.
         if path and not path.startswith("/"):
             path = "/" + path
         return self._replace(path=path)
 
-    def with_fragment(self, fragment: str) -> "Uri":
+    def with_fragment(self, fragment: str) -> Uri:
         # Strip an accidental leading ``#`` so callers can pass either form.
         return self._replace(fragment=fragment.lstrip("#"))
 
-    def with_query(self, query: Union[str, Mapping[str, object]]) -> "Uri":
+    def with_query(self, query: str | Mapping[str, object]) -> Uri:
         """Replace the query component entirely."""
         return self._replace(query=self._encode_query(query))
 
-    def merge_query(self, query: Mapping[str, object]) -> "Uri":
+    def merge_query(self, query: Mapping[str, object]) -> Uri:
         """Merge ``query`` over existing params (existing keys overwritten)."""
         merged = dict(parse_qsl(self._query, keep_blank_values=True))
         merged.update({k: str(v) for k, v in query.items()})
         return self._replace(query=urlencode(merged, doseq=True))
 
-    def without_query(self, *keys: str) -> "Uri":
+    def without_query(self, *keys: str) -> Uri:
         """Drop ``keys`` from the query string."""
         if not keys:
             return self
@@ -176,7 +185,7 @@ class Uri:
 
     # ── Internals ──────────────────────────────────────────────────
 
-    def _replace(self, **changes) -> "Uri":
+    def _replace(self, **changes) -> Uri:
         # Tiny copy-with-changes helper — avoids ``dataclasses.replace``
         # dependency since we use ``__slots__``.
         return Uri(
@@ -204,7 +213,7 @@ class Uri:
         return netloc
 
     @staticmethod
-    def _encode_query(query: Union[str, Mapping[str, object], Iterable]) -> str:
+    def _encode_query(query: str | Mapping[str, object] | Iterable) -> str:
         if isinstance(query, str):
             # Strip a leading ``?`` so callers can pass either form
             # without thinking about it.

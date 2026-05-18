@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional
+from typing import Any
 
 
 @dataclass
 class DispatchedEvent:
     event: Any
-    payload: Optional[dict] = None
+    payload: dict | None = None
 
 
 class EventFake:
     def __init__(self) -> None:
-        self.events: List[DispatchedEvent] = []
+        self.events: list[DispatchedEvent] = []
 
     # Production surface — accept the common names so any caller works.
     #
@@ -25,13 +26,13 @@ class EventFake:
     # ``TypeError: 'NoneType' object is not awaitable``. The body is a
     # plain list append so it's still safe to ``asyncio.run`` in
     # synchronous test cases.
-    async def dispatch(self, event: Any, payload: Optional[dict] = None) -> None:
+    async def dispatch(self, event: Any, payload: dict | None = None) -> None:
         self.events.append(DispatchedEvent(event=event, payload=payload))
 
-    async def fire(self, event: Any, payload: Optional[dict] = None) -> None:
+    async def fire(self, event: Any, payload: dict | None = None) -> None:
         await self.dispatch(event, payload)
 
-    async def emit(self, event: Any, payload: Optional[dict] = None) -> None:
+    async def emit(self, event: Any, payload: dict | None = None) -> None:
         await self.dispatch(event, payload)
 
     def listen(self, *args: Any, **kwargs: Any) -> None:
@@ -40,10 +41,10 @@ class EventFake:
 
     # ── Assertions ───────────────────────────────────────────────────
 
-    def dispatched(self, of_type: type) -> List[DispatchedEvent]:
+    def dispatched(self, of_type: type) -> list[DispatchedEvent]:
         return [e for e in self.events if isinstance(e.event, of_type)]
 
-    def count(self, of_type: Optional[type] = None) -> int:
+    def count(self, of_type: type | None = None) -> int:
         if of_type is None:
             return len(self.events)
         return len(self.dispatched(of_type))
@@ -52,8 +53,8 @@ class EventFake:
         self,
         of_type: type,
         *,
-        where: Optional[Callable[[DispatchedEvent], bool]] = None,
-        times: Optional[int] = None,
+        where: Callable[[DispatchedEvent], bool] | None = None,
+        times: int | None = None,
     ) -> None:
         matches = self.dispatched(of_type)
         if where is not None:
@@ -63,7 +64,9 @@ class EventFake:
                 f"Expected {of_type.__name__} dispatched {times}x, got {len(matches)}"
             )
         if times is None and not matches:
-            raise AssertionError(f"Expected {of_type.__name__} to be dispatched; none were")
+            raise AssertionError(
+                f"Expected {of_type.__name__} to be dispatched; none were"
+            )
 
     def assert_not_dispatched(self, of_type: type) -> None:
         matches = self.dispatched(of_type)

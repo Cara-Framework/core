@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import sys
 import threading
-from typing import Any, Callable, Dict, Tuple
+from collections.abc import Callable
+from typing import Any
 
 # Sentinel distinguishing "cached None" from "not yet computed".
 _MISSING = object()
@@ -33,7 +34,7 @@ _MISSING = object()
 class Once:
     """Process-wide memoization keyed on caller ``(file, line)``."""
 
-    _cache: Dict[Tuple[str, int], Any] = {}
+    _cache: dict[tuple[str, int], Any] = {}
     _lock = threading.Lock()
 
     @classmethod

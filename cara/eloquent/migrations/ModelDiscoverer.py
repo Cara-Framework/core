@@ -5,7 +5,6 @@ ModelDiscoverer: Discover and parse model files.
 import ast
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from cara.support import paths
 
@@ -21,10 +20,29 @@ class ModelDiscoverer:
     # column never reaches the generated migration). That bug erased
     # the ``metadata`` column from ~10 tables.
     FIELD_TYPES_WITH_NAMES = {
-        "string", "text", "integer", "tiny_integer", "small_integer",
-        "medium_integer", "big_integer", "unsigned_integer", "unsigned_big_integer",
-        "decimal", "boolean", "enum", "uuid", "json", "jsonb", "timestamp",
-        "date", "time", "datetime", "id", "increments", "big_increments", "float"
+        "string",
+        "text",
+        "integer",
+        "tiny_integer",
+        "small_integer",
+        "medium_integer",
+        "big_integer",
+        "unsigned_integer",
+        "unsigned_big_integer",
+        "decimal",
+        "boolean",
+        "enum",
+        "uuid",
+        "json",
+        "jsonb",
+        "timestamp",
+        "date",
+        "time",
+        "datetime",
+        "id",
+        "increments",
+        "big_increments",
+        "float",
     }
 
     # Field types that don't take field names
@@ -34,7 +52,7 @@ class ModelDiscoverer:
         # Don't resolve path at init time - do it at runtime when needed
         self.models_dir = None
 
-    def discover_models(self) -> List[Dict]:
+    def discover_models(self) -> list[dict]:
         """Discover all model files by scanning for classes that inherit from Model"""
         models = []
 
@@ -48,18 +66,22 @@ class ModelDiscoverer:
         seen_names = set()
         unique_models = []
         for model in models:
-            if model['name'] not in seen_names:
+            if model["name"] not in seen_names:
                 # Exclude models from within Cara framework
-                model_file = model.get('file', '')
-                if '/cara/' in model_file and ('eloquent' in model_file or 'queues' in model_file):
+                model_file = model.get("file", "")
+                if "/cara/" in model_file and (
+                    "eloquent" in model_file or "queues" in model_file
+                ):
                     continue
 
-                seen_names.add(model['name'])
+                seen_names.add(model["name"])
                 unique_models.append(model)
 
         return unique_models
 
-    def _scan_path_for_models(self, path: Path, max_depth: int = 5, current_depth: int = 0) -> List[Dict]:
+    def _scan_path_for_models(
+        self, path: Path, max_depth: int = 5, current_depth: int = 0
+    ) -> list[dict]:
         """Recursively scan a path for model files with depth limit"""
         models = []
 
@@ -70,25 +92,35 @@ class ModelDiscoverer:
         try:
             for item in path.iterdir():
                 # Skip hidden directories, venv, __pycache__, .git, etc.
-                if (item.name.startswith('.') or
-                    item.name in ['venv', '__pycache__', 'node_modules', 'build', 'dist', '.git']):
+                if item.name.startswith(".") or item.name in [
+                    "venv",
+                    "__pycache__",
+                    "node_modules",
+                    "build",
+                    "dist",
+                    ".git",
+                ]:
                     continue
 
                 if item.is_dir():
                     # Recursively scan subdirectories
-                    models.extend(self._scan_path_for_models(item, max_depth, current_depth + 1))
-                elif item.is_file() and item.suffix == '.py':
+                    models.extend(
+                        self._scan_path_for_models(item, max_depth, current_depth + 1)
+                    )
+                elif item.is_file() and item.suffix == ".py":
                     # Skip __init__.py and test files
-                    if (item.name.startswith('__') or
-                        item.name.startswith('test_') or
-                        item.name.endswith('_test.py')):
+                    if (
+                        item.name.startswith("__")
+                        or item.name.startswith("test_")
+                        or item.name.endswith("_test.py")
+                    ):
                         continue
 
                     try:
                         model_info = self._parse_model_file(item)
                         if model_info:
                             # Add file path to model info
-                            model_info['file'] = str(item)
+                            model_info["file"] = str(item)
                             models.append(model_info)
                     except Exception:
                         # Skip files that can't be parsed
@@ -99,12 +131,12 @@ class ModelDiscoverer:
 
         return models
 
-    def _discover_models_from_imports(self, init_file: Path) -> List[Dict]:
+    def _discover_models_from_imports(self, init_file: Path) -> list[dict]:
         """Discover models by parsing imports from __init__.py"""
         models = []
 
         try:
-            with open(init_file, 'r', encoding='utf-8') as f:
+            with open(init_file, "r", encoding="utf-8") as f:
                 content = f.read()
 
             tree = ast.parse(content)
@@ -113,11 +145,13 @@ class ModelDiscoverer:
                 if isinstance(node, ast.ImportFrom):
                     # Handle: from commons.models.core import User, Category
                     if node.module:
-                        models.extend(self._resolve_import_models(node.module, node.names))
+                        models.extend(
+                            self._resolve_import_models(node.module, node.names)
+                        )
                 elif isinstance(node, ast.Import):
                     # Handle: import commons.models.core.User
                     for alias in node.names:
-                        if 'models' in alias.name:
+                        if "models" in alias.name:
                             models.extend(self._resolve_direct_import_models(alias.name))
 
         except Exception as e:
@@ -133,25 +167,27 @@ class ModelDiscoverer:
 
         return models
 
-    def _resolve_import_models(self, module_path: str, names: List[ast.alias]) -> List[Dict]:
+    def _resolve_import_models(
+        self, module_path: str, names: list[ast.alias]
+    ) -> list[dict]:
         """Resolve model files from import statements - generic implementation"""
         # Skip import resolution - rely on directory scanning instead
         # This keeps the framework completely app-agnostic
         return []
 
-    def _resolve_direct_import_models(self, import_path: str) -> List[Dict]:
+    def _resolve_direct_import_models(self, import_path: str) -> list[dict]:
         """Handle direct imports - generic implementation"""
         # Skip import resolution - rely on directory scanning instead
         # This keeps the framework completely app-agnostic
         return []
 
-    def _discover_models_from_packages(self, packages_dir: Path) -> List[Dict]:
+    def _discover_models_from_packages(self, packages_dir: Path) -> list[dict]:
         """Discover models from packages directory structure - generic implementation"""
         # Skip packages-specific discovery - rely on general directory scanning
         # This keeps the framework completely app-agnostic
         return []
 
-    def _scan_directory_for_models(self, directory: Path) -> List[Dict]:
+    def _scan_directory_for_models(self, directory: Path) -> list[dict]:
         """Scan a directory for model files."""
         models = []
 
@@ -169,7 +205,7 @@ class ModelDiscoverer:
 
         return models
 
-    def resolve_dependency_order(self, models: List[Dict]) -> List[Dict]:
+    def resolve_dependency_order(self, models: list[dict]) -> list[dict]:
         """Resolve dependency order for models (FK dependencies first)."""
 
         # First pass: Resolve SQL dependencies for raw SQL models
@@ -228,7 +264,7 @@ class ModelDiscoverer:
 
         return sorted_models
 
-    def _parse_model_file(self, file_path: Path) -> Optional[Dict]:
+    def _parse_model_file(self, file_path: Path) -> dict | None:
         """Parse model file and extract Field.* structure."""
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -238,7 +274,9 @@ class ModelDiscoverer:
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 if self._is_model_class(node):
-                    return self._extract_model_structure(node, file_path.stem, str(file_path))
+                    return self._extract_model_structure(
+                        node, file_path.stem, str(file_path)
+                    )
 
         return None
 
@@ -249,7 +287,9 @@ class ModelDiscoverer:
                 return True
         return False
 
-    def _extract_model_structure(self, class_node: ast.ClassDef, filename: str, file_path: Optional[str] = None) -> Dict:
+    def _extract_model_structure(
+        self, class_node: ast.ClassDef, filename: str, file_path: str | None = None
+    ) -> dict:
         """Extract model structure from AST looking for table attribute and fields() method."""
         model_info = {
             "name": class_node.name,
@@ -290,7 +330,6 @@ class ModelDiscoverer:
                 model_info["has_fields_method"] = True
                 self._parse_fields_method(node, model_info)
 
-
         # Set default table name if not specified
         if not model_info["table"]:
             model_info["table"] = self._snake_case(class_node.name)
@@ -300,7 +339,7 @@ class ModelDiscoverer:
 
         return model_info
 
-    def _parse_model_attribute(self, assign_node: ast.Assign, model_info: Dict):
+    def _parse_model_attribute(self, assign_node: ast.Assign, model_info: dict):
         """Parse model class attributes looking for __columns__ dict, __table__, and other special attributes."""
         for target in assign_node.targets:
             if isinstance(target, ast.Name):
@@ -355,14 +394,10 @@ class ModelDiscoverer:
                     model_info["timestamps"] = assign_node.value.value
 
                 # Parse __views__ = [{"name": "...", "sql": "..."}]
-                elif target.id == "__views__" and isinstance(
-                    assign_node.value, ast.List
-                ):
-                    model_info["views"] = self._parse_views_attribute(
-                        assign_node.value
-                    )
+                elif target.id == "__views__" and isinstance(assign_node.value, ast.List):
+                    model_info["views"] = self._parse_views_attribute(assign_node.value)
 
-    def _parse_fields_dict(self, dict_node: ast.Dict, model_info: Dict):
+    def _parse_fields_dict(self, dict_node: ast.Dict, model_info: dict):
         """Parse __columns__ = {...} dictionary and extract Field.* definitions."""
         for key, value in zip(dict_node.keys, dict_node.values):
             if isinstance(key, ast.Constant) and isinstance(value, ast.Call):
@@ -371,7 +406,7 @@ class ModelDiscoverer:
                 if field_definition:
                     model_info["fields"][field_name] = field_definition
 
-    def _extract_field_definition(self, call_node: ast.Call) -> Optional[Dict]:
+    def _extract_field_definition(self, call_node: ast.Call) -> dict | None:
         """Extract Field.* definition from AST call node (old syntax)."""
         if (
             isinstance(call_node.func, ast.Attribute)
@@ -409,7 +444,7 @@ class ModelDiscoverer:
 
         return None
 
-    def _parse_fields_method(self, method_node: ast.FunctionDef, model_info: Dict):
+    def _parse_fields_method(self, method_node: ast.FunctionDef, model_info: dict):
         """Parse fields() method that returns Schema.build(lambda field: (...)) or dict with up/down."""
         for stmt in method_node.body:
             if isinstance(stmt, ast.Return):
@@ -429,7 +464,7 @@ class ModelDiscoverer:
                             lambda_node = stmt.value.args[0]
                             self._parse_lambda_fields(lambda_node, model_info)
 
-    def _parse_lambda_fields(self, lambda_node: ast.Lambda, model_info: Dict):
+    def _parse_lambda_fields(self, lambda_node: ast.Lambda, model_info: dict):
         """Parse lambda field: (...) body to extract field definitions."""
         if isinstance(lambda_node.body, ast.Tuple):
             # Handle tuple of field definitions
@@ -452,12 +487,16 @@ class ModelDiscoverer:
                         continue
                     # Check if this is a separate foreign key definition
                     if self._is_separate_foreign_key_call(field_call):
-                        foreign_key_def = self._extract_separate_foreign_key_definition(field_call)
+                        foreign_key_def = self._extract_separate_foreign_key_definition(
+                            field_call
+                        )
                         if foreign_key_def:
                             field_name = foreign_key_def["field"]
                             # Add foreign key info to existing field
                             if field_name in model_info["fields"]:
-                                model_info["fields"][field_name]["foreign_key"] = foreign_key_def
+                                model_info["fields"][field_name]["foreign_key"] = (
+                                    foreign_key_def
+                                )
                     else:
                         # Always try to extract field definition first
                         field_def = self._extract_field_definition_new_syntax(field_call)
@@ -471,7 +510,7 @@ class ModelDiscoverer:
                                 if field_type in ["timestamps", "soft_deletes"]:
                                     model_info["fields"][field_type] = field_def
 
-    def _extract_field_definition_new_syntax(self, call_node: ast.Call) -> Optional[Dict]:
+    def _extract_field_definition_new_syntax(self, call_node: ast.Call) -> dict | None:
         """Extract field definition from new syntax: field.string("name").nullable()"""
         field_type = None
         params = {}
@@ -485,7 +524,9 @@ class ModelDiscoverer:
                     # This is a method call like .nullable() or .default(value)
                     method_name = current.func.attr
 
-                    if method_name in (self.FIELD_TYPES_WITH_NAMES | self.FIELD_TYPES_WITHOUT_NAMES):
+                    if method_name in (
+                        self.FIELD_TYPES_WITH_NAMES | self.FIELD_TYPES_WITHOUT_NAMES
+                    ):
                         # This is the base field type
                         field_type = method_name
                         # Extract positional arguments (like precision/scale for decimal)
@@ -559,7 +600,7 @@ class ModelDiscoverer:
             return result
         return None
 
-    def _extract_field_name_from_call(self, call_node: ast.Call) -> Optional[str]:
+    def _extract_field_name_from_call(self, call_node: ast.Call) -> str | None:
         """Extract field name from the first string argument in the call chain."""
         # We need to find the base field type call (like field.string("name"))
         # and extract the field name from there, not from modifier calls like .default(True)
@@ -595,15 +636,13 @@ class ModelDiscoverer:
                 break
         return None
 
-    def _is_foreign_key_field(self, field_name: str, field_info: Dict) -> bool:
+    def _is_foreign_key_field(self, field_name: str, field_info: dict) -> bool:
         """Check if field is a foreign key (ends with _id or explicitly marked)."""
         return field_name.endswith("_id") or field_info.get("params", {}).get(
             "foreign_key", False
         )
 
-    def _extract_referenced_table(
-        self, field_name: str, field_info: Dict
-    ) -> Optional[str]:
+    def _extract_referenced_table(self, field_name: str, field_info: dict) -> str | None:
         """Extract referenced table name from foreign key field."""
         # For fields ending with _id, assume table name is the prefix
         if field_name.endswith("_id"):
@@ -613,8 +652,8 @@ class ModelDiscoverer:
         return field_info.get("params", {}).get("references")
 
     def _topological_sort(
-        self, models: List[Dict], dependency_graph: Dict[str, List[str]]
-    ) -> List[Dict]:
+        self, models: list[dict], dependency_graph: dict[str, list[str]]
+    ) -> list[dict]:
         """Topological sort using a simple iterative approach."""
         model_lookup = {model["table"]: model for model in models}
         result = []
@@ -629,8 +668,12 @@ class ModelDiscoverer:
                 table_name = model["table"]
                 dependencies = dependency_graph.get(table_name, [])
                 # Check if all dependencies are already processed
-                if all(dep in processed_tables or dep == table_name or dep not in model_lookup
-                       for dep in dependencies):
+                if all(
+                    dep in processed_tables
+                    or dep == table_name
+                    or dep not in model_lookup
+                    for dep in dependencies
+                ):
                     ready_models.append(model)
 
             if not ready_models:
@@ -657,7 +700,7 @@ class ModelDiscoverer:
         for elt in list_node.elts:
             if not isinstance(elt, ast.Dict):
                 continue
-            view_entry: Dict[str, str] = {}
+            view_entry: dict[str, str] = {}
             for key, value in zip(elt.keys, elt.values):
                 if isinstance(key, ast.Constant) and isinstance(value, ast.Constant):
                     view_entry[key.value] = value.value
@@ -665,18 +708,18 @@ class ModelDiscoverer:
                 views.append(view_entry)
         return views
 
-    def _parse_raw_sql_fields(self, dict_node: ast.Dict, model_info: Dict):
+    def _parse_raw_sql_fields(self, dict_node: ast.Dict, model_info: dict):
         """Parse fields() method that returns {'up': function, 'down': function}."""
         has_up_function = False
         has_down_function = False
 
         for key, value in zip(dict_node.keys, dict_node.values):
-            if isinstance(key, ast.Constant) and key.value in ['up', 'down']:
+            if isinstance(key, ast.Constant) and key.value in ["up", "down"]:
                 # Check if value is a function (ast.Name referring to a local function)
                 if isinstance(value, ast.Name):
-                    if key.value == 'up':
+                    if key.value == "up":
                         has_up_function = True
-                    elif key.value == 'down':
+                    elif key.value == "down":
                         has_down_function = True
 
         if has_up_function:
@@ -731,9 +774,11 @@ class ModelDiscoverer:
         while current:
             if isinstance(current, ast.Call):
                 if isinstance(current.func, ast.Attribute):
-                    if (isinstance(current.func.value, ast.Name) and
-                        current.func.value.id == "field" and
-                        current.func.attr == "foreign"):
+                    if (
+                        isinstance(current.func.value, ast.Name)
+                        and current.func.value.id == "field"
+                        and current.func.attr == "foreign"
+                    ):
                         return True
                     # Move to the object being called (chaining)
                     current = current.func.value
@@ -743,7 +788,9 @@ class ModelDiscoverer:
                 break
         return False
 
-    def _extract_separate_foreign_key_definition(self, call_node: ast.Call) -> Optional[Dict]:
+    def _extract_separate_foreign_key_definition(
+        self, call_node: ast.Call
+    ) -> dict | None:
         """Extract separate foreign key definition from field.foreign("field_name").references("id").on("table")"""
         field_name = None
         references = None
@@ -787,22 +834,24 @@ class ModelDiscoverer:
                 "references": references or "id",
                 "on": on_table,
                 "on_delete": on_delete,
-                "on_update": on_update
+                "on_update": on_update,
             }
         return None
 
-    def _extract_raw_sql_dependencies(self, model_info: Dict, all_known_tables: Optional[List[str]] = None):
+    def _extract_raw_sql_dependencies(
+        self, model_info: dict, all_known_tables: list[str] | None = None
+    ):
         """Extract table dependencies from raw SQL in the up() function."""
         if all_known_tables is None:
             all_known_tables = []
         try:
             # Get the model file path
-            model_file = model_info.get('file')
+            model_file = model_info.get("file")
             if not model_file:
                 return
 
             # Read the file content
-            with open(model_file, 'r', encoding='utf-8') as f:
+            with open(model_file, "r", encoding="utf-8") as f:
                 content = f.read()
 
             # Parse the AST to find the up() function
@@ -815,17 +864,16 @@ class ModelDiscoverer:
                     sql_content = self._extract_sql_from_function(node)
                     if sql_content:
                         # Parse SQL for table references
-                        dependencies = self._parse_sql_for_dependencies(sql_content, model_info, all_known_tables)
+                        dependencies = self._parse_sql_for_dependencies(
+                            sql_content, model_info, all_known_tables
+                        )
                         if dependencies:
                             # Add dependencies to fields for dependency resolution
                             for dep_table in dependencies:
                                 field_name = f"_sql_dependency_{dep_table}"
                                 model_info["fields"][field_name] = {
                                     "type": "sql_dependency",
-                                    "foreign_key": {
-                                        "on": dep_table,
-                                        "references": "id"
-                                    }
+                                    "foreign_key": {"on": dep_table, "references": "id"},
                                 }
 
         except Exception:
@@ -839,18 +887,21 @@ class ModelDiscoverer:
         for node in ast.walk(function_node):
             if isinstance(node, ast.Call):
                 # Look for DB.statement("SQL") calls
-                if (isinstance(node.func, ast.Attribute) and
-                    node.func.attr == "statement" and
-                    isinstance(node.func.value, ast.Name) and
-                    node.func.value.id == "DB"):
-
+                if (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "statement"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "DB"
+                ):
                     # Extract string argument
                     if node.args and isinstance(node.args[0], ast.Constant):
                         sql_parts.append(node.args[0].value)
 
         return "\n".join(sql_parts)
 
-    def _parse_sql_for_dependencies(self, sql: str, model_info: Dict, all_known_tables: List[str]) -> List[str]:
+    def _parse_sql_for_dependencies(
+        self, sql: str, model_info: dict, all_known_tables: list[str]
+    ) -> list[str]:
         """Parse SQL content to find table dependencies using known tables from discovery."""
         dependencies = []
 
@@ -858,35 +909,44 @@ class ModelDiscoverer:
         potential_tables = set()
 
         # Pattern 1: FROM table_name
-        from_matches = re.finditer(r'FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)', sql, re.IGNORECASE)
+        from_matches = re.finditer(r"FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)", sql, re.IGNORECASE)
         for match in from_matches:
             potential_tables.add(match.group(1).lower())
 
         # Pattern 2: JOIN table_name
-        join_matches = re.finditer(r'(?:INNER\s+|LEFT\s+|RIGHT\s+|FULL\s+)?JOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)', sql, re.IGNORECASE)
+        join_matches = re.finditer(
+            r"(?:INNER\s+|LEFT\s+|RIGHT\s+|FULL\s+)?JOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+            sql,
+            re.IGNORECASE,
+        )
         for match in join_matches:
             potential_tables.add(match.group(1).lower())
 
         # Pattern 3: REFERENCES table_name (for foreign keys)
-        ref_matches = re.finditer(r'REFERENCES\s+([a-zA-Z_][a-zA-Z0-9_]*)', sql, re.IGNORECASE)
+        ref_matches = re.finditer(
+            r"REFERENCES\s+([a-zA-Z_][a-zA-Z0-9_]*)", sql, re.IGNORECASE
+        )
         for match in ref_matches:
             potential_tables.add(match.group(1).lower())
 
         # Pattern 4: Extract foreign key column patterns (column_id -> column table)
-        fk_column_matches = re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)_id', sql, re.IGNORECASE)
+        fk_column_matches = re.finditer(
+            r"([a-zA-Z_][a-zA-Z0-9_]*)_id", sql, re.IGNORECASE
+        )
         for match in fk_column_matches:
             base_name = match.group(1).lower()
             potential_tables.add(base_name)
 
         # Filter potential tables against known tables from model discovery
-        current_table = model_info.get('table', '').lower()
+        current_table = model_info.get("table", "").lower()
         known_tables_lower = [t.lower() for t in all_known_tables]
 
         for table_name in potential_tables:
-            if (table_name != current_table and
-                table_name in known_tables_lower and
-                table_name not in dependencies):
+            if (
+                table_name != current_table
+                and table_name in known_tables_lower
+                and table_name not in dependencies
+            ):
                 dependencies.append(table_name)
 
         return dependencies
-

@@ -8,7 +8,8 @@ checks.
 import importlib
 import inspect
 import os
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Type
+from collections.abc import Iterable
+from typing import Any
 
 from cara.exceptions import (
     InvalidRuleFormatException,
@@ -17,6 +18,8 @@ from cara.exceptions import (
 from cara.validation import ValidationErrors
 from cara.validation.contracts import (
     Rule,
+)
+from cara.validation.contracts import (
     Validation as ValidationContract,
 )
 
@@ -38,11 +41,11 @@ class Validation(ValidationContract):
 
     # Class-level registry of user-supplied custom rules (Laravel parity).
     # Mapping: rule_name (lowercase) → Rule class.
-    _custom_rules: Dict[str, Type[Rule]] = {}
+    _custom_rules: dict[str, type[Rule]] = {}
 
     def __init__(self) -> None:
-        self._errors: Dict[str, list[str]] = {}
-        self._validated: Dict[str, Any] = {}
+        self._errors: dict[str, list[str]] = {}
+        self._validated: dict[str, Any] = {}
         # Dynamically load all rule classes from cara/validation/rules/
         self.__rule_classes = self._discover_rules()
         # Merge user-supplied rules registered via Validation.extend(...).
@@ -52,7 +55,7 @@ class Validation(ValidationContract):
 
     def _discover_rules(
         self,
-    ) -> Dict[str, Type[Rule]]:
+    ) -> dict[str, type[Rule]]:
         """
         Inspect the 'cara.validation.rules' package for any class whose name ends with 'Rule' and
         implements Rule.
@@ -62,7 +65,7 @@ class Validation(ValidationContract):
         """
         rules_pkg = "cara.validation.rules"
         pkg_dir = os.path.dirname(__file__) + "/rules"
-        classes: Dict[str, Type[Rule]] = {}
+        classes: dict[str, type[Rule]] = {}
 
         for filename in os.listdir(pkg_dir):
             if filename.endswith("Rule.py") and not filename.startswith("__"):
@@ -99,7 +102,7 @@ class Validation(ValidationContract):
     # Public extension API                                               #
     # ------------------------------------------------------------------ #
     @classmethod
-    def extend(cls, name: str, rule_class: Type[Rule]) -> None:
+    def extend(cls, name: str, rule_class: type[Rule]) -> None:
         """Register a custom rule globally (Laravel ``Validator::extend``).
 
         Args:
@@ -113,12 +116,12 @@ class Validation(ValidationContract):
         cls._custom_rules[name.lower()] = rule_class
 
     @classmethod
-    def extend_many(cls, mapping: Dict[str, Type[Rule]]) -> None:
+    def extend_many(cls, mapping: dict[str, type[Rule]]) -> None:
         """Register multiple custom rules at once."""
         for name, rule_class in mapping.items():
             cls.extend(name, rule_class)
 
-    def after(self, callback) -> "Validation":
+    def after(self, callback) -> Validation:
         """Register an after-validation callback (Laravel parity).
 
         The callback receives the Validation instance and can inspect
@@ -129,10 +132,10 @@ class Validation(ValidationContract):
 
     @staticmethod
     def make(
-        data: Dict[str, Any],
-        rules: Dict[str, str],
-        messages: Optional[Dict[str, str]] = None,
-    ) -> "Validation":
+        data: dict[str, Any],
+        rules: dict[str, str],
+        messages: dict[str, str] | None = None,
+    ) -> Validation:
         """
         Laravel-style validation method with custom message support.
 
@@ -143,9 +146,7 @@ class Validation(ValidationContract):
         - if validator.passes():
         """
         if not isinstance(rules, dict):
-            raise InvalidRuleFormatException(
-                "Rules must be a dict of field→rule_string."
-            )
+            raise InvalidRuleFormatException("Rules must be a dict of field→rule_string.")
 
         # Create new instance for this validation
         instance = Validation()
@@ -158,7 +159,7 @@ class Validation(ValidationContract):
         # against the incoming data. Non-wildcard keys pass through
         # unchanged so existing semantics (including data.get(field)
         # returning None for missing fields) are preserved.
-        rule_plan: List[Tuple[str, str, str, Any, bool]] = []
+        rule_plan: list[tuple[str, str, str, Any, bool]] = []
         for field, rule_string in rules.items():
             if instance._WILDCARD in field.split("."):
                 any_expansion = False
@@ -190,8 +191,7 @@ class Validation(ValidationContract):
             # numeric-looking strings as numbers when `integer`/`numeric` is
             # present in the chain, and as length otherwise).
             _chain = tuple(
-                instance._split_token(tok)[0]
-                for tok in rule_string.split("|")
+                instance._split_token(tok)[0] for tok in rule_string.split("|")
             )
 
             # Laravel ``bail`` modifier: stop running further rules for the
@@ -206,9 +206,7 @@ class Validation(ValidationContract):
                 params["_rules"] = _chain
                 rule_cls = instance._Validation__rule_classes.get(rule_name)
                 if not rule_cls:
-                    raise RuleNotFoundException(
-                        f"Rule '{rule_name}' is not registered."
-                    )
+                    raise RuleNotFoundException(f"Rule '{rule_name}' is not registered.")
                 rule_instance = rule_cls()
                 # Pass the full data for rules that need access to other fields (like confirmed)
                 params["_data"] = data
@@ -279,7 +277,7 @@ class Validation(ValidationContract):
         """Returns ValidationErrors object with all errors."""
         return ValidationErrors(self._errors)
 
-    def first_error(self, field: Optional[str] = None) -> str:
+    def first_error(self, field: str | None = None) -> str:
         """Get the first error message for a field, or the first error overall."""
         if field:
             field_errors = self._errors.get(field, [])
@@ -297,10 +295,10 @@ class Validation(ValidationContract):
             all_messages.extend(field_errors)
         return all_messages
 
-    def validated(self) -> Dict[str, Any]:
+    def validated(self) -> dict[str, Any]:
         return self._validated.copy()
 
-    def _split_token(self, token: str) -> (str, Dict[str, Any]):
+    def _split_token(self, token: str) -> (str, dict[str, Any]):
         """Given "min:5" or "required", returns ("min", {"min": "5"}) or ("required", {})."""
         if ":" in token:
             name, raw_param = token.split(":", 1)
@@ -311,9 +309,7 @@ class Validation(ValidationContract):
     # Wildcard helpers                                                   #
     # ------------------------------------------------------------------ #
 
-    def _expand_wildcard_field(
-        self, field: str, data: Any
-    ) -> Iterable[Tuple[str, Any]]:
+    def _expand_wildcard_field(self, field: str, data: Any) -> Iterable[tuple[str, Any]]:
         """
         Expand a wildcard field pattern against ``data``.
 
@@ -331,10 +327,10 @@ class Validation(ValidationContract):
 
     def _walk_segments(
         self,
-        segments: List[str],
+        segments: list[str],
         current: Any,
-        path_so_far: List[str],
-    ) -> Iterable[Tuple[str, Any]]:
+        path_so_far: list[str],
+    ) -> Iterable[tuple[str, Any]]:
         if not segments:
             yield ".".join(path_so_far), current
             return
@@ -344,15 +340,11 @@ class Validation(ValidationContract):
         if head == self._WILDCARD:
             if isinstance(current, list):
                 for index, item in enumerate(current):
-                    yield from self._walk_segments(
-                        rest, item, path_so_far + [str(index)]
-                    )
+                    yield from self._walk_segments(rest, item, path_so_far + [str(index)])
             elif isinstance(current, dict):
                 # Support dict-as-collection (Laravel also walks dicts).
                 for key, item in current.items():
-                    yield from self._walk_segments(
-                        rest, item, path_so_far + [str(key)]
-                    )
+                    yield from self._walk_segments(rest, item, path_so_far + [str(key)])
             # Non-collection under a wildcard: nothing to emit.
             return
 
@@ -362,7 +354,7 @@ class Validation(ValidationContract):
         elif isinstance(current, list):
             try:
                 child = current[int(head)]
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 return
         else:
             return
@@ -371,11 +363,11 @@ class Validation(ValidationContract):
 
     def _resolve_custom_message(
         self,
-        messages: Dict[str, str],
+        messages: dict[str, str],
         original_field: str,
         concrete_field: str,
         rule_name: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Pick the most specific custom message available.
 

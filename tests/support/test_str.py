@@ -2,7 +2,7 @@ import pytest
 from cara.support.Str import (
     slugify,
     normalize_email,
-    format_money,
+    format_money_cents,
     truncate,
     title_case,
     snake_case,
@@ -35,15 +35,15 @@ def test_normalize_email_edge_cases():
 
 
 def test_format_money():
-    assert format_money(1050) == "$10.50"
-    assert format_money(0) == "$0.00"
-    assert format_money(100000, "EUR") == "€1,000.00"
+    assert format_money_cents(1050) == "$10.50"
+    assert format_money_cents(0) == "$0.00"
+    assert format_money_cents(100000, "EUR") == "€1,000.00"
     
     with pytest.raises(TypeError):
-        format_money("1050")
+        format_money_cents("1050")
     
     with pytest.raises(ValueError):
-        format_money(-100)
+        format_money_cents(-100)
 
 
 def test_truncate():
@@ -167,19 +167,19 @@ def test_slugify_edge_cases():
 
 
 def test_format_money_edge_cases():
-    assert format_money(1) == "$0.01"
-    assert format_money(99) == "$0.99"
-    assert format_money(100) == "$1.00"
-    assert format_money(1234567, "GBP") == u"\u00a312,345.67"
-    assert format_money(0, "TRY") == u"\u20ba0.00"
-    assert format_money(50, "AUD") == "A$0.50"
-    assert format_money(50, "CAD") == "C$0.50"
+    assert format_money_cents(1) == "$0.01"
+    assert format_money_cents(99) == "$0.99"
+    assert format_money_cents(100) == "$1.00"
+    assert format_money_cents(1234567, "GBP") == u"\u00a312,345.67"
+    assert format_money_cents(0, "TRY") == u"\u20ba0.00"
+    assert format_money_cents(50, "AUD") == "A$0.50"
+    assert format_money_cents(50, "CAD") == "C$0.50"
     with pytest.raises(ValueError):
-        format_money(100, "JPY")
+        format_money_cents(100, "JPY")
     with pytest.raises(TypeError):
-        format_money(10.5)
+        format_money_cents(10.5)
     with pytest.raises(TypeError):
-        format_money(None)
+        format_money_cents(None)
 
 
 def test_truncate_edge_cases():

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import ClassVar, List, Optional
+from typing import ClassVar
 
 
 class Sleep:
@@ -42,7 +42,7 @@ class Sleep:
     # When True, sleeps are recorded into ``_recorded`` instead of
     # actually invoking ``time.sleep`` / ``asyncio.sleep``.
     _faking: ClassVar[bool] = False
-    _recorded: ClassVar[List[float]] = []
+    _recorded: ClassVar[list[float]] = []
 
     def __init__(self, seconds: float) -> None:
         self._seconds = float(seconds)
@@ -50,7 +50,7 @@ class Sleep:
     # ── Builders ────────────────────────────────────────────────────
 
     @classmethod
-    def for_(cls, duration: float) -> "Sleep":
+    def for_(cls, duration: float) -> Sleep:
         """Start a fluent sleep — call a unit method to terminate."""
         return cls(duration)
 
@@ -99,7 +99,7 @@ class Sleep:
             )
 
     @classmethod
-    def assert_slept_for(cls, *, seconds: Optional[float] = None) -> None:
+    def assert_slept_for(cls, *, seconds: float | None = None) -> None:
         """Assert total recorded sleep time matches ``seconds`` (with epsilon)."""
         if seconds is None:
             return
@@ -115,7 +115,7 @@ class Sleep:
             raise AssertionError(f"Expected no sleeps, got: {cls._recorded}")
 
     @classmethod
-    def recorded(cls) -> List[float]:
+    def recorded(cls) -> list[float]:
         """Return a copy of recorded sleep durations (in seconds)."""
         return list(cls._recorded)
 

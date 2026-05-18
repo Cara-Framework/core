@@ -12,7 +12,7 @@ event back to the connection that triggered it.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 
 class Broadcaster(ABC):
@@ -21,11 +21,11 @@ class Broadcaster(ABC):
     @abstractmethod
     async def broadcast(
         self,
-        channels: Union[str, List[str]],
+        channels: str | list[str],
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None:
         """Fan out ``event`` to ``channels``. Skip the connection
         whose public socket id matches ``except_socket_id``."""
@@ -35,8 +35,8 @@ class Broadcaster(ABC):
         self,
         connection_id: str,
         websocket: Any,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -53,19 +53,19 @@ class Broadcaster(ABC):
         self,
         user_id: str,
         event: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         *,
-        except_socket_id: Optional[str] = None,
+        except_socket_id: str | None = None,
     ) -> None: ...
 
     @abstractmethod
     def get_connection_count(self) -> int: ...
 
     @abstractmethod
-    def get_channel_subscribers(self, channel: str) -> List[str]: ...
+    def get_channel_subscribers(self, channel: str) -> list[str]: ...
 
     @abstractmethod
-    def get_stats(self) -> Dict[str, Any]: ...
+    def get_stats(self) -> dict[str, Any]: ...
 
     async def cleanup(self) -> None:
         """Tear-down hook — override if the driver holds external

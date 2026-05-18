@@ -25,7 +25,7 @@ Usage:
 """
 
 import functools
-from typing import Callable
+from collections.abc import Callable
 
 
 def _register_model_event(event_name: str, method: Callable) -> Callable:

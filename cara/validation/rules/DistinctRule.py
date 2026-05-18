@@ -12,14 +12,15 @@ Two attachment styles supported:
     the list of primitives, ``leaf`` is the numeric index, the previous
     code path returned ``True`` silently).
 """
-from typing import Any, Dict
+
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
 
 
 class DistinctRule(BaseRule):
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         # Whole-array attachment: ``"product_ids": "...|distinct"``.
         # Value is the list itself; we just need to confirm uniqueness.
         # ``None`` is left to ``required`` / ``nullable`` to handle so
@@ -79,6 +80,6 @@ class DistinctRule(BaseRule):
 
         return collected.count(value) <= 1
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
         return f"The {attr.lower()} field has a duplicate value."

@@ -8,7 +8,7 @@ import inspect
 import sys
 import traceback
 import uuid
-from typing import Any, Optional, Union
+from typing import Any
 
 from loguru import logger as _loguru_logger
 
@@ -36,7 +36,7 @@ class Logger(Logger):
         """Force re-initialization of the logger (for development)."""
         cls._initialized = False
 
-    def __init__(self, name: str = "app", config: Optional[dict] = None) -> None:
+    def __init__(self, name: str = "app", config: dict | None = None) -> None:
         self._name = name
         if config:
             Logger._config = config
@@ -131,12 +131,14 @@ class Logger(Logger):
 
     # Class names that belong to the logging infrastructure itself and
     # should be skipped when walking up the call stack to find the real caller.
-    _FRAMEWORK_LOGGER_CLASSES = frozenset({
-        "Logger",
-        "ContextualLogger",
-        "CaraPythonLoggerAdapter",
-        "CaraLoggerFactory",
-    })
+    _FRAMEWORK_LOGGER_CLASSES = frozenset(
+        {
+            "Logger",
+            "ContextualLogger",
+            "CaraPythonLoggerAdapter",
+            "CaraLoggerFactory",
+        }
+    )
 
     def _get_caller_info(self) -> tuple[str, str]:
         """Get caller module and line info efficiently."""
@@ -158,7 +160,9 @@ class Logger(Logger):
                     module_name = frame.f_globals.get("__name__", "")
                     # Skip frames from cara.logging.* modules
                     if not module_name.startswith("cara.logging"):
-                        simple_name = module_name.split(".")[-1].replace("_", "").capitalize()
+                        simple_name = (
+                            module_name.split(".")[-1].replace("_", "").capitalize()
+                        )
                         return simple_name, str(frame.f_lineno)
 
                 # Move up one frame
@@ -189,6 +193,7 @@ class Logger(Logger):
         """
         try:
             from cara.context import ExecutionContext
+
             corr = ExecutionContext.get_correlation_id()
             if corr:
                 return str(corr)
@@ -202,9 +207,7 @@ class Logger(Logger):
         except Exception:
             return str(uuid.uuid4())[:8]
 
-    def _format_exception(
-        self, exc_info: Union[bool, Exception, tuple]
-    ) -> Optional[str]:
+    def _format_exception(self, exc_info: bool | Exception | tuple) -> str | None:
         """Format exception information."""
         if not exc_info:
             return None
@@ -229,11 +232,11 @@ class Logger(Logger):
         self,
         level: str,
         message: str,
-        category: Optional[str] = None,
-        exception: Optional[Exception] = None,
-        exc_info: Union[bool, Exception, tuple, None] = None,
-        color: Optional[str] = None,
-        _module_override: Optional[str] = None,
+        category: str | None = None,
+        exception: Exception | None = None,
+        exc_info: bool | Exception | tuple | None = None,
+        color: str | None = None,
+        _module_override: str | None = None,
     ) -> None:
         """Internal logging method.
 
@@ -351,82 +354,126 @@ class Logger(Logger):
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
-        color: Optional[str] = None,
-        exc_info: Union[bool, Exception, tuple, None] = None,
-        _module_override: Optional[str] = None,
+        category: str | None = None,
+        color: str | None = None,
+        exc_info: bool | Exception | tuple | None = None,
+        _module_override: str | None = None,
     ) -> None:
         """Log debug message."""
-        self._log("DEBUG", message, category, exc_info=exc_info, color=color, _module_override=_module_override)
+        self._log(
+            "DEBUG",
+            message,
+            category,
+            exc_info=exc_info,
+            color=color,
+            _module_override=_module_override,
+        )
 
     def info(
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
-        color: Optional[str] = None,
-        exc_info: Union[bool, Exception, tuple, None] = None,
-        _module_override: Optional[str] = None,
+        category: str | None = None,
+        color: str | None = None,
+        exc_info: bool | Exception | tuple | None = None,
+        _module_override: str | None = None,
     ) -> None:
         """Log info message."""
-        self._log("INFO", message, category, exc_info=exc_info, color=color, _module_override=_module_override)
+        self._log(
+            "INFO",
+            message,
+            category,
+            exc_info=exc_info,
+            color=color,
+            _module_override=_module_override,
+        )
 
     def warning(
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
-        color: Optional[str] = None,
-        exc_info: Union[bool, Exception, tuple, None] = None,
-        _module_override: Optional[str] = None,
+        category: str | None = None,
+        color: str | None = None,
+        exc_info: bool | Exception | tuple | None = None,
+        _module_override: str | None = None,
     ) -> None:
         """Log warning message."""
-        self._log("WARNING", message, category, exc_info=exc_info, color=color, _module_override=_module_override)
+        self._log(
+            "WARNING",
+            message,
+            category,
+            exc_info=exc_info,
+            color=color,
+            _module_override=_module_override,
+        )
 
     def error(
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
-        color: Optional[str] = None,
-        exception: Optional[Exception] = None,
-        exc_info: Union[bool, Exception, tuple, None] = None,
-        _module_override: Optional[str] = None,
+        category: str | None = None,
+        color: str | None = None,
+        exception: Exception | None = None,
+        exc_info: bool | Exception | tuple | None = None,
+        _module_override: str | None = None,
     ) -> None:
         """Log error message."""
-        self._log("ERROR", message, category, exception, exc_info, color=color, _module_override=_module_override)
+        self._log(
+            "ERROR",
+            message,
+            category,
+            exception,
+            exc_info,
+            color=color,
+            _module_override=_module_override,
+        )
 
     def critical(
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
-        color: Optional[str] = None,
-        exc_info: Union[bool, Exception, tuple, None] = None,
-        _module_override: Optional[str] = None,
+        category: str | None = None,
+        color: str | None = None,
+        exc_info: bool | Exception | tuple | None = None,
+        _module_override: str | None = None,
     ) -> None:
         """Log critical message."""
-        self._log("CRITICAL", message, category, exc_info=exc_info, color=color, _module_override=_module_override)
+        self._log(
+            "CRITICAL",
+            message,
+            category,
+            exc_info=exc_info,
+            color=color,
+            _module_override=_module_override,
+        )
 
     def exception(
         self,
         message: str,
         *args: Any,
-        category: Optional[str] = None,
-        exc_info: Union[bool, Exception, tuple, None] = True,
-        _module_override: Optional[str] = None,
+        category: str | None = None,
+        exc_info: bool | Exception | tuple | None = True,
+        _module_override: str | None = None,
     ) -> None:
         """Log an exception message with backtrace."""
-        self._log("ERROR", message, category, exc_info=exc_info, _module_override=_module_override)
+        self._log(
+            "ERROR",
+            message,
+            category,
+            exc_info=exc_info,
+            _module_override=_module_override,
+        )
 
-    def withContext(self, **context: Any) -> "ContextualLogger":
+    def withContext(self, **context: Any) -> ContextualLogger:
         """Return a scoped logger that auto-injects context into every message.
 
         Laravel-style usage::
 
             logger = Log.withContext(job_id=self.job_id)
-            logger.info("Starting collect")   # → "[CollectProductJob] Starting collect [job_id=abc123]"
-            logger.error("Failed")            # → "[CollectProductJob] Failed [job_id=abc123]"
+            logger.info(
+                "Starting collect"
+            )  # → "[CollectProductJob] Starting collect [job_id=abc123]"
+            logger.error("Failed")  # → "[CollectProductJob] Failed [job_id=abc123]"
         """
         return ContextualLogger(self, context)
 
@@ -444,7 +491,9 @@ class ContextualLogger:
     def __init__(self, parent: Logger, context: dict) -> None:
         self._parent = parent
         self._context = context
-        self._suffix = " ".join(f"[{k}={v}]" for k, v in context.items()) if context else ""
+        self._suffix = (
+            " ".join(f"[{k}={v}]" for k, v in context.items()) if context else ""
+        )
 
     def _fmt(self, message: str) -> str:
         return f"{message} {self._suffix}" if self._suffix else message

@@ -25,7 +25,8 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 
 class Conditionable:
@@ -40,9 +41,9 @@ class Conditionable:
     def when(
         self,
         value: Any,
-        callback: Optional[Callable[..., Any]] = None,
-        default: Optional[Callable[..., Any]] = None,
-    ) -> "Conditionable":
+        callback: Callable[..., Any] | None = None,
+        default: Callable[..., Any] | None = None,
+    ) -> Conditionable:
         """Run ``callback(self, value)`` if ``value`` is truthy.
 
         ``callback`` and ``default`` may be plain callables; if a
@@ -81,9 +82,9 @@ class Conditionable:
     def unless(
         self,
         value: Any,
-        callback: Optional[Callable[..., Any]] = None,
-        default: Optional[Callable[..., Any]] = None,
-    ) -> "Conditionable":
+        callback: Callable[..., Any] | None = None,
+        default: Callable[..., Any] | None = None,
+    ) -> Conditionable:
         """Inverse of :meth:`when` — runs ``callback`` when ``value`` is falsy.
 
         Same semantics as :meth:`when` but with the truthiness check

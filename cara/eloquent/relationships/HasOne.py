@@ -6,7 +6,7 @@ from .BaseRelationship import BaseRelationship
 class HasOne(BaseRelationship):
     """
     Has One Relationship.
-    
+
     Works as both decorator and property (Laravel-style).
     """
 
@@ -24,12 +24,12 @@ class HasOne(BaseRelationship):
         if instance is None:
             return self
 
-        func = getattr(self, '_func', None) or getattr(self, 'fn', None)
-        attr_name = func.__name__ if func and hasattr(func, '__name__') else None
+        func = getattr(self, "_func", None) or getattr(self, "fn", None)
+        attr_name = func.__name__ if func and hasattr(func, "__name__") else None
 
         # Return cached relation if already loaded (eager or previous lazy load)
         if attr_name:
-            relations = getattr(instance, '_relations', None)
+            relations = getattr(instance, "_relations", None)
             if relations is not None and attr_name in relations:
                 return relations[attr_name]
 
@@ -42,8 +42,8 @@ class HasOne(BaseRelationship):
 
         # Cache in _relations so subsequent access doesn't re-query
         if attr_name:
-            if not hasattr(instance, '_relations') or instance._relations is None:
-                instance.__dict__.setdefault('_relations', {})
+            if not hasattr(instance, "_relations") or instance._relations is None:
+                instance.__dict__.setdefault("_relations", {})
             instance._relations[attr_name] = result
 
         return result
@@ -160,6 +160,7 @@ class HasOne(BaseRelationship):
         related_table = self.get_builder().get_table_name()
         if not builder._columns:
             builder = builder.select("*")
+
         def _make_sub(_unused_new):
             sub = self.get_builder()
             return (
@@ -170,6 +171,7 @@ class HasOne(BaseRelationship):
                 )
                 .when(callback, lambda qq: callback(qq))
             )
+
         return builder.add_select(alias, _make_sub)
 
     def _alias_base(self, relation_name):

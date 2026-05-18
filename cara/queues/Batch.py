@@ -17,7 +17,8 @@ Usage::
 """
 
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from cara.queues.contracts import Queueable
 
@@ -40,6 +41,7 @@ def _batch_failed_key(batch_id: str) -> str:
 
 # ── Batch ─────────────────────────────────────────────────────────────
 
+
 class Batch:
     """Fluent API for batching jobs with completion tracking."""
 
@@ -47,18 +49,18 @@ class Batch:
     # any orphaned counter is auto-cleaned by the cache driver.
     BATCH_TTL = 86400  # 24 h
 
-    def __init__(self, jobs: List[Queueable]):
+    def __init__(self, jobs: list[Queueable]):
         self.jobs = jobs
         self.batch_id = str(uuid.uuid4())
-        self.then_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-        self.catch_callback: Optional[Callable[[Exception, Queueable], None]] = None
+        self.then_callback: Callable[[dict[str, Any]], None] | None = None
+        self.catch_callback: Callable[[Exception, Queueable], None] | None = None
 
-    def then(self, callback: Callable[[Dict[str, Any]], None]) -> "Batch":
+    def then(self, callback: Callable[[dict[str, Any]], None]) -> Batch:
         """Set completion callback — fires when ALL jobs finish successfully."""
         self.then_callback = callback
         return self
 
-    def catch(self, callback: Callable[[Exception, Queueable], None]) -> "Batch":
+    def catch(self, callback: Callable[[Exception, Queueable], None]) -> Batch:
         """Set failure callback — fires once per failed job."""
         self.catch_callback = callback
         return self
@@ -69,7 +71,7 @@ class Batch:
         Returns:
             The ``batch_id`` so callers can poll status if desired.
         """
-        from cara.facades import Cache, Queue, Log
+        from cara.facades import Cache, Log, Queue
 
         total = len(self.jobs)
         if total == 0:
@@ -79,11 +81,15 @@ class Batch:
             return self.batch_id
 
         # Store batch metadata in cache.
-        Cache.put(_batch_key(self.batch_id), {
-            "total": total,
-            "then": self.then_callback is not None,
-            "catch": self.catch_callback is not None,
-        }, self.BATCH_TTL)
+        Cache.put(
+            _batch_key(self.batch_id),
+            {
+                "total": total,
+                "then": self.then_callback is not None,
+                "catch": self.catch_callback is not None,
+            },
+            self.BATCH_TTL,
+        )
         Cache.put(_batch_pending_key(self.batch_id), total, self.BATCH_TTL)
         Cache.put(_batch_failed_key(self.batch_id), 0, self.BATCH_TTL)
 
@@ -97,7 +103,9 @@ class Batch:
                 Queue.push(job)
                 dispatched += 1
             except Exception as e:
-                Log.error(f"Batch {self.batch_id}: failed to dispatch {type(job).__name__}: {e}")
+                Log.error(
+                    f"Batch {self.batch_id}: failed to dispatch {type(job).__name__}: {e}"
+                )
                 if self.catch_callback:
                     self.catch_callback(e, job)
                 # Decrement pending since this job will never run.
@@ -111,6 +119,7 @@ class Batch:
 
 
 # ── BatchAware mixin ──────────────────────────────────────────────────
+
 
 class BatchAware:
     """Mixin for jobs that participate in batch tracking.
@@ -142,6 +151,7 @@ class BatchAware:
             return
 
         from cara.facades import Cache
+
         try:
             # Pass the batch TTL explicitly. If the initial ``put()``
             # missed (cache eviction, partial init, cold-start before
@@ -163,7 +173,9 @@ class BatchAware:
         _decrement_pending(batch_id, then_cb)
 
 
-def auto_dispatch_batch_completion(instance: Any, exception: Optional[Exception] = None) -> None:
+def auto_dispatch_batch_completion(
+    instance: Any, exception: Exception | None = None
+) -> None:
     """Worker-side hook — called by every queue driver after a job
     runs (success or failure).
 
@@ -215,16 +227,22 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
 
         if then_callback:
             try:
-                then_callback({
-                    "batch_id": batch_id,
-                    "total": meta.get("total", 0),
-                    "failed": failed_count,
-                })
+                then_callback(
+                    {
+                        "batch_id": batch_id,
+                        "total": meta.get("total", 0),
+                        "failed": failed_count,
+                    }
+                )
             except Exception as e:
                 Log.error(f"Batch {batch_id}: then() callback raised: {e}")
 
         # Cleanup cache keys.
-        for key in (_batch_key(batch_id), _batch_pending_key(batch_id), _batch_failed_key(batch_id)):
+        for key in (
+            _batch_key(batch_id),
+            _batch_pending_key(batch_id),
+            _batch_failed_key(batch_id),
+        ):
             try:
                 Cache.forget(key)
             except Exception:

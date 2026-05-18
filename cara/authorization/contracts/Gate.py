@@ -3,7 +3,8 @@ Gate interface for authorization.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, List, Union
+from collections.abc import Callable
+from typing import Any
 
 
 class Gate(ABC):
@@ -12,7 +13,7 @@ class Gate(ABC):
     """
 
     @abstractmethod
-    def define(self, ability: str, callback: Union[Callable, str]) -> None:
+    def define(self, ability: str, callback: Callable | str) -> None:
         """
         Define a new ability.
         """
@@ -33,7 +34,7 @@ class Gate(ABC):
         pass
 
     @abstractmethod
-    def any(self, abilities: List[str], *args) -> bool:
+    def any(self, abilities: list[str], *args) -> bool:
         """
         Check if the current user has any of the given abilities.
         """

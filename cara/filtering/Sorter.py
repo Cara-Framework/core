@@ -24,7 +24,8 @@ Why a framework instead of a per-repo ``if sort_by == "...":`` ladder:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 
 class Sorter(ABC):
@@ -42,7 +43,7 @@ class Sorter(ABC):
     #: Alternate names that should resolve to this sorter (kept for
     #: backwards-compat without growing the registry — e.g.
     #: ``"newest"`` aliases to the canonical ``"recent"``).
-    aliases: Tuple[str, ...] = ()
+    aliases: tuple[str, ...] = ()
 
     #: True for the default sort that should be picked when the
     #: caller didn't supply one. Exactly one ``Sorter`` per registry
@@ -60,7 +61,7 @@ class Sorter(ABC):
         — encapsulating that here keeps the repo body sort-agnostic.
         """
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """JSON-serialisable spec for the wizard / docs payload."""
         return {
             "name": self.name,
@@ -86,7 +87,7 @@ class SortRegistry:
         self,
         sorters: Iterable[Sorter],
         *,
-        default: Optional[str] = None,
+        default: str | None = None,
     ) -> None:
         """Build a registry, with optional registry-level default.
 
@@ -100,13 +101,13 @@ class SortRegistry:
                 default but the deal feed wants ``BestDealSorter``
                 first).
         """
-        self._sorters: List[Sorter] = list(sorters)
+        self._sorters: list[Sorter] = list(sorters)
 
         if not self._sorters:
             raise ValueError("SortRegistry requires at least one sorter")
 
-        seen: Dict[str, Sorter] = {}
-        class_defaults: List[Sorter] = []
+        seen: dict[str, Sorter] = {}
+        class_defaults: list[Sorter] = []
         for s in self._sorters:
             if not s.name:
                 raise ValueError(
@@ -131,7 +132,7 @@ class SortRegistry:
 
         # ``default=`` kwarg wins. When unset, fall back to the
         # ``is_default`` class flag (legacy semantics).
-        chosen: Optional[Sorter] = None
+        chosen: Sorter | None = None
         if default is not None:
             chosen = seen.get(default)
             if chosen is None:
@@ -155,11 +156,11 @@ class SortRegistry:
             chosen = class_defaults[0]
 
         self._default: Sorter = chosen
-        self._by_name: Dict[str, Sorter] = seen
+        self._by_name: dict[str, Sorter] = seen
 
     # ── Resolution ─────────────────────────────────────────────────
 
-    def resolve(self, name: Optional[str]) -> Sorter:
+    def resolve(self, name: str | None) -> Sorter:
         """Return the sorter matching ``name`` (or the default if missing).
 
         Unknown names also fall back to the default rather than
@@ -172,7 +173,7 @@ class SortRegistry:
 
     # ── Composition ────────────────────────────────────────────────
 
-    def apply(self, query: Any, name: Optional[str]) -> Tuple[Any, Sorter]:
+    def apply(self, query: Any, name: str | None) -> tuple[Any, Sorter]:
         """Resolve and apply the sort, returning ``(query, sorter)``.
 
         The caller often wants the resolved sorter back (e.g. to
@@ -184,13 +185,13 @@ class SortRegistry:
 
     # ── Introspection ──────────────────────────────────────────────
 
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         """Canonical names in declaration order (no aliases)."""
         return [s.name for s in self._sorters]
 
-    def all_names(self) -> List[str]:
+    def all_names(self) -> list[str]:
         """Canonical names + aliases. Used to build the ``in:`` rule."""
-        out: List[str] = []
+        out: list[str] = []
         for s in self._sorters:
             out.append(s.name)
             out.extend(s.aliases)
@@ -204,7 +205,7 @@ class SortRegistry:
         """
         return "nullable|string|in:" + ",".join(self.all_names())
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """JSON-serialisable spec for the wizard."""
         return {
             "name": "sort_by",

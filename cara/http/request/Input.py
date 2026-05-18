@@ -6,7 +6,7 @@ implementing input handling with support for nested data, arrays, and dot notati
 access.
 """
 
-from typing import Any, Dict, TypeVar
+from typing import Any, TypeVar
 
 from cara.http.request.utils.QueryParser import QueryStringParser
 from cara.support.Structures import data_get
@@ -52,7 +52,7 @@ class InputBag:
 
     def __init__(self):
         """Initialize an empty input bag."""
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self._parser = QueryStringParser()
 
     @classmethod
@@ -177,7 +177,7 @@ class InputBag:
                 return False
         return True
 
-    def all(self) -> Dict[str, Any]:
+    def all(self) -> dict[str, Any]:
         """
         Get all inputs.
 
@@ -186,7 +186,7 @@ class InputBag:
         """
         return self._data
 
-    def all_as_values(self, internal_variables: bool = False) -> Dict[str, Any]:
+    def all_as_values(self, internal_variables: bool = False) -> dict[str, Any]:
         """
         Get all inputs as raw values.
 
@@ -200,7 +200,7 @@ class InputBag:
             return {k: v for k, v in self._data.items() if not k.startswith("__")}
         return self._data.copy()
 
-    def only(self, *names: str) -> Dict[str, Any]:
+    def only(self, *names: str) -> dict[str, Any]:
         """
         Get only specified inputs.
 
@@ -217,7 +217,7 @@ class InputBag:
                 result[name] = value
         return result
 
-    def except_(self, *names: str) -> Dict[str, Any]:
+    def except_(self, *names: str) -> dict[str, Any]:
         """
         Get all inputs except specified ones.
 
@@ -242,7 +242,7 @@ class InputBag:
         """Get all input items as (name, value) tuples."""
         return list(self._data.items())
 
-    def update(self, data: Dict[str, Any]) -> None:
+    def update(self, data: dict[str, Any]) -> None:
         """
         Update input data with deep merging.
 
@@ -280,7 +280,7 @@ class InputBag:
         return f"InputBag({self._data})"
 
     @staticmethod
-    def _merge_dicts(d1: Dict[str, Any], d2: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_dicts(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, Any]:
         """
         Deep merge two dictionaries.
 

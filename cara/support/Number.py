@@ -54,6 +54,7 @@ def clamp(value: Number, lo: Number, hi: Number) -> Number:
     """
     if lo > hi:
         from cara.exceptions import InvalidArgumentException  # lazy: see module note
+
         raise InvalidArgumentException(
             f"clamp(lo={lo}, hi={hi}): lower bound must be <= upper bound"
         )

@@ -8,7 +8,7 @@ Follows DRY and KISS principles for casting management.
 import json
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, Union
+from typing import Any
 
 from cara.eloquent.utils.DateManager import DateManager
 
@@ -71,7 +71,7 @@ class CastManager:
         return cast_type, cast_options
 
     @classmethod
-    def _parse_cast_options(cls, options_str: str) -> Dict[str, Any]:
+    def _parse_cast_options(cls, options_str: str) -> dict[str, Any]:
         """Parse cast options string into dictionary."""
         options = {}
 
@@ -94,7 +94,7 @@ class CastManager:
 
         return options
 
-    _BUILTIN_CASTERS: Dict[str, str] = {
+    _BUILTIN_CASTERS: dict[str, str] = {
         "bool": "_cast_boolean",
         "boolean": "_cast_boolean",
         "int": "_cast_integer",
@@ -113,7 +113,7 @@ class CastManager:
 
     @classmethod
     def _cast_builtin(
-        cls, cast_type: str, value: Any, options: Dict[str, Any], operation: str
+        cls, cast_type: str, value: Any, options: dict[str, Any], operation: str
     ) -> Any:
         """Handle built-in casting types via a registry lookup."""
         method_name = cls._BUILTIN_CASTERS.get(cast_type.lower())
@@ -121,6 +121,7 @@ class CastManager:
             return value
         method = getattr(cls, method_name)
         import inspect
+
         sig = inspect.signature(method)
         if "options" in sig.parameters:
             return method(value, options, operation)
@@ -151,7 +152,7 @@ class CastManager:
             return None
         try:
             return int(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return 0
 
     @classmethod
@@ -161,12 +162,12 @@ class CastManager:
             return None
         try:
             return float(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return 0.0
 
     @classmethod
     def _cast_decimal(
-        cls, value: Any, options: Dict[str, Any], operation: str
+        cls, value: Any, options: dict[str, Any], operation: str
     ) -> Decimal:
         """Cast value to Decimal with precision."""
         try:
@@ -180,7 +181,7 @@ class CastManager:
                 decimal_value = decimal_value.quantize(quantizer)
 
             return decimal_value
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return Decimal("0")
 
     @classmethod
@@ -191,7 +192,7 @@ class CastManager:
         return str(value)
 
     @classmethod
-    def _cast_json(cls, value: Any, operation: str) -> Union[str, Any]:
+    def _cast_json(cls, value: Any, operation: str) -> str | Any:
         """Cast value to/from JSON."""
         if operation == "set":
             # When setting, convert to JSON string
@@ -200,7 +201,7 @@ class CastManager:
                 try:
                     json.loads(value)
                     return value
-                except (json.JSONDecodeError, ValueError):
+                except json.JSONDecodeError, ValueError:
                     # If not valid JSON, encode it
                     return json.dumps(value)
             else:
@@ -211,12 +212,12 @@ class CastManager:
             if isinstance(value, str):
                 try:
                     return json.loads(value)
-                except (json.JSONDecodeError, ValueError):
+                except json.JSONDecodeError, ValueError:
                     return value
             return value
 
     @classmethod
-    def _cast_array(cls, value: Any, operation: str) -> Union[str, list]:
+    def _cast_array(cls, value: Any, operation: str) -> str | list:
         """Cast value to/from array."""
         if operation == "set":
             # When setting, convert to JSON string
@@ -229,7 +230,7 @@ class CastManager:
                         return value
                     else:
                         return json.dumps([parsed])
-                except (json.JSONDecodeError, ValueError):
+                except json.JSONDecodeError, ValueError:
                     return json.dumps([value])
             else:
                 return json.dumps([value])
@@ -239,7 +240,7 @@ class CastManager:
                 try:
                     parsed = json.loads(value)
                     return parsed if isinstance(parsed, list) else [parsed]
-                except (json.JSONDecodeError, ValueError):
+                except json.JSONDecodeError, ValueError:
                     return [value]
             elif isinstance(value, list):
                 return value
@@ -248,8 +249,8 @@ class CastManager:
 
     @classmethod
     def _cast_date(
-        cls, value: Any, options: Dict[str, Any], operation: str
-    ) -> Union[str, datetime]:
+        cls, value: Any, options: dict[str, Any], operation: str
+    ) -> str | datetime:
         """Cast value to/from date."""
         format_str = options.get("format", "Y-m-d")
 
@@ -265,8 +266,8 @@ class CastManager:
 
     @classmethod
     def _cast_datetime(
-        cls, value: Any, options: Dict[str, Any], operation: str
-    ) -> Union[str, datetime]:
+        cls, value: Any, options: dict[str, Any], operation: str
+    ) -> str | datetime:
         """Cast value to/from datetime."""
         format_str = options.get("format", "Y-m-d H:i:s")
 
@@ -281,7 +282,7 @@ class CastManager:
             return value
 
     @classmethod
-    def _cast_timestamp(cls, value: Any, operation: str) -> Union[int, datetime]:
+    def _cast_timestamp(cls, value: Any, operation: str) -> int | datetime:
         """Cast value to/from timestamp."""
         if operation == "set":
             # When setting, convert to timestamp

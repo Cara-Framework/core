@@ -3,7 +3,7 @@ Guard Interface for authentication guards.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class Guard(ABC):
@@ -22,17 +22,17 @@ class Guard(ABC):
         pass
 
     @abstractmethod
-    def user(self) -> Optional[Any]:
+    def user(self) -> Any | None:
         """Get the currently authenticated user."""
         pass
 
     @abstractmethod
-    def id(self) -> Optional[Any]:
+    def id(self) -> Any | None:
         """Get the ID of the authenticated user."""
         pass
 
     @abstractmethod
-    def attempt(self, credentials: Dict[str, Any]) -> bool:
+    def attempt(self, credentials: dict[str, Any]) -> bool:
         """Attempt to authenticate using credentials."""
         pass
 

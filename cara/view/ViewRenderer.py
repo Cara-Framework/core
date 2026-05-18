@@ -4,7 +4,7 @@ View Renderer - Rendering functionality for Cara view engine
 This file provides view rendering capabilities.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cara.view import ViewEngine
 
@@ -12,17 +12,17 @@ from cara.view import ViewEngine
 class ViewRenderer:
     """View renderer for processing and rendering templates."""
 
-    def __init__(self, engine: Optional[ViewEngine] = None, factory=None):
+    def __init__(self, engine: ViewEngine | None = None, factory=None):
         """Initialize view renderer."""
         self.engine = engine or ViewEngine()
         self.factory = factory
         self.debug = True  # Enable debug mode by default
 
-    def render(self, view: str, data: Dict[str, Any] = None) -> str:
+    def render(self, view: str, data: dict[str, Any] = None) -> str:
         """Render a view template."""
         return self.engine.render(view, data, factory=self.factory)
 
-    def render_string(self, template: str, data: Dict[str, Any] = None) -> str:
+    def render_string(self, template: str, data: dict[str, Any] = None) -> str:
         """Render template string directly."""
         data = data or {}
 
@@ -120,17 +120,17 @@ class ViewRenderer:
             # Return error message in production mode
             return "Template Error"
 
-    def render_partial(self, view: str, data: Dict[str, Any] = None) -> str:
+    def render_partial(self, view: str, data: dict[str, Any] = None) -> str:
         """Render a partial view (for includes)."""
         return self.render(view, data)
 
-    def render_component(self, component: str, data: Dict[str, Any] = None) -> str:
+    def render_component(self, component: str, data: dict[str, Any] = None) -> str:
         """Render a view component."""
         # Components would be views with specific naming convention
         component_view = f"components.{component}"
         return self.render(component_view, data)
 
-    def render_mail_template(self, template: str, data: Dict[str, Any] = None) -> str:
+    def render_mail_template(self, template: str, data: dict[str, Any] = None) -> str:
         """Render mail template specifically."""
         # Add mail-specific data and helpers
         mail_data = {
@@ -145,7 +145,7 @@ class ViewRenderer:
         return self.render(template, mail_data)
 
     def render_notification_template(
-        self, template: str, data: Dict[str, Any] = None
+        self, template: str, data: dict[str, Any] = None
     ) -> str:
         """Render notification template."""
         # Add notification-specific data
@@ -167,6 +167,6 @@ class ViewRenderer:
         """Get the view engine instance."""
         return self.engine
 
-    def get_renderer(self) -> "ViewRenderer":
+    def get_renderer(self) -> ViewRenderer:
         """Get the renderer instance (for compatibility)."""
         return self

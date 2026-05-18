@@ -126,6 +126,7 @@ class DatabaseManager:
             # Provider will configure later — this is OK. Log at debug
             # so it's visible if someone is troubleshooting boot order.
             import logging
+
             logging.getLogger("cara.database").debug(
                 "DatabaseManager._auto_configure skipped (early bootstrap): %s", e
             )
@@ -308,6 +309,7 @@ class DatabaseManager:
         # this context is inside ``with db.transaction()``.
         try:
             from .connections.ConnectionResolver import _get_registry
+
             active = _get_registry().get(connection_name)
             if active is not None:
                 return active

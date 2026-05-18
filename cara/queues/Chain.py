@@ -15,9 +15,9 @@ Usage:
 """
 
 import asyncio
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
-from cara.queues.contracts import ShouldQueue, Queueable
+from cara.queues.contracts import Queueable, ShouldQueue
 
 
 class ChainRunnerJob(ShouldQueue, Queueable):
@@ -25,8 +25,8 @@ class ChainRunnerJob(ShouldQueue, Queueable):
 
     def __init__(
         self,
-        jobs: List[Queueable],
-        catch_callback: Optional[Callable[[Exception, Queueable], None]] = None
+        jobs: list[Queueable],
+        catch_callback: Callable[[Exception, Queueable], None] | None = None,
     ):
         """Initialize chain runner.
 
@@ -62,16 +62,16 @@ class ChainRunnerJob(ShouldQueue, Queueable):
 class Chain:
     """Fluent API for chaining jobs."""
 
-    def __init__(self, jobs: List[Queueable]):
+    def __init__(self, jobs: list[Queueable]):
         """Initialize chain with list of jobs.
 
         Args:
             jobs: List of job instances to chain together.
         """
         self.jobs = jobs
-        self.catch_callback: Optional[Callable] = None
+        self.catch_callback: Callable | None = None
 
-    def catch(self, callback: Callable[[Exception, Queueable], None]) -> "Chain":
+    def catch(self, callback: Callable[[Exception, Queueable], None]) -> Chain:
         """Set failure callback.
 
         Args:

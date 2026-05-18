@@ -76,17 +76,9 @@ class CacheProvider(DeferredProvider):
                 "cache.drivers.redis.socket_connect_timeout", 5.0
             ),
             socket_timeout=config("cache.drivers.redis.socket_timeout", 5.0),
-            socket_keepalive=config(
-                "cache.drivers.redis.socket_keepalive", True
-            ),
-            health_check_interval=config(
-                "cache.drivers.redis.health_check_interval", 30
-            ),
-            max_connections=config(
-                "cache.drivers.redis.max_connections", 32
-            ),
-            retry_on_timeout=config(
-                "cache.drivers.redis.retry_on_timeout", True
-            ),
+            socket_keepalive=config("cache.drivers.redis.socket_keepalive", True),
+            health_check_interval=config("cache.drivers.redis.health_check_interval", 30),
+            max_connections=config("cache.drivers.redis.max_connections", 32),
+            retry_on_timeout=config("cache.drivers.redis.retry_on_timeout", True),
         )
         cache_manager.add_driver(RedisCacheDriver.driver_name, driver)

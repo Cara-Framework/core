@@ -4,7 +4,7 @@ Between Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is between two given values.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation.rules import BaseRule
 
@@ -16,7 +16,7 @@ class BetweenRule(BaseRule):
     Usage: "between:5,10"
     """
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         if value is None:
             return False
 
@@ -28,7 +28,7 @@ class BetweenRule(BaseRule):
             min_val, max_val = between_param.split(",", 1)
             min_val = float(min_val.strip())
             max_val = float(max_val.strip())
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             return False
 
         if isinstance(value, bool):
@@ -53,6 +53,6 @@ class BetweenRule(BaseRule):
 
         return False
 
-    def message(self, field: str, params: Dict[str, Any]) -> str:
+    def message(self, field: str, params: dict[str, Any]) -> str:
         between_param = params.get("between", "")
         return f"'{field}' must be between {between_param}."

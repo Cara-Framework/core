@@ -25,7 +25,8 @@ time too.
 from __future__ import annotations
 
 import time
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -35,7 +36,7 @@ class Timebox:
 
     def call(
         self,
-        callback: Callable[["Timebox"], T],
+        callback: Callable[[Timebox], T],
         microseconds: int = 0,
     ) -> T:
         """Run ``callback(self)`` and pad to ``microseconds`` minimum.

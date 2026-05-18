@@ -5,7 +5,7 @@ This module provides an advanced validation rule that checks if a value exists i
 with support for custom messages, complex conditions, and multiple validation scenarios.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules import BaseRule
@@ -21,7 +21,7 @@ class ExistsRule(BaseRule):
     - "exists:users" - Check if value exists in 'id' column (default)
     """
 
-    def validate(self, field: str, value: Any, params: Dict[str, Any]) -> bool:
+    def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value exists in the specified table.column with optional conditions."""
         exists_params = params.get("exists")
         if not exists_params:
@@ -85,8 +85,7 @@ class ExistsRule(BaseRule):
             # see it in incident review instead of silently returning
             # validation failure.
             self._log_debug(
-                f"ExistsRule: unexpected outer failure: "
-                f"{e.__class__.__name__}: {e}"
+                f"ExistsRule: unexpected outer failure: {e.__class__.__name__}: {e}"
             )
 
         return False
@@ -96,11 +95,12 @@ class ExistsRule(BaseRule):
         """Best-effort debug log; survives when Log facade isn't yet booted."""
         try:
             from cara.facades import Log
+
             Log.debug(msg, category="cara.validation.exists")
         except ImportError:
             pass
 
-    def default_message(self, field: str, params: Dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default exists validation message."""
         exists_params = params.get("exists", "")
         parts = [p.strip() for p in exists_params.split(",")]
@@ -147,7 +147,7 @@ class ExistsRule(BaseRule):
                     cls = getattr(module, model_name, None)
                     if cls is not None:
                         return cls
-                except (ImportError, AttributeError):
+                except ImportError, AttributeError:
                     pass
 
                 # 2. aggregated layout: app.models re-exports
@@ -156,7 +156,7 @@ class ExistsRule(BaseRule):
                     cls = getattr(pkg, model_name, None)
                     if cls is not None:
                         return cls
-                except (ImportError, AttributeError):
+                except ImportError, AttributeError:
                     pass
 
             return None

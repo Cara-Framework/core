@@ -8,12 +8,12 @@ from .ViewRenderer import ViewRenderer
 from .ViewProvider import ViewProvider
 
 __all__ = [
-    'View',
-    'ViewInstance',
-    'ViewEngine',
-    'ViewCompiler',
-    'ViewRenderer',
-    'ViewDirectives',
-    'ViewDirectivesRegistry',
-    'ViewProvider',
+    "View",
+    "ViewInstance",
+    "ViewEngine",
+    "ViewCompiler",
+    "ViewRenderer",
+    "ViewDirectives",
+    "ViewDirectivesRegistry",
+    "ViewProvider",
 ]

@@ -5,7 +5,7 @@ This driver logs emails instead of sending them,
 useful for development and testing.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from cara.mail.contracts import Mail
 
@@ -13,7 +13,7 @@ from cara.mail.contracts import Mail
 class LogDriver(Mail):
     driver_name = "log"
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize log driver.
 
@@ -22,7 +22,7 @@ class LogDriver(Mail):
         """
         self.config = config
 
-    def send(self, mailable_data: Dict[str, Any]) -> bool:
+    def send(self, mailable_data: dict[str, Any]) -> bool:
         """
         Log email instead of sending.
 

@@ -9,7 +9,7 @@ import logging
 import pickle
 import threading
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import pendulum
 import pika
@@ -48,7 +48,7 @@ class AMQPDriver(HasColoredOutput, Queue):
     DEFAULT_MAX_ATTEMPTS = 3
     DEFAULT_RETRY_BACKOFF_SECONDS = (1, 5, 30)
 
-    def __init__(self, application, options: Dict[str, Any]):
+    def __init__(self, application, options: dict[str, Any]):
         super().__init__(module="queue.amqp")
         self.application = application
         self.options = options
@@ -69,7 +69,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # process-global; thread-locals only point at a connection
         # while that thread is using one. Bounded so we don't
         # accumulate idle sockets on a load spike.
-        self._pool: Dict[str, List[Any]] = {}
+        self._pool: dict[str, list[Any]] = {}
         self._pool_lock = threading.Lock()
         self._publish_lock = threading.Lock()
         self._max_pool_per_url = int(options.get("amqp_pool_size", 8))
@@ -98,7 +98,7 @@ class AMQPDriver(HasColoredOutput, Queue):
     def channel(self, value):
         self._tls.channel = value
 
-    def push(self, *jobs: Any, options: Dict[str, Any]) -> Union[str, List[str]]:
+    def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push jobs to queue and return job ID(s) for tracking."""
         merged_opts = {**self.options, **options}
         job_ids = []
@@ -146,11 +146,11 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
-    def batch(self, *jobs: Any, options: Dict[str, Any]) -> None:
+    def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
         """Batch push: push all jobs at once."""
         self.push(*jobs, options=options)
 
-    def chain(self, jobs: list, options: Dict[str, Any]) -> None:
+    def chain(self, jobs: list, options: dict[str, Any]) -> None:
         """Chain jobs: push each job in sequence."""
         if not jobs:
             return
@@ -158,7 +158,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         for job in jobs:
             self.push(job, options=options)
 
-    def schedule(self, job: Any, when: Any, options: Dict[str, Any]) -> None:
+    def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> None:
         """Schedule job for future execution using AMQP delayed plugin."""
         merged_opts = {**self.options, **options}
 
@@ -180,7 +180,9 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         self.push(job, options=merged_opts)
 
-    def later(self, delay: Union[int, "pendulum.Duration"], job: Any, options: Dict[str, Any] = None) -> Union[str, List[str]]:
+    def later(
+        self, delay: int | pendulum.Duration, job: Any, options: dict[str, Any] = None
+    ) -> str | list[str]:
         """
         Schedule a job to be executed after a delay.
 
@@ -205,13 +207,17 @@ class AMQPDriver(HasColoredOutput, Queue):
             delay_seconds = delay
         else:
             # Assume it's a Duration-like object
-            delay_seconds = int(delay.total_seconds()) if hasattr(delay, "total_seconds") else delay
+            delay_seconds = (
+                int(delay.total_seconds()) if hasattr(delay, "total_seconds") else delay
+            )
 
         # Merge options
         merged_opts = {**self.options, **options}
 
         # Calculate when job should run
-        when = pendulum_module.now(tz=merged_opts.get("tz", "UTC")).add(seconds=delay_seconds)
+        when = pendulum_module.now(tz=merged_opts.get("tz", "UTC")).add(
+            seconds=delay_seconds
+        )
 
         # Use schedule method which handles AMQP delayed plugin
         self.schedule(job, when, merged_opts)
@@ -223,10 +229,10 @@ class AMQPDriver(HasColoredOutput, Queue):
     def retry(
         self,
         job: Any,
-        options: Dict[str, Any] = None,
+        options: dict[str, Any] = None,
         attempts: int = 3,
-        backoff: str = "exponential"
-    ) -> Optional[Union[str, List[str]]]:
+        backoff: str = "exponential",
+    ) -> str | list[str] | None:
         """
         Retry a failed job with optional exponential backoff.
 
@@ -263,7 +269,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # Calculate delay based on backoff strategy
         if isinstance(backoff, str) and backoff == "exponential":
             # Exponential backoff: 1s, 2s, 4s, 8s, etc.
-            delay_seconds = 2 ** attempts_made
+            delay_seconds = 2**attempts_made
         elif isinstance(backoff, str) and backoff == "linear":
             # Linear backoff: 1s, 2s, 3s, 4s, etc.
             delay_seconds = (attempts_made + 1) * 60  # 1 minute per attempt
@@ -291,9 +297,9 @@ class AMQPDriver(HasColoredOutput, Queue):
     def _handle_failed_message(
         self,
         instance: Any,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         exc: Exception,
-        options: Dict[str, Any],
+        options: dict[str, Any],
     ) -> None:
         """Route a failed in-flight message to retry or to DLX.
 
@@ -363,8 +369,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         attempts_made = int(payload.get("attempts", 0)) + 1
         max_attempts = int(
-            getattr(instance, "max_attempts", None)
-            or self.DEFAULT_MAX_ATTEMPTS
+            getattr(instance, "max_attempts", None) or self.DEFAULT_MAX_ATTEMPTS
         )
 
         if attempts_made >= max_attempts:
@@ -428,7 +433,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 )
 
     def _send_to_dead_letter(
-        self, job: Any, options: Dict[str, Any], attempts: int
+        self, job: Any, options: dict[str, Any], attempts: int
     ) -> None:
         """
         Send a permanently failed job to dead letter queue.
@@ -450,7 +455,9 @@ class AMQPDriver(HasColoredOutput, Queue):
                     "obj": job,
                     "args": options.get("args", ()),
                     "callback": options.get("callback", "handle"),
-                    "failed_at": pendulum.now(tz=options.get("tz", "UTC")).to_datetime_string(),
+                    "failed_at": pendulum.now(
+                        tz=options.get("tz", "UTC")
+                    ).to_datetime_string(),
                     "attempts": attempts,
                     "error": options.get("error"),
                 }
@@ -497,6 +504,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # alerts can fire when DLQ rate spikes.
                 try:
                     from app.support.Metrics import Metrics  # type: ignore[attr-defined]
+
                     Metrics.queue_jobs_dead_lettered_total.labels(
                         job=job.__class__.__name__,
                     ).inc()
@@ -516,7 +524,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     exc_info=True,
                 )
 
-    def consume(self, options: Dict[str, Any]) -> None:
+    def consume(self, options: dict[str, Any]) -> None:
         """Consume jobs from RabbitMQ.
 
         Each invocation runs a single-thread blocking consume loop.
@@ -565,9 +573,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             "x-message-ttl": message_ttl,
         }
         try:
-            channel.queue_declare(
-                queue=queue_name, durable=True, arguments=queue_args
-            )
+            channel.queue_declare(queue=queue_name, durable=True, arguments=queue_args)
         except pika.exceptions.ChannelClosedByBroker as exc:
             if getattr(exc, "reply_code", None) != 406:
                 raise
@@ -589,6 +595,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # Propagate tracing context so logs show real IDs
                 # instead of [job_id=unknown].
                 from cara.context import ExecutionContext as _EC
+
                 _job_id = getattr(instance, "job_id", None)
                 _batch_id = getattr(instance, "batch_id", None)
                 _corr_id = getattr(instance, "correlation_id", None)
@@ -612,9 +619,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 self._dispatch_batch_completion(instance, None)
-                self.info(
-                    f"AMQPDriver: job processed successfully, queue={queue_name}"
-                )
+                self.info(f"AMQPDriver: job processed successfully, queue={queue_name}")
             except Exception as exc:
                 self.danger(f"AMQPDriver: job processing failed: {exc}")
                 # Bounded automatic retry. Pre-fix the consumer nacked
@@ -639,9 +644,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                         options=merged_opts,
                     )
                 except Exception as retry_exc:
-                    self.danger(
-                        f"AMQPDriver: retry/dead-letter path raised: {retry_exc}"
-                    )
+                    self.danger(f"AMQPDriver: retry/dead-letter path raised: {retry_exc}")
                 # Job-side ``failed`` hook for app-level cleanup —
                 # fires once per *attempt* (the framework already
                 # logs the retry separately), so listeners that care
@@ -669,7 +672,9 @@ class AMQPDriver(HasColoredOutput, Queue):
         import signal
 
         def _graceful_stop(signum, frame):
-            sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+            sig_name = (
+                signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+            )
             self.info(f"AMQPDriver: received {sig_name}, stopping consumer gracefully…")
             try:
                 channel.stop_consuming()
@@ -717,7 +722,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         except Exception:
             pass
 
-    def _create_job_record(self, job, job_id: str, opts: Dict[str, Any]) -> Optional[int]:
+    def _create_job_record(self, job, job_id: str, opts: dict[str, Any]) -> int | None:
         """Create job record via JobTracker for consistent tracking."""
         try:
             tracker = self._resolve_job_tracker()
@@ -780,9 +785,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             # Declare dead letter exchange
             dlx_name = f"{exchange_name}.dlx"
             self.channel.exchange_declare(
-                exchange=dlx_name,
-                exchange_type="topic",
-                durable=True
+                exchange=dlx_name, exchange_type="topic", durable=True
             )
 
             # Declare dead letter queue
@@ -792,14 +795,12 @@ class AMQPDriver(HasColoredOutput, Queue):
                 durable=True,
                 arguments={
                     "x-message-ttl": 86400000,  # 24 hours
-                }
+                },
             )
 
             # Bind queue to DLX
             self.channel.queue_bind(
-                exchange=dlx_name,
-                queue=dlq_name,
-                routing_key="dead.*"
+                exchange=dlx_name, queue=dlq_name, routing_key="dead.*"
             )
 
             Log.info(f"Dead letter exchange configured: {dlx_name}")
@@ -816,7 +817,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
     def get_dead_letter_messages(
         self, queue_name: str = "dead.letter.queue", limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Peek at dead letter queue messages without consuming them.
 
@@ -833,7 +834,9 @@ class AMQPDriver(HasColoredOutput, Queue):
 
             # Use basic_get to peek at messages without consuming
             for _ in range(limit):
-                method, properties, body = self.channel.basic_get(queue_name, auto_ack=False)
+                method, properties, body = self.channel.basic_get(
+                    queue_name, auto_ack=False
+                )
 
                 if method is None:
                     break
@@ -847,15 +850,17 @@ class AMQPDriver(HasColoredOutput, Queue):
                     except Exception:
                         payload = {"raw": body.decode("utf-8", errors="ignore")}
 
-                messages.append({
-                    "delivery_tag": method.delivery_tag,
-                    "routing_key": method.routing_key,
-                    "redelivered": method.redelivered,
-                    "exchange": method.exchange,
-                    "headers": dict(properties.headers or {}),
-                    "timestamp": properties.timestamp,
-                    "payload": payload,
-                })
+                messages.append(
+                    {
+                        "delivery_tag": method.delivery_tag,
+                        "routing_key": method.routing_key,
+                        "redelivered": method.redelivered,
+                        "exchange": method.exchange,
+                        "headers": dict(properties.headers or {}),
+                        "timestamp": properties.timestamp,
+                        "payload": payload,
+                    }
+                )
 
                 # Don't consume - requeue the message
                 self.channel.basic_nack(method.delivery_tag, requeue=True)
@@ -872,9 +877,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         return messages
 
-    def replay_dead_letter(
-        self, queue_name: str, message_id: Optional[str] = None
-    ) -> int:
+    def replay_dead_letter(self, queue_name: str, message_id: str | None = None) -> int:
         """
         Replay dead letter messages back to original queue.
 
@@ -892,7 +895,9 @@ class AMQPDriver(HasColoredOutput, Queue):
             self._connect({})
 
             while True:
-                method, properties, body = self.channel.basic_get(dlq_name, auto_ack=False)
+                method, properties, body = self.channel.basic_get(
+                    dlq_name, auto_ack=False
+                )
 
                 if method is None:
                     break
@@ -933,7 +938,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         return replayed
 
-    def _connect_and_publish(self, payload: Any, opts: Dict[str, Any]) -> None:
+    def _connect_and_publish(self, payload: Any, opts: dict[str, Any]) -> None:
         """Connect to RabbitMQ and publish message.
 
         Connection management — was: open + publish + close. Every
@@ -962,7 +967,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         else:
             self._return_thread_connection(url)
 
-    def _connect_and_publish_locked(self, payload: Any, opts: Dict[str, Any]) -> None:
+    def _connect_and_publish_locked(self, payload: Any, opts: dict[str, Any]) -> None:
         """Inner publish path — assumes ``self.channel`` / ``self.connection``
         are bound to this thread by the caller."""
 
@@ -979,7 +984,9 @@ class AMQPDriver(HasColoredOutput, Queue):
         message_ttl = opts.get("message_ttl", 86400000)  # 24h default
 
         queue_args = {
-            "x-dead-letter-exchange": f"{exchange_name}.dlx" if exchange_name else "dead.letter.dlx",
+            "x-dead-letter-exchange": f"{exchange_name}.dlx"
+            if exchange_name
+            else "dead.letter.dlx",
             "x-dead-letter-routing-key": f"dead.{queue_name}",
             "x-message-ttl": message_ttl,
         }
@@ -1030,9 +1037,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     self.channel.confirm_delivery()
                 except Exception:
                     self._connect(opts)
-                self.channel.queue_declare(
-                    queue=queue_name, durable=True, passive=True
-                )
+                self.channel.queue_declare(queue=queue_name, durable=True, passive=True)
                 # New channel -> new cache; mark this queue as
                 # already-confirmed so subsequent publishes through
                 # the same channel don't re-incur the 406 dance.
@@ -1095,7 +1100,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # connection to the pool for reuse.
 
     # ── Pool helpers ───────────────────────────────────────────────
-    def _open_new_connection(self, opts: Dict[str, Any]) -> tuple:
+    def _open_new_connection(self, opts: dict[str, Any]) -> tuple:
         """Open a brand-new connection + channel pair."""
         try:
             import pika
@@ -1110,7 +1115,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         channel.confirm_delivery()
         return connection, channel
 
-    def _acquire_thread_connection(self, url: str, opts: Dict[str, Any]) -> None:
+    def _acquire_thread_connection(self, url: str, opts: dict[str, Any]) -> None:
         """Bind a connection + channel to this thread for the publish.
 
         Reuse priority: existing thread-local → pool → open fresh.
@@ -1187,7 +1192,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             except Exception:
                 pass
 
-    def _connect(self, opts: Dict[str, Any]) -> None:
+    def _connect(self, opts: dict[str, Any]) -> None:
         """Bind a connection + channel to this thread.
 
         Kept for callers that don't go through ``_connect_and_publish``
@@ -1209,7 +1214,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # conflicted with existing queues and caused PRECONDITION_FAILED
         # (inequivalent arg 'x-message-ttl') on reconnects.
 
-    def _build_url(self, opts: Dict[str, Any]) -> str:
+    def _build_url(self, opts: dict[str, Any]) -> str:
         """Build AMQP connection URL with proper encoding."""
         from urllib.parse import quote_plus
 

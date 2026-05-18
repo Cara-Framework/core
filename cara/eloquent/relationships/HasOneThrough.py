@@ -246,7 +246,7 @@ class HasOneThrough(BaseRelationship):
                 f"{int_table}.{self.local_owner_key}",
                 f"{current_builder.get_table_name()}.{self.local_key}",
             )
-            .when(callback, lambda q: (callback(q)))
+            .when(callback, lambda q: callback(q))
         )
 
     def get_with_count_query(self, current_builder, callback, relation_name=None):
@@ -273,18 +273,15 @@ class HasOneThrough(BaseRelationship):
                 .table(dist_table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(self.distant_builder.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(self.distant_builder.select(self.other_owner_key)),
                     ),
                 )
             ),
         )
 
         return return_query
-
 
     def get_with_sum_query(self, current_builder, column, callback, relation_name=None):
         dist_table = self.distant_builder.get_table_name()
@@ -310,11 +307,9 @@ class HasOneThrough(BaseRelationship):
                 .table(dist_table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(self.distant_builder.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(self.distant_builder.select(self.other_owner_key)),
                     ),
                 )
             ),
@@ -346,11 +341,9 @@ class HasOneThrough(BaseRelationship):
                 .table(dist_table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(self.distant_builder.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(self.distant_builder.select(self.other_owner_key)),
                     ),
                 )
             ),
@@ -382,11 +375,9 @@ class HasOneThrough(BaseRelationship):
                 .table(dist_table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(self.distant_builder.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(self.distant_builder.select(self.other_owner_key)),
                     ),
                 )
             ),
@@ -418,11 +409,9 @@ class HasOneThrough(BaseRelationship):
                 .table(dist_table)
                 .when(
                     callback,
-                    lambda q: (
-                        q.where_in(
-                            self.foreign_key,
-                            callback(self.distant_builder.select(self.other_owner_key)),
-                        )
+                    lambda q: q.where_in(
+                        self.foreign_key,
+                        callback(self.distant_builder.select(self.other_owner_key)),
                     ),
                 )
             ),

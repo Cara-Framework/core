@@ -34,7 +34,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from cara.cache.contracts import Cache
 from cara.exceptions import CacheConfigurationException
@@ -64,7 +64,7 @@ _HMAC_TAG_LEN = 32
 # Lazily-resolved HMAC key for cache integrity. One per process, derived
 # from the application secret on first use. Module-level so the
 # resolution cost (config / env lookup) only happens once.
-_HMAC_KEY_CACHE: Optional[bytes] = None
+_HMAC_KEY_CACHE: bytes | None = None
 
 
 def _resolve_hmac_key() -> bytes:
@@ -85,7 +85,7 @@ def _resolve_hmac_key() -> bytes:
     if _HMAC_KEY_CACHE is not None:
         return _HMAC_KEY_CACHE
 
-    secret: Optional[str] = None
+    secret: str | None = None
 
     try:
         from cara.configuration import config
@@ -175,7 +175,7 @@ class FileCacheDriver(Cache):
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> None:
         expires_at = self._compute_expiration(ttl)
         file_path = self._file_path(key)
@@ -215,7 +215,7 @@ class FileCacheDriver(Cache):
         self,
         key: str,
         value: Any,
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> bool:
         """Atomically add a value only if the key doesn't exist.
 
@@ -263,9 +263,7 @@ class FileCacheDriver(Cache):
             try:
                 with os.fdopen(fd, "wb") as f:
                     payload = pickle.dumps((expires_at, value))
-                    tag = hmac.new(
-                        _resolve_hmac_key(), payload, hashlib.sha256
-                    ).digest()
+                    tag = hmac.new(_resolve_hmac_key(), payload, hashlib.sha256).digest()
                     f.write(tag)
                     f.write(payload)
                 return True
@@ -329,12 +327,12 @@ class FileCacheDriver(Cache):
             )
         return candidate
 
-    def _compute_expiration(self, ttl: Optional[int]) -> Optional[float]:
+    def _compute_expiration(self, ttl: int | None) -> float | None:
         if ttl is not None:
             return None if ttl <= 0 else time.time() + ttl
         return time.time() + self._default_ttl
 
-    def _read_file(self, file_path: str) -> tuple[bool, Optional[float], Any]:
+    def _read_file(self, file_path: str) -> tuple[bool, float | None, Any]:
         """Verify HMAC, then unpickle.
 
         SECURITY — ``pickle.load`` on untrusted input is an arbitrary-
@@ -374,7 +372,7 @@ class FileCacheDriver(Cache):
     def _write_file(
         self,
         file_path: str,
-        expires_at: Optional[float],
+        expires_at: float | None,
         value: Any,
     ) -> None:
         """Atomic, HMAC-tagged write.
@@ -426,7 +424,7 @@ class FileCacheDriver(Cache):
             current = self.get(key, 0)
             try:
                 new_val = int(current) + amount
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 new_val = amount
             self.put(key, new_val, ttl)
             return new_val
@@ -455,7 +453,7 @@ class FileCacheDriver(Cache):
                 return False
             return self._delete_file(file_path)
 
-    def ttl(self, key: str) -> Optional[int]:
+    def ttl(self, key: str) -> int | None:
         """Remaining time-to-live for ``key`` in seconds.
 
         Mirrors ``RedisCacheDriver.ttl``: returns ``None`` when the

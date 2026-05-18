@@ -5,10 +5,10 @@ plain dict as an object with attribute access, while still
 supporting item access and chainable mutation::
 
     cfg = Fluent({"host": "localhost", "port": 5432})
-    cfg.host                        # "localhost"
+    cfg.host  # "localhost"
     cfg.set("port", 6543).set("ssl", True)
-    cfg.get("missing", "default")   # "default"
-    cfg.to_dict()                   # {"host": ..., "port": ..., "ssl": ...}
+    cfg.get("missing", "default")  # "default"
+    cfg.to_dict()  # {"host": ..., "port": ..., "ssl": ...}
 
 Useful as the parameter bag for command/option DTOs, config
 objects pulled from JSON, or any "loose schema" payload where you
@@ -20,7 +20,8 @@ and ``__set__`` writes through to the underlying dict.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Mapping, Optional
+from collections.abc import Iterator, Mapping
+from typing import Any
 
 
 class Fluent:
@@ -28,7 +29,7 @@ class Fluent:
 
     __slots__ = ("_attributes",)
 
-    def __init__(self, attributes: Optional[Mapping[str, Any]] = None) -> None:
+    def __init__(self, attributes: Mapping[str, Any] | None = None) -> None:
         # Coerce to a fresh dict so mutations don't leak into the caller's
         # source mapping.
         object.__setattr__(self, "_attributes", dict(attributes) if attributes else {})
@@ -39,7 +40,7 @@ class Fluent:
         """Return ``key`` or ``default`` — Laravel ``Fluent::get``."""
         return self._attributes.get(key, default)
 
-    def set(self, key: str, value: Any) -> "Fluent":
+    def set(self, key: str, value: Any) -> Fluent:
         """Set ``key`` and return self for chaining."""
         self._attributes[key] = value
         return self
@@ -48,28 +49,28 @@ class Fluent:
         """True if ``key`` is present (regardless of value)."""
         return key in self._attributes
 
-    def forget(self, *keys: str) -> "Fluent":
+    def forget(self, *keys: str) -> Fluent:
         """Remove ``keys`` if present — chainable."""
         for key in keys:
             self._attributes.pop(key, None)
         return self
 
-    def merge(self, attributes: Mapping[str, Any]) -> "Fluent":
+    def merge(self, attributes: Mapping[str, Any]) -> Fluent:
         """Shallow-merge ``attributes`` over current — chainable."""
         self._attributes.update(attributes)
         return self
 
-    def only(self, *keys: str) -> Dict[str, Any]:
+    def only(self, *keys: str) -> dict[str, Any]:
         """Return a dict containing only ``keys`` that exist."""
         return {k: self._attributes[k] for k in keys if k in self._attributes}
 
-    def except_(self, *keys: str) -> Dict[str, Any]:
+    def except_(self, *keys: str) -> dict[str, Any]:
         """Return a dict excluding ``keys``."""
         return {k: v for k, v in self._attributes.items() if k not in keys}
 
     # ── Conversion ──────────────────────────────────────────────────
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a shallow copy of the underlying dict."""
         return dict(self._attributes)
 

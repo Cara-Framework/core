@@ -18,7 +18,8 @@ unknown attribute that hasn't been registered raises
 
 from __future__ import annotations
 
-from typing import Any, Callable, ClassVar, Dict
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 
 class Macroable:
@@ -33,7 +34,7 @@ class Macroable:
     # Per-class macro registry. ``__init_subclass__`` shadows this
     # with a fresh dict on every subclass so registrations don't leak
     # into siblings or the base.
-    _macros: ClassVar[Dict[str, Callable]] = {}
+    _macros: ClassVar[dict[str, Callable]] = {}
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -49,7 +50,7 @@ class Macroable:
         (``self``-style binding) plus any caller-supplied args, so
         it behaves like a real method::
 
-            Collection.macro("sum_squares", lambda self: sum(x*x for x in self))
+            Collection.macro("sum_squares", lambda self: sum(x * x for x in self))
             collect([1, 2, 3]).sum_squares()  # → 14
 
         Re-registering an existing macro overwrites it without warning.
@@ -83,9 +84,7 @@ class Macroable:
             if macros and name in macros:
                 callback = macros[name]
                 return lambda *args, **kwargs: callback(self, *args, **kwargs)
-        raise AttributeError(
-            f"{type(self).__name__!r} object has no attribute {name!r}"
-        )
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
 
 __all__ = ["Macroable"]

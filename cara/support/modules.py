@@ -10,10 +10,9 @@ Laravel config() style dynamic interface:
 """
 
 from .ModuleManager import ModuleManager
-from typing import Optional
 
 
-def modules(path: str = "", base: Optional[str] = None) -> str:
+def modules(path: str = "", base: str | None = None) -> str:
     """
     Dynamic module path resolver with Laravel-style interface.
 
@@ -146,7 +145,7 @@ def get_functions(path: str):
 
 
 # Ultra-short aliases for power users
-def m(path: str = "", base: Optional[str] = None) -> str:
+def m(path: str = "", base: str | None = None) -> str:
     """Ultra-short alias for modules()."""
     return modules(path, base)
 
