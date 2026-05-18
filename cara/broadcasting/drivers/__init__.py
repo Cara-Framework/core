@@ -4,8 +4,8 @@ from .NullBroadcaster import NullBroadcaster
 from .RedisBroadcaster import RedisBroadcaster
 
 __all__ = [
-    "MemoryBroadcaster",
-    "RedisBroadcaster",
     "LogBroadcaster",
+    "MemoryBroadcaster",
     "NullBroadcaster",
+    "RedisBroadcaster",
 ]

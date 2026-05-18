@@ -17,10 +17,10 @@ from .ThrottlesExceptions import ThrottlesExceptions
 
 __all__ = [
     "RateLimited",
-    "WithoutOverlapping",
-    "ThrottlesExceptions",
     "run_through_middleware",
     "run_through_middleware_async",
+    "ThrottlesExceptions",
+    "WithoutOverlapping",
 ]
 
 

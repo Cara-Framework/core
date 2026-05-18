@@ -18,10 +18,10 @@ from .CacheFake import CacheFake
 from .NotificationFake import NotificationFake
 
 __all__ = [
+    "CacheFake",
+    "EventFake",
     "LogFake",
     "MailFake",
-    "QueueFake",
-    "EventFake",
-    "CacheFake",
     "NotificationFake",
+    "QueueFake",
 ]

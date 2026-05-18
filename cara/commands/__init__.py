@@ -9,13 +9,13 @@ from .CommandRunner import CommandRunner
 from .ReloadableMixin import ReloadableMixin
 
 __all__ = [
-    "CommandLoader",
-    "CommandRunner",
-    "Command",
-    "CommandProvider",
-    "CommandRegistry",
-    "CommandBase",
-    "ReloadableMixin",
     "AutoReloadMixin",
     "BlockingCommandMixin",
+    "Command",
+    "CommandBase",
+    "CommandLoader",
+    "CommandProvider",
+    "CommandRegistry",
+    "CommandRunner",
+    "ReloadableMixin",
 ]

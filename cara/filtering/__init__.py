@@ -46,6 +46,7 @@ from .Request import FilteredFormRequest, PAGING_RULES
 from .Sorter import Sorter, SortRegistry
 
 __all__ = [
+    "Filter",
     "FILTER_GROUP_AVAILABILITY",
     "FILTER_GROUP_BRAND",
     "FILTER_GROUP_MARKETPLACE",
@@ -53,11 +54,12 @@ __all__ = [
     "FILTER_GROUP_QUALITY",
     "FILTER_GROUP_SCOPE",
     "FILTER_GROUP_SPECS",
-    "Filter",
+    "FilteredFormRequest",
     "FilterPipeline",
     "FilterSet",
-    "FilteredFormRequest",
     "PAGING_RULES",
+    "pipeline",
+    "relations",
     "RelationSet",
     "Sorter",
     "SortRegistry",
@@ -69,6 +71,4 @@ __all__ = [
     "UI_CONTROL_RANGE_SLIDER",
     "UI_CONTROL_TEXT_INPUT",
     "UI_CONTROL_TOGGLE",
-    "pipeline",
-    "relations",
 ]

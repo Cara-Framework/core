@@ -9,7 +9,7 @@ __all__ = [
     "DatabaseManager",
     "EloquentProvider",
     "Factory",
+    "is_unique_violation",
     "Model",
     "Schema",
-    "is_unique_violation",
 ]

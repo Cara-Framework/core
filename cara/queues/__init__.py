@@ -7,9 +7,9 @@ from .QueueProvider import QueueProvider
 
 __all__ = [
     "Bus",
+    "instantiate_job",
     "JobContext",
     "Queue",
     "QueueProvider",
-    "instantiate_job",
     "safe_dispatch",
 ]

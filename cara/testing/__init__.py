@@ -51,35 +51,29 @@ from .loader import (
 )
 
 __all__ = [
-    # Assertions
+    "CacheFake",
+    "describe",
+    "EventFake",
     "expect",
     "Expectation",
     "ExpectationFailed",
-    # Base classes & decorators
-    "TestCase",
     "it",
-    "describe",
-    # Fakes
-    "LogFake",
-    "MailFake",
-    "QueueFake",
-    "EventFake",
-    "CacheFake",
-    "NotificationFake",
-    # Mocks
-    "Mock",
-    "Spy",
-    "when",
-    "returning",
-    # Facade swap primitives
-    "swap",
-    "register",
-    "reset",
-    "uninstall_patch",
-    # Module loaders that bypass package __init__.py chains
-    "load_service",
     "load_contract",
     "load_module",
+    "load_service",
+    "LogFake",
+    "MailFake",
+    "Mock",
+    "NotificationFake",
+    "QueueFake",
+    "register",
+    "reset",
+    "returning",
+    "Spy",
     "stub_modules",
     "stub_modules_scoped",
+    "swap",
+    "TestCase",
+    "uninstall_patch",
+    "when",
 ]

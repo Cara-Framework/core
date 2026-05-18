@@ -8,13 +8,13 @@ from .ShouldQueue import ShouldQueue
 from .UniqueJob import UniqueJob
 
 __all__ = [
-    "Queue",
-    "ShouldQueue",
-    "Queueable",
-    "SerializesModels",
-    "BaseQueueable",
     "BaseJob",
+    "BaseQueueable",
     "CancellableJob",
     "JobCancelledException",
+    "Queue",
+    "Queueable",
+    "SerializesModels",
+    "ShouldQueue",
     "UniqueJob",
 ]

@@ -52,6 +52,6 @@ __all__ = [
     "RouteListCommand",
     "ScheduleWorkCommand",
     "ServeCommand",
-    "UpCommand",
     "TinkerCommand",
+    "UpCommand",
 ]

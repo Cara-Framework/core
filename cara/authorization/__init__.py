@@ -4,8 +4,8 @@ from .AuthorizationProvider import AuthorizationProvider
 from .AuthorizationResponse import AuthorizationResponse
 
 __all__ = [
-    "Policy",
-    "Gate",
     "AuthorizationProvider",
     "AuthorizationResponse",
+    "Gate",
+    "Policy",
 ]

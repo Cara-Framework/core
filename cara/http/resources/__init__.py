@@ -4,4 +4,8 @@ from .JsonResource import JsonResource
 from .MissingValue import MissingValue
 from .ResourceCollection import ResourceCollection
 
-__all__ = ["JsonResource", "ResourceCollection", "MissingValue"]
+__all__ = [
+    "JsonResource",
+    "MissingValue",
+    "ResourceCollection",
+]

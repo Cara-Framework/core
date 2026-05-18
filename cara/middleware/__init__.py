@@ -5,8 +5,8 @@ from .MiddlewareRegistry import MiddlewareRegistry
 
 __all__ = [
     "Middleware",
-    "MiddlewareParameterParser",
     "MiddlewareCapsule",
+    "MiddlewareParameterParser",
     "MiddlewareProvider",
     "MiddlewareRegistry",
 ]
