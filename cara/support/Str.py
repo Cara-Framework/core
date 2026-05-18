@@ -156,7 +156,12 @@ def get_controller_name(controller: str | Any) -> str:
     return controller_str
 
 
-def slugify(text: str, separator: str = "-") -> str:
+def slugify(
+    text: str,
+    separator: str = "-",
+    *,
+    max_length: int | None = None,
+) -> str:
     """Convert a string to a URL-friendly slug.
 
     Handles common Unicode transliterations (Turkish chars, accented letters).
@@ -164,6 +169,19 @@ def slugify(text: str, separator: str = "-") -> str:
     separators and consecutive separators are removed.
 
     Returns empty string for empty/whitespace-only input.
+
+    Args:
+        text: input string.
+        separator: character placed between word boundaries (default ``"-"``).
+        max_length: optional hard cap on the returned slug length. When the
+            slug would otherwise be longer, it is truncated at the last
+            separator before ``max_length`` (so the cut lands on a word
+            boundary rather than mid-word). Set to ``None`` to opt out.
+            Callers persisting to a slug column (product/brand/category)
+            SHOULD pass this matching the column width / read-side cap.
+            Pre-fix the consolidator wrote 187-char slugs into a
+            ``varchar(500)`` column while the API's ``SlugParser`` capped
+            reads at 255 — a slug in (255, 500] was unreachable.
     """
     if not text or text.isspace():
         return ""
@@ -212,6 +230,15 @@ def slugify(text: str, separator: str = "-") -> str:
     text = re.sub(r"[^a-z0-9]+", separator, text)
     text = re.sub(rf"{re.escape(separator)}+", separator, text)
     text = text.strip(separator)
+
+    if max_length is not None and max_length > 0 and len(text) > max_length:
+        # Truncate at the last separator before ``max_length`` so the cut
+        # lands on a word boundary. If no separator exists in the head
+        # (rare — single very long token), fall back to a hard slice.
+        head = text[:max_length]
+        cut = head.rfind(separator)
+        text = (head[:cut] if cut > 0 else head).rstrip(separator)
+
     return text
 
 
