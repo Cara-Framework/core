@@ -874,7 +874,7 @@ class Shell:
         # Start interactive session
         try:
             console.interact()
-        except EOFError, KeyboardInterrupt:
+        except (EOFError, KeyboardInterrupt):
             print("\n👋 Goodbye!")
 
     def execute_command(self, command: str):

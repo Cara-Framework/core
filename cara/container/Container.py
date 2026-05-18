@@ -568,7 +568,7 @@ class Container:
             sig = inspect.signature(func)
             params = list(sig.parameters.keys())
             return len(params) > 0 and params[0] in ("app", "container", "self")
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return False
 
     def fire_hook(self, action: str, key: Any, obj: Any):
@@ -705,7 +705,7 @@ class Container:
                     provider_obj.__class__
                 ):
                     return provider_obj.__class__
-            except TypeError, AttributeError:
+            except (TypeError, AttributeError):
                 pass
 
         return None

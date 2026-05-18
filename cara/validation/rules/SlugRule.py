@@ -23,5 +23,5 @@ class SlugRule(BaseRule):
         # Check if value is a valid slug format: letters, numbers, hyphens, underscores
         return bool(re.match(r"^[\w-]+$", value))
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must be a valid slug (letters, numbers, hyphens, and underscores only)."

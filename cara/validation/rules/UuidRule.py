@@ -24,5 +24,5 @@ class UuidRule(BaseRule):
         uuid_pattern = r"^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$"
         return bool(re.match(uuid_pattern, value))
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must be a valid UUID format."

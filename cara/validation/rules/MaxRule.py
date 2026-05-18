@@ -27,7 +27,7 @@ class MaxRule(BaseRule):
 
         try:
             max_threshold = float(params.get("max"))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return False
 
         if isinstance(value, bool):
@@ -54,9 +54,9 @@ class MaxRule(BaseRule):
 
         try:
             return float(value) <= max_threshold
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return False
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         max_val = params.get("max", "")
         return f"'{field}' may not be greater than {max_val}."

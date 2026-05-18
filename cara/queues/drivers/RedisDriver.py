@@ -402,7 +402,7 @@ class RedisDriver(HasColoredOutput, Queue):
                 return self._redis.blmove(
                     src, dst, timeout=self.blocking_timeout, src="RIGHT", dest="LEFT"
                 )
-            except AttributeError, TypeError:
+            except (AttributeError, TypeError):
                 pass
             except Exception:
                 return None

@@ -39,7 +39,7 @@ class Reflector:
         """
         try:
             return inspect.signature(target)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return None
 
     @staticmethod

@@ -348,7 +348,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             )
             try:
                 won = bool(int(affected)) if affected is not None else False
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 won = bool(affected)
             if won:
                 claimed.append(job)

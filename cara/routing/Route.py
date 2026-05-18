@@ -242,14 +242,14 @@ class Route:
         if compiler_type in ("int", "integer"):
             try:
                 return int(param_value)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 return param_value
         elif compiler_type == "bool":
             return param_value.lower() in ("true", "1")
         elif compiler_type == "float":
             try:
                 return float(param_value)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 return param_value
 
         return param_value

@@ -287,7 +287,7 @@ class WebsocketConductor:
                 if len(positional) >= 2:
                     # (request, response) — HTTP shape, not for us.
                     continue
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 # Builtin or otherwise non-introspectable — try the
                 # call and let the except block log if it fails.
                 pass

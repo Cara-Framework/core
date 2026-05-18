@@ -57,6 +57,6 @@ class SerializerFactory:
             import config.queue as queue_config
 
             return queue_config.JOB_SERIALIZER
-        except ImportError, AttributeError:
+        except (ImportError, AttributeError):
             # Default to JSON (modern, secure, enforces clean architecture)
             return "json"

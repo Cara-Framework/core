@@ -9,7 +9,7 @@ from cara.validation.rules import BaseRule
 def _to_number(v):
     try:
         return float(v)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
 
 

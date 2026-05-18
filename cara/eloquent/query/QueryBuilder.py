@@ -2769,11 +2769,11 @@ class QueryBuilder(ObservesEvents):
         # Sanitise inputs — coerce to int, clamp to safe bounds.
         try:
             per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             per_page = 15
         try:
             page = max(1, min(int(page), self._MAX_PAGE))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             page = 1
 
         if page == 1:
@@ -2809,11 +2809,11 @@ class QueryBuilder(ObservesEvents):
         # Sanitise inputs — coerce to int, clamp to safe bounds.
         try:
             per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             per_page = 15
         try:
             page = max(1, min(int(page), self._MAX_PAGE))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             page = 1
 
         if page == 1:

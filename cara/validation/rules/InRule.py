@@ -27,6 +27,6 @@ class InRule(BaseRule):
         values_list = [v.strip() for v in in_values.split(",")]
         return str(value) in values_list
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         in_values = params.get("in", "")
         return f"'{field}' must be one of: {in_values}."

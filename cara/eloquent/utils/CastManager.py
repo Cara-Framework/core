@@ -152,7 +152,7 @@ class CastManager:
             return None
         try:
             return int(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return 0
 
     @classmethod
@@ -162,7 +162,7 @@ class CastManager:
             return None
         try:
             return float(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return 0.0
 
     @classmethod
@@ -181,7 +181,7 @@ class CastManager:
                 decimal_value = decimal_value.quantize(quantizer)
 
             return decimal_value
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return Decimal("0")
 
     @classmethod

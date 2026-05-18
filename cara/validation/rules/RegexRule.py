@@ -29,5 +29,5 @@ class RegexRule(BaseRule):
 
         return bool(pattern.match(value))
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' format is invalid."

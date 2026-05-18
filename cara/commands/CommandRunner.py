@@ -433,7 +433,7 @@ class CommandRunner:
                             )
                         )
                     _start_autopush(interval_seconds=_push_interval)
-                except ImportError, AttributeError:
+                except (ImportError, AttributeError):
                     pass
             except Exception:
                 _M = None  # type: ignore[assignment]

@@ -89,7 +89,7 @@ class CompressResponses(Middleware):
             if cfg_min is not None:
                 try:
                     min_size = max(0, int(cfg_min))
-                except TypeError, ValueError:
+                except (TypeError, ValueError):
                     pass
             cfg_level = config("compression.compression.level", None)
             if cfg_level is not None:
@@ -97,7 +97,7 @@ class CompressResponses(Middleware):
                     lvl = int(cfg_level)
                     if 1 <= lvl <= 9:
                         level = lvl
-                except TypeError, ValueError:
+                except (TypeError, ValueError):
                     pass
             cfg_types = config("compression.compression.content_types", None)
             if isinstance(cfg_types, (list, tuple)) and cfg_types:

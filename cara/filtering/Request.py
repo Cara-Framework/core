@@ -264,7 +264,7 @@ class FilteredFormRequest(FormRequest):
         ):
             try:
                 setattr(request, attr, value)
-            except AttributeError, TypeError:
+            except (AttributeError, TypeError):
                 # Frozen / dataclass-like request; mirroring onto
                 # ``validated`` below covers callers that only see
                 # the dict, so the missing attribute isn't a problem.
@@ -282,7 +282,7 @@ class FilteredFormRequest(FormRequest):
         # without re-plumbing the filter set / sort registry / eager.
         try:
             request.pipeline = self._pipeline_factory(parsed, sort_name)
-        except AttributeError, TypeError:
+        except (AttributeError, TypeError):
             # Frozen request — callers can build a pipeline manually
             # using validated["_parsed_filters"] / _sort_name above.
             pass

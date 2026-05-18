@@ -52,7 +52,7 @@ class RouteResolver:
         try:
             # Try normal signature first
             return inspect.signature(callable_obj)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             # Handle builtin type annotation issues
             from typing import get_type_hints
 
@@ -117,7 +117,7 @@ class RouteResolver:
         # Get constructor signature
         try:
             sig = inspect.signature(controller_class.__init__)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             # No signature available, instantiate without args
             return controller_class()
 
@@ -216,7 +216,7 @@ class RouteResolver:
             else:
                 # For other types, try direct conversion
                 return expected_type(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             # If conversion fails, return original value
             return value
 
@@ -323,7 +323,7 @@ class RouteResolver:
 
             self._handler_signature = self._safe_signature(method)
 
-        except ControllerMethodNotFoundException, RouteRegistrationException:
+        except (ControllerMethodNotFoundException, RouteRegistrationException):
             # Re-raise our custom exceptions
             raise
         except Exception as e:

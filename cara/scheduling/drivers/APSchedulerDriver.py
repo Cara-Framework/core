@@ -37,7 +37,7 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
         try:
             _M.scheduled_tasks_total.labels(task=identifier, outcome=outcome).inc()
             _M.scheduled_task_duration_seconds.labels(task=identifier).observe(duration)
-        except AttributeError, TypeError:
+        except (AttributeError, TypeError):
             pass
 
     if inspect.iscoroutinefunction(callback):

@@ -331,7 +331,7 @@ class Event:
                         _M.listener_duration_seconds.labels(
                             listener=_lst_name,
                         ).observe(_t.time() - _lst_start)
-                    except ImportError, AttributeError:
+                    except (ImportError, AttributeError):
                         pass
 
     def _get_matching_wildcard_listeners(self, event_name: str) -> list[Listener]:

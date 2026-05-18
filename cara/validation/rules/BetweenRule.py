@@ -28,7 +28,7 @@ class BetweenRule(BaseRule):
             min_val, max_val = between_param.split(",", 1)
             min_val = float(min_val.strip())
             max_val = float(max_val.strip())
-        except ValueError, AttributeError:
+        except (ValueError, AttributeError):
             return False
 
         if isinstance(value, bool):
@@ -53,6 +53,6 @@ class BetweenRule(BaseRule):
 
         return False
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         between_param = params.get("between", "")
         return f"'{field}' must be between {between_param}."

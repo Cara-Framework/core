@@ -147,7 +147,7 @@ class ExistsRule(BaseRule):
                     cls = getattr(module, model_name, None)
                     if cls is not None:
                         return cls
-                except ImportError, AttributeError:
+                except (ImportError, AttributeError):
                     pass
 
                 # 2. aggregated layout: app.models re-exports
@@ -156,7 +156,7 @@ class ExistsRule(BaseRule):
                     cls = getattr(pkg, model_name, None)
                     if cls is not None:
                         return cls
-                except ImportError, AttributeError:
+                except (ImportError, AttributeError):
                     pass
 
             return None

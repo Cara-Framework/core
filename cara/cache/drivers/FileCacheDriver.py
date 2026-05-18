@@ -424,7 +424,7 @@ class FileCacheDriver(Cache):
             current = self.get(key, 0)
             try:
                 new_val = int(current) + amount
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 new_val = amount
             self.put(key, new_val, ttl)
             return new_val

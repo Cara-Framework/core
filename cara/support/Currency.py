@@ -121,7 +121,7 @@ def format_money(
     """
     try:
         value = float(amount)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         value = 0.0
     return f"{currency_symbol(currency)}{value:.{decimals}f}"
 

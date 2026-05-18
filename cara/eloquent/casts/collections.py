@@ -29,7 +29,7 @@ class ArrayCast(BaseCast):
                 if not isinstance(parsed, list):
                     return []
                 return parsed
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 return []
 
         return []
@@ -71,7 +71,7 @@ class CollectionCast(BaseCast):
                 parsed = json.loads(value)
                 if isinstance(parsed, list):
                     return Collection(parsed)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 pass
 
         return Collection([])
@@ -89,7 +89,7 @@ class CollectionCast(BaseCast):
                 parsed = json.loads(value)
                 if isinstance(parsed, list):
                     return parsed
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 pass
 
         return []

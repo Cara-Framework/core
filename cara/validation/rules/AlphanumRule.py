@@ -23,5 +23,5 @@ class AlphanumRule(BaseRule):
         # Check if value contains only alphanumeric characters
         return bool(re.match(r"^[a-zA-Z0-9]+$", value))
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must contain only alphanumeric characters."

@@ -279,7 +279,7 @@ class Gate(Gate):
                 try:
                     module = __import__("app.policies", fromlist=[policy_class])
                     policy_cls = getattr(module, policy_class)
-                except ImportError, AttributeError:
+                except (ImportError, AttributeError):
                     raise ImportError(f"Policy class {policy_class} not found")
 
             return policy_cls()

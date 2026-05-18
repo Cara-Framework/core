@@ -41,7 +41,7 @@ class ThrottleRequests(Middleware):
         elif limit is not None:
             try:
                 self.custom_limit = int(limit)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 self.custom_limit = limit
         else:
             self.custom_limit = None
@@ -49,7 +49,7 @@ class ThrottleRequests(Middleware):
         if window is not None:
             try:
                 self.custom_window_minutes = int(window)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 self.custom_window_minutes = window
         else:
             self.custom_window_minutes = None

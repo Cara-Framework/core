@@ -27,5 +27,5 @@ class BooleanRule(BaseRule):
 
         return False
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must be a boolean value."

@@ -350,7 +350,7 @@ def head(items: Any) -> Any:
         return items[0] if items else None
     try:
         return next(iter(items))
-    except StopIteration, TypeError:
+    except (StopIteration, TypeError):
         return None
 
 
@@ -373,7 +373,7 @@ def last(items: Any) -> Any:
         return items[-1] if items else None
     try:
         return list(items)[-1]
-    except TypeError, IndexError:
+    except (TypeError, IndexError):
         return None
 
 

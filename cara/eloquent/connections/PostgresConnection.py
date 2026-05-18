@@ -111,7 +111,7 @@ class PostgresConnection(BaseConnection):
         if connect_timeout is not None:
             try:
                 kw["connect_timeout"] = int(connect_timeout)
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 pass
 
         # ``server_settings`` is the asyncpg-style nested dict for GUCs

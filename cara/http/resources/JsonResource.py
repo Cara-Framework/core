@@ -131,7 +131,7 @@ class JsonResource:
             return None
         try:
             return float(value)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return None
 
     @staticmethod
@@ -141,7 +141,7 @@ class JsonResource:
             return None
         try:
             return int(value)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return None
 
     @staticmethod

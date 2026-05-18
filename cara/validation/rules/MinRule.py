@@ -29,7 +29,7 @@ class MinRule(BaseRule):
 
         try:
             min_threshold = float(params.get("min"))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return False
 
         if isinstance(value, bool):
@@ -58,7 +58,7 @@ class MinRule(BaseRule):
         # Last-ditch numeric conversion.
         try:
             return float(value) >= min_threshold
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:

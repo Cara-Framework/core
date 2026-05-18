@@ -354,7 +354,7 @@ class Validation(ValidationContract):
         elif isinstance(current, list):
             try:
                 child = current[int(head)]
-            except ValueError, IndexError:
+            except (ValueError, IndexError):
                 return
         else:
             return

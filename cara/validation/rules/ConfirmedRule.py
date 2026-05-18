@@ -25,5 +25,5 @@ class ConfirmedRule(BaseRule):
 
         return value == confirmation_value
 
-    def message(self, field: str, params: dict[str, Any]) -> str:
+    def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' confirmation does not match."

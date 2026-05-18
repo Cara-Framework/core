@@ -134,7 +134,7 @@ class CaraPythonLoggerAdapter(logging.Logger):
         if args:
             try:
                 message = msg % args
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 message = str(msg)
         else:
             message = str(msg)

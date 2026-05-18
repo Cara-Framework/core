@@ -26,7 +26,7 @@ class RequestHelpersMixin:
             return default
         try:
             return int(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return default
 
     async def float_val(self, key: str, default: float = 0.0) -> float:
@@ -36,7 +36,7 @@ class RequestHelpersMixin:
             return default
         try:
             return float(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return default
 
     async def array_or_csv(self, key: str, default: list[Any] | None = None) -> list[Any]:
@@ -82,7 +82,7 @@ class RequestHelpersMixin:
         for item in raw:
             try:
                 n = int(item)
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 raise ValidationException(
                     validation_errors={key: [f"{key} must contain integers"]}
                 )

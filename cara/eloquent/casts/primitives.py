@@ -71,7 +71,7 @@ class IntCast(BaseCast):
             return None
         try:
             return int(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return 0
 
     def set(self, value):
@@ -80,7 +80,7 @@ class IntCast(BaseCast):
             return None
         try:
             return int(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return 0
 
 
@@ -93,7 +93,7 @@ class FloatCast(BaseCast):
             return None
         try:
             return float(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return 0.0
 
     def set(self, value):
@@ -102,7 +102,7 @@ class FloatCast(BaseCast):
             return None
         try:
             return float(value)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return 0.0
 
 
@@ -170,7 +170,7 @@ class JsonCast(BaseCast):
                 return None
             try:
                 return json.loads(value)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 return None
         return value
 
@@ -195,5 +195,5 @@ class JsonCast(BaseCast):
                 json.loads(value)
                 return value
             return json.dumps(value, default=str, ensure_ascii=False)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return json.dumps(value, default=str, ensure_ascii=False)
