@@ -1,3 +1,5 @@
+from typing import Self
+
 """Field definitions for Eloquent models using Blueprint."""
 
 import inspect
@@ -14,12 +16,12 @@ class FieldDefinition:
         self.kwargs = kwargs
         self._modifiers = []
 
-    def nullable(self):
+    def nullable(self) -> Self:
         """Make field nullable."""
         self._modifiers.append("nullable")
         return self
 
-    def default(self, value):
+    def default(self, value) -> Self:
         """Set default value."""
         self._modifiers.append(("default", value))
         return self

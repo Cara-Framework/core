@@ -1,3 +1,5 @@
+from typing import Self
+
 """
 JoinClause - Simple expression class for JOIN statements
 
@@ -40,20 +42,20 @@ class JoinClause:
         """Convert to SQL string."""
         return str(self)
 
-    def on(self, column1, equality, column2):
+    def on(self, column1, equality, column2) -> Self:
         self.on_clauses.append(OnClause(column1, equality, column2))
         return self
 
-    def or_on(self, column1, equality, column2):
+    def or_on(self, column1, equality, column2) -> Self:
         self.on_clauses.append(OnClause(column1, equality, column2, "or"))
         return self
 
-    def on_value(self, column, *args):
+    def on_value(self, column, *args) -> Self:
         equality, value = self._extract_operator_value(*args)
         self.on_clauses += ((OnValueClause(column, equality, value, "value")),)
         return self
 
-    def or_on_value(self, column, *args):
+    def or_on_value(self, column, *args) -> Self:
         equality, value = self._extract_operator_value(*args)
         self.on_clauses += (
             (
@@ -68,7 +70,7 @@ class JoinClause:
         )
         return self
 
-    def on_null(self, column):
+    def on_null(self, column) -> Self:
         """
         Specifies an ON expression where the column IS NULL.
 
@@ -81,7 +83,7 @@ class JoinClause:
         self.on_clauses += ((OnValueClause(column, "=", None, "NULL")),)
         return self
 
-    def on_not_null(self, column: str):
+    def on_not_null(self, column: str) -> Self:
         """
         Specifies an ON expression where the column IS NOT NULL.
 
@@ -94,7 +96,7 @@ class JoinClause:
         self.on_clauses += ((OnValueClause(column, "=", True, "NOT NULL")),)
         return self
 
-    def or_on_null(self, column):
+    def or_on_null(self, column) -> Self:
         """
         Specifies an ON expression where the column IS NULL.
 
@@ -107,7 +109,7 @@ class JoinClause:
         self.on_clauses += ((OnValueClause(column, "=", None, "NULL", operator="or")),)
         return self
 
-    def or_on_not_null(self, column: str):
+    def or_on_not_null(self, column: str) -> Self:
         """
         Specifies an ON expression where the column IS NOT NULL.
 

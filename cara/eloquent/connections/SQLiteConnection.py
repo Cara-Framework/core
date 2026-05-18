@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Self
+
 import re
 
 from cara.exceptions import DriverNotFoundException, QueryException
@@ -92,7 +94,7 @@ class SQLiteConnection(BaseConnection):
     def reconnect(self):
         pass
 
-    def commit(self):
+    def commit(self) -> Self:
         """Transaction."""
 
         if self.get_transaction_level() == 1:
@@ -107,13 +109,13 @@ class SQLiteConnection(BaseConnection):
         self.transaction_level -= 1
         return self
 
-    def begin(self):
+    def begin(self) -> Self:
         """Sqlite Transaction."""
         self._connection.isolation_level = "DEFERRED"
         self.transaction_level += 1
         return self
 
-    def rollback(self):
+    def rollback(self) -> Self:
         """Transaction."""
         if self.get_transaction_level() == 1:
             self._connection.rollback()

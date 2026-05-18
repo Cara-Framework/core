@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Self
+
 import threading
 
 from cara.exceptions import DriverNotFoundException, QueryException
@@ -151,7 +153,7 @@ class MySQLConnection(BaseConnection):
 
         return connection
 
-    def reconnect(self):
+    def reconnect(self) -> Self:
         self._connection.connect()
         return self
 
@@ -181,12 +183,12 @@ class MySQLConnection(BaseConnection):
             except Exception:
                 pass
 
-    def dry(self):
+    def dry(self) -> Self:
         """Transaction."""
         self._dry = True
         return self
 
-    def begin(self):
+    def begin(self) -> Self:
         """Mysql Transaction."""
         self._connection.begin()
         self.transaction_level += 1

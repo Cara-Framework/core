@@ -1,3 +1,5 @@
+from typing import Self
+
 """
 JoinClause - Simple JOIN clause component (different from expression)
 """
@@ -11,7 +13,7 @@ class JoinClause:
         self.table = table
         self.on_conditions = on_conditions or []
 
-    def add_on_condition(self, condition):
+    def add_on_condition(self, condition) -> Self:
         """Add an ON condition."""
         self.on_conditions.append(condition)
         return self

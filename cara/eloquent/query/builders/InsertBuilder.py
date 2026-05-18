@@ -2,7 +2,7 @@
 InsertBuilder - Single Responsibility for INSERT operations
 """
 
-from typing import Any
+from typing import Any, Self
 
 
 class InsertBuilder:
@@ -13,12 +13,12 @@ class InsertBuilder:
         self._values = []
         self._bindings = []
 
-    def into(self, table: str):
+    def into(self, table: str) -> Self:
         """Set the table to insert into."""
         self._table = table
         return self
 
-    def values(self, data: dict[str, Any]):
+    def values(self, data: dict[str, Any]) -> Self:
         """Add values to insert."""
         self._values.append(data)
         return self
@@ -31,7 +31,7 @@ class InsertBuilder:
         """Get all bindings."""
         return self._bindings.copy()
 
-    def reset(self):
+    def reset(self) -> Self:
         """Reset all INSERT settings."""
         self._table = None
         self._values = []

@@ -5,7 +5,7 @@ Single Responsibility: Handle relationship operations for Eloquent models.
 Clean separation of relationship logic from main model class.
 """
 
-from typing import Any
+from typing import Any, Self
 
 
 class HasRelationships:
@@ -126,7 +126,7 @@ class HasRelationships:
         """Load all records with specified relationships."""
         return cls.query().with_(*relations).get()
 
-    def load(self, *relations):
+    def load(self, *relations) -> Self:
         """
         Lazy eager-load relationships on an already-fetched model instance.
 

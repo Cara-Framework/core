@@ -1,3 +1,5 @@
+from typing import Self
+
 from cara.support.Collection import Collection
 
 from .BaseRelationship import BaseRelationship
@@ -41,7 +43,7 @@ class HasOneThrough(BaseRelationship):
         distant_builder,
         intermediary_builder,
         attribute,
-    ):
+    ) -> Self:
         self.local_key = self.local_key or "id"
         self.foreign_key = self.foreign_key or f"{attribute}_id"
         self.local_owner_key = self.local_owner_key or "id"

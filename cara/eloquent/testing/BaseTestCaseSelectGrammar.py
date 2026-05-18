@@ -1,3 +1,5 @@
+from typing import Self
+
 import inspect
 
 from cara.facades import Log
@@ -10,7 +12,7 @@ from ..query import QueryBuilder
 class MockConnection:
     connection_details = {}
 
-    def make_connection(self):
+    def make_connection(self) -> Self:
         return self
 
 

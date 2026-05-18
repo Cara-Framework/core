@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Self
+
 from cara.exceptions import DriverNotFoundException, QueryException
 
 from ..query.grammars import MSSQLGrammar
@@ -102,7 +104,7 @@ class MSSQLConnection(BaseConnection):
 
         self.transaction_level -= 1
 
-    def begin(self):
+    def begin(self) -> Self:
         """MSSQL Transaction."""
         self._connection.autocommit = False
         self.transaction_level += 1

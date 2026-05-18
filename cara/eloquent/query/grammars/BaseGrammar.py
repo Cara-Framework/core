@@ -1,3 +1,5 @@
+from typing import Self
+
 import re
 
 from cara.eloquent.expressions import (
@@ -775,7 +777,7 @@ class BaseGrammar:
         """
         self._bindings += bindings
 
-    def column_exists(self, column):
+    def column_exists(self, column) -> Self:
         """
         Check if a column exists.
 
@@ -789,7 +791,7 @@ class BaseGrammar:
         self._sql = self.process_exists()
         return self
 
-    def table_exists(self):
+    def table_exists(self) -> Self:
         """
         Checks if a table exists.
 
@@ -974,7 +976,7 @@ class BaseGrammar:
         """
         return self.value_string().format(value=value, separator=separator)
 
-    def drop_table(self, table):
+    def drop_table(self, table) -> Self:
         """
         Specifies a drop table expression.
 
@@ -987,7 +989,7 @@ class BaseGrammar:
         self._sql = self.drop_table_string().format(table=self.process_column(table))
         return self
 
-    def drop_table_if_exists(self, table):
+    def drop_table_if_exists(self, table) -> Self:
         """
         Specifies a drop table if exists expression.
 
@@ -1002,7 +1004,7 @@ class BaseGrammar:
         )
         return self
 
-    def rename_table(self, current_table_name, new_table_name):
+    def rename_table(self, current_table_name, new_table_name) -> Self:
         """
         Specifies a rename table expression.
 

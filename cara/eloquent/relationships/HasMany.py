@@ -1,3 +1,5 @@
+from typing import Self
+
 from cara.support.Collection import Collection
 
 from .BaseRelationship import BaseRelationship
@@ -67,7 +69,7 @@ class HasMany(BaseRelationship):
 
         return result
 
-    def set_keys(self, owner, attribute):
+    def set_keys(self, owner, attribute) -> Self:
         self.local_key = self.local_key or "id"
         self.foreign_key = self.foreign_key or f"{attribute}_id"
         return self

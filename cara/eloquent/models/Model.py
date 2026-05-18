@@ -20,7 +20,7 @@ from collections.abc import Callable
 from datetime import date as datetimedate
 from datetime import datetime
 from datetime import time as datetimetime
-from typing import Any
+from typing import Any, Self
 
 import pendulum
 from inflection import tableize, underscore
@@ -488,7 +488,7 @@ class Model(
 
             self.append_passthrough(list(self.get_builder()._macros.keys()))
 
-    def append_passthrough(self, passthrough):
+    def append_passthrough(self, passthrough) -> Self:
         self.__passthrough__.update(passthrough)
         return self
 
@@ -813,11 +813,11 @@ class Model(
             model.observe_events(model, "hydrated")
             return model
 
-    def fill(self, attributes):
+    def fill(self, attributes) -> Self:
         self.__attributes__.update(attributes)
         return self
 
-    def fill_original(self, attributes):
+    def fill_original(self, attributes) -> Self:
         self.__original_attributes__.update(attributes)
         return self
 
@@ -909,7 +909,7 @@ class Model(
             .first()
         )
 
-    def refresh(self):
+    def refresh(self) -> Self:
         """Reload the model's attributes from the database in place.
 
         Laravel parity — unlike :meth:`fresh`, this mutates ``self`` and
@@ -1088,7 +1088,7 @@ class Model(
 
         return clone
 
-    def set_hidden(self, hidden):
+    def set_hidden(self, hidden) -> Self:
         """
         Set the hidden attributes for the model.
 
@@ -1101,7 +1101,7 @@ class Model(
         self.__hidden__ = list(hidden) if hidden else []
         return self
 
-    def set_visible(self, visible):
+    def set_visible(self, visible) -> Self:
         """
         Set the visible attributes for the model.
 
@@ -1114,7 +1114,7 @@ class Model(
         self.__visible__ = list(visible) if visible else []
         return self
 
-    def append(self, *attributes):
+    def append(self, *attributes) -> Self:
         """
         Add attributes to the append list.
 
@@ -1667,7 +1667,7 @@ class Model(
             # Fallback to UTC
             return "UTC"
 
-    def set_appends(self, appends):
+    def set_appends(self, appends) -> Self:
         """
         Get the attributes that should be converted to dates.
 

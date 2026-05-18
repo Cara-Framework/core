@@ -1,10 +1,12 @@
+from typing import Self
+
 class ConstraintManager:
     """Single Responsibility: Manages table constraints and indexes"""
 
     def __init__(self, table):
         self.table = table
 
-    def add_primary_key(self, columns, name=None):
+    def add_primary_key(self, columns, name=None) -> Self:
         """Add primary key constraint"""
         if not isinstance(columns, list):
             columns = [columns]
@@ -16,7 +18,7 @@ class ConstraintManager:
         )
         return self
 
-    def add_unique_constraint(self, columns, name=None):
+    def add_unique_constraint(self, columns, name=None) -> Self:
         """Add unique constraint"""
         if not isinstance(columns, list):
             columns = [columns]
@@ -28,7 +30,7 @@ class ConstraintManager:
         )
         return self
 
-    def add_index(self, columns, name=None):
+    def add_index(self, columns, name=None) -> Self:
         """Add index"""
         if not isinstance(columns, list):
             columns = [columns]
@@ -40,7 +42,7 @@ class ConstraintManager:
         )
         return self
 
-    def add_fulltext_index(self, columns, name=None):
+    def add_fulltext_index(self, columns, name=None) -> Self:
         """Add fulltext index"""
         if not isinstance(columns, list):
             columns = [columns]

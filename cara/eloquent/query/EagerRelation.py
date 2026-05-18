@@ -1,3 +1,5 @@
+from typing import Self
+
 """
 EagerRelations - Simple eager loading component
 """
@@ -14,7 +16,7 @@ class EagerRelations:
         self.eager_counts = []  # 🔧 For counting eager loads
         self.callback_eagers = {}  # 🔧 For callback-based eager loading
 
-    def register(self, *relations):
+    def register(self, *relations) -> Self:
         """Register relations for eager loading (Laravel-style with *args)."""
         try:
             for relation in relations:
@@ -38,7 +40,7 @@ class EagerRelations:
             raise
         return self
 
-    def with_relation(self, relation: str):
+    def with_relation(self, relation: str) -> Self:
         """Add a relation to eager load."""
         self.relations.append(relation)
         self.eagers.append(relation)
@@ -50,17 +52,17 @@ class EagerRelations:
 
         return self
 
-    def with_count(self, relation: str):
+    def with_count(self, relation: str) -> Self:
         """Add a relation to count."""
         self.eager_counts.append(relation)
         return self
 
-    def with_constraint(self, relation: str, constraint):
+    def with_constraint(self, relation: str, constraint) -> Self:
         """Add constraint to eager loading."""
         self.eager_constraints[relation] = constraint
         return self
 
-    def with_callback(self, relation: str, callback):
+    def with_callback(self, relation: str, callback) -> Self:
         """Add callback for eager loading."""
         self.callback_eagers[relation] = callback
         return self
@@ -101,7 +103,7 @@ class EagerRelations:
         """Check if there are relations to count."""
         return len(self.eager_counts) > 0
 
-    def reset(self):
+    def reset(self) -> Self:
         """Reset all relations."""
         self.relations = []
         self.eagers = []

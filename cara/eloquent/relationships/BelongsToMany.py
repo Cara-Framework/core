@@ -1,3 +1,5 @@
+from typing import Self
+
 import pendulum
 from inflection import singularize
 
@@ -77,12 +79,12 @@ class BelongsToMany(BaseRelationship):
 
         return result
 
-    def set_keys(self, owner, attribute):
+    def set_keys(self, owner, attribute) -> Self:
         self.local_key = self.local_key or "id"
         self.foreign_key = self.foreign_key or f"{attribute}_id"
         return self
 
-    def with_pivot(self, *columns):
+    def with_pivot(self, *columns) -> Self:
         """Include additional pivot table columns in the relationship results.
 
         Adds the specified columns from the pivot table to each related model.
@@ -205,7 +207,7 @@ class BelongsToMany(BaseRelationship):
 
         return result
 
-    def table(self, table):
+    def table(self, table) -> Self:
         self._table = table
         return self
 

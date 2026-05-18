@@ -1,3 +1,5 @@
+from typing import Self
+
 from cara.support.Collection import Collection
 
 from .BaseRelationship import BaseRelationship
@@ -37,7 +39,7 @@ class MorphMany(BaseRelationship):
                 return related_model.query()
         raise AttributeError("Cannot get builder: related model not found")
 
-    def set_keys(self, owner, attribute):
+    def set_keys(self, owner, attribute) -> Self:
         self.morph_id = self.morph_id or "record_id"
         self.morph_key = self.morph_key or "record_type"
         return self

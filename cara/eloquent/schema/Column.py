@@ -1,3 +1,5 @@
+from typing import Self
+
 class Column:
     """Used for creating or modifying columns."""
 
@@ -27,7 +29,7 @@ class Column:
         self.primary = False
         self.comment = None
 
-    def nullable(self):
+    def nullable(self) -> Self:
         """
         Sets this column to be nullable.
 
@@ -37,7 +39,7 @@ class Column:
         self.is_null = True
         return self
 
-    def signed(self):
+    def signed(self) -> Self:
         """
         Sets this column to be nullable.
 
@@ -47,7 +49,7 @@ class Column:
         self._signed = "signed"
         return self
 
-    def unsigned(self):
+    def unsigned(self) -> Self:
         """
         Sets this column to be nullable.
 
@@ -57,7 +59,7 @@ class Column:
         self._signed = "unsigned"
         return self
 
-    def not_nullable(self):
+    def not_nullable(self) -> Self:
         """
         Sets this column to be not nullable.
 
@@ -70,7 +72,7 @@ class Column:
     def set_as_primary(self):
         self.primary = True
 
-    def rename(self, column):
+    def rename(self, column) -> Self:
         """
         Renames this column to a new name.
 
@@ -83,7 +85,7 @@ class Column:
         self.old_column = column
         return self
 
-    def after(self, after):
+    def after(self, after) -> Self:
         """
         Sets the column that this new column should be created after.
 
@@ -112,7 +114,7 @@ class Column:
         """
         return self._after
 
-    def default(self, value, raw=False):
+    def default(self, value, raw=False) -> Self:
         """
         Sets a default value for this column.
 
@@ -127,7 +129,7 @@ class Column:
         self.default_is_raw = raw
         return self
 
-    def change(self):
+    def change(self) -> Self:
         """
         Sets the schema to create a modify sql statement.
 
@@ -137,7 +139,7 @@ class Column:
         self._action = "modify"
         return self
 
-    def use_current(self):
+    def use_current(self) -> Self:
         """
         Sets the column to use a current timestamp.
 
@@ -149,6 +151,6 @@ class Column:
         self.default_value = "current"
         return self
 
-    def add_comment(self, comment):
+    def add_comment(self, comment) -> Self:
         self.comment = comment
         return self

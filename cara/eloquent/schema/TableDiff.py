@@ -1,3 +1,5 @@
+from typing import Self
+
 from .Column import Column
 from .Table import Table
 
@@ -66,11 +68,11 @@ class TableDiff(Table):
     def get_dropped_foreign_keys(self):
         return self.dropped_foreign_keys
 
-    def drop_foreign(self, name):
+    def drop_foreign(self, name) -> Self:
         self.dropped_foreign_keys.append(name)
         return self
 
-    def drop_primary(self, name):
+    def drop_primary(self, name) -> Self:
         self.dropped_primary_keys.append(name)
         return self
 
@@ -79,6 +81,6 @@ class TableDiff(Table):
 
         self.changed_columns.update({added_column.name: added_column})
 
-    def add_comment(self, comment):
+    def add_comment(self, comment) -> Self:
         self.comment = comment
         return self

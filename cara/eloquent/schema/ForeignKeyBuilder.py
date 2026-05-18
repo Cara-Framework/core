@@ -1,3 +1,5 @@
+from typing import Self
+
 class ForeignKeyBuilder:
     """Single Responsibility: Builds foreign key relationships"""
 
@@ -6,13 +8,13 @@ class ForeignKeyBuilder:
         self.constraint_manager = constraint_manager
         self._last_foreign = None
 
-    def foreign_id(self, column):
+    def foreign_id(self, column) -> Self:
         """Create foreign ID column with constraint"""
         self.column_factory.unsigned_big_integer(column)
         self._last_foreign = self.constraint_manager.add_foreign_key(column)
         return self
 
-    def foreign_uuid(self, column):
+    def foreign_uuid(self, column) -> Self:
         """Create foreign UUID column with constraint"""
         self.column_factory.uuid(column)
         self._last_foreign = self.constraint_manager.add_foreign_key(column)
@@ -27,25 +29,25 @@ class ForeignKeyBuilder:
         else:
             return self.foreign_uuid(clm)
 
-    def references(self, column):
+    def references(self, column) -> Self:
         """Set referenced column"""
         if self._last_foreign:
             self._last_foreign.references(column)
         return self
 
-    def on(self, table):
+    def on(self, table) -> Self:
         """Set referenced table"""
         if self._last_foreign:
             self._last_foreign.on(table)
         return self
 
-    def on_delete(self, action):
+    def on_delete(self, action) -> Self:
         """Set on delete action"""
         if self._last_foreign:
             self._last_foreign.on_delete(action)
         return self
 
-    def on_update(self, action):
+    def on_update(self, action) -> Self:
         """Set on update action"""
         if self._last_foreign:
             self._last_foreign.on_update(action)

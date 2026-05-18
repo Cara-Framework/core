@@ -1,3 +1,5 @@
+from typing import Self
+
 """
 GroupByClause - Simple GROUP BY clause component
 """
@@ -9,7 +11,7 @@ class GroupByClause:
     def __init__(self, *columns):
         self.columns = list(columns)
 
-    def add_column(self, column: str):
+    def add_column(self, column: str) -> Self:
         """Add a column to GROUP BY."""
         self.columns.append(column)
         return self

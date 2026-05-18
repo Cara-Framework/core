@@ -1,3 +1,5 @@
+from typing import Self
+
 from .Column import Column
 from .Constraint import Constraint
 from .ForeignKeyConstraint import ForeignKeyConstraint
@@ -97,7 +99,7 @@ class Table:
     def get_renamed_columns(self):
         return self.added_columns
 
-    def set_primary_key(self, columns):
+    def set_primary_key(self, columns) -> Self:
         self.primary_key = columns
         return self
 
@@ -107,6 +109,6 @@ class Table:
     def get_index(self, name):
         return self.added_indexes[name]
 
-    def add_comment(self, comment):
+    def add_comment(self, comment) -> Self:
         self.comment = comment
         return self

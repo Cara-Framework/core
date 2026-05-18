@@ -1,3 +1,5 @@
+from typing import Self
+
 from timeit import default_timer as timer
 
 
@@ -18,11 +20,11 @@ class BaseConnection:
     # actionable slow query (anything beyond cold-cache jitter is real).
     SLOW_QUERY_THRESHOLD_MS = 750
 
-    def dry(self):
+    def dry(self) -> Self:
         self._dry = True
         return self
 
-    def set_schema(self, schema):
+    def set_schema(self, schema) -> Self:
         self.schema = schema
         return self
 
@@ -118,7 +120,7 @@ class BaseConnection:
             return self
         return None
 
-    def set_as_global(self, is_global=True):
+    def set_as_global(self, is_global=True) -> Self:
         """Mark this connection as global - avoids circular dependency"""
         self._is_global = is_global
         return self
@@ -138,7 +140,7 @@ class BaseConnection:
     def format_cursor_results(self, cursor_result):
         return cursor_result
 
-    def set_cursor(self):
+    def set_cursor(self) -> Self:
         self._cursor = self._connection.cursor()
         return self
 

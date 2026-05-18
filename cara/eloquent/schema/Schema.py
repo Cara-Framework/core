@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Self
+
 import contextlib
 from decimal import Decimal
 
@@ -121,7 +123,7 @@ class Schema:
             # Use default connection
             self.on(connection)
 
-    def on(self, connection_key):
+    def on(self, connection_key) -> Self:
         """
         Change the connection - delegates to connection manager
 
@@ -134,7 +136,7 @@ class Schema:
         self.connection_manager.resolve_connection(connection_key)
         return self
 
-    def dry(self):
+    def dry(self) -> Self:
         """Enable dry run mode - Single responsibility"""
         self._dry = True
         self.query_executor.dry = True
@@ -525,20 +527,20 @@ class FieldDefinition:
         self._is_foreign = False
         self._foreign_key_config = {}
 
-    def nullable(self):
+    def nullable(self) -> Self:
         self._nullable = True
         return self
 
-    def default(self, value):
+    def default(self, value) -> Self:
         self._default = value
         return self
 
-    def unique(self):
+    def unique(self) -> Self:
         """Mark this field as unique."""
         self._unique = True
         return self
 
-    def foreign(self):
+    def foreign(self) -> Self:
         """Mark this field as a foreign key."""
         self._is_foreign = True
         self._foreign_key_config = {
@@ -550,25 +552,25 @@ class FieldDefinition:
         }
         return self
 
-    def references(self, column):
+    def references(self, column) -> Self:
         """Set the referenced column for foreign key."""
         if self._is_foreign:
             self._foreign_key_config["references"] = column
         return self
 
-    def on(self, table):
+    def on(self, table) -> Self:
         """Set the referenced table for foreign key."""
         if self._is_foreign:
             self._foreign_key_config["on"] = table
         return self
 
-    def on_delete(self, action):
+    def on_delete(self, action) -> Self:
         """Set the ON DELETE action for foreign key."""
         if self._is_foreign:
             self._foreign_key_config["on_delete"] = action
         return self
 
-    def on_update(self, action):
+    def on_update(self, action) -> Self:
         """Set the ON UPDATE action for foreign key."""
         if self._is_foreign:
             self._foreign_key_config["on_update"] = action

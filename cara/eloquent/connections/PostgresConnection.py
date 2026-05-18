@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Self
+
 import re
 import threading
 import time
@@ -358,7 +360,7 @@ class PostgresConnection(BaseConnection):
             finally:
                 self.transaction_level -= 1
 
-    def begin(self):
+    def begin(self) -> Self:
         """Postgres Transaction with savepoint support for nesting."""
         if self.transaction_level > 0:
             # Nested transaction — use savepoint

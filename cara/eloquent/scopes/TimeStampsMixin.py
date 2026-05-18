@@ -1,3 +1,5 @@
+from typing import Self
+
 from .TimeStampsScope import TimeStampsScope
 
 
@@ -7,6 +9,6 @@ class TimeStampsMixin:
     def boot_TimeStampsMixin(self, builder):
         builder.set_global_scope(TimeStampsScope())
 
-    def activate_timestamps(self, boolean=True):
+    def activate_timestamps(self, boolean=True) -> Self:
         self.__timestamps__ = boolean
         return self

@@ -1,3 +1,5 @@
+from typing import Self
+
 class ForeignKeyConstraint:
     def __init__(
         self,
@@ -13,22 +15,22 @@ class ForeignKeyConstraint:
         self.update_action = None
         self.constraint_name = name
 
-    def references(self, foreign_column):
+    def references(self, foreign_column) -> Self:
         self.foreign_column = foreign_column
         return self
 
-    def on(self, foreign_table):
+    def on(self, foreign_table) -> Self:
         self.foreign_table = foreign_table
         return self
 
-    def on_delete(self, action):
+    def on_delete(self, action) -> Self:
         self.delete_action = action
         return self
 
-    def on_update(self, action):
+    def on_update(self, action) -> Self:
         self.update_action = action
         return self
 
-    def name(self, name):
+    def name(self, name) -> Self:
         self.constraint_name = name
         return self

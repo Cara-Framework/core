@@ -1,3 +1,5 @@
+from typing import Self
+
 from cara.support.Collection import Collection
 
 from .BaseRelationship import BaseRelationship
@@ -27,7 +29,7 @@ class MorphTo(BaseRelationship):
     def get_builder(self):
         return self._related_builder
 
-    def set_keys(self, owner, attribute):
+    def set_keys(self, owner, attribute) -> Self:
         self.morph_id = self.morph_id or "record_id"
         self.morph_key = self.morph_key or "record_type"
         return self

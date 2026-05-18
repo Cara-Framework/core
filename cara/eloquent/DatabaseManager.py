@@ -1,3 +1,5 @@
+from typing import Self
+
 import threading
 from contextlib import contextmanager
 
@@ -47,7 +49,7 @@ class DatabaseManager:
             self._resolver = ConnectionResolver(database_manager=self)
         return self._resolver
 
-    def set_database_config(self, default_connection, connection_details):
+    def set_database_config(self, default_connection, connection_details) -> Self:
         """Set database configuration"""
         # Normalize connection_details to a plain dict. Sometimes config()
         # returns a dotty_dict whose __hash__/__str__ recurses infinitely
@@ -71,7 +73,7 @@ class DatabaseManager:
         """Get database configuration"""
         return self._database_config
 
-    def set_queue_config(self, config):
+    def set_queue_config(self, config) -> Self:
         """Set queue configuration"""
         self._queue_config = config
         return self
@@ -355,7 +357,7 @@ class DatabaseManager:
             return self._default_connection
         return connection_key
 
-    def morph_map(self, morph_map_dict):
+    def morph_map(self, morph_map_dict) -> Self:
         """Register morph type mappings for polymorphic relationships.
 
         Args:

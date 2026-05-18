@@ -1,3 +1,5 @@
+from typing import Self
+
 from cara.exceptions import ConnectionNotRegisteredException
 
 
@@ -11,7 +13,7 @@ class SchemaConnectionManager:
         self.connection_class = None
         self.platform = None
 
-    def resolve_connection(self, connection_key):
+    def resolve_connection(self, connection_key) -> Self:
         """Resolve connection using DatabaseManager"""
         self.connection = self._db_manager.resolve_connection_for_schema(connection_key)
 

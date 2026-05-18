@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Self
 
 # ``order_by`` SQL injection guard: accept ``column`` or
 # ``table.column`` identifiers only. Anything fancier (functions,
@@ -178,7 +178,7 @@ class QueryBuilder(ObservesEvents):
         self._creates_related = fields
         return self
 
-    def set_schema(self, schema):
+    def set_schema(self, schema) -> Self:
         self._schema = schema
         return self
 
@@ -188,11 +188,11 @@ class QueryBuilder(ObservesEvents):
     def lock_for_update(self):
         return self.make_lock("update")
 
-    def make_lock(self, lock):
+    def make_lock(self, lock) -> Self:
         self.lock = lock
         return self
 
-    def reset(self):
+    def reset(self) -> Self:
         """Resets the query builder instance so you can make multiple calls with the same builder
         instance."""
 
@@ -213,7 +213,7 @@ class QueryBuilder(ObservesEvents):
         """Get connection info from DatabaseManager"""
         return self._db_manager.get_connection_info(self.connection)
 
-    def table(self, table, raw=False):
+    def table(self, table, raw=False) -> Self:
         """
         Sets a table on the query builder.
 
@@ -297,7 +297,7 @@ class QueryBuilder(ObservesEvents):
             raise RuntimeError("No active transaction to commit.")
         return self._connection.commit()
 
-    def rollback(self):
+    def rollback(self) -> Self:
         """Roll back the active database transaction."""
         if not hasattr(self, "_connection") or self._connection is None:
             raise RuntimeError("No active transaction to roll back.")
@@ -336,7 +336,7 @@ class QueryBuilder(ObservesEvents):
     # general signature (accepting an optional builder argument). Python
     # silently shadows methods, so the version formerly here was dead code.
 
-    def set_scope(self, name, callable):
+    def set_scope(self, name, callable) -> Self:
         """
         Sets a scope based on a class and maps it to a name.
 
@@ -352,7 +352,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def set_global_scope(self, name="", callable=None, action="select"):
+    def set_global_scope(self, name="", callable=None, action="select") -> Self:
         """
         Sets the global scopes that should be used before creating the SQL.
 
@@ -374,11 +374,11 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def without_global_scopes(self):
+    def without_global_scopes(self) -> Self:
         self._global_scopes = {}
         return self
 
-    def remove_global_scope(self, scope, action=None):
+    def remove_global_scope(self, scope, action=None) -> Self:
         """
         Sets the global scopes that should be used before creating the SQL.
 
@@ -433,7 +433,7 @@ class QueryBuilder(ObservesEvents):
 
         raise AttributeError(f"'QueryBuilder' object has no attribute '{attribute}'")
 
-    def on(self, connection):
+    def on(self, connection) -> Self:
         """Use DatabaseManager for connection resolution"""
         # If connection is an object, use default connection name instead of object's name
         if hasattr(connection, "name") and hasattr(connection, "make_connection"):
@@ -456,7 +456,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def select(self, *args):
+    def select(self, *args) -> Self:
         """
         Specifies columns that should be selected.
 
@@ -473,7 +473,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def distinct(self, boolean=True):
+    def distinct(self, boolean=True) -> Self:
         """
         Specifies that all columns should be distinct.
 
@@ -483,7 +483,7 @@ class QueryBuilder(ObservesEvents):
         self._distinct = boolean
         return self
 
-    def add_select(self, alias, callable):
+    def add_select(self, alias, callable) -> Self:
         """
         Specifies columns that should be selected.
 
@@ -501,7 +501,7 @@ class QueryBuilder(ObservesEvents):
         result = self.new_connection().query(query, bindings)
         return self.prepare_result(result)
 
-    def select_raw(self, query):
+    def select_raw(self, query) -> Self:
         """
         Specifies raw SQL that should be injected into the select expression.
 
@@ -687,7 +687,7 @@ class QueryBuilder(ObservesEvents):
 
         return result
 
-    def where(self, column, *args):
+    def where(self, column, *args) -> Self:
         """
         Specifies a where expression.
 
@@ -730,7 +730,7 @@ class QueryBuilder(ObservesEvents):
             self._wheres += ((QueryExpression(column, operator, value, "value")),)
         return self
 
-    def where_from_builder(self, builder):
+    def where_from_builder(self, builder) -> Self:
         """
         Specifies a where expression.
 
@@ -778,7 +778,7 @@ class QueryBuilder(ObservesEvents):
         """
         return self.where(column, "not like", value)
 
-    def where_raw(self, query: str, bindings=()):
+    def where_raw(self, query: str, bindings=()) -> Self:
         """
         Specifies raw SQL that should be injected into the where expression.
 
@@ -805,7 +805,7 @@ class QueryBuilder(ObservesEvents):
         )
         return self
 
-    def or_where_raw(self, query: str, bindings=()):
+    def or_where_raw(self, query: str, bindings=()) -> Self:
         """
         Specifies raw SQL that should be injected into the where expression, OR-joined.
 
@@ -969,7 +969,7 @@ class QueryBuilder(ObservesEvents):
         """
         return self.where_raw(f"{column} ? %s", [key])
 
-    def or_where(self, column, *args):
+    def or_where(self, column, *args) -> Self:
         """
         Specifies an or where query expression.
 
@@ -1017,7 +1017,7 @@ class QueryBuilder(ObservesEvents):
             )
         return self
 
-    def where_exists(self, value: str | int | QueryBuilder):
+    def where_exists(self, value: str | int | QueryBuilder) -> Self:
         """
         Specifies a where exists expression.
 
@@ -1052,7 +1052,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def or_where_exists(self, value: str | int | QueryBuilder):
+    def or_where_exists(self, value: str | int | QueryBuilder) -> Self:
         """
         Specifies a where exists expression.
 
@@ -1099,7 +1099,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def where_not_exists(self, value: str | int | QueryBuilder):
+    def where_not_exists(self, value: str | int | QueryBuilder) -> Self:
         """
         Specifies a where exists expression.
 
@@ -1135,7 +1135,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def or_where_not_exists(self, value: str | int | QueryBuilder):
+    def or_where_not_exists(self, value: str | int | QueryBuilder) -> Self:
         """
         Specifies a where exists expression.
 
@@ -1183,7 +1183,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def having(self, column, equality="", value=""):
+    def having(self, column, equality="", value="") -> Self:
         """
         Specifying a having expression.
 
@@ -1200,7 +1200,7 @@ class QueryBuilder(ObservesEvents):
         self._having += ((HavingExpression(column, equality, value)),)
         return self
 
-    def having_raw(self, string):
+    def having_raw(self, string) -> Self:
         """
         Specifies raw SQL that should be injected into the having expression.
 
@@ -1213,7 +1213,7 @@ class QueryBuilder(ObservesEvents):
         self._having += ((HavingExpression(string, raw=True)),)
         return self
 
-    def where_null(self, column):
+    def where_null(self, column) -> Self:
         """
         Specifies a where expression where the column is NULL.
 
@@ -1226,7 +1226,7 @@ class QueryBuilder(ObservesEvents):
         self._wheres += ((QueryExpression(column, "=", None, "NULL")),)
         return self
 
-    def or_where_null(self, column):
+    def or_where_null(self, column) -> Self:
         """
         Specifies a where expression where the column is NULL.
 
@@ -1244,7 +1244,7 @@ class QueryBuilder(ObservesEvents):
     # previously here has been removed — it could not be reached because
     # Python class bodies use last-definition-wins semantics.
 
-    def where_not_null(self, column: str):
+    def where_not_null(self, column: str) -> Self:
         """
         Specifies a where expression where the column is not NULL.
 
@@ -1265,7 +1265,7 @@ class QueryBuilder(ObservesEvents):
         elif hasattr(date, "strftime"):
             return date.strftime("%m-%d-%Y")
 
-    def where_date(self, column: str, date: str | datetime):
+    def where_date(self, column: str, date: str | datetime) -> Self:
         """
         Specifies a where DATE expression.
 
@@ -1287,7 +1287,7 @@ class QueryBuilder(ObservesEvents):
         )
         return self
 
-    def or_where_date(self, column: str, date: str | datetime):
+    def or_where_date(self, column: str, date: str | datetime) -> Self:
         """
         Specifies a where DATE expression.
 
@@ -1311,7 +1311,7 @@ class QueryBuilder(ObservesEvents):
         )
         return self
 
-    def between(self, column: str, low: int, high: int):
+    def between(self, column: str, low: int, high: int) -> Self:
         """
         Specifies a where between expression.
 
@@ -1332,7 +1332,7 @@ class QueryBuilder(ObservesEvents):
     def where_not_between(self, *args, **kwargs):
         return self.not_between(*args, **kwargs)
 
-    def not_between(self, column: str, low: str, high: str):
+    def not_between(self, column: str, low: str, high: str) -> Self:
         """
         Specifies a where not between expression.
 
@@ -1347,7 +1347,7 @@ class QueryBuilder(ObservesEvents):
         self._wheres += (BetweenExpression(column, low, high, not_between=True),)
         return self
 
-    def where_in(self, column, wheres=None):
+    def where_in(self, column, wheres=None) -> Self:
         """
         Specifies where a column contains a list of a values.
 
@@ -1420,7 +1420,7 @@ class QueryBuilder(ObservesEvents):
             )
         return rel
 
-    def has(self, *relationships):
+    def has(self, *relationships) -> Self:
         if not self._model:
             raise AttributeError(
                 "You must specify a model in order to use 'has' relationship methods"
@@ -1437,7 +1437,7 @@ class QueryBuilder(ObservesEvents):
                 related.query_has(self)
         return self
 
-    def or_has(self, *relationships):
+    def or_has(self, *relationships) -> Self:
         if not self._model:
             raise AttributeError(
                 "You must specify a model in order to use 'has' relationship methods"
@@ -1466,7 +1466,7 @@ class QueryBuilder(ObservesEvents):
                 related.query_has(self, method="or_where_exists")
         return self
 
-    def doesnt_have(self, *relationships):
+    def doesnt_have(self, *relationships) -> Self:
         if not self._model:
             raise AttributeError(
                 "You must specify a model in order to use the 'doesnt_have' relationship methods"
@@ -1494,7 +1494,7 @@ class QueryBuilder(ObservesEvents):
                 related.query_has(self, method="where_not_exists")
         return self
 
-    def or_doesnt_have(self, *relationships):
+    def or_doesnt_have(self, *relationships) -> Self:
         if not self._model:
             raise AttributeError(
                 "You must specify a model in order to use the 'doesnt_have' relationship methods"
@@ -1522,7 +1522,7 @@ class QueryBuilder(ObservesEvents):
                 related.query_has(self, method="or_where_not_exists")
         return self
 
-    def where_has(self, relationship, callback):
+    def where_has(self, relationship, callback) -> Self:
         if not self._model:
             raise AttributeError(
                 "You must specify a model in order to use 'has' relationship methods"
@@ -1548,7 +1548,7 @@ class QueryBuilder(ObservesEvents):
             related.query_where_exists(self, callback, method="where_exists")
         return self
 
-    def or_where_has(self, relationship, callback):
+    def or_where_has(self, relationship, callback) -> Self:
         if not self._model:
             raise AttributeError(
                 "You must specify a model in order to use 'has' relationship methods"
@@ -1574,7 +1574,7 @@ class QueryBuilder(ObservesEvents):
             related.query_where_exists(self, callback, method="or_where_exists")
         return self
 
-    def where_doesnt_have(self, relationship, callback):
+    def where_doesnt_have(self, relationship, callback) -> Self:
         if not self._model:
             raise AttributeError(
                 "You must specify a model in order to use the 'doesnt_have' relationship methods"
@@ -1601,7 +1601,7 @@ class QueryBuilder(ObservesEvents):
             related.query_where_exists(self, callback, method="where_not_exists")
         return self
 
-    def or_where_doesnt_have(self, relationship, callback):
+    def or_where_doesnt_have(self, relationship, callback) -> Self:
         if not self._model:
             raise AttributeError(
                 "You must specify a model in order to use the 'doesnt_have' relationship methods"
@@ -1751,7 +1751,7 @@ class QueryBuilder(ObservesEvents):
             self, column, callback=callback, relation_name=relationship
         )
 
-    def tap(self, callback):
+    def tap(self, callback) -> Self:
         """Execute callback with the builder and return the builder for chaining.
 
         Useful for debugging or side effects without breaking the chain.
@@ -1772,7 +1772,7 @@ class QueryBuilder(ObservesEvents):
         """
         return callback(self)
 
-    def where_not_in(self, column, wheres=None):
+    def where_not_in(self, column, wheres=None) -> Self:
         """
         Specifies where a column does not contain a list of a values.
 
@@ -1811,7 +1811,7 @@ class QueryBuilder(ObservesEvents):
         equality=None,
         column2=None,
         clause="inner",
-    ):
+    ) -> Self:
         """
         Specifies a join expression.
 
@@ -1891,13 +1891,13 @@ class QueryBuilder(ObservesEvents):
             clause="right",
         )
 
-    def joins(self, *relationships, clause="inner"):
+    def joins(self, *relationships, clause="inner") -> Self:
         for relationship in relationships:
             getattr(self._model, relationship).joins(self, clause=clause)
 
         return self
 
-    def join_on(self, relationship, callback=None, clause="inner"):
+    def join_on(self, relationship, callback=None, clause="inner") -> Self:
         relation = getattr(self._model, relationship)
         relation.joins(self, clause=clause)
 
@@ -1908,7 +1908,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def where_column(self, column1, column2):
+    def where_column(self, column1, column2) -> Self:
         """
         Specifies where two columns equal eachother.
 
@@ -1926,7 +1926,7 @@ class QueryBuilder(ObservesEvents):
         """Alias for limit method."""
         return self.limit(*args, **kwargs)
 
-    def limit(self, amount):
+    def limit(self, amount) -> Self:
         """
         Specifies a limit expression.
 
@@ -1939,7 +1939,7 @@ class QueryBuilder(ObservesEvents):
         self._limit = amount
         return self
 
-    def offset(self, amount):
+    def offset(self, amount) -> Self:
         """
         Specifies an offset expression.
 
@@ -2053,7 +2053,7 @@ class QueryBuilder(ObservesEvents):
     def force_update(self, updates: dict, dry=False):
         return self.update(updates, dry=dry, force=True)
 
-    def set_updates(self, updates: dict, dry=False):
+    def set_updates(self, updates: dict, dry=False) -> Self:
         """
         Specifies columns and values to be updated.
 
@@ -2186,7 +2186,7 @@ class QueryBuilder(ObservesEvents):
         """
         return self._run_aggregate("MAX", column, dry)
 
-    def order_by(self, column, direction="ASC"):
+    def order_by(self, column, direction="ASC") -> Self:
         """
         Specifies a column to order by.
 
@@ -2213,7 +2213,7 @@ class QueryBuilder(ObservesEvents):
             self._order_by += (OrderByExpression(col, direction=dir_str),)
         return self
 
-    def order_by_raw(self, query, bindings=None):
+    def order_by_raw(self, query, bindings=None) -> Self:
         """
         Specifies a column to order by.
 
@@ -2231,7 +2231,7 @@ class QueryBuilder(ObservesEvents):
         self._order_by += (OrderByExpression(query, raw=True, bindings=bindings),)
         return self
 
-    def group_by(self, column):
+    def group_by(self, column) -> Self:
         """
         Specifies a column to group by.
 
@@ -2246,7 +2246,7 @@ class QueryBuilder(ObservesEvents):
 
         return self
 
-    def group_by_raw(self, query, bindings=None):
+    def group_by_raw(self, query, bindings=None) -> Self:
         """
         Specifies a column to group by.
 
@@ -2747,11 +2747,11 @@ class QueryBuilder(ObservesEvents):
     def get_connection(self):
         return self._connection
 
-    def without_eager(self):
+    def without_eager(self) -> Self:
         self._should_eager = False
         return self
 
-    def with_(self, *eagers):
+    def with_(self, *eagers) -> Self:
         try:
             self._eager_relation.register(*eagers)
         except Exception as e:
@@ -2826,7 +2826,7 @@ class QueryBuilder(ObservesEvents):
         paginator = SimplePaginator(result, per_page, page)
         return paginator
 
-    def set_action(self, action):
+    def set_action(self, action) -> Self:
         """
         Sets the action that the query builder should take when the query is built.
 
@@ -2924,7 +2924,7 @@ class QueryBuilder(ObservesEvents):
             sql = sql.replace("'?'", "%s")
         return sql, bindings
 
-    def debug_sql(self):
+    def debug_sql(self) -> Self:
         """Print compiled SQL + bindings to stderr (dev-aid). Returns self for chaining.
 
         Example:
@@ -2939,7 +2939,7 @@ class QueryBuilder(ObservesEvents):
         Log.debug(f"[BIND] {bindings}", category="db.debug")
         return self
 
-    def run_scopes(self):
+    def run_scopes(self) -> Self:
         # ROOT CAUSE (2026-04-23): ``_global_scopes`` is a class-level
         # dict shared across every QueryBuilder instance. Under the
         # threaded queue worker (and ``--concurrency=8`` sync runs) two
@@ -3072,11 +3072,11 @@ class QueryBuilder(ObservesEvents):
         """
         return self
 
-    def macro(self, name, callable):
+    def macro(self, name, callable) -> Self:
         self._macros.update({name: callable})
         return self
 
-    def when(self, conditional, callback, otherwise=None):
+    def when(self, conditional, callback, otherwise=None) -> Self:
         """Apply the callback if the condition is truthy (Laravel-style).
 
         Supports two calling conventions::
@@ -3114,7 +3114,7 @@ class QueryBuilder(ObservesEvents):
                 chosen(self)
         return self
 
-    def unless(self, conditional, callback, otherwise=None):
+    def unless(self, conditional, callback, otherwise=None) -> Self:
         """Apply the callback if the condition is falsy (opposite of when).
 
         Supports the same value-forwarding convention as :meth:`when`.
@@ -3595,7 +3595,7 @@ class QueryBuilder(ObservesEvents):
                 break
 
     # ===== UNION =====
-    def union(self, query, all=False):
+    def union(self, query, all=False) -> Self:
         """Append a UNION (or UNION ALL) clause from another QueryBuilder.
 
         Args:

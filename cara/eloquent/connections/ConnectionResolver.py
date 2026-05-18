@@ -1,3 +1,5 @@
+from typing import Self
+
 """Connection / transaction resolution for the Cara ORM.
 
 **Thread-safety fix (2026-04-23):** ``_active_connections`` used to be a
@@ -67,7 +69,7 @@ class ConnectionResolver:
         self.database_manager = database_manager
         self._register_default_connections()
 
-    def set_database_manager(self, database_manager):
+    def set_database_manager(self, database_manager) -> Self:
         """Set database manager dependency"""
         self.database_manager = database_manager
         return self

@@ -2,7 +2,7 @@
 UpdateBuilder - Single Responsibility for UPDATE operations
 """
 
-from typing import Any
+from typing import Any, Self
 
 
 class UpdateBuilder:
@@ -14,17 +14,17 @@ class UpdateBuilder:
         self._conditions = []
         self._bindings = []
 
-    def table(self, table: str):
+    def table(self, table: str) -> Self:
         """Set the table to update."""
         self._table = table
         return self
 
-    def set(self, column: str, value: Any):
+    def set(self, column: str, value: Any) -> Self:
         """Set a column value."""
         self._sets[column] = value
         return self
 
-    def where(self, column: str, operator: str = "=", value: Any = None):
+    def where(self, column: str, operator: str = "=", value: Any = None) -> Self:
         """Add WHERE condition."""
         if value is None:
             value = operator
@@ -46,7 +46,7 @@ class UpdateBuilder:
         """Get all bindings."""
         return self._bindings.copy()
 
-    def reset(self):
+    def reset(self) -> Self:
         """Reset all UPDATE settings."""
         self._table = None
         self._sets = {}
