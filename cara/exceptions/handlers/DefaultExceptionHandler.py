@@ -62,6 +62,24 @@ class DefaultExceptionHandler:
     # internals (SQL errors, file paths, lib stack frames) to the caller.
     _GENERIC_5XX_MESSAGE = "Internal server error"
 
+    # Machine-readable ``type`` tokens for the generic-error path
+    # (exceptions that don't define ``to_dict``). The contract: every
+    # error response carries a stable ``type`` string the client can
+    # branch on, so storefront / SDK code doesn't have to substring-
+    # match human-readable ``error`` text. Typed framework exceptions
+    # (``AuthorizationException`` et al.) keep emitting their own
+    # specific ``type`` via their ``to_dict``; this default only
+    # covers the catch-all path.
+    #
+    # 5xx in production is deliberately collapsed to ``internal_error``
+    # — same redaction principle as ``_GENERIC_5XX_MESSAGE``: leaking
+    # ``ValueError`` / ``IntegrityError`` / ``KeyError`` class names
+    # to public callers gives away implementation detail. 4xx uses
+    # ``request_error`` as the catch-all when the exception class
+    # doesn't define a more specific type.
+    _GENERIC_5XX_TYPE = "internal_error"
+    _GENERIC_4XX_TYPE = "request_error"
+
     def format_error(self, exception: Exception, status_code: int) -> dict[str, Any]:
         """Format general errors.
 
@@ -91,23 +109,43 @@ class DefaultExceptionHandler:
         # or filesystem paths. 4xx messages are intentional (validation /
         # not-found / forbidden) and stay verbatim so callers can act.
         if status_code >= 500 and not debug:
-            response = {"error": self._GENERIC_5XX_MESSAGE}
+            response: dict[str, Any] = {"error": self._GENERIC_5XX_MESSAGE}
         else:
             response = {"error": str(exception)}
 
-        if debug:
+        # Always include a machine-readable ``type``. Pre-fix the
+        # generic-error path emitted ``{error: "..."}`` only — storefront
+        # / SDK code had to substring-match the human message to branch
+        # on error class. ``type`` is now part of the response contract
+        # everywhere, with 5xx-in-prod collapsed to ``internal_error``
+        # so we don't leak the actual exception class to public callers
+        # (mirrors the ``_GENERIC_5XX_MESSAGE`` redaction policy).
+        if status_code >= 500 and not debug:
+            response["type"] = self._GENERIC_5XX_TYPE
+        elif debug:
+            # Debug + 5xx OR debug + 4xx: emit the raw class name as the
+            # ``type``. Useful tag for the storefront's error UX during
+            # development; matches the existing debug-mode behaviour.
             response["type"] = exception.__class__.__name__
+        else:
+            # 4xx in production. Don't leak the class name — emit the
+            # generic 4xx token. Typed exceptions like
+            # ``AuthorizationException`` define their own ``to_dict``
+            # and never reach this branch, so they keep their specific
+            # token ("authorization_error", etc.).
+            response["type"] = self._GENERIC_4XX_TYPE
+
+        if debug and status_code >= 500:
             # Only attach diagnostic stack/file/line for genuine 5xx
             # faults. 4xx responses are documented application
             # outcomes and should stay clean even when debug is on.
-            if status_code >= 500:
-                response.update(
-                    {
-                        "file": self.get_exception_file(exception),
-                        "line": self.get_exception_line(exception),
-                        "trace": self.get_trace(exception),
-                    }
-                )
+            response.update(
+                {
+                    "file": self.get_exception_file(exception),
+                    "line": self.get_exception_line(exception),
+                    "trace": self.get_trace(exception),
+                }
+            )
 
         return response
 
