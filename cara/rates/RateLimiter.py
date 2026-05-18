@@ -6,7 +6,6 @@ request limits per key within a time window. It supports named limiters (Laravel
 for flexible per-user, per-endpoint rate limiting.
 """
 
-import time
 from typing import Callable, Optional, Tuple
 
 from cara.facades import Cache

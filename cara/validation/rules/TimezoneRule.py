@@ -8,7 +8,10 @@ try:
     from zoneinfo import ZoneInfo, available_timezones
 except ImportError:  # py < 3.9 fallback (shouldn't hit in this codebase)
     ZoneInfo = None  # type: ignore
-    available_timezones = lambda: set()  # type: ignore
+
+    def available_timezones() -> set:  # type: ignore[no-redef]
+        """Fallback when ``zoneinfo`` isn't on the import path."""
+        return set()
 
 
 class TimezoneRule(BaseRule):

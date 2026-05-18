@@ -722,7 +722,7 @@ class {class_name}(Migration):
         # We look for the blank line between up() body end and down() def.
         up_view_block = "\n".join(view_up_lines)
         migration_content = migration_content.replace(
-            f'\n    def down(self):',
+            '\n    def down(self):',
             f'{up_view_block}\n\n    def down(self):',
         )
 

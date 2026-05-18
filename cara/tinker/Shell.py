@@ -495,7 +495,6 @@ class Shell:
         """Start IPython shell with enhanced autocomplete."""
         try:
             from IPython import embed
-            from IPython.terminal.interactiveshell import TerminalInteractiveShell
 
             # Configure IPython with custom completers
             self._setup_ipython_completers()
@@ -508,7 +507,6 @@ class Shell:
         """Setup custom autocompletion for Cara framework."""
         try:
             from IPython import get_ipython
-            from IPython.core.completer import IPCompleter
 
             # Get IPython instance
             ip = get_ipython()

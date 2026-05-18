@@ -6,7 +6,7 @@ If the client exceeds the limit, returns a 429 Response with appropriate headers
 knows when to retry. Otherwise, adds rate-limit info in response headers.
 """
 
-from typing import Callable, Optional
+from typing import Callable
 
 from cara.facades import Log, RateLimiter
 from cara.http import Request, Response

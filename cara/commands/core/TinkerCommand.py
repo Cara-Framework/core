@@ -35,10 +35,20 @@ class TinkerCommand(CommandBase):
         """Handle Tinker shell startup with enhanced options."""
         self.info("🔧 Starting Cara Tinker...")
 
-        try:
-            # Import tinker components
-            from cara.tinker import Repl, ScriptRunner, Shell
+        # ``cara.tinker`` is an optional install — probe for it
+        # without importing the symbols (Repl / ScriptRunner / Shell
+        # are instantiated inside the per-mode helpers below, so a
+        # top-level ``from cara.tinker import ...`` here would import
+        # the symbols but never use them). ``find_spec`` answers the
+        # availability question without the unused-import noise.
+        import importlib.util
 
+        if importlib.util.find_spec("cara.tinker") is None:
+            self.error("❌ Tinker not available: cara.tinker is not installed")
+            self.error("💡 Make sure Tinker package is properly installed")
+            return
+
+        try:
             # Handle different execution modes
             if execute:
                 self._execute_single_command(execute)
@@ -46,10 +56,6 @@ class TinkerCommand(CommandBase):
                 self._execute_file(file)
             else:
                 self._start_interactive_shell(include)
-
-        except ImportError as e:
-            self.error(f"❌ Tinker not available: {e}")
-            self.error("💡 Make sure Tinker package is properly installed")
         except Exception as e:
             self.error(f"❌ Tinker error: {e}")
             if self.option("verbose"):

@@ -1257,7 +1257,9 @@ class Collection(Macroable):
         if callable(key):
             grouper = key
         else:
-            grouper = lambda x: self._data_get(x, key)
+            def grouper(x):
+                """Resolve the group key from ``x`` via dotted-path lookup."""
+                return self._data_get(x, key)
 
         results = {}
 

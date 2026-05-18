@@ -35,7 +35,18 @@ def _build_chain(job, handler: Callable) -> Callable:
     chain = handler
     for mw in reversed(middleware_list):
         prev = chain
-        chain = lambda j, m=mw, p=prev: m.handle(j, p)
+
+        def _link(j: Any, m: Any = mw, p: Callable = prev) -> Any:
+            """One link in the middleware chain — invokes ``m.handle(job, next)``.
+
+            ``m`` and ``p`` are pinned via default args so each loop
+            iteration captures the current ``mw`` / ``prev`` rather than
+            the loop's last-assigned values (the closure-over-loop-var bug
+            ``lambda`` invites here).
+            """
+            return m.handle(j, p)
+
+        chain = _link
     return chain
 
 

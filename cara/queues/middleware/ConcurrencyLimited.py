@@ -19,7 +19,7 @@ Usage:
 
 import asyncio
 import time
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 
 class ConcurrencyLimited:
