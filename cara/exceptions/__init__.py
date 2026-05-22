@@ -102,6 +102,7 @@ from .types.eloquent import (
 )
 from .types.encryption import EncryptionException
 from .types.event import (
+    EventDispatchCycleException,
     EventNameConflictException,
     ListenerNotFoundException,
 )
@@ -207,6 +208,7 @@ __all__ = [
     "EloquentMultipleRecordsFoundException",
     "EloquentQueryException",
     "EncryptionException",
+    "EventDispatchCycleException",
     "EventNameConflictException",
     "ExceptionProvider",
     "GenericContainerException",

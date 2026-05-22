@@ -14,12 +14,22 @@ Supports:
 import asyncio
 import inspect
 from collections.abc import Callable
-from threading import Lock
+from contextvars import ContextVar
+from threading import RLock
 
 from cara.events.contracts import Event, Listener
-from cara.exceptions import EventNameConflictException
+from cara.exceptions import EventDispatchCycleException, EventNameConflictException
 from cara.facades import Log, Queue
 from cara.queues.contracts import ShouldQueue
+
+# Per-task stack of event names currently being dispatched. Used to
+# detect re-entrant dispatch of an event whose handler is still on
+# the stack, which would otherwise recurse until the Python stack
+# overflows. ContextVar (not threadlocal) so the chain follows the
+# asyncio task that drives dispatch, including nested ``await``s.
+_dispatch_stack: ContextVar[tuple[str, ...]] = ContextVar(
+    "cara_event_dispatch_stack", default=()
+)
 
 
 class EventSubscriber:
@@ -86,7 +96,11 @@ class Event:
         self._wildcard_listeners: dict[str, list[Listener]] = {}
         # Keep track of registered event names to avoid conflicts
         self._registered_events: dict[str, type[Event]] = {}
-        self._lock = Lock()
+        # Reentrant: ``dispatch`` snapshots listeners while holding the
+        # lock and then calls ``_get_matching_wildcard_listeners``,
+        # which also acquires for its own iteration. A plain ``Lock``
+        # would deadlock the second acquire on the same thread.
+        self._lock = RLock()
 
     @classmethod
     def _resolve_application(cls):
@@ -208,8 +222,9 @@ class Event:
         Returns:
             True if there are listeners, False otherwise
         """
-        if event_name in self._listeners and self._listeners[event_name]:
-            return True
+        with self._lock:
+            if event_name in self._listeners and self._listeners[event_name]:
+                return True
         if self._get_matching_wildcard_listeners(event_name):
             return True
         return False
@@ -237,18 +252,53 @@ class Event:
         else:
             event_name = event.__class__.__name__.lower()
 
-        # Get direct listeners for this event name
-        direct_listeners = self._listeners.get(event_name, []).copy()
+        # Cycle guard. If this same event name is already in flight on
+        # the current task, a listener somewhere re-dispatched it —
+        # left alone, this recurses until the Python stack overflows.
+        # We raise instead so the responsible listener fails loudly
+        # rather than crashing the whole process.
+        stack = _dispatch_stack.get()
+        if event_name in stack:
+            chain = " -> ".join((*stack, event_name))
+            raise EventDispatchCycleException(
+                f"Event dispatch cycle detected for '{event_name}'. Chain: {chain}"
+            )
 
-        # Get wildcard listeners that match this event name
-        wildcard_listeners = self._get_matching_wildcard_listeners(event_name)
+        # Snapshot direct + wildcard listeners under the lock so a
+        # concurrent ``subscribe()`` from another thread cannot mutate
+        # the underlying lists while we iterate. Without the lock,
+        # ``_get_matching_wildcard_listeners`` walks
+        # ``_wildcard_listeners.items()`` directly and can raise
+        # ``RuntimeError: dictionary changed size during iteration``.
+        with self._lock:
+            direct_listeners = list(self._listeners.get(event_name, []))
+            wildcard_listeners = self._get_matching_wildcard_listeners(event_name)
 
-        # Combine all listeners
-        all_listeners = direct_listeners + wildcard_listeners
+        # Dedup by listener identity so a listener subscribed to BOTH
+        # a specific event name AND a wildcard that matches it fires
+        # exactly once. Insertion order is preserved (direct first,
+        # then wildcards) so existing ordering guarantees hold.
+        seen: set[int] = set()
+        all_listeners: list[Listener] = []
+        for _lst in (*direct_listeners, *wildcard_listeners):
+            _ident = id(_lst)
+            if _ident in seen:
+                continue
+            seen.add(_ident)
+            all_listeners.append(_lst)
 
         if not all_listeners:
             return
 
+        token = _dispatch_stack.set((*stack, event_name))
+        try:
+            await self._invoke_listeners(event, all_listeners)
+        finally:
+            _dispatch_stack.reset(token)
+
+    async def _invoke_listeners(
+        self, event: Event, all_listeners: list[Listener]
+    ) -> None:
         for listener in all_listeners:
             if hasattr(event, "is_propagation_stopped") and event.is_propagation_stopped:
                 break
@@ -349,11 +399,12 @@ class Event:
         Returns:
             List of listeners matching the wildcard patterns
         """
-        matching_listeners = []
+        matching_listeners: list[Listener] = []
 
-        for pattern, listeners in self._wildcard_listeners.items():
-            if self._matches_wildcard(event_name, pattern):
-                matching_listeners.extend(listeners)
+        with self._lock:
+            for pattern, listeners in self._wildcard_listeners.items():
+                if self._matches_wildcard(event_name, pattern):
+                    matching_listeners.extend(listeners)
 
         return matching_listeners
 

@@ -51,24 +51,43 @@ class HandleCors(Middleware):
         """
         Handle CORS request (Laravel style).
 
-        Args:
-            request: The HTTP request
-            next_handler: Next middleware/handler in chain
-
-        Returns:
-            Response: CORS-enabled response
+        CORS headers MUST be applied even when the inner chain raises.
+        Browsers enforce the same-origin policy regardless of HTTP
+        status — a 500 or 401 without ``Access-Control-Allow-Origin``
+        is opaque to the JS client (the fetch promise rejects with a
+        generic "CORS error" and the real status is unreachable). We
+        therefore wrap ``next_handler`` in try/except, attach headers
+        to whatever response object is in flight, and re-raise so the
+        framework's exception handler still produces the body it
+        would have produced. If the exception carries no Response
+        (i.e. a raw Python exception), we fall back to building a
+        500 response just so headers have somewhere to live; the
+        outer handler can replace the body but the headers will
+        already be set.
         """
         # Handle preflight OPTIONS requests
         if request.method.upper() == "OPTIONS":
             return self._handle_preflight(request)
 
-        # Process request normally
-        response = await next_handler(request)
-
-        # Add CORS headers to response
-        self._add_cors_headers(request, response)
-
-        return response
+        response = None
+        try:
+            response = await next_handler(request)
+            return response
+        except Exception as exc:
+            # Look for a response attached to the exception (framework
+            # convention: HTTP-shaped exceptions carry ``.response``).
+            response = getattr(exc, "response", None)
+            raise
+        finally:
+            if response is not None:
+                try:
+                    self._add_cors_headers(request, response)
+                except Exception:
+                    # Header application must never mask the primary
+                    # exception path. Browsers handle missing CORS
+                    # headers gracefully (visible CORS error) — far
+                    # better than losing the original failure cause.
+                    pass
 
     def _handle_preflight(self, request: Request) -> Response:
         """Handle OPTIONS preflight request."""

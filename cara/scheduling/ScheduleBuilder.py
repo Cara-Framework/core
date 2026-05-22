@@ -105,8 +105,10 @@ class ScheduleBuilder:
         """
         Prevent this scheduled task from overlapping executions (Laravel-style).
 
-        Uses a lock file or cache lock to ensure only one instance runs at a time.
-        If a previous execution is still running, the current execution is skipped.
+        Uses a distributed cache lock (keyed on the scheduled identifier) so
+        only one instance runs at a time across every process that boots the
+        scheduler. If a previous execution is still running when the trigger
+        fires, the current execution is skipped.
 
         Args:
             timeout: Lock timeout in seconds (default: 24 hours)
@@ -117,7 +119,13 @@ class ScheduleBuilder:
         Returns:
             self for fluent interface
         """
+        # Both flags MUST land in ``options`` — that dict is what the driver
+        # actually sees. Stashing them only on ``self`` made this a no-op for
+        # years: APScheduler ran the bare callback with no lock, so two
+        # services pods firing the same cron at the same wall-clock minute
+        # both executed in parallel.
         self._without_overlapping = True
+        self.options["without_overlapping"] = True
         self.options["lock_timeout"] = timeout
         return self
 

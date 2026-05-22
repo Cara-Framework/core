@@ -27,11 +27,29 @@ class ResponseFactory:
         """
         Initialize ResponseFactory with BaseResponse.
 
+        Reuses the BaseResponse's existing ``HeaderManager`` when present
+        so the "content-type was set explicitly" flag is tracked on the
+        same instance ``Response._finalize_response`` later inspects.
+        Creating a second HeaderManager over the same HeaderBag (as the
+        original code did) split that flag across two objects: writing
+        the JSON content-type via the factory flipped the factory's
+        flag, but ``_finalize_response`` looked at the Response's flag
+        (still False) and ran ``ContentTypeDetector`` over the body. For
+        small responses the detector re-detected ``application/json`` so
+        nobody noticed — but ``CompressResponses`` middleware swapped
+        ``self.content`` for gzip bytes whose binary content matched the
+        very loose CSS heuristic, and the explicit JSON header was
+        overwritten with ``text/css`` on the wire.
+
         Args:
             base_response: BaseResponse instance to work with
         """
         self.response = base_response
-        self.headers = HeaderManager(base_response.header_bag)
+        existing = getattr(base_response, "headers", None)
+        self.headers = (
+            existing if isinstance(existing, HeaderManager)
+            else HeaderManager(base_response.header_bag)
+        )
 
     # =============================================================================
     # EXPLICIT CONTENT-TYPE METHODS (Laravel-style - Priority)

@@ -276,8 +276,14 @@ class ApiKeyGuard(Guard):
 
         try:
             cache_key = f"api_key_rate_limit:{api_key}"
-            current_count = Cache.get(cache_key, 0)
-            Cache.put(cache_key, current_count + 1, self.rate_limit_window)
+            # Atomic INCR — the previous ``get`` + ``put`` was a TOCTOU
+            # race: two concurrent requests both read the same count and
+            # both wrote back ``count+1``, losing one increment. Under N
+            # parallel requests the counter undercounted by up to N-1,
+            # letting callers exceed the configured budget. ``increment``
+            # is backed by Redis INCRBY (atomic) and the file driver
+            # emulates with a per-key lock — both safe under concurrency.
+            Cache.increment(cache_key, 1, self.rate_limit_window)
         except Exception as exc:
             # Rate limiting degraded — log so operators notice, but don't
             # block the request.  Silent pass here previously hid cache

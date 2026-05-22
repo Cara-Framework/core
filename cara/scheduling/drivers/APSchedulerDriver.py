@@ -69,6 +69,65 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
     return _sync_wrapped
 
 
+def _wrap_without_overlapping(
+    identifier: str, callback: Callable, lock_timeout: int
+) -> Callable:
+    """Wrap ``callback`` so concurrent fires across processes are serialized.
+
+    APScheduler's own ``max_instances=1`` only guards same-process re-entry;
+    a second pod (or a second worker that booted the scheduler) sees a
+    fresh in-memory state and happily fires the same job at the same
+    wall-clock minute. The ``Cache.add`` primitive in Cara is atomic
+    (Redis ``SET NX`` underneath) so it gives us a distributed mutex
+    without pulling in a new dependency.
+
+    On contention the run is *skipped*, not queued — matching Laravel's
+    ``withoutOverlapping`` semantics. The lock TTL caps tail damage if the
+    holder crashes before releasing.
+    """
+    from cara.facades import Cache as _Cache
+
+    lock_key = f"scheduler:lock:{identifier}"
+
+    if inspect.iscoroutinefunction(callback):
+
+        async def _async_locked(*a, **kw):
+            if not _Cache.add(lock_key, "1", lock_timeout):
+                Log.info(
+                    f"Scheduled job '{identifier}' skipped — previous run still in flight.",
+                    category="scheduler",
+                )
+                return None
+            try:
+                return await callback(*a, **kw)
+            finally:
+                try:
+                    _Cache.forget(lock_key)
+                except Exception:
+                    pass
+
+        _async_locked.__name__ = getattr(callback, "__name__", f"locked_{identifier}")
+        return _async_locked
+
+    def _sync_locked(*a, **kw):
+        if not _Cache.add(lock_key, "1", lock_timeout):
+            Log.info(
+                f"Scheduled job '{identifier}' skipped — previous run still in flight.",
+                category="scheduler",
+            )
+            return None
+        try:
+            return callback(*a, **kw)
+        finally:
+            try:
+                _Cache.forget(lock_key)
+            except Exception:
+                pass
+
+    _sync_locked.__name__ = getattr(callback, "__name__", f"locked_{identifier}")
+    return _sync_locked
+
+
 # ── Error listener ────────────────────────────────────────────────────
 
 
@@ -163,6 +222,14 @@ class APSchedulerDriver(Scheduling):
 
         trigger = self._build_trigger(schedule_spec)
         instrumented = _instrument_scheduled(identifier, callback)
+        if isinstance(options, dict) and options.get("without_overlapping"):
+            # Lock TTL falls back to one day — matches the
+            # ``ScheduleBuilder.without_overlapping`` default and prevents a
+            # crashed holder from blocking the slot forever.
+            lock_timeout = int(options.get("lock_timeout", 86400))
+            instrumented = _wrap_without_overlapping(
+                identifier, instrumented, lock_timeout
+            )
         job_opts = (
             options.get("apscheduler_job_options", {})
             if isinstance(options, dict)

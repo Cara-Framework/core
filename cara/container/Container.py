@@ -800,7 +800,13 @@ class Container:
                     raw_name = ann.split("|", 1)[0].strip()
                     found = func_globals.get(raw_name)
                     if found is None:
-                        for bound_key in self._bindings:
+                        # The container's binding map is ``self.objects``;
+                        # the previous ``self._bindings`` attribute does
+                        # not exist on this class and would raise
+                        # AttributeError the moment an annotation failed
+                        # to eval (e.g. a closure with a string-form type
+                        # under ``from __future__ import annotations``).
+                        for bound_key in self.objects:
                             if (
                                 inspect.isclass(bound_key)
                                 and bound_key.__name__ == raw_name

@@ -164,9 +164,25 @@ class MakesIdempotentBase:
         """Return job parameters for idempotency key generation.
 
         Default behaviour: include every public, non-callable instance
-        attribute (excluding queue-runner internals). Subclasses
-        commonly override to pin a smaller / different set.
+        attribute (excluding queue-runner internals).
+
+        Subclasses can pin the dedup surface by setting a class-level
+        ``idempotency_params`` tuple — only the listed attributes
+        contribute to the hash. This is the right shape when a job's
+        identity is "what entity does this touch" rather than "what
+        bag of optional kwargs was it dispatched with":
+
+            class ConsolidateProductJob(BaseJob):
+                idempotency_params = ("listing_id",)
+
+        Without the whitelist, ``ConsolidateProductJob(listing_id=42)``
+        and ``ConsolidateProductJob(listing_id=42, standardized_data={...})``
+        produce different keys, both acquire different locks, and both
+        write to the same product row concurrently — the exact race
+        the lock exists to prevent.
         """
+        whitelist = getattr(self, "idempotency_params", None)
+
         params: dict[str, Any] = {}
         for key, value in vars(self).items():
             if key.startswith("_"):
@@ -174,6 +190,8 @@ class MakesIdempotentBase:
             if key in {"queue", "routing_key", "attempts", "job_id"}:
                 continue
             if callable(value):
+                continue
+            if whitelist is not None and key not in whitelist:
                 continue
             normalized = self._normalize_param_value(value)
             if normalized is not None:

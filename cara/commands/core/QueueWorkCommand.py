@@ -857,7 +857,26 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             matched = {q for q in discovered if _fnmatch.fnmatch(q, pattern)}
             static |= matched
 
-        return sorted(static)
+        # Sort by priority rank, NOT alphabetically. The worker polls this
+        # list head-first in ``_process_queue_cycle`` and only restarts
+        # from index 0 after a job runs, so alphabetical order
+        # (critical, default, high, low) starved high-priority jobs behind
+        # the default queue. Names that don't carry a known suffix sort
+        # alphabetically *after* the priority-bearing queues to preserve
+        # deterministic ordering.
+        return sorted(static, key=lambda q: self._priority_sort_key(q))
+
+    @staticmethod
+    def _priority_sort_key(queue_name: str) -> tuple[int, str]:
+        """Sort key that puts higher-priority queues first.
+
+        Rank is derived from the suffix after the final dot; unknown or
+        missing suffixes sort after every known priority and then
+        alphabetically so the order is stable across runs.
+        """
+        rank = {"critical": 0, "high": 1, "default": 2, "low": 3}
+        suffix = queue_name.rsplit(".", 1)[-1]
+        return (rank.get(suffix, 99), queue_name)
 
     def _discover_rabbitmq_queues(self) -> list:
         """Fetch existing queue names from RabbitMQ Management API.

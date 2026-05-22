@@ -595,7 +595,15 @@ class BaseGrammar:
                     keyword = ""
                 else:
                     keyword = " " + self.first_where_string()
-            elif hasattr(where, "keyword") and where.keyword == "or":
+            elif (
+                hasattr(where, "keyword")
+                and isinstance(where.keyword, str)
+                and where.keyword.lower() == "or"
+            ):
+                # Case-insensitive: WhereBuilder emits "OR" while QueryBuilder
+                # emits "or". Both must route to the OR branch — a strict
+                # ``== "or"`` check silently downgraded every WhereBuilder
+                # ``or_where`` to AND, producing wrong result sets.
                 keyword = " " + self.or_where_string()
             else:
                 keyword = " " + self.additional_where_string()

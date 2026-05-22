@@ -7,6 +7,7 @@ Modern, clean implementation for RabbitMQ-based job queue management.
 import json
 import logging
 import pickle
+import random
 import threading
 import uuid
 from typing import Any
@@ -47,6 +48,13 @@ class AMQPDriver(HasColoredOutput, Queue):
     # queue up.
     DEFAULT_MAX_ATTEMPTS = 3
     DEFAULT_RETRY_BACKOFF_SECONDS = (1, 5, 30)
+    # Fractional ± jitter applied to every retry delay. Without it,
+    # N workers that all failed on the same downstream blip (DB
+    # restart, broker reconnect, scrape.do 5xx) would all retry at
+    # the same second, recreating the spike that caused the original
+    # failure. 25 % spread is enough to smear the recovery wave
+    # while staying inside the schedule's intent.
+    DEFAULT_RETRY_JITTER_FRACTION = 0.25
 
     def __init__(self, application, options: dict[str, Any]):
         super().__init__(module="queue.amqp")
@@ -294,6 +302,87 @@ class AMQPDriver(HasColoredOutput, Queue):
         # Schedule retry with delay
         return self.later(delay_seconds, job, retry_opts)
 
+    @staticmethod
+    def _drive_to_completion(result: Any) -> Any:
+        """Run a coroutine return value to completion.
+
+        Pika's ``BlockingConnection`` callback (``on_message``) is
+        synchronous. When the job's ``handle`` is ``async def``,
+        ``Container.call`` returns a coroutine — we must drive it
+        here or it gets garbage-collected un-run and the broker is
+        told (by ``basic_ack``) that the work is done.
+
+        Non-coroutine return values pass through unchanged so this
+        helper is safe to call from the hot path regardless of
+        whether the bound callback is sync or async.
+        """
+        import asyncio
+        import inspect
+
+        if not inspect.iscoroutine(result):
+            return result
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # Normal path: pika's consumer thread has no asyncio
+            # loop. ``asyncio.run`` creates one for the duration of
+            # this single job (matches QueueWorkCommand).
+            return asyncio.run(result)
+
+        # An asyncio loop is already running on this thread, which
+        # means someone wired the AMQP consumer into an async
+        # context. We can't nest ``asyncio.run`` and the pika
+        # callback can't yield, so drive the coroutine on a fresh
+        # loop in a dedicated thread and block until it finishes —
+        # awkward, but the only correct option short of refusing
+        # the call entirely.
+        import threading
+
+        container: dict[str, Any] = {}
+
+        def _runner() -> None:
+            try:
+                container["value"] = asyncio.run(result)
+            except BaseException as exc:  # noqa: BLE001 — re-raised below
+                container["error"] = exc
+
+        worker = threading.Thread(target=_runner, daemon=True)
+        worker.start()
+        worker.join()
+        if "error" in container:
+            raise container["error"]
+        return container.get("value")
+
+    def _apply_retry_jitter(self, base_delay: int, instance: Any) -> int:
+        """Add full-jitter spread to a retry delay.
+
+        A job class can override the spread with a
+        ``retry_jitter_fraction`` attribute (0 disables jitter).
+        Floor is always ``1s`` so callers don't accidentally retry
+        immediately when ``base_delay`` is small and the jitter swing
+        rounds the result down to zero. Floor is also bounded ABOVE
+        by ``base_delay + jitter_max`` so a misconfigured fraction
+        never inflates the wait time beyond the schedule's intent.
+        """
+        if base_delay <= 0:
+            return 0
+        fraction = getattr(
+            instance, "retry_jitter_fraction", self.DEFAULT_RETRY_JITTER_FRACTION
+        )
+        try:
+            fraction = float(fraction)
+        except (TypeError, ValueError):
+            fraction = self.DEFAULT_RETRY_JITTER_FRACTION
+        if fraction <= 0:
+            return base_delay
+        # Clamp the spread so a bad config (1.0+) doesn't double the
+        # base delay or push the lower end below zero.
+        fraction = min(fraction, 0.9)
+        swing = base_delay * fraction
+        jitter = random.uniform(-swing, swing)
+        return max(1, int(round(base_delay + jitter)))
+
     def _handle_failed_message(
         self,
         instance: Any,
@@ -394,13 +483,14 @@ class AMQPDriver(HasColoredOutput, Queue):
         if not isinstance(backoff_schedule, (list, tuple)) or not backoff_schedule:
             backoff_schedule = self.DEFAULT_RETRY_BACKOFF_SECONDS
         idx = min(attempts_made - 1, len(backoff_schedule) - 1)
-        delay_seconds = int(backoff_schedule[idx])
+        base_delay = int(backoff_schedule[idx])
+        delay_seconds = self._apply_retry_jitter(base_delay, instance)
 
         Log.info(
             f"Job {instance.__class__.__name__} attempt "
             f"{attempts_made}/{max_attempts} failed "
             f"({type(exc).__name__}: {exc}). Retrying in "
-            f"{delay_seconds}s."
+            f"{delay_seconds}s (base {base_delay}s + jitter)."
         )
 
         retry_options = {
@@ -613,9 +703,20 @@ class AMQPDriver(HasColoredOutput, Queue):
                     )
 
                 if hasattr(self.application, "call"):
-                    self.application.call(method_to_call, *args)
+                    result = self.application.call(method_to_call, *args)
                 else:
-                    method_to_call(*args) if args else method_to_call()
+                    result = method_to_call(*args) if args else method_to_call()
+
+                # ``BaseJob.handle`` is ``async def``. Container.call
+                # returns the bare coroutine — pre-fix the AMQP
+                # consumer dropped it on the floor (no await, no
+                # run_until_complete) so every async job consumed
+                # through this driver was silently lost while the
+                # ``basic_ack`` below cheerfully told the broker the
+                # work was done. Matches the pattern in
+                # ``QueueWorkCommand.process_message`` which is the
+                # production worker entry-point.
+                self._drive_to_completion(result)
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 self._dispatch_batch_completion(instance, None)

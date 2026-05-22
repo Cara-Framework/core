@@ -20,6 +20,15 @@ class InRule(BaseRule):
         if value is None:
             return False
 
+        # Reject non-scalar inputs explicitly. Without this guard, a
+        # caller could submit ``["apple"]`` and the rule would compare
+        # ``str(["apple"])`` (i.e. ``"['apple']"``) against the
+        # allowlist — a confusing silent fail. Worse, ``str(value)``
+        # against an attacker-controlled object can hit ``__str__`` /
+        # ``__repr__`` side effects.
+        if isinstance(value, (list, tuple, set, dict)):
+            return False
+
         in_values = params.get("in")
         if not in_values:
             return False

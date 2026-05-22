@@ -6,6 +6,7 @@ Clean, focused JWT authentication with all functionality in a single class.
 
 import hashlib
 import time
+from contextvars import ContextVar
 from typing import Any
 
 from cara.authentication.contracts import Authenticatable, Guard
@@ -17,6 +18,16 @@ from cara.exceptions import (
     UserNotFoundException,
 )
 from cara.facades import Cache
+
+# Per-request cache for the resolved user / consumed token. Lives in a
+# ContextVar so each asyncio task (one per HTTP request / WS connection)
+# gets its own slot. The guard itself is a process-singleton — without
+# ContextVar isolation, ``self._user = userA`` from request A is still
+# truthy when request B arrives mid-await, and request B's call to
+# ``user()`` returns Alice instead of validating B's own Authorization
+# header (cross-request identity leak under concurrency).
+_REQUEST_USER: ContextVar[Any] = ContextVar("jwt_guard_user", default=None)
+_REQUEST_TOKEN: ContextVar[Any] = ContextVar("jwt_guard_token", default=None)
 
 # Token type claims — tokens carry `typ` so an access token can't be
 # swapped in where a refresh token is required (and vice versa).
@@ -77,9 +88,29 @@ class JWTGuard(Guard):
         self.user_model = user_model
         self._user_class = self._load_user_class(user_model)
 
-        # Authentication state
-        self._user: Authenticatable | None = None
-        self._token: str | None = None
+        # Authentication state is stored in module-level ContextVars
+        # (see top of file). ``self._user`` / ``self._token`` are
+        # exposed as descriptors so existing call sites — and the
+        # ``ResetAuth`` terminable middleware that clears them — keep
+        # working unchanged, but the underlying storage is now scoped
+        # per-asyncio-task. Concurrent requests no longer share a
+        # cached identity through this singleton guard instance.
+
+    @property
+    def _user(self) -> Any | None:
+        return _REQUEST_USER.get()
+
+    @_user.setter
+    def _user(self, value: Any | None) -> None:
+        _REQUEST_USER.set(value)
+
+    @property
+    def _token(self) -> str | None:
+        return _REQUEST_TOKEN.get()
+
+    @_token.setter
+    def _token(self, value: str | None) -> None:
+        _REQUEST_TOKEN.set(value)
 
     def check(self) -> bool:
         """Check if the current request is authenticated."""
@@ -186,6 +217,46 @@ class JWTGuard(Guard):
     def blacklist_token(self, token: str) -> None:
         """Public wrapper around _blacklist_token for external callers."""
         self._blacklist_token(token)
+
+    def consume_refresh_token(self, token: str) -> bool:
+        """Atomically claim a refresh token for one-time use.
+
+        Returns ``True`` if the caller wins the slot, ``False`` if the
+        token has already been consumed (or is already blacklisted).
+
+        The ``blacklist_token`` + later ``_is_blacklisted`` pair is a
+        racy combo when used as one-time-use enforcement: two parallel
+        ``/auth/refresh`` requests both pass ``validate_refresh_token``
+        (blacklist hasn't been written yet), then both write — and
+        both walk away with fresh token pairs. The fix is to make
+        "is this the first use?" and "mark used" a single atomic op.
+
+        ``Cache.add`` does exactly that: under Redis it's a ``SET ...
+        NX EX <ttl>`` round-trip, so only one caller gets a True
+        return for a given key. We use the blacklist key namespace so
+        a token that was burned via ``logout`` or admin revocation
+        still loses the race here.
+        """
+        if not self.blacklist_enabled:
+            return True
+        try:
+            payload = jwt.decode(
+                token,
+                self.secret,
+                algorithms=[self.algorithm],
+                options={"verify_exp": False},
+            )
+            exp = payload.get("exp", 0)
+            ttl = max(0, exp - int(time.time()) + self.blacklist_grace_period)
+            if ttl <= 0:
+                # Token already past its natural lifetime; refuse rather
+                # than write a zero-TTL key that vanishes immediately.
+                return False
+            return bool(
+                Cache.add(f"jwt_blacklist:{_hash_token(token)}", True, ttl)
+            )
+        except Exception:
+            return False
 
     def validate_refresh_token(self, token: str) -> bool:
         """Validate a refresh token specifically - ignores expiration for refresh window check."""

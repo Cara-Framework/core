@@ -48,17 +48,34 @@ class MigrationTracker:
 
     # ── Schema bootstrap ──────────────────────────────────────────────
     def ensure_migrations_table(self):
-        """Create migrations table if it doesn't exist."""
-        if not self._table_has_correct_structure():
-            connection = self._get_connection()
-            try:
-                try:
-                    connection.query(f"DROP TABLE IF EXISTS {self.table_name}")
-                except Exception:
-                    pass
-                self._create_migrations_table(connection)
-            finally:
-                _release(connection)
+        """Create migrations table if it doesn't exist.
+
+        Previous implementation DROPPED the table whenever
+        ``_table_has_correct_structure`` returned False. That probe
+        swallows every exception (transient connection blip, lock
+        timeout, replica lag) and reports "structure wrong" — meaning
+        a single network hiccup at startup would erase the entire
+        migration history. We now use ``CREATE TABLE IF NOT EXISTS``
+        and never destroy existing tracker rows. If a real schema
+        mismatch is detected, surface it as an explicit error so the
+        operator can decide whether to migrate the tracker schema
+        themselves rather than auto-deleting their audit trail.
+        """
+        if self._table_exists():
+            if not self._table_has_correct_structure():
+                raise RuntimeError(
+                    f"Migrations table '{self.table_name}' exists but has "
+                    f"an unexpected schema (missing id/migration/batch "
+                    f"columns). Refusing to drop it automatically; "
+                    f"resolve manually to preserve migration history."
+                )
+            return
+
+        connection = self._get_connection()
+        try:
+            self._create_migrations_table(connection)
+        finally:
+            _release(connection)
 
     def _table_exists(self):
         """Check if migrations table exists."""
@@ -89,10 +106,16 @@ class MigrationTracker:
 
         Caller owns the connection lifecycle — do NOT release here.
         """
+        # ``IF NOT EXISTS`` closes the concurrent-bootstrap race: two
+        # workers calling ``ensure_migrations_table`` simultaneously
+        # both see the table missing in ``_table_exists`` (TOCTOU) and
+        # race into ``CREATE TABLE``. Without IF NOT EXISTS, the loser
+        # crashes with "relation already exists" and the migration
+        # sweep aborts.
         driver = self._get_driver_type()
         if driver in ["postgres", "postgresql"]:
             sql = f"""
-            CREATE TABLE {self.table_name} (
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
                 id SERIAL PRIMARY KEY,
                 migration VARCHAR(255) NOT NULL,
                 batch INTEGER NOT NULL,
@@ -101,7 +124,7 @@ class MigrationTracker:
             """
         else:
             sql = f"""
-            CREATE TABLE {self.table_name} (
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 migration VARCHAR(255) NOT NULL,
                 batch INTEGER NOT NULL,

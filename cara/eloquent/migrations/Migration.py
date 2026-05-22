@@ -116,15 +116,26 @@ class Migration:
         if migration == "all":
             self.executor.run_pending_migrations()
         else:
-            # Run specific migration
+            # Run specific migration — must use the same transactional
+            # wrapping as ``run_pending_migrations`` so a crash between
+            # ``up()`` and ``record_migration`` cannot leave the schema
+            # changed but unrecorded (or vice versa). Previously this
+            # path called the two side-by-side with no atomicity,
+            # producing inconsistent state on any mid-flight failure.
             migration_files = self.file_manager.get_migration_files()
             for file_path in migration_files:
                 migration_name = self.file_manager.get_migration_name_from_file(file_path)
                 if migration_name == migration:
                     Log.info(f"Running migration: {migration_name}")
-                    self.executor._run_migration(file_path, "up")
                     batch = self.tracker.get_last_batch_number() + 1
-                    self.tracker.record_migration(migration_name, batch)
+                    transactional = self.executor._migration_is_transactional(file_path)
+                    if transactional:
+                        with DB.transaction():
+                            self.executor._run_migration(file_path, "up")
+                            self.tracker.record_migration(migration_name, batch)
+                    else:
+                        self.executor._run_migration(file_path, "up")
+                        self.tracker.record_migration(migration_name, batch)
                     Log.info(f"Migrated: {migration_name}")
                     break
 
@@ -139,7 +150,12 @@ class Migration:
         if migration == "all":
             self.executor.rollback_last_batch()
         else:
-            # Rollback specific migration
+            # Rollback specific migration — symmetric to the migrate
+            # branch above: ``down()`` and ``remove_migration`` must
+            # commit together. Otherwise a failure between them either
+            # un-applies the schema while leaving the tracker entry
+            # behind, or removes the tracker entry while leaving the
+            # schema intact.
             migration_files = self.file_manager.get_migration_files()
             file_map = {}
             for file_path in migration_files:
@@ -148,8 +164,14 @@ class Migration:
 
             if migration in file_map:
                 Log.info(f"Rolling back: {migration}")
-                self.executor._run_migration(file_map[migration], "down")
-                self.tracker.remove_migration(migration)
+                transactional = self.executor._migration_is_transactional(file_map[migration])
+                if transactional:
+                    with DB.transaction():
+                        self.executor._run_migration(file_map[migration], "down")
+                        self.tracker.remove_migration(migration)
+                else:
+                    self.executor._run_migration(file_map[migration], "down")
+                    self.tracker.remove_migration(migration)
                 Log.info(f"Rolled back: {migration}")
 
         if output and self.command_class:

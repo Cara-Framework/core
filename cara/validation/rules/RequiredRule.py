@@ -14,10 +14,20 @@ class RequiredRule(BaseRule):
     """Validates that a value is not None and not an empty string."""
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        """Check if value is present and not empty."""
+        """Check if value is present and not empty.
+
+        "Empty" means: missing key (None), whitespace-only string, or
+        zero-length collection (list, tuple, set, dict). Without the
+        collection check, an attacker can satisfy ``required|array`` on
+        a field by submitting ``[]`` — the previous implementation only
+        rejected None and empty strings, so empty arrays slipped past
+        every required check on array-typed fields.
+        """
         if value is None:
             return False
         if isinstance(value, str) and value.strip() == "":
+            return False
+        if isinstance(value, (list, tuple, set, dict)) and len(value) == 0:
             return False
         return True
 

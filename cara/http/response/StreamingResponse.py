@@ -28,7 +28,14 @@ class StreamingResponse:
             base_response: BaseResponse instance to work with
         """
         self.response = base_response
-        self.headers = HeaderManager(base_response.header_bag)
+        # Share the Response's HeaderManager so the explicit-content-type
+        # flag isn't split across two instances — see the matching
+        # comment in ResponseFactory.__init__.
+        existing = getattr(base_response, "headers", None)
+        self.headers = (
+            existing if isinstance(existing, HeaderManager)
+            else HeaderManager(base_response.header_bag)
+        )
 
     async def stream(
         self,

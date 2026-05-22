@@ -83,6 +83,13 @@ class WhereBuilder:
         values_collection = Collection(values)
         cleaned_values = values_collection.filter(lambda x: x is not None).all()
 
+        if not cleaned_values:
+            # All values were None — emitting ``IN ()`` is a SQL syntax error
+            # on Postgres/MySQL. NULL never equals anything (including NULL)
+            # in standard SQL, so ``IN (NULL, NULL, …)`` matches nothing
+            # anyway. Collapse to the equivalent tautology.
+            return self.where_raw("1 = 0")
+
         self._wheres.append(
             QueryExpression(
                 column=column,
@@ -99,11 +106,20 @@ class WhereBuilder:
     def where_not_in(self, column: str, values: list[Any]) -> WhereBuilder:
         """Add WHERE NOT IN condition."""
         if not values:
-            # Empty list should match everything
-            return self
+            # Empty exclusion list is almost always a caller bug — e.g.
+            # ``Model.where_not_in('id', external_ids).delete()`` where
+            # ``external_ids`` came back empty. Silently dropping the
+            # clause would turn that into "delete everything". Emit an
+            # explicit always-true predicate so the SQL reflects intent
+            # ("nothing to exclude") and the query is still well-formed.
+            return self.where_raw("1 = 1")
 
         values_collection = Collection(values)
         cleaned_values = values_collection.filter(lambda x: x is not None).all()
+
+        if not cleaned_values:
+            # Same reasoning as ``where_in`` — avoid invalid ``NOT IN ()``.
+            return self.where_raw("1 = 1")
 
         self._wheres.append(
             QueryExpression(
@@ -186,12 +202,21 @@ class WhereBuilder:
     # ===== RAW CONDITIONS =====
 
     def where_raw(self, query: str, bindings: tuple = ()) -> WhereBuilder:
-        """Add raw WHERE condition."""
+        """Add raw WHERE condition.
+
+        ``BaseGrammar.process_wheres`` reads raw SQL from
+        ``expression.column`` (mirroring ``QueryBuilder.where_raw``
+        which uses the column slot for the raw query). Storing the
+        query in ``value`` made every raw predicate emit an empty SQL
+        fragment, so a sentinel like ``where_raw("1 = 0")`` silently
+        produced no predicate — and the supposed "match nothing" guard
+        for ``where_in([])`` quietly fell back to "match everything".
+        """
         self._wheres.append(
             QueryExpression(
-                column="",
+                column=query,
                 equality="",
-                value=query,
+                value=None,
                 value_type="RAW",
                 keyword="AND",
                 raw=True,
