@@ -231,6 +231,7 @@ class ServeCommand(CommandBase):
         self.console.print()
 
         # Start server process
+        process: subprocess.Popen | None = None
         try:
             # Capture subprocess output so we can colorize it
             process = subprocess.Popen(
@@ -251,6 +252,28 @@ class ServeCommand(CommandBase):
             )
         except Exception as e:
             self.error(f"× Failed to start server: {e}")
+        finally:
+            # The monitor only handles KeyboardInterrupt explicitly.
+            # Any other exception leaving the monitor (or any failure
+            # surfaced in the except blocks above) used to leave the
+            # uvicorn child running and the stdout PIPE open — orphan
+            # process pinned to the configured port, blocking the
+            # next ``serve``. Force teardown on the way out.
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                except Exception:
+                    pass
+                if process.stdout is not None:
+                    try:
+                        process.stdout.close()
+                    except Exception:
+                        pass
 
     def _show_routes_compact(self) -> None:
         """Show registered routes in compact format."""

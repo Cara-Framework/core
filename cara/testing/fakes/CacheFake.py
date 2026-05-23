@@ -50,6 +50,20 @@ class CacheFake:
     def has(self, key: str) -> bool:
         return key in self._store
 
+    def ttl(self, key: str) -> int | None:
+        """Mirror of the production ``Cache.ttl`` surface.
+
+        Returns the TTL last associated with ``key`` via ``put`` /
+        ``increment``, or ``None`` when the key is missing or has no
+        expiry. The real Redis driver returns remaining seconds; the
+        fake does not advance wall-clock TTL between writes, so
+        callers that compare against the most-recent write get the
+        same answer in both surfaces.
+        """
+        if key not in self._store:
+            return None
+        return self._ttls.get(key)
+
     def forget(self, key: str) -> bool:
         existed = key in self._store
         self._store.pop(key, None)

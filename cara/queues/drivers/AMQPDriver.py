@@ -590,14 +590,15 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # surface it. Previously logged at INFO and silently filled
                 # the DLQ — ops only learned about job exhaustion by
                 # querying the DB after-the-fact.
+                # NOTE: cara's Log.error() does not accept an ``extra=``
+                # kwarg (TypeError on every call). The structured fields
+                # are folded into the message string instead.
                 Log.error(
                     f"Job dead-lettered after {attempts} attempts: "
-                    f"{job.__class__.__name__} → {dlq_routing_key}",
-                    extra={
-                        "job_class": job.__class__.__name__,
-                        "attempts": attempts,
-                        "dlq_routing_key": dlq_routing_key,
-                    },
+                    f"{job.__class__.__name__} → {dlq_routing_key} "
+                    f"(job_class={job.__class__.__name__}, "
+                    f"attempts={attempts}, "
+                    f"dlq_routing_key={dlq_routing_key})",
                 )
 
                 # Best-effort metric increment so dashboards / Prometheus
@@ -611,18 +612,33 @@ class AMQPDriver(HasColoredOutput, Queue):
                 except Exception:
                     pass
 
-                # Close connection
-                try:
-                    self.channel.close()
-                    self.connection.close()
-                except Exception:
-                    pass
-
             except Exception:
                 Log.error(
                     "Failed to send job to dead letter queue",
                     exc_info=True,
                 )
+            finally:
+                # Pre-fix the close lines lived inside the try block
+                # *after* publish + Log.error. Any exception above
+                # (broker reset, serializer error, even the legacy
+                # ``Log.error(extra=...)`` TypeError) skipped them and
+                # left the thread-local channel/connection bound to a
+                # dead handle. The next call from this thread would
+                # reuse the stale state and either fail again or open
+                # a new connection without closing the old one,
+                # eventually exhausting the broker's connection limit.
+                try:
+                    if self.channel is not None:
+                        self.channel.close()
+                except Exception:
+                    pass
+                try:
+                    if self.connection is not None:
+                        self.connection.close()
+                except Exception:
+                    pass
+                self.channel = None
+                self.connection = None
 
     def consume(self, options: dict[str, Any]) -> None:
         """Consume jobs from RabbitMQ.
@@ -1052,15 +1068,27 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # Remove from dead letter queue
                 self.channel.basic_ack(method.delivery_tag)
 
-            # Close connection
-            try:
-                self.channel.close()
-                self.connection.close()
-            except Exception:
-                pass
-
         except Exception as e:
             Log.error(f"Failed to replay dead letter messages: {e}")
+        finally:
+            # Pre-fix the close lines sat after the loop *inside* the
+            # try block: any exception mid-loop (broker hiccup during
+            # basic_publish / basic_ack) jumped past them and leaked
+            # the channel/connection bound to the thread-local. Drain
+            # the handles unconditionally and clear thread-local state
+            # so the next call opens fresh.
+            try:
+                if self.channel is not None:
+                    self.channel.close()
+            except Exception:
+                pass
+            try:
+                if self.connection is not None:
+                    self.connection.close()
+            except Exception:
+                pass
+            self.channel = None
+            self.connection = None
 
         return replayed
 

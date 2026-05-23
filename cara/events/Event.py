@@ -96,11 +96,31 @@ class Event:
         self._wildcard_listeners: dict[str, list[Listener]] = {}
         # Keep track of registered event names to avoid conflicts
         self._registered_events: dict[str, type[Event]] = {}
+        # Per-topic count of dispatches that fired without any
+        # subscribed listener. ``dispatch`` increments here when
+        # ``has_listeners`` is False at fire time. Operators wrap a
+        # Prometheus counter on top of ``orphan_dispatch_count`` so
+        # a regression (renamed listener, typo'd subscribe topic)
+        # surfaces in dashboards rather than vanishing into the
+        # dispatcher's silent no-op branch.
+        self._orphan_dispatch_counts: dict[str, int] = {}
         # Reentrant: ``dispatch`` snapshots listeners while holding the
         # lock and then calls ``_get_matching_wildcard_listeners``,
         # which also acquires for its own iteration. A plain ``Lock``
         # would deadlock the second acquire on the same thread.
         self._lock = RLock()
+
+    def orphan_dispatch_count(self, event_name: str) -> int:
+        """Return how many times ``event_name`` was dispatched with
+        zero registered listeners since this dispatcher booted.
+
+        Tests and operator dashboards use this to detect events that
+        leak into the void — a common bug shape when a listener is
+        renamed but the ``subscribe()`` call still references the old
+        topic.
+        """
+        with self._lock:
+            return self._orphan_dispatch_counts.get(event_name, 0)
 
     @classmethod
     def _resolve_application(cls):
@@ -252,6 +272,35 @@ class Event:
         else:
             event_name = event.__class__.__name__.lower()
 
+        # Per-event payload validation. Events opt in by declaring
+        # ``REQUIRED_FIELDS`` (or implementing
+        # :meth:`validate_payload`); a non-empty result means the
+        # event is malformed (caller forgot a positional, passed
+        # ``None`` for a typed field, etc.). We log + skip dispatch
+        # rather than raise — the upstream job has already done its
+        # work and may have queued the event for observability only,
+        # so a fire-time raise would back-propagate a failure that
+        # wasn't really there. The warning surfaces the bad payload
+        # exactly once.
+        validator = getattr(event, "validate_payload", None)
+        if callable(validator):
+            try:
+                missing = validator()
+            except Exception as _vexc:
+                missing = None
+                Log.warning(
+                    f"Event {event_name!r} validate_payload() raised "
+                    f"{_vexc.__class__.__name__}: {_vexc}; dispatching anyway",
+                    category="cara.events",
+                )
+            if missing:
+                Log.warning(
+                    f"Event {event_name!r} failed validate_payload(); "
+                    f"missing/invalid fields: {missing!r}. Skipping dispatch.",
+                    category="cara.events",
+                )
+                return
+
         # Cycle guard. If this same event name is already in flight on
         # the current task, a listener somewhere re-dispatched it —
         # left alone, this recurses until the Python stack overflows.
@@ -288,6 +337,16 @@ class Event:
             all_listeners.append(_lst)
 
         if not all_listeners:
+            # Surface the orphan dispatch via a per-topic counter so
+            # operators can wire a Prometheus / log alert. The silent
+            # no-op pre-fix made renamed listeners and typo'd topics
+            # invisible — by the time the regression was noticed the
+            # upstream job had already marked itself "succeeded" and
+            # the orphaned event was unrecoverable.
+            with self._lock:
+                self._orphan_dispatch_counts[event_name] = (
+                    self._orphan_dispatch_counts.get(event_name, 0) + 1
+                )
             return
 
         token = _dispatch_stack.set((*stack, event_name))
@@ -489,6 +548,17 @@ class Event:
 
         except Exception as e:
             Log.error(f"Failed to queue listener: {str(e)}")
+            # Pipeline-critical listeners opt into propagation via
+            # ``propagate_failures = True``. Pre-fix this branch
+            # swallowed every queue-side failure (broker offline,
+            # serialisation error, missing routing key) and returned
+            # ``False`` — the caller (``_invoke_listeners``) ignored
+            # the return value, so the upstream job marked itself
+            # successful while the listener never ran. Re-raising
+            # here honours the same contract as the in-process
+            # listener path and lets the queue worker retry.
+            if getattr(listener, "propagate_failures", False):
+                raise
             return False
 
     # Strong refs to fire-and-forget tasks. ``asyncio.create_task``
@@ -502,6 +572,45 @@ class Event:
     def _track(cls, task: asyncio.Task) -> None:
         cls._pending_tasks.add(task)
         task.add_done_callback(cls._pending_tasks.discard)
+        # Surface exceptions from fire-and-forget tasks via Log.error.
+        # Without this callback, ``task.result()`` is never called and
+        # any exception raised by the listener is silently dropped —
+        # the worst failure mode for a bug-finding pipeline. The
+        # ``_handle_task_exception`` helper existed for exactly this
+        # purpose but was never wired up.
+        task.add_done_callback(cls._handle_task_exception_static)
+
+    @staticmethod
+    def _handle_task_exception_static(task: asyncio.Task) -> None:
+        """``add_done_callback`` adapter for :meth:`_handle_task_exception`.
+
+        The instance method takes ``self`` plus the task; this
+        wrapper drops the implicit ``self`` so the callback can be
+        registered without a bound instance.
+        """
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            try:
+                from cara.facades import Log as _Log
+                _Log.error(
+                    f"Fire-and-forget listener failed with exception: "
+                    f"{e.__class__.__name__}: {e}",
+                    category="cara.events",
+                )
+            except Exception:
+                # Log facade may not be wired in a bare framework
+                # context (cara unit tests). Re-raise to ``stderr``
+                # as a last resort so the exception isn't fully
+                # swallowed.
+                import sys
+                print(
+                    f"[cara.events] fire-and-forget task raised "
+                    f"{e.__class__.__name__}: {e}",
+                    file=sys.stderr,
+                )
 
     @staticmethod
     async def fire(event: Event) -> None:
