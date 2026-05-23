@@ -26,7 +26,15 @@ class InRule(BaseRule):
         # allowlist — a confusing silent fail. Worse, ``str(value)``
         # against an attacker-controlled object can hit ``__str__`` /
         # ``__repr__`` side effects.
-        if isinstance(value, (list, tuple, set, dict)):
+        #
+        # ``frozenset`` is a sibling of ``set`` (not a subclass), so
+        # the bare ``set`` check missed it. ``bytes`` / ``bytearray``
+        # are scalars by length=1 but ``str(b'a') == "b'a'"`` — that
+        # confusing repr form would silently fail the allowlist match
+        # without surfacing the type misuse to the caller.
+        if isinstance(
+            value, (list, tuple, set, frozenset, dict, bytes, bytearray)
+        ):
             return False
 
         in_values = params.get("in")

@@ -90,8 +90,23 @@ class Batch:
             },
             self.BATCH_TTL,
         )
-        Cache.put(_batch_pending_key(self.batch_id), total, self.BATCH_TTL)
-        Cache.put(_batch_failed_key(self.batch_id), 0, self.BATCH_TTL)
+        # Pending counter MUST be initialised via ``Cache.increment``,
+        # not ``Cache.put``. The decrement path below (``Cache.decrement``)
+        # maps to Redis ``INCRBY -1`` — running INCRBY against a key
+        # that holds pickle bytes raises a ``WRONGTYPE`` on Redis. The
+        # driver's fallback then ``DELETE``s the key and re-creates it
+        # at ``-1`` (string), so the *very first* job completion sees
+        # ``remaining == -1``, hits ``<= 0``, and fires the ``then()``
+        # callback while N-1 jobs are still running.
+        #
+        # INCRBY by ``total`` against a missing key creates it as
+        # ``total`` directly and lets subsequent decrements behave
+        # correctly under the same primitive. The failed counter is
+        # intentionally NOT pre-seeded — INCRBY by 0 (the read idiom
+        # in ``_decrement_pending``) returns 0 against a missing key,
+        # so the explicit ``put(... 0)`` was both wrong-shaped (pickle
+        # bytes vs raw int) and unnecessary.
+        Cache.increment(_batch_pending_key(self.batch_id), total, self.BATCH_TTL)
 
         # Stamp each job with batch info so BatchAware can decrement.
         dispatched = 0
@@ -223,7 +238,17 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
         Log.info(f"Batch {batch_id}: all jobs completed", category="cara.queue.batch")
 
         meta = Cache.get(_batch_key(batch_id)) or {}
-        failed_count = int(Cache.get(_batch_failed_key(batch_id)) or 0)
+        # Failed counter is written via ``Cache.increment`` (INCRBY →
+        # raw integer string). Reading the same key with ``Cache.get``
+        # routes through the pickle decoder, fails on the raw bytes,
+        # and the driver's corrupt-entry self-heal then DELETEs the
+        # counter — so ``then()`` callbacks always saw ``failed=0`` even
+        # for batches that had partial failures. The canonical "read
+        # counter" idiom is ``Cache.increment(key, 0, ttl)``: atomic,
+        # protocol-clean, and materialises a missing key as 0.
+        failed_count = int(
+            Cache.increment(_batch_failed_key(batch_id), 0, Batch.BATCH_TTL) or 0
+        )
 
         if then_callback:
             try:

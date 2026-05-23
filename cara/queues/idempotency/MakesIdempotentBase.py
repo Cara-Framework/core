@@ -61,6 +61,16 @@ class MakesIdempotentBase:
     #: Lock TTL for active jobs (30 minutes).
     JOB_LOCK_TTL = 30 * 60
 
+    #: Sentinel that encodes a cached ``None`` return value. Without
+    #: this, ``cache_result(None)`` writes ``None`` and
+    #: ``get_cached_result()`` can't tell "ran successfully and
+    #: returned nothing" from "never ran" — every subsequent dispatch
+    #: of a None-returning job (every fire-and-forget pipeline step)
+    #: re-executed the work it was supposed to skip. Stored as a
+    #: stable string literal so JSON / pickle Cache drivers
+    #: round-trip it identically.
+    _NONE_SENTINEL = "__cara_idempotent_none__"
+
     #: Keep idempotency semantics identical between queue workers and
     #: sync paths. Legacy jobs can opt out by setting
     #: ``enforce_sync_idempotency = False``.
@@ -109,8 +119,19 @@ class MakesIdempotentBase:
             )
 
         if not is_forced:
-            cached_result = self.get_cached_result()
-            if cached_result is not None:
+            cache_key = f"job_result:{self._idempotency_key}"
+            # Read the raw cache value once so we can distinguish
+            # "cached None" (sentinel) from "no entry" (truly missing).
+            # ``Cache.has`` is the authoritative miss/hit signal —
+            # ``Cache.get`` returning ``None`` overlaps with the
+            # "absent" case on every driver.
+            if Cache.has(cache_key):
+                cached_raw = Cache.get(cache_key)
+                cached_result = (
+                    None
+                    if cached_raw == self._NONE_SENTINEL
+                    else cached_raw
+                )
                 Log.debug(
                     f"Job already completed (cached): {self.get_job_identifier()}",
                     category="idempotency",
@@ -221,12 +242,29 @@ class MakesIdempotentBase:
     # ── Cache / lock primitives ────────────────────────────────────
 
     def get_cached_result(self) -> Any | None:
+        """Read the cached result, decoding the None-sentinel.
+
+        ``Cache.get`` returning ``None`` overlaps with "absent"
+        and "cached None" on every driver. ``wrap_with_idempotency``
+        uses ``Cache.has`` + a sentinel-aware decode for the canonical
+        check; this accessor decodes correctly when callers ask but
+        still returns ``None`` for "truly absent" so the existing
+        ``if cached is not None`` shape in external callers remains
+        meaningful.
+        """
         cache_key = f"job_result:{self._idempotency_key}"
-        return Cache.get(cache_key)
+        raw = Cache.get(cache_key)
+        if raw == self._NONE_SENTINEL:
+            return None
+        return raw
 
     def cache_result(self, result: Any) -> None:
+        """Cache a job's terminal result, encoding ``None`` to the
+        sentinel so the next dispatch doesn't mistake "cached None"
+        for "never ran"."""
         cache_key = f"job_result:{self._idempotency_key}"
-        Cache.put(cache_key, result, self.IDEMPOTENCY_CACHE_TTL)
+        stored = self._NONE_SENTINEL if result is None else result
+        Cache.put(cache_key, stored, self.IDEMPOTENCY_CACHE_TTL)
 
     def is_job_locked(self) -> bool:
         lock_key = f"job_lock:{self._idempotency_key}"
@@ -346,13 +384,23 @@ class MakesIdempotentBase:
         max_wait_time = 300  # 5 minutes
         check_interval = 5
         waited = 0
+        cache_key = f"job_result:{self._idempotency_key}"
 
         while waited < max_wait_time:
             await asyncio.sleep(check_interval)
             waited += check_interval
 
-            cached_result = self.get_cached_result()
-            if cached_result is not None:
+            # Sentinel-aware existence check — see
+            # ``wrap_with_idempotency`` for the rationale: a job that
+            # returns ``None`` must be observable to waiters as
+            # "completed", not "still running".
+            if Cache.has(cache_key):
+                cached_raw = Cache.get(cache_key)
+                cached_result = (
+                    None
+                    if cached_raw == self._NONE_SENTINEL
+                    else cached_raw
+                )
                 Log.debug(
                     f"Waited job completed: {self.get_job_identifier()}",
                     category="idempotency",

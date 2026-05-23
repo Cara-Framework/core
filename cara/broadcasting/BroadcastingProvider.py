@@ -58,6 +58,20 @@ class BroadcastingProvider(DeferredProvider):
         self._add_log_driver(manager)
         self._add_null_driver(manager)
 
+        # Mirror QueueProvider's boot-time guard: a misspelt
+        # ``BROADCAST_DRIVER`` (e.g. ``rabbit`` from an out-of-date
+        # ``.env.example``) previously slipped past the truthy check
+        # above and only surfaced lazily on the first ``Broadcast.fire``
+        # as a confusing "driver 'rabbit' is not registered" exception
+        # — typically hours into a workload, long after deploy.
+        if default_driver not in manager._drivers:
+            available = sorted(manager._drivers.keys())
+            raise BroadcastingConfigurationException(
+                f"Broadcasting default driver {default_driver!r} is not "
+                f"registered. Available drivers: {available}. Check "
+                f"BROADCAST_DRIVER in your environment."
+            )
+
         self.application.bind("broadcasting", manager)
 
         # Load app-level channel auth callbacks. Best-effort; a missing

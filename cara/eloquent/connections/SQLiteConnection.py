@@ -186,8 +186,20 @@ class SQLiteConnection(BaseConnection):
         self._cursor = self._connection.cursor()
         self.statement(query, bindings)
 
-        result = self.format_cursor_results(self._cursor.fetchmany(amount))
-        while result:
-            yield result
-
+        try:
             result = self.format_cursor_results(self._cursor.fetchmany(amount))
+            while result:
+                yield result
+
+                result = self.format_cursor_results(self._cursor.fetchmany(amount))
+        finally:
+            # Caller may abandon the generator (break, return, raise) before
+            # the loop drains. Without this finally the SQLite connection
+            # would stay open until GC, leaking handles in every paginated
+            # iteration path.
+            if self.get_transaction_level() <= 0:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
+                self.open = 0

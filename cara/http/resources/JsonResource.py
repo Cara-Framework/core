@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import timezone
 from typing import Any
 
 from .MissingValue import MissingValue
@@ -153,12 +154,46 @@ class JsonResource:
 
     @staticmethod
     def opt_datetime(value: Any) -> str | None:
-        """Coerce a datetime-like value to an ISO-8601 string, preserving None."""
+        """Coerce a datetime-like value to an ISO-8601 string, preserving None.
+
+        Always emits an explicit timezone offset for datetime values: a
+        naive ``datetime`` (no ``tzinfo``) is interpreted as UTC, which
+        matches the codebase convention — the DB stores wall-clock UTC
+        and the model layer round-trips through pendulum-in-UTC. Without
+        the offset, frontend ``new Date(...)`` parses the string as
+        browser-local time and two users in different timezones see
+        different absolute moments for the same column.
+
+        ``date`` instances (no time component) are returned as plain
+        ``YYYY-MM-DD`` — they intentionally carry no time-of-day, so
+        appending an offset would lie about precision.
+
+        Datetime-shaped strings (e.g. ``"2026-05-23 12:30:45"`` from a
+        raw ``DB.select`` row) are normalised to ISO 8601 with a UTC
+        suffix; Safari historically rejects the space-separated form.
+        """
         if value is None:
             return None
+        from datetime import date as _date, datetime as _datetime
+
+        if isinstance(value, _datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.isoformat()
+        if isinstance(value, _date):
+            return value.isoformat()
         if hasattr(value, "isoformat"):
             return value.isoformat()
-        return str(value) if value else None
+        s = str(value).strip() if value else None
+        if not s:
+            return None
+        try:
+            parsed = _datetime.fromisoformat(s.replace(" ", "T", 1))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.isoformat()
+        except ValueError:
+            return s
 
     @staticmethod
     def opt_bool(value: Any, default: bool = False) -> bool:

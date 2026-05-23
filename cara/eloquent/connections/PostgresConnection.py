@@ -6,7 +6,11 @@ import re
 import threading
 import time
 
-from cara.exceptions import DriverNotFoundException, QueryException
+from cara.exceptions import (
+    DatabaseUnavailableException,
+    DriverNotFoundException,
+    QueryException,
+)
 
 from ..query.grammars import PostgresGrammar
 from ..query.processors import PostgresPostProcessor
@@ -182,10 +186,14 @@ class PostgresConnection(BaseConnection):
 
         acquired = _pool_semaphore.acquire(timeout=self._POOL_ACQUIRE_TIMEOUT)
         if not acquired:
-            raise psycopg2.OperationalError(
+            # Pool exhaustion is a capacity problem, not a query bug —
+            # surface it as 503 so load balancers / clients can retry
+            # instead of treating it as a 500 application fault.
+            raise DatabaseUnavailableException(
                 f"Connection pool exhausted: could not acquire a slot "
                 f"within {self._POOL_ACQUIRE_TIMEOUT}s "
-                f"(pool_size={self.connection_pool_size})"
+                f"(pool_size={self.connection_pool_size})",
+                retry_after=1,
             )
         self._pool_slot_acquired = True
 
@@ -203,8 +211,20 @@ class PostgresConnection(BaseConnection):
                         connection.rollback()
                     connection.autocommit = True
                     cursor = connection.cursor()
-                    cursor.execute("SELECT 1")
-                    cursor.close()
+                    try:
+                        # SELECT 1 can raise if the server-side
+                        # connection was closed without psycopg2 noticing
+                        # (idle-in-transaction timeout, network drop).
+                        # The bare execute()→close() pattern leaked the
+                        # cursor on that path — wrap in try/finally so
+                        # the cursor is released whether the probe
+                        # succeeds or blows up.
+                        cursor.execute("SELECT 1")
+                    finally:
+                        try:
+                            cursor.close()
+                        except Exception:
+                            pass
             except Exception:
                 try:
                     connection.close()
@@ -323,7 +343,10 @@ class PostgresConnection(BaseConnection):
     def savepoint(self, name):
         """Create a savepoint within the current transaction."""
         self._validate_savepoint_name(name)
-        self._connection.autocommit = False
+        # No autocommit toggle here: a savepoint only exists inside an
+        # already-open transaction (begin() sets autocommit=False for the
+        # outer level), and psycopg2 raises "set_session cannot be used
+        # inside a transaction" if autocommit is touched mid-transaction.
         cursor = self._connection.cursor()
         cursor.execute(f"SAVEPOINT {name}")
         cursor.close()
@@ -444,6 +467,21 @@ class PostgresConnection(BaseConnection):
                         return cursor.fetchall()
                     return {}
         except Exception as e:
+            # Distinguish "DB is down / connection lost" from "bad query"
+            # so the exception handler can return 503 (retryable) instead
+            # of 500 (application fault). psycopg2.OperationalError covers
+            # both: a) network/connect failure, b) the connection dropped
+            # mid-query. Pool exhaustion already raises
+            # ``DatabaseUnavailableException`` directly in
+            # ``create_connection``; that path is re-raised here unchanged.
+            if isinstance(e, DatabaseUnavailableException):
+                raise
+            try:
+                import psycopg2  # local import — psycopg2 may not be installed
+            except ModuleNotFoundError:
+                psycopg2 = None  # type: ignore[assignment]
+            if psycopg2 is not None and isinstance(e, psycopg2.OperationalError):
+                raise DatabaseUnavailableException(str(e), retry_after=1) from e
             raise QueryException(str(e)) from e
         finally:
             if self.get_transaction_level() <= 0:

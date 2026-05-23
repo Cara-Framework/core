@@ -1387,7 +1387,17 @@ class QueryBuilder(ObservesEvents):
                 ),
             )
         else:
-            self._wheres += ((QueryExpression(column, "IN", list(wheres))),)
+            # Drop None values. ``IN (NULL, …)`` is never true in standard
+            # SQL (NULL ≠ NULL), and the grammar would otherwise splice
+            # the Python literal ``'None'`` as a string — a silent type
+            # mismatch that always returns zero rows. If every value was
+            # None, collapse to the same "match nothing" sentinel as the
+            # empty-list branch instead of emitting bogus SQL.
+            cleaned = [v for v in wheres if v is not None]
+            if not cleaned:
+                self._wheres += ((QueryExpression(0, "=", 1, "value_equals")),)
+            else:
+                self._wheres += ((QueryExpression(column, "IN", cleaned)),)
         return self
 
     def get_relation(self, relationship, builder=None):
@@ -1799,9 +1809,46 @@ class QueryBuilder(ObservesEvents):
                 ),
             )
         elif not wheres:
-            return self
+            # Empty exclusion list is almost always a caller bug — e.g.
+            # ``Model.where_not_in('id', external_ids).update({...})`` where
+            # ``external_ids`` came back empty. Silently dropping the
+            # clause would turn that into "update everything". Emit an
+            # explicit always-true predicate so the SQL still reflects
+            # intent ("nothing to exclude") and remains well-formed.
+            self._wheres += (
+                (
+                    QueryExpression(
+                        column="1 = 1",
+                        equality="",
+                        value=None,
+                        value_type="RAW",
+                        keyword="AND",
+                        raw=True,
+                    )
+                ),
+            )
         else:
-            self._wheres += ((QueryExpression(column, "NOT IN", list(wheres))),)
+            # Same defensive cleanup as ``where_in`` — drop None values
+            # so we never emit literal ``NOT IN ('None', …)`` (which
+            # would match every row in the table, the opposite of what
+            # ``NOT IN (NULL, …)`` would actually evaluate to). If every
+            # value was None, treat it as "nothing to exclude".
+            cleaned = [v for v in wheres if v is not None]
+            if not cleaned:
+                self._wheres += (
+                    (
+                        QueryExpression(
+                            column="1 = 1",
+                            equality="",
+                            value=None,
+                            value_type="RAW",
+                            keyword="AND",
+                            raw=True,
+                        )
+                    ),
+                )
+            else:
+                self._wheres += ((QueryExpression(column, "NOT IN", cleaned)),)
         return self
 
     def join(
@@ -1931,12 +1978,27 @@ class QueryBuilder(ObservesEvents):
         Specifies a limit expression.
 
         Arguments:
-            amount {int} -- The number of rows to limit.
+            amount {int} -- The number of rows to limit. ``None`` clears
+                the limit (same as never calling ``limit``). ``0`` means
+                "return zero rows" and is honored; negative values are
+                rejected.
 
         Returns:
             self
         """
-        self._limit = amount
+        if amount is None:
+            self._limit = False
+        elif isinstance(amount, bool):
+            # ``True``/``False`` would coerce to 1/0 silently — almost
+            # always a caller mistake. ``False`` matches the sentinel
+            # for "no limit", but pinning it here makes intent explicit.
+            raise ValueError(f"limit() expects an int or None, got {amount!r}")
+        elif isinstance(amount, int):
+            if amount < 0:
+                raise ValueError(f"limit() must be >= 0, got {amount!r}")
+            self._limit = amount
+        else:
+            raise ValueError(f"limit() expects an int or None, got {amount!r}")
         return self
 
     def offset(self, amount) -> Self:
@@ -1944,12 +2006,23 @@ class QueryBuilder(ObservesEvents):
         Specifies an offset expression.
 
         Arguments:
-            amount {int} -- The number of rows to limit.
+            amount {int} -- The number of rows to skip. ``None`` clears
+                the offset. Negative values are rejected (Postgres + MySQL
+                both raise on ``OFFSET -1``).
 
         Returns:
             self
         """
-        self._offset = amount
+        if amount is None:
+            self._offset = False
+        elif isinstance(amount, bool):
+            raise ValueError(f"offset() expects an int or None, got {amount!r}")
+        elif isinstance(amount, int):
+            if amount < 0:
+                raise ValueError(f"offset() must be >= 0, got {amount!r}")
+            self._offset = amount
+        else:
+            raise ValueError(f"offset() expects an int or None, got {amount!r}")
         return self
 
     def skip(self, *args, **kwargs):
@@ -2039,6 +2112,20 @@ class QueryBuilder(ObservesEvents):
         self.set_action("update")
         if dry or self.dry:
             return self
+
+        # Safety: refuse to execute UPDATE without a WHERE clause to
+        # prevent accidental mass-mutation.  ``delete()`` has the same
+        # guard. If a caller's where-list reduced to empty (e.g. an
+        # external id list came back empty and ``where_in`` collapsed
+        # to a no-op), this catches the foot-gun before the query runs.
+        if not self._wheres:
+            from cara.exceptions import QueryException
+
+            raise QueryException(
+                "update() without a WHERE clause would modify all rows. "
+                "Use ``where_raw('1 = 1')`` to opt in explicitly, "
+                "or build the update on a loaded model instance."
+            )
 
         additional.update(updates)
 

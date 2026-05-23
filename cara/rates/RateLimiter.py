@@ -150,11 +150,33 @@ class RateLimiter(RateLimit):
         # in the same window reuse it without resetting.
         try:
             count = Cache.increment(cache_key, 1, self.window)
-        except Exception:
-            # Cache backend down — degrade open (allow traffic) rather
-            # than crash the request. Same posture as
-            # ``ThrottleRequests._attempt_limit``.
-            return True, self.limit, 0
+        except Exception as exc:
+            # Cache backend down. Fail-closed by default — coincident
+            # cache + abuse-traffic outage is the wrong moment to lift
+            # the cap silently. Programmatic callers (jobs, console
+            # commands) get a ``ServiceUnavailableException`` they can
+            # catch and retry. ``rate.fail_open=True`` restores the
+            # legacy availability-first posture.
+            try:
+                from cara.facades import Config, Log
+                fail_open = bool(Config.get("rate.fail_open", False))
+            except Exception:
+                fail_open = False
+            try:
+                from cara.facades import Log as _Log
+                _Log.warning(
+                    f"RateLimiter cache backend failed: {exc}; "
+                    f"fail_open={fail_open}",
+                )
+            except Exception:
+                pass
+            if fail_open:
+                return True, self.limit, 0
+            from cara.exceptions import ServiceUnavailableException
+            raise ServiceUnavailableException(
+                "Rate limiter temporarily unavailable",
+                retry_after=1,
+            ) from exc
 
         allowed = count <= self.limit
         remaining = max(self.limit - count, 0)

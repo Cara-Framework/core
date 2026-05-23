@@ -544,3 +544,243 @@ async def test_direct_listeners_fire_before_wildcard_listeners(dispatcher):
         await dispatcher.dispatch(event)
 
     assert log == ["direct-a", "direct-b", "wildcard-a", "wildcard-b"]
+
+
+# ── Stress tests ────────────────────────────────────────────────────
+# These exercise the cycle guard, RLock + snapshot, and dedup paths
+# beyond the trivial-case coverage above. Each one is meant to fail
+# loudly if any of those primitives regresses — a deadlock, dropped
+# listener, false-positive cycle, or "dict changed size during
+# iteration" surfaces here long before it reaches production.
+
+
+@pytest.mark.asyncio
+async def test_deep_nested_cascade_does_not_trip_cycle_guard(dispatcher):
+    """A → B → C → D → E → F → G → H → I → J normal cascade. Each
+    handler dispatches a DIFFERENT event, so the cycle guard must
+    treat the chain as benign. Pre-fix worry: if the dispatch stack
+    grows but never unwinds across awaits, deep but legal cascades
+    would false-positive."""
+    depth = 10
+    log: list[str] = []
+
+    class StepEvent:
+        def __init__(self, idx: int):
+            self.name = f"step.{idx}"
+            self.idx = idx
+            self.is_propagation_stopped = False
+
+    def make_handler(next_idx: int | None):
+        class StepListener:
+            propagate_failures = True
+
+            async def handle(self, event):
+                log.append(event.name)
+                if next_idx is not None:
+                    await dispatcher.dispatch(StepEvent(next_idx))
+
+        return StepListener()
+
+    for i in range(depth):
+        next_i = i + 1 if i + 1 < depth else None
+        dispatcher.subscribe(f"step.{i}", make_handler(next_i))
+
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
+        await dispatcher.dispatch(StepEvent(0))
+
+    assert log == [f"step.{i}" for i in range(depth)]
+
+
+@pytest.mark.asyncio
+async def test_listener_in_three_overlapping_wildcards_fires_once(dispatcher):
+    """One listener instance subscribed to a direct name AND TWO
+    wildcards that both match. Dedup must collapse to a single
+    invocation — regression would re-trigger side effects 3x."""
+    log = []
+    listener = SimpleListener(log)
+    dispatcher.subscribe("user.registered", listener)
+    dispatcher.subscribe("user.*", listener)
+    dispatcher.subscribe("*.registered", listener)
+    dispatcher.subscribe("*", listener)  # matches everything too
+
+    event = UserRegisteredEvent(user_id=1, email="a@b.com")
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
+        await dispatcher.dispatch(event)
+
+    assert log == ["simple"]
+
+
+def test_threaded_concurrent_dispatch_independent_event_loops():
+    """Each thread runs its OWN ``asyncio.run`` and dispatches the
+    same event 50 times against a shared dispatcher. The cycle guard
+    is a ContextVar so each task starts fresh; the snapshot under
+    RLock keeps the shared listener buckets safe to iterate while
+    the other threads may still be subscribing.
+
+    This is the multi-thread variant of
+    ``test_concurrent_dispatches_have_independent_cycle_stacks`` (which
+    runs on one loop), and the higher-volume sibling of
+    ``test_concurrent_subscribe_during_dispatch_does_not_raise``."""
+    import asyncio as _a
+    import threading
+
+    dispatcher = EventDispatcher()
+    log_lock = threading.Lock()
+    log: list[int] = []
+    threads_n = 8
+    per_thread = 50
+    barrier = threading.Barrier(threads_n)
+    errors: list[BaseException] = []
+
+    class ThreadLogger:
+        def handle(self, event):
+            with log_lock:
+                log.append(event.user_id)
+
+    dispatcher.subscribe("user.registered", ThreadLogger())
+    # A few wildcard subs so the dispatcher exercises the wildcard
+    # snapshot path under contention, not just direct lookup.
+    dispatcher.subscribe("user.*", ThreadLogger())
+    dispatcher.subscribe("*.registered", ThreadLogger())
+
+    def worker(tid: int):
+        async def runner():
+            with patch(
+                "cara.context.ExecutionContext.ExecutionContext.is_sync",
+                return_value=True,
+            ):
+                for i in range(per_thread):
+                    await dispatcher.dispatch(
+                        UserRegisteredEvent(
+                            user_id=tid * 1000 + i, email=f"{tid}@x.com"
+                        )
+                    )
+
+        try:
+            barrier.wait()
+            _a.run(runner())
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [
+        threading.Thread(target=worker, args=(t,)) for t in range(threads_n)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+        assert not t.is_alive(), "Worker thread hung — possible deadlock"
+
+    assert not errors, f"Concurrent dispatch raised: {errors!r}"
+    # Each dispatch fires the deduped listener exactly once per registration
+    # of distinct ThreadLogger instances — we registered 3, but they are
+    # 3 distinct objects so all 3 fire per dispatch.
+    assert len(log) == threads_n * per_thread * 3
+
+
+def test_thread_subscribes_while_thread_dispatches_high_volume():
+    """High-volume churn variant of
+    ``test_concurrent_subscribe_during_dispatch_does_not_raise``:
+    1000 subscribe ops racing against 1000 dispatch ops, both
+    touching wildcard buckets. Pre-fix this surfaced
+    ``RuntimeError: dictionary changed size during iteration``
+    quickly under load."""
+    import asyncio as _a
+    import threading
+
+    dispatcher = EventDispatcher()
+    fixed_log: list[str] = []
+    dispatcher.subscribe("user.*", SimpleListener(fixed_log))
+
+    errors: list[BaseException] = []
+    iterations = 1000
+    barrier = threading.Barrier(2)
+
+    def churner():
+        try:
+            barrier.wait()
+            for i in range(iterations):
+                dispatcher.subscribe(f"churn{i}.*", SimpleListener([]))
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    def dispatcher_thread():
+        async def runner():
+            with patch(
+                "cara.context.ExecutionContext.ExecutionContext.is_sync",
+                return_value=True,
+            ):
+                for _ in range(iterations):
+                    await dispatcher.dispatch(
+                        UserRegisteredEvent(user_id=1, email="a@b.com")
+                    )
+
+        try:
+            barrier.wait()
+            _a.run(runner())
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    t1 = threading.Thread(target=churner, daemon=True)
+    t2 = threading.Thread(target=dispatcher_thread, daemon=True)
+    t1.start()
+    t2.start()
+    t1.join(timeout=20)
+    t2.join(timeout=20)
+
+    assert not t1.is_alive() and not t2.is_alive(), "Worker hung"
+    assert not errors, f"High-volume race raised: {errors!r}"
+    # The pinned "user.*" listener fired on every dispatch.
+    assert len(fixed_log) == iterations
+
+
+@pytest.mark.asyncio
+async def test_cycle_stack_resets_when_listener_raises(dispatcher):
+    """If a listener raises (and re-raises via propagate_failures),
+    the cycle stack MUST be popped — otherwise the next dispatch of
+    the same event in the same task would false-positive as a cycle.
+    Tests the ContextVar reset is in the right ``finally`` block."""
+    from cara.exceptions import EventDispatchCycleException  # noqa: F401
+
+    class Boomer:
+        propagate_failures = True
+
+        def handle(self, event):
+            raise RuntimeError("boom")
+
+    dispatcher.subscribe("user.registered", Boomer())
+
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
+        with pytest.raises(RuntimeError, match="boom"):
+            await dispatcher.dispatch(UserRegisteredEvent(user_id=1, email="a@b.com"))
+
+        # Second dispatch in the same task: should also reach the
+        # listener and raise — NOT EventDispatchCycleException.
+        with pytest.raises(RuntimeError, match="boom"):
+            await dispatcher.dispatch(UserRegisteredEvent(user_id=2, email="b@c.com"))
+
+
+@pytest.mark.asyncio
+async def test_wildcard_matching_multiple_patterns_preserves_order(dispatcher):
+    """An event name that matches three wildcard patterns: registration
+    order must be preserved across patterns (insertion order of the
+    wildcard dict)."""
+    log = []
+    dispatcher.subscribe("user.*", OrderedListener("a", log))
+    dispatcher.subscribe("*.registered", OrderedListener("b", log))
+    dispatcher.subscribe("*", OrderedListener("c", log))
+
+    event = UserRegisteredEvent(user_id=1, email="a@b.com")
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
+        await dispatcher.dispatch(event)
+
+    # All three patterns match — order = registration order.
+    assert log == ["a", "b", "c"]

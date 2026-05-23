@@ -512,10 +512,17 @@ class BaseGrammar:
         """
         Compiles the limit expression.
 
+        ``self._limit`` uses ``False`` as the "no limit set" sentinel
+        (initial state), so ``limit(0)`` — a legitimate "return zero
+        rows" request — must render. A blanket ``if not self._limit``
+        truthiness check treated 0 and False identically and silently
+        upgraded ``LIMIT 0`` to "no limit", returning every row in the
+        table when the caller asked for none.
+
         Returns:
             self
         """
-        if not self._limit:
+        if self._limit is False or self._limit is None:
             return ""
 
         return self.limit_string(offset=self._offset).format(limit=self._limit)
@@ -524,10 +531,14 @@ class BaseGrammar:
         """
         Compiles the offset expression.
 
+        ``OFFSET 0`` is the SQL default; emitting it is harmless but
+        noisy, so keep the falsy short-circuit for the zero case.
+        ``False``/``None`` are the "unset" sentinels.
+
         Returns:
             self
         """
-        if not self._offset:
+        if self._offset is False or self._offset is None or self._offset == 0:
             return ""
 
         return self.offset_string().format(offset=self._offset, limit=self._limit or 1)

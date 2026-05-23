@@ -18,7 +18,15 @@ class AuthenticationProvider(DeferredProvider):
 
     @classmethod
     def provides(cls) -> list[str]:
-        return ["auth"]
+        # ``"authentication"`` is the lowercase ``Authentication.__name__``;
+        # Application.make() looks up class type-hints by that key when
+        # deciding whether to trigger a deferred provider. Without it, a
+        # cold-start request to ``/api/auth/register`` (or any controller
+        # that DI-injects ``Authentication`` directly, not via the
+        # ``auth`` middleware path) raises MissingContainerBindingException
+        # because the provider hasn't fired yet and nothing in the
+        # container matches the class annotation.
+        return ["auth", "authentication"]
 
     def register(self) -> None:
         """Register authentication services."""
@@ -29,6 +37,10 @@ class AuthenticationProvider(DeferredProvider):
         self._register_api_key_guard(auth_manager)
 
         self.application.bind("auth", auth_manager)
+        # Also bind under the class so the container's direct-lookup
+        # strategy (Strategy 1 in ``_find_obj``) resolves the type-hint
+        # without falling through to the iterate-and-isinstance scan.
+        self.application.bind(Authentication, auth_manager)
 
     def _register_jwt_guard(self, auth_manager: Authentication) -> None:
         """Register JWT guard."""

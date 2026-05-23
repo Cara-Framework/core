@@ -212,27 +212,189 @@ class JobProcessor:
         except TimeoutError as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
 
-    @staticmethod
-    def _should_retry_job(msg, attempts_count):
-        """Determine if job should be retried based on attempt configuration."""
-        if not msg or "attempts" not in msg:
-            return False
-        max_attempts = msg.get("attempts", 1)
-        current_attempt = msg.get("attempt", 1)
-        return current_attempt < max_attempts
+    # Framework-default retry policy used when the failing job does
+    # not declare its own ``max_attempts`` / ``retry_backoff``. Kept
+    # in lockstep with ``AMQPDriver`` so the production worker path
+    # (this command) and the legacy ``AMQPDriver.consume`` path agree
+    # on the budget. Pre-fix this command had its own broken policy
+    # that effectively gave every job zero retries.
+    DEFAULT_MAX_ATTEMPTS = 3
+    DEFAULT_RETRY_BACKOFF_SECONDS = (1, 5, 30)
 
     @staticmethod
-    def _nack_with_requeue(channel, method_frame, msg):
-        """NACK message with requeue to put it back in queue."""
+    def _should_retry_job(msg, instance) -> bool:
+        """Decide whether a failed message should be republished with a delay.
+
+        ``msg["attempts"]`` is the *attempts-already-made* counter
+        (AMQPDriver.push stamps it 0; each retry republish bumps it).
+        The cap is whatever the job class declares via ``max_attempts``
+        (default :data:`DEFAULT_MAX_ATTEMPTS`).
+
+        Pre-fix this read ``msg["attempt"]`` (singular — a key nothing
+        ever set) and compared it to ``msg["attempts"]`` as if that
+        held the cap, so the comparison was always ``1 < 0`` → False
+        and every first failure was ACKed straight to the DLQ. The
+        whole ``AMQPDriver._handle_failed_message`` retry schedule was
+        dead code.
+        """
+        if not msg:
+            return False
         try:
-            channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
-            Log.info(
-                f"↻ Job requeued for retry (attempt {msg.get('attempt', 1)}/{msg.get('attempts', 1)})"
-            )
-        except Exception as e:
-            Log.error(f"Failed to NACK with requeue: {e}")
-            # Fallback: ACK to prevent infinite loop
+            attempts_done = int(msg.get("attempts", 0) or 0)
+        except (TypeError, ValueError):
+            attempts_done = 0
+        max_attempts = int(
+            getattr(instance, "max_attempts", None)
+            or JobProcessor.DEFAULT_MAX_ATTEMPTS
+        )
+        # ``do_not_retry`` on the failing exception is honoured one
+        # level up (see _requeue_with_delay) — we only answer the
+        # "budget remaining" question here.
+        return attempts_done + 1 < max_attempts
+
+    @staticmethod
+    def _requeue_with_delay(
+        channel,
+        method_frame,
+        msg,
+        instance,
+        exc: Exception,
+        queue_name: str | None,
+    ) -> None:
+        """ACK the current delivery and republish with backoff.
+
+        ``basic_nack(requeue=True)`` puts the message back on the queue
+        head immediately. With ``prefetch=1`` the same worker thread
+        re-claims it on the very next iteration — a poison message
+        loops at 100% CPU. The Cara contract is ``republish-with-
+        backoff`` (1s / 5s / 30s by default, jittered), which only
+        works when we re-publish through the AMQP delayed-message
+        path. We ACK the original delivery and stamp the new message
+        with ``attempts = attempts_done + 1`` so the next failure can
+        decide budget correctly.
+        """
+        try:
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+        except Exception as ack_err:
+            Log.error(f"Failed to ACK before retry republish: {ack_err}")
+            # Fall through — pika may have already auto-rejected.
+
+        attempts_done = int(msg.get("attempts", 0) or 0)
+        next_attempt = attempts_done + 1
+
+        backoff_schedule = getattr(
+            instance,
+            "retry_backoff",
+            JobProcessor.DEFAULT_RETRY_BACKOFF_SECONDS,
+        )
+        if not isinstance(backoff_schedule, (list, tuple)) or not backoff_schedule:
+            backoff_schedule = JobProcessor.DEFAULT_RETRY_BACKOFF_SECONDS
+        idx = min(attempts_done, len(backoff_schedule) - 1)
+        base_delay = int(backoff_schedule[idx])
+
+        try:
+            from cara.facades import Queue as _Queue
+
+            driver = _Queue.driver()
+            # ``AMQPDriver`` exposes ``_apply_retry_jitter`` for the
+            # full-jitter spread; fall back to the unjittered delay if
+            # we're running against a different driver.
+            delay_seconds = base_delay
+            apply_jitter = getattr(driver, "_apply_retry_jitter", None)
+            if callable(apply_jitter):
+                try:
+                    delay_seconds = apply_jitter(base_delay, instance)
+                except Exception:
+                    delay_seconds = base_delay
+
+            retry_options = {
+                "queue": queue_name or msg.get("queue") or "default",
+                "attempts": next_attempt,
+            }
+            # Carry the original ``callback`` / ``args`` through to the
+            # republished payload. Pre-fix the retry options ONLY held
+            # ``queue`` and ``attempts``, so AMQPDriver.push fell back
+            # to defaults (``callback="handle"``, ``args=()``). Any job
+            # dispatched with ``Bus.dispatch(job, callback="custom",
+            # args=(123,))`` retried against ``handle()`` with no args
+            # — silent semantic drift on every retry path. Only
+            # propagate keys the original payload actually set so we
+            # don't override driver defaults with empty values.
+            if "callback" in msg:
+                retry_options["callback"] = msg["callback"]
+            if "args" in msg:
+                retry_options["args"] = msg["args"]
+            # ``later`` is the Laravel-compatible delay entry point.
+            # Falls back to ``schedule`` for drivers that don't expose
+            # one; ``Queue.later`` already handles that delegation.
+            _Queue.later(delay_seconds, instance, **retry_options)
+            Log.info(
+                f"↻ Retry queued for {instance.__class__.__name__} "
+                f"(attempt {next_attempt}, +{delay_seconds}s, "
+                f"reason={type(exc).__name__})"
+            )
+        except Exception as republish_err:
+            Log.error(
+                f"Retry republish failed for {instance.__class__.__name__}: "
+                f"{republish_err}. Falling back to DLQ to avoid losing the payload."
+            )
+            JobProcessor._ack_to_dlq(channel, method_frame, msg, str(exc))
+
+    @staticmethod
+    def _route_failed_message(
+        *,
+        channel,
+        method_frame,
+        msg,
+        instance,
+        exc: Exception,
+        queue_name: str | None,
+    ) -> None:
+        """Single failure router: retry-with-delay OR dead-letter.
+
+        Centralises three rules that the two ``except`` branches
+        previously duplicated and routinely diverged on:
+
+        * ``do_not_retry`` exceptions skip straight to DLQ — no point
+          burning the backoff budget on a 404 that won't come back.
+        * Retries leave the ``UniqueJob`` lock in place so a concurrent
+          dispatch with the same ``unique_id`` doesn't slip in during
+          the backoff window. The lock TTL (``unique_for``, default 1h)
+          remains the safety cap.
+        * Terminal failure (budget exhausted, unpickleable instance,
+          ``do_not_retry``) releases the lock so the next legitimate
+          dispatch can proceed.
+        """
+        do_not_retry = bool(getattr(exc, "do_not_retry", False))
+        can_retry = (
+            msg
+            and instance is not None
+            and not do_not_retry
+            and JobProcessor._should_retry_job(msg, instance)
+        )
+
+        if can_retry:
+            JobProcessor._requeue_with_delay(
+                channel=channel,
+                method_frame=method_frame,
+                msg=msg,
+                instance=instance,
+                exc=exc,
+                queue_name=queue_name,
+            )
+            # Intentional: DO NOT release the UniqueJob lock. The
+            # retry is in flight (delayed publish); releasing now
+            # would allow a duplicate dispatch to win the lock and
+            # both copies would run when the delay expires.
+            return
+
+        # Terminal — give up the slot.
+        JobProcessor._ack_to_dlq(channel, method_frame, msg, str(exc))
+        if instance is not None and isinstance(instance, UniqueJob):
+            try:
+                UniqueJob.release_unique_lock(instance.unique_id())
+            except Exception:
+                pass
 
     @staticmethod
     def _ack_to_dlq(channel, method_frame, msg, error_msg):
@@ -374,6 +536,31 @@ class JobProcessor:
             db_job_id = msg.get("db_job_id")
             job_timeout = msg.get("timeout", JobProcessor.DEFAULT_JOB_TIMEOUT)
 
+            # A payload with no ``obj`` (or ``obj=None``) is malformed —
+            # the worker has no class to call, no UniqueJob lock to
+            # release, no failed() hook to invoke. Pre-fix the
+            # ``callable(getattr(None, callback))`` check below was
+            # False, the block was skipped, and the success branch
+            # ACKed the message + emitted ``outcome="success"``
+            # metrics on work that never ran. Producers can hit this
+            # by accident — a script pushing a raw dict, a JSON
+            # serializer where ``obj`` resolves to None — and the
+            # only operator-visible symptom is silently-missing work.
+            # Route straight to the DLQ with an explicit error so
+            # the trail exists.
+            if instance is None:
+                Log.error(
+                    f"❌ Malformed payload (missing 'obj'): job_id={msg.get('job_id')} "
+                    f"keys={sorted(msg.keys())} — routing to DLQ"
+                )
+                JobProcessor._ack_to_dlq(
+                    channel, method_frame, msg, "payload missing 'obj'"
+                )
+                _mx_queue = _queue_label(msg, queue_name=queue_name)
+                _mx_job = _job_label(None, msg)
+                _mx_record("malformed")
+                return "failure"
+
             # Queue wait time — measure dispatched_at → now.
             _dispatched_at = getattr(instance, "_dispatched_at", None)
             if _dispatched_at and isinstance(_dispatched_at, str):
@@ -489,9 +676,24 @@ class JobProcessor:
             if tracker and db_job_id:
                 tracker.update_job_status(db_job_id, "completed")
 
-            # Release UniqueJob lock if applicable
+            # Release UniqueJob lock if applicable. The release MUST
+            # not be allowed to raise through to the outer handler —
+            # the work is already done, and skipping basic_ack here
+            # causes the broker to redeliver a completed message
+            # under prefetch=1, double-executing every side-effecting
+            # handler the next time the cache backing the lock blips.
+            # The lock TTL (``unique_for``, default 1h) is the safety
+            # net for any release we couldn't write — better a delayed
+            # re-dispatch than a duplicated side effect.
             if isinstance(instance, UniqueJob):
-                UniqueJob.release_unique_lock(instance.unique_id())
+                try:
+                    UniqueJob.release_unique_lock(instance.unique_id())
+                except Exception as release_err:
+                    Log.warning(
+                        f"UniqueJob lock release failed for "
+                        f"{instance.__class__.__name__}: {release_err}. "
+                        f"Lock will expire on its TTL — proceeding to ACK."
+                    )
 
             # Acknowledge message
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
@@ -509,15 +711,14 @@ class JobProcessor:
             if tracker and db_job_id:
                 tracker.update_job_status(db_job_id, "failed")
 
-            # CRITICAL FIX #2: Handle retry logic for timeout failures
-            if msg and JobProcessor._should_retry_job(msg, msg.get("attempt", 1)):
-                JobProcessor._nack_with_requeue(channel, method_frame, msg)
-            else:
-                JobProcessor._ack_to_dlq(channel, method_frame, msg, str(timeout_error))
-
-            # Release UniqueJob lock on timeout failure
-            if instance and isinstance(instance, UniqueJob):
-                UniqueJob.release_unique_lock(instance.unique_id())
+            JobProcessor._route_failed_message(
+                channel=channel,
+                method_frame=method_frame,
+                msg=msg,
+                instance=instance,
+                exc=timeout_error,
+                queue_name=queue_name,
+            )
 
             # Try to call failed method
             try:
@@ -547,17 +748,14 @@ class JobProcessor:
             if tracker and db_job_id:
                 tracker.update_job_status(db_job_id, "failed")
 
-            # CRITICAL FIX #2: Implement smart NACK/DLQ handling
-            if msg and JobProcessor._should_retry_job(msg, msg.get("attempt", 1)):
-                # Requeue for retry if attempts remain
-                JobProcessor._nack_with_requeue(channel, method_frame, msg)
-            else:
-                # Move to DLQ if no retries or attempts exhausted
-                JobProcessor._ack_to_dlq(channel, method_frame, msg, str(job_error))
-
-            # Release UniqueJob lock on failure
-            if instance and isinstance(instance, UniqueJob):
-                UniqueJob.release_unique_lock(instance.unique_id())
+            JobProcessor._route_failed_message(
+                channel=channel,
+                method_frame=method_frame,
+                msg=msg,
+                instance=instance,
+                exc=job_error,
+                queue_name=queue_name,
+            )
 
             # Try to call failed method
             try:

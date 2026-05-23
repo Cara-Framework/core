@@ -4,9 +4,22 @@ Authentication Manager for Cara Framework.
 Manages authentication guards and user sessions.
 """
 
+from contextvars import ContextVar
 from typing import Any
 
 from cara.authentication.contracts import Authenticatable
+
+# The Authentication manager is bound to the IoC container as a
+# process-wide singleton (see ``AuthenticationProvider.register``).
+# Storing the resolved user on ``self._user`` therefore leaked the
+# first-resolved identity to every subsequent request that hit any
+# ``auth_manager.user()`` / ``auth_manager.login()`` call before its
+# own guard could re-authenticate — the exact cross-request identity
+# leak that ``JWTGuard`` was already fixed for via a ContextVar.
+# This mirrors that fix one layer up so the wrapper API is safe even
+# if a future caller routes through ``auth_manager.user()`` instead
+# of going to ``auth_manager.guard("jwt").user()`` directly.
+_REQUEST_USER: ContextVar[Any] = ContextVar("auth_manager_user", default=None)
 
 
 class Authentication:
@@ -18,7 +31,14 @@ class Authentication:
         self.application = application
         self.default_guard = default_guard
         self.guards: dict[str, Any] = {}
-        self._user: Authenticatable | None = None
+
+    @property
+    def _user(self) -> Any | None:
+        return _REQUEST_USER.get()
+
+    @_user.setter
+    def _user(self, value: Any | None) -> None:
+        _REQUEST_USER.set(value)
 
     def add_guard(self, name: str, guard) -> None:
         """Add a guard to the authentication manager."""

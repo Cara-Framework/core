@@ -321,9 +321,39 @@ class RedisDriver(HasColoredOutput, Queue):
         """Batch push: push all jobs at once."""
         self.push(*jobs, options=options)
 
+    def later(self, delay: Any, job: Any, options: dict[str, Any]) -> None:
+        """Schedule ``job`` to run ``delay`` seconds from now.
+
+        Laravel-compatible delay entry point. Pre-fix RedisDriver had
+        no ``later`` method, so ``Queue.later(5, job)`` fell through
+        to ``schedule(job, 5)`` which treated ``5`` as a unix
+        timestamp (1970-01-01) — ``run_ts <= now`` so the job was
+        published immediately, defeating every retry-with-backoff
+        caller on the Redis driver.
+        """
+        if hasattr(delay, "total_seconds"):
+            delay_seconds = float(delay.total_seconds())
+        else:
+            try:
+                delay_seconds = float(delay)
+            except (TypeError, ValueError) as e:
+                raise QueueException(
+                    f"RedisDriver.later: invalid delay {delay!r}"
+                ) from e
+        merged = {**self.options, **(options or {})}
+        now = pendulum.now(tz=merged.get("tz", self.tz))
+        when = now.add(seconds=max(delay_seconds, 0.0))
+        return self.schedule(job, when, options or {})
+
     def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> None:
         """
         Schedule job for future execution.
+
+        ``when`` accepts: a ``pendulum.DateTime``, a parseable string,
+        or a numeric unix timestamp. Numeric values are interpreted
+        as absolute timestamps (kept for backwards compatibility). For
+        "N seconds from now" semantics use :meth:`later` — that path
+        is what every retry-with-backoff caller goes through.
 
         - If run_time <= now: push immediately
         - Otherwise: add to delayed sorted set
@@ -336,7 +366,13 @@ class RedisDriver(HasColoredOutput, Queue):
         now = pendulum.now(tz=merged.get("tz", self.tz))
 
         # Parse run time to timestamp
-        if isinstance(when, (int, float)):
+        if hasattr(when, "int_timestamp"):
+            # pendulum DateTime (handed to us by ``later`` or a caller
+            # that already built the absolute moment) — read the int
+            # timestamp directly so we don't pay a round-trip through
+            # ``str()`` + ``pendulum.parse()``.
+            run_ts = when.int_timestamp
+        elif isinstance(when, (int, float)):
             run_ts = int(when)
         else:
             try:

@@ -81,6 +81,7 @@ from .types.driver import (
     QueueException as DriverQueueException,
 )
 from .types.eloquent import (
+    DatabaseUnavailableException,
     HTTP404Exception,
     ConnectionNotRegisteredException,
     ORMException,
@@ -112,6 +113,7 @@ from .types.http import (
     MethodNotAllowedException,
     ResponseException,
     RouteNotFoundException,
+    ServiceUnavailableException,
 )
 from .types.http import (
     RouteMiddlewareNotFoundException as HttpRouteMiddlewareNotFoundException,
@@ -195,6 +197,7 @@ __all__ = [
     "ConnectionNotRegisteredException",
     "ContainerException",
     "ControllerMethodNotFoundException",
+    "DatabaseUnavailableException",
     "DriverException",
     "DriverLibraryNotFoundException",
     "DriverLibraryNotFoundFromDriver",
@@ -250,6 +253,7 @@ __all__ = [
     "RuleNotFoundException",
     "SchedulingConfigurationException",
     "SchedulingException",
+    "ServiceUnavailableException",
     "StorageConfigurationException",
     "StorageException",
     "StrictContainerException",

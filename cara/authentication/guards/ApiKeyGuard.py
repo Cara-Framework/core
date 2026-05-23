@@ -4,11 +4,23 @@ API Key Authentication Guard.
 Clean, focused API Key authentication with all functionality in a single class.
 """
 
+from contextvars import ContextVar
 from typing import Any
 
 from cara.authentication.contracts import Authenticatable, Guard
 from cara.exceptions import TokenInvalidException
 from cara.facades import Cache
+
+# Per-request slot for the resolved user / consumed api key. Mirrors
+# the ``_REQUEST_USER`` / ``_REQUEST_TOKEN`` ContextVars in
+# ``JWTGuard`` — the guard itself is a process singleton, so storing
+# the resolved identity on ``self._user`` would leak request A's
+# identity to request B under concurrent asyncio scheduling. Routes
+# don't currently mount the ``X-API-Key`` guard, but exposing the
+# class as part of the framework means any future opt-in would
+# silently inherit the cross-request leak without this scoping.
+_REQUEST_USER: ContextVar[Any] = ContextVar("api_key_guard_user", default=None)
+_REQUEST_TOKEN: ContextVar[Any] = ContextVar("api_key_guard_token", default=None)
 
 
 class ApiKeyGuard(Guard):
@@ -60,9 +72,27 @@ class ApiKeyGuard(Guard):
         else:
             self._user_class = None
 
-        # Authentication state
-        self._user: Any | None = None
-        self._token: str | None = None
+        # Authentication state is stored in module-level ContextVars
+        # (see top of file). The ``_user`` / ``_token`` descriptors
+        # below adapt to that storage so existing call sites keep
+        # working unchanged while the underlying slots are now scoped
+        # per-asyncio-task.
+
+    @property
+    def _user(self) -> Any | None:
+        return _REQUEST_USER.get()
+
+    @_user.setter
+    def _user(self, value: Any | None) -> None:
+        _REQUEST_USER.set(value)
+
+    @property
+    def _token(self) -> str | None:
+        return _REQUEST_TOKEN.get()
+
+    @_token.setter
+    def _token(self, value: str | None) -> None:
+        _REQUEST_TOKEN.set(value)
 
     def check(self) -> bool:
         """Check if the current request is authenticated."""
@@ -258,13 +288,30 @@ class ApiKeyGuard(Guard):
         return None
 
     def _check_rate_limit(self, api_key: str) -> bool:
-        """Check if API key is within rate limits."""
+        """Check if API key is within rate limits.
+
+        Counter is written via ``Cache.increment`` (Redis INCRBY), which
+        stores a raw integer string. Reading the same key via
+        ``Cache.get`` runs the pickle decoder against that raw string,
+        fails to unpickle, and the driver's corrupt-entry self-heal
+        deletes the key and returns the default. The result: every
+        rate-limit check observed 0 attempts and the limiter never
+        engaged — an attacker with one valid API key could exceed the
+        configured budget by an unbounded factor. The canonical "read
+        counter" idiom in this codebase is ``Cache.increment(key, 0,
+        ttl)``: an INCRBY by 0 returns the current value without
+        touching the pickle codec and materialises a missing key as 0.
+        Pass the same TTL as ``_record_usage`` so the read doesn't
+        accidentally extend the window past its intended expiry.
+        """
         if not self.rate_limit_enabled:
             return True
 
         try:
             cache_key = f"api_key_rate_limit:{api_key}"
-            current_count = Cache.get(cache_key, 0)
+            current_count = int(
+                Cache.increment(cache_key, 0, self.rate_limit_window) or 0
+            )
             return current_count < self.rate_limit_max_attempts
         except Exception:
             return True

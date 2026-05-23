@@ -58,17 +58,40 @@ class BaseJob(BaseQueueable):
             self.with_tag(tag)
         return self
 
+    # Public contract: four-tier priority. Mirrors the wire format
+    # used by the cheapa pipeline (``stage.priority`` routing keys).
+    # A subclass that wants a different queue layout can override
+    # ``_priority_queue_map``.
+    _PRIORITY_QUEUE_MAP: dict[str, str] = {
+        "critical": "jobs-critical",
+        "high": "jobs-priority",
+        "default": "jobs",
+        "low": "jobs-low",
+    }
+
     def priority(self, level: str) -> BaseJob:
-        """Set job priority level."""
+        """Set job priority level.
+
+        Recognised levels (highest first): ``critical``, ``high``,
+        ``default``, ``low``. Pre-fix only ``high`` and ``low`` were
+        wired — ``priority("critical")`` silently no-oped, so callers
+        thought they were preempting the queue but the job landed on
+        whatever ``queue_name`` happened to be set. Unknown levels
+        raise ``ValueError`` so a typo can't disguise itself as
+        ``default``.
+        """
+        if level not in self._PRIORITY_QUEUE_MAP:
+            valid = ", ".join(sorted(self._PRIORITY_QUEUE_MAP.keys()))
+            raise ValueError(
+                f"Unknown priority level {level!r}. Valid: {valid}"
+            )
         self.job_priority = level
-
-        # Automatically adjust queue based on priority
-        if level == "high":
-            self.queue_name = "jobs-priority"
-        elif level == "low":
-            self.queue_name = "jobs-low"
-
+        self.queue_name = self._PRIORITY_QUEUE_MAP[level]
         return self
+
+    def critical_priority(self) -> BaseJob:
+        """Mark this job as critical priority (preempts everything else)."""
+        return self.priority("critical")
 
     def high_priority(self) -> BaseJob:
         """Mark this job as high priority."""

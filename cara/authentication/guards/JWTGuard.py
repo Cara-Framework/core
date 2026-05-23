@@ -364,12 +364,31 @@ class JWTGuard(Guard):
             return None
 
     def _resolve_user_from_token(self, token: str) -> Any | None:
-        """Resolve user from JWT token payload."""
+        """Resolve user from JWT token payload.
+
+        Enforces the access-token type claim. ``refresh()`` already
+        rejects access tokens passed to ``/auth/refresh`` via the
+        symmetric ``typ == refresh`` check, but the inverse — a
+        refresh token presented in the ``Authorization`` header on
+        any auth-protected route — was previously accepted as if it
+        were an access token. Refresh tokens carry a much longer
+        lifetime (3 days vs. 30 minutes for access) and are intended
+        for the single ``/refresh`` endpoint only, so accepting one
+        as an access token effectively extended every authenticated
+        session by the refresh TTL. We treat legacy tokens without a
+        ``typ`` claim as access tokens for backwards compatibility —
+        the field was added recently and any in-flight token at
+        rollout will still resolve.
+        """
         try:
             payload = self._decode_token(token)
             user_id = payload.get("sub")
 
             if not user_id:
+                return None
+
+            typ = payload.get("typ")
+            if typ is not None and typ != TOKEN_TYPE_ACCESS:
                 return None
 
             user = self._resolve_user_by_id(user_id, payload)

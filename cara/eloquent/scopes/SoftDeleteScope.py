@@ -51,27 +51,39 @@ class SoftDeleteScope(BaseScope):
         table = builder.get_table_name()
         return builder.where_null(f"{table}.{self.deleted_at_column}")
 
-    def _with_trashed(self, builder):
+    def _with_trashed(self, model, builder):
         """
         Include soft-deleted records in results.
         Removes the soft delete scope from SELECT.
+
+        Macro signature: ``(model, builder)`` — the QueryBuilder macro
+        dispatcher (`QueryBuilder.__getattr__`) calls registered macros
+        with ``(self._model, self, *args)``, so every macro on this scope
+        receives the model + builder pair even when it doesn't use the
+        model. Pre-fix the signature was ``(self, builder)`` and every
+        ``Model.with_trashed()`` call raised
+        ``TypeError: takes 2 positional arguments but 3 were given``.
         """
         builder.remove_global_scope("_soft_delete", action="select")
         return builder
 
-    def _only_trashed(self, builder):
+    def _only_trashed(self, model, builder):
         """
         Return only soft-deleted records.
         Removes the soft delete scope and adds a filter for non-null deleted_at.
+
+        See ``_with_trashed`` for the ``(model, builder)`` signature reason.
         """
         builder.remove_global_scope("_soft_delete", action="select")
         table = builder.get_table_name()
         return builder.where_not_null(f"{table}.{self.deleted_at_column}")
 
-    def _restore(self, builder):
+    def _restore(self, model, builder):
         """
         Restore soft-deleted records by clearing the deleted_at timestamp.
         Must remove the soft delete scope to allow restoring deleted records.
+
+        See ``_with_trashed`` for the ``(model, builder)`` signature reason.
         """
         builder.remove_global_scope("_soft_delete", action="select")
         return builder.update({self.deleted_at_column: None})
@@ -111,19 +123,23 @@ class SoftDeleteScope(BaseScope):
 
         return builder.update({self.deleted_at_column: timestamp})
 
-    def _force_delete(self, builder):
+    def _force_delete(self, model, builder):
         """
         Permanently delete a record, bypassing soft delete.
+
+        See ``_with_trashed`` for the ``(model, builder)`` signature reason.
         """
         # Remove soft delete scope to allow actual deletion
         builder.remove_global_scope("_soft_delete", action="select")
         builder.remove_global_scope("_soft_delete_delete", action="delete")
         return builder.delete()
 
-    def _force_delete_query(self, builder):
+    def _force_delete_query(self, model, builder):
         """
         Get a query builder for force delete without executing.
         Useful for batch delete operations.
+
+        See ``_with_trashed`` for the ``(model, builder)`` signature reason.
         """
         builder.remove_global_scope("_soft_delete", action="select")
         builder.remove_global_scope("_soft_delete_delete", action="delete")

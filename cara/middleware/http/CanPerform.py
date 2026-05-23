@@ -37,12 +37,18 @@ class CanPerform(Middleware):
             return await next_fn(request)
 
         except Exception as e:
-            # Authorization failed - return 403 Forbidden
+            # Authorization failed - return 403 Forbidden.
+            # Canonical envelope: ``{error, type}`` — same shape the
+            # global exception handler uses on every other 4xx/5xx
+            # path. Pre-fix this middleware emitted
+            # ``{error, message}`` which forced clients to substring-
+            # match the human-readable text to discriminate between
+            # 403 sources.
             response = Response(self.application)
             return response.json(
                 {
-                    "error": "Forbidden",
-                    "message": str(e) if str(e) else "This action is unauthorized",
+                    "error": str(e) if str(e) else "This action is unauthorized",
+                    "type": "authorization_failed",
                 },
                 403,
             )

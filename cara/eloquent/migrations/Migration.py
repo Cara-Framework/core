@@ -122,6 +122,24 @@ class Migration:
             # changed but unrecorded (or vice versa). Previously this
             # path called the two side-by-side with no atomicity,
             # producing inconsistent state on any mid-flight failure.
+            #
+            # IDEMPOTENCY: the executor's ``run_pending_migrations``
+            # skips migrations already in the tracker; this specific-
+            # name path used to run ``up()`` unconditionally, so
+            # ``python craft migrate --m=foo`` twice ran ``foo.up()``
+            # twice (typically a ``CREATE TABLE`` followed by an
+            # ``already exists`` crash on the second invocation, plus a
+            # duplicate tracker row when ``up`` was idempotent enough
+            # to survive). Treat already-ran migrations as a no-op to
+            # match the bulk path's contract.
+            self.tracker.ensure_migrations_table()
+            ran_migrations = set(self.tracker.get_ran_migrations())
+            if migration in ran_migrations:
+                Log.info(f"Migration {migration} already ran; skipping.")
+                if output and self.command_class:
+                    self.command_class.info("Migrations completed.")
+                return
+
             migration_files = self.file_manager.get_migration_files()
             for file_path in migration_files:
                 migration_name = self.file_manager.get_migration_name_from_file(file_path)
@@ -156,6 +174,23 @@ class Migration:
             # un-applies the schema while leaving the tracker entry
             # behind, or removes the tracker entry while leaving the
             # schema intact.
+            #
+            # IDEMPOTENCY: previously ran ``down()`` even if the named
+            # migration was already rolled back, so calling
+            # ``migrate:rollback --m=foo`` twice ran
+            # ``DROP TABLE foo`` twice and the second invocation
+            # crashed with "table does not exist" — masking the actual
+            # state ("we already rolled it back").
+            self.tracker.ensure_migrations_table()
+            ran_migrations = set(self.tracker.get_ran_migrations())
+            if migration not in ran_migrations:
+                Log.info(
+                    f"Migration {migration} was not in the tracker; nothing to rollback."
+                )
+                if output and self.command_class:
+                    self.command_class.info("Rollback completed.")
+                return
+
             migration_files = self.file_manager.get_migration_files()
             file_map = {}
             for file_path in migration_files:

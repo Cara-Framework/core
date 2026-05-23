@@ -20,8 +20,15 @@ class CheckMaintenanceMode(Middleware):
 
         if os.path.exists(maintenance_path):
             resp = Response(self.application)
+            # Canonical envelope ``{error, type}`` — same shape the
+            # global exception handler uses, so clients can branch on
+            # ``type === "maintenance_mode"`` instead of substring-
+            # matching the human-readable error text.
             return resp.json(
-                {"error": "Service Unavailable (maintenance mode)"},
+                {
+                    "error": "Service Unavailable (maintenance mode)",
+                    "type": "maintenance_mode",
+                },
                 503,
             )
 

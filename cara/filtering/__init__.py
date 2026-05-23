@@ -44,8 +44,15 @@ from .Pipeline import FilterPipeline, pipeline
 from .Relations import RelationSet, relations
 from .Request import FilteredFormRequest, PAGING_RULES
 from .Sorter import Sorter, SortRegistry
+from .VariationKeys import (
+    ALL_VARIATION_KEYS,
+    COLOR_SWATCH_KEYS,
+    VARIATION_SELECT_KEYS,
+)
 
 __all__ = [
+    "ALL_VARIATION_KEYS",
+    "COLOR_SWATCH_KEYS",
     "Filter",
     "FILTER_GROUP_AVAILABILITY",
     "FILTER_GROUP_BRAND",
@@ -71,4 +78,5 @@ __all__ = [
     "UI_CONTROL_RANGE_SLIDER",
     "UI_CONTROL_TEXT_INPUT",
     "UI_CONTROL_TOGGLE",
+    "VARIATION_SELECT_KEYS",
 ]

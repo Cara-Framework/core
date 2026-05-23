@@ -17,17 +17,24 @@ class RequiredRule(BaseRule):
         """Check if value is present and not empty.
 
         "Empty" means: missing key (None), whitespace-only string, or
-        zero-length collection (list, tuple, set, dict). Without the
-        collection check, an attacker can satisfy ``required|array`` on
-        a field by submitting ``[]`` — the previous implementation only
-        rejected None and empty strings, so empty arrays slipped past
-        every required check on array-typed fields.
+        zero-length collection (list, tuple, set, frozenset, dict,
+        bytes, bytearray). Without the collection check, an attacker
+        can satisfy ``required|array`` on a field by submitting ``[]``
+        — the previous implementation only rejected None and empty
+        strings, so empty arrays slipped past every required check on
+        array-typed fields. ``frozenset`` is included because it is
+        NOT a subclass of ``set`` (siblings — ``isinstance(frozenset(),
+        set)`` is False), and ``bytes`` / ``bytearray`` because empty
+        binary uploads otherwise looked "present" to the validator.
         """
         if value is None:
             return False
         if isinstance(value, str) and value.strip() == "":
             return False
-        if isinstance(value, (list, tuple, set, dict)) and len(value) == 0:
+        if (
+            isinstance(value, (list, tuple, set, frozenset, dict, bytes, bytearray))
+            and len(value) == 0
+        ):
             return False
         return True
 

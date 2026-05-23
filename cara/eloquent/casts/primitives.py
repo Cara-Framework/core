@@ -142,7 +142,7 @@ class DecimalCast(BaseCast):
             return self._quantize(value)
         try:
             return self._quantize(Decimal(str(value)))
-        except ValueError, TypeError, InvalidOperation:
+        except (ValueError, TypeError, InvalidOperation):
             return None
 
     def set(self, value):
@@ -150,7 +150,7 @@ class DecimalCast(BaseCast):
             return None
         try:
             return self._quantize(Decimal(str(value)))
-        except ValueError, TypeError, InvalidOperation:
+        except (ValueError, TypeError, InvalidOperation):
             return None
 
 

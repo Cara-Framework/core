@@ -389,8 +389,16 @@ class AMQPDriver(HasColoredOutput, Queue):
         payload: dict[str, Any],
         exc: Exception,
         options: dict[str, Any],
-    ) -> None:
+    ) -> bool:
         """Route a failed in-flight message to retry or to DLX.
+
+        Returns:
+            ``True`` when a retry was scheduled (caller must NOT
+            release the ``UniqueJob`` lock — the retry is in flight
+            and needs the lock held until it actually runs).
+            ``False`` when the message was terminally dead-lettered
+            (caller MUST release the lock so the next legitimate
+            dispatch can proceed).
 
         The decision is hard-bounded by the per-class ``max_attempts``
         (instance class attribute; default
@@ -441,7 +449,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 Log.warning(
                     f"_handle_failed_message: DLX after unpickle failure raised: {e}"
                 )
-            return
+            return False
 
         if getattr(exc, "do_not_retry", False):
             Log.error(
@@ -454,7 +462,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 options=dlx_options,
                 attempts=int(payload.get("attempts", 0)),
             )
-            return
+            return False
 
         attempts_made = int(payload.get("attempts", 0)) + 1
         max_attempts = int(
@@ -470,7 +478,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             self._send_to_dead_letter(
                 job=instance, options=dlx_options, attempts=attempts_made
             )
-            return
+            return False
 
         backoff_schedule = getattr(
             instance,
@@ -499,6 +507,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         }
         try:
             self.later(delay_seconds, instance, retry_options)
+            return True
         except Exception as republish_exc:
             # Republish failed — we've already acked the original
             # delivery, so the job is lost unless we surface this.
@@ -521,6 +530,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     f"also failed — payload IS lost",
                     exc_info=True,
                 )
+            return False
 
     def _send_to_dead_letter(
         self, job: Any, options: dict[str, Any], attempts: int
@@ -720,6 +730,12 @@ class AMQPDriver(HasColoredOutput, Queue):
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 self._dispatch_batch_completion(instance, None)
+                # Success terminates the job's slot — release the
+                # UniqueJob lock so subsequent legitimate dispatches
+                # for the same ``unique_id`` can proceed. The failure
+                # branch handles its own release decision (held during
+                # retries, released on DLX).
+                self._release_unique_lock_if_any(instance)
                 self.info(f"AMQPDriver: job processed successfully, queue={queue_name}")
             except Exception as exc:
                 self.danger(f"AMQPDriver: job processing failed: {exc}")
@@ -737,13 +753,14 @@ class AMQPDriver(HasColoredOutput, Queue):
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 except Exception:
                     pass
+                retry_scheduled = False
                 try:
-                    self._handle_failed_message(
+                    retry_scheduled = bool(self._handle_failed_message(
                         instance=instance,
                         payload=payload if "payload" in dir() else {},
                         exc=exc,
                         options=merged_opts,
-                    )
+                    ))
                 except Exception as retry_exc:
                     self.danger(f"AMQPDriver: retry/dead-letter path raised: {retry_exc}")
                 # Job-side ``failed`` hook for app-level cleanup —
@@ -758,8 +775,16 @@ class AMQPDriver(HasColoredOutput, Queue):
                     except Exception as inner:
                         self.danger(f"AMQPDriver: failed() raised: {inner}")
                 self._dispatch_batch_completion(instance, exc)
-            finally:
-                self._release_unique_lock_if_any(instance)
+                # Release the UniqueJob lock ONLY on terminal failure.
+                # If a retry was scheduled, the delayed-publish payload
+                # carries the same ``unique_id`` and the retry must
+                # observe the lock as still held — otherwise a
+                # concurrent dispatch in the backoff window wins the
+                # lock and we get a duplicate execution when the
+                # retry fires. The lock TTL (``unique_for``, default
+                # 3600s) caps the worst case.
+                if not retry_scheduled:
+                    self._release_unique_lock_if_any(instance)
 
         channel.basic_consume(queue=queue_name, on_message_callback=on_message)
         self.info(f"AMQPDriver: consuming from queue='{queue_name}'")

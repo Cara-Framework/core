@@ -12,6 +12,15 @@ from cara.facades import Log, RateLimiter
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
+# Default to fail-closed when the cache backend that backs the rate
+# limiter is unreachable. Fail-open silently lifts the cap, so the
+# rate limiter that's supposed to absorb abuse stops working at the
+# exact moment Redis is also down (typical correlated-failure window
+# during DDoS / cache stampede). Operators who explicitly want the
+# legacy fail-open posture can flip ``rate.fail_open`` to True in
+# config — the tradeoff is documented but no longer the default.
+_DEFAULT_FAIL_OPEN = False
+
 
 class ThrottleRequests(Middleware):
     """Rate limiting middleware with automatic parameter parsing."""
@@ -100,15 +109,18 @@ class ThrottleRequests(Middleware):
         allowed, remaining, reset_in = self._attempt_limit(key, limit_config)
 
         if not allowed:
-            # Build a 429 Response and attach headers
+            # Build a 429 Response with the canonical error envelope.
+            # Pre-fix the body was ``{"success": False, "message": ...}``
+            # while the framework's DefaultExceptionHandler emits
+            # ``{"error", "type", ...}`` — same caller hitting an error
+            # via two different paths saw two different shapes. The
+            # storefront / SDK now branches on ``type`` everywhere.
             resp = Response(self.application)
-            # Standard 429 body (JSON)
             body = {
-                "success": False,
-                "message": "Too Many Requests",
+                "error": "Too Many Requests",
+                "type": "rate_limit_exceeded",
+                "retry_after": int(reset_in),
             }
-
-            # Set JSON payload and status
             resp.json(body, 429)
 
             # Attach rate-limit headers
@@ -132,6 +144,20 @@ class ThrottleRequests(Middleware):
         response.header("X-RateLimit-Reset", str(reset_in))
 
         return response
+
+    def _fail_open_mode(self) -> bool:
+        """Whether to allow traffic when the cache backend is down.
+
+        Default False (fail-closed). Operators flip ``rate.fail_open``
+        in config when the tradeoff favours availability over abuse
+        protection — but the safer default is to refuse traffic and
+        let the caller retry once the limiter is healthy again.
+        """
+        try:
+            from cara.facades import Config
+            return bool(Config.get("rate.fail_open", _DEFAULT_FAIL_OPEN))
+        except Exception:
+            return _DEFAULT_FAIL_OPEN
 
     def _is_trusted_ip(self, request: Request) -> bool:
         """Check whether the request originates from a trusted IP.
@@ -292,10 +318,26 @@ class ThrottleRequests(Middleware):
             # allowed concurrent requests to slip past the limit.
             # Cache.increment creates the key with TTL if it doesn't exist.
             count = Cache.increment(cache_key, 1, window_seconds)
-        except Exception:
-            # Cache backend down — degrade open (allow traffic) rather
-            # than crash the request or silently block legitimate users.
-            return True, limit_config.max_attempts, 0
+        except Exception as exc:
+            # Cache backend down. Fail-closed by default — an abuse
+            # window that coincides with cache outage is the worst
+            # possible time to silently lift the cap. Operators who
+            # need fail-open posture can opt back in with
+            # ``rate.fail_open=True``. The fail-closed branch raises
+            # ``ServiceUnavailableException`` so the global handler
+            # emits a canonical 503 envelope (``{error, type, retry_after}``)
+            # rather than the bespoke 429 shape this middleware builds.
+            from cara.exceptions import ServiceUnavailableException
+            Log.warning(
+                f"ThrottleRequests cache backend failed: {exc}; "
+                f"fail_open={self._fail_open_mode()}",
+            )
+            if self._fail_open_mode():
+                return True, limit_config.max_attempts, 0
+            raise ServiceUnavailableException(
+                "Rate limiter temporarily unavailable",
+                retry_after=1,
+            ) from exc
 
         allowed = count <= limit_config.max_attempts
         remaining = max(limit_config.max_attempts - count, 0)
