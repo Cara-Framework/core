@@ -44,14 +44,45 @@ class CursorPaginator(BasePaginator):
         raw = json.dumps({"v": value}, default=str).encode("utf-8")
         return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
 
+    # Allowlist of cursor-value types that make sense as a keyset
+    # comparand. A keyset query is ``WHERE id > ?`` (or compound
+    # equivalent) where ``?`` is bound as a query parameter — only
+    # scalars are meaningful, and only scalars round-trip cleanly
+    # through every supported DB driver. Pre-fix, ``decode`` returned
+    # whatever ``json.loads(...).get("v")`` produced — a hand-crafted
+    # cursor could smuggle a ``{}`` / ``[]`` / ``null`` body through
+    # the keyset boundary, and the downstream query crashed with a
+    # non-actionable psycopg2 error (``can't adapt type 'dict'``)
+    # instead of being treated as "invalid cursor → start from
+    # beginning". Booleans (``True``/``False``) are excluded too —
+    # they're technically scalar in Python but never a real keyset.
+    _ALLOWED_CURSOR_TYPES: tuple[type, ...] = (int, float, str)
+
     @staticmethod
     def decode(cursor):
-        """Decode a cursor string back to the keyset value."""
+        """Decode a cursor string back to the keyset value.
+
+        Returns ``None`` for missing, malformed, or compound-payload
+        cursors — same contract on every failure mode so the caller
+        can branch once ("invalid cursor → start from beginning")
+        without having to discriminate the failure cause.
+        """
         if cursor is None:
             return None
         padding = "=" * (-len(cursor) % 4)
         try:
             raw = base64.urlsafe_b64decode(cursor + padding).decode("utf-8")
-            return json.loads(raw).get("v")
+            payload = json.loads(raw)
         except Exception:
             return None
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("v")
+        # ``isinstance(True, int)`` is True in Python — explicit bool
+        # rejection prevents a tampered cursor smuggling a boolean
+        # into a numeric keyset column.
+        if isinstance(value, bool):
+            return None
+        if not isinstance(value, CursorPaginator._ALLOWED_CURSOR_TYPES):
+            return None
+        return value

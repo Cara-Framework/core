@@ -58,6 +58,37 @@ def _redact_query_string(query: str) -> str:
     return _SENSITIVE_PARAM_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", query)
 
 
+# Per the ASGI spec, ``scope["path"]`` is the URL-DECODED path — so a
+# request to ``/foo%0Abar`` reaches the middleware as ``/foo\nbar``
+# with a real newline. Logging that straight into the access log
+# splits one logical entry across two lines (log forging — the
+# attacker plants a synthetic "successful admin action" entry under
+# their own request), and a ``%1B`` (ESC) decodes to ``\x1b`` which
+# terminal log viewers honour as a real ANSI control sequence
+# (``\x1b[2K`` clears the prior line, ``\x1b[31m`` re-colours
+# subsequent output to mimic an error). Same risk on the
+# attacker-controlled ``User-Agent`` header in the debug-level
+# headers dump.
+#
+# Replace every C0 (``\x00..\x1f``) + DEL (``\x7f``) + C1
+# (``\x80..\x9f``) byte with its ``%XX`` substitute. Preserves the
+# URL-style "looks like an encoded escape" rendering so the entry
+# stays human-readable but no character can break line structure or
+# inject terminal sequences. Non-control Unicode (Turkish chars,
+# emoji, accented letters) passes through unchanged — they're not
+# injection vectors.
+def _sanitize_log_path(value: str) -> str:
+    """Return ``value`` with C0/DEL/C1 control chars %-encoded."""
+    if not value:
+        return value
+    return "".join(
+        f"%{ord(c):02X}"
+        if (ord(c) < 0x20 or ord(c) == 0x7F or 0x80 <= ord(c) <= 0x9F)
+        else c
+        for c in value
+    )
+
+
 def _redact_headers(headers: list) -> dict:
     """Build a header dict with sensitive values replaced by ``[REDACTED]``.
 
@@ -74,9 +105,10 @@ def _redact_headers(headers: list) -> dict:
         if name in _SENSITIVE_HEADERS:
             redacted[name] = "[REDACTED]"
         else:
-            redacted[name] = (
+            decoded = (
                 raw_value.decode("latin-1") if isinstance(raw_value, bytes) else raw_value
             )
+            redacted[name] = _sanitize_log_path(decoded)
     return redacted
 
 
@@ -110,10 +142,10 @@ class LogHttpRequests(Middleware):
             response = await next(request)
         except Exception as exc:
             method = request.method
-            path = request.path
+            path = _sanitize_log_path(request.path)
             qs = request.scope.get("query_string", b"").decode()
             if qs:
-                path += f"?{_redact_query_string(qs)}"
+                path += f"?{_sanitize_log_path(_redact_query_string(qs))}"
             Log.warning(
                 f"🌐 HTTP FAIL: {client_ip} -> {method} {path} — {type(exc).__name__}: {exc}",
                 category="cara.http.requests",
@@ -125,13 +157,17 @@ class LogHttpRequests(Middleware):
 
         # Build log message using sync and async methods appropriately
         method = request.method  # sync property
-        path = request.path  # sync property
+        path = _sanitize_log_path(request.path)  # sync property
 
         # Get query string from scope if available. Redact known-secret
         # params so tokens/keys never end up in access logs.
         query_string = request.scope.get("query_string", b"").decode()
         if query_string:
-            path += f"?{_redact_query_string(query_string)}"
+            # Sanitize AFTER the redaction so a control char inside a
+            # redacted token's position can't slip past the sanitizer
+            # — and the marker text ``[REDACTED]`` itself has no
+            # control chars so the second pass is a no-op on it.
+            path += f"?{_sanitize_log_path(_redact_query_string(query_string))}"
 
         status_code = response.get_status_code()
         status_color, status_symbol = self._get_status_info(status_code)

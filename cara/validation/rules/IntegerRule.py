@@ -4,6 +4,7 @@ Integer Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is an integer.
 """
 
+import re
 from typing import Any
 
 from cara.validation import MessageFormatter
@@ -11,7 +12,25 @@ from cara.validation.rules import BaseRule
 
 
 class IntegerRule(BaseRule):
-    """Validates that a value is an integer or integer string."""
+    """Validates that a value is an integer or integer string.
+
+    String inputs must match the canonical form ``^[+-]?\\d+$``
+    — no surrounding whitespace, no PEP 515 underscore separators,
+    no control characters. Python's ``int()`` accepts all of those
+    (``int("\\t42") == 42``, ``int("1_000") == 1000``), so a pre-fix
+    ``try: int(value)`` swallowed them silently. The raw, untrusted
+    string then flowed into downstream code — log lines, Prometheus
+    labels, error messages — where a newline-tainted value
+    corrupts the record.
+
+    Strict shape at the rule boundary is what Laravel's ``integer``
+    rule enforces too.
+    """
+
+    # Anchored shape — ``fullmatch`` removes the default-mode ``$``
+    # quirk that lets ``"42\n"`` slip past ``match()`` with a
+    # trailing ``$`` anchor.
+    _STRICT_INT_PATTERN = re.compile(r"^[+-]?\d+$")
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value is an integer."""
@@ -25,11 +44,10 @@ class IntegerRule(BaseRule):
             return True
 
         if isinstance(value, str):
-            try:
-                int(value)
-                return True
-            except ValueError:
-                return False
+            # Strict shape check — see class docstring. ``fullmatch``
+            # rejects trailing newlines that the default ``$`` would
+            # otherwise allow.
+            return bool(self._STRICT_INT_PATTERN.fullmatch(value))
 
         return False
 

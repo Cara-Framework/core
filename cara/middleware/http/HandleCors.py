@@ -190,3 +190,35 @@ class HandleCors(Middleware):
             if re.match(pattern, origin):
                 return True
         return False
+
+
+def apply_cors_headers_to_response(application, request, response) -> None:
+    """Stamp CORS headers on ``response`` for middleware that
+    short-circuits BEFORE ``HandleCors`` runs in the chain.
+
+    The global chain in ``api/config/middleware.py`` places
+    ``HandleCors`` at position 9; ``EnforceBodySizeLimit`` (3) and
+    ``FilterBlockedUserAgents`` (4) reject earlier with a ``return
+    Response(...)``. That response unwinds the stack 3 → 2 → 1 —
+    position 9 (``HandleCors``) is never invoked, so the browser
+    sees a response without ``Access-Control-Allow-Origin`` and
+    the fetch promise rejects with a generic "CORS error" that
+    masks the real status code. The exception handler covers the
+    equivalent case for RAISED exceptions
+    (``DefaultExceptionHandler._cors_headers_for_scope``) but not
+    for direct Response returns.
+
+    This helper applies the same logic ``HandleCors._add_cors_headers``
+    would — including the wildcard-with-credentials safety guard —
+    so callers get a single source of truth for the policy.
+    Header-application failures are swallowed so a CORS-config
+    hiccup never masks the primary 413/403 the middleware was
+    trying to surface.
+    """
+    try:
+        HandleCors(application)._add_cors_headers(request, response)
+    except Exception:
+        # Same swallow as HandleCors.handle()'s finally — better to
+        # ship the 4xx without CORS headers than to crash the
+        # rejection path on a config lookup failure.
+        pass

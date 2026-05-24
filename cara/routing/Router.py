@@ -53,13 +53,12 @@ class Router:
 
     def add(self, *routes: Route) -> Router:
         """Add routes to the router."""
-        for route in routes:
-            for r in route if isinstance(route, list) else [route]:
-                self.routes.append(r)
-                for m in r.request_method:
-                    key = m.upper()
-                    if key in self.routes_by_method:
-                        self.routes_by_method[key].append(r)
+        for r in flatten(routes):
+            self.routes.append(r)
+            for m in r.request_method:
+                key = m.upper()
+                if key in self.routes_by_method:
+                    self.routes_by_method[key].append(r)
         return self
 
     # ------------------------------------------------------------------

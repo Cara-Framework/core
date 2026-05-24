@@ -46,7 +46,14 @@ class UniqueJob:
     def is_unique_locked(cls, unique_id: str) -> bool:
         """Check if a job with this unique_id is already locked.
 
-        Tries Cache-backed lock first, falls back to in-memory for boot scenarios.
+        Tries Cache-backed lock first, falls back to in-memory for boot
+        scenarios AND for transient Cache outages (Redis down, network
+        flap). Pre-fix only ``ImportError`` triggered the fallback —
+        any other Cache exception (``redis.ConnectionError``,
+        ``TimeoutError``) propagated and crashed every UniqueJob
+        dispatch for the duration of the outage. Falling back is best-
+        effort (the in-memory dict isn't shared across worker
+        processes) but strictly better than crashing the pipeline.
         """
         cache_key = f"unique_job:{unique_id}"
 
@@ -56,7 +63,11 @@ class UniqueJob:
 
             if Cache.get(cache_key) is not None:
                 return True
-        except ImportError:
+        except Exception:
+            # ImportError (boot) OR any runtime Cache failure (Redis
+            # down, timeout, misconfigured facade). Fall through to the
+            # in-memory check below — we cannot afford to raise out of
+            # a lock primitive that's on the hot dispatch path.
             pass
 
         # Fallback: in-memory lock
@@ -74,7 +85,14 @@ class UniqueJob:
         """Try to acquire a uniqueness lock. Returns True if acquired.
 
         Uses Cache.add() for atomic distributed locking, falls back to
-        in-memory threading lock for boot scenarios.
+        in-memory threading lock when Cache is unavailable — both at
+        boot (``ImportError``) AND during a runtime outage (Redis
+        ConnectionError, TimeoutError). Pre-fix only ImportError
+        triggered the fallback; a transient Redis blip turned every
+        UniqueJob dispatch into an unhandled exception. The in-memory
+        fallback is best-effort across multi-worker deployments — the
+        occasional double-execution is bounded by each job's own
+        idempotency guards downstream.
         """
         cache_key = f"unique_job:{unique_id}"
 
@@ -87,7 +105,11 @@ class UniqueJob:
                 return True
             # Lock already exists in Cache
             return False
-        except ImportError:
+        except Exception:
+            # Cache-facade ImportError at boot OR a runtime Cache
+            # failure (Redis ConnectionError, TimeoutError, misconfigured
+            # binding). Fall through to the in-memory branch — see
+            # ``is_unique_locked`` for the same rationale.
             pass
 
         # Fallback: in-memory lock
@@ -105,6 +127,13 @@ class UniqueJob:
         """Release a uniqueness lock.
 
         Removes from Cache (distributed) and in-memory fallback.
+        Cache failures during release are swallowed — the in-memory
+        clear below is the load-bearing step for single-process
+        retries, and a Cache outage shouldn't prevent the caller from
+        moving on. Pre-fix only ImportError was caught; a Redis
+        ConnectionError during ``release_unique_lock`` would propagate
+        and the Bus's error path would silently double-release on the
+        outer try/except.
         """
         cache_key = f"unique_job:{unique_id}"
 
@@ -113,7 +142,10 @@ class UniqueJob:
             from cara.facades import Cache
 
             Cache.forget(cache_key)
-        except ImportError:
+        except Exception:
+            # Cache unavailable (boot) OR runtime failure — see acquire
+            # for the same rationale. Releasing is best-effort; the
+            # in-memory clear below still runs.
             pass
 
         # Also remove from in-memory fallback

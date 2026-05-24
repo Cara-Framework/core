@@ -269,6 +269,26 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         builder.identifier = job_id
         builder.options.update({"silent": True})
 
+        # ROOT-CAUSE: pre-fix the dict-job registration silently dropped
+        # any ``without_overlapping`` flag in the spec, so every entry in
+        # ``config/scheduling.py`` ran without scheduler-level overlap
+        # protection — a 30 s interval whose body takes 45 s cascaded; a
+        # multi-pod deploy fired the same cron tick on every pod in
+        # parallel. The flag must be applied BEFORE the terminal
+        # ``builder.interval()`` / ``.daily()`` / ``.cron()`` call
+        # because those methods dispatch ``options`` to the driver
+        # immediately. Default stays False so existing entries that
+        # rely on overlap (or that implement their own internal
+        # ``Cache.add`` fence — see ``FlushDirtyPricesJob``) keep
+        # their current behaviour. ``lock_timeout`` mirrors the
+        # ``APSchedulerDriver._wrap_without_overlapping`` default of
+        # 86400 s (1 day) so a crashed holder can't wedge the slot
+        # forever — same TTL the rest of the lock surface uses.
+        if spec.get("without_overlapping"):
+            builder.without_overlapping(
+                timeout=int(spec.get("lock_timeout", 86400)),
+            )
+
         if trigger == "interval":
             builder.interval(
                 seconds=spec.get("seconds", 0),

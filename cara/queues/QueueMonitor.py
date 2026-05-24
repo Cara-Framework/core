@@ -108,10 +108,21 @@ class QueueMonitor:
             f"[QueueMonitor] {status_emoji} Job {job_stat['status']}: {job_stat['job_name']} ({job_stat['duration']:.2f}s)"
         )
 
-        # Clean up old job stats (keep last 1000)
+        # Clean up old job stats (keep last 1000).
+        # ROOT-CAUSE: the previous eviction sorted by dict KEY (which is
+        # ``f"{class_name}_{ms_ts}"``), so alphabetisation buckets by
+        # class name FIRST and only orders by timestamp WITHIN a class.
+        # A high-volume A-named class (``AggregatePricesJob``, 10/s) kept
+        # displacing rare Z-named rows (``WishlistPriceDropSweepJob``,
+        # 1/min) from the visible history regardless of actual age —
+        # the rare jobs effectively vanished from monitoring. Sorting by
+        # ``started_at`` makes the eviction genuinely time-ordered.
         if len(self.job_stats) > 1000:
-            oldest_jobs = sorted(self.job_stats.keys())[:100]
-            for old_job_id in oldest_jobs:
+            oldest_first = sorted(
+                self.job_stats.items(),
+                key=lambda kv: kv[1].get("started_at") or datetime.min,
+            )
+            for old_job_id, _ in oldest_first[:100]:
                 del self.job_stats[old_job_id]
 
     def get_queue_stats(self, queue_name: str | None = None) -> dict[str, Any]:
@@ -149,6 +160,54 @@ class QueueMonitor:
                 job["completed_at"] = job["completed_at"].isoformat()
 
         return recent_jobs
+
+    def get_stuck_jobs(self, threshold_seconds: int = 300) -> list[dict[str, Any]]:
+        """Return every job still in ``processing`` past the threshold.
+
+        A "stuck" job is one whose lifecycle ended without a
+        ``job_completed`` call — typically because the worker crashed
+        mid-execution (segfault, OOM, ``kill -9``), got cancelled
+        externally, or the consumer ack'd without firing the monitor
+        hook. The row sits in this monitor's ``job_stats`` as
+        ``status="processing"`` indefinitely (until the eviction cap
+        clears it ~1000 jobs later), and the framework has no native
+        watchdog for "still running too long".
+
+        ``threshold_seconds`` is the caller's contract for "how long
+        is too long" — a typical value is 5×p99 latency for the
+        slowest healthy job in the queue. Use ``0`` to dump every
+        in-flight job (debug / incident response).
+
+        Returns
+        -------
+        Oldest-first list of stat dicts enriched with
+        ``elapsed_seconds`` — the single most useful field on a
+        stuck-job alert payload (avoids forcing every caller to
+        recompute against ``started_at``).
+        """
+        now = datetime.now()
+        stuck: list[tuple[float, dict[str, Any]]] = []
+        for stat in self.job_stats.values():
+            if stat.get("status") != "processing":
+                continue
+            started = stat.get("started_at")
+            if not isinstance(started, datetime):
+                # Defensive: ``job_started`` writes ``datetime.now()`` but
+                # ``get_job_stats`` mutates entries to ISO strings on the
+                # return path. Skip anything we can't compare numerically.
+                continue
+            elapsed = (now - started).total_seconds()
+            if elapsed < threshold_seconds:
+                continue
+            enriched = dict(stat)
+            enriched["elapsed_seconds"] = round(elapsed, 3)
+            enriched["started_at"] = started.isoformat()
+            stuck.append((elapsed, enriched))
+
+        # Oldest first — ops should see the worst offender at the top
+        # of the alert payload.
+        stuck.sort(key=lambda kv: -kv[0])
+        return [s for _, s in stuck]
 
     def get_failed_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
         """

@@ -17,7 +17,18 @@ class BeforeRule(BaseRule):
         v = _parse_date(value)
         if compare is None or v is None:
             return False
-        return v < compare
+        # Raw ``<`` raises ``TypeError`` when one side is naive and
+        # the other is timezone-aware (the API caller submitted
+        # ``"2026-01-01T00:00:00"`` against a target carrying an
+        # offset, or vice versa). Validation is the layer that
+        # converts bad input into a clean 422 — letting the
+        # ``TypeError`` propagate turns a malformed timezone field
+        # into a 500. Catch the comparison failure and return False
+        # so the standard "must be a date before X" message fires.
+        try:
+            return v < compare
+        except TypeError:
+            return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)

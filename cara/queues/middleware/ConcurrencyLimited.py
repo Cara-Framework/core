@@ -76,11 +76,43 @@ class ConcurrencyLimited:
                 return await result
             return result
 
-    def _try_acquire(self, cache, redis_key: str, slot_id: str) -> bool:
-        """Atomic slot acquisition using a Redis sorted set.
+    # Lua script that combines prune-expired + count + conditional-add
+    # in a single server-side EVAL. Redis evaluates the whole script
+    # under the keyspace lock so concurrent workers cannot slip past
+    # the count check between commands. Returns 1 if a slot was
+    # acquired, 0 if the cap is full.
+    #
+    # KEYS[1] = redis_key (sorted set holding slot_id → expiry score)
+    # ARGV[1] = now (unix ts)
+    # ARGV[2] = expiry (now + slot_ttl)
+    # ARGV[3] = max_concurrent
+    # ARGV[4] = slot_id
+    # ARGV[5] = key_ttl (slot_ttl + headroom)
+    _ACQUIRE_LUA = (
+        "redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1]) "
+        "local n = redis.call('ZCARD', KEYS[1]) "
+        "if n >= tonumber(ARGV[3]) then return 0 end "
+        "redis.call('ZADD', KEYS[1], ARGV[2], ARGV[4]) "
+        "redis.call('EXPIRE', KEYS[1], ARGV[5]) "
+        "return 1"
+    )
 
-        Members are slot_ids scored by expiry timestamp. We prune expired
-        entries, check count, and add ourselves in one logical operation.
+    def _try_acquire(self, cache, redis_key: str, slot_id: str) -> bool:
+        """Atomic slot acquisition using a single Redis EVAL.
+
+        Pre-fix this method issued ``ZCARD`` (read) and ``ZADD`` (write)
+        as separate round-trips. Two workers racing on the last free
+        slot both read ``zcard < max_concurrent``, both passed the
+        gate, both ``ZADD``-ed themselves in — and the cap was silently
+        exceeded by one for every concurrent racer. Routing prune +
+        count + conditional-add through a Lua script closes the
+        TOCTOU window: Redis evaluates the script under its keyspace
+        lock so the second concurrent caller observes the first's
+        ZADD before its own ZCARD.
+
+        Falls back to the pre-fix pipeline path when the client doesn't
+        expose ``eval`` (some fake/in-memory drivers used in early-boot
+        tests) — those drivers don't have concurrent callers anyway.
         """
         try:
             redis = self._get_redis(cache)
@@ -88,10 +120,34 @@ class ConcurrencyLimited:
                 return True  # degrade gracefully
 
             now = time.time()
+            expiry = now + self.slot_ttl
+            key_ttl = self.slot_ttl + 60
+
+            evaluator = getattr(redis, "eval", None)
+            if callable(evaluator):
+                try:
+                    result = evaluator(
+                        self._ACQUIRE_LUA,
+                        1,  # numkeys
+                        redis_key,
+                        str(now),
+                        str(expiry),
+                        str(int(self.max_concurrent)),
+                        slot_id,
+                        str(int(key_ttl)),
+                    )
+                    return bool(int(result or 0))
+                except Exception:
+                    # If EVAL itself fails (script error, redis cluster
+                    # quirk), fall through to the legacy path below
+                    # rather than dropping every dispatch.
+                    pass
+
+            # Legacy fallback — kept for non-Redis backends. Still
+            # TOCTOU-prone, but the only callers reaching this branch
+            # are single-threaded test fakes.
             pipe = redis.pipeline(True)
-            # Remove expired slots
             pipe.zremrangebyscore(redis_key, "-inf", now)
-            # Count active slots
             pipe.zcard(redis_key)
             results = pipe.execute()
             active_count = results[1]
@@ -99,7 +155,6 @@ class ConcurrencyLimited:
             if active_count >= self.max_concurrent:
                 return False
 
-            # Add our slot with expiry score
             redis.zadd(redis_key, {slot_id: now + self.slot_ttl})
             redis.expire(redis_key, self.slot_ttl + 60)
             return True
@@ -166,6 +221,14 @@ class ConcurrencyExceeded(Exception):
     The queue runner should requeue the job with a delay. This exception
     does NOT count against max_attempts since it's a transient throttle,
     not a job failure.
+
+    The ``is_throttle`` class-attribute is the load-bearing signal —
+    ``JobProcessor._requeue_with_delay`` reads it via ``getattr`` to
+    suppress the normal ``attempts += 1`` write when republishing. Pre-
+    fix the docstring promised this behaviour but no code wired it up,
+    so a scrape-pipeline burst that triggered three throttles in a row
+    drained healthy jobs into the DLQ purely from losing the slot
+    lottery — not from any real failure.
     """
 
-    pass
+    is_throttle: bool = True

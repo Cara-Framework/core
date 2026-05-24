@@ -18,6 +18,24 @@ class ImageProcessor:
     Usage: Image.make(source).orientate().resize(300, 300).save(path)
     """
 
+    # Hard pixel cap — refused at load time so a small file that
+    # decodes to ``100_000 × 100_000`` (≈10⁴ MB of RGB) can't OOM
+    # the worker. 25M pixels covers any legitimate avatar / brand
+    # logo / category banner with comfortable headroom (a 5K × 5K
+    # banner is 25M). Pillow's default ``MAX_IMAGE_PIXELS`` is ~89M
+    # but only WARNS — too lax and too quiet for a public-internet
+    # upload surface.
+    MAX_PIXEL_COUNT = 25_000_000
+
+    # Allowlist of decoder formats accepted on load. Restricts the
+    # blast radius of future Pillow CVEs (the Pillow 9.x BMP RLE
+    # crash, the CVE-2023-4863 WebP CVE family, the PCX OOB read)
+    # to the four formats real avatar / logo uploads actually use.
+    # BMP / TIFF / ICO are NOT in this set — none of those formats
+    # has a legitimate use case in a storefront upload field, and
+    # each has CVE history.
+    ALLOWED_FORMATS = frozenset({"JPEG", "PNG", "GIF", "WEBP"})
+
     def __init__(self, image: PILImage.Image):
         self.image = image
         self._orientated = False
@@ -53,7 +71,37 @@ class ImageProcessor:
         return self
 
     def save(self, path: str, quality: int = 85) -> str:
-        """Save image to path."""
+        """Save image to path.
+
+        Refuses path-traversal forms (``..`` segments) and NUL-byte
+        injection. Callers compose paths like
+        ``f"/var/uploads/{user_filename}"`` — a forgetful caller
+        that doesn't sanitise the user-supplied filename component
+        would otherwise honour ``filename="../../../etc/passwd"``:
+        ``os.makedirs`` creates the parent dirs, ``PIL.save`` writes
+        JPEG bytes over the target. Refusing at the helper boundary
+        means every consumer of the framework benefits from one
+        consistent defence regardless of how they assemble their
+        path string.
+        """
+        if not isinstance(path, str) or not path:
+            raise ValueError("save() requires a non-empty path string")
+        # NUL bytes in paths historically truncate the target on
+        # ancient libc filesystems; on modern ones the kernel returns
+        # an error but the helper should reject ahead of the syscall
+        # so the error message identifies the cause.
+        if "\x00" in path:
+            raise ValueError("save() path must not contain NUL bytes")
+        # Path-segment scan — refuse any ``..`` segment regardless of
+        # whether the OS would resolve it inside or outside the
+        # caller's intended base directory. Catches both ``a/../b``
+        # and ``a\\..\\b`` (Windows separator).
+        parts = path.replace("\\", "/").split("/")
+        if any(part == ".." for part in parts):
+            raise ValueError(
+                f"save() path must not contain '..' segments (traversal): {path!r}"
+            )
+
         # Ensure directory exists
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -137,6 +185,14 @@ class Image:
 
         Args:
             source: File path or bytes
+
+        Raises:
+            ValueError: when the source format isn't on
+              ``ImageProcessor.ALLOWED_FORMATS`` or the declared
+              dimensions exceed ``ImageProcessor.MAX_PIXEL_COUNT``.
+              Both gates fire BEFORE any pixel data is decoded so
+              a small decompression-bomb buffer cannot wedge the
+              worker on memory.
         """
         if isinstance(source, str):
             image = PILImage.open(source)
@@ -144,5 +200,26 @@ class Image:
             image = PILImage.open(BytesIO(source))
         else:
             raise ValueError(f"Unsupported source type: {type(source)}")
+
+        # Format allowlist — gate on the Pillow-identified decoder,
+        # not the file extension (which the uploader controls). The
+        # header bytes have been read at this point but no pixel
+        # data has been decoded yet, so the check is cheap.
+        fmt = (image.format or "").upper()
+        if fmt not in ImageProcessor.ALLOWED_FORMATS:
+            allowed = ", ".join(sorted(ImageProcessor.ALLOWED_FORMATS))
+            raise ValueError(
+                f"Unsupported image format {fmt!r}; allowed: {allowed}"
+            )
+
+        # Pixel-count guard — declared dimensions only, no full
+        # decode. A 100_000 × 100_000 PNG-bomb header is rejected
+        # here before ``.load()`` ever runs.
+        width, height = image.size
+        if width * height > ImageProcessor.MAX_PIXEL_COUNT:
+            raise ValueError(
+                f"Image exceeds the {ImageProcessor.MAX_PIXEL_COUNT}-"
+                f"pixel cap (got {width}x{height} = {width * height} pixels)"
+            )
 
         return ImageProcessor(image)

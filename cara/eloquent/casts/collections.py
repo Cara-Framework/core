@@ -35,11 +35,52 @@ class ArrayCast(BaseCast):
         return []
 
     def set(self, value):
-        """Set as JSON string."""
+        """Set as JSON string.
+
+        ``None`` is preserved as ``None`` (SQL NULL). Pre-fix the
+        cast returned the literal ``"[]"`` string for ``None``,
+        causing NULL drift on nullable array columns:
+        ``WHERE col IS NULL`` queries then missed every row written
+        through this path while ``col = '[]'::jsonb`` matched them
+        all — a silent split between "no value" and "empty value"
+        that broke facet aggregation, sitemap filters, and any
+        downstream predicate that branched on NULL-ness.
+
+        ``get(None)`` still returns ``[]`` on purpose — callers
+        iterate the read-side result without guards. The hazard
+        was the write-side coercion, not the read-side fallback.
+
+        Non-list inputs (a dict, a number, a string passed where a
+        list was expected) are a caller bug. Historically the cast
+        silently swallowed them and stored ``"[]"`` with no signal;
+        the fix keeps the graceful ``"[]"`` fallback for backwards
+        compatibility but logs a warning so ops can see the
+        dropped write in observability.
+        """
         if value is None:
-            return "[]"
+            return None
 
         if not isinstance(value, list):
+            # Caller bug — dropping a non-list to ``"[]"`` is data
+            # loss. Log so the bug surfaces; preserve the legacy
+            # return value so existing callers don't break.
+            try:
+                from cara.facades import Log
+                Log.warning(
+                    f"ArrayCast: dropped {type(value).__name__} input "
+                    f"(repr={value!r}); expected list — storing as '[]'",
+                    category="cast.array",
+                )
+            except Exception:
+                # Facade not bound (unit-test boot order, etc.) —
+                # fall back to stdlib logging so the warning still
+                # lands in test capture and any plain Python harness.
+                import logging
+                logging.getLogger("cara.cast.array").warning(
+                    "ArrayCast: dropped %s input (repr=%r); "
+                    "expected list — storing as '[]'",
+                    type(value).__name__, value,
+                )
             return "[]"
 
         return json.dumps(value, default=str)

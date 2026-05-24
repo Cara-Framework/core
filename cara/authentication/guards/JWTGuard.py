@@ -346,7 +346,25 @@ class JWTGuard(Guard):
     # ========================================================================
 
     def _extract_token(self) -> str | None:
-        """Extract JWT token from request headers."""
+        """Extract JWT token from request headers.
+
+        The Authorization scheme name is **case-insensitive** per
+        RFC 7235 §2.1 ("auth-scheme ... case-insensitively"). Real
+        clients send every casing — ``Bearer`` (canonical),
+        ``bearer`` (curl / Postman exports / shell scripts that
+        lowercase everything), ``BEARER`` (older OAuth integrations).
+        Pre-fix the prefix check was a plain ``startswith("Bearer ")``,
+        so any non-canonical casing surfaced as
+        ``TokenInvalidException("No Authorization header provided
+        or invalid format")`` — the same response as a missing
+        header. The user holding a valid JWT couldn't tell their
+        token had been rejected for casing alone.
+
+        Only the SCHEME case is normalised; the token bytes that
+        follow are preserved exactly (JWT base64url is
+        case-sensitive — lowercasing the signature segment makes
+        every token invalid).
+        """
         try:
             from cara.http.request.context import current_request
 
@@ -356,10 +374,16 @@ class JWTGuard(Guard):
             if not header_value:
                 return None
 
-            if header_value.startswith(f"{self.header_prefix} "):
-                return header_value[len(self.header_prefix) + 1 :]
-
-            return None
+            prefix_len = len(self.header_prefix)
+            # Need at least ``<prefix><space>`` before any token can
+            # follow. Cheaper than building the lowercase head twice.
+            if len(header_value) <= prefix_len:
+                return None
+            if header_value[prefix_len] != " ":
+                return None
+            if header_value[:prefix_len].lower() != self.header_prefix.lower():
+                return None
+            return header_value[prefix_len + 1 :]
         except Exception:
             return None
 

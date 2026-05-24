@@ -48,14 +48,48 @@ class DefaultExceptionHandler:
         # Default to 500 for unknown exceptions
         return 500
 
-    def format_response(self, exception: Exception, status_code: int) -> dict[str, Any]:
-        """Format the exception into a response."""
-        # If exception has its own to_dict method, use it
-        if hasattr(exception, "to_dict") and callable(exception.to_dict):
-            return exception.to_dict()
+    # Keys preserved on a redacted 5xx-in-prod response when an
+    # exception's ``to_dict`` returned them. ``retry_after`` is the
+    # documented 503 contract field (``ServiceUnavailableException``
+    # surfaces it in both the JSON body and the ``Retry-After`` header)
+    # — stripping it would force every client into blind backoff.
+    # Everything else in a 5xx-prod body is replaced by the generic
+    # ``error`` / ``type`` pair regardless of how it was produced.
+    _5XX_PROD_SAFE_KEYS = frozenset({"retry_after"})
 
-        # Default formatting for exceptions without to_dict
-        return self.format_error(exception, status_code)
+    def format_response(self, exception: Exception, status_code: int) -> dict[str, Any]:
+        """Format the exception into a response.
+
+        The ``to_dict`` short-circuit used to bypass the prod-5xx
+        redaction policy: ``raise HttpException("DSN=postgresql://...",
+        status_code=500)`` shipped the raw message + class name + every
+        custom kwarg straight into the response body, because
+        ``HttpException`` defines ``to_dict``. ``_GENERIC_5XX_MESSAGE``
+        applied only to exceptions WITHOUT ``to_dict`` — exactly
+        inverted relative to the risk.
+
+        Now the redaction is applied uniformly: ``to_dict`` still
+        produces the 4xx body (the caller acted on bad input and needs
+        the real message + any context the exception attached), but
+        any 5xx-in-prod response is collapsed to the generic envelope
+        plus a small allowlist of contract fields (``retry_after``).
+        """
+        if hasattr(exception, "to_dict") and callable(exception.to_dict):
+            response = exception.to_dict()
+        else:
+            response = self.format_error(exception, status_code)
+
+        if status_code >= 500 and not self.is_debug_mode():
+            redacted: dict[str, Any] = {
+                "error": self._GENERIC_5XX_MESSAGE,
+                "type": self._GENERIC_5XX_TYPE,
+            }
+            for key in self._5XX_PROD_SAFE_KEYS:
+                if key in response:
+                    redacted[key] = response[key]
+            return redacted
+
+        return response
 
     # Generic message for unexpected 5xx errors when not in debug. The real
     # exception still hits the logs (with exc_info) — we just don't ship
@@ -283,11 +317,30 @@ class DefaultExceptionHandler:
                     else:
                         headers_dict[k] = str(v)
 
-            custom_hsts = config("security.security.hsts")
-            if custom_hsts is None and "security.security.hsts" in (
-                getattr(config, "loaded_keys", set()) or set()
-            ):
-                hsts = None
+            # HSTS opt-out parity with ``SecurityHeaders._load_config``.
+            # Pre-fix this branch tried to distinguish "explicit None"
+            # from "absent config" via ``getattr(config, "loaded_keys",
+            # set())`` — but the ``config`` callable has no such
+            # attribute, so the ``and`` half was always False and the
+            # opt-out path NEVER fired. Result: a deployment that set
+            # ``SECURITY_HSTS=`` (empty env → ``security.security.hsts
+            # = None``) had the success-path middleware strip HSTS on
+            # 200s while the error path silently kept stamping
+            # ``_DEFAULT_HSTS`` on 4xx / 5xx. Mixed coverage caches the
+            # error-path pin in the browser and confuses every later
+            # debug session ("HSTS is set sometimes?").
+            #
+            # Use a real sentinel so "absent config" preserves the
+            # baseline default (defence-in-depth) AND explicit None
+            # strips (operator's documented opt-out path). Mirrors the
+            # config-loader-shaped semantics across both code paths.
+            _UNSET = object()
+            custom_hsts = config("security.security.hsts", _UNSET)
+            if custom_hsts is _UNSET:
+                # Unconfigured — keep ``_SH_DEFAULT_HSTS`` already set above.
+                pass
+            elif custom_hsts is None:
+                hsts = None  # explicit opt-out
             elif isinstance(custom_hsts, str):
                 hsts = custom_hsts
             hsts_preload = bool(config("security.security.hsts_preload", False))
@@ -298,10 +351,20 @@ class DefaultExceptionHandler:
             [k.lower().encode(), str(v).encode()] for k, v in headers_dict.items()
         ]
 
-        # HSTS only on HTTPS — match SecurityHeaders middleware logic.
+        # HSTS only on HTTPS — must mirror ``SecurityHeaders._is_https``
+        # exactly, otherwise success vs. error responses ship
+        # inconsistent HSTS coverage. Real failure mode: a TLS-terminating
+        # load balancer (ALB / Cloudflare / nginx) gives the worker
+        # ``scope.scheme == "http"`` but ``X-Forwarded-Proto: https``.
+        # The success path's middleware honours the forwarded proto
+        # (when peer is in ``trustedproxies.proxies``), so it stamps HSTS
+        # on the 200. The error path used to compare ``scope.scheme``
+        # only — the matching 404 came back without HSTS. Mixed coverage
+        # is worse than uniform absence: the browser cache keeps the
+        # success-path pin while error responses look "downgraded",
+        # making the asymmetry hard to spot.
         try:
-            scheme = scope.get("scheme") if isinstance(scope, dict) else None
-            if hsts and isinstance(scheme, str) and scheme.lower() == "https":
+            if hsts and self._is_https_for_scope(scope):
                 value = hsts
                 if hsts_preload and "preload" not in value:
                     value = f"{value}; preload"
@@ -310,6 +373,78 @@ class DefaultExceptionHandler:
             pass
 
         return out
+
+    @staticmethod
+    def _is_https_for_scope(scope: Any) -> bool:
+        """Mirror ``SecurityHeaders._is_https`` for the error-response path.
+
+        Order of trust:
+          1. ``scope["scheme"] == "https"`` (direct TLS at the worker).
+          2. When the immediate peer is in ``trustedproxies.proxies``,
+             honour ``X-Forwarded-Proto`` and RFC 7239 ``Forwarded``.
+
+        Any signal from an untrusted peer is ignored so a public client
+        cannot forge HSTS by setting ``X-Forwarded-Proto: https``.
+        """
+        if not isinstance(scope, dict):
+            return False
+        scheme = scope.get("scheme")
+        if isinstance(scheme, str) and scheme.lower() == "https":
+            return True
+
+        try:
+            from cara.configuration import config
+
+            proxies = config(
+                "trustedproxies.proxies",
+                config("security.security.trusted_proxies", []),
+            )
+        except Exception:
+            proxies = []
+        if not proxies:
+            return False
+
+        client = scope.get("client") or ()
+        client_ip = client[0] if client else None
+        if not client_ip:
+            return False
+
+        trusted = False
+        if "*" in proxies:
+            trusted = True
+        else:
+            try:
+                import ipaddress
+
+                ip = ipaddress.ip_address(client_ip)
+                for entry in proxies:
+                    try:
+                        if ip in ipaddress.ip_network(entry, strict=False):
+                            trusted = True
+                            break
+                    except ValueError:
+                        continue
+            except Exception:
+                trusted = False
+        if not trusted:
+            return False
+
+        raw_headers = {
+            (k.decode().lower() if isinstance(k, (bytes, bytearray)) else str(k).lower()): (
+                v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
+            )
+            for k, v in scope.get("headers", []) or []
+        }
+        forwarded_proto = raw_headers.get("x-forwarded-proto")
+        if (
+            isinstance(forwarded_proto, str)
+            and forwarded_proto.split(",")[0].strip().lower() == "https"
+        ):
+            return True
+        forwarded = raw_headers.get("forwarded")
+        if isinstance(forwarded, str) and "proto=https" in forwarded.lower():
+            return True
+        return False
 
     def _request_id_header_for(self, request: Any, scope: dict[str, Any]) -> list:
         """Return the X-Request-ID header pair for the error response.

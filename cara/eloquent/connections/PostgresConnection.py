@@ -184,6 +184,21 @@ class PostgresConnection(BaseConnection):
 
         self._ensure_pool_initialized()
 
+        # Release any slot this wrapper still owns from a previous
+        # ``create_connection`` call before acquiring a new one. The
+        # query path calls ``make_connection`` again when
+        # ``self._connection.closed`` becomes True mid-life (psycopg2
+        # noticed the server-side close between two queries). Pre-fix
+        # that path re-acquired a slot without releasing the old one,
+        # so every flaky-network event silently drained one slot from
+        # the pool. Under sustained instability the semaphore drained
+        # to zero and every subsequent caller hung on ``acquire()``
+        # for the full timeout then 503'd. Releasing the orphan first
+        # keeps the per-wrapper invariant at ≤1 slot.
+        if getattr(self, "_pool_slot_acquired", False) and _pool_semaphore is not None:
+            _pool_semaphore.release()
+            self._pool_slot_acquired = False
+
         acquired = _pool_semaphore.acquire(timeout=self._POOL_ACQUIRE_TIMEOUT)
         if not acquired:
             # Pool exhaustion is a capacity problem, not a query bug —

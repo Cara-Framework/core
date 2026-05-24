@@ -144,50 +144,20 @@ class RateLimiter(RateLimit):
         """
         cache_key = f"{self.prefix}{key}"
 
-        # Atomic increment. ``Cache.increment`` initialises the key to
-        # ``amount`` with ``ttl`` when it doesn't exist, so the first
-        # caller in a fresh window sets the expiry; subsequent callers
-        # in the same window reuse it without resetting.
-        try:
-            count = Cache.increment(cache_key, 1, self.window)
-        except Exception as exc:
-            # Cache backend down. Fail-closed by default — coincident
-            # cache + abuse-traffic outage is the wrong moment to lift
-            # the cap silently. Programmatic callers (jobs, console
-            # commands) get a ``ServiceUnavailableException`` they can
-            # catch and retry. ``rate.fail_open=True`` restores the
-            # legacy availability-first posture.
-            try:
-                from cara.facades import Config, Log
-                fail_open = bool(Config.get("rate.fail_open", False))
-            except Exception:
-                fail_open = False
-            try:
-                from cara.facades import Log as _Log
-                _Log.warning(
-                    f"RateLimiter cache backend failed: {exc}; "
-                    f"fail_open={fail_open}",
-                )
-            except Exception:
-                pass
-            if fail_open:
-                return True, self.limit, 0
-            from cara.exceptions import ServiceUnavailableException
-            raise ServiceUnavailableException(
-                "Rate limiter temporarily unavailable",
-                retry_after=1,
-            ) from exc
+        # Atomic increment + Redis-down fallback handled by the shared
+        # helper. Both this method and the parallel ``ThrottleRequests``
+        # middleware path delegate so the fallback policy (memory /
+        # open / closed), the once-per-transition warning, and the
+        # recovery sweep live in one place. See
+        # ``cara.rates.MemoryRateStore.attempt_with_fallback`` for the
+        # policy contract.
+        from cara.rates.MemoryRateStore import attempt_with_fallback
 
-        allowed = count <= self.limit
-        remaining = max(self.limit - count, 0)
-
-        # Query the actual remaining TTL on the bucket. ``Cache.ttl``
-        # returns ``None`` when the driver doesn't expose TTL or the
-        # key was just removed; in those edge cases fall back to the
-        # full window so the header is at least an upper bound.
-        actual_ttl = Cache.ttl(cache_key)
-        reset_in = actual_ttl if actual_ttl is not None else self.window
-
+        allowed, remaining, reset_in, _backend = attempt_with_fallback(
+            cache_key=cache_key,
+            window_seconds=self.window,
+            max_attempts=self.limit,
+        )
         return allowed, remaining, reset_in
 
     def for_(self, name: str, callback: Callable) -> RateLimiter:

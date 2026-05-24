@@ -304,8 +304,6 @@ class ThrottleRequests(Middleware):
             of a 60-second window was told "retry in 60 s" when the
             truth was "retry in ~10 s".
         """
-        from cara.facades import Cache
-
         # Handle unlimited case
         if limit_config.max_attempts == 0:
             return True, -1, 0
@@ -313,40 +311,17 @@ class ThrottleRequests(Middleware):
         window_seconds = int(limit_config.decay_minutes * 60)
         cache_key = f"throttle_{key}"
 
-        try:
-            # Atomic increment — avoids the read-modify-write race that
-            # allowed concurrent requests to slip past the limit.
-            # Cache.increment creates the key with TTL if it doesn't exist.
-            count = Cache.increment(cache_key, 1, window_seconds)
-        except Exception as exc:
-            # Cache backend down. Fail-closed by default — an abuse
-            # window that coincides with cache outage is the worst
-            # possible time to silently lift the cap. Operators who
-            # need fail-open posture can opt back in with
-            # ``rate.fail_open=True``. The fail-closed branch raises
-            # ``ServiceUnavailableException`` so the global handler
-            # emits a canonical 503 envelope (``{error, type, retry_after}``)
-            # rather than the bespoke 429 shape this middleware builds.
-            from cara.exceptions import ServiceUnavailableException
-            Log.warning(
-                f"ThrottleRequests cache backend failed: {exc}; "
-                f"fail_open={self._fail_open_mode()}",
-            )
-            if self._fail_open_mode():
-                return True, limit_config.max_attempts, 0
-            raise ServiceUnavailableException(
-                "Rate limiter temporarily unavailable",
-                retry_after=1,
-            ) from exc
+        # Atomic increment + Redis-down fallback handled by the shared
+        # helper. ``RateLimiter.attempt`` uses the same helper so the
+        # fallback policy (memory / open / closed), the
+        # once-per-transition warning latch, and the recovery sweep
+        # apply uniformly across both surfaces. See
+        # ``cara.rates.MemoryRateStore.attempt_with_fallback``.
+        from cara.rates.MemoryRateStore import attempt_with_fallback
 
-        allowed = count <= limit_config.max_attempts
-        remaining = max(limit_config.max_attempts - count, 0)
-
-        # Query the actual remaining TTL on the bucket. ``Cache.ttl``
-        # returns ``None`` when the driver doesn't expose TTL or the
-        # key was just removed; in those edge cases fall back to the
-        # full window so the header is at least an upper bound.
-        actual_ttl = Cache.ttl(cache_key)
-        reset_in = actual_ttl if actual_ttl is not None else window_seconds
-
+        allowed, remaining, reset_in, _backend = attempt_with_fallback(
+            cache_key=cache_key,
+            window_seconds=window_seconds,
+            max_attempts=limit_config.max_attempts,
+        )
         return allowed, remaining, reset_in

@@ -94,15 +94,31 @@ class ViewEngine:
                     os.remove(file_path)
 
     def escape_html(self, value: Any) -> str:
-        """Escape HTML characters."""
+        """Escape HTML-significant characters for safe text interpolation.
+
+        Always escapes — pre-fix the helper short-circuited any
+        string that already contained ``&lt;`` / ``&gt;`` / ``&amp;``
+        on the assumption that the input was already escaped. That
+        was a partial-escape XSS: any string carrying ONE entity
+        (very common in scraped product titles like
+        ``"Sons &amp; Co"``) would skip escaping for the WHOLE
+        string. A title like ``"Sons &amp; <script>...</script>"``
+        flowed straight through with the ``<script>`` tag intact.
+
+        Defensive double-encoding (``"&amp;"`` → ``"&amp;amp;"``)
+        on already-escaped input is strictly safer than the
+        previous heuristic: the browser decodes one level so the
+        visible string is identical (``Sons &amp; Co``), while a
+        future injection payload hidden behind a legitimate entity
+        is fully neutralised. Templates that genuinely need raw
+        markup pass through the ``raw()`` helper the compiler
+        already special-cases — that's the single sanctioned
+        escape hatch.
+        """
         if value is None:
             return ""
 
         value = str(value)
-
-        # Check if already escaped
-        if "&lt;" in value or "&gt;" in value or "&amp;" in value:
-            return value
 
         return (
             value.replace("&", "&amp;")

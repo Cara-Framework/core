@@ -19,10 +19,25 @@ class ScheduleBuilder:
         self._skip_if_maintenance = False
         self._timezone = None
 
+    def _resolve_timezone(self, explicit):
+        """Pick the timezone the trigger spec should carry.
+
+        Explicit per-trigger kwarg wins over the fluent ``.timezone()``
+        setter — keeps existing callers (e.g. ``ScheduleWorkCommand``
+        which passes ``timezone=`` as a kwarg) working unchanged while
+        letting a fluent chain set a per-builder default. Without this
+        fallback, ``.timezone('Europe/London').daily()`` shipped to
+        the driver with NO timezone and APScheduler defaulted to the
+        worker's local TZ — a "daily at 09:00 London" job actually
+        ran at 09:00 UTC, an hour off during BST.
+        """
+        return explicit if explicit else self._timezone
+
     def cron(self, expression, timezone=None):
         spec = {"type": "cron", "expression": expression}
-        if timezone:
-            spec["timezone"] = timezone
+        resolved_tz = self._resolve_timezone(timezone)
+        if resolved_tz:
+            spec["timezone"] = resolved_tz
         self.driver.schedule_job(
             self.identifier,
             self.callback,
@@ -37,8 +52,9 @@ class ScheduleBuilder:
             "hour": hour,
             "minute": minute,
         }
-        if timezone:
-            spec["timezone"] = timezone
+        resolved_tz = self._resolve_timezone(timezone)
+        if resolved_tz:
+            spec["timezone"] = resolved_tz
         self.driver.schedule_job(
             self.identifier,
             self.callback,
@@ -49,8 +65,9 @@ class ScheduleBuilder:
 
     def hourly(self, minute=0, timezone=None):
         spec = {"type": "hourly", "minute": minute}
-        if timezone:
-            spec["timezone"] = timezone
+        resolved_tz = self._resolve_timezone(timezone)
+        if resolved_tz:
+            spec["timezone"] = resolved_tz
         self.driver.schedule_job(
             self.identifier,
             self.callback,
@@ -91,8 +108,9 @@ class ScheduleBuilder:
             "hour": hour,
             "minute": minute,
         }
-        if timezone:
-            spec["timezone"] = timezone
+        resolved_tz = self._resolve_timezone(timezone)
+        if resolved_tz:
+            spec["timezone"] = resolved_tz
         self.driver.schedule_job(
             self.identifier,
             self.callback,

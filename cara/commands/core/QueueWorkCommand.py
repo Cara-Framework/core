@@ -206,10 +206,23 @@ class JobProcessor:
 
     @staticmethod
     def _execute_async_job_with_timeout(method_to_call, init_args, timeout_seconds):
-        """Execute async job with timeout enforcement."""
+        """Execute async job with timeout enforcement.
+
+        Wraps the coroutine in ``asyncio.wait_for(...)`` so a hung
+        ``await`` (a stuck HTTP call without its own timeout, a DB
+        operation behind a dead pool) actually surfaces as a
+        ``TimeoutError`` after ``timeout_seconds``. Pre-fix this
+        helper accepted ``timeout_seconds`` but only used it in the
+        exception message — ``asyncio.run(method_to_call(...))`` ran
+        without a cap, so an async job that genuinely hung held its
+        worker slot indefinitely. The active worker dispatch path
+        (``handle`` body) already wraps in ``wait_for``; this static
+        is here so anyone reaching for it (debug shim, alternative
+        worker mode, unit test) gets the same contract.
+        """
         try:
-            asyncio.run(method_to_call(*init_args))
-        except TimeoutError as e:
+            asyncio.run(asyncio.wait_for(method_to_call(*init_args), timeout=timeout_seconds))
+        except (asyncio.TimeoutError, TimeoutError) as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
 
     # Framework-default retry policy used when the failing job does
@@ -280,7 +293,17 @@ class JobProcessor:
             # Fall through — pika may have already auto-rejected.
 
         attempts_done = int(msg.get("attempts", 0) or 0)
-        next_attempt = attempts_done + 1
+        # Throttle-class exceptions (``ConcurrencyExceeded`` raised by
+        # the ``ConcurrencyLimited`` middleware, future per-host rate-
+        # limit middleware) signal "the job never got a slot, try again
+        # later" — not a job failure. Bumping ``attempts`` for these
+        # would DLQ healthy jobs purely from losing the slot lottery.
+        # The middleware contract is the source of truth (it declares
+        # ``is_throttle = True`` on the exception class); we read it
+        # via ``getattr`` so the check stays loose-coupled and future
+        # throttle classes opt in for free.
+        is_throttle = bool(getattr(exc, "is_throttle", False))
+        next_attempt = attempts_done if is_throttle else attempts_done + 1
 
         backoff_schedule = getattr(
             instance,

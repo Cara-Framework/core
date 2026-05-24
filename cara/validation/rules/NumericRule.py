@@ -5,6 +5,7 @@ This module provides a validation rule that checks if a value is numeric.
 """
 
 import math
+import re
 from typing import Any
 
 from cara.validation import MessageFormatter
@@ -30,7 +31,24 @@ class NumericRule(BaseRule):
       ``Infinity`` / ``-Infinity`` / ``NaN`` now return a clean
       ``must be numeric`` error at the validation layer instead of
       leaking semantics-altering values into the filter SQL.
+
+    STRING-SHAPE NOTE:
+      Python's ``float()`` is also permissive about surrounding
+      whitespace + PEP 515 underscore separators
+      (``float("\\t3.14") == 3.14``, ``float("1_000.5") == 1000.5``).
+      The raw string would otherwise leak into log lines / Prom
+      labels / JSON responses unchanged. The strict pattern below
+      requires the canonical form ``[+-]?digits[.digits][e±digits]``
+      before the ``float()`` round-trip so newline-tainted values
+      and underscore-separated values are rejected.
     """
+
+    # Canonical decimal-with-optional-scientific shape. Anchored with
+    # ``fullmatch`` to defeat the default-mode ``$``-allows-trailing-
+    # newline quirk.
+    _STRICT_NUMERIC_PATTERN = re.compile(
+        r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$"
+    )
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value is a finite numeric."""
@@ -48,6 +66,16 @@ class NumericRule(BaseRule):
             return math.isfinite(value)
 
         if isinstance(value, str):
+            # Strict canonical shape — Python ``float()`` is
+            # permissive (``float("\t3.14") == 3.14``,
+            # ``float("1_000.5") == 1000.5``) and the raw string
+            # could leak downstream into log lines / Prom labels /
+            # JSON responses with embedded control characters or
+            # PEP 515 underscore separators no caller actually typed.
+            # ``fullmatch`` removes the default-mode ``$`` trailing-
+            # newline allowance the regex engine carries.
+            if not self._STRICT_NUMERIC_PATTERN.fullmatch(value):
+                return False
             try:
                 parsed = float(value)
             except ValueError:

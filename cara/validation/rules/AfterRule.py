@@ -17,7 +17,15 @@ class AfterRule(BaseRule):
         v = _parse_date(value)
         if compare is None or v is None:
             return False
-        return v > compare
+        # Naive-vs-aware comparison raises ``TypeError`` in Python;
+        # treat that as a validation miss so the rule emits the
+        # standard 422 message instead of letting the exception
+        # propagate to a 500. See ``BeforeRule`` for the same
+        # rationale.
+        try:
+            return v > compare
+        except TypeError:
+            return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)

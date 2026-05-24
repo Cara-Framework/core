@@ -66,9 +66,33 @@ class HasEvents:
                     # If any handler returns False, cancel the operation
                     if result is False:
                         return False
-                except Exception:
-                    # Log the error but don't stop other handlers
-                    pass
+                except Exception as exc:
+                    # Hook failures must not silently disappear — pre-fix
+                    # this branch was a bare ``pass`` and a ``@saving``
+                    # validation hook raising ``ValueError`` returned
+                    # ``True`` to the caller, letting the unverified row
+                    # land in the DB with no record of the failure
+                    # anywhere. Mirror the ``_fire_observers`` channel
+                    # (level + category) so log routing rules stay
+                    # symmetric across the two failure paths. Other
+                    # hooks for the same event still run — same
+                    # continue-on-failure policy as observers.
+                    try:
+                        from cara.facades import Log
+
+                        Log.error(
+                            f"Event '{event_name}' on "
+                            f"{self.__class__.__name__} failed: {exc}",
+                            category="cara.eloquent.events",
+                            exc_info=True,
+                        )
+                    except ImportError:
+                        # Cara facade not booted (very early framework
+                        # init / standalone import) — fall through so
+                        # the original swallow behaviour is preserved
+                        # in that one degenerate case rather than
+                        # turning a missing-dep error into a save crash.
+                        pass
 
         # Fire global observers
         return self._fire_observers(event_name, **kwargs)

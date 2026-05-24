@@ -27,8 +27,31 @@ from cara.http.request.mixins import (
 def _trusted_proxy_networks() -> tuple:
     """Parse TRUSTED_PROXIES env into a tuple of ip_network objects.
 
-    Accepts comma-separated IPs or CIDR blocks. Private loopback + link-local
-    ranges are always included to match a typical dev + containerized layout.
+    Accepts comma-separated IPs or CIDR blocks.
+
+    Auto-defaults are LOOPBACK ONLY (``127.0.0.0/8`` + ``::1/128``).
+    A process that can spoof its own loopback peer can already do
+    anything to itself, so trusting it adds no attack surface.
+
+    Private RFC1918 ranges (``10.0.0.0/8``, ``172.16.0.0/12``,
+    ``192.168.0.0/16``) are NOT auto-trusted. Pre-fix they were —
+    which silently turned every internal-LAN peer into a trusted
+    proxy and allowed:
+
+    * A compromised pod / sidecar / debug container on the same VPC
+      to spoof ``X-Forwarded-For`` and dictate ``request.ip()``,
+      bypassing per-IP rate limits, audit-log non-repudiation, and
+      the ``RequireAdminIp`` allowlist.
+    * Default Docker / docker-compose container networks
+      (172.17.x.x) to spoof each other's IPs by default.
+    * Local k8s pod networks (typically 10.244.x.x) to do the same.
+
+    Operators who genuinely terminate TLS at an internal LB on
+    10.x / 172.x / 192.168.x MUST opt that range in explicitly via
+    the ``TRUSTED_PROXIES`` config / env var. This matches what
+    Symfony / Laravel 9+ do, and what the repo's own
+    ``OutboundClickService._trusted_proxies`` already does (no
+    auto-defaults, explicit config only).
     """
     try:
         from cara.configuration import config
@@ -37,8 +60,9 @@ def _trusted_proxy_networks() -> tuple:
     except Exception:
         raw = os.environ.get("TRUSTED_PROXIES", "")
     nets = []
-    # Loopback + common private ranges for dev / behind-LB topology.
-    defaults = ("127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    # Loopback only — safe to auto-trust because spoofing the
+    # loopback peer requires being the process itself.
+    defaults = ("127.0.0.0/8", "::1/128")
     for entry in (*defaults, *[e.strip() for e in raw.split(",") if e.strip()]):
         try:
             nets.append(ipaddress.ip_network(entry, strict=False))

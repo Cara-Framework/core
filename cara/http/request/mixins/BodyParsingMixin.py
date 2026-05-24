@@ -503,14 +503,28 @@ class BodyParsingMixin:
             "multipart/form-data" in content_type
             or "application/x-www-form-urlencoded" in content_type
         ):
-            # Handle as form data
+            # Handle as form data. A parse failure here (bad
+            # boundary, oversize multipart, etc.) is deliberately
+            # NOT propagated — ``request.input()`` callers should
+            # see whatever query params were valid even when the
+            # body is malformed. But the swallow MUST be logged:
+            # pre-fix this was a bare ``pass`` with a comment that
+            # claimed we'd log, which made every "where did my form
+            # field go?" investigation start by re-reading the
+            # source to confirm the bug had no telemetry.
             try:
                 form_data = await self.form()
                 if form_data:
                     result.update(form_data)
-            except BadRequestException:
-                # Log error but don't break the request
-                pass
+            except BadRequestException as exc:
+                import logging
+                logging.getLogger("cara.http.body").debug(
+                    "BodyParsingMixin.all(): form parse swallowed "
+                    "for content-type %r — caller will see query "
+                    "params only. Cause: %s",
+                    content_type,
+                    exc,
+                )
         elif "application/json" in content_type:
             # Handle as JSON data. The previous version swallowed
             # invalid-JSON errors silently which made
@@ -525,19 +539,33 @@ class BodyParsingMixin:
             if isinstance(json_data, dict):
                 result.update(json_data)
         else:
-            # Try JSON first, then form as fallback
+            # No Content-Type → speculative parse. Try JSON first,
+            # then form as fallback. Both failures are swallowed
+            # (the caller likely has no body at all, e.g. a GET
+            # with query params only), but the second swallow MUST
+            # be logged so a request whose body genuinely was
+            # malformed JSON AND malformed form data leaves a
+            # breadcrumb in the logs — pre-fix the bare ``pass``
+            # made this case completely invisible to telemetry.
             try:
                 json_data = await self.json()
                 if isinstance(json_data, dict):
                     result.update(json_data)
-            except BadRequestException:
-                # If JSON fails, try form data
+            except BadRequestException as json_exc:
+                # If JSON fails, try form data.
                 try:
                     form_data = await self.form()
                     if form_data:
                         result.update(form_data)
-                except BadRequestException:
-                    # Both failed, continue with query params only
-                    pass
+                except BadRequestException as form_exc:
+                    import logging
+                    logging.getLogger("cara.http.body").debug(
+                        "BodyParsingMixin.all(): both JSON and form "
+                        "parse failed on a no-Content-Type request — "
+                        "caller will see query params only. "
+                        "json_cause=%s form_cause=%s",
+                        json_exc,
+                        form_exc,
+                    )
 
         return result
