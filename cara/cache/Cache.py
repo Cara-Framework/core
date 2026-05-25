@@ -372,6 +372,19 @@ class Cache:
         # key, then re-read. The poll interval is short (50ms) but
         # capped at the lock's lifetime so we don't deadlock if the
         # winner crashes.
+        #
+        # The loop ALSO watches the lock state (not just the cached
+        # value). Pre-fix it only checked the value; when the winner's
+        # callback raised, ``finally`` released the lock but nothing
+        # got cached, so every loser waited out the full deadline
+        # then fell through to running the callback themselves — N
+        # losers → N uncoordinated callback runs against the same
+        # already-stressed downstream the winner just timed out
+        # against (the very thundering herd this lock exists to
+        # prevent). Detecting the empty-lock + empty-cache state lets
+        # exactly ONE loser re-claim the slot via ``add`` and become
+        # the secondary winner; the other losers see the lock taken
+        # again and keep polling for the secondary winner's result.
         import time as _time
 
         deadline = _time.time() + stampede_lock_seconds
@@ -379,11 +392,35 @@ class Cache:
             cached = driver.get(key, _MISSING)
             if cached is not _MISSING:
                 return cached
+            # Lock state probe. ``add`` is the canonical atomic
+            # primitive — using ``get`` then ``add`` here would race
+            # in exactly the same window the initial claim above
+            # races. Instead, optimistically attempt ``add`` whenever
+            # the cache is still empty: ``add`` is a no-op + False
+            # if the lock is already held, and only one caller wins
+            # if multiple losers race the secondary claim
+            # simultaneously.
+            try:
+                re_won = driver.add(lock_key, "1", stampede_lock_seconds)
+            except Exception:
+                re_won = False
+            if re_won:
+                try:
+                    value = callback()
+                    driver.put(key, value, ttl)
+                    return value
+                finally:
+                    try:
+                        driver.forget(lock_key)
+                    except Exception:
+                        pass
             _time.sleep(0.05)
 
-        # Winner crashed or callback runs longer than the lock TTL.
-        # Run the callback ourselves rather than return None — the
-        # caller's contract is "you'll get the value or this raises".
+        # Winner crashed AND no loser could claim the secondary slot
+        # before the deadline (rare: implies repeated crashes
+        # outpacing every poll cycle). Run the callback ourselves
+        # rather than return None — the caller's contract is "you'll
+        # get the value or this raises".
         value = callback()
         driver.put(key, value, ttl)
         return value

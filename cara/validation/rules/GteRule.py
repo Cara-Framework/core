@@ -23,6 +23,13 @@ class GteRule(BaseRule):
             return False
         data = params.get("_data", {})
         other = data.get(threshold)
+        # See ``LteRule.validate`` for the full rationale — same
+        # absent-referenced-field guard, mirrored on the upper side
+        # of a range. Without this an upper-bound-only payload
+        # (``?max_price=100`` with no ``min_price``) failed the
+        # canonical ``max_price: gte:min_price`` cross-field guard.
+        if other is None and _to_number(threshold) is None:
+            return True
         compare_to = _to_number(threshold) if other is None else _to_number(other)
         val = _to_number(value)
         if compare_to is None or val is None:

@@ -281,8 +281,37 @@ class MakesIdempotentBase:
         return Cache.add(lock_key, lock_data, self.JOB_LOCK_TTL)
 
     def release_job_lock(self) -> None:
+        """Release the idempotency lock.
+
+        Cache failures are swallowed defensively. ``release_job_lock``
+        is invoked from the ``finally`` block of ``_execute_with_lock``;
+        an exception escaping here would REPLACE any in-flight
+        callback exception (Python's exception-during-finally
+        semantic), so a runtime Redis outage that fires mid-job would
+        silently transmute a precise domain exception (e.g.
+        ``PermanentScrapeError`` with ``do_not_retry=True``) into a
+        generic ``ConnectionError`` — and every upstream consumer
+        keyed on the original class (``AMQPDriver._handle_failed_message``
+        do_not_retry branch, per-class retry policies, per-error
+        handlers) silently mishandles the failure. The same shape
+        happens for successful jobs: the result is computed and
+        cached, but the caller sees the cache-forget exception
+        instead of the return value.
+
+        Mirrors the existing defensive shape on
+        ``UniqueJob.release_unique_lock`` — best-effort release, log
+        on failure, never bubble. The lock leaks for at most
+        ``JOB_LOCK_TTL`` (30m) on the unlikely path where Cache is
+        still down when the TTL expires.
+        """
         lock_key = f"job_lock:{self._idempotency_key}"
-        Cache.forget(lock_key)
+        try:
+            Cache.forget(lock_key)
+        except Exception as exc:
+            Log.warning(
+                f"Failed to release idempotency lock {lock_key}: {exc}",
+                category="idempotency",
+            )
 
     # ── Lifecycle / cooldown hooks (override in subclass) ──────────
 
