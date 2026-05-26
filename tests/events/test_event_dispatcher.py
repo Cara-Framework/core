@@ -387,6 +387,124 @@ async def test_listener_chain_to_distinct_event_does_not_trip_cycle_guard(dispat
 
 
 @pytest.mark.asyncio
+async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
+    """``fresh_dispatch_scope`` resets the in-flight event stack so a
+    sync-dispatched child job (whose own ``handle()`` fires events) is
+    treated as a fresh top-level dispatch — not a continuation of the
+    parent listener's event chain.
+
+    Real-world shape (variation discovery):
+
+      1. Parent product fires ``product.collected``.
+      2. ``AmazonPostCollectionListener`` runs as a listener for that
+         event — so ``_dispatch_stack`` is ``("product.collected",)``.
+      3. The listener calls ``Bus.dispatch(CollectProductJob(sibling))``;
+         in ``--sync`` mode the child job runs INLINE in the same
+         async context (same contextvar bindings).
+      4. The child job completes and fires ``product.collected`` for
+         the sibling product.
+      5. Pre-fix: cycle detector sees ``"product.collected"`` already
+         in the stack and raises ``EventDispatchCycleException`` even
+         though the two dispatches are for DIFFERENT entities — a
+         legitimate fan-out tree, not a recursive loop.
+
+    The fix exposes a public ``fresh_dispatch_scope()`` that callers
+    crossing a job boundary use to clear the stack. ``Bus._run_sync_with_tracking``
+    wraps job execution in this scope; queued mode is already fine
+    because each worker has its own contextvar context.
+    """
+    from cara.events.Event import fresh_dispatch_scope
+
+    log = []
+
+    class ChildJob:
+        """Simulates a queued job that runs synchronously inline. Its
+        ``handle()`` fires ``user.registered`` for a SIBLING user
+        (different id from the parent that triggered this dispatch).
+        Real-world equivalent: ``CollectProductJob`` for a variation
+        ASIN, whose ``handle()`` ends with ``Event.fire(ProductCollected(...))``
+        for the sibling product."""
+
+        async def handle(self, sibling_id):
+            with fresh_dispatch_scope():
+                await dispatcher.dispatch(
+                    UserRegisteredEvent(user_id=sibling_id, email=f"sib{sibling_id}@x.com")
+                )
+
+    class SiblingDispatcher:
+        """Listener mirroring ``AmazonPostCollectionListener``: only
+        dispatches sibling work when handling the ROOT event (user_id=1
+        is the parent; user_id>=2 is a sibling that already has its
+        own listener pass and must NOT recurse). Gating on the parent
+        id is the natural termination — sibling discovery in the real
+        listener gates on ``listing.metadata.variation_asins`` and the
+        ``already_exists`` set, which is the same shape."""
+
+        propagate_failures = True
+
+        async def handle(self, event):
+            log.append(f"sibling_listener:{event.user_id}")
+            # Only the root parent (user_id=1) has unseen siblings to
+            # dispatch — siblings themselves terminate the fan-out.
+            if event.user_id == 1:
+                await ChildJob().handle(sibling_id=2)
+
+    class CollectionAuditListener:
+        """Plain listener subscribed to the same topic — pinned here
+        so we can verify the SIBLING dispatch reached the listener
+        chain (cycle guard would have suppressed it pre-fix)."""
+
+        async def handle(self, event):
+            log.append(f"audit:{event.user_id}")
+
+    dispatcher.subscribe("user.registered", SiblingDispatcher())
+    dispatcher.subscribe("user.registered", CollectionAuditListener())
+
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync",
+        return_value=True,
+    ):
+        await dispatcher.dispatch(
+            UserRegisteredEvent(user_id=1, email="parent@x.com")
+        )
+
+    # Parent listener ran for user 1, child fan-out dispatched user 2,
+    # and the audit listener saw BOTH ids — no cycle exception.
+    assert "sibling_listener:1" in log
+    assert "audit:1" in log
+    assert "audit:2" in log, (
+        f"FAIL: sibling-style event dispatch was suppressed. log={log!r}. "
+        "Likely ``fresh_dispatch_scope`` isn't isolating the child "
+        "dispatch — the cycle detector still sees the parent's "
+        "in-flight ``user.registered`` and the child's listeners "
+        "never run."
+    )
+
+
+@pytest.mark.asyncio
+async def test_fresh_dispatch_scope_restores_outer_stack_on_exit():
+    """The scope must be a strict stack push/pop — leaving the scope
+    restores the outer dispatch stack. Otherwise a sync job that uses
+    the helper would leak an empty stack back into its caller and
+    break the cycle detector for the rest of the caller's listener
+    chain."""
+    from cara.events.Event import _dispatch_stack, fresh_dispatch_scope
+
+    token = _dispatch_stack.set(("outer.event",))
+    try:
+        assert _dispatch_stack.get() == ("outer.event",)
+        with fresh_dispatch_scope():
+            assert _dispatch_stack.get() == (), (
+                "fresh_dispatch_scope must clear the stack inside the block"
+            )
+        assert _dispatch_stack.get() == ("outer.event",), (
+            "fresh_dispatch_scope must restore the prior stack on exit"
+        )
+    finally:
+        _dispatch_stack.reset(token)
+
+
+@pytest.mark.asyncio
 async def test_concurrent_dispatches_have_independent_cycle_stacks():
     """Two asyncio tasks each dispatching the same event concurrently
     must not see each other's stack — the cycle guard is per-task

@@ -230,10 +230,28 @@ class Bus:
             if hasattr(job, "_mark_processing"):
                 job._mark_processing()
 
-        # Run the job through middleware pipeline
+        # Run the job through middleware pipeline.
+        #
+        # ``fresh_dispatch_scope`` clears the in-flight event-dispatch
+        # stack for the duration of the job's execution. Sync jobs run
+        # INLINE in the caller's async context, so any contextvar set
+        # by the caller's listener fan-out leaks into the job's own
+        # event chain. In particular, when a listener triggered by
+        # event ``X`` dispatches a child job whose ``handle()`` also
+        # fires event ``X`` (for a DIFFERENT entity — e.g. variation
+        # sibling discovery in ``AmazonPostCollectionListener``), the
+        # cycle detector pre-fix saw ``X`` already in the stack and
+        # raised ``EventDispatchCycleException``. Queued mode doesn't
+        # have this problem because each worker has its own contextvar
+        # context; sync mode shares the caller's context, and that's
+        # where the leak happens. Resetting at this boundary preserves
+        # cycle protection WITHIN the job's own listener chain (the
+        # stack starts empty but accumulates as the job dispatches its
+        # own events) while letting legitimate fan-out trees run.
         try:
             import asyncio
 
+            from cara.events.Event import fresh_dispatch_scope
             from cara.queues.middleware import run_through_middleware_async
 
             async def job_handler(j):
@@ -246,7 +264,8 @@ class Bus:
                     return await out
                 return out
 
-            result = await run_through_middleware_async(job, job_handler)
+            with fresh_dispatch_scope():
+                result = await run_through_middleware_async(job, job_handler)
 
             # If middleware skipped the job (returned None), still mark success
             if result is None:

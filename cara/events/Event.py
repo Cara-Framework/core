@@ -32,6 +32,39 @@ _dispatch_stack: ContextVar[tuple[str, ...]] = ContextVar(
 )
 
 
+def fresh_dispatch_scope():
+    """Context manager that clears the in-flight event-dispatch stack
+    for the duration of the ``with`` block, then restores the prior
+    stack on exit.
+
+    Use at natural job boundaries (e.g. ``Bus._run_sync_with_tracking``)
+    so a sync-dispatched child job doesn't inherit its caller's
+    listener-context stack. Without this, a listener that dispatches
+    a child job whose own ``handle()`` fires the same event type (for
+    a different entity) trips the cycle guard — even though it's a
+    legitimate fan-out tree, not a recursive loop. Queued mode doesn't
+    need this because each worker has its own contextvar context;
+    sync mode reuses the caller's context and that's where the leak
+    happens.
+
+    Cycle protection is preserved WITHIN the wrapped block — the
+    fresh stack starts empty but accumulates as the inner code
+    dispatches its own events, so a genuine self-recursive listener
+    inside the job still raises.
+    """
+    import contextlib
+
+    @contextlib.contextmanager
+    def _scope():
+        token = _dispatch_stack.set(())
+        try:
+            yield
+        finally:
+            _dispatch_stack.reset(token)
+
+    return _scope()
+
+
 class EventSubscriber:
     """
     Base class for event subscribers.
