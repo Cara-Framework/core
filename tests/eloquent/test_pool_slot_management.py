@@ -235,6 +235,137 @@ class TestSlotLeakOnMidLifeReconnect:
         )
 
 
+class TestMakeConnectionSetupFailureReleasesSlot:
+    """``make_connection`` runs two post-acquire operations before it
+    can be considered fully constructed:
+
+      * ``self._connection.autocommit = True`` — psycopg2 property
+        assign; on a TCP-RST'd connection raises ``OperationalError``.
+      * ``self.enable_disable_foreign_keys()`` — issues an actual
+        SQL roundtrip; the network/server can drop the connection
+        between ``create_connection`` returning and this statement
+        executing.
+
+    Pre-fix either failure mode bubbled straight out of
+    ``make_connection``, but ``create_connection`` had already
+    acquired a pool slot and assigned ``self._connection``. The
+    caller saw the exception, abandoned the wrapper, and the slot
+    stayed checked out until process exit. Under sustained
+    instability (Postgres restart, network flap) every fire
+    drained one slot from the global semaphore; once exhausted,
+    every subsequent caller hung for the 30 s acquire timeout
+    and then 503'd.
+
+    These tests pin that ``make_connection`` releases the slot via
+    ``close_connection`` before re-raising. Net invariant: a
+    failed setup leaves the semaphore unchanged from its
+    pre-call value.
+    """
+
+    def test_enable_foreign_keys_failure_releases_slot(self, monkeypatch):
+        sem = _fresh_pool(monkeypatch, size=3)
+        before = sem._value
+
+        _install_fake_psycopg2(monkeypatch, _mock_pg_connection)
+
+        # ``foreign_keys=True`` forces ``enable_disable_foreign_keys``
+        # to issue ``self._connection.execute(...)``; pin the connection
+        # to raise on that call.
+        pc = _make_pc(full_details={"foreign_keys": True})
+
+        def _raising_execute(_sql):
+            raise RuntimeError("server-side socket closed mid-setup")
+
+        # Monkeypatch the connection that the fake psycopg2 will return.
+        # The fake_psycopg2 calls _mock_pg_connection() each time; patch
+        # that to inject a raising execute on the returned mock.
+        original = _mock_pg_connection
+
+        def _broken_mock_pg_connection(**_kw):
+            conn = original()
+            conn.execute = _raising_execute  # type: ignore[method-assign]
+            return conn
+
+        _install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)
+
+        with pytest.raises(RuntimeError, match="socket closed"):
+            pc.make_connection()
+
+        after = sem._value
+        assert after == before, (
+            f"make_connection setup failure leaked a slot: "
+            f"semaphore {before} → {after}. The fix routes through "
+            f"close_connection on the exception path so the slot is "
+            f"released before the exception bubbles."
+        )
+        # ``_pool_slot_acquired`` must be cleared so a subsequent
+        # close_connection on the (abandoned) wrapper doesn't
+        # double-release.
+        assert getattr(pc, "_pool_slot_acquired", False) is False, (
+            "_pool_slot_acquired flag must be cleared by the cleanup "
+            "path so a stray close_connection can't double-release"
+        )
+
+    def test_autocommit_assign_failure_releases_slot(self, monkeypatch):
+        """Same shape, different surface — psycopg2's
+        ``connection.autocommit = True`` setter can raise
+        ``OperationalError`` if the underlying socket died between
+        ``create_connection`` and this assignment."""
+        sem = _fresh_pool(monkeypatch, size=3)
+        before = sem._value
+
+        # Use a connection whose autocommit setter raises. MagicMock's
+        # default behaviour accepts any property assign; override via
+        # PropertyMock so the setter side-effect fires.
+        from unittest.mock import PropertyMock
+
+        def _exploding_mock_pg_connection(**_kw):
+            conn = _mock_pg_connection()
+            type(conn).autocommit = PropertyMock(
+                side_effect=RuntimeError("TCP RST before autocommit could land")
+            )
+            return conn
+
+        _install_fake_psycopg2(monkeypatch, _exploding_mock_pg_connection)
+        pc = _make_pc()
+
+        with pytest.raises(RuntimeError, match="TCP RST"):
+            pc.make_connection()
+
+        after = sem._value
+        assert after == before, (
+            f"autocommit-assign failure leaked a slot: {before} → {after}"
+        )
+
+    def test_repeated_setup_failures_do_not_drain_pool(self, monkeypatch):
+        """Belt-and-braces: 10 consecutive setup failures must leave
+        the pool with EVERY slot still available. Pre-fix this would
+        drain a 4-slot pool in 4 iterations and 503 every caller for
+        the rest of the process lifetime."""
+        sem = _fresh_pool(monkeypatch, size=4)
+
+        def _broken_mock_pg_connection(**_kw):
+            conn = _mock_pg_connection()
+
+            def _raising_execute(_sql):
+                raise RuntimeError("repeat failure")
+
+            conn.execute = _raising_execute  # type: ignore[method-assign]
+            return conn
+
+        _install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)
+
+        for _ in range(10):
+            pc = _make_pc(full_details={"foreign_keys": True})
+            with pytest.raises(RuntimeError):
+                pc.make_connection()
+
+        assert sem._value == 4, (
+            f"10 setup failures drained the pool: {sem._value}/4 slots "
+            f"available. The fix must release on every failed setup."
+        )
+
+
 class TestRepeatReconnectsDoNotAccumulate:
     """Belt-and-braces: 10 consecutive reconnects on the same
     wrapper must hold EXACTLY 1 slot at the end. Pre-fix each

@@ -78,9 +78,31 @@ class PostgresConnection(BaseConnection):
 
         self._connection = self.create_connection()
 
-        self._connection.autocommit = True
-
-        self.enable_disable_foreign_keys()
+        # Post-acquire setup. Pre-fix any failure here (an
+        # ``enable_disable_foreign_keys`` SQL roundtrip that hits a
+        # dead socket, or the rare ``autocommit = True`` assignment
+        # on a TCP-RST'd connection) bubbled straight out of
+        # ``make_connection`` — but ``create_connection`` had already
+        # acquired a pool slot and assigned ``self._connection``.
+        # The caller saw the exception, abandoned the wrapper, and
+        # the slot + raw psycopg2 connection stayed orphaned until
+        # process exit. Under sustained instability (network flap,
+        # Postgres restart that drops in-flight connections) every
+        # fire drained 1 slot from the global semaphore; once
+        # exhausted, every subsequent caller hung for the full
+        # ``_POOL_ACQUIRE_TIMEOUT`` (30 s) and then 503'd. Mirror
+        # the ``create_connection`` cleanup contract: on failure,
+        # route through ``close_connection`` (releases slot,
+        # returns/closes the connection) before re-raising.
+        try:
+            self._connection.autocommit = True
+            self.enable_disable_foreign_keys()
+        except Exception:
+            try:
+                self.close_connection()
+            except Exception:
+                pass
+            raise
 
         self.open = 1
 
