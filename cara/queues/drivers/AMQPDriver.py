@@ -1071,12 +1071,29 @@ class AMQPDriver(HasColoredOutput, Queue):
                     )
                     replayed += 1
                     Log.info(f"Replayed message {msg_id} to {queue_name}")
-
+                    # ACK MUST happen here, before any ``break``.
+                    # Pre-fix the targeted-match branch broke out of
+                    # the loop and the trailing ``basic_ack`` below
+                    # never ran — pika treated the delivery as
+                    # in-flight, the broker redelivered on connection
+                    # close, and the job stayed in the DLQ for the
+                    # next ``CleanDeadLetterJob`` sweep to re-replay
+                    # forever.
+                    self.channel.basic_ack(method.delivery_tag)
                     if message_id is not None:
                         break
-
-                # Remove from dead letter queue
-                self.channel.basic_ack(method.delivery_tag)
+                else:
+                    # Targeted scan, non-matching message. MUST NOT
+                    # ack — that removes the message from the DLQ
+                    # silently. Pre-fix the trailing
+                    # ``basic_ack(method.delivery_tag)`` ran on every
+                    # iteration regardless of match, so a targeted
+                    # replay for one stuck job silently discarded
+                    # every other DLQ message in the peek window
+                    # (pure data loss). Nack with requeue=True so
+                    # the broker keeps the message available for the
+                    # next ``CleanDeadLetterJob`` scan.
+                    self.channel.basic_nack(method.delivery_tag, requeue=True)
 
         except Exception as e:
             Log.error(f"Failed to replay dead letter messages: {e}")

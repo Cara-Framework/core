@@ -74,9 +74,20 @@ class Pagination:
         raw_page = data.get(page_key)
         raw_offset = data.get(offset_key)
 
-        if raw_offset is not None:
+        # Treat empty string the same as missing on BOTH params so a
+        # form-submitted ``?offset=&page=5`` honours the populated
+        # page. Pre-fix ``if raw_offset is not None`` matched the
+        # empty string (it's not None), entered the offset branch,
+        # ``_safe_int("", default=0)`` returned 0, and the user's
+        # ``page=5`` was silently ignored — the listing snapped to
+        # page 1 instead of page 5. Common shape when a form UI
+        # submits empty input fields alongside populated ones.
+        offset_provided = raw_offset is not None and raw_offset != ""
+        page_provided = raw_page is not None and raw_page != ""
+
+        if offset_provided:
             offset = max(0, cls._safe_int(raw_offset, default=0))
-        elif raw_page is not None:
+        elif page_provided:
             page = max(1, cls._safe_int(raw_page, default=1))
             offset = (page - 1) * limit
         else:

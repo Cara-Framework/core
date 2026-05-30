@@ -79,6 +79,27 @@ class DefaultExceptionHandler:
         else:
             response = self.format_error(exception, status_code)
 
+        # Propagate the documented ``retry_after`` contract from
+        # exceptions that set it but don't define ``to_dict``.
+        # ``ServiceUnavailableException`` inherits ``HttpException.to_dict``
+        # which scans ``__dict__`` and picks the attribute up
+        # accidentally; ``DatabaseUnavailableException`` (raised by
+        # ``PostgresConnection`` on pool exhaustion / connection drop)
+        # inherits from ``ORMException`` which has no ``to_dict`` —
+        # so the ``retry_after`` value the constructor stashes was
+        # silently dropped by ``format_error``. The 5xx-prod redaction
+        # below preserves ``retry_after`` from ``response`` via the
+        # ``_5XX_PROD_SAFE_KEYS`` allowlist, so making sure it's in
+        # ``response`` here is the single fix needed for both paths.
+        retry_after = getattr(exception, "retry_after", None)
+        if retry_after is not None and "retry_after" not in response:
+            try:
+                response["retry_after"] = int(retry_after)
+            except (TypeError, ValueError):
+                # Non-int values shouldn't reach here, but if they do
+                # don't poison the response — drop silently.
+                pass
+
         if status_code >= 500 and not self.is_debug_mode():
             redacted: dict[str, Any] = {
                 "error": self._GENERIC_5XX_MESSAGE,
