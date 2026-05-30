@@ -179,11 +179,21 @@ class AMQPDriver(HasColoredOutput, Queue):
             - pendulum.now("UTC").float_timestamp * 1000
         )
 
-        # Add delay header for RabbitMQ delayed plugin
-        headers = {"x-delay": delay_ms}
-        merged_opts["connection_options"] = {
-            **merged_opts.get("connection_options", {}),
-            **headers,
+        # Per-MESSAGE header for the RabbitMQ delayed-message-exchange
+        # plugin. Pre-fix this was injected into ``connection_options``,
+        # which ``_build_url`` then appended as URL query params used
+        # as the connection-pool key. Result: every distinct
+        # ``delay_ms`` value produced a unique pool key, so the
+        # scheduled / retry hot path NEVER reused a pooled connection
+        # and paid the full 5-50ms TCP+TLS handshake per publish
+        # (defeating the explicit pool design — see
+        # ``_connect_and_publish``'s docstring). The fix routes the
+        # header through a dedicated ``message_headers`` opt key that
+        # ``_connect_and_publish_locked`` reads at publish time but
+        # ``_build_url`` ignores at connection time.
+        merged_opts["message_headers"] = {
+            **merged_opts.get("message_headers", {}),
+            "x-delay": delay_ms,
         }
 
         self.push(job, options=merged_opts)
@@ -1231,6 +1241,16 @@ class AMQPDriver(HasColoredOutput, Queue):
         # synchronously inside ``basic_publish`` because we use
         # ``BlockingChannel`` with confirms on. Removing the redundant
         # post-call.
+        # Per-publish message headers. ``message_headers`` is the
+        # dedicated key (used by ``schedule()`` for the delayed-plugin
+        # ``x-delay`` header). ``connection_options`` remains as a
+        # legacy fallback so any out-of-tree caller that still uses
+        # the old shape keeps working — but new code MUST use
+        # ``message_headers`` so the connection-pool key (built from
+        # ``connection_options``) stays stable across publishes.
+        publish_headers = (
+            opts.get("message_headers") or opts.get("connection_options")
+        )
         try:
             self.channel.basic_publish(
                 exchange=opts.get("exchange", ""),
@@ -1238,7 +1258,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 body=body,
                 properties=pika.BasicProperties(
                     delivery_mode=2,  # Make message persistent
-                    headers=opts.get("connection_options"),
+                    headers=publish_headers,
                 ),
                 mandatory=True,
             )

@@ -24,6 +24,15 @@ class GtRule(BaseRule):
         # Threshold can be a literal number or a field name.
         data = params.get("_data", {})
         other = data.get(threshold)
+        # See ``LteRule.validate`` / ``LtRule.validate`` for the full
+        # rationale — mirrored absent-referenced-field guard. Without
+        # this an upper-bound-only payload (``?max_price=100`` with
+        # no ``min_price``) failed any ``max_price: gt:min_price``
+        # cross-field guard. The literal-numeric threshold form
+        # (``gt:10``) still falls through to the numeric comparison
+        # below because ``_to_number("10")`` returns 10.0.
+        if other is None and _to_number(threshold) is None:
+            return True
         compare_to = _to_number(threshold) if other is None else _to_number(other)
         val = _to_number(value)
         if compare_to is None or val is None:
