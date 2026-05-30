@@ -497,6 +497,29 @@ class DefaultExceptionHandler:
                 rid = ""
         return [[b"x-request-id", rid.encode()]] if rid else []
 
+    @staticmethod
+    def _retry_after_header_for(data: dict[str, Any]) -> list:
+        """Return the ``Retry-After`` header pair when ``data`` carries
+        a positive ``retry_after`` value, else empty list.
+
+        Coerces to a positive integer per RFC 7231 §7.1.3 (the
+        delta-seconds form). Anything non-numeric, non-positive, or
+        out-of-int-range is silently dropped — the client falls back
+        to its default backoff strategy, same as if the header had
+        never been set. The body-side ``retry_after`` value stays
+        regardless so the JSON contract is unchanged.
+        """
+        raw = data.get("retry_after") if isinstance(data, dict) else None
+        if raw is None:
+            return []
+        try:
+            seconds = int(raw)
+        except (TypeError, ValueError):
+            return []
+        if seconds <= 0:
+            return []
+        return [[b"retry-after", str(seconds).encode()]]
+
     async def send_response(
         self,
         data: dict[str, Any],
@@ -510,7 +533,25 @@ class DefaultExceptionHandler:
         cors = self._cors_headers_for_scope(scope)
         sec = self._security_headers_for_scope(scope)
         rid = self._request_id_header_for(request, scope)
-        extras = cors + sec + rid
+        # ``Retry-After`` HTTP header. ``HttpException.ServiceUnavailable
+        # Exception`` documents the contract: ``retry_after`` is surfaced
+        # both in the JSON envelope AND the ``Retry-After`` header so
+        # callers don't have to parse the body to know when to come back.
+        # Pre-fix only the body half landed — ``format_response`` (above)
+        # propagated ``retry_after`` into ``data``, but ``send_response``
+        # only emitted CORS / security / request-id headers and never
+        # promoted it to the HTTP layer. Load balancers, browser retry,
+        # urllib3 ``Retry`` adapters, ``requests``' ``Retry`` config —
+        # all look at the header, not the body — fall back to default
+        # exponential backoff or a long pin. ``DatabaseUnavailableException``
+        # (raised on pool exhaustion) was the load-bearing case: clients
+        # got ``retry_after=1`` in the JSON but the HTTP header was
+        # absent, so they kept retrying every 30+ seconds. Pull from
+        # ``data`` since ``format_response`` is the single source of
+        # truth (works for both ``to_dict``-defining exceptions and the
+        # ``getattr(exception, "retry_after", ...)`` fallback path).
+        retry = self._retry_after_header_for(data)
+        extras = cors + sec + rid + retry
         try:
             if self.application:
                 response = self.application.make("response")
