@@ -940,14 +940,29 @@ class AMQPDriver(HasColoredOutput, Queue):
                 exchange=dlx_name, exchange_type="topic", durable=True
             )
 
-            # Declare dead letter queue
-            dlq_name = f"{exchange_name}.queue"
+            # Declare dead letter queue. Name MUST match every
+            # consumer-side reader (``replay_dead_letter`` /
+            # ``get_dead_letter_messages`` /
+            # ``services.app.support.QueueNames.DEAD_LETTER``) —
+            # pre-fix this declared ``{exchange_name}.queue`` so any
+            # deployment that called the method created a DLQ no
+            # reader looked at, and the canonical
+            # ``dead.letter.queue`` stayed empty while the broker
+            # filled up unread.
+            #
+            # NO message-TTL argument: the DLQ exists specifically
+            # to preserve failed messages for triage. A 24h ceiling
+            # would silently DROP every dead-lettered message older
+            # than 24h if ``CleanDeadLetterJob`` is paused, broken,
+            # or slower than the failure rate for one rotation —
+            # with no further DLX on the DLQ, expired messages just
+            # evaporate. If storage capping is ever needed it
+            # should be paired with another DLX and documented
+            # inline.
+            dlq_name = "dead.letter.queue"
             self.channel.queue_declare(
                 queue=dlq_name,
                 durable=True,
-                arguments={
-                    "x-message-ttl": 86400000,  # 24 hours
-                },
             )
 
             # Bind queue to DLX
