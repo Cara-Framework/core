@@ -17,7 +17,7 @@ from cara.middleware.http import (
     ThrottleRequests,
     TrimStrings,
 )
-from cara.middleware.ws import Authenticate, LogWSRequests
+from cara.middleware.ws import Authenticate, LogWSRequests, Throttle as WSThrottle
 
 MiddlewareClass = type[Middleware]
 
@@ -176,8 +176,15 @@ class MiddlewareProvider(DeferredProvider):
 
     @staticmethod
     def _register_core_ws_aliases(capsule) -> None:
-        """Register core WebSocket middleware aliases (opt-in per route)."""
+        """Register core WebSocket middleware aliases (opt-in per route).
+
+        ``ws.throttle`` is the WebSocket sibling of the HTTP ``throttle``
+        alias. Per-IP rolling-window cap on the upgrade — every public
+        WS route should declare it so a loop-connector can't churn the
+        broadcaster/pool unbounded.
+        """
         capsule.add_alias("ws.auth", Authenticate)
+        capsule.add_alias("ws.throttle", WSThrottle)
 
     def register(self) -> None:
         """Register HTTP and WebSocket middleware."""
