@@ -90,6 +90,15 @@ async def test_listeners_called_in_registration_order(dispatcher):
     event = MagicMock()
     event.name = "order.test"
     event.is_propagation_stopped = False
+    # The dispatcher gates dispatch on ``event.validate_payload()``
+    # returning a falsy "missing fields" report (the gate landed
+    # AFTER this test was originally authored — see Event.py:318).
+    # Bare MagicMock auto-creates ``validate_payload`` as a method
+    # whose return value is another MagicMock, which is truthy, so
+    # the gate would log "failed validate_payload(); Skipping
+    # dispatch." and the listeners never run. Explicitly set to
+    # None so ``callable(validator)`` is False and the gate skips.
+    event.validate_payload = None
 
     with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
         await dispatcher.dispatch(event)

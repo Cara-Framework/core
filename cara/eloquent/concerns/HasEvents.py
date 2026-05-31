@@ -62,7 +62,19 @@ class HasEvents:
         if event_name in event_methods:
             for method in event_methods[event_name]:
                 try:
-                    result = method(self, **kwargs)
+                    # ``method`` came out of ``_get_model_events`` via
+                    # ``getattr(self, attr_name)`` — it's ALREADY a
+                    # bound method carrying its own ``self``. The
+                    # previous ``method(self, **kwargs)`` passed self
+                    # a SECOND time and every hook crashed with
+                    # ``TypeError: _hook() takes 1 positional argument
+                    # but 2 were given``. The except-Exception arm
+                    # below logged the TypeError and swallowed it, so
+                    # the symptom looked like "hook silently
+                    # un-ran" — every test pinning continue-on-failure
+                    # + cancel-on-False semantics failed because no
+                    # hook ever got past argument binding.
+                    result = method(**kwargs)
                     # If any handler returns False, cancel the operation
                     if result is False:
                         return False
