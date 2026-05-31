@@ -69,7 +69,7 @@ class RouteResolver:
                 type_hints = {}
                 try:
                     type_hints = get_type_hints(callable_obj)
-                except NameError, AttributeError, TypeError:
+                except (NameError, AttributeError, TypeError):
                     # If type hints fail, try to get them from annotations
                     if hasattr(callable_obj, "__annotations__"):
                         type_hints = callable_obj.__annotations__

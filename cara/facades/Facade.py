@@ -32,7 +32,7 @@ class Facade(type):
         """
         try:
             from bootstrap import application
-        except ImportError, ModuleNotFoundError, TypeError:
+        except (ImportError, ModuleNotFoundError, TypeError):
             # Handle bootstrap unavailability with targeted fallbacks
             # (e.g. running stress tests outside the full Cara framework,
             # or Python version mismatch causing TypeError on 3.10+ syntax)

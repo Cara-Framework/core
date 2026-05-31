@@ -201,7 +201,7 @@ class _OptionalProxy:
             return _OptionalProxy(None)
         try:
             return wrapped[key]
-        except KeyError, IndexError, TypeError:
+        except (KeyError, IndexError, TypeError):
             return _OptionalProxy(None)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:

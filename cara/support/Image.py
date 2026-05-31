@@ -59,7 +59,7 @@ class ImageProcessor:
                         self.image = self.image.rotate(270, expand=True)
                     elif exif[orientation] == 8:
                         self.image = self.image.rotate(90, expand=True)
-        except AttributeError, KeyError, IndexError, TypeError:
+        except (AttributeError, KeyError, IndexError, TypeError):
             pass
 
         self._orientated = True

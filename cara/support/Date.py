@@ -151,7 +151,7 @@ class Date:
         """
         try:
             pendulum.travel_to(instant, freeze=True)
-        except NotImplementedError, AttributeError, Exception:
+        except (NotImplementedError, AttributeError, Exception):
             pass
 
     @staticmethod
@@ -159,7 +159,7 @@ class Date:
         """Release any pendulum-side freeze if the test extra exists."""
         try:
             pendulum.travel_back()
-        except NotImplementedError, AttributeError, Exception:
+        except (NotImplementedError, AttributeError, Exception):
             pass
 
 

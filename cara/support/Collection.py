@@ -1697,7 +1697,7 @@ class Collection(Macroable):
 
                 if next_data is not None:
                     return self._extract_wildcard_path(next_data, remaining)
-            except KeyError, IndexError, AttributeError, TypeError, ValueError:
+            except (KeyError, IndexError, AttributeError, TypeError, ValueError):
                 pass
 
             return []

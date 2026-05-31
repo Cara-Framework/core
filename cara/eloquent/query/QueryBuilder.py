@@ -3603,19 +3603,36 @@ class QueryBuilder(ObservesEvents):
 
     def cursor(self, chunk_size: int = 1000):
         """
-        Stream results from the database using a cursor for memory-efficient iteration.
+        Stream results from the database in memory-bounded chunks.
 
-        This method processes large datasets without loading everything into memory.
-        It yields individual model instances one by one.
+        Implementation note: ``cursor()`` does NOT open a server-side
+        DB cursor — it issues ``LIMIT N OFFSET M`` page queries under
+        the hood and yields rows one at a time. The DB connection is
+        released between chunks (not held across the whole iteration),
+        which keeps the pool free but means the iteration is
+        OFFSET-paginated, with two consequences worth knowing:
+
+          * **Cost per chunk grows with offset.** PostgreSQL still
+            scans-and-skips ``M`` rows before returning the next ``N``.
+            For multi-million-row tables the late chunks dominate the
+            total wall clock.
+          * **Not stable under concurrent writes.** Inserts/deletes
+            mid-iteration can shift the page boundary, causing rows
+            to be skipped OR re-yielded across consecutive chunks.
+
+        For large tables that need a stable iteration order or O(1)
+        per-chunk cost regardless of position, prefer
+        :py:meth:`chunk_by_id` (keyset pagination on a monotonic
+        column — ``WHERE id > last_id ORDER BY id LIMIT N``).
 
         Args:
-            chunk_size: Number of records to fetch in each batch (default: 1000)
+            chunk_size: Number of records to fetch per page (default: 1000)
 
         Yields:
             Model: Individual model instances
 
         Example:
-            # Memory-efficient processing of large datasets
+            # Memory-efficient processing of (relatively) static datasets
             for user in User.where('active', True).cursor():
                 process_user(user)
 
