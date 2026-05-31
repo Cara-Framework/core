@@ -187,6 +187,19 @@ class JsonResource:
         s = str(value).strip() if value else None
         if not s:
             return None
+        # Date-only strings (``"YYYY-MM-DD"``) carry no time-of-day —
+        # treating them as ``T00:00:00+00:00`` lies about precision
+        # AND TZ-shifts the day for west-of-UTC callers (the storefront's
+        # ``formatDate`` distinguishes ``YYYY-MM-DD`` and parses it as a
+        # local calendar date; a stamped UTC midnight on the wire flips
+        # west-of-UTC users to the prior day). Pass these through
+        # untouched — same shape ``date.isoformat()`` would return.
+        if len(s) == 10 and s[4] == "-" and s[7] == "-":
+            try:
+                _date.fromisoformat(s)
+                return s
+            except ValueError:
+                pass
         try:
             parsed = _datetime.fromisoformat(s.replace(" ", "T", 1))
             if parsed.tzinfo is None:

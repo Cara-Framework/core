@@ -38,7 +38,12 @@ class ExistsRule(BaseRule):
         condition_column = parts[2] if len(parts) > 2 else None
         condition_value = parts[3] if len(parts) > 3 else None
 
-        if not table or not value:
+        # ``not value`` would treat integer ``0`` (and ``False``) as
+        # "missing", but those are legitimate column values — anonymous
+        # / system user rows often use ``id=0`` as a sentinel. Reject
+        # only the genuinely empty inputs so the DB lookup actually
+        # runs for ``value=0``.
+        if not table or value is None or value == "":
             return False
 
         try:

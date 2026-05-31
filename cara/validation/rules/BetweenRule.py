@@ -34,6 +34,22 @@ class BetweenRule(BaseRule):
         if isinstance(value, bool):
             return False
 
+        # Inverted bounds (``min > max``) make the predicate impossible
+        # to satisfy — every input fails. Surface the misconfig so
+        # operators have a signal rather than silently rejecting every
+        # request. ``min == max`` is left alone — a degenerate but
+        # legitimate exact-equality spec.
+        if min_val > max_val:
+            try:
+                from cara.facades import Log
+                Log.warning(
+                    f"BetweenRule misconfig: field={field!r} has inverted "
+                    f"bounds (min={min_val} > max={max_val}) — every input "
+                    f"fails by design. Check the rule spec.",
+                )
+            except Exception:
+                pass
+
         chain = params.get("_rules") or ()
         numeric_context = "integer" in chain or "numeric" in chain
 

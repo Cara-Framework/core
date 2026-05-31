@@ -36,6 +36,24 @@ class MaxRule(BaseRule):
         chain = params.get("_rules") or ()
         numeric_context = "integer" in chain or "numeric" in chain
 
+        # A negative ``max`` in a LENGTH context can never be satisfied
+        # — string / list / dict lengths are always ``>= 0``, so every
+        # input fails. Surface as a warning rather than a silent reject
+        # so operators have a signal that the rule is misconfigured.
+        # Numeric contexts intentionally allow negative thresholds
+        # (e.g. ``max:-1`` against a negative-only domain) so we
+        # only warn outside that branch.
+        if max_threshold < 0 and not numeric_context:
+            try:
+                from cara.facades import Log
+                Log.warning(
+                    f"MaxRule misconfig: field={field!r} has a negative "
+                    f"max threshold ({max_threshold}) in a length context — "
+                    f"every input fails by design. Check the rule spec.",
+                )
+            except Exception:
+                pass
+
         # For numeric values (int, float), compare numerically
         if isinstance(value, (int, float)):
             return float(value) <= max_threshold
