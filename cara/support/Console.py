@@ -42,28 +42,3 @@ class HasColoredOutput:
         return self.success(message)
 
 
-class AddCommandColors:
-    """
-    Command-line color formatting.
-
-    This class provides methods for formatting command-line output with colors, specifically focused
-    on error and warning messages in CLI commands.
-    """
-
-    def error(self, text):
-        """
-        Write a string as information output.
-
-        :param text: The line to write
-        :type text: str
-        """
-        self.line(text, "error")
-
-    def warning(self, text):
-        """
-        Write a string as information output.
-
-        :param text: The line to write
-        :type text: str
-        """
-        self.line(text, "c2")

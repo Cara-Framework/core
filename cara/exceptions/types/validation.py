@@ -80,7 +80,29 @@ class ValidationException(CaraException):
             self._extract_first_error_from_dict(validation_dict)
 
     def _analyze_validation_object(self) -> None:
-        """Analyze ValidationErrors object with methods."""
+        """Analyze ValidationErrors object with methods.
+
+        Both branches below talk to a third-party ValidationErrors
+        contract that we don't fully own (the rule-engine plugs in
+        custom error classes). Failures inside ``errors()`` /
+        ``first_error()`` should never crash the request — the worst
+        case is that ``self._extracted_message`` stays unset and the
+        global handler falls back to the generic 422 envelope. But
+        the failures ARE bugs in the rule's error class (raising
+        instead of returning), so we surface them at ``debug`` level
+        rather than the previous bare ``pass`` that masked them
+        completely. The HTTP path is unaffected; only ops + the
+        rule's author see the breadcrumb.
+        """
+        # Lazy import — exceptions module loads early in bootstrap, the
+        # Log facade may not be wired yet on the very first call. The
+        # import is cheap (already cached by the loader for every
+        # subsequent call after framework warm-up).
+        try:
+            from cara.facades import Log
+        except Exception:
+            Log = None  # type: ignore[assignment]
+
         # Try errors() method to get all errors
         if hasattr(self.validation_errors, "errors"):
             try:
@@ -88,8 +110,18 @@ class ValidationException(CaraException):
                 if isinstance(all_errors, dict) and all_errors:
                     self._extracted_errors = all_errors
                     self._extract_first_error_from_dict(all_errors)
-            except Exception:
-                pass
+            except Exception as exc:
+                if Log is not None:
+                    try:
+                        Log.debug(
+                            f"ValidationException: errors() method on "
+                            f"{type(self.validation_errors).__name__} raised "
+                            f"{type(exc).__name__}: {exc} — falling back to "
+                            f"generic envelope",
+                            category="validation",
+                        )
+                    except Exception:
+                        pass
 
         # Try first_error() method for main message
         if hasattr(self.validation_errors, "first_error"):
@@ -97,8 +129,18 @@ class ValidationException(CaraException):
                 first_error = self.validation_errors.first_error()
                 if first_error:
                     self._extracted_message = first_error
-            except Exception:
-                pass
+            except Exception as exc:
+                if Log is not None:
+                    try:
+                        Log.debug(
+                            f"ValidationException: first_error() method on "
+                            f"{type(self.validation_errors).__name__} raised "
+                            f"{type(exc).__name__}: {exc} — falling back to "
+                            f"generic envelope",
+                            category="validation",
+                        )
+                    except Exception:
+                        pass
 
     def _extract_first_error_from_dict(self, errors_dict: dict[str, Any]) -> None:
         """Extract first error message from errors dictionary."""
