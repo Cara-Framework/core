@@ -1171,6 +1171,25 @@ class Model(
         """
         Get the first record matching the attributes or create it.
 
+        Race-safe: a concurrent caller can insert the same row between
+        the SELECT below and the INSERT. If a UNIQUE constraint backs
+        the ``wheres`` columns, the racing INSERT raises a driver-
+        level UniqueViolation. Without the catch-and-re-query below,
+        the loser of the race surfaces that as an unhandled
+        ``IntegrityError`` even though semantically the operation
+        succeeded (the row IS there now — just inserted by the other
+        request). The fix detects the unique-violation SQLSTATE /
+        message and re-runs the SELECT to return the row the winning
+        side inserted. Mirrors the same driver-agnostic pattern used
+        in ``ConversionService.record_conversion`` for the
+        ``external_order_id`` unique index.
+
+        Without a UNIQUE constraint there's no atomic guard — two
+        concurrent callers DO each insert a row. ``first_or_create``
+        cannot prevent that at the application layer; callers who
+        need true uniqueness must back ``wheres`` with a DB-level
+        UNIQUE index.
+
         Returns:
             Model
         """
@@ -1181,9 +1200,42 @@ class Model(
         total = {}
         total.update(creates)
         total.update(wheres)
-        if not record:
+        if record:
+            return record
+        try:
             return self.create(total, id_key=cls.get_primary_key())
-        return record
+        except Exception as exc:
+            if not cls._is_unique_violation(exc):
+                raise
+            # Concurrent insert won the race — re-query and return
+            # the row they inserted. If it's STILL not there
+            # (race against a delete, RLS hiding, etc.), bubble the
+            # original IntegrityError so the caller sees the real
+            # failure instead of a misleading None.
+            again = cls().where(wheres).first()
+            if again is not None:
+                return again
+            raise
+
+    @staticmethod
+    def _is_unique_violation(exc: Exception) -> bool:
+        """Detect a UNIQUE constraint violation across psycopg2 /
+        psycopg3 / sqlalchemy / mysql drivers.
+
+        psycopg surfaces SQLSTATE ``23505`` on the exception (and on
+        ``exc.orig.pgcode`` when wrapped); MySQL raises
+        ``IntegrityError`` with ``"duplicate"`` in the message; most
+        ORMs preserve one of those signals in the message string.
+        Mirrors the helper in
+        ``api/app/services/ConversionService.record_conversion``.
+        """
+        sqlstate = getattr(exc, "sqlstate", None) or getattr(
+            getattr(exc, "orig", None), "pgcode", None
+        )
+        if sqlstate == "23505":
+            return True
+        msg = str(exc).lower()
+        return "duplicate key" in msg or "unique constraint" in msg
 
     @classmethod
     def first_or_new(cls, wheres, values: dict | None = None):
@@ -1210,13 +1262,34 @@ class Model(
 
     @classmethod
     def update_or_create(cls, wheres, updates):
+        """Upsert: update if a matching row exists, else create.
+
+        Same TOCTOU race as ``first_or_create`` — the SELECT-then-
+        INSERT path can lose to a concurrent inserter. When the loser
+        catches a UNIQUE violation, re-query and apply the update
+        (the merge semantics of an upsert) so both racing requests
+        converge on a single row with the latest payload.
+        """
         self = cls()
         record = self.where(wheres).first()
         total = {}
         total.update(updates)
         total.update(wheres)
         if not record:
-            return self.create(total, id_key=cls.get_primary_key()).fresh()
+            try:
+                return self.create(total, id_key=cls.get_primary_key()).fresh()
+            except Exception as exc:
+                if not cls._is_unique_violation(exc):
+                    raise
+                # Concurrent insert beat us. Fall through to the
+                # UPDATE branch so the loser's payload still lands
+                # — that's the "upsert" the function name promises.
+                # If the row vanished again (race against delete),
+                # the UPDATE matches 0 rows and the final SELECT
+                # returns None; bubble the original error in that
+                # case to surface the real failure.
+                if cls().where(wheres).first() is None:
+                    raise
 
         self.where(wheres).update(total)
         return self.where(wheres).first()
