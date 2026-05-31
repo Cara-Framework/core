@@ -17,6 +17,7 @@ application reference and router (both immutable across requests).
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from cara.exceptions import MiddlewareNotFoundException
@@ -242,7 +243,25 @@ class HttpConductor:
                 continue
 
             try:
-                await terminate_fn(request, response)
+                # ``terminate`` MAY be sync or async. Pre-fix the
+                # dispatcher blindly awaited the return value — a
+                # sync ``def terminate(self, ...): ...`` returns
+                # None, and ``await None`` raises ``TypeError:
+                # object NoneType can't be used in 'await'
+                # expression``. The except clause then swallows it,
+                # logs an opaque "Error in terminable middleware X",
+                # and the terminate step is silently skipped on
+                # every request. Mirror the
+                # ``cara.support.Pipeline`` async loop: call first,
+                # await ONLY if the result is awaitable. Allows
+                # both ``async def terminate`` (built-in
+                # ``ResetAuth``) and ``def terminate`` (user-land
+                # middleware that does only synchronous cleanup
+                # — closing a request-scoped resource, decrementing
+                # an in-process counter, etc.).
+                result = terminate_fn(request, response)
+                if inspect.isawaitable(result):
+                    await result
             except Exception as e:
                 name = type(instance).__name__
                 Log.error(f"Error in terminable middleware {name}: {e}")

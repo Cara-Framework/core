@@ -172,7 +172,25 @@ class MiddlewareCapsule:
 
             async def terminate(self, request, response):
                 if hasattr(self._instance, "terminate"):
-                    return await self._instance.terminate(request, response)
+                    # The wrapped middleware's ``terminate`` may be
+                    # either sync or async — the framework's contract
+                    # accepts both (mirrors the
+                    # ``cara.support.Pipeline.through`` dispatch).
+                    # Pre-fix this proxy blind-awaited the return
+                    # value, so a parameterised middleware (e.g.
+                    # ``throttle:60,1``) with a sync ``terminate``
+                    # raised ``TypeError: object NoneType can't be
+                    # used in 'await' expression`` on every request.
+                    # The exception was caught by the conductor's
+                    # broad except and logged as an opaque error,
+                    # silently skipping cleanup. Inspect the return
+                    # and await ONLY when awaitable.
+                    import inspect as _inspect
+
+                    result = self._instance.terminate(request, response)
+                    if _inspect.isawaitable(result):
+                        return await result
+                    return result
 
         # Set meaningful name for debugging
         ParameterizedMiddleware.__name__ = f"{base_middleware.__name__}WithParams"
