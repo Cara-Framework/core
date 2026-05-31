@@ -155,7 +155,27 @@ class HeaderManager:
         self.set("Content-Length", str(length))
 
     def location(self, url: str) -> None:
-        """Set Location header for redirects (Laravel-style)."""
+        """Set Location header for redirects (Laravel-style).
+
+        Strips CR/LF from the URL before setting the header. Without
+        this guard, an attacker-controlled URL (e.g. a ``?next=``
+        query param that flowed into a redirect) carrying ``\\r\\n``
+        would split the HTTP response — the bytes after the
+        newline would be parsed by the client as additional
+        headers (response-splitting / header-injection: poisoned
+        cookies, ``Content-Type: text/html`` flip, cached
+        XSS). All header-setters should defend at the boundary;
+        this is the load-bearing redirect entry point so the
+        explicit check lives here even though ``HeaderManager.set``
+        could carry it too.
+        """
+        if not isinstance(url, str):
+            url = str(url)
+        if "\r" in url or "\n" in url:
+            raise ValueError(
+                "Location header must not contain CR or LF "
+                "characters (response-splitting protection)",
+            )
         self.set("Location", url)
 
     def authorization(self, token: str) -> None:

@@ -241,7 +241,7 @@ class Notifiable(Notifiable):
                 channels = json.loads(pref.value)
                 if isinstance(channels, list):
                     return channels
-            except json.JSONDecodeError, TypeError:
+            except (json.JSONDecodeError, TypeError):
                 pass
 
         # Return empty list = use notification's default channels

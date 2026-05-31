@@ -201,7 +201,7 @@ class CastManager:
                 try:
                     json.loads(value)
                     return value
-                except json.JSONDecodeError, ValueError:
+                except (json.JSONDecodeError, ValueError):
                     # If not valid JSON, encode it
                     return json.dumps(value)
             else:
@@ -212,7 +212,7 @@ class CastManager:
             if isinstance(value, str):
                 try:
                     return json.loads(value)
-                except json.JSONDecodeError, ValueError:
+                except (json.JSONDecodeError, ValueError):
                     return value
             return value
 
@@ -230,7 +230,7 @@ class CastManager:
                         return value
                     else:
                         return json.dumps([parsed])
-                except json.JSONDecodeError, ValueError:
+                except (json.JSONDecodeError, ValueError):
                     return json.dumps([value])
             else:
                 return json.dumps([value])
@@ -240,7 +240,7 @@ class CastManager:
                 try:
                     parsed = json.loads(value)
                     return parsed if isinstance(parsed, list) else [parsed]
-                except json.JSONDecodeError, ValueError:
+                except (json.JSONDecodeError, ValueError):
                     return [value]
             elif isinstance(value, list):
                 return value

@@ -299,7 +299,20 @@ class StreamingResponse:
             data = event["data"]
             if isinstance(data, (dict, list)):
                 data = json.dumps(data, ensure_ascii=False, default=str)
-            lines.append(f"data: {data}")
+            # RFC 8030 §8.3: a multi-line ``data`` field MUST emit
+            # ``data: `` on EVERY line — the SSE parser at the
+            # browser end joins consecutive ``data:`` lines with
+            # ``\n`` to reconstruct the value. Pre-fix this branch
+            # emitted a single ``data: <stringified>`` so an
+            # embedded ``\n`` (very common in user-content payloads,
+            # multi-line markdown, or a JSON value with newline
+            # whitespace) split the field — the client read the
+            # first line as ``data: <head>``, treated the second
+            # line as a malformed field (no ``data:`` prefix → SSE
+            # spec says ignore), and the event was either
+            # truncated to the first line or dropped entirely.
+            for line in str(data).split("\n"):
+                lines.append(f"data: {line}")
 
         lines.append("")  # Empty line to end event
         lines.append("")  # Double newline for SSE format

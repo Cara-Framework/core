@@ -186,7 +186,7 @@ class DownCommand(CommandBase):
         try:
             with open(self.maintenance_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except json.JSONDecodeError, Exception:
+        except (json.JSONDecodeError, Exception):
             return {
                 "message": "Application is in maintenance mode",
                 "created_at": "Unknown",

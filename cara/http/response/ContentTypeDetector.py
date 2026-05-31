@@ -152,7 +152,7 @@ class ContentTypeDetector:
         try:
             json.loads(content)
             return True
-        except json.JSONDecodeError, ValueError:
+        except (json.JSONDecodeError, ValueError):
             return False
 
     @staticmethod

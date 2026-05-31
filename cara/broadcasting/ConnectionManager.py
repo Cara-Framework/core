@@ -550,7 +550,7 @@ class ConnectionManager:
             self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
-            except asyncio.CancelledError, Exception:
+            except (asyncio.CancelledError, Exception):
                 pass
         for task in list(self._heartbeat_tasks.values()):
             if task and not task.done():

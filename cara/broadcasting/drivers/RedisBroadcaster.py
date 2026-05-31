@@ -533,7 +533,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             self._listener_task.cancel()
             try:
                 await self._listener_task
-            except asyncio.CancelledError, Exception:
+            except (asyncio.CancelledError, Exception):
                 pass
 
         if self._listener_pubsub is not None:

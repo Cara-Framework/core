@@ -79,8 +79,31 @@ class UploadedFile:
         return self._store_file(directory, filename)
 
     def _store_file(self, directory: str, filename: str) -> str:
-        """Internal file storage method."""
+        """Internal file storage method.
+
+        Guards against a null-byte filename smuggle that the existing
+        path-traversal checks (``../`` / ``..`` / absolute paths) miss:
+        Python's ``open(path, ...)`` silently truncates the filename
+        at the first NUL byte. An attacker who controls part of the
+        filename can upload ``innocent.txt\\x00.php`` — every layer
+        above that inspects the EXTENSION sees ``.php`` and rejects
+        the upload (or accepts it on the wrong allowlist), but the
+        bytes written to disk land as ``innocent.txt``. The two
+        layers disagree about what file just landed; that's the
+        classic null-byte filename bypass.
+
+        Same defence applied to ``directory`` — a null byte there
+        truncates the path prefix and could let a caller escape into
+        a sibling directory.
+        """
+        from cara.exceptions import BadRequestException
         from cara.support.paths import paths
+
+        if "\x00" in filename or "\x00" in directory:
+            raise BadRequestException(
+                f"Upload path contains null byte (filename or directory): "
+                f"directory={directory!r} filename={filename!r}",
+            )
 
         # Get storage path
         storage_base = paths("storage")
