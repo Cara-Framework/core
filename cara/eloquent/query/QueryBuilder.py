@@ -2248,7 +2248,18 @@ class QueryBuilder(ObservesEvents):
         """Get the sum of a column's values.
 
         Returns:
-            The sum value, or 0 if no results.
+            The sum value, or ``None`` when the filter matches zero
+            rows (Postgres' ``SUM`` over an empty set returns ``NULL``,
+            which psycopg surfaces as Python ``None``). Callers that
+            want a numeric zero MUST coerce explicitly — the canonical
+            pattern in this codebase is ``float(qb.sum("amount") or 0)``.
+
+        Pre-fix the docstring read "or 0 if no results" — incorrect,
+        since every call site that didn't ``or 0`` would have hit a
+        ``TypeError`` on the empty-table path (``None * 1`` raises).
+        The aggregate ``COUNT`` does coerce to ``0`` on empty, but
+        ``SUM`` / ``AVG`` / ``MIN`` / ``MAX`` all surface ``None``
+        because the SQL semantics differ.
         """
         return self._run_aggregate("SUM", column, dry)
 
@@ -3726,6 +3737,25 @@ class QueryBuilder(ObservesEvents):
         ``WHERE column > last_id`` cursor instead of ``OFFSET`` (which can skip
         rows when records are deleted mid-iteration).
         """
+        # Upfront column validation — same ``_ORDER_BY_COLUMN_RE``
+        # gate that ``order_by`` applies, but enforced HERE so a
+        # caller passing a bad column name fails fast at the entry
+        # point instead of after the WHERE clause has already been
+        # queued onto a clone. Pre-fix the validation lived only
+        # inside ``order_by`` (line ~3735), which meant ``where``
+        # (line ~3733) accepted the column without checking; an
+        # attacker-shaped ``"id; DROP TABLE x"`` never actually
+        # reached the DB (order_by raised first, killing the query)
+        # but the failure surfaced in the wrong place and the WHERE
+        # quirk was a foot-gun waiting for the next refactor to
+        # swap the order. ``re.fullmatch`` (not ``match``) so a
+        # trailing ``;`` doesn't slip past.
+        if not isinstance(column, str) or not _ORDER_BY_COLUMN_RE.fullmatch(column):
+            raise ValueError(
+                f"chunk_by_id: invalid column name {column!r}. Allowed: "
+                f"``[A-Za-z_][A-Za-z0-9_]*`` optionally with a single "
+                f"``.<col>`` qualifier (table.column).",
+            )
         last_id = None
         while True:
             builder = self.clone()
