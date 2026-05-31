@@ -230,16 +230,80 @@ class Event:
         # Handle wildcard patterns
         if "*" in event_name:
             with self._lock:
-                if event_name not in self._wildcard_listeners:
-                    self._wildcard_listeners[event_name] = []
-                self._wildcard_listeners[event_name].append(listener)
+                bucket = self._wildcard_listeners.setdefault(event_name, [])
+                # Identity-dedup: subscribing the SAME listener instance
+                # twice to the same pattern would otherwise invoke the
+                # handler twice per fire — every double-subscribe is a
+                # silent doubling of notifications / DB writes / job
+                # dispatches. Comparison is by ``is`` (not ``==``) so a
+                # listener class that overrides ``__eq__`` doesn't
+                # accidentally collapse two distinct instances.
+                if not any(existing is listener for existing in bucket):
+                    bucket.append(listener)
             return
 
         # Handle direct event listener subscription
         with self._lock:
-            if event_name not in self._listeners:
-                self._listeners[event_name] = []
-            self._listeners[event_name].append(listener)
+            bucket = self._listeners.setdefault(event_name, [])
+            # Identity-dedup mirror of the wildcard path above. The
+            # ``EventSubscriber.subscribe()`` flow re-runs on every app
+            # boot AND from test setUp/tearDown — without this guard a
+            # test that boots the app twice (TestCase per-method
+            # ``setUp``) would silently double the listener list on the
+            # second boot and every assertion on listener-invocation
+            # counts would fail intermittently.
+            if not any(existing is listener for existing in bucket):
+                bucket.append(listener)
+
+    def unsubscribe(self, event_name: str, listener: Listener) -> bool:
+        """Remove ``listener`` from the bucket for ``event_name``.
+
+        Returns ``True`` when a registration was removed, ``False``
+        when no matching subscription existed (no-op, no raise).
+
+        Why this exists
+        ~~~~~~~~~~~~~~~
+        The dispatcher was append-only — tests setting up per-case
+        listeners had to either work around the leftover registrations
+        OR teardown-recreate the dispatcher. Both shapes are noisy.
+        More importantly: request-scoped listeners (a controller
+        attaches a one-shot listener for the duration of a request)
+        could not detach themselves at request end, leaking into the
+        next request's dispatch and accumulating over the app's
+        lifetime. Comparison is by ``is`` (identity), mirroring the
+        dedup in :meth:`subscribe` so the same listener instance
+        roundtrips cleanly.
+
+        Args:
+            event_name: Event name OR wildcard pattern the listener
+                was subscribed to. Pattern must match what was passed
+                to ``subscribe`` exactly — this method does NOT walk
+                wildcards looking for the listener in a different
+                bucket.
+            listener: The listener instance to remove. Identity
+                comparison (``is``), not equality.
+        """
+        bucket_map = (
+            self._wildcard_listeners
+            if "*" in event_name
+            else self._listeners
+        )
+        with self._lock:
+            bucket = bucket_map.get(event_name)
+            if not bucket:
+                return False
+            for idx, existing in enumerate(bucket):
+                if existing is listener:
+                    bucket.pop(idx)
+                    # Drop the empty bucket entry so ``has_listeners``
+                    # returns False cleanly. Without this the bucket
+                    # exists as ``[]`` and the next subscriber may
+                    # mistake an empty list for a populated one in
+                    # debug logging.
+                    if not bucket:
+                        bucket_map.pop(event_name, None)
+                    return True
+            return False
 
     def listen(self, event_name: str, callback: Callable) -> None:
         """

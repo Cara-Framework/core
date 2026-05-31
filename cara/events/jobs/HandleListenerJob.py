@@ -39,17 +39,59 @@ def _resolve_listener_class(
 
 
 def _instantiate_event(event_cls: type[Any], data: dict[str, Any]) -> Any:
+    """Re-hydrate ``event_cls`` from its serialized ``data`` dict.
+
+    Prefers a ``from_dict`` classmethod when the event class declares
+    one (lets a custom event opt into stricter parsing — type
+    narrowing, default repopulation, etc.). Otherwise falls back to
+    the public-attribute kwargs path: strip ``_``-prefixed keys
+    (private bookkeeping like ``_dispatch_id`` shouldn't reach the
+    ``__init__``) and call ``event_cls(**public)``.
+
+    Post-construction, if the event ships a ``validate_payload``
+    method (the same hook the in-process dispatcher gates on at
+    Event.py:318), call it and refuse to hand a malformed event to
+    the listener. Pre-fix the queue path skipped this gate entirely
+    — a payload that the dispatcher would have rejected at fire-time
+    silently round-tripped through serialization and reached the
+    listener with missing required fields. That's worse than the
+    sync path because the in-process error surfaces at the dispatch
+    site while the queue path surfaces at the listener's first deref
+    (often hours later, in a worker log, with no stack trace from
+    the originating fire). Re-raising as ``ValueError`` lets the
+    queue runner's standard retry+DLQ path own the recovery.
+    """
     from_dict = getattr(event_cls, "from_dict", None)
     if callable(from_dict):
-        return from_dict(data)
+        event = from_dict(data)
+    else:
+        public = {k: v for k, v in data.items() if not str(k).startswith("_")}
+        try:
+            event = event_cls(**public)
+        except TypeError as e:
+            raise TypeError(
+                f"Could not reconstruct event {event_cls.__name__} from serialized data: {e}"
+            ) from e
 
-    public = {k: v for k, v in data.items() if not str(k).startswith("_")}
-    try:
-        return event_cls(**public)
-    except TypeError as e:
-        raise TypeError(
-            f"Could not reconstruct event {event_cls.__name__} from serialized data: {e}"
-        ) from e
+    validator = getattr(event, "validate_payload", None)
+    if callable(validator):
+        try:
+            missing = validator()
+        except Exception as exc:
+            # Validator raised — surface with the originating event
+            # class name so the worker log points straight at the bug.
+            raise ValueError(
+                f"validate_payload() on rehydrated {event_cls.__name__} "
+                f"raised {exc.__class__.__name__}: {exc}",
+            ) from exc
+        if missing:
+            raise ValueError(
+                f"Queued {event_cls.__name__} failed validate_payload(); "
+                f"missing/invalid fields: {missing!r}. Refusing to invoke "
+                f"listener with a malformed payload — same gate the sync "
+                f"dispatcher applies at fire time.",
+            )
+    return event
 
 
 class HandleListenerJob(BaseJob):
