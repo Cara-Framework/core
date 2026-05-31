@@ -110,8 +110,17 @@ class ExistsRule(BaseRule):
         exists_params = params.get("exists", "")
         parts = [p.strip() for p in exists_params.split(",")]
 
-        parts[0] if parts else "table"
+        # ``table`` resolved but currently unused by the message
+        # branches below — pre-fix this line was the expression
+        # ``parts[0] if parts else "table"`` with the result silently
+        # discarded (statement expression, no assignment), a copy-
+        # paste leftover from when an earlier message variant
+        # surfaced the table name. Kept as an assignment now so the
+        # value is reachable for the next maintainer who wants to
+        # add a table-aware branch without re-discovering the parse.
+        table = parts[0] if parts else "table"
         column = parts[1] if len(parts) > 1 else "id"
+        _ = table  # explicit unused-name marker until a branch uses it
         condition_column = parts[2] if len(parts) > 2 else None
 
         attribute = MessageFormatter.format_attribute_name(field)

@@ -25,7 +25,29 @@ class MinLengthRule(BaseRule):
         if min_length is None:
             return False
 
-        threshold = int(min_length)
+        try:
+            threshold = int(min_length)
+        except (TypeError, ValueError):
+            # Misconfigured rule literal — ``min_length:abc`` would
+            # otherwise raise ValueError out of the validator and
+            # 500 the request. Sibling ``MinRule``/``MaxRule`` log
+            # + pass-through on the same shape; for a length rule
+            # the safe default is to FAIL the value (the developer
+            # clearly intended a constraint but typo'd the
+            # threshold — letting the input through silently would
+            # mask the typo for as long as no string is short enough
+            # to be caught by accident).
+            try:
+                from cara.facades import Log
+                Log.warning(
+                    f"MinLengthRule: non-numeric min_length "
+                    f"parameter {min_length!r} on field {field!r}; "
+                    f"failing value as defensive default",
+                    category="cara.validation",
+                )
+            except ImportError:
+                pass
+            return False
         return len(value) >= threshold
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:

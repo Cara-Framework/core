@@ -25,7 +25,27 @@ class MaxLengthRule(BaseRule):
         if max_length is None:
             return False
 
-        threshold = int(max_length)
+        try:
+            threshold = int(max_length)
+        except (TypeError, ValueError):
+            # Misconfigured rule literal — ``max_length:abc`` would
+            # otherwise raise ValueError out of the validator and
+            # 500 the request. Mirror MinLengthRule's defensive
+            # default: log + fail the value so a typo'd cap surfaces
+            # immediately instead of silently allowing every value
+            # through (which would be the alternative for a MAX
+            # rule that pass-through'd on a misconfigured cap).
+            try:
+                from cara.facades import Log
+                Log.warning(
+                    f"MaxLengthRule: non-numeric max_length "
+                    f"parameter {max_length!r} on field {field!r}; "
+                    f"failing value as defensive default",
+                    category="cara.validation",
+                )
+            except ImportError:
+                pass
+            return False
         return len(value) <= threshold
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
