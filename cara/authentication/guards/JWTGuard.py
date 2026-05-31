@@ -494,21 +494,90 @@ class JWTGuard(Guard):
         # missing primitive that lets ``change_email`` actually expire
         # outstanding sessions instead of leaving stolen tokens live
         # for the full refresh-TTL window.
+        #
+        # Fail-closed contract on cache backend errors (round 30):
+        #   * ``Cache.get`` returning ``None`` / ``0`` is the legitimate
+        #     "no revocation event recorded for this user" branch — fall
+        #     through normally and accept the token.
+        #   * A cache backend EXCEPTION (Redis down, connection reset,
+        #     serialization error) MUST NOT silently bypass the check.
+        #     Pre-fix the bare ``except Exception: pass`` swallowed
+        #     these and let a revoked JWT keep authenticating during a
+        #     Redis outage — exactly the wrong direction for a
+        #     security/availability trade-off. A user who is
+        #     accidentally locked out can recover by re-logging in;
+        #     a leaked token that keeps working has no recovery path
+        #     because the legitimate owner doesn't know the token was
+        #     ever stolen.
         sub = payload.get("sub")
         iat = payload.get("iat")
         if sub and iat is not None:
+            # Collect the set of exception types that mean "cache
+            # backend is degraded — we cannot trust an absent
+            # revocation cutoff". Built-in network / timeout types
+            # always; redis-py types when the library is importable
+            # so we don't accidentally widen the catch to unrelated
+            # exceptions. Anything outside this set bubbles up to the
+            # caller (legitimate programming errors stay loud).
+            cache_failure_types: tuple[type[BaseException], ...] = (
+                ConnectionError,
+                TimeoutError,
+                OSError,
+            )
+            try:
+                from cara.exceptions import (
+                    CacheConfigurationException,
+                    DriverNotRegisteredException,
+                )
+                cache_failure_types = cache_failure_types + (
+                    CacheConfigurationException,
+                    DriverNotRegisteredException,
+                )
+            except ImportError:
+                pass
+            try:
+                import redis as _redis  # type: ignore
+
+                cache_failure_types = cache_failure_types + (
+                    _redis.exceptions.RedisError,  # type: ignore[attr-defined]
+                )
+            except (ImportError, AttributeError):
+                pass
+
             try:
                 cutoff = Cache.get(f"jwt_user_revoke:{sub}", 0)
-                if cutoff and int(iat) < int(cutoff):
-                    raise TokenBlacklistedException(
-                        "Token revoked: issued before user-level revocation cutoff"
+            except cache_failure_types as exc:
+                # Cache backend failure — fail CLOSED. We don't know
+                # whether this user's tokens were revoked; treat them
+                # as if they were. Log at ERROR so ops can spot the
+                # Redis outage in the dashboards. A user who is
+                # accidentally locked out can recover by re-logging in;
+                # a leaked token that keeps working has no recovery
+                # path because the legitimate owner doesn't know the
+                # token was ever stolen.
+                try:
+                    from cara.facades import Log
+
+                    Log.error(
+                        f"JWTGuard._decode_token: revocation-cutoff cache "
+                        f"read failed for sub={sub!r}; failing closed: "
+                        f"{type(exc).__name__}: {exc}",
+                        category="cara.auth.jwt",
                     )
-            except TokenBlacklistedException:
-                raise
-            except Exception:
-                # Cache misses / serialization errors must not lock users
-                # out — degrade to "no revocation cutoff" rather than 401.
-                pass
+                except ImportError:
+                    pass
+                raise TokenBlacklistedException(
+                    "Token revocation status unavailable; failing closed."
+                ) from exc
+
+            # Cache.get(..., 0) returning ``None`` / ``0`` is the
+            # legitimate "no revocation event recorded" branch — fall
+            # through and accept the token. Only a positive cutoff
+            # whose value strictly exceeds the token's ``iat`` rejects.
+            if cutoff and int(iat) < int(cutoff):
+                raise TokenBlacklistedException(
+                    "Token revoked: issued before user-level revocation cutoff"
+                )
 
         return payload
 
