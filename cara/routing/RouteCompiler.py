@@ -7,6 +7,7 @@ extraction functionality in the Cara framework.
 
 import re
 from typing import Any
+from urllib.parse import unquote
 
 
 class RouteCompiler:
@@ -61,7 +62,36 @@ class RouteCompiler:
         return regex
 
     def extract_parameters(self, path: str) -> dict[str, Any]:
-        """Extract parameters from a given path using the compiled regex."""
+        r"""Extract parameters from a given path using the compiled regex.
+
+        Percent-decoding policy
+        -----------------------
+        Matched parameter values are passed through ``urllib.parse.unquote``
+        so a slug like ``caf%C3%A9`` lands on the handler as ``café``.
+
+        - Compliant ASGI servers (uvicorn, hypercorn) already pre-decode
+          ``scope['path']`` per the ASGI HTTP spec — for those, ``unquote``
+          is idempotent (``unquote('café') == 'café'``) and the call is
+          a cheap no-op.
+        - Non-compliant servers, mounted middleware that bypasses path
+          decoding, and test fixtures that pass raw URLs all leak the
+          raw percent-encoded value into the binding pre-fix.
+          ``Product.where('slug', 'caf%C3%A9')`` silently misses the
+          ``café`` row and the user sees a phantom 404.
+        - ``%2F`` (encoded slash) stays segregated by the time we get
+          here: the ``[^/]+`` / ``[\w-]+`` regexes don't backtrack
+          across literal ``/`` boundaries so the *match shape* still
+          treats each path segment as one slug. Decoding the captured
+          value afterwards is safe — it cannot retroactively expand
+          one segment into two.
+
+        Pre-fix: zero decoding. Verified by ``RouteCompiler('@slug').
+        extract_parameters('/caf%C3%A9')`` returning ``{'slug':
+        'caf%C3%A9'}`` instead of ``{'slug': 'café'}``.
+
+        Optional params stay None when missing (not empty string) so
+        callers can distinguish "absent" from "empty".
+        """
         if not self._compiled_regex:
             return {}
 
@@ -71,10 +101,24 @@ class RouteCompiler:
 
         raw_groups = match.groups()
         params: dict[str, Any] = {}
-        # Iterate over named positions. Optional params stay None when missing
-        # (not empty string) so callers can distinguish "absent" from "empty".
         for idx, name in enumerate(self.url_list):
-            params[name] = raw_groups[idx] if idx < len(raw_groups) else None
+            if idx >= len(raw_groups):
+                params[name] = None
+                continue
+            raw = raw_groups[idx]
+            if raw is None:
+                # Optional param that didn't match — preserve None so
+                # callers see "absent" rather than empty string.
+                params[name] = None
+                continue
+            # Decode percent-encoded bytes. Wrapped in try/except to
+            # ensure a malformed percent triplet (e.g. ``%ZZ``) can't
+            # crash the router — fall back to the raw value so the
+            # handler can decide what to do.
+            try:
+                params[name] = unquote(raw)
+            except (UnicodeDecodeError, ValueError):
+                params[name] = raw
         return params
 
     def matches(self, path: str) -> bool:

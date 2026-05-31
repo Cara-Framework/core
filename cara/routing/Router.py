@@ -43,13 +43,22 @@ class Router:
         self.controller_locations = module_location
         self._model_bindings: dict[str, Callable[[Any], Any]] = {}
 
-        # Bucket routes by method for efficient lookup
+        # Bucket routes by method for efficient lookup. ``setdefault``
+        # (vs the previous ``if key in self.routes_by_method`` guard)
+        # so a route declaring a non-standard HTTP verb (PROPFIND,
+        # MKCOL, REPORT — WebDAV; LINK / UNLINK — RFC 5988; custom
+        # extension verbs) gets its own bucket and is reachable via
+        # ``find``. Pre-fix the route landed in ``self.routes`` but
+        # never in any bucket, so ``find`` (which iterates the
+        # bucket for the request method) silently treated it as
+        # 404 — both the route registration AND the inspection list
+        # said it was there. The HTTP_METHODS bucket is still
+        # pre-seeded so a vanilla GET-only app pays no overhead.
         self.routes_by_method: dict[str, list[Route]] = {m: [] for m in HTTP_METHODS}
         for route in self.routes:
             for m in route.request_method:
                 key = m.upper()
-                if key in self.routes_by_method:
-                    self.routes_by_method[key].append(route)
+                self.routes_by_method.setdefault(key, []).append(route)
 
     def add(self, *routes: Route) -> Router:
         """Add routes to the router."""
@@ -57,8 +66,10 @@ class Router:
             self.routes.append(r)
             for m in r.request_method:
                 key = m.upper()
-                if key in self.routes_by_method:
-                    self.routes_by_method[key].append(r)
+                # See ``__init__``: ``setdefault`` instead of an
+                # allow-list ``in`` check so non-standard verbs
+                # registered after construction are also reachable.
+                self.routes_by_method.setdefault(key, []).append(r)
         return self
 
     # ------------------------------------------------------------------
@@ -166,8 +177,14 @@ class Router:
         if allowed:
             if method == "OPTIONS":
                 return self._create_preflight_route(path, allowed)
+            # Pass the allow-list through to the exception so the
+            # default handler can emit the RFC-9110 ``Allow`` header
+            # (see ``MethodNotAllowedException`` docstring). The kwarg
+            # rides through ``HttpException.__init__``'s **kwargs
+            # setattr loop, so no exception-class plumbing is needed.
             raise MethodNotAllowedException(
-                f"Method {request_method} not allowed. Allowed methods: {allowed}"
+                f"Method {request_method} not allowed. Allowed methods: {allowed}",
+                allowed=allowed,
             )
 
         raise RouteNotFoundException(f"No route matches path '{path}'")
@@ -192,6 +209,21 @@ class Router:
     def _create_preflight_route(self, path: str, allowed_methods: list[str]) -> Route:
         """Generate an OPTIONS route for CORS preflight.
 
+        The advertised method list ALWAYS includes ``OPTIONS`` itself,
+        regardless of whether an OPTIONS route was explicitly
+        registered. Browser preflight logic expects the requesting
+        method (``Access-Control-Request-Method``) to appear in the
+        response, and CORS clients spec the preflight to include the
+        preflight verb in the advertised set — pre-fix
+        ``get_allowed_methods`` only returned what was explicitly
+        registered, so a path with just ``GET`` + ``POST`` returned
+        ``Allow: GET, POST`` on a preflight (no OPTIONS), which some
+        strict HTTP clients flag as inconsistent (`Allow` is supposed
+        to describe the methods the resource supports, and the
+        resource clearly supports OPTIONS — the response itself is
+        proof). Dedup the merge so an explicit OPTIONS registration
+        doesn't double-list.
+
         Args:
             path: The request path
             allowed_methods: List of allowed HTTP methods
@@ -199,13 +231,16 @@ class Router:
         Returns:
             A Route instance configured for OPTIONS requests
         """
+        # Preserve registration order, append OPTIONS if absent.
+        # ``dict.fromkeys`` is the idiomatic ordered-dedup pattern.
+        advertised = list(dict.fromkeys([*allowed_methods, "OPTIONS"]))
 
         class PreflightController:
             def handle(self, request: Any, response: Any) -> Any:
                 response.with_headers(
                     {
-                        "Allow": ", ".join(allowed_methods),
-                        "Access-Control-Allow-Methods": ", ".join(allowed_methods),
+                        "Allow": ", ".join(advertised),
+                        "Access-Control-Allow-Methods": ", ".join(advertised),
                     }
                 ).status(204)
                 return response

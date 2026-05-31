@@ -100,6 +100,22 @@ class DefaultExceptionHandler:
                 # don't poison the response — drop silently.
                 pass
 
+        # Propagate the per-route allow-list from
+        # ``MethodNotAllowedException`` so ``send_response`` can emit
+        # the RFC 9110 §15.5.6 ``Allow`` header. Mirrors the
+        # ``retry_after`` lift above. ``HttpException.to_dict`` already
+        # surfaces ``allowed`` via its ``__dict__`` scan when the kwarg
+        # was passed, so this only matters for callers that override
+        # ``to_dict`` and don't include it — defensive against drift.
+        allowed = getattr(exception, "allowed", None)
+        if allowed is not None and "allowed" not in response:
+            try:
+                response["allowed"] = list(allowed)
+            except TypeError:
+                # Non-iterable — drop silently rather than crashing
+                # the error path.
+                pass
+
         if status_code >= 500 and not self.is_debug_mode():
             redacted: dict[str, Any] = {
                 "error": self._GENERIC_5XX_MESSAGE,
@@ -520,6 +536,47 @@ class DefaultExceptionHandler:
             return []
         return [[b"retry-after", str(seconds).encode()]]
 
+    @staticmethod
+    def _allow_header_for(data: dict[str, Any]) -> list:
+        """Return the ``Allow`` header pair when ``data`` carries a
+        non-empty ``allowed`` method list, else empty list.
+
+        Per RFC 9110 §15.5.6, a 405 Method Not Allowed response MUST
+        include an ``Allow`` field listing the methods the target
+        resource actually supports. The router stamps this list on
+        ``MethodNotAllowedException(..., allowed=[...])`` and
+        ``format_response`` propagates it into ``data['allowed']``
+        (see the parallel ``retry_after`` lift). Here we emit the
+        HTTP header.
+
+        Method names are upper-cased to match the RFC's
+        token-case convention (``GET`` / ``POST`` / etc.) regardless of
+        whether the route registered them as lower-case strings
+        (``Route.get`` stores ``["get", "head"]``).  Non-token chars
+        and empty entries are filtered defensively so a malformed
+        runtime injection can't produce a malformed header line.
+        """
+        raw = data.get("allowed") if isinstance(data, dict) else None
+        if not raw:
+            return []
+        try:
+            methods = [str(m).upper().strip() for m in raw if str(m).strip()]
+        except TypeError:
+            return []
+        if not methods:
+            return []
+        # Drop anything that doesn't look like an HTTP token (RFC 9110
+        # §5.6.2 / RFC 7230 §3.2.6). Belt-and-braces: should never
+        # fire in practice because the router populates from a fixed
+        # vocabulary, but cheap to enforce here.
+        import re as _re
+
+        _token = _re.compile(r"^[A-Z][A-Z0-9_-]*$")
+        safe = [m for m in methods if _token.fullmatch(m)]
+        if not safe:
+            return []
+        return [[b"allow", ", ".join(safe).encode()]]
+
     async def send_response(
         self,
         data: dict[str, Any],
@@ -533,6 +590,16 @@ class DefaultExceptionHandler:
         cors = self._cors_headers_for_scope(scope)
         sec = self._security_headers_for_scope(scope)
         rid = self._request_id_header_for(request, scope)
+        # ``Allow`` HTTP header for 405 Method Not Allowed responses
+        # (RFC 9110 §15.5.6). The router stamps the allow-list on
+        # ``MethodNotAllowedException`` via the ``allowed`` kwarg;
+        # we surface it here so the response carries the per-route
+        # allow list rather than the generic CORS-allowed-methods
+        # config which describes the cross-origin policy, not the
+        # resource's supported verbs. ``_allow_header_for`` is a
+        # no-op when the exception doesn't carry the attribute, so
+        # non-405 responses get an empty list and add nothing.
+        allow = self._allow_header_for(data)
         # ``Retry-After`` HTTP header. ``HttpException.ServiceUnavailable
         # Exception`` documents the contract: ``retry_after`` is surfaced
         # both in the JSON envelope AND the ``Retry-After`` header so
@@ -551,7 +618,7 @@ class DefaultExceptionHandler:
         # truth (works for both ``to_dict``-defining exceptions and the
         # ``getattr(exception, "retry_after", ...)`` fallback path).
         retry = self._retry_after_header_for(data)
-        extras = cors + sec + rid + retry
+        extras = cors + sec + rid + retry + allow
         try:
             if self.application:
                 response = self.application.make("response")
