@@ -457,8 +457,18 @@ class Event:
             if hasattr(event, "is_propagation_stopped") and event.is_propagation_stopped:
                 break
 
-            # Laravel-style queue check: If listener implements ShouldQueue, queue it
-            if self._should_queue(listener):
+            # Laravel-style queue check: If listener implements ShouldQueue, queue it.
+            # EXCEPT under ExecutionContext.sync() (--sync CLI / tests), where the
+            # whole pipeline MUST run inline to completion. A queued listener in
+            # sync mode pushes work onto a broker that no worker is draining (the
+            # CLI exits right after), so the event-driven pipeline silently stalls
+            # mid-flight — the "first product fully processed, the rest stranded
+            # in the queue" divergence. In sync mode we fall through to the
+            # in-process await path so the listener (and everything it dispatches)
+            # runs inline. Sync = fully inline, identical outcome to async.
+            from cara.context import ExecutionContext
+
+            if self._should_queue(listener) and not ExecutionContext.is_sync():
                 self._queue_listener(listener, event)
                 continue
 
