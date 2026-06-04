@@ -6,6 +6,8 @@ If the client exceeds the limit, returns a 429 Response with appropriate headers
 knows when to retry. Otherwise, adds rate-limit info in response headers.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 from cara.facades import Log, RateLimiter
@@ -155,6 +157,7 @@ class ThrottleRequests(Middleware):
         """
         try:
             from cara.facades import Config
+
             return bool(Config.get("rate.fail_open", _DEFAULT_FAIL_OPEN))
         except Exception:
             return _DEFAULT_FAIL_OPEN

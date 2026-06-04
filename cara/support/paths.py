@@ -8,6 +8,8 @@ Laravel-style dynamic interface for filesystem paths:
     paths('anything.here')           # /project/anything/here
 """
 
+from __future__ import annotations
+
 from .PathManager import PathManager
 
 

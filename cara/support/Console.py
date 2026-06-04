@@ -40,5 +40,3 @@ class HasColoredOutput:
 
     def info(self, message):
         return self.success(message)
-
-

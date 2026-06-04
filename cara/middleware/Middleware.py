@@ -5,6 +5,8 @@ Core Middleware base class for Cara framework.
 Laravel-style middleware with automatic parameter parsing and dependency injection.
 """
 
+from __future__ import annotations
+
 import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable

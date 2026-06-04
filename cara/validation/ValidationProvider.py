@@ -5,6 +5,8 @@ This module provides the service provider that configures and registers the vali
 including all validation rules.
 """
 
+from __future__ import annotations
+
 from cara.configuration import config
 from cara.foundation import DeferredProvider
 from cara.validation import Validation

@@ -6,6 +6,8 @@ following Laravel-style API with Cara framework conventions.
 Includes automatic serialization support for queue jobs.
 """
 
+from __future__ import annotations
+
 import os
 from typing import Any
 

@@ -5,6 +5,8 @@ Binds a default exception handler and ensures that any exception
 escaping the HTTP conductor is forwarded to that handler.
 """
 
+from __future__ import annotations
+
 from cara.exceptions.handlers import DefaultExceptionHandler
 from cara.foundation import Provider
 

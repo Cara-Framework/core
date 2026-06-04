@@ -4,6 +4,8 @@ Database Reset Command for the Cara framework.
 This module provides a CLI command to completely reset the database schema.
 """
 
+from __future__ import annotations
+
 import os
 
 from cara.commands import CommandBase
@@ -48,9 +50,33 @@ class MigrateResetCommand(CommandBase):
 
         try:
             self._execute_reset(config)
+            self._flush_job_idempotency_cache()
             self._display_success_message()
         except Exception as e:
             self._handle_error(e)
+
+    def _flush_job_idempotency_cache(self) -> None:
+        """Invalidate job idempotency caches after a schema reset.
+
+        ``job_result:*`` / ``job_lock:*`` keys are hashed from the job
+        class plus its entity-id arguments. A fresh schema restarts every
+        sequence at 1, so e.g. listing id 5 after a reset collides with a
+        stale cached result from a *different* entity that held id 5
+        before the reset. The job is then served from cache and its
+        downstream event / dispatch never fires — silently stalling the
+        pipeline at the stage where the false hit occurs. Clearing these
+        on reset keeps DB state and job idempotency consistent. URL-keyed
+        caches (e.g. scrape responses) don't collide and are kept.
+        """
+        try:
+            from cara.facades import Cache
+
+            removed = 0
+            for pattern in ("job_result:*", "job_lock:*"):
+                removed += Cache.forget_pattern(pattern)
+            self.info(f"🧹 Flushed {removed} job idempotency cache entries")
+        except Exception as e:
+            self.warning(f"⚠️  Could not flush job idempotency cache: {e}")
 
     def _display_warning(self) -> None:
         """Display initial warning."""

@@ -5,9 +5,12 @@ This module provides log notification channel functionality,
 logging notifications instead of sending them, useful for debugging.
 """
 
+from __future__ import annotations
+
 import json
-from datetime import datetime
 from typing import Any
+
+import pendulum
 
 from cara.notifications.channels import BaseChannel
 
@@ -46,7 +49,7 @@ class LogChannel(BaseChannel):
         try:
             # Prepare log data
             log_data = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": pendulum.now("UTC").isoformat(),
                 "notification_type": notification.__class__.__name__,
                 "notifiable_type": notifiable.__class__.__name__,
                 "notifiable_id": self._get_notifiable_id(notifiable),

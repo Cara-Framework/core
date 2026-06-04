@@ -5,6 +5,8 @@ This module provides the main mail management functionality,
 handling different drivers and mail sending operations.
 """
 
+from __future__ import annotations
+
 from cara.facades import Log, Queue
 from cara.mail import Mailable
 from cara.mail.contracts import Mail

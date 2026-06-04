@@ -13,6 +13,8 @@ Features:
 - Model observers for event-driven logic
 """
 
+from __future__ import annotations
+
 import copy
 import inspect
 import json
@@ -20,7 +22,12 @@ from collections.abc import Callable
 from datetime import date as datetimedate
 from datetime import datetime
 from datetime import time as datetimetime
-from typing import Any, Self
+from typing import Any
+
+try:
+    from typing import Self
+except ImportError:  # Python <3.11
+    from typing_extensions import Self  # noqa: F401
 
 import pendulum
 from inflection import tableize, underscore
@@ -581,6 +588,16 @@ class Model(
                 # Update existing record
                 updates = self.get_dirty_attributes()
                 if updates:
+                    # ``__setattr__`` already applied the SET cast when it
+                    # populated ``__dirty_attributes__`` (via
+                    # HasAttributes._set_cast_attribute). Letting update()
+                    # re-cast would DOUBLE-cast and corrupt non-idempotent
+                    # casts — e.g. DateTimeCast.set on a non-UTC APP_TIMEZONE
+                    # re-shifts the timestamp on every save. Cast exactly once,
+                    # at the __setattr__ boundary. (Direct .update({...}) /
+                    # .create({...}) callers keep casting — they never went
+                    # through __setattr__.)
+                    kwargs.setdefault("cast", False)
                     result = (
                         self.get_builder()
                         .where(self.get_primary_key(), self.get_primary_key_value())
@@ -1180,9 +1197,8 @@ class Model(
         succeeded (the row IS there now — just inserted by the other
         request). The fix detects the unique-violation SQLSTATE /
         message and re-runs the SELECT to return the row the winning
-        side inserted. Mirrors the same driver-agnostic pattern used
-        in ``ConversionService.record_conversion`` for the
-        ``external_order_id`` unique index.
+        side inserted. Mirrors the driver-agnostic pattern used
+        elsewhere for unique-violation translation.
 
         Without a UNIQUE constraint there's no atomic guard — two
         concurrent callers DO each insert a row. ``first_or_create``
@@ -1226,8 +1242,6 @@ class Model(
         ``exc.orig.pgcode`` when wrapped); MySQL raises
         ``IntegrityError`` with ``"duplicate"`` in the message; most
         ORMs preserve one of those signals in the message string.
-        Mirrors the helper in
-        ``api/app/services/ConversionService.record_conversion``.
         """
         sqlstate = getattr(exc, "sqlstate", None) or getattr(
             getattr(exc, "orig", None), "pgcode", None
@@ -1611,9 +1625,7 @@ class Model(
         return False
 
     def get_cast_map(self):
-        cast_map = self.__internal_cast_map__
-        cast_map.update(self.__cast_map__)
-        return cast_map
+        return {**self.__internal_cast_map__, **self.__cast_map__}
 
     def _cast_attribute(self, attribute, value):
         cast_method = self.__casts__[attribute]

@@ -17,6 +17,8 @@ Usage:
             ]
 """
 
+from __future__ import annotations
+
 import asyncio
 import time
 from collections.abc import Callable
@@ -136,7 +138,7 @@ class ConcurrencyLimited:
                         slot_id,
                         str(int(key_ttl)),
                     )
-                    return bool(int(result or 0))
+                    return bool(int(result if result is not None else 0))
                 except Exception:
                     # If EVAL itself fails (script error, redis cluster
                     # quirk), fall through to the legacy path below

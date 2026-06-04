@@ -4,6 +4,8 @@ Maximum Value Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value doesn't exceed a maximum threshold.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation.rules import BaseRule
@@ -46,6 +48,7 @@ class MaxRule(BaseRule):
         if max_threshold < 0 and not numeric_context:
             try:
                 from cara.facades import Log
+
                 Log.warning(
                     f"MaxRule misconfig: field={field!r} has a negative "
                     f"max threshold ({max_threshold}) in a length context — "

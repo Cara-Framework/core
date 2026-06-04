@@ -5,6 +5,8 @@ This module defines the contract that any event listener must implement, specify
 for event listening.
 """
 
+from __future__ import annotations
+
 from typing import Protocol
 
 from .Event import Event

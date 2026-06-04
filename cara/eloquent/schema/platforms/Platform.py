@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 
 # SQL identifiers (table, column, schema, database names) must be

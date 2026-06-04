@@ -4,6 +4,8 @@ Default Exception Handler.
 Professional exception handler using proper exception hierarchy.
 """
 
+from __future__ import annotations
+
 import traceback
 from typing import Any
 
@@ -467,9 +469,11 @@ class DefaultExceptionHandler:
             return False
 
         raw_headers = {
-            (k.decode().lower() if isinstance(k, (bytes, bytearray)) else str(k).lower()): (
-                v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
-            )
+            (
+                k.decode().lower()
+                if isinstance(k, (bytes, bytearray))
+                else str(k).lower()
+            ): (v.decode() if isinstance(v, (bytes, bytearray)) else str(v))
             for k, v in scope.get("headers", []) or []
         }
         forwarded_proto = raw_headers.get("x-forwarded-proto")

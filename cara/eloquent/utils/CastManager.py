@@ -5,6 +5,8 @@ Single responsibility: Handle all casting operations cleanly and efficiently.
 Follows DRY and KISS principles for casting management.
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from decimal import Decimal

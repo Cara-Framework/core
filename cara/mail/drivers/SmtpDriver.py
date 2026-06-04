@@ -5,6 +5,8 @@ This module provides SMTP email sending functionality following
 Cara framework conventions.
 """
 
+from __future__ import annotations
+
 import os
 import smtplib
 import ssl

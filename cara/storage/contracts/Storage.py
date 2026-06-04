@@ -5,6 +5,8 @@ This module defines the contract that any storage driver must implement, specify
 for storage operations.
 """
 
+from __future__ import annotations
+
 from typing import Protocol
 
 

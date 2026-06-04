@@ -4,6 +4,8 @@ Serializer Factory - Creates appropriate serializer based on config.
 Generic factory pattern for pluggable serialization.
 """
 
+from __future__ import annotations
+
 from .serializers import JsonJobSerializer, PickleJobSerializer
 
 

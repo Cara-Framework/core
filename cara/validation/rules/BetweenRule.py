@@ -4,6 +4,8 @@ Between Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is between two given values.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation.rules import BaseRule
@@ -42,6 +44,7 @@ class BetweenRule(BaseRule):
         if min_val > max_val:
             try:
                 from cara.facades import Log
+
                 Log.warning(
                     f"BetweenRule misconfig: field={field!r} has inverted "
                     f"bounds (min={min_val} > max={max_val}) — every input "

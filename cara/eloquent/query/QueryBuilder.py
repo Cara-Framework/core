@@ -6,7 +6,12 @@ import re
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Self
+from typing import Any, Dict, List, Optional
+
+try:
+    from typing import Self
+except ImportError:  # Python <3.11
+    from typing_extensions import Self  # noqa: F401
 
 # ``order_by`` SQL injection guard: accept ``column`` or
 # ``table.column`` identifiers only. Anything fancier (functions,
@@ -2071,12 +2076,24 @@ class QueryBuilder(ObservesEvents):
 
         if model:
             if not model.__force_update__ and not force:
-                # Filter updates to only those with changes
+                # Filter updates to only those with changes. JSON / array /
+                # collection casts are EXEMPT from change-detection: their cast
+                # value is a mutable dict/list and ``getattr`` hands back the
+                # very object stored in ``__original_attributes__`` (the two
+                # alias after hydrate), so an in-place mutation makes
+                # ``original != value`` compare an object against itself
+                # (always False) and the write is SILENTLY dropped — real data
+                # loss with no error (CODING_RULES §8). We cannot detect the
+                # change reliably, so always persist these columns when they
+                # are present in the update: re-writing an unchanged JSON value
+                # is cheap; dropping a mutated one is a bug.
+                _mutable_casts = ("json", "array", "collection")
                 updates = {
                     attr: value
                     for attr, value in updates.items()
                     if (
                         value is None
+                        or model.__casts__.get(attr) in _mutable_casts
                         or model.__original_attributes__.get(attr, None) != value
                     )
                 }

@@ -25,6 +25,8 @@ Canonical winners (preserved from the legacy wildcard order):
   - RouteMiddlewareNotFoundException -> types.routing
 """
 
+from __future__ import annotations
+
 from .ExceptionProvider import ExceptionProvider
 from .types.application import (
     AppException,

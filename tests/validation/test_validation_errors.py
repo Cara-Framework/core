@@ -3,10 +3,12 @@ from cara.validation.ValidationErrors import ValidationErrors
 
 
 def _sample_errors():
-    return ValidationErrors({
-        "email": ["The email field is required.", "The email must be valid."],
-        "name": ["The name field is required."],
-    })
+    return ValidationErrors(
+        {
+            "email": ["The email field is required.", "The email must be valid."],
+            "name": ["The name field is required."],
+        }
+    )
 
 
 def test_first_with_field():
@@ -41,7 +43,10 @@ def test_has():
 
 def test_get():
     errors = _sample_errors()
-    assert errors.get("email") == ["The email field is required.", "The email must be valid."]
+    assert errors.get("email") == [
+        "The email field is required.",
+        "The email must be valid.",
+    ]
     assert errors.get("missing") == []
 
 

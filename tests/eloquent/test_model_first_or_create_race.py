@@ -28,9 +28,9 @@ both call ``create()``. Outcomes:
     the race surfaces an unhandled 500 even though the row IS
     there now — just inserted by the winner.
 
-Mirror of the ``ConversionService.record_conversion`` fix from
-an earlier round: catch the unique-violation SQLSTATE / message
-and re-query so the loser returns the winner's row.
+Mirror of the unique-violation-translation pattern used elsewhere:
+catch the unique-violation SQLSTATE / message and re-query so the
+loser returns the winner's row.
 
 Tests pin:
   - Race on first_or_create: ``IntegrityError(23505)`` → re-query
@@ -74,6 +74,7 @@ def _make_unique_violation(*, sqlstate: bool = True) -> Exception:
 
 def _make_orig_pgcode_violation() -> Exception:
     """SQLAlchemy-style wrapped: original driver exception under .orig."""
+
     class _Orig:
         pgcode = "23505"
 
@@ -108,12 +109,16 @@ class TestIsUniqueViolation:
 
     def test_duplicate_key_message_detected(self) -> None:
         # No SQLSTATE, no .orig — message-substring fallback.
-        exc = Exception("ERROR: duplicate key value violates unique constraint \"foo_pkey\"")
+        exc = Exception(
+            'ERROR: duplicate key value violates unique constraint "foo_pkey"'
+        )
         assert Model._is_unique_violation(exc) is True
 
     def test_unique_constraint_message_detected(self) -> None:
         # MySQL flavour.
-        exc = Exception("1062 (23000): Duplicate entry for key 'PRIMARY' — unique constraint")
+        exc = Exception(
+            "1062 (23000): Duplicate entry for key 'PRIMARY' — unique constraint"
+        )
         assert Model._is_unique_violation(exc) is True
 
     def test_other_sqlstate_not_detected(self) -> None:
@@ -135,8 +140,8 @@ class _RecordingModelFOC:
     assert on the dispatch sequence without a live DB."""
 
     # Class-level state — reset per test via fixture below.
-    select_sequence: list[Any] = []   # ordered .first() return values
-    select_calls: list[dict] = []     # captured where() args per first()
+    select_sequence: list[Any] = []  # ordered .first() return values
+    select_calls: list[dict] = []  # captured where() args per first()
     create_side_effect: Exception | None = None
     create_payload: dict | None = None
     primary_key: str = "id"
@@ -200,7 +205,8 @@ def model_class() -> type[_RecordingModelFOC]:
 
 class TestFirstOrCreateRace:
     def test_existing_row_returned_no_create(
-        self, model_class: type[_RecordingModelFOC],
+        self,
+        model_class: type[_RecordingModelFOC],
     ) -> None:
         """Baseline happy path — row already exists, no create fires.
         Regression guard against the fix accidentally always going
@@ -216,20 +222,24 @@ class TestFirstOrCreateRace:
         assert model_class.create_payload is None  # create never called
 
     def test_no_row_no_race_creates_normally(
-        self, model_class: type[_RecordingModelFOC],
+        self,
+        model_class: type[_RecordingModelFOC],
     ) -> None:
         """Happy path when no concurrent inserter exists — first()
         returns None, create() succeeds, that's it."""
         model_class.select_sequence = [None]
         out = Model.first_or_create.__func__(
-            model_class, {"slug": "foo"}, {"title": "Foo"},
+            model_class,
+            {"slug": "foo"},
+            {"title": "Foo"},
         )
         assert out.slug == "foo"
         assert out.title == "Foo"
         assert model_class.create_payload == {"title": "Foo", "slug": "foo"}
 
     def test_race_uniqueviolation_requeries_and_returns_winner_row(
-        self, model_class: type[_RecordingModelFOC],
+        self,
+        model_class: type[_RecordingModelFOC],
     ) -> None:
         """The load-bearing case. First .first() returns None (race
         opens), create() raises UniqueViolation (loser of the race),
@@ -247,7 +257,8 @@ class TestFirstOrCreateRace:
         )
 
     def test_non_unique_integrity_error_propagates(
-        self, model_class: type[_RecordingModelFOC],
+        self,
+        model_class: type[_RecordingModelFOC],
     ) -> None:
         """FK violation, NOT NULL violation, check constraint — these
         are NOT the race surface. They must re-raise so the caller
@@ -266,7 +277,8 @@ class TestFirstOrCreateRace:
         assert len(model_class.select_calls) == 1
 
     def test_race_then_winner_vanishes_reraises_original(
-        self, model_class: type[_RecordingModelFOC],
+        self,
+        model_class: type[_RecordingModelFOC],
     ) -> None:
         """Pathological case — caller A inserts and immediately
         deletes; caller B's pre-INSERT SELECT misses, INSERT loses
@@ -289,7 +301,8 @@ class TestFirstOrCreateRace:
 
 class TestUpdateOrCreateRace:
     def test_existing_row_updated_no_create(
-        self, model_class: type[_RecordingModelFOC],
+        self,
+        model_class: type[_RecordingModelFOC],
     ) -> None:
         existing = _FakeRow(id=1, slug="foo", title="Old")
         # Two .first() calls: pre-update SELECT + post-update SELECT.
@@ -297,7 +310,9 @@ class TestUpdateOrCreateRace:
         model_class.select_sequence = [existing, updated]
 
         out = Model.update_or_create.__func__(
-            model_class, {"slug": "foo"}, {"title": "New"},
+            model_class,
+            {"slug": "foo"},
+            {"title": "New"},
         )
 
         assert out is updated
@@ -305,7 +320,8 @@ class TestUpdateOrCreateRace:
         assert model_class.create_payload == {"title": "New", "slug": "foo"}
 
     def test_race_uniqueviolation_falls_through_to_update(
-        self, model_class: type[_RecordingModelFOC],
+        self,
+        model_class: type[_RecordingModelFOC],
     ) -> None:
         """The upsert promise — loser's payload still lands. SELECT
         misses, CREATE loses the race, the existence-check confirms
@@ -319,7 +335,9 @@ class TestUpdateOrCreateRace:
         model_class.create_side_effect = _make_unique_violation()
 
         out = Model.update_or_create.__func__(
-            model_class, {"slug": "foo"}, {"title": "Loser merged"},
+            model_class,
+            {"slug": "foo"},
+            {"title": "Loser merged"},
         )
 
         assert out is final_row
@@ -329,7 +347,8 @@ class TestUpdateOrCreateRace:
         assert model_class.create_payload == {"title": "Loser merged", "slug": "foo"}
 
     def test_race_then_winner_vanishes_reraises(
-        self, model_class: type[_RecordingModelFOC],
+        self,
+        model_class: type[_RecordingModelFOC],
     ) -> None:
         """Same vanishing-row guard as first_or_create — if the
         post-violation existence check misses, the row was deleted
@@ -343,7 +362,9 @@ class TestUpdateOrCreateRace:
 
         with pytest.raises(Exception) as excinfo:
             Model.update_or_create.__func__(
-                model_class, {"slug": "foo"}, {"title": "x"},
+                model_class,
+                {"slug": "foo"},
+                {"title": "x"},
             )
 
         assert getattr(excinfo.value, "sqlstate", None) == "23505"

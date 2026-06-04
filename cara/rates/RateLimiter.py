@@ -6,6 +6,8 @@ request limits per key within a time window. It supports named limiters (Laravel
 for flexible per-user, per-endpoint rate limiting.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 from cara.facades import Cache

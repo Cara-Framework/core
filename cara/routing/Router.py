@@ -5,6 +5,8 @@ Implements Laravel-style route lookup, including OPTIONS preflight for HTTP and 
 Supports route model binding for automatic model resolution.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import Any
 

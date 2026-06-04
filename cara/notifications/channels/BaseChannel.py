@@ -5,6 +5,8 @@ This module provides an abstract base class for notification channels,
 implementing the NotificationChannel.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.notifications.contracts import NotificationChannel

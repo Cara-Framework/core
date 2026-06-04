@@ -5,6 +5,8 @@ This module provides Slack notification channel functionality,
 sending notifications to Slack webhooks.
 """
 
+from __future__ import annotations
+
 import json
 import urllib.parse
 import urllib.request

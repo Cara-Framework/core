@@ -5,6 +5,8 @@ This module provides the Notifiable mixin for entities that can receive notifica
 following Laravel-style notification system.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.notifications.contracts import Notifiable

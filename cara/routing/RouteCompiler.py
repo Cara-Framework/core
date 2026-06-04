@@ -5,6 +5,8 @@ This module handles the transformation of URL patterns into regex matchers and p
 extraction functionality in the Cara framework.
 """
 
+from __future__ import annotations
+
 import re
 from typing import Any
 from urllib.parse import unquote

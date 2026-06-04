@@ -3,7 +3,7 @@
 Replaces 30+ occurrences of::
 
     limit = int(validated.get("limit") or 24)
-    offset = int(validated.get("offset") or 0)
+    offset = int(validated.get("offset") if validated.get("offset") is not None else 0)
 
 with::
 

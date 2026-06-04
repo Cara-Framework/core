@@ -4,6 +4,8 @@ Defines the core contract for notifiable entities in the Cara framework.
 Any entity that can receive notifications must implement these methods.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 

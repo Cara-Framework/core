@@ -4,6 +4,8 @@ OnClause - Simple expression class for JOIN ON conditions
 Handles ON clauses in a clean, simple way.
 """
 
+from __future__ import annotations
+
 
 class OnClause:
     """

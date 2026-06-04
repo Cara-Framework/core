@@ -20,6 +20,8 @@ Usage:
         .dispatch()
 """
 
+from __future__ import annotations
+
 import asyncio
 import uuid
 from collections.abc import Callable

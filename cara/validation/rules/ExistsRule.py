@@ -5,6 +5,8 @@ This module provides an advanced validation rule that checks if a value exists i
 with support for custom messages, complex conditions, and multiple validation scenarios.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

@@ -4,6 +4,8 @@ View Directives - Directive management for Cara view engine
 This file provides directive registration and management functionality.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 

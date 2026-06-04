@@ -4,6 +4,8 @@ View Compiler - Template compiler for Cara view engine
 This file provides template compilation functionality.
 """
 
+from __future__ import annotations
+
 import re
 
 

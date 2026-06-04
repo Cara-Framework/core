@@ -12,6 +12,8 @@ covers every existing call site cleanly; we'll grow the surface only
 when an app actually needs configurable rules.
 """
 
+from __future__ import annotations
+
 # Common-password prefixes — lowercased. Match by prefix rather than
 # exact equality so trivial decorations ("password123", "qwerty!")
 # still get caught. Sourced from the SecLists "10k-most-common.txt"

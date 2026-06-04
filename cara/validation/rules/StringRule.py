@@ -4,6 +4,8 @@ String Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is a string.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

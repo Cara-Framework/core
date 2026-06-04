@@ -51,9 +51,7 @@ from unittest.mock import MagicMock
 import pytest
 
 
-PGModule = importlib.import_module(
-    "cara.eloquent.connections.PostgresConnection"
-)
+PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")
 PostgresConnection = PGModule.PostgresConnection
 DatabaseUnavailableException = PGModule.DatabaseUnavailableException
 
@@ -68,7 +66,9 @@ def _install_fake_psycopg2(monkeypatch, connect_factory):
     return fake
 
 
-def _fresh_pool(monkeypatch, *, size: int, warm: list | None = None) -> threading.Semaphore:
+def _fresh_pool(
+    monkeypatch, *, size: int, warm: list | None = None
+) -> threading.Semaphore:
     """Reset the module-level pool state so each test is hermetic.
 
     Returns the semaphore so tests can assert against the slot count.
@@ -89,7 +89,11 @@ def _make_pc(**overrides):
         **overrides.pop("full_details", {}),
     }
     return PostgresConnection(
-        host="x", database="x", user="x", port=5432, password="x",
+        host="x",
+        database="x",
+        user="x",
+        port=5432,
+        password="x",
         full_details=full_details,
     )
 
@@ -138,7 +142,11 @@ class TestPoolExhaustionRaises503Shape:
         )
         # Slot state must not have been mutated by a failed acquire —
         # the wrapper had nothing to release.
-        assert pc._pool_slot_acquired is False if hasattr(pc, "_pool_slot_acquired") else True
+        assert (
+            pc._pool_slot_acquired is False
+            if hasattr(pc, "_pool_slot_acquired")
+            else True
+        )
 
 
 # ── Slot leak on close_connection with _connection=None ─────────

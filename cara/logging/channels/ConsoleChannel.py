@@ -4,6 +4,8 @@ Console Logging Channel for the Cara framework.
 This module provides a logging channel that outputs log records to the console.
 """
 
+from __future__ import annotations
+
 import sys
 from typing import Any
 

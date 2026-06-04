@@ -3,6 +3,8 @@
 Usage: ``size:5``.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

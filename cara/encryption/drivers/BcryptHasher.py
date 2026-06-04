@@ -5,6 +5,8 @@ This module provides the BcryptHasher class, which implements password hashing a
 using the bcrypt algorithm.
 """
 
+from __future__ import annotations
+
 import bcrypt
 
 

@@ -5,6 +5,8 @@ This mixin provides common functionality for long-running blocking commands
 like queue workers, schedulers, and servers with consistent UX and auto-reload.
 """
 
+from __future__ import annotations
+
 import time
 from abc import ABC, abstractmethod
 from typing import Any

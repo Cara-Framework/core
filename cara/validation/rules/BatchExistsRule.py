@@ -17,6 +17,8 @@ Semantics: validation passes only when EVERY value in the array exists in
 filter). A single missing or extra value fails the field.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterable
 from typing import Any
 
@@ -90,8 +92,8 @@ class BatchExistsRule(BaseRule):
             if condition_column and condition_value is not None:
                 sql += f' AND "{condition_column}" = %s'
                 params.append(condition_value)
-            rows = DB.select(sql, params)
-            count = int((rows or [{}])[0].get("c", 0))
+            row = DB.select_one(sql, params)
+            count = int((row or {}).get("c", 0))
             return count >= len(unique)
         except Exception as exc:
             self._log_debug(

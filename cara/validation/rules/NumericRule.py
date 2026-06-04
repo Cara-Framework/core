@@ -4,6 +4,8 @@ Numeric Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is numeric.
 """
 
+from __future__ import annotations
+
 import math
 import re
 from typing import Any
@@ -46,9 +48,7 @@ class NumericRule(BaseRule):
     # Canonical decimal-with-optional-scientific shape. Anchored with
     # ``fullmatch`` to defeat the default-mode ``$``-allows-trailing-
     # newline quirk.
-    _STRICT_NUMERIC_PATTERN = re.compile(
-        r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$"
-    )
+    _STRICT_NUMERIC_PATTERN = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """Check if value is a finite numeric."""

@@ -4,6 +4,8 @@ Logging Channel Configurator for the Cara framework.
 This module provides utilities for configuring and managing logging channels.
 """
 
+from __future__ import annotations
+
 import os
 from inspect import signature
 from pathlib import Path

@@ -4,6 +4,8 @@ Redis Queue Driver for the Cara framework.
 Modern, clean implementation for Redis-backed job queue management.
 """
 
+from __future__ import annotations
+
 import os
 import pickle
 import time
@@ -107,13 +109,9 @@ class RedisDriver(HasColoredOutput, Queue):
         # exhausting file descriptors on the worker host. Pull
         # overrides from ``options`` so the queue config can tune
         # them per-driver without touching every framework caller.
-        socket_connect_timeout = float(
-            self.options.get("socket_connect_timeout", 5.0)
-        )
+        socket_connect_timeout = float(self.options.get("socket_connect_timeout", 5.0))
         socket_timeout = float(self.options.get("socket_timeout", 5.0))
-        health_check_interval = int(
-            self.options.get("health_check_interval", 30)
-        )
+        health_check_interval = int(self.options.get("health_check_interval", 30))
         max_connections = int(self.options.get("max_connections", 32))
 
         # Drop ``password`` from the kwargs entirely when not set —
@@ -337,9 +335,7 @@ class RedisDriver(HasColoredOutput, Queue):
             try:
                 delay_seconds = float(delay)
             except (TypeError, ValueError) as e:
-                raise QueueException(
-                    f"RedisDriver.later: invalid delay {delay!r}"
-                ) from e
+                raise QueueException(f"RedisDriver.later: invalid delay {delay!r}") from e
         merged = {**self.options, **(options or {})}
         now = pendulum.now(tz=merged.get("tz", self.tz))
         when = now.add(seconds=max(delay_seconds, 0.0))
@@ -522,7 +518,8 @@ class RedisDriver(HasColoredOutput, Queue):
                     # they're swept by the same path. Lists younger
                     # than ``visibility_timeout`` are left alone — the
                     # owning worker is presumed alive and processing.
-                    list_idle = self._redis.object("idletime", proc_key) or 0
+                    list_idle = self._redis.object("idletime", proc_key)
+                    list_idle = list_idle if list_idle is not None else 0
                     if list_idle < visibility_timeout:
                         continue
                     # Atomically drain the stale processing list back
@@ -540,7 +537,7 @@ class RedisDriver(HasColoredOutput, Queue):
                         moved = self._redis.eval(
                             self._REAP_PROCESSING_LUA, 2, proc_key, requeue_key
                         )
-                        recovered += int(moved or 0)
+                        recovered += int(moved if moved is not None else 0)
                     except Exception as e:
                         self.danger(f"Reaper: atomic move failed for {proc_key}: {e}")
                 if cursor == 0:

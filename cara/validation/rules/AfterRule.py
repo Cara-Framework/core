@@ -1,5 +1,7 @@
 """After-date rule. Usage: ``after:2020-01-01`` or ``after:other_field``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

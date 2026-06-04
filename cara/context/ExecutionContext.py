@@ -4,7 +4,15 @@ Execution Context Manager.
 Manages global execution context for the application, including sync/async mode.
 """
 
-from contextvars import ContextVar
+from __future__ import annotations
+
+import asyncio
+import copy
+from collections.abc import Callable
+from contextvars import ContextVar, copy_context
+from typing import Any, TypeVar
+
+_T = TypeVar("_T")
 
 # Context variable for sync mode (thread-safe)
 _sync_mode: ContextVar[bool] = ContextVar("sync_mode", default=False)
@@ -149,6 +157,45 @@ class ExecutionContext:
             value: True to enable debug logging
         """
         _debug_mode.set(value)
+
+    @staticmethod
+    async def run_in_thread(func: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+        """Run a sync callable in a worker thread, propagating context vars.
+
+        Drop-in replacement for :func:`asyncio.to_thread` that copies the
+        current :mod:`contextvars` snapshot into the thread so job IDs,
+        correlation IDs, and other context-local state survive the
+        boundary.
+
+        Forwards both positional AND keyword arguments to ``func``.
+        Pre-fix the signature dropped ``**kwargs`` entirely — every
+        controller that called this with kwargs (``period``,
+        ``include_counts``, etc.) blew up at request time with
+        ``TypeError: ... got an unexpected keyword argument``. Matching
+        :func:`asyncio.to_thread`'s ``(func, /, *args, **kwargs)`` shape
+        keeps the call sites idiomatic.
+
+        Args:
+            func: Synchronous callable.
+            *args: Positional arguments forwarded to ``func``.
+            **kwargs: Keyword arguments forwarded to ``func``.
+
+        Returns:
+            The return value of ``func(*args, **kwargs)``.
+
+        Example::
+
+            result = await ExecutionContext.run_in_thread(
+                repo.heavy_query,
+                product_id,
+                include_counts=True,
+            )
+        """
+        ctx = copy_context()
+        return await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: ctx.run(func, *args, **kwargs),
+        )
 
 
 class _ExecutionContextManager:

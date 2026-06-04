@@ -13,11 +13,15 @@ Usage:
             return [ThrottlesExceptions(max_exceptions=3, decay_seconds=60, retry_after=300)]
 """
 
+from __future__ import annotations
+
 import asyncio
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
+
+from cara.queues.contracts import JobThrottledException
 
 _exception_buckets: dict = {}
 _throttle_gates: dict = {}
@@ -36,8 +40,8 @@ class ThrottlesExceptions:
     """Throttle jobs after max exceptions within a decay window.
 
     Records exception timestamps per key. When ``max_exceptions`` failures occur
-    within ``decay_seconds``, the job is skipped (returns None) until
-    ``retry_after`` seconds have passed since the throttle gate activated.
+    within ``decay_seconds``, the job raises :class:`JobThrottledException`
+    until ``retry_after`` seconds have passed since the throttle gate activated.
     """
 
     def __init__(
@@ -71,7 +75,11 @@ class ThrottlesExceptions:
                         )
                     except ImportError:
                         pass
-                    return None
+                    raise JobThrottledException(
+                        f"Job {throttle_key} throttled",
+                        key=throttle_key,
+                        retry_after=self.retry_after,
+                    )
                 # Gate expired — reset tracking.
                 _throttle_gates.pop(throttle_key, None)
                 _exception_buckets.pop(throttle_key, None)

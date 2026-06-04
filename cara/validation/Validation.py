@@ -5,6 +5,8 @@ This module provides the core validation logic, managing validation rules and ex
 checks.
 """
 
+from __future__ import annotations
+
 import importlib
 import inspect
 import os

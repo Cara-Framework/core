@@ -5,6 +5,8 @@ Handles all JOIN-related query building operations cleanly and efficiently.
 Follows DRY and KISS principles.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import Any
 

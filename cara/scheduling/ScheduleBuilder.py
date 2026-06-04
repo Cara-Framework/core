@@ -5,6 +5,8 @@ This module provides utilities for building and configuring job schedules in a f
 Supports Laravel-style schedule features including overlapping prevention and maintenance mode.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 

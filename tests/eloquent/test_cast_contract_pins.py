@@ -74,20 +74,38 @@ class TestBoolCast:
     fix for scrapers that write string-shaped truthiness into boolean
     columns."""
 
-    @pytest.mark.parametrize("token", [
-        "true", "True", "TRUE",
-        "1", " 1 ",
-        "yes", "y", "t", "on",
-    ])
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "true",
+            "True",
+            "TRUE",
+            "1",
+            " 1 ",
+            "yes",
+            "y",
+            "t",
+            "on",
+        ],
+    )
     def test_truthy_tokens(self, token):
         assert BoolCast().set(token) is True
 
-    @pytest.mark.parametrize("token", [
-        "false", "False", "FALSE",
-        "0", " 0 ",
-        "no", "n", "f", "off",
-        "",  # empty string is null-equivalent for bool intent
-    ])
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "false",
+            "False",
+            "FALSE",
+            "0",
+            " 0 ",
+            "no",
+            "n",
+            "f",
+            "off",
+            "",  # empty string is null-equivalent for bool intent
+        ],
+    )
     def test_falsy_tokens(self, token):
         result = BoolCast().set(token)
         assert result is False, (
@@ -101,14 +119,17 @@ class TestBoolCast:
         assert BoolCast().set(None) is None
         assert BoolCast().get(None) is None
 
-    @pytest.mark.parametrize("value,expected", [
-        (True, True),
-        (False, False),
-        (1, True),
-        (0, False),
-        (1.0, True),
-        (0.0, False),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (True, True),
+            (False, False),
+            (1, True),
+            (0, False),
+            (1.0, True),
+            (0.0, False),
+        ],
+    )
     def test_native_types(self, value, expected):
         assert BoolCast().set(value) is expected
         assert BoolCast().get(value) is expected
@@ -296,7 +317,8 @@ class TestArrayCastNullPreservation:
         assert ArrayCast().set([1, 2, 3]) == "[1, 2, 3]"
 
     def test_set_non_list_logs_and_falls_back(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """A dict / number / string passed where a list was expected
         is a caller bug. The cast historically swallowed the value

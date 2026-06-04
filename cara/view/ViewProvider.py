@@ -4,6 +4,8 @@ View Provider - Service provider for Cara view engine
 This file provides the service provider for the view engine.
 """
 
+from __future__ import annotations
+
 from cara.configuration import config
 from cara.foundation import DeferredProvider
 from cara.support import paths

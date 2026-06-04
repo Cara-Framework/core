@@ -5,6 +5,8 @@ This module provides the deferred service provider that configures and registers
 subsystem, including SMTP, Log, Array, and Mailgun mail drivers.
 """
 
+from __future__ import annotations
+
 from cara.configuration import config
 from cara.exceptions import MailConfigurationException
 from cara.foundation import DeferredProvider

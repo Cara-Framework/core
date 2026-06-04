@@ -5,6 +5,8 @@ Implements domain.subtype.priority routing pattern with automatic
 queue binding and message routing via routing keys.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from cara.facades import Log
@@ -211,7 +213,11 @@ class TopicExchange:
     _DISPATCH_BACKOFF_BASE = 0.5
 
     def dispatch_job(
-        self, routing_key: str, job_instance, payload: dict | None = None
+        self,
+        routing_key: str,
+        job_instance,
+        payload: dict | None = None,
+        delay: float | None = None,
     ) -> str:
         """
         Dispatch job to appropriate queue based on routing key.
@@ -275,7 +281,15 @@ class TopicExchange:
 
         for attempt in range(self._DISPATCH_MAX_RETRIES):
             try:
-                job_id = Queue.push(job_instance)
+                # Honor a requested delay via the delayed-message path
+                # (Queue.later → AMQPDriver.schedule sets the x-delay header).
+                # Queue.push ignores job.delay and would publish immediately,
+                # silently dropping the delay. job_instance.queue was pinned to
+                # target_queue above, so the delayed publish lands correctly.
+                if delay:
+                    job_id = Queue.later(delay, job_instance)
+                else:
+                    job_id = Queue.push(job_instance)
                 Log.debug(
                     f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
                     category="cara.queue.exchange",
@@ -288,7 +302,11 @@ class TopicExchange:
                     import time
 
                     wait = self._DISPATCH_BACKOFF_BASE * (2**attempt)
-                    Log.warning(
+                    # Transient broker blips (idle connection dropped, broken
+                    # pipe) are recovered by the reconnect-and-retry below, so
+                    # an intermediate attempt is not operator-actionable. Only
+                    # the final give-up (Log.error) is. Keep retries at debug.
+                    Log.debug(
                         f"Dispatch attempt {attempt + 1} failed for {routing_key}, "
                         f"retrying in {wait:.1f}s: {publish_err}",
                         category="cara.queue.exchange",

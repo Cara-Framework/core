@@ -4,6 +4,8 @@ Image Processing for Cara Framework.
 Laravel Intervention Image style fluent API.
 """
 
+from __future__ import annotations
+
 import os
 from io import BytesIO
 
@@ -208,9 +210,7 @@ class Image:
         fmt = (image.format or "").upper()
         if fmt not in ImageProcessor.ALLOWED_FORMATS:
             allowed = ", ".join(sorted(ImageProcessor.ALLOWED_FORMATS))
-            raise ValueError(
-                f"Unsupported image format {fmt!r}; allowed: {allowed}"
-            )
+            raise ValueError(f"Unsupported image format {fmt!r}; allowed: {allowed}")
 
         # Pixel-count guard — declared dimensions only, no full
         # decode. A 100_000 × 100_000 PNG-bomb header is rejected

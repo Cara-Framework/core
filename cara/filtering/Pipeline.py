@@ -451,6 +451,53 @@ class _CachedPipeline:
 
         return Cache.remember(self._build_key("count"), self._ttl, self._pipe.count)
 
+    def get(self, *, limit: int | None = None, offset: int | None = None) -> list[Any]:
+        """Cached ``get`` — raw model rows path used by services that
+        want to hand the rows to a per-controller serialiser (e.g.
+        ``ProductController.index`` → ``batch_serialize``) instead of
+        going through ``paginate()``'s built-in dict materialiser.
+
+        Without this proxy ``ProductReadService.list_products`` (which
+        deliberately doesn't call ``paginate`` to avoid double-
+        serialising rows through ``ProductResource`` once they reach
+        ``batch_serialize``) would explode with
+        ``AttributeError: '_CachedPipeline' object has no attribute 'get'``
+        the moment the read path picked up the cached wrapper —
+        which is the steady-state path for every storefront list
+        request that lands on a cacheable sort. Mirrors ``count``
+        above: bypass the cache when the predicate vetoes caching
+        for this pipeline, otherwise round-trip through ``Cache.remember``.
+        """
+        if not self._when(self._pipe):
+            return self._pipe.get(limit=limit, offset=offset)
+
+        from cara.facades import Cache
+
+        return Cache.remember(
+            self._build_key("get", limit=limit, offset=offset),
+            self._ttl,
+            lambda: self._pipe.get(limit=limit, offset=offset),
+        )
+
+    # The following helpers are pass-throughs so ``ProductReadService``
+    # can read pipeline metadata (sort name, parsed filter state, cache
+    # key) for the response envelope without juggling whether it has a
+    # ``FilterPipeline`` or a ``_CachedPipeline`` instance. Without
+    # them the service would have to ``isinstance``-fork before every
+    # attribute read; routing through the proxy keeps the call site
+    # uniform and avoids leaking the caching wrapper into business
+    # logic.
+    def _resolved_sort_name(self) -> str:
+        return self._pipe._resolved_sort_name()
+
+    @property
+    def _parsed(self) -> Any:
+        return self._pipe._parsed
+
+    @property
+    def cache_key(self) -> str:
+        return self._pipe.cache_key
+
 
 def pipeline(
     builder: Any,

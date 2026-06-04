@@ -1,5 +1,7 @@
 """Before-date rule. Usage: ``before:2030-01-01`` or ``before:other_field``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

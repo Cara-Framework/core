@@ -5,6 +5,8 @@ This module provides the deferred service provider that configures and registers
 subsystem, including file-based storage drivers.
 """
 
+from __future__ import annotations
+
 from cara.configuration import config
 from cara.exceptions import StorageConfigurationException
 from cara.foundation import DeferredProvider

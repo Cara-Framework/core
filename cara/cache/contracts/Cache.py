@@ -5,6 +5,8 @@ Any cache driver (file, redis, etc.) must implement these methods. This ensures 
 (get, put, forever, forget, flush) across drivers.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 

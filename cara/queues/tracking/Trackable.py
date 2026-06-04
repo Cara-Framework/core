@@ -5,6 +5,8 @@ This trait provides automatic job tracking capabilities for any job class.
 Similar to Laravel's job tracking but integrated into the Cara framework.
 """
 
+from __future__ import annotations
+
 import uuid
 from typing import Any
 
@@ -107,22 +109,36 @@ class Trackable:
             return None
 
     def _mark_processing(self) -> None:
-        """Mark job as processing."""
+        """Mark job as processing.
+
+        Tracking is observability — it must NEVER fail the job it observes.
+        Pre-fix this (and ``_mark_success``) were the only ``_mark_*`` hooks
+        without a guard, so a tracking-layer error (e.g. a stale job_model)
+        propagated out of the worker's ``instance._mark_processing()`` call
+        and failed otherwise-healthy jobs. The other hooks already swallow;
+        mirror that contract here.
+        """
         if not self._tracking_enabled or not self._job_uid:
             return
 
-        job_tracker = self._get_job_tracker()
-        if job_tracker:
-            job_tracker.track_job_processing(self._job_uid)
+        try:
+            job_tracker = self._get_job_tracker()
+            if job_tracker:
+                job_tracker.track_job_processing(self._job_uid)
+        except Exception as e:
+            Log.warning(f"Failed to mark job as processing: {str(e)}")
 
     def _mark_success(self, result_data: dict | None = None) -> None:
-        """Mark job as successful."""
+        """Mark job as successful (tracking failures must not fail the job)."""
         if not self._tracking_enabled or not self._job_uid:
             return
 
-        job_tracker = self._get_job_tracker()
-        if job_tracker:
-            job_tracker.track_job_success(self._job_uid, result_data)
+        try:
+            job_tracker = self._get_job_tracker()
+            if job_tracker:
+                job_tracker.track_job_success(self._job_uid, result_data)
+        except Exception as e:
+            Log.warning(f"Failed to mark job as successful: {str(e)}")
 
     def _mark_failed(self, error: str, should_retry: bool = True) -> str | None:
         """Mark job as failed and handle retry logic."""

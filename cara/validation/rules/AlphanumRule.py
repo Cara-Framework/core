@@ -4,6 +4,8 @@ Alphanumeric Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value contains only alphanumeric characters.
 """
 
+from __future__ import annotations
+
 import re
 from typing import Any
 

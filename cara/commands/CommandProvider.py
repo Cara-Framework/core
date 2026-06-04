@@ -4,6 +4,8 @@ Command Provider for the Cara framework.
 This module provides the service provider that registers CLI commands into the application.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.commands import Command

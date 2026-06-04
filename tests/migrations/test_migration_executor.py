@@ -77,9 +77,9 @@ def _setup(transactional=True, up_raises=False, down_raises=False):
 
     file_manager = MagicMock(name="file_manager")
     file_manager.get_migration_files.return_value = ["/fake/0001_a.py"]
-    file_manager.get_migration_name_from_file.side_effect = (
-        lambda p: p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    )
+    file_manager.get_migration_name_from_file.side_effect = lambda p: p.rsplit("/", 1)[
+        -1
+    ].rsplit(".", 1)[0]
 
     class _Mig:
         transactional = _trans
@@ -105,12 +105,8 @@ def _setup(transactional=True, up_raises=False, down_raises=False):
     # ``rollback_last_batch`` does not short-circuit on "Nothing to
     # rollback"; they override it explicitly.
     tracker.get_last_batch_number.return_value = 1
-    tracker.record_migration.side_effect = lambda *a, **k: calls.append(
-        f"record:{a[0]}"
-    )
-    tracker.remove_migration.side_effect = lambda *a, **k: calls.append(
-        f"remove:{a[0]}"
-    )
+    tracker.record_migration.side_effect = lambda *a, **k: calls.append(f"record:{a[0]}")
+    tracker.remove_migration.side_effect = lambda *a, **k: calls.append(f"remove:{a[0]}")
     tracker.get_migrations_by_batch.return_value = ["0001_a"]
 
     executor = MigrationExecutor(db_manager, file_manager, tracker)
@@ -236,6 +232,7 @@ def test_unloadable_migration_defaults_to_transactional_wrapping():
         if load_calls["n"] == 1:
             # Probe call from _migration_is_transactional — fail.
             raise ImportError("module not found")
+
         # Subsequent call from _run_migration — succeed so the
         # transactional wrapping path is observable.
         class _Mig:
@@ -252,9 +249,7 @@ def test_unloadable_migration_defaults_to_transactional_wrapping():
     tracker.ensure_migrations_table = MagicMock()
     tracker.get_ran_migrations.return_value = []
     tracker.get_last_batch_number.return_value = 0
-    tracker.record_migration.side_effect = lambda *a, **k: calls.append(
-        f"record:{a[0]}"
-    )
+    tracker.record_migration.side_effect = lambda *a, **k: calls.append(f"record:{a[0]}")
 
     MigrationExecutor(db_manager, file_manager, tracker).run_pending_migrations()
 
@@ -290,9 +285,9 @@ def test_each_pending_migration_runs_in_its_own_transaction():
         "/fake/0002_b.py",
         "/fake/0003_c.py",
     ]
-    file_manager.get_migration_name_from_file.side_effect = (
-        lambda p: p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    )
+    file_manager.get_migration_name_from_file.side_effect = lambda p: p.rsplit("/", 1)[
+        -1
+    ].rsplit(".", 1)[0]
 
     class _OK:
         transactional = True
@@ -316,17 +311,13 @@ def test_each_pending_migration_runs_in_its_own_transaction():
         "/fake/0002_b.py": _Bad,
         "/fake/0003_c.py": _OK,
     }
-    file_manager.load_migration_class.side_effect = (
-        lambda path: class_by_file[path]
-    )
+    file_manager.load_migration_class.side_effect = lambda path: class_by_file[path]
 
     tracker = MagicMock()
     tracker.ensure_migrations_table = MagicMock()
     tracker.get_ran_migrations.return_value = []
     tracker.get_last_batch_number.return_value = 0
-    tracker.record_migration.side_effect = lambda *a, **k: calls.append(
-        f"record:{a[0]}"
-    )
+    tracker.record_migration.side_effect = lambda *a, **k: calls.append(f"record:{a[0]}")
 
     with pytest.raises(RuntimeError, match="0002 fails"):
         MigrationExecutor(db_manager, file_manager, tracker).run_pending_migrations()
@@ -334,8 +325,13 @@ def test_each_pending_migration_runs_in_its_own_transaction():
     # Migration 1 committed; migration 2 rolled back; migration 3
     # never started.
     assert calls == [
-        "begin", "up-ok", "record:0001_a", "commit",
-        "begin", "up-bad", "rollback",
+        "begin",
+        "up-ok",
+        "record:0001_a",
+        "commit",
+        "begin",
+        "up-bad",
+        "rollback",
     ]
 
 
@@ -351,11 +347,9 @@ def test_run_pending_calls_ensure_migrations_table_before_any_work():
     # And it must precede the read — assert via call order on the
     # tracker mock.
     ensure_idx = next(
-        i for i, c in enumerate(tracker.method_calls)
-        if c[0] == "ensure_migrations_table"
+        i for i, c in enumerate(tracker.method_calls) if c[0] == "ensure_migrations_table"
     )
     read_idx = next(
-        i for i, c in enumerate(tracker.method_calls)
-        if c[0] == "get_ran_migrations"
+        i for i, c in enumerate(tracker.method_calls) if c[0] == "get_ran_migrations"
     )
     assert ensure_idx < read_idx

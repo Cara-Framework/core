@@ -129,17 +129,21 @@ class TestChunkByIdColumnValidation:
         # We never call .get() — validation raises before the cursor
         # starts the first chunk. A bare object suffices as ``self``.
         from cara.eloquent.query.QueryBuilder import QueryBuilder
+
         self._call = QueryBuilder.chunk_by_id
 
-    @pytest.mark.parametrize("good_column", [
-        "id",
-        "user_id",
-        "_internal_id",
-        "Id",
-        "users.id",
-        "snake_case.snake_case_col",
-        "x.y",
-    ])
+    @pytest.mark.parametrize(
+        "good_column",
+        [
+            "id",
+            "user_id",
+            "_internal_id",
+            "Id",
+            "users.id",
+            "snake_case.snake_case_col",
+            "x.y",
+        ],
+    )
     def test_valid_column_names_accepted(self, good_column: str) -> None:
         # Validation should accept the documented shape without
         # raising. The callback is never invoked because the clone
@@ -148,7 +152,10 @@ class TestChunkByIdColumnValidation:
         # validation and assert ONLY that the validator passed.
         try:
             self._call(  # type: ignore[misc]
-                object(), 100, lambda _r: None, column=good_column,
+                object(),
+                100,
+                lambda _r: None,
+                column=good_column,
             )
         except ValueError as e:
             # Must NOT be our validator's rejection.
@@ -163,26 +170,33 @@ class TestChunkByIdColumnValidation:
             # rest of the cursor body. Good enough.
             pass
 
-    @pytest.mark.parametrize("bad_column", [
-        "id; DROP TABLE users",                # injection attempt
-        "id) UNION SELECT password FROM",       # parenthesised
-        "id--comment",                           # SQL comment
-        "id\nORDER BY x",                       # newline payload
-        "id;",                                    # trailing semicolon
-        "user.id.extra",                         # 3 segments — only 2 allowed
-        "1id",                                    # starts with digit
-        "",                                       # empty
-        "   ",                                    # whitespace only
-        "id col",                                 # space mid-string
-        "id/*comment*/",                         # SQL block comment
-        "id`",                                    # backtick
-    ])
+    @pytest.mark.parametrize(
+        "bad_column",
+        [
+            "id; DROP TABLE users",  # injection attempt
+            "id) UNION SELECT password FROM",  # parenthesised
+            "id--comment",  # SQL comment
+            "id\nORDER BY x",  # newline payload
+            "id;",  # trailing semicolon
+            "user.id.extra",  # 3 segments — only 2 allowed
+            "1id",  # starts with digit
+            "",  # empty
+            "   ",  # whitespace only
+            "id col",  # space mid-string
+            "id/*comment*/",  # SQL block comment
+            "id`",  # backtick
+        ],
+    )
     def test_invalid_column_names_rejected_with_clear_error(
-        self, bad_column: str,
+        self,
+        bad_column: str,
     ) -> None:
         with pytest.raises(ValueError, match="invalid column name"):
             self._call(  # type: ignore[misc]
-                object(), 100, lambda _r: None, column=bad_column,
+                object(),
+                100,
+                lambda _r: None,
+                column=bad_column,
             )
 
     def test_non_string_column_rejected(self) -> None:
@@ -191,11 +205,17 @@ class TestChunkByIdColumnValidation:
         # ``re.fullmatch`` and raise TypeError mid-cursor.
         with pytest.raises(ValueError, match="invalid column name"):
             self._call(  # type: ignore[misc]
-                object(), 100, lambda _r: None, column=123,  # type: ignore[arg-type]
+                object(),
+                100,
+                lambda _r: None,
+                column=123,  # type: ignore[arg-type]
             )
         with pytest.raises(ValueError, match="invalid column name"):
             self._call(  # type: ignore[misc]
-                object(), 100, lambda _r: None, column=None,  # type: ignore[arg-type]
+                object(),
+                100,
+                lambda _r: None,
+                column=None,  # type: ignore[arg-type]
             )
 
     def test_default_column_id_passes(self) -> None:

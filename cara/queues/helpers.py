@@ -9,6 +9,8 @@ contract.
 Generic, domain-free — apps bind their own jobs and routing keys.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 
@@ -67,7 +69,10 @@ async def safe_dispatch(
         except Exception as e:
             last_exc = e
             if attempt < max_retries - 1:
-                Log.warning(
+                # Intermediate retry of a transient broker blip — recovered
+                # below. Not operator-actionable; only the final failure
+                # (Log.error) is. Keep retries at debug to avoid noise.
+                Log.debug(
                     f"Dispatch attempt {attempt + 1} failed for "
                     f"{job.__class__.__name__}: {e}. Retrying…"
                 )

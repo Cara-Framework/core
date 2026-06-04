@@ -51,32 +51,35 @@ from cara.validation.rules.RequiredUnlessRule import RequiredUnlessRule
 
 
 class TestValuesMatch:
-    @pytest.mark.parametrize("actual,expected,want", [
-        # Python bool against the canonical lowercase rule literal.
-        (True, "true", True),
-        (False, "false", True),
-        (True, "false", False),
-        (False, "true", False),
-        # Bool against uppercase rule literal — both sides lower-cased,
-        # so the rule author can write whichever they prefer.
-        (True, "TRUE", True),
-        (False, "False", True),
-        # String case-insensitive (form-uppercased select values).
-        ("ADMIN", "admin", True),
-        ("admin", "Admin", True),
-        # Whitespace tolerant — handles trailing-newline rule literals
-        # that survived a copy-paste from docs.
-        ("active", " active ", True),
-        # None against the documented sentinel literals.
-        (None, "null", True),
-        (None, "none", True),
-        (None, "active", False),
-        # Numeric coincidence still works for int<->str pairs.
-        (18, "18", True),
-        ("18", "18", True),
-        # Negative case — different values.
-        ("inactive", "active", False),
-    ])
+    @pytest.mark.parametrize(
+        "actual,expected,want",
+        [
+            # Python bool against the canonical lowercase rule literal.
+            (True, "true", True),
+            (False, "false", True),
+            (True, "false", False),
+            (False, "true", False),
+            # Bool against uppercase rule literal — both sides lower-cased,
+            # so the rule author can write whichever they prefer.
+            (True, "TRUE", True),
+            (False, "False", True),
+            # String case-insensitive (form-uppercased select values).
+            ("ADMIN", "admin", True),
+            ("admin", "Admin", True),
+            # Whitespace tolerant — handles trailing-newline rule literals
+            # that survived a copy-paste from docs.
+            ("active", " active ", True),
+            # None against the documented sentinel literals.
+            (None, "null", True),
+            (None, "none", True),
+            (None, "active", False),
+            # Numeric coincidence still works for int<->str pairs.
+            (18, "18", True),
+            ("18", "18", True),
+            # Negative case — different values.
+            ("inactive", "active", False),
+        ],
+    )
     def test_match_truth_table(self, actual, expected, want):
         assert _values_match(actual, expected) is want
 

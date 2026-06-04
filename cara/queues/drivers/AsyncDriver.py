@@ -4,6 +4,8 @@ Async Queue Driver for the Cara framework.
 Immediate asynchronous execution without queuing.
 """
 
+from __future__ import annotations
+
 import asyncio
 import uuid
 from typing import Any

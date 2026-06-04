@@ -4,6 +4,8 @@ Base Validation Rule for the Cara framework.
 This module provides the base class for all validation rules in the application.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

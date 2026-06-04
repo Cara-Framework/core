@@ -3,6 +3,8 @@ Deferred provider that loads middleware configuration from MiddlewareRegistry.
 Binds the configured MiddlewareCapsule under the key 'middleware_http' and 'middleware_ws'.
 """
 
+from __future__ import annotations
+
 import inspect
 
 from cara.configuration import config

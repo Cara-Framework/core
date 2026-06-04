@@ -4,6 +4,8 @@ Queue job for handling event listeners in background.
 This job is automatically created when event listeners implement ShouldQueue.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.events import Event as EventDispatcher

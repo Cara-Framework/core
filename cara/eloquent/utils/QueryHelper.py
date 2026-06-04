@@ -2,6 +2,8 @@
 QueryHelper - Utility for query operations
 """
 
+from __future__ import annotations
+
 
 class QueryHelper:
     """Helper for query building operations."""

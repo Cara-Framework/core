@@ -5,6 +5,8 @@ This module provides the service provider that configures and registers the sche
 making scheduling services available throughout the application.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.configuration import config

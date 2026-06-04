@@ -5,6 +5,8 @@ Laravel-inspired header management for HTTP responses with case-insensitive oper
 Clean, robust header handling with explicit content-type tracking.
 """
 
+from __future__ import annotations
+
 from cara.http.request import Header, HeaderBag
 
 

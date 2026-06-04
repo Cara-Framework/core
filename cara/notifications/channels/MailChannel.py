@@ -5,6 +5,8 @@ This module provides email notification channel functionality,
 integrating with Cara's mail system.
 """
 
+from __future__ import annotations
+
 import hashlib
 import hmac
 from typing import Any
@@ -254,7 +256,8 @@ class MailChannel(BaseChannel):
 
         view_data.setdefault("frontend_url", frontend_url)
         view_data.setdefault(
-            "preferences_url", f"{frontend_url}/profile/preferences",
+            "preferences_url",
+            f"{frontend_url}/profile/preferences",
         )
 
         if "unsubscribe_url" in view_data and view_data["unsubscribe_url"]:
@@ -262,7 +265,9 @@ class MailChannel(BaseChannel):
 
         user_id = getattr(notifiable, "id", None)
         email = getattr(notifiable, "email", None) or getattr(
-            notifiable, "email_address", None,
+            notifiable,
+            "email_address",
+            None,
         )
         try:
             secret = config("app.unsubscribe_secret", "") or ""
@@ -282,6 +287,4 @@ class MailChannel(BaseChannel):
             # No HMAC available — point at the manual preferences page
             # rather than a token-less ``/unsubscribe`` URL the handler
             # would reject. A real link beats a dead ``#`` either way.
-            view_data["unsubscribe_url"] = (
-                f"{frontend_url}/profile/preferences#email"
-            )
+            view_data["unsubscribe_url"] = f"{frontend_url}/profile/preferences#email"

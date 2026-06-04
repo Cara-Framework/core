@@ -16,6 +16,8 @@ Features:
 - Rollback support on errors
 """
 
+from __future__ import annotations
+
 import ast
 import re
 import tempfile

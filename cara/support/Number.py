@@ -5,6 +5,8 @@ numeric helpers so each app doesn't grow its own ``clamp.py`` /
 ``round_to_step.py`` / ``percent_diff.py`` copies.
 """
 
+from __future__ import annotations
+
 from typing import Union
 
 # NOTE: ``cara.exceptions`` is imported lazily inside ``clamp`` for the same

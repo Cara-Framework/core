@@ -4,6 +4,8 @@ Min Length Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a string value meets a minimum length.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter
@@ -39,6 +41,7 @@ class MinLengthRule(BaseRule):
             # to be caught by accident).
             try:
                 from cara.facades import Log
+
                 Log.warning(
                     f"MinLengthRule: non-numeric min_length "
                     f"parameter {min_length!r} on field {field!r}; "

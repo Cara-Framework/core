@@ -1,5 +1,7 @@
 """Date rule (parses ISO-style date/datetime strings). Usage: ``date``."""
 
+from __future__ import annotations
+
 from datetime import date, datetime
 from typing import Any
 

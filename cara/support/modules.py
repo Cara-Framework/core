@@ -9,6 +9,8 @@ Laravel config() style dynamic interface:
     modules('controllers', base='myapp')     # myapp.controllers
 """
 
+from __future__ import annotations
+
 from .ModuleManager import ModuleManager
 
 

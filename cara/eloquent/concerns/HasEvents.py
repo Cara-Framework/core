@@ -5,6 +5,8 @@ Single Responsibility: Handle model events for Eloquent models.
 Clean separation of event logic following SRP.
 """
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:

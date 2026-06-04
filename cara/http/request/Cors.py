@@ -5,6 +5,8 @@ This module provides comprehensive CORS support for the Cara framework, implemen
 specification with preflight handling, header management, and origin validation.
 """
 
+from __future__ import annotations
+
 
 class Cors:
     """

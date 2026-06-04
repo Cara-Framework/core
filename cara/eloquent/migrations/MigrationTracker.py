@@ -7,6 +7,8 @@ migrations leaks N pool slots and the runner hits ``pool_max`` after
 ~50 migrations (each migration calls ``record_migration``).
 """
 
+from __future__ import annotations
+
 
 def _release(connection) -> None:
     """Return a borrowed connection to the pool (best-effort)."""
@@ -162,7 +164,8 @@ class MigrationTracker:
             if result and result[0]:
                 row = result[0]
                 if hasattr(row, "get"):
-                    batch = row.get("max") or 0
+                    max_batch = row.get("max")
+                    batch = max_batch if max_batch is not None else 0
                 else:
                     batch = row[0] if row[0] is not None else 0
             else:

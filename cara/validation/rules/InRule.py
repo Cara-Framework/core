@@ -4,6 +4,8 @@ In Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is in a given list of values.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation.rules import BaseRule
@@ -32,9 +34,7 @@ class InRule(BaseRule):
         # are scalars by length=1 but ``str(b'a') == "b'a'"`` — that
         # confusing repr form would silently fail the allowlist match
         # without surfacing the type misuse to the caller.
-        if isinstance(
-            value, (list, tuple, set, frozenset, dict, bytes, bytearray)
-        ):
+        if isinstance(value, (list, tuple, set, frozenset, dict, bytes, bytearray)):
             return False
 
         in_values = params.get("in")

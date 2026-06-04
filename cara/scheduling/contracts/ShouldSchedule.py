@@ -5,6 +5,8 @@ This module defines the interface for jobs that should be scheduled, specifying 
 for schedule eligibility.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
 from cara.scheduling import Scheduling

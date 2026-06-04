@@ -43,9 +43,7 @@ def _make_conn() -> PostgresConnection:
     The mock starts with ``autocommit=True`` (matches the default
     state ``make_connection`` would set after a successful connect).
     """
-    pc = PostgresConnection(
-        host="x", database="x", user="x", port=5432, password="x"
-    )
+    pc = PostgresConnection(host="x", database="x", user="x", port=5432, password="x")
     fake = MagicMock(name="psycopg2_connection")
     fake.autocommit = True  # post-connect default
     fake.closed = False
@@ -68,8 +66,7 @@ def test_savepoint_does_not_toggle_autocommit():
 
     # Cursor used SAVEPOINT, autocommit untouched by savepoint().
     issued = [
-        c.args[0]
-        for c in pc._connection.cursor.return_value.execute.call_args_list
+        c.args[0] for c in pc._connection.cursor.return_value.execute.call_args_list
     ]
     assert any("SAVEPOINT sp_test" in s for s in issued)
     assert pc._connection.autocommit is False
@@ -96,7 +93,7 @@ def test_savepoint_increments_transaction_level():
         "name-with-dash",
         "name.with.dot",
         "name'quote",
-        "name\"dquote",
+        'name"dquote',
     ],
 )
 def test_savepoint_name_validator_rejects_injection(bad):
@@ -169,8 +166,7 @@ def test_nested_begin_uses_savepoint_and_leaves_autocommit_off():
     pc.begin()  # nested
 
     issued = [
-        c.args[0]
-        for c in pc._connection.cursor.return_value.execute.call_args_list
+        c.args[0] for c in pc._connection.cursor.return_value.execute.call_args_list
     ]
     assert any("SAVEPOINT sp_1" in s for s in issued)
     assert pc._connection.autocommit is False
@@ -185,8 +181,7 @@ def test_nested_commit_releases_savepoint_without_touching_autocommit():
     pc.commit()  # should RELEASE SAVEPOINT sp_1, not commit the tx
 
     issued = [
-        c.args[0]
-        for c in pc._connection.cursor.return_value.execute.call_args_list
+        c.args[0] for c in pc._connection.cursor.return_value.execute.call_args_list
     ]
     assert any("RELEASE SAVEPOINT sp_1" in s for s in issued)
     pc._connection.commit.assert_not_called()  # outer tx stays open
@@ -202,8 +197,7 @@ def test_nested_rollback_rolls_back_to_savepoint_without_touching_autocommit():
     pc.rollback()  # should ROLLBACK TO SAVEPOINT sp_1
 
     issued = [
-        c.args[0]
-        for c in pc._connection.cursor.return_value.execute.call_args_list
+        c.args[0] for c in pc._connection.cursor.return_value.execute.call_args_list
     ]
     assert any("ROLLBACK TO SAVEPOINT sp_1" in s for s in issued)
     pc._connection.rollback.assert_not_called()  # outer tx stays open
@@ -301,9 +295,7 @@ def test_concurrent_threads_each_run_nested_tx_without_crosstalk():
             pc.begin()
             pc.commit()  # release sp_1
             pc.commit()  # commit outer
-            results.append(
-                (pc.transaction_level, pc._connection.commit.call_count)
-            )
+            results.append((pc.transaction_level, pc._connection.commit.call_count))
         except BaseException as e:  # noqa: BLE001
             errors.append(e)
 

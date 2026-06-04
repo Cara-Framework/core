@@ -4,6 +4,8 @@ Shell - Interactive shell for Cara Tinker
 This file provides the interactive shell functionality with Rich integration.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 from typing import Any

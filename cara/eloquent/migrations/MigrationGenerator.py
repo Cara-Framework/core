@@ -2,9 +2,12 @@
 MigrationGenerator: Generate migration content from model definitions.
 """
 
+from __future__ import annotations
+
 import re
-from datetime import datetime
 from pathlib import Path
+
+import pendulum
 
 from cara.support import paths
 
@@ -510,6 +513,9 @@ class {class_name}(Migration):
         if "default" in params:
             column.default(params["default"])
 
+        if params.get("use_current", False):
+            column.use_current()
+
         if params.get("unique", False):
             column.unique()
 
@@ -592,6 +598,9 @@ class {class_name}(Migration):
                 blueprint_call += f".default({str(default_val)})"
             else:
                 blueprint_call += f".default({default_val})"
+
+        if params.get("use_current", False):
+            blueprint_call += ".use_current()"
 
         # Always add unique constraint if present, even if field also has foreign key
         if params.get("unique", False):
@@ -730,5 +739,5 @@ class {class_name}(Migration):
 
     def _generate_migration_filename(self, name: str) -> str:
         """Generate timestamped migration filename."""
-        timestamp = datetime.now().strftime("%Y_%m_%d_%H%M%S")
+        timestamp = pendulum.now("UTC").format("YYYY_MM_DD_HHmmss")
         return f"{timestamp}_{name}.py"

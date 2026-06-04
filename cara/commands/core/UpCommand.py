@@ -4,6 +4,8 @@ Maintenance Mode Deactivation Command for the Cara framework.
 This module provides a CLI command to disable maintenance mode with enhanced UX.
 """
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path

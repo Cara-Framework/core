@@ -5,6 +5,8 @@ This class provides a quick way to send emails without
 creating custom Mailable classes.
 """
 
+from __future__ import annotations
+
 from cara.mail import Mailable
 
 

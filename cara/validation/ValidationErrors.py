@@ -4,6 +4,8 @@ Validation Errors for the Cara framework.
 This module provides the ValidationErrors class to handle validation errors in Laravel style.
 """
 
+from __future__ import annotations
+
 
 class ValidationErrors:
     """Helper class to handle validation errors in Laravel style."""

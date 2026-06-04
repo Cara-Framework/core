@@ -4,6 +4,8 @@ Log Colors for HTTP Request Logging.
 This module provides ANSI color codes and formatting for HTTP request logs.
 """
 
+from __future__ import annotations
+
 import re
 from enum import Enum
 

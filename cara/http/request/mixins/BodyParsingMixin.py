@@ -5,6 +5,8 @@ This mixin provides functionality for parsing request bodies including JSON, for
 and multipart file uploads with Laravel-like validation and error handling.
 """
 
+from __future__ import annotations
+
 import json
 from functools import lru_cache
 from typing import Any
@@ -518,6 +520,7 @@ class BodyParsingMixin:
                     result.update(form_data)
             except BadRequestException as exc:
                 import logging
+
                 logging.getLogger("cara.http.body").debug(
                     "BodyParsingMixin.all(): form parse swallowed "
                     "for content-type %r — caller will see query "
@@ -559,6 +562,7 @@ class BodyParsingMixin:
                         result.update(form_data)
                 except BadRequestException as form_exc:
                     import logging
+
                     logging.getLogger("cara.http.body").debug(
                         "BodyParsingMixin.all(): both JSON and form "
                         "parse failed on a no-Content-Type request — "

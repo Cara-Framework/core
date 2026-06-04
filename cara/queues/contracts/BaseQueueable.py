@@ -5,6 +5,8 @@ This class eliminates code repetition across Mail, Notification, Job
 and other queueable classes by providing common functionality.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from .Queueable import Queueable

@@ -4,6 +4,8 @@ View - Main view factory for Cara framework
 This file provides the main View factory functionality.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import Any
 

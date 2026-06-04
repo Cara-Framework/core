@@ -5,6 +5,8 @@ Laravel-style command to create symbolic links from public/storage to storage/ap
 This allows serving files from storage/app/public through the web server.
 """
 
+from __future__ import annotations
+
 import os
 
 from cara.commands import CommandBase

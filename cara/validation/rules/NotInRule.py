@@ -1,5 +1,7 @@
 """Not-in rule. Usage: ``not_in:apple,banana``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

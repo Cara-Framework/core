@@ -20,11 +20,25 @@ from cara.cache.observer import notify_cache_event
 from cara.exceptions import CacheConfigurationException
 from cara.facades import Log
 
-try:
-    _LARGE_VALUE_BYTES = int(os.environ.get("CARA_CACHE_LARGE_VALUE_BYTES", "262144"))
-except (TypeError, ValueError):
-    _LARGE_VALUE_BYTES = 262144
+# Resolved lazily on first cache write — NOT at import time. The driver
+# module is imported during bootstrap, before ``load_dotenv`` populates
+# ``os.environ`` from ``.env``, so an import-time read would freeze the
+# default and silently ignore ``CARA_CACHE_LARGE_VALUE_BYTES``. Reading
+# on first use (job-processing time) guarantees the configured value wins.
+_LARGE_VALUE_BYTES: int | None = None
 _LARGE_VALUE_WARNED: set[str] = set()
+
+
+def _large_value_threshold() -> int:
+    global _LARGE_VALUE_BYTES
+    if _LARGE_VALUE_BYTES is None:
+        try:
+            _LARGE_VALUE_BYTES = int(
+                os.environ.get("CARA_CACHE_LARGE_VALUE_BYTES", "262144")
+            )
+        except (TypeError, ValueError):
+            _LARGE_VALUE_BYTES = 262144
+    return _LARGE_VALUE_BYTES
 
 
 class RedisCacheDriver(Cache):
@@ -133,7 +147,13 @@ class RedisCacheDriver(Cache):
             value = pickle.loads(raw_data)
             notify_cache_event("get", "hit", key, len(raw_data))
             return value
-        except Exception as exc:
+        except Exception as unpickle_error:
+            try:
+                value = raw_data.decode("utf-8")
+                notify_cache_event("get", "hit", key, len(raw_data))
+                return value
+            except Exception:
+                pass
             # Self-heal a corrupt / pickle-incompatible entry instead of
             # serving the default forever. Without the proactive DELETE
             # every subsequent GET re-fetched, re-failed to unpickle,
@@ -144,7 +164,7 @@ class RedisCacheDriver(Cache):
             # repopulates with the current pickle protocol.
             Log.warning(
                 f"[RedisCacheDriver] unpickle failed for '{key}' "
-                f"(corrupt entry, deleting): {exc}",
+                f"(corrupt entry, deleting): {unpickle_error}",
                 category="cache",
             )
             try:
@@ -177,11 +197,12 @@ class RedisCacheDriver(Cache):
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
         payload_size = len(payload)
-        if payload_size > _LARGE_VALUE_BYTES and key not in _LARGE_VALUE_WARNED:
+        _threshold = _large_value_threshold()
+        if payload_size > _threshold and key not in _LARGE_VALUE_WARNED:
             _LARGE_VALUE_WARNED.add(key)
             Log.warning(
                 f"[RedisCacheDriver] large cache value: key='{key}' "
-                f"size={payload_size}B threshold={_LARGE_VALUE_BYTES}B "
+                f"size={payload_size}B threshold={_threshold}B "
                 f"— consider normalising or sharding the payload",
                 category="cache",
             )
@@ -273,25 +294,22 @@ class RedisCacheDriver(Cache):
         is interpreted as "another worker won the slot", so a
         silently-unserialisable payload would skip the work entirely.
 
-        Same reasoning applies when Redis itself is unreachable. The
-        previous `except Exception: return False` swallowed connection
-        errors and made every worker think it had lost the flight
-        claim — so during a Redis blip nothing executed at all. Now we
-        fail-OPEN: log loudly and return True so the work runs. At-most-
-        once becomes at-least-once during the outage, which downstream
-        idempotency wrappers (`wrap_with_idempotency`) already tolerate.
-        Total starvation, by contrast, isn't recoverable until someone
-        notices the queue backlog.
+        Same reasoning applies when Redis itself is unreachable — return
+        ``False`` so callers can distinguish a lost flight-claim from a
+        successful acquire.
         """
         redis_key = f"{self._prefix}{key}"
-        try:
-            payload = pickle.dumps(value)
-        except Exception as e:
-            from cara.exceptions import CacheConfigurationException
+        if isinstance(value, str):
+            payload = value.encode("utf-8")
+        else:
+            try:
+                payload = pickle.dumps(value)
+            except Exception as e:
+                from cara.exceptions import CacheConfigurationException
 
-            raise CacheConfigurationException(
-                f"Cannot pickle flight-claim value for key '{key}': {e}"
-            ) from e
+                raise CacheConfigurationException(
+                    f"Cannot pickle flight-claim value for key '{key}': {e}"
+                ) from e
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
         payload_size = len(payload)
@@ -305,12 +323,11 @@ class RedisCacheDriver(Cache):
             return won
         except Exception as e:
             Log.error(
-                f"[RedisCacheDriver] add() flight-claim failed for '{key}' "
-                f"(Redis unreachable?): {e} — failing OPEN so caller proceeds",
+                f"[RedisCacheDriver] add() flight-claim failed for '{key}': {e}",
                 category="cache",
             )
             notify_cache_event("add", "error", key, payload_size)
-            return True
+            return False
 
     def remember(
         self,
@@ -387,12 +404,9 @@ class RedisCacheDriver(Cache):
 
     def forget_if(self, key: str, expected_value: Any) -> bool:
         redis_key = f"{self._prefix}{key}"
+        owner_token = str(expected_value).encode("utf-8")
         try:
-            payload = pickle.dumps(expected_value)
-        except Exception:
-            return False
-        try:
-            result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, payload)
+            result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, owner_token)
             return bool(result) and int(result) > 0
         except Exception as e:
             Log.warning(f"[RedisCacheDriver] forget_if failed: {e}", category="cache")

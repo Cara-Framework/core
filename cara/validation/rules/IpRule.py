@@ -1,5 +1,7 @@
 """IP address rule (v4 or v6). Usage: ``ip``."""
 
+from __future__ import annotations
+
 import ipaddress
 from typing import Any
 

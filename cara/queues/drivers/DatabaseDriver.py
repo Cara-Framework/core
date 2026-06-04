@@ -4,6 +4,8 @@ Database Queue Driver for the Cara framework.
 Modern, clean implementation for database-backed job queue management.
 """
 
+from __future__ import annotations
+
 import base64
 import json
 import pickle
@@ -186,6 +188,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                             {
                                 "attempts": attempts_done + 1,
                                 "available_at": retry_at.to_datetime_string(),
+                                "reserved_at": None,
                             }
                         )
                     elif attempts_done + 1 >= attempts and failed_table:
@@ -201,12 +204,16 @@ class DatabaseDriver(HasColoredOutput, Queue):
                             {
                                 "attempts": attempts_done + 1,
                                 "available_at": retry_at.to_datetime_string(),
+                                "reserved_at": None,
                             }
                         )
                     else:
                         # Max retries reached, no failed_table — leave in place
                         builder.where("id", job["id"]).update(
-                            {"attempts": attempts_done + 1}
+                            {
+                                "attempts": attempts_done + 1,
+                                "reserved_at": None,
+                            }
                         )
 
     def retry(self, options: dict[str, Any]) -> None:

@@ -66,25 +66,30 @@ def _sanitize_via_module(value: str) -> str:
 
 
 class TestPathControlCharsSanitized:
-    @pytest.mark.parametrize("raw,expected_marker", [
-        # Newline → %0A so the log entry stays single-line.
-        ("/api/products/foo\nbar", "%0A"),
-        ("/api/products/foo\r\nbar", "%0D"),
-        # ANSI escape → %1B so terminal viewers don't honour the
-        # sequence as a real control code.
-        ("/api/products/\x1b[31mFAKE", "%1B"),
-        # Tab → %09 (less critical but still breaks structured
-        # tab-separated log formats).
-        ("/api/products/foo\tbar", "%09"),
-        # NUL → %00 (psycopg2 rejects NUL in any string literal, but
-        # the log middleware shouldn't be the failing layer).
-        ("/api/products/foo\x00bar", "%00"),
-        # C1 controls (0x80-0x9F) — rarely real but should still be
-        # escaped (some terminals interpret them).
-        ("/api/products/foo\x9bbar", "%9B"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected_marker",
+        [
+            # Newline → %0A so the log entry stays single-line.
+            ("/api/products/foo\nbar", "%0A"),
+            ("/api/products/foo\r\nbar", "%0D"),
+            # ANSI escape → %1B so terminal viewers don't honour the
+            # sequence as a real control code.
+            ("/api/products/\x1b[31mFAKE", "%1B"),
+            # Tab → %09 (less critical but still breaks structured
+            # tab-separated log formats).
+            ("/api/products/foo\tbar", "%09"),
+            # NUL → %00 (psycopg2 rejects NUL in any string literal, but
+            # the log middleware shouldn't be the failing layer).
+            ("/api/products/foo\x00bar", "%00"),
+            # C1 controls (0x80-0x9F) — rarely real but should still be
+            # escaped (some terminals interpret them).
+            ("/api/products/foo\x9bbar", "%9B"),
+        ],
+    )
     def test_control_chars_get_percent_encoded(
-        self, raw: str, expected_marker: str,
+        self,
+        raw: str,
+        expected_marker: str,
     ) -> None:
         sanitized = _sanitize_via_module(raw)
         # The marker must appear at the position of the control char.
@@ -95,10 +100,7 @@ class TestPathControlCharsSanitized:
             f"ANSI sequences (\\x1b) into terminal log viewers."
         )
         # And no raw control characters survive.
-        assert not any(
-            ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f
-            for c in sanitized
-        ), (
+        assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in sanitized), (
             f"sanitized output {sanitized!r} still contains a control "
             f"character; the percent-encoding step is incomplete."
         )

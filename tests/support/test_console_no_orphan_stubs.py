@@ -41,18 +41,17 @@ import pytest
 
 
 CONSOLE_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "cara"
-    / "support"
-    / "Console.py"
+    Path(__file__).resolve().parent.parent.parent / "cara" / "support" / "Console.py"
 )
 
 # Classes that ARE expected to live in Console.py. Everything else
 # raises a flag. Keep this list short — Console is meant to host the
 # tiny coloured-output helper and nothing more.
-EXPECTED_CLASSES: frozenset[str] = frozenset({
-    "HasColoredOutput",
-})
+EXPECTED_CLASSES: frozenset[str] = frozenset(
+    {
+        "HasColoredOutput",
+    }
+)
 
 
 def _module_classes() -> list[ast.ClassDef]:
@@ -64,8 +63,7 @@ def test_console_file_is_readable():
     """Smoke check — pin the discovery path so a directory move
     fires here instead of letting the next test pass vacuously."""
     assert CONSOLE_PATH.is_file(), (
-        f"Console.py missing at {CONSOLE_PATH}; did the support/ "
-        f"layout change?"
+        f"Console.py missing at {CONSOLE_PATH}; did the support/ layout change?"
     )
 
 
@@ -100,9 +98,7 @@ def test_every_class_method_only_calls_defined_helpers(cls: ast.ClassDef):
     accidental import + call ALSO can't ship orphaned ``self.X``
     references."""
     defined: set[str] = {
-        m.name
-        for m in cls.body
-        if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+        m.name for m in cls.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     # Parent classes the test doesn't try to introspect; methods
     # they declare are assumed to satisfy ``self.X`` references.

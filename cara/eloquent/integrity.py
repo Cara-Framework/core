@@ -20,6 +20,8 @@ Generic — no domain assumptions. Apps pass their own constraint /
 column names; the helper just knows the Postgres error shape.
 """
 
+from __future__ import annotations
+
 import psycopg2
 
 # Postgres error code for ``unique_violation`` — the only kind of

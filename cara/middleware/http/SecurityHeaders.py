@@ -23,6 +23,8 @@ are production-safe for a JSON API:
       keeps working). Opt-out via config if you deliberately serve HTTP.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 from cara.configuration import config

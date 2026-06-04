@@ -13,6 +13,8 @@ instance on every ``start()`` call. This means ``shutdown()`` +
 scheduler to sit idle for hours.
 """
 
+from __future__ import annotations
+
 import inspect
 import time as _time
 from collections.abc import Callable, Iterable

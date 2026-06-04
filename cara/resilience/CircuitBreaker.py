@@ -25,6 +25,8 @@ Usage:
         result = requests.get(url)
 """
 
+from __future__ import annotations
+
 import threading
 import time
 from collections.abc import Callable

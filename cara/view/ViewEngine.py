@@ -4,6 +4,8 @@ View Engine - Core view engine for Cara framework
 This file provides the main view engine functionality.
 """
 
+from __future__ import annotations
+
 import os
 from typing import Any
 

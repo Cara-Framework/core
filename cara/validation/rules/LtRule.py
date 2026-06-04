@@ -1,5 +1,7 @@
 """Less-than comparison rule. Usage: ``lt:10`` or ``lt:field``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

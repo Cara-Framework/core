@@ -60,9 +60,9 @@ def _patched_migration(ran_migrations, files):
 
         mig.file_manager = MagicMock(name="file_manager")
         mig.file_manager.get_migration_files.return_value = list(files)
-        mig.file_manager.get_migration_name_from_file.side_effect = (
-            lambda p: p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-        )
+        mig.file_manager.get_migration_name_from_file.side_effect = lambda p: p.rsplit(
+            "/", 1
+        )[-1].rsplit(".", 1)[0]
 
         mig.executor = MagicMock(name="executor")
         # Default: pretend everything is transactional. Tests that
@@ -144,9 +144,7 @@ def test_rollback_specific_in_tracker_runs_down_and_removes():
         mig.executor._run_migration.assert_called_once_with(
             "/m/0001_create_widgets_table.py", "down"
         )
-        mig.tracker.remove_migration.assert_called_once_with(
-            "0001_create_widgets_table"
-        )
+        mig.tracker.remove_migration.assert_called_once_with("0001_create_widgets_table")
 
 
 def test_rollback_all_delegates_to_rollback_last_batch():

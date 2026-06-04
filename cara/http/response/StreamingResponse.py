@@ -5,6 +5,8 @@ Laravel-style streaming response support for HTTP responses.
 Handles chunked transfers and real-time data streaming.
 """
 
+from __future__ import annotations
+
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
@@ -33,7 +35,8 @@ class StreamingResponse:
         # comment in ResponseFactory.__init__.
         existing = getattr(base_response, "headers", None)
         self.headers = (
-            existing if isinstance(existing, HeaderManager)
+            existing
+            if isinstance(existing, HeaderManager)
             else HeaderManager(base_response.header_bag)
         )
 

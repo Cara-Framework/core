@@ -5,6 +5,8 @@ This module defines the contract that any validation class must implement, speci
 methods for validation operations.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any
 

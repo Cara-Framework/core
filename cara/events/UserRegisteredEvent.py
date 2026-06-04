@@ -1,5 +1,7 @@
 """Concrete event fired when a new user registers."""
 
+from __future__ import annotations
+
 from typing import Any
 
 

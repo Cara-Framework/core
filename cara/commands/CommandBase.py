@@ -4,6 +4,8 @@ Command Base Class for the Cara framework.
 This module provides the base class for all CLI commands in the application.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from rich.console import Console as RichConsole

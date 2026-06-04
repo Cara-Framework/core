@@ -5,6 +5,8 @@ Laravel-style factory methods for creating different types of HTTP responses.
 Provides explicit methods with priority over intelligent detection.
 """
 
+from __future__ import annotations
+
 import json
 from typing import Any
 
@@ -47,7 +49,8 @@ class ResponseFactory:
         self.response = base_response
         existing = getattr(base_response, "headers", None)
         self.headers = (
-            existing if isinstance(existing, HeaderManager)
+            existing
+            if isinstance(existing, HeaderManager)
             else HeaderManager(base_response.header_bag)
         )
 

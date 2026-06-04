@@ -85,8 +85,7 @@ class Throttle(Middleware):
             current = Cache.increment(key, 1, window)
         except Exception as e:
             Log.warning(
-                f"WebSocket throttle cache failure for key {key!r}; "
-                f"failing open. {e}",
+                f"WebSocket throttle cache failure for key {key!r}; failing open. {e}",
                 category="cara.websocket",
             )
             return await next(socket)
@@ -98,10 +97,12 @@ class Throttle(Middleware):
                 category="cara.websocket",
             )
             try:
-                await socket.send({
-                    "type": "websocket.close",
-                    "code": _RATE_LIMIT_CLOSE_CODE,
-                })
+                await socket.send(
+                    {
+                        "type": "websocket.close",
+                        "code": _RATE_LIMIT_CLOSE_CODE,
+                    }
+                )
             except Exception:
                 pass
             raise WebSocketException(

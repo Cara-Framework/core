@@ -534,7 +534,13 @@ class ConnectionManager:
             meta = self.connection_metadata.get(connection_id)
             if meta is None:
                 continue
-            last = meta.get("last_activity") or meta.get("connected_at") or 0
+            last_activity = meta.get("last_activity")
+            connected_at = meta.get("connected_at")
+            last = (
+                last_activity
+                if last_activity is not None
+                else (connected_at if connected_at is not None else 0)
+            )
             if now - last > self.idle_timeout:
                 Log.debug(
                     f"Sweeping idle connection {connection_id} "

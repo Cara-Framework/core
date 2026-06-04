@@ -4,6 +4,8 @@ HTTP Exception Type for the Cara framework.
 This module defines exception types related to HTTP operations.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from .base import CaraException

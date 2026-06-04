@@ -4,6 +4,8 @@ A logging.Handler that forwards Python stdlib log records into Loguru.
 Used to intercept 'uvicorn.error' and 'uvicorn.access' and send them through Loguru.
 """
 
+from __future__ import annotations
+
 import logging
 
 from loguru import logger as loguru_logger

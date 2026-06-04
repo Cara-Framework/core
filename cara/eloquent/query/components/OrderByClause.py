@@ -2,6 +2,8 @@
 OrderByClause - Simple ORDER BY clause component
 """
 
+from __future__ import annotations
+
 
 class OrderByClause:
     """Simple ORDER BY clause representation."""

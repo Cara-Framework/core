@@ -6,6 +6,8 @@ implementing input handling with support for nested data, arrays, and dot notati
 access.
 """
 
+from __future__ import annotations
+
 from typing import Any, TypeVar
 
 from cara.http.request.utils.QueryParser import QueryStringParser

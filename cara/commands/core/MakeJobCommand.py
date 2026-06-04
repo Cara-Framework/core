@@ -4,6 +4,8 @@ Job Generation Command for the Cara framework.
 This module provides a CLI command to generate Job classes with enhanced UX.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from cara.commands import CommandBase

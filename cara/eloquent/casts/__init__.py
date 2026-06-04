@@ -5,6 +5,8 @@ Provides powerful, extensible data transformation and validation for model attri
 Following SOLID principles with clean, simple interfaces.
 """
 
+from __future__ import annotations
+
 # Import all base components
 # (We deliberately omit ``cast_registry`` from ``.base`` here — line 98
 # below redefines the public ``cast_registry`` symbol as the

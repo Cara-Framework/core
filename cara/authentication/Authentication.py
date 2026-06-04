@@ -4,6 +4,8 @@ Authentication Manager for Cara Framework.
 Manages authentication guards and user sessions.
 """
 
+from __future__ import annotations
+
 from contextvars import ContextVar
 from typing import Any
 

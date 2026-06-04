@@ -5,10 +5,13 @@ Generic job state tracking and cancellation management.
 Framework-level component, independent of application logic.
 """
 
+from __future__ import annotations
+
 import threading
 from collections.abc import Callable
-from datetime import datetime
 from typing import Any
+
+import pendulum
 
 
 class JobStateManager:
@@ -41,7 +44,7 @@ class JobStateManager:
         with self._lock:
             self._active_jobs[job_id] = {
                 "context": context,
-                "started_at": datetime.now().isoformat(),
+                "started_at": pendulum.now("UTC").isoformat(),
                 "status": "running",
             }
 
@@ -90,7 +93,7 @@ class JobStateManager:
 
             # Mark as cancelled
             self._active_jobs[job_id]["status"] = "cancelled"
-            self._active_jobs[job_id]["cancelled_at"] = datetime.now().isoformat()
+            self._active_jobs[job_id]["cancelled_at"] = pendulum.now("UTC").isoformat()
             self._active_jobs[job_id]["cancel_reason"] = reason
 
             # Execute cancellation callback if provided
@@ -174,9 +177,7 @@ class JobStateManager:
         Returns:
             int: Number of jobs cleaned up
         """
-        from datetime import timedelta
-
-        cutoff = datetime.now() - timedelta(hours=max_age_hours)
+        cutoff = pendulum.now("UTC").subtract(hours=max_age_hours)
         cutoff_iso = cutoff.isoformat()
 
         cleaned_count = 0

@@ -10,7 +10,11 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from cara.exceptions import MiddlewareNotFoundException, WebSocketException
+from cara.exceptions import (
+    MiddlewareNotFoundException,
+    RouteNotFoundException,
+    WebSocketException,
+)
 from cara.facades import Log
 from cara.middleware import Middleware
 from cara.support import Pipeline
@@ -124,6 +128,22 @@ class WebsocketConductor:
             # than the catch-all 1011.
             self._wsx_close_code = getattr(e, "code", 1011)
             raise
+        except RouteNotFoundException:
+            # A WS connection to an unregistered path is a 404, not a server
+            # error. This process (services/) deliberately registers NO /ws
+            # routes — every terminator lives on api/:8300 — so any /ws/*
+            # connection that reaches here is a misrouted client. Close
+            # cleanly with 1008 (policy) instead of re-raising, which would
+            # otherwise bubble to uvicorn as a noisy "Exception in ASGI
+            # application" traceback for what is a benign client mistake.
+            # ``clean_exit`` stays False so the finally closes with the code
+            # set below.
+            Log.debug(
+                f"No WS route for path "
+                f"'{getattr(self.socket, 'path', '?')}'; closing 1008",
+                category="cara.websocket",
+            )
+            self._wsx_close_code = 1008
         except Exception as e:
             Log.error(f"Error in WebSocket connection: {e}")
             raise

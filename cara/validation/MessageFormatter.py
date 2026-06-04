@@ -5,6 +5,8 @@ This module provides advanced message formatting capabilities for validation rul
 including placeholder replacement and attribute name formatting.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 

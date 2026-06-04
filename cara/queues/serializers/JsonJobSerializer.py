@@ -8,6 +8,8 @@ Serializes jobs as JSON instead of pickle for:
 - Simplicity (only primitives allowed)
 """
 
+from __future__ import annotations
+
 import json
 from typing import Any
 

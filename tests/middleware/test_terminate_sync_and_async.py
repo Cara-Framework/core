@@ -146,16 +146,22 @@ def _conductor(monkeypatch: pytest.MonkeyPatch):
 
 class TestSyncTerminateRunsCleanly:
     def test_sync_terminate_executes_without_typeerror(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         conductor = _conductor(monkeypatch)
         sync_mw = _SyncTerminate()
         pipeline = _StubPipeline([sync_mw])
         req, resp = _FakeRequest(), _FakeResponse()
 
-        asyncio.run(conductor._run_terminable_middleware(
-            req, resp, pipeline, None,
-        ))
+        asyncio.run(
+            conductor._run_terminable_middleware(
+                req,
+                resp,
+                pipeline,
+                None,
+            )
+        )
 
         assert sync_mw.calls == [(req, resp)], (
             "sync terminate must have been called exactly once; "
@@ -170,23 +176,30 @@ class TestAsyncTerminateStillWorks:
     must not break under the new dispatcher."""
 
     def test_async_terminate_executes(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         conductor = _conductor(monkeypatch)
         async_mw = _AsyncTerminate()
         pipeline = _StubPipeline([async_mw])
         req, resp = _FakeRequest(), _FakeResponse()
 
-        asyncio.run(conductor._run_terminable_middleware(
-            req, resp, pipeline, None,
-        ))
+        asyncio.run(
+            conductor._run_terminable_middleware(
+                req,
+                resp,
+                pipeline,
+                None,
+            )
+        )
 
         assert async_mw.calls == [(req, resp)]
 
 
 class TestMixedStackRunsAll:
     def test_sync_async_no_terminate_all_handled(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A realistic stack has all three shapes. None of them should
         block another — pre-fix the sync one's TypeError, caught and
@@ -199,9 +212,14 @@ class TestMixedStackRunsAll:
         pipeline = _StubPipeline([sync_mw, no_term, async_mw])
         req, resp = _FakeRequest(), _FakeResponse()
 
-        asyncio.run(conductor._run_terminable_middleware(
-            req, resp, pipeline, None,
-        ))
+        asyncio.run(
+            conductor._run_terminable_middleware(
+                req,
+                resp,
+                pipeline,
+                None,
+            )
+        )
 
         # Sync ran exactly once.
         assert sync_mw.calls == [(req, resp)]
@@ -211,7 +229,8 @@ class TestMixedStackRunsAll:
         # assert against — the absence of the method is the signal).
 
     def test_one_middleware_raising_does_not_block_others(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Defense-in-depth: a buggy middleware's terminate raises
         a real exception (NOT the TypeError-from-blind-await — a
@@ -233,9 +252,14 @@ class TestMixedStackRunsAll:
         req, resp = _FakeRequest(), _FakeResponse()
 
         # Must NOT raise — the conductor logs and continues.
-        asyncio.run(conductor._run_terminable_middleware(
-            req, resp, pipeline, None,
-        ))
+        asyncio.run(
+            conductor._run_terminable_middleware(
+                req,
+                resp,
+                pipeline,
+                None,
+            )
+        )
 
         # The downstream async one still ran despite the upstream
         # crash.
@@ -257,9 +281,7 @@ class TestParameterizedProxyTerminateShape:
         # The capsule helper is a method on MiddlewareCapsule that
         # builds the proxy class. Call it through a bare instance
         # bypassing __init__ — we don't need a real application.
-        capsule = _capsule_mod.MiddlewareCapsule.__new__(
-            _capsule_mod.MiddlewareCapsule
-        )
+        capsule = _capsule_mod.MiddlewareCapsule.__new__(_capsule_mod.MiddlewareCapsule)
         capsule.application = None
         return capsule._create_parameterized_middleware(base_cls, [])
 
@@ -330,6 +352,7 @@ class TestParameterizedProxyTerminateShape:
 
             async def handle(self, req: Any, next_fn: Any) -> Any:
                 return await next_fn(req)
+
             # No terminate method.
 
         ProxyCls = self._build_proxy(_Base)

@@ -5,6 +5,8 @@ This mixin provides validation functionality and convenience methods for handlin
 validated data and errors.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.exceptions.types.validation import ValidationException

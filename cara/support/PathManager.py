@@ -4,6 +4,8 @@ Path Manager for filesystem paths in the Cara framework.
 This module provides utilities for handling filesystem paths throughout the project structure.
 """
 
+from __future__ import annotations
+
 import os
 
 

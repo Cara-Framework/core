@@ -65,7 +65,19 @@ class Loader:
             else:
                 module_paths.append(as_filepath(path))
 
-        for module_loader, name, _ in pkgutil.iter_modules(module_paths):
+        # Sort by module name for a DETERMINISTIC load order.
+        # ``pkgutil.iter_modules`` yields in filesystem order, which varies
+        # run-to-run. When config modules (e.g. ``config/middleware.py``,
+        # which imports ``app.middlewares``) load in a cycle-triggering order
+        # relative to the app packages they pull in, boot fails
+        # intermittently with a partial-init ImportError (e.g. "cannot import
+        # name 'SeasonalCalendar' from 'app.support.SeasonalCalendar'") — but
+        # only on the unlucky orderings. A stable alphabetical order makes the
+        # outcome reproducible (config dicts are order-independent, so sorting
+        # is safe) and avoids the random boot failure.
+        for module_loader, name, _ in sorted(
+            pkgutil.iter_modules(module_paths), key=lambda m: m[1]
+        ):
             module = load(
                 f"{os.path.relpath(module_loader.path)}.{name}",
                 raise_exception=raise_exception,

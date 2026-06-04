@@ -2,6 +2,8 @@
 WhereClause - Simple WHERE clause component
 """
 
+from __future__ import annotations
+
 
 class WhereClause:
     """Simple WHERE clause representation."""

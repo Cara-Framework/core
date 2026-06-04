@@ -2,6 +2,8 @@
 Policy Generation Command for the Cara framework.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from cara.commands import CommandBase

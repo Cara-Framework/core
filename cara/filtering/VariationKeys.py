@@ -40,12 +40,14 @@ from __future__ import annotations
 # Kept as a separate set rather than a tag because the storefront's
 # ``SmartFilterSidebar`` keys off the literal ``ui_control`` value
 # to switch between renderers — see ``ColorSwatchFilter``.
-COLOR_SWATCH_KEYS: frozenset[str] = frozenset({
-    "color",
-    "color_name",
-    "colour",
-    "colour_name",
-})
+COLOR_SWATCH_KEYS: frozenset[str] = frozenset(
+    {
+        "color",
+        "color_name",
+        "colour",
+        "colour_name",
+    }
+)
 
 # Variation keys that ship as ``string`` from Amazon's PTD but are
 # shoppable enums in practice — they earn the ``select`` /
@@ -53,21 +55,23 @@ COLOR_SWATCH_KEYS: frozenset[str] = frozenset({
 # Mirrors Amazon's variation set from
 # ``SeedAttributesCommand.is_variation_field`` minus the colour
 # family (those go to the swatch branch).
-VARIATION_SELECT_KEYS: frozenset[str] = frozenset({
-    "size",
-    "size_name",
-    "style",
-    "style_name",
-    "material",
-    "material_type",
-    "pattern",
-    "pattern_name",
-    "flavor",
-    "scent",
-    "item_shape",
-    "configuration",
-    "handle",
-})
+VARIATION_SELECT_KEYS: frozenset[str] = frozenset(
+    {
+        "size",
+        "size_name",
+        "style",
+        "style_name",
+        "material",
+        "material_type",
+        "pattern",
+        "pattern_name",
+        "flavor",
+        "scent",
+        "item_shape",
+        "configuration",
+        "handle",
+    }
+)
 
 # The union — every shopper-facing variation key, regardless of UI.
 # Facet eligibility / seeder ``is_variation`` flag both read this

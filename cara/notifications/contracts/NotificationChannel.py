@@ -5,6 +5,8 @@ Any notification channel (mail, database, slack, etc.) must implement these meth
 (send) across channels.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 

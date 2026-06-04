@@ -4,6 +4,8 @@ AMQP Queue Driver for the Cara framework.
 Modern, clean implementation for RabbitMQ-based job queue management.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import pickle
@@ -132,7 +134,11 @@ class AMQPDriver(HasColoredOutput, Queue):
                 "created": pendulum.now(tz=merged_opts.get("tz", "UTC")),
                 "job_id": job_id,
                 "db_job_id": db_job_id,
-                "attempts": int(merged_opts.get("attempts", 0) or 0),
+                "attempts": int(
+                    merged_opts.get("attempts", 0)
+                    if merged_opts.get("attempts", 0) is not None
+                    else 0
+                ),
             }
 
             try:
@@ -558,7 +564,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # mutated by concurrent threads.
         with self._publish_lock:
             try:
-                self._connect({})
+                self._connect(self.options)
 
                 # Prepare dead letter message
                 payload = {
@@ -690,14 +696,25 @@ class AMQPDriver(HasColoredOutput, Queue):
         # Idempotent declare — same logic as the publish path so
         # consume against an existing TTL-mismatched queue still works.
         exchange_name = merged_opts.get("exchange", "")
-        message_ttl = merged_opts.get("message_ttl", 86400000)
-        queue_args = {
+        # Default switched to ``None`` (no per-queue TTL) to match the
+        # canonical queues declared by ``dev:reset --dlx``. The previous
+        # 86400000ms (24h) default produced
+        # ``PRECONDITION_FAILED - inequivalent arg 'x-message-ttl'``
+        # on every active declare against a queue that already existed
+        # without the TTL arg — the driver then dropped to passive
+        # declare and consumers silently failed to register against
+        # the queue, so the worker bound to ALL named queues but never
+        # received a single ``ValidateProductJob`` / ``ConsolidateProductJob``
+        # event. Explicit ``message_ttl=N`` in caller opts still wins.
+        message_ttl = merged_opts.get("message_ttl", None)
+        queue_args: dict[str, object] = {
             "x-dead-letter-exchange": (
                 f"{exchange_name}.dlx" if exchange_name else "dead.letter.dlx"
             ),
             "x-dead-letter-routing-key": f"dead.{queue_name}",
-            "x-message-ttl": message_ttl,
         }
+        if message_ttl is not None:
+            queue_args["x-message-ttl"] = message_ttl
         try:
             channel.queue_declare(queue=queue_name, durable=True, arguments=queue_args)
         except pika.exceptions.ChannelClosedByBroker as exc:
@@ -781,12 +798,14 @@ class AMQPDriver(HasColoredOutput, Queue):
                     pass
                 retry_scheduled = False
                 try:
-                    retry_scheduled = bool(self._handle_failed_message(
-                        instance=instance,
-                        payload=payload if "payload" in dir() else {},
-                        exc=exc,
-                        options=merged_opts,
-                    ))
+                    retry_scheduled = bool(
+                        self._handle_failed_message(
+                            instance=instance,
+                            payload=payload if "payload" in dir() else {},
+                            exc=exc,
+                            options=merged_opts,
+                        )
+                    )
                 except Exception as retry_exc:
                     self.danger(f"AMQPDriver: retry/dead-letter path raised: {retry_exc}")
                 # Job-side ``failed`` hook for app-level cleanup —
@@ -997,7 +1016,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         """
         messages = []
         try:
-            self._connect({})
+            self._connect(self.options)
 
             # Use basic_get to peek at messages without consuming
             for _ in range(limit):
@@ -1059,7 +1078,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         replayed = 0
 
         try:
-            self._connect({})
+            self._connect(self.options)
 
             while True:
                 method, properties, body = self.channel.basic_get(
@@ -1175,17 +1194,29 @@ class AMQPDriver(HasColoredOutput, Queue):
             else opts.get("queue", "default")
         )
 
-        # Declare queue with dead letter exchange support
+        # Declare queue with dead letter exchange support.
+        #
+        # ``message_ttl`` default switched to ``None`` (no per-queue TTL)
+        # to match the canonical queues declared by ``dev:reset --dlx``.
+        # The 86400000ms (24h) default ran into
+        # ``PRECONDITION_FAILED - inequivalent arg 'x-message-ttl'``
+        # on every active declare against a queue that already existed
+        # without the TTL arg — passive declare succeeded but consumer
+        # binding silently failed, leaving the worker bound to every
+        # named queue while no ``Validate``/``Standardize``/``Consolidate``
+        # ProductJob ever reached it. Explicit ``message_ttl=N`` via
+        # caller opts still wins.
         exchange_name = opts.get("exchange", "")
-        message_ttl = opts.get("message_ttl", 86400000)  # 24h default
+        message_ttl = opts.get("message_ttl", None)
 
-        queue_args = {
+        queue_args: dict[str, object] = {
             "x-dead-letter-exchange": f"{exchange_name}.dlx"
             if exchange_name
             else "dead.letter.dlx",
             "x-dead-letter-routing-key": f"dead.{queue_name}",
-            "x-message-ttl": message_ttl,
         }
+        if message_ttl is not None:
+            queue_args["x-message-ttl"] = message_ttl
 
         # Idempotent declare: if the queue was originally created with
         # different args (e.g. older codebase or manual setup left it
@@ -1214,29 +1245,43 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         if queue_name not in declared:
             try:
-                self.channel.queue_declare(
-                    queue=queue_name,
-                    durable=True,
-                    arguments=queue_args,
-                )
+                # PASSIVE-DECLARE FIRST. A passive declare only asserts the
+                # queue exists — it never compares arguments — so it
+                # succeeds against ANY pre-existing queue regardless of how
+                # it was originally declared. This is the key to not
+                # emitting ``PRECONDITION_FAILED - inequivalent arg
+                # 'x-dead-letter-exchange'`` on every first publish to a
+                # queue created by an older schema (the canonical priority
+                # queues in this deployment predate the DLX arg set). The
+                # previous active-declare-with-args path hit a 406, killed
+                # the channel, logged a WARNING, then fell back to passive
+                # anyway — so the publish still worked but spammed one
+                # warning per queue. Doing the passive declare up front gets
+                # the same result silently. This also mirrors the worker's
+                # _process_single_queue declare path (passive first, create
+                # on miss), so producer and consumer agree on topology.
+                self.channel.queue_declare(queue=queue_name, durable=True, passive=True)
                 declared.add(queue_name)
             except pika.exceptions.ChannelClosedByBroker as exc:
-                if getattr(exc, "reply_code", None) != 406:
+                if getattr(exc, "reply_code", None) != 404:
                     raise
-                Log.warning(
-                    f"⚠️  Queue '{queue_name}' exists with different args "
-                    f"(reply={exc.reply_text}); falling back to passive declare"
-                )
-                # Channel is dead after 406 — reopen on the same connection.
+                # 404 NOT_FOUND — the queue genuinely doesn't exist yet.
+                # The passive declare closed the channel, so reopen and
+                # actively create it with the canonical DLX argument set so
+                # failed jobs dead-letter correctly.
                 try:
                     self.channel = self.connection.channel()
                     self.channel.confirm_delivery()
                 except Exception:
                     self._connect(opts)
-                self.channel.queue_declare(queue=queue_name, durable=True, passive=True)
+                self.channel.queue_declare(
+                    queue=queue_name,
+                    durable=True,
+                    arguments=queue_args,
+                )
                 # New channel -> new cache; mark this queue as
                 # already-confirmed so subsequent publishes through
-                # the same channel don't re-incur the 406 dance.
+                # the same channel don't re-declare it.
                 new_cache = {queue_name}
                 self.channel._cheapa_declared_queues = new_cache
 
@@ -1280,9 +1325,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # the old shape keeps working — but new code MUST use
         # ``message_headers`` so the connection-pool key (built from
         # ``connection_options``) stays stable across publishes.
-        publish_headers = (
-            opts.get("message_headers") or opts.get("connection_options")
-        )
+        publish_headers = opts.get("message_headers") or opts.get("connection_options")
         try:
             self.channel.basic_publish(
                 exchange=opts.get("exchange", ""),

@@ -13,6 +13,7 @@ from cara.support.Str import (
 
 # --- random_string ---
 
+
 def test_random_string_default_length():
     result = random_string()
     assert len(result) == 4
@@ -32,6 +33,7 @@ def test_random_string_charset():
 
 # --- modularize ---
 
+
 def test_modularize_unix_path():
     assert modularize("app/controllers/Foo.py") == "app.controllers.Foo"
 
@@ -50,6 +52,7 @@ def test_modularize_custom_suffix():
 
 # --- as_filepath ---
 
+
 def test_as_filepath_dotted():
     assert as_filepath("app.controllers.Foo") == "app/controllers/Foo"
 
@@ -63,6 +66,7 @@ def test_as_filepath_empty():
 
 
 # --- removeprefix ---
+
 
 def test_removeprefix_match():
     assert removeprefix("HelloWorld", "Hello") == "World"
@@ -78,6 +82,7 @@ def test_removeprefix_empty_prefix():
 
 # --- removesuffix ---
 
+
 def test_removesuffix_match():
     assert removesuffix("HelloWorld", "World") == "Hello"
 
@@ -91,6 +96,7 @@ def test_removesuffix_empty_suffix():
 
 
 # --- match ---
+
 
 def test_match_trailing_wildcard():
     assert match("app.controllers.Foo", "app.*") is True
@@ -114,6 +120,7 @@ def test_match_no_match():
 
 
 # --- add_query_params ---
+
 
 def test_add_query_params_simple():
     assert add_query_params("/search", {"q": "hello"}) == "/search?q=hello"

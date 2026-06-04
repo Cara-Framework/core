@@ -21,6 +21,7 @@ from .QueueCancelCommand import QueueCancelCommand
 from .QueueStatsCommand import QueueStatsCommand
 from .QueueWorkCommand import QueueWorkCommand
 from .RouteListCommand import RouteListCommand
+from .RouteOpenApiCommand import RouteOpenApiCommand
 from .ScheduleWorkCommand import ScheduleWorkCommand
 from .ServeCommand import ServeCommand
 from .TinkerCommand import TinkerCommand
@@ -50,6 +51,7 @@ __all__ = [
     "QueueStatsCommand",
     "QueueWorkCommand",
     "RouteListCommand",
+    "RouteOpenApiCommand",
     "ScheduleWorkCommand",
     "ServeCommand",
     "TinkerCommand",

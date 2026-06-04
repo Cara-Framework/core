@@ -4,6 +4,8 @@ Slack Logging Channel for the Cara framework.
 This module provides a logging channel that sends log records to a Slack webhook.
 """
 
+from __future__ import annotations
+
 import json
 from typing import Any
 

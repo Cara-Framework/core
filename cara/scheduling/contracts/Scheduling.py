@@ -5,6 +5,8 @@ This module defines the contract for scheduling drivers, specifying the required
 scheduling implementations.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterable
 from typing import Any
 

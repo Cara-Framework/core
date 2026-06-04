@@ -74,8 +74,7 @@ class TestPartialEntityDoesNotSkipEscape:
             f"present; got: {out!r}"
         )
         assert "&lt;script&gt;" in out, (
-            f"escape_html did not produce the entity-encoded form; "
-            f"got: {out!r}"
+            f"escape_html did not produce the entity-encoded form; got: {out!r}"
         )
 
     def test_lt_entity_does_not_pass_through_attribute_payload(self, engine):
@@ -85,7 +84,7 @@ class TestPartialEntityDoesNotSkipEscape:
         assert "&lt;img" in out
 
     def test_gt_entity_does_not_pass_through_javascript_url(self, engine):
-        hostile = "Range: 0 &gt; 99 <a href=\"javascript:alert(1)\">x</a>"
+        hostile = 'Range: 0 &gt; 99 <a href="javascript:alert(1)">x</a>'
         out = engine.escape_html(hostile)
         # The angle brackets on the <a> tag must be entity-encoded;
         # ``javascript:`` itself isn't dangerous as plain text but
@@ -149,13 +148,16 @@ class TestFullEscapeTable:
     ``&apos;`` (which Internet Explorer ≤ 8 doesn't render) would
     surface here."""
 
-    @pytest.mark.parametrize("raw,expected", [
-        ("&", "&amp;"),
-        ("<", "&lt;"),
-        (">", "&gt;"),
-        ('"', "&quot;"),
-        ("'", "&#x27;"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("&", "&amp;"),
+            ("<", "&lt;"),
+            (">", "&gt;"),
+            ('"', "&quot;"),
+            ("'", "&#x27;"),
+        ],
+    )
     def test_each_char(self, engine, raw, expected):
         assert engine.escape_html(raw) == expected
 

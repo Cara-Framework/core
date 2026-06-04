@@ -11,6 +11,8 @@ id matches will be skipped on delivery. Used to avoid echoing an
 event back to the connection that triggered it.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any
 

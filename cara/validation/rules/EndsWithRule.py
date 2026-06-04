@@ -1,5 +1,7 @@
 """Ends-with rule. Usage: ``ends_with:.png,.jpg``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

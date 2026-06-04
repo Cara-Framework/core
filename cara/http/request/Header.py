@@ -5,6 +5,8 @@ This module provides classes for managing HTTP headers in the Cara framework, im
 insensitive header handling, header bags, and proper header formatting for ASGI compatibility.
 """
 
+from __future__ import annotations
+
 from inflection import titleize
 
 

@@ -5,6 +5,8 @@ Single Responsibility: Handle all attribute-related operations for Eloquent mode
 Extracted from Model.py to follow SRP and DRY principles.
 """
 
+from __future__ import annotations
+
 import json
 from typing import Any
 

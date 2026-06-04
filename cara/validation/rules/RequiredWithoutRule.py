@@ -5,6 +5,8 @@ Field becomes required when any of the listed fields is NOT present.
 Usage: ``required_without:field1,field2,...``.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

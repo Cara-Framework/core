@@ -5,6 +5,8 @@ Smart content-type detection for HTTP responses when explicit methods are not us
 Laravel-inspired fallback mechanism for automatic content-type assignment.
 """
 
+from __future__ import annotations
+
 import json
 
 

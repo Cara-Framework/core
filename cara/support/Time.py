@@ -1,5 +1,7 @@
 """Time related helpers."""
 
+from __future__ import annotations
+
 import pendulum
 
 

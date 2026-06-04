@@ -4,6 +4,8 @@ Schedule Worker Command for the Cara framework.
 This module provides a CLI command to process scheduled jobs with enhanced UX.
 """
 
+from __future__ import annotations
+
 import time
 import traceback
 import uuid
@@ -140,18 +142,41 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         self.console.print()
 
     def _register_jobs(self) -> list[dict[str, Any]]:
-        """Register all scheduled jobs and return summary."""
+        """Register all scheduled jobs and return summary.
+
+        Each ``_register_dict_job`` / ``_register_spec_job`` call may
+        return ``None`` silently — e.g. when ``ScheduleBuilder`` raises
+        a non-``Exception`` during the daily/cron chain, or when
+        APScheduler's internal ``add_job`` swallows a conflicting id.
+        Pre-fix the only signal of those silent drops was the
+        ``Status: N jobs`` banner being lower than the dict count, and
+        operators almost never noticed (RecomputeProductPriceLowsJob
+        sat un-fired for weeks). The post-loop reconciliation logs
+        WARNING for every config entry whose ``id`` didn't land in the
+        registration set, so silent drops surface at boot.
+        """
         jobs = config("scheduling.jobs", []) or []
         if not jobs:
             return []
 
         self.info("📋 Registering scheduled jobs...")
         job_entries = []
+        # ``expected_dict_ids`` tracks every dict-config entry's id so
+        # the post-loop reconciliation can diff registered vs. expected.
+        # Decorator / ShouldSchedule entries don't carry an operator-
+        # facing id so they're excluded.
+        expected_dict_ids: list[tuple[str, str]] = []
 
         for job_target in jobs:
             try:
                 # ── Dict-based config (services-style) ──────────────
                 if isinstance(job_target, dict):
+                    expected_dict_ids.append(
+                        (
+                            str(job_target.get("id") or "?"),
+                            str(job_target.get("name") or job_target.get("job") or "?"),
+                        )
+                    )
                     entry = self._register_dict_job(job_target)
                     if entry:
                         job_entries.append(entry)
@@ -191,6 +216,23 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
                     else job_target.get("name", job_target.get("job", "?"))
                 )
                 self.warning(f"⚠️  Failed to register job '{job_name}': {e}")
+
+        # ── Reconciliation: which dict-config ids never produced an
+        # entry? ``_register_dict_job`` returning ``None`` (or any of
+        # the downstream builder calls swallowing a failure) ends up
+        # here. Surface each one at WARNING level with the id + name
+        # so an operator scanning boot logs sees exactly what was
+        # silently dropped.
+        registered_ids = {str(e.get("id")) for e in job_entries if e.get("id")}
+        for spec_id, spec_name in expected_dict_ids:
+            if spec_id == "?" or spec_id in registered_ids:
+                continue
+            self.warning(
+                f"⚠️  Scheduled job '{spec_id}' ({spec_name}) was in "
+                f"config but never registered — check the cron/interval "
+                f"spec, the dotted import path, or APScheduler id "
+                f"conflicts. This job will NOT fire."
+            )
 
         return job_entries
 
@@ -239,6 +281,21 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
                 # Fallback: kwargs don't match __init__ signature,
                 # try DI container without kwargs.
                 instance = _app.make(_cls)
+
+            # Scheduled jobs run on a fixed cadence — the scheduler IS the
+            # dedup authority. Opt them out of the 24h idempotency *result
+            # cache*: a no-arg recurring job (e.g. FlushDirtyPricesJob every
+            # 30s) hashes to one stable key, so the result cache would return
+            # the first tick's cached result for a full day and the job would
+            # effectively run once per 24h. That silently broke the deferred
+            # price-aggregation flush, so freshly consolidated products never
+            # got a canonical price and stayed ``discovered`` (hidden from the
+            # storefront). Overlap between slow ticks is still guarded by the
+            # idempotency job lock + any WithoutOverlapping middleware.
+            try:
+                instance.idempotency_cache_results = False
+            except Exception:
+                pass
 
             # Resolve handle() parameters via DI container if needed.
             handle_method = getattr(instance, "handle", None)

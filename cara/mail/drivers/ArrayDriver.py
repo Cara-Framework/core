@@ -4,6 +4,8 @@ Array driver for Cara Framework mail system.
 This driver stores emails in memory for testing purposes.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.mail.contracts import Mail

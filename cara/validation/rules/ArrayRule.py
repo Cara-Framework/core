@@ -4,6 +4,8 @@ Array validation rule.
 Validates that a value is a list/array.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

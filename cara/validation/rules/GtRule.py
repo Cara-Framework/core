@@ -3,6 +3,8 @@
 Usage: ``gt:10`` or ``gt:other_field``.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

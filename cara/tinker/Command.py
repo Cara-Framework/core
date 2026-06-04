@@ -4,6 +4,8 @@ Tinker Command - Laravel-style console command for Cara Tinker
 This file contains the main tinker console command with Typer and Rich integration.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import typer

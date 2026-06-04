@@ -9,6 +9,8 @@ Wire-up lives in :mod:`cara.queues.Bus`, which runs jobs through
 :func:`run_through_middleware_async` during sync-context dispatch.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 from collections.abc import Callable

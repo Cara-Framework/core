@@ -1,4 +1,9 @@
-from typing import Self
+from __future__ import annotations
+
+try:
+    from typing import Self
+except ImportError:  # Python <3.11
+    from typing_extensions import Self  # noqa: F401
 
 import threading
 from contextlib import contextmanager
@@ -212,6 +217,18 @@ class DatabaseManager:
                     conn.close_connection()
                 except Exception:
                     pass
+
+    def select_one(self, query, bindings=(), connection=None):
+        """Execute a raw SELECT and return the first row as a dict, or None.
+
+        Convenience wrapper around :meth:`select` for queries that are
+        expected to return at most one row (aggregates, lookups by PK,
+        ``LIMIT 1``, etc.).  Eliminates the pervasive
+        ``rows = DB.select(...); row = rows[0] if rows else None``
+        boilerplate scattered across repositories.
+        """
+        rows = self.select(query, bindings, connection)
+        return rows[0] if rows else None
 
     def statement(self, query, bindings=(), connection=None):
         """Executes raw SQL statement"""

@@ -5,6 +5,8 @@ This middleware logs HTTP requests with beautiful colorful output using ANSI esc
 This is the primary HTTP access log middleware and must be first in the middleware stack.
 """
 
+from __future__ import annotations
+
 import re
 import time
 from collections.abc import Callable

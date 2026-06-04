@@ -5,6 +5,8 @@ App-agnostic job tracking service with smart retry logic, conflict resolution,
 and performance analytics. Similar to Laravel's job tracking but enhanced.
 """
 
+from __future__ import annotations
+
 import uuid
 from typing import Any
 

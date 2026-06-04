@@ -8,6 +8,8 @@ A sink wrapper for writing to a file. Loguru will interpret the string returned 
 actual file path (including {time} placeholders).
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 

@@ -2,6 +2,8 @@
 Explicit Route Loader for loading routes from routes.api, routes.web, and routes.websocket modules.
 """
 
+from __future__ import annotations
+
 from cara.exceptions import RouteRegistrationException
 from cara.facades import Log
 from cara.routing import Route

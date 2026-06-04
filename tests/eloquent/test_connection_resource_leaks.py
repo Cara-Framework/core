@@ -20,9 +20,7 @@ import importlib
 from cara.eloquent.connections.SQLiteConnection import SQLiteConnection
 
 # Resolve the *module* (not the class re-exported by the package __init__).
-PGModule = importlib.import_module(
-    "cara.eloquent.connections.PostgresConnection"
-)
+PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")
 PostgresConnection = PGModule.PostgresConnection
 
 
@@ -74,8 +72,7 @@ def test_select_many_releases_connection_when_consumer_raises():
             raise RuntimeError("boom")
 
     assert conn.open == 0, (
-        "select_many leaked: connection was not released after the "
-        "consumer raised"
+        "select_many leaked: connection was not released after the consumer raised"
     )
 
 
@@ -139,12 +136,14 @@ def test_create_connection_closes_cursor_when_healthcheck_execute_raises(
     # Reset the module-level pool / semaphore so this test is hermetic.
     monkeypatch.setattr(PGModule, "CONNECTION_POOL", [stale_conn])
     monkeypatch.setattr(PGModule, "_pool_initialized", True)
-    monkeypatch.setattr(
-        PGModule, "_pool_semaphore", threading.Semaphore(4)
-    )
+    monkeypatch.setattr(PGModule, "_pool_semaphore", threading.Semaphore(4))
 
     pc = PostgresConnection(
-        host="x", database="x", user="x", port=5432, password="x",
+        host="x",
+        database="x",
+        user="x",
+        port=5432,
+        password="x",
         full_details={"connection_pooling_enabled": True},
     )
 
@@ -154,8 +153,11 @@ def test_create_connection_closes_cursor_when_healthcheck_execute_raises(
         "create_connection should fall through to a fresh connect after "
         "the stale one fails its healthcheck"
     )
-    stale_cursor.close.assert_called_once_with(), (
-        "Cursor opened for the SELECT 1 healthcheck must be closed even "
-        "when execute() raises — otherwise it leaks attached to a dead "
-        "connection"
+    (
+        stale_cursor.close.assert_called_once_with(),
+        (
+            "Cursor opened for the SELECT 1 healthcheck must be closed even "
+            "when execute() raises — otherwise it leaks attached to a dead "
+            "connection"
+        ),
     )

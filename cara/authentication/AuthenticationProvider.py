@@ -3,6 +3,8 @@ Authentication Provider for Cara Framework.
 Service provider that registers authentication guards.
 """
 
+from __future__ import annotations
+
 from cara.authentication.Authentication import Authentication
 from cara.authentication.guards import ApiKeyGuard, JWTGuard
 from cara.configuration import config

@@ -5,6 +5,8 @@ This module provides the foundation for creating background tasks with retry cap
 failure handling. Includes automatic serialization support and job cancellation.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 
@@ -141,8 +143,16 @@ class PendingDispatch:
         if self._delay and hasattr(self.job, "delay"):
             self.job.delay = self._delay
 
-        # Push to queue (will raise exception if fails)
-        job_id = Queue.push(self.job)
+        # Push to queue (will raise exception if fails). A requested delay
+        # MUST route through Queue.later (→ AMQPDriver.schedule, which sets the
+        # broker x-delay header) — Queue.push ignores job.delay and would fire
+        # the job immediately, silently dropping the delay. A delayed retry
+        # would then fire at once and collide on the idempotency cache,
+        # dedup-skipping against the attempt it was meant to retry.
+        if self._delay:
+            job_id = Queue.later(self._delay, self.job)
+        else:
+            job_id = Queue.push(self.job)
 
         # Set tracking ID
         if hasattr(self.job, "set_tracking_id"):
@@ -168,9 +178,14 @@ class PendingDispatch:
         if self._delay and hasattr(self.job, "delay"):
             self.job.delay = self._delay
 
-        # Dispatch via exchange (will raise exception if fails)
+        # Dispatch via exchange (will raise exception if fails). Forward the
+        # delay so dispatch_job routes through the delayed-message path after
+        # it resolves the target queue (Queue.push there also ignores
+        # job.delay; see TopicExchange.dispatch_job).
         job_id = exchange.dispatch_job(
-            routing_key=self._routing_key, job_instance=self.job
+            routing_key=self._routing_key,
+            job_instance=self.job,
+            delay=self._delay,
         )
 
         # Set tracking ID

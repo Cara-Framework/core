@@ -104,8 +104,8 @@ class CacheFake:
 
         Signature now matches the Cache contract — callers passing
         ``ttl=`` (e.g. version-stamp helpers in BrandCache /
-        CategoryCache / ConversionCache / BrowsingHistoryService)
-        previously crashed against the fake with TypeError. ``ttl``
+        CategoryCache / BrowsingHistoryService) previously
+        crashed against the fake with TypeError. ``ttl``
         applies on first creation only; subsequent increments do not
         refresh the TTL, mirroring Redis ``INCRBY`` semantics.
         """

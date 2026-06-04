@@ -185,9 +185,7 @@ class TestExplicitCancelStillWins:
     """The fix must not collapse the ``return False`` cancel signal
     into the new logging branch."""
 
-    def test_hook_returning_false_cancels_without_logging(
-        self, log_spy: _LogSpy
-    ) -> None:
+    def test_hook_returning_false_cancels_without_logging(self, log_spy: _LogSpy) -> None:
         class _M(_StubModel):
             @_hook("saving")
             def _veto(self, **kwargs: Any) -> bool:

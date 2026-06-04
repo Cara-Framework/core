@@ -5,6 +5,8 @@ This module provides utility functions for file and directory operations, such a
 existence checks, and metadata retrieval.
 """
 
+from __future__ import annotations
+
 import mimetypes
 import os
 import pathlib

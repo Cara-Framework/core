@@ -5,6 +5,8 @@ Handles all WHERE-related query building operations cleanly and efficiently.
 Follows DRY and KISS principles.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.eloquent.expressions.BetweenExpression import BetweenExpression

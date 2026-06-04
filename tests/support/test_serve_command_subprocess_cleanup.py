@@ -61,20 +61,27 @@ def test_start_server_terminates_process_when_monitor_raises():
     cmd = _make_serve_command()
     fake_process = _make_fake_popen(still_running=True)
 
-    with patch(
-        "cara.commands.core.ServeCommand.subprocess.Popen",
-        return_value=fake_process,
-    ), patch.object(
-        cmd,
-        "_monitor_server_process",
-        side_effect=RuntimeError("colorize blew up on bad utf-8"),
-    ), patch.object(cmd, "_build_server_command", return_value=["/bin/true"]):
+    with (
+        patch(
+            "cara.commands.core.ServeCommand.subprocess.Popen",
+            return_value=fake_process,
+        ),
+        patch.object(
+            cmd,
+            "_monitor_server_process",
+            side_effect=RuntimeError("colorize blew up on bad utf-8"),
+        ),
+        patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
+    ):
         cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
-    fake_process.terminate.assert_called(), (
-        "Popen child must be terminated when the monitor raises an "
-        "unexpected exception — otherwise orphan uvicorn pinned to the "
-        "configured port"
+    (
+        fake_process.terminate.assert_called(),
+        (
+            "Popen child must be terminated when the monitor raises an "
+            "unexpected exception — otherwise orphan uvicorn pinned to the "
+            "configured port"
+        ),
     )
 
 
@@ -84,24 +91,29 @@ def test_start_server_kills_process_when_terminate_times_out():
     to ``kill()`` — otherwise a stuck child still holds the port."""
     cmd = _make_serve_command()
     fake_process = _make_fake_popen(still_running=True)
-    fake_process.wait.side_effect = subprocess.TimeoutExpired(
-        cmd="server", timeout=5
-    )
+    fake_process.wait.side_effect = subprocess.TimeoutExpired(cmd="server", timeout=5)
 
-    with patch(
-        "cara.commands.core.ServeCommand.subprocess.Popen",
-        return_value=fake_process,
-    ), patch.object(
-        cmd,
-        "_monitor_server_process",
-        side_effect=RuntimeError("boom"),
-    ), patch.object(cmd, "_build_server_command", return_value=["/bin/true"]):
+    with (
+        patch(
+            "cara.commands.core.ServeCommand.subprocess.Popen",
+            return_value=fake_process,
+        ),
+        patch.object(
+            cmd,
+            "_monitor_server_process",
+            side_effect=RuntimeError("boom"),
+        ),
+        patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
+    ):
         cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     fake_process.terminate.assert_called()
-    fake_process.kill.assert_called(), (
-        "If terminate's grace period elapses, escalate to kill — "
-        "otherwise a hung child keeps the port bound"
+    (
+        fake_process.kill.assert_called(),
+        (
+            "If terminate's grace period elapses, escalate to kill — "
+            "otherwise a hung child keeps the port bound"
+        ),
     )
 
 
@@ -112,17 +124,19 @@ def test_start_server_closes_stdout_pipe_when_monitor_raises():
     cmd = _make_serve_command()
     fake_process = _make_fake_popen(still_running=True)
 
-    with patch(
-        "cara.commands.core.ServeCommand.subprocess.Popen",
-        return_value=fake_process,
-    ), patch.object(
-        cmd, "_monitor_server_process", side_effect=RuntimeError("boom")
-    ), patch.object(cmd, "_build_server_command", return_value=["/bin/true"]):
+    with (
+        patch(
+            "cara.commands.core.ServeCommand.subprocess.Popen",
+            return_value=fake_process,
+        ),
+        patch.object(cmd, "_monitor_server_process", side_effect=RuntimeError("boom")),
+        patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
+    ):
         cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
-    fake_process.stdout.close.assert_called(), (
-        "captured stdout PIPE must be closed when the monitor exits "
-        "abnormally"
+    (
+        fake_process.stdout.close.assert_called(),
+        ("captured stdout PIPE must be closed when the monitor exits abnormally"),
     )
 
 
@@ -133,11 +147,13 @@ def test_start_server_does_not_terminate_already_exited_process():
     cmd = _make_serve_command()
     fake_process = _make_fake_popen(still_running=False)  # already exited
 
-    with patch(
-        "cara.commands.core.ServeCommand.subprocess.Popen",
-        return_value=fake_process,
-    ), patch.object(cmd, "_monitor_server_process", return_value=None), patch.object(
-        cmd, "_build_server_command", return_value=["/bin/true"]
+    with (
+        patch(
+            "cara.commands.core.ServeCommand.subprocess.Popen",
+            return_value=fake_process,
+        ),
+        patch.object(cmd, "_monitor_server_process", return_value=None),
+        patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
     ):
         cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 

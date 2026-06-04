@@ -4,6 +4,8 @@ Validation Rule Interface for the Cara framework.
 This module defines the contract that any validation rule must implement, specifying required methods for validation logic.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any
 

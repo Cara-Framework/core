@@ -5,6 +5,8 @@ This module provides the Hash class, which offers a unified interface for passwo
 verification using multiple algorithms (bcrypt, sha256).
 """
 
+from __future__ import annotations
+
 from cara.encryption.drivers import BcryptHasher, Sha256Hasher
 
 

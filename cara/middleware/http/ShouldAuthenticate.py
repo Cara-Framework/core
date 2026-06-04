@@ -5,6 +5,8 @@ Core authentication logic with easy customization points.
 Users can extend this in their app for custom authentication needs.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 from cara.facades import Log

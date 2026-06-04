@@ -5,6 +5,8 @@ Fluent middleware registration helper for clean, organized middleware configurat
 Users can easily register global middleware, groups, and aliases.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from .Middleware import Middleware

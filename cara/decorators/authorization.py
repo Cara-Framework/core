@@ -9,6 +9,8 @@ Usage Examples:
     @policy("Post", "update")
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from functools import wraps
 

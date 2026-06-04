@@ -5,6 +5,8 @@ This module provides the logging service provider for the Cara framework.
 It configures Loguru through Cara's channel system and provides centralized logging.
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 

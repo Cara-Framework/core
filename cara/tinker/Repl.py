@@ -4,6 +4,8 @@ Repl - Read-Eval-Print Loop for Cara Tinker
 This file provides REPL functionality for executing commands in the Cara framework with Rich integration.
 """
 
+from __future__ import annotations
+
 import ast
 from typing import Any
 

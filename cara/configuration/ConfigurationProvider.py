@@ -5,6 +5,8 @@ This module provides the service provider that binds and loads the application c
 it accessible throughout the Cara application.
 """
 
+from __future__ import annotations
+
 from cara.foundation import Provider
 
 from .Configuration import Configuration

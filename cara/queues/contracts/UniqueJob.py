@@ -20,6 +20,8 @@ Usage:
             return 3600  # seconds — lock expires after 1 hour
 """
 
+from __future__ import annotations
+
 import threading
 import time
 

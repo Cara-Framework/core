@@ -16,6 +16,8 @@ Usage::
         .dispatch()
 """
 
+from __future__ import annotations
+
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -246,9 +248,10 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
         # for batches that had partial failures. The canonical "read
         # counter" idiom is ``Cache.increment(key, 0, ttl)``: atomic,
         # protocol-clean, and materialises a missing key as 0.
-        failed_count = int(
-            Cache.increment(_batch_failed_key(batch_id), 0, Batch.BATCH_TTL) or 0
+        increment_result = Cache.increment(
+            _batch_failed_key(batch_id), 0, Batch.BATCH_TTL
         )
+        failed_count = int(increment_result if increment_result is not None else 0)
 
         if then_callback:
             try:

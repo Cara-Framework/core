@@ -4,6 +4,8 @@ Command Decorator for the Cara framework.
 This module provides a decorator for registering command-line commands in the application.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from functools import wraps
 from typing import Any

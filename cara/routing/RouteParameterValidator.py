@@ -5,6 +5,8 @@ This module provides a robust validation system for route parameters using autom
 rule discovery and intelligent type conversion.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 

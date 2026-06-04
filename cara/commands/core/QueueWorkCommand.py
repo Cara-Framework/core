@@ -4,6 +4,8 @@ Queue Worker Command for the Cara framework.
 This module provides a CLI command to process jobs from the queue with enhanced UX.
 """
 
+from __future__ import annotations
+
 import asyncio
 import builtins
 import concurrent.futures
@@ -221,7 +223,9 @@ class JobProcessor:
         worker mode, unit test) gets the same contract.
         """
         try:
-            asyncio.run(asyncio.wait_for(method_to_call(*init_args), timeout=timeout_seconds))
+            asyncio.run(
+                asyncio.wait_for(method_to_call(*init_args), timeout=timeout_seconds)
+            )
         except (asyncio.TimeoutError, TimeoutError) as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
 
@@ -253,12 +257,13 @@ class JobProcessor:
         if not msg:
             return False
         try:
-            attempts_done = int(msg.get("attempts", 0) or 0)
+            attempts_done = int(
+                msg.get("attempts", 0) if msg.get("attempts", 0) is not None else 0
+            )
         except (TypeError, ValueError):
             attempts_done = 0
         max_attempts = int(
-            getattr(instance, "max_attempts", None)
-            or JobProcessor.DEFAULT_MAX_ATTEMPTS
+            getattr(instance, "max_attempts", None) or JobProcessor.DEFAULT_MAX_ATTEMPTS
         )
         # ``do_not_retry`` on the failing exception is honoured one
         # level up (see _requeue_with_delay) — we only answer the
@@ -292,7 +297,9 @@ class JobProcessor:
             Log.error(f"Failed to ACK before retry republish: {ack_err}")
             # Fall through — pika may have already auto-rejected.
 
-        attempts_done = int(msg.get("attempts", 0) or 0)
+        attempts_done = int(
+            msg.get("attempts", 0) if msg.get("attempts", 0) is not None else 0
+        )
         # Throttle-class exceptions (``ConcurrencyExceeded`` raised by
         # the ``ConcurrencyLimited`` middleware, future per-host rate-
         # limit middleware) signal "the job never got a slot, try again
@@ -1035,12 +1042,35 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # Expand wildcard patterns
         expanded_queues = []
         for pattern in queue_patterns:
+            # Trailing-dot prefix shorthand: "discovery." means "every
+            # priority sub-queue of discovery" — i.e. discovery.{critical,
+            # high,default,low} (plus any nested queues the management API
+            # reports, e.g. notification.email.default). This is the form
+            # the operator-facing docs and the e2e queue:work command use.
+            #
+            # Without this normalisation a bare "discovery." fell through
+            # the ``"*" in pattern`` check and was polled as a LITERAL queue
+            # name. RabbitMQ has no queue called "discovery.", so the worker
+            # lazily created an empty one and consumed from it forever while
+            # the real discovery.default (where DiscoverProductsJob actually
+            # lands) was never read — the whole pipeline stalled at dispatch.
+            # Mapping "prefix." → "prefix.*" routes it through the same
+            # expansion the wildcard form already uses.
+            if pattern.endswith(".") and "*" not in pattern:
+                pattern = pattern + "*"
+
             if "*" in pattern:
                 expanded_queues.extend(self._expand_wildcard_pattern(pattern))
             else:
                 expanded_queues.append(pattern)
 
-        return expanded_queues if expanded_queues else ["default"]
+        # De-duplicate while preserving the priority-ordered sequence so a
+        # queue named by two overlapping patterns (e.g. "discovery." and
+        # "discovery.high") isn't polled twice per cycle.
+        seen: set[str] = set()
+        deduped = [q for q in expanded_queues if not (q in seen or seen.add(q))]
+
+        return deduped if deduped else ["default"]
 
     def _expand_wildcard_pattern(self, pattern: str) -> list:
         """Expand wildcard pattern to actual queue names.
@@ -1077,6 +1107,28 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         if discovered:
             matched = {q for q in discovered if _fnmatch.fnmatch(q, pattern)}
             static |= matched
+
+        # Also merge canonical queue names declared in the topic-exchange
+        # bindings that match this pattern. Live RabbitMQ discovery only
+        # sees queues that ALREADY exist at worker startup; a queue first
+        # created mid-run — e.g. ``notification.email`` the moment the first
+        # email job is dispatched after the worker booted — would otherwise
+        # never be polled, so those messages pile up with no consumer. The
+        # bindings are the declarative source of truth for canonical queue
+        # names (notification.email/sms/push, etc.), so consulting them makes
+        # a ``notification.*`` worker pick up those channel queues regardless
+        # of broker timing. Missing queues are handled gracefully by the
+        # per-queue declare path, so adding a not-yet-created name is safe.
+        try:
+            from cara.configuration import config as _config
+
+            bindings = _config("queue.topic_exchange_bindings", []) or []
+            bound = {
+                name for name, _routing in bindings if _fnmatch.fnmatch(name, pattern)
+            }
+            static |= bound
+        except Exception:
+            pass
 
         # Sort by priority rank, NOT alphabetically. The worker polls this
         # list head-first in ``_process_queue_cycle`` and only restarts
@@ -1519,7 +1571,30 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                     self._missing_queues[queue_name] = now
                     return False
                 try:
-                    channel.queue_declare(queue=queue_name, durable=True)
+                    # Declare with the SAME args the publish path uses
+                    # (``AMQPDriver._connect_and_publish_locked``). Without
+                    # these args this worker poll path lazily creates the
+                    # queue as a plain ``durable=True`` queue with no DLX
+                    # binding — the very next publish then tries to
+                    # re-declare it with ``x-dead-letter-exchange`` /
+                    # ``x-dead-letter-routing-key`` and hits
+                    # ``PRECONDITION_FAILED - inequivalent arg``. The
+                    # publisher falls back to passive declare but loses
+                    # the DLX wiring, so failed jobs disappear instead of
+                    # routing to ``dead.letter.queue`` and the whole
+                    # pipeline stalls (validation/standardization/etc.
+                    # messages pile up on the unwired queue and never get
+                    # consumed). Mirror the publish-path arg set here so
+                    # whichever side wins the race creates the queue
+                    # with the same topology.
+                    channel.queue_declare(
+                        queue=queue_name,
+                        durable=True,
+                        arguments={
+                            "x-dead-letter-exchange": "dead.letter.dlx",
+                            "x-dead-letter-routing-key": f"dead.{queue_name}",
+                        },
+                    )
                 except Exception:
                     # Truly cannot create — cache miss briefly.
                     self._missing_queues[queue_name] = now

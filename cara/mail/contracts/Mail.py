@@ -5,6 +5,8 @@ This module defines the contract that any mail driver must implement, specifying
 for email operations.
 """
 
+from __future__ import annotations
+
 from typing import Any, Protocol
 
 

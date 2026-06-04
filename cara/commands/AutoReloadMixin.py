@@ -5,6 +5,8 @@ This mixin provides hot-reload capabilities for any long-running Cara command,
 similar to uvicorn's auto-reload but for all blocking operations.
 """
 
+from __future__ import annotations
+
 import importlib
 import os
 import sys

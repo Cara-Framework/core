@@ -9,9 +9,12 @@ The container follows the PSR-11 container interface standard and provides Larav
 container functionality.
 """
 
+from __future__ import annotations
+
 import inspect
 import threading
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any, Union
 
 # Lazy import exceptions to avoid circular imports
@@ -30,6 +33,9 @@ def _get_container_exceptions():
         MissingContainerBindingException,
         StrictContainerException,
     )
+
+
+_resolving_stack_var: ContextVar[list[Any]] = ContextVar("cara.container.resolving_stack")
 
 
 class Container:
@@ -67,10 +73,7 @@ class Container:
         # fix; the path runs once per service, so contention is nil.
         self._deferred_lock = threading.RLock()
 
-        # (6) Resolution stack for circular dependency detection
-        self._resolving_stack: list[Any] = []
-
-        # (5) Hooks: callback lists for bind / make / resolve events
+        # (6) Hooks: callback lists for bind / make / resolve events
         self._hooks: dict[str, dict[Any, list[Callable]]] = {
             "bind": {},
             "make": {},
@@ -342,10 +345,9 @@ class Container:
         - "self" parameters receive the class itself.
         """
         # Circular dependency guard
-        if obj in self._resolving_stack:
-            chain = " -> ".join(
-                getattr(c, "__name__", str(c)) for c in self._resolving_stack
-            )
+        resolving_stack = _resolving_stack_var.get([])
+        if obj in resolving_stack:
+            chain = " -> ".join(getattr(c, "__name__", str(c)) for c in resolving_stack)
             name = getattr(obj, "__name__", str(obj))
             (
                 GenericContainerException,
@@ -355,12 +357,16 @@ class Container:
             raise GenericContainerException(
                 f"Circular dependency detected: {chain} -> {name}"
             )
-        self._resolving_stack.append(obj)
+        _resolving_stack_var.set([*resolving_stack, obj])
 
         try:
             return self._do_resolve(obj, *resolving_arguments)
         finally:
-            self._resolving_stack.pop()
+            stack = _resolving_stack_var.get([])
+            if stack:
+                _resolving_stack_var.set(stack[:-1])
+            else:
+                _resolving_stack_var.set([])
 
     def _do_resolve(self, obj: Any, *resolving_arguments: Any) -> Any:
         """Internal resolve implementation."""

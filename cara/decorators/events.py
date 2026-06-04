@@ -12,7 +12,7 @@ Example:
 
         @saving
         def update_timestamp(self):
-            self.updated_at = datetime.now()
+            self.updated_at = pendulum.now("UTC")
 
         @deleting
         def check_permissions(self):
@@ -23,6 +23,8 @@ Usage:
     user = User(name="John")
     user.save()  # Triggers: creating -> saving -> created -> saved
 """
+
+from __future__ import annotations
 
 import functools
 from collections.abc import Callable

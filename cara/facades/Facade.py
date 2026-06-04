@@ -5,6 +5,8 @@ Provides a clean way to access services from the container as static-like method
 Similar to Laravel facades - services are resolved on first access.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 
@@ -134,7 +136,7 @@ class Facade(type):
         return f"Facade({cls.key})"
 
     @classmethod
-    def get_logger(cls) -> Logger:
+    def get_logger(cls) -> "Logger":
         """Get a logger instance for this facade.
 
         Returns:

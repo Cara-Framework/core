@@ -5,9 +5,12 @@ This module provides database notification channel functionality,
 storing notifications in the database for later retrieval.
 """
 
+from __future__ import annotations
+
 import uuid
-from datetime import datetime
 from typing import Any
+
+import pendulum
 
 from cara.notifications.channels import BaseChannel
 
@@ -70,18 +73,27 @@ class DatabaseChannel(BaseChannel):
             notification_type = notification.__class__.__name__
             original_notification = notification
 
-        # Prepare notification record
+        # Map to the application's ``notification`` table schema.
+        # The table uses ``user_id`` (not ``notifiable_id``) and stores
+        # structured fields (``title``, ``body``, ``channel``) instead
+        # of a single ``data`` JSON blob.
+        now = pendulum.now("UTC")
         record = {
-            "id": str(uuid.uuid4()),
+            "user_id": self._get_notifiable_id(notifiable),
             "type": notification_type,
-            "notifiable_type": notifiable.get_notification_type()
-            if hasattr(notifiable, "get_notification_type")
-            else notifiable.__class__.__name__,
-            "notifiable_id": self._get_notifiable_id(notifiable),
-            "data": self._serialize_data(data),
+            "channel": "database",
+            "title": data.get("title", notification_type)
+            if isinstance(data, dict)
+            else notification_type,
+            "body": data.get("body", "") if isinstance(data, dict) else "",
+            "action_url": data.get("action_url") if isinstance(data, dict) else None,
+            "status": "delivered",
+            "sent_at": now,
+            "delivered_at": now,
             "read_at": None,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "metadata": self._serialize_data(data),
+            "created_at": now,
+            "updated_at": now,
         }
 
         # Add notification ID if set
@@ -153,23 +165,14 @@ class DatabaseChannel(BaseChannel):
         Returns:
             True if updated successfully, False otherwise
         """
-        notifiable_id = self._get_notifiable_id(notifiable)
-        notifiable_type = (
-            notifiable.get_notification_type()
-            if hasattr(notifiable, "get_notification_type")
-            else notifiable.__class__.__name__
-        )
+        user_id = self._get_notifiable_id(notifiable)
 
-        query = (
-            self.database_manager.table(self.table_name)
-            .where("notifiable_type", notifiable_type)
-            .where("notifiable_id", notifiable_id)
-        )
+        query = self.database_manager.table(self.table_name).where("user_id", user_id)
 
         if notification_ids:
             query = query.where_in("id", notification_ids)
 
-        query.update({"read_at": datetime.utcnow()})
+        query.update({"read_at": pendulum.now("UTC")})
         return True
 
     def get_notifications(self, notifiable, read: bool | None = None) -> list:
@@ -183,18 +186,9 @@ class DatabaseChannel(BaseChannel):
         Returns:
             List of notifications
         """
-        notifiable_id = self._get_notifiable_id(notifiable)
-        notifiable_type = (
-            notifiable.get_notification_type()
-            if hasattr(notifiable, "get_notification_type")
-            else notifiable.__class__.__name__
-        )
+        user_id = self._get_notifiable_id(notifiable)
 
-        query = (
-            self.database_manager.table(self.table_name)
-            .where("notifiable_type", notifiable_type)
-            .where("notifiable_id", notifiable_id)
-        )
+        query = self.database_manager.table(self.table_name).where("user_id", user_id)
 
         if read is True:
             query = query.where_not_null("read_at")

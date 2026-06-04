@@ -16,6 +16,8 @@ Two API surfaces are exposed:
   fully synchronous so callers can use the pipeline outside an event loop.
 """
 
+from __future__ import annotations
+
 import inspect
 from collections.abc import Awaitable, Callable
 from functools import reduce

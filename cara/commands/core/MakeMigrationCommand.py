@@ -3,6 +3,8 @@ MakeMigrationCommand: Auto-generates migrations from models using stubs.
 Orchestrates model discovery, schema comparison, and migration generation.
 """
 
+from __future__ import annotations
+
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.migrations.MigrationGenerator import MigrationGenerator
@@ -124,6 +126,15 @@ class MakeMigrationCommand(CommandBase):
             patterns = [
                 f"*create_{table_name}_table.py",
                 f"*update_{table_name}_table.py",
+                # Column-level incremental migrations (e.g.
+                # ``add_<col>_to_<table>_table.py``) are fully subsumed by the
+                # freshly regenerated ``create_<table>`` migration, which is
+                # built from the current model and already declares every
+                # column. Leaving them behind made a from-scratch ``migrate``
+                # abort with ``column "<col>" of relation "<table>" already
+                # exists``. In this development workflow the model is the sole
+                # source of truth, so drop the redundant incremental ones too.
+                f"*_to_{table_name}_table.py",
             ]
 
             for pattern in patterns:

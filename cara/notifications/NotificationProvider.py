@@ -5,6 +5,8 @@ This module provides the deferred service provider that configures and registers
 subsystem, including mail, database, slack and log notification channels.
 """
 
+from __future__ import annotations
+
 from cara.configuration import config
 from cara.facades import Log
 from cara.foundation import DeferredProvider
@@ -76,14 +78,14 @@ class NotificationProvider(DeferredProvider):
             channel = DatabaseChannel(
                 database_manager=query_builder,
                 table_name=config(
-                    "notifications.channels.database.table", "notifications",
+                    "notifications.channels.database.table",
+                    "notification",
                 ),
             )
             notification_manager.add_channel(DatabaseChannel.channel_name, channel)
         except Exception as e:
             Log.warning(
-                f"[NotificationProvider] Database channel registration "
-                f"failed: {e}",
+                f"[NotificationProvider] Database channel registration failed: {e}",
             )
 
     def _add_slack_channel(self, notification_manager: Notification) -> None:
@@ -110,8 +112,7 @@ class NotificationProvider(DeferredProvider):
             notification_manager.add_channel(SlackChannel.channel_name, channel)
         except Exception as e:
             Log.warning(
-                f"[NotificationProvider] Slack channel registration "
-                f"failed: {e}",
+                f"[NotificationProvider] Slack channel registration failed: {e}",
             )
 
     def _add_log_channel(self, notification_manager: Notification) -> None:
@@ -127,13 +128,13 @@ class NotificationProvider(DeferredProvider):
         try:
             channel = LogChannel(
                 log_file=config(
-                    "notifications.channels.log.file", "notifications.log",
+                    "notifications.channels.log.file",
+                    "notifications.log",
                 ),
                 log_level=config("notifications.channels.log.level", "info"),
             )
             notification_manager.add_channel(LogChannel.channel_name, channel)
         except Exception as e:
             Log.warning(
-                f"[NotificationProvider] Log channel registration "
-                f"failed: {e}",
+                f"[NotificationProvider] Log channel registration failed: {e}",
             )

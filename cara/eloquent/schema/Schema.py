@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Self
+try:
+    from typing import Self
+except ImportError:  # Python <3.11
+    from typing_extensions import Self  # noqa: F401
 
 import contextlib
 from decimal import Decimal
@@ -211,6 +214,17 @@ class Schema:
         """Drop table if exists - delegates to query executor"""
         sql = self.connection_manager.platform.compile_drop_table_if_exists(table)
         return self.query_executor.execute_query(sql)
+
+    def drop_if_exists(self, *args, **kwargs):
+        """Alias for drop_table_if_exists - Laravel-style naming (``dropIfExists``).
+
+        Migrations (and the make:migration generator output) call
+        ``schema.drop_if_exists(table)``; without this alias every such
+        migration died with ``'Schema' object has no attribute
+        'drop_if_exists'`` and ``migrate`` aborted mid-run. Mirrors the
+        existing ``drop`` → ``drop_table`` alias above.
+        """
+        return self.drop_table_if_exists(*args, **kwargs)
 
     def rename(self, table, new_name):
         """Rename table - delegates to query executor"""

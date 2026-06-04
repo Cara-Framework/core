@@ -40,9 +40,7 @@ from typing import Any
 import pytest
 
 
-_handler_mod = importlib.import_module(
-    "cara.exceptions.handlers.DefaultExceptionHandler"
-)
+_handler_mod = importlib.import_module("cara.exceptions.handlers.DefaultExceptionHandler")
 DefaultExceptionHandler = _handler_mod.DefaultExceptionHandler
 
 
@@ -97,58 +95,53 @@ class TestRetryAfterHelper:
     header pair. Pin its acceptance / rejection shape directly."""
 
     def test_present_positive_int_emits_pair(self) -> None:
-        result = DefaultExceptionHandler._retry_after_header_for(
-            {"retry_after": 5}
-        )
+        result = DefaultExceptionHandler._retry_after_header_for({"retry_after": 5})
         assert result == [[b"retry-after", b"5"]]
 
     def test_present_positive_string_coerced(self) -> None:
         # Some exception constructors pass string seconds (e.g.
         # config-driven). The helper coerces via ``int`` — RFC 7231
         # §7.1.3 delta-seconds form is integer.
-        result = DefaultExceptionHandler._retry_after_header_for(
-            {"retry_after": "30"}
-        )
+        result = DefaultExceptionHandler._retry_after_header_for({"retry_after": "30"})
         assert result == [[b"retry-after", b"30"]]
 
     def test_zero_dropped(self) -> None:
         # 0 means "no wait" — emitting ``Retry-After: 0`` would tell
         # the client to hammer the failing endpoint without backoff.
         # Drop and let the client's default backoff strategy run.
-        assert DefaultExceptionHandler._retry_after_header_for(
-            {"retry_after": 0}
-        ) == []
+        assert DefaultExceptionHandler._retry_after_header_for({"retry_after": 0}) == []
 
     def test_negative_dropped(self) -> None:
-        assert DefaultExceptionHandler._retry_after_header_for(
-            {"retry_after": -1}
-        ) == []
+        assert DefaultExceptionHandler._retry_after_header_for({"retry_after": -1}) == []
 
     def test_non_numeric_dropped(self) -> None:
         # A bogus value (e.g. ``"soon"``) must not crash the handler
         # or land on the wire as ``Retry-After: soon`` (RFC 7231
         # tolerant parsers might accept HTTP-date there, but ours is
         # the delta-seconds branch only).
-        assert DefaultExceptionHandler._retry_after_header_for(
-            {"retry_after": "soon"}
-        ) == []
+        assert (
+            DefaultExceptionHandler._retry_after_header_for({"retry_after": "soon"}) == []
+        )
 
     def test_absent_dropped(self) -> None:
         # Standard 4xx without retry hints — no header, body
         # unchanged. Pre-fix this branch already silently did the
         # right thing; pin it so a future refactor doesn't start
         # emitting ``Retry-After: None`` or similar.
-        assert DefaultExceptionHandler._retry_after_header_for(
-            {"error": "not found"}
-        ) == []
+        assert (
+            DefaultExceptionHandler._retry_after_header_for({"error": "not found"}) == []
+        )
 
     def test_none_data_safe(self) -> None:
         # Defensive — the helper is called from ``send_response``
         # which receives ``data`` from ``format_response``; a future
         # refactor that passes None must not crash the error path.
-        assert DefaultExceptionHandler._retry_after_header_for(
-            None  # type: ignore[arg-type]
-        ) == []
+        assert (
+            DefaultExceptionHandler._retry_after_header_for(
+                None  # type: ignore[arg-type]
+            )
+            == []
+        )
 
 
 # ── End-to-end via send_manual_response ─────────────────────────
@@ -265,8 +258,6 @@ async def test_retry_after_survives_5xx_prod_redaction() -> None:
         }
         # The header helper reads from the post-redaction body —
         # ``Retry-After: 1`` survives.
-        assert handler._retry_after_header_for(body) == [
-            [b"retry-after", b"1"]
-        ]
+        assert handler._retry_after_header_for(body) == [[b"retry-after", b"1"]]
     finally:
         _cfg.config = original  # type: ignore[assignment]

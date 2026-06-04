@@ -5,6 +5,8 @@ This module provides the service provider that binds the Loader utility into the
 container.
 """
 
+from __future__ import annotations
+
 from cara.foundation import DeferredProvider
 from cara.loader import Loader
 

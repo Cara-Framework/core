@@ -16,6 +16,8 @@ Router edge-case pins covering the audit fixes:
   6. Middleware order in nested groups: outer → inner → route.
 """
 
+from __future__ import annotations
+
 import re
 
 import pytest
@@ -96,9 +98,7 @@ class TestRouteParameterDecoding:
         # ``[^/]+`` matches ``%20`` (no literal slash) and unquote
         # converts it back to a space.
         compiler = self._compile("/q/@term")
-        assert compiler.extract_parameters("/q/hello%20world") == {
-            "term": "hello world"
-        }
+        assert compiler.extract_parameters("/q/hello%20world") == {"term": "hello world"}
 
     def test_plus_sign_is_preserved_as_literal(self):
         # ``+`` is space ONLY in application/x-www-form-urlencoded
@@ -434,9 +434,7 @@ class TestMiddlewareOrderNested:
         # Throttle. Each group's middleware lands BEFORE the
         # previously-accumulated chain (most recent = outermost).
         route = Route.get("/users", _controller).middleware("throttle")
-        inner = RouteGroup(prefix="/admin", middleware=["admin_gate"]).routes(
-            [route]
-        )
+        inner = RouteGroup(prefix="/admin", middleware=["admin_gate"]).routes([route])
         outer = RouteGroup(prefix="/api", middleware=["auth"]).routes(list(inner))
         # Single route in the group — pull its middleware list out.
         result = list(outer)[0].get_middleware()

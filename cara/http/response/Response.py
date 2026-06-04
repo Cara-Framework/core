@@ -5,6 +5,8 @@ Laravel-inspired modular response system with clean separation of concerns.
 Orchestrates BaseResponse, ResponseFactory, HeaderManager, ContentTypeDetector, and StreamingResponse.
 """
 
+from __future__ import annotations
+
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 

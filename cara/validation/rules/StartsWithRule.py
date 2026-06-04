@@ -1,5 +1,7 @@
 """Starts-with rule. Usage: ``starts_with:http,https``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

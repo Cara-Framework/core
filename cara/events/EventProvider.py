@@ -5,6 +5,8 @@ This module provides the service provider that registers event handling and disp
 application.
 """
 
+from __future__ import annotations
+
 from cara.events import Event
 from cara.foundation import DeferredProvider
 

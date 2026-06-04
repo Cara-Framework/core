@@ -5,6 +5,8 @@ Handles all aggregate-related query building operations cleanly and efficiently.
 Follows DRY and KISS principles.
 """
 
+from __future__ import annotations
+
 from cara.eloquent.expressions.Raw import Raw
 
 

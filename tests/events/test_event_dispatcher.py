@@ -46,6 +46,7 @@ def dispatcher():
 
 # --- Registration and dispatching ---
 
+
 @pytest.mark.asyncio
 async def test_subscribe_and_dispatch(dispatcher):
     log = []
@@ -53,7 +54,9 @@ async def test_subscribe_and_dispatch(dispatcher):
     dispatcher.subscribe("user.registered", listener)
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["simple"]
@@ -65,7 +68,9 @@ async def test_listen_with_callback(dispatcher):
     dispatcher.listen("user.registered", lambda e: log.append(e.email))
 
     event = UserRegisteredEvent(user_id=1, email="test@example.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["test@example.com"]
@@ -74,11 +79,14 @@ async def test_listen_with_callback(dispatcher):
 @pytest.mark.asyncio
 async def test_dispatch_no_listeners_is_noop(dispatcher):
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)  # should not raise
 
 
 # --- Listener ordering ---
+
 
 @pytest.mark.asyncio
 async def test_listeners_called_in_registration_order(dispatcher):
@@ -100,13 +108,16 @@ async def test_listeners_called_in_registration_order(dispatcher):
     # None so ``callable(validator)`` is False and the gate skips.
     event.validate_payload = None
 
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["first", "second", "third"]
 
 
 # --- Stop propagation ---
+
 
 @pytest.mark.asyncio
 async def test_stop_propagation(dispatcher):
@@ -116,7 +127,9 @@ async def test_stop_propagation(dispatcher):
     dispatcher.subscribe("user.registered", AfterStopListener(log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert "before" in log
@@ -126,13 +139,16 @@ async def test_stop_propagation(dispatcher):
 
 # --- Wildcard listeners ---
 
+
 @pytest.mark.asyncio
 async def test_wildcard_trailing(dispatcher):
     log = []
     dispatcher.subscribe("user.*", SimpleListener(log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["simple"]
@@ -144,7 +160,9 @@ async def test_wildcard_leading(dispatcher):
     dispatcher.subscribe("*.registered", SimpleListener(log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["simple"]
@@ -156,13 +174,16 @@ async def test_wildcard_does_not_match_unrelated(dispatcher):
     dispatcher.subscribe("order.*", SimpleListener(log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == []
 
 
 # --- has_listeners ---
+
 
 def test_has_listeners_true(dispatcher):
     log = []
@@ -182,6 +203,7 @@ def test_has_listeners_wildcard(dispatcher):
 
 # --- EventSubscriber ---
 
+
 @pytest.mark.asyncio
 async def test_event_subscriber(dispatcher):
     log = []
@@ -194,13 +216,16 @@ async def test_event_subscriber(dispatcher):
     dispatcher.subscribe(TestSubscriber)
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["sub-registered"]
 
 
 # --- UserRegisteredEvent ---
+
 
 def test_user_registered_event_payload():
     event = UserRegisteredEvent(user_id=42, email="alice@example.com", role="admin")
@@ -247,7 +272,9 @@ async def test_listener_subscribed_to_direct_and_matching_wildcard_fires_once(
     dispatcher.subscribe("user.*", listener)
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["simple"]
@@ -265,7 +292,9 @@ async def test_distinct_listeners_with_overlapping_subscriptions_all_fire(dispat
     dispatcher.subscribe("user.*", b)
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["direct", "wildcard"]
@@ -353,7 +382,9 @@ async def test_sequential_dispatches_of_same_event_do_not_trip_cycle_guard(dispa
     log = []
     dispatcher.subscribe("user.registered", SimpleListener(log))
 
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(UserRegisteredEvent(user_id=1, email="a@b.com"))
         await dispatcher.dispatch(UserRegisteredEvent(user_id=2, email="b@c.com"))
 
@@ -389,7 +420,9 @@ async def test_listener_chain_to_distinct_event_does_not_trip_cycle_guard(dispat
     dispatcher.subscribe("topic.a", AHandler())
     dispatcher.subscribe("topic.b", BHandler())
 
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(EventA())
 
     assert log == ["a", "b"]
@@ -437,7 +470,9 @@ async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
         async def handle(self, sibling_id):
             with fresh_dispatch_scope():
                 await dispatcher.dispatch(
-                    UserRegisteredEvent(user_id=sibling_id, email=f"sib{sibling_id}@x.com")
+                    UserRegisteredEvent(
+                        user_id=sibling_id, email=f"sib{sibling_id}@x.com"
+                    )
                 )
 
     class SiblingDispatcher:
@@ -473,9 +508,7 @@ async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
         "cara.context.ExecutionContext.ExecutionContext.is_sync",
         return_value=True,
     ):
-        await dispatcher.dispatch(
-            UserRegisteredEvent(user_id=1, email="parent@x.com")
-        )
+        await dispatcher.dispatch(UserRegisteredEvent(user_id=1, email="parent@x.com"))
 
     # Parent listener ran for user 1, child fan-out dispatched user 2,
     # and the audit listener saw BOTH ids — no cycle exception.
@@ -531,7 +564,9 @@ async def test_concurrent_dispatches_have_independent_cycle_stacks():
 
     dispatcher.subscribe("user.registered", SlowListener())
 
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         import asyncio as _a
 
         await _a.gather(
@@ -584,9 +619,7 @@ async def test_concurrent_subscribe_during_dispatch_does_not_raise(dispatcher):
             "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
         ):
             for _ in range(iterations):
-                await dispatcher.dispatch(
-                    UserRegisteredEvent(user_id=1, email="a@b.com")
-                )
+                await dispatcher.dispatch(UserRegisteredEvent(user_id=1, email="a@b.com"))
     finally:
         t.join(timeout=5)
         assert not t.is_alive(), "Churner thread did not complete"
@@ -614,7 +647,9 @@ async def test_non_propagating_listener_failure_does_not_block_chain(dispatcher)
     dispatcher.subscribe("user.registered", OrderedListener("third", log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["first", "third"]
@@ -658,7 +693,7 @@ async def test_direct_listeners_fire_before_wildcard_listeners(dispatcher):
     """Listener ordering must be deterministic: direct subscriptions
     fire in registration order, then wildcard subscriptions in
     registration order. Listeners that assume this order (e.g.
-    ``PriceAlertListener`` persists before ``PriceAlertNotificationListener``
+    ``PriceAlertTriggeredListener`` persists before ``PriceAlertNotificationListener``
     notifies) rely on it."""
     log = []
     dispatcher.subscribe("user.registered", OrderedListener("direct-a", log))
@@ -667,7 +702,9 @@ async def test_direct_listeners_fire_before_wildcard_listeners(dispatcher):
     dispatcher.subscribe("*.registered", OrderedListener("wildcard-b", log))
 
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
-    with patch("cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True):
+    with patch(
+        "cara.context.ExecutionContext.ExecutionContext.is_sync", return_value=True
+    ):
         await dispatcher.dispatch(event)
 
     assert log == ["direct-a", "direct-b", "wildcard-a", "wildcard-b"]
@@ -782,9 +819,7 @@ def test_threaded_concurrent_dispatch_independent_event_loops():
             ):
                 for i in range(per_thread):
                     await dispatcher.dispatch(
-                        UserRegisteredEvent(
-                            user_id=tid * 1000 + i, email=f"{tid}@x.com"
-                        )
+                        UserRegisteredEvent(user_id=tid * 1000 + i, email=f"{tid}@x.com")
                     )
 
         try:
@@ -793,9 +828,7 @@ def test_threaded_concurrent_dispatch_independent_event_loops():
         except BaseException as e:  # noqa: BLE001
             errors.append(e)
 
-    threads = [
-        threading.Thread(target=worker, args=(t,)) for t in range(threads_n)
-    ]
+    threads = [threading.Thread(target=worker, args=(t,)) for t in range(threads_n)]
     for t in threads:
         t.start()
     for t in threads:

@@ -3,6 +3,8 @@ QueueCancelCommand: Cancel running jobs with flexible filtering options.
 Provides safe job cancellation capabilities for the enhanced queue system.
 """
 
+from __future__ import annotations
+
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.facades import Queue

@@ -4,6 +4,8 @@ HTTP Colorizer for the Cara framework.
 This module provides HTTP request colorization for logs.
 """
 
+from __future__ import annotations
+
 import re
 
 

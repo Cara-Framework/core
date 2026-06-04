@@ -4,6 +4,8 @@ UUID Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is a valid UUID format.
 """
 
+from __future__ import annotations
+
 import re
 from typing import Any
 

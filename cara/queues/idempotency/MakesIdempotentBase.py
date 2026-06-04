@@ -26,6 +26,8 @@ Subclasses MUST set ``_idempotency_key`` indirectly by calling
 ``get_job_parameters`` + ``__class__.__name__``).
 """
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
@@ -76,6 +78,16 @@ class MakesIdempotentBase:
     #: ``enforce_sync_idempotency = False``.
     enforce_sync_idempotency = True
 
+    #: Whether this job participates in the 24h *result cache* dedup.
+    #: Per-entity pipeline jobs keep this True (re-dispatching the same
+    #: listing_id must not re-run the work). RECURRING SCHEDULED jobs set
+    #: it False — they hash to one stable key (no per-run params), so the
+    #: result cache would dedupe every tick after the first into a single
+    #: run per IDEMPOTENCY_CACHE_TTL (24h). The scheduler flips this off
+    #: for scheduled invocations. Overlap is still guarded by the job lock
+    #: (and any WithoutOverlapping / cross-process lock the job declares).
+    idempotency_cache_results = True
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._idempotency_key: str | None = None
@@ -119,27 +131,30 @@ class MakesIdempotentBase:
             )
 
         if not is_forced:
-            cache_key = f"job_result:{self._idempotency_key}"
-            # Read the raw cache value once so we can distinguish
-            # "cached None" (sentinel) from "no entry" (truly missing).
-            # ``Cache.has`` is the authoritative miss/hit signal —
-            # ``Cache.get`` returning ``None`` overlaps with the
-            # "absent" case on every driver.
-            if Cache.has(cache_key):
-                cached_raw = Cache.get(cache_key)
-                cached_result = (
-                    None
-                    if cached_raw == self._NONE_SENTINEL
-                    else cached_raw
-                )
-                Log.debug(
-                    f"Job already completed (cached): {self.get_job_identifier()}",
-                    category="idempotency",
-                )
-                self._emit_cache_op_metric("get", "hit")
-                self._emit_idempotency_metric("collision")
-                return cached_result
-            self._emit_cache_op_metric("get", "miss")
+            # Recurring scheduled jobs opt out of the result cache (see
+            # ``idempotency_cache_results``) — they MUST run every tick.
+            # The lock + lifecycle checks below still apply, so overlapping
+            # ticks are still serialised.
+            if getattr(self, "idempotency_cache_results", True):
+                cache_key = f"job_result:{self._idempotency_key}"
+                # Read the raw cache value once so we can distinguish
+                # "cached None" (sentinel) from "no entry" (truly missing).
+                # ``Cache.has`` is the authoritative miss/hit signal —
+                # ``Cache.get`` returning ``None`` overlaps with the
+                # "absent" case on every driver.
+                if Cache.has(cache_key):
+                    cached_raw = Cache.get(cache_key)
+                    cached_result = (
+                        None if cached_raw == self._NONE_SENTINEL else cached_raw
+                    )
+                    Log.debug(
+                        f"Job already completed (cached): {self.get_job_identifier()}",
+                        category="idempotency",
+                    )
+                    self._emit_cache_op_metric("get", "hit")
+                    self._emit_idempotency_metric("collision")
+                    return cached_result
+                self._emit_cache_op_metric("get", "miss")
 
             if self.is_job_locked():
                 Log.debug(
@@ -386,7 +401,8 @@ class MakesIdempotentBase:
                 category="idempotency",
             )
             result = await callback()
-            self.cache_result(result)
+            if getattr(self, "idempotency_cache_results", True):
+                self.cache_result(result)
             Log.debug(
                 f"Job completed successfully: {self.get_job_identifier()}",
                 category="idempotency",
@@ -425,11 +441,7 @@ class MakesIdempotentBase:
             # "completed", not "still running".
             if Cache.has(cache_key):
                 cached_raw = Cache.get(cache_key)
-                cached_result = (
-                    None
-                    if cached_raw == self._NONE_SENTINEL
-                    else cached_raw
-                )
+                cached_result = None if cached_raw == self._NONE_SENTINEL else cached_raw
                 Log.debug(
                     f"Waited job completed: {self.get_job_identifier()}",
                     category="idempotency",

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.migrations import Migration

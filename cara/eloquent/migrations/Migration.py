@@ -199,7 +199,9 @@ class Migration:
 
             if migration in file_map:
                 Log.info(f"Rolling back: {migration}")
-                transactional = self.executor._migration_is_transactional(file_map[migration])
+                transactional = self.executor._migration_is_transactional(
+                    file_map[migration]
+                )
                 if transactional:
                     with DB.transaction():
                         self.executor._run_migration(file_map[migration], "down")

@@ -5,6 +5,8 @@ This module provides a powerful collection system for the Cara framework, implem
 collection methods with support for mapping, filtering, sorting, and aggregation operations.
 """
 
+from __future__ import annotations
+
 import json
 import operator
 import random

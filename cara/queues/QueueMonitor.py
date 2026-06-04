@@ -5,10 +5,14 @@ This module provides monitoring capabilities for queue jobs,
 including job status tracking, performance metrics, and failure handling.
 """
 
+from __future__ import annotations
+
 import json
 import time
 from datetime import datetime
 from typing import Any
+
+import pendulum
 
 from cara.facades import Log
 
@@ -49,7 +53,7 @@ class QueueMonitor:
             "job_class": job.__class__.__name__,
             "queue": queue_name,
             "status": "processing",
-            "started_at": datetime.now(),
+            "started_at": pendulum.now("UTC"),
             "attempts": getattr(job, "attempts", 1),
             "payload_size": len(str(job.__dict__)),
         }
@@ -82,7 +86,7 @@ class QueueMonitor:
             return
 
         job_stat = self.job_stats[job_id]
-        job_stat["completed_at"] = datetime.now()
+        job_stat["completed_at"] = pendulum.now("UTC")
         job_stat["duration"] = (
             job_stat["completed_at"] - job_stat["started_at"]
         ).total_seconds()
@@ -185,14 +189,14 @@ class QueueMonitor:
         stuck-job alert payload (avoids forcing every caller to
         recompute against ``started_at``).
         """
-        now = datetime.now()
+        now = pendulum.now("UTC")
         stuck: list[tuple[float, dict[str, Any]]] = []
         for stat in self.job_stats.values():
             if stat.get("status") != "processing":
                 continue
             started = stat.get("started_at")
             if not isinstance(started, datetime):
-                # Defensive: ``job_started`` writes ``datetime.now()`` but
+                # Defensive: ``job_started`` writes ``pendulum.now("UTC")`` but
                 # ``get_job_stats`` mutates entries to ISO strings on the
                 # return path. Skip anything we can't compare numerically.
                 continue
@@ -268,7 +272,7 @@ class QueueMonitor:
             "average_processing_time_seconds": round(avg_processing_time, 3),
             "queues_active": len(self.queue_stats),
             "queue_stats": self.queue_stats,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": pendulum.now("UTC").isoformat(),
         }
 
     def export_stats(self, format: str = "json") -> str:
@@ -338,7 +342,7 @@ class QueueMonitor:
             "status": status,
             "issues": issues,
             "metrics": stats,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": pendulum.now("UTC").isoformat(),
         }
 
     def get_throughput(self, window_minutes: int = 60) -> dict[str, Any]:
@@ -351,9 +355,7 @@ class QueueMonitor:
         Returns:
             Dict with throughput metrics per queue
         """
-        cutoff_time = datetime.now() - __import__("datetime").timedelta(
-            minutes=window_minutes
-        )
+        cutoff_time = pendulum.now("UTC").subtract(minutes=window_minutes)
 
         throughput = {}
         for job_id, job_stat in self.job_stats.items():
@@ -384,7 +386,7 @@ class QueueMonitor:
         return {
             "window_minutes": window_minutes,
             "throughput": throughput,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": pendulum.now("UTC").isoformat(),
         }
 
     def get_error_breakdown(self) -> dict[str, Any]:
@@ -454,7 +456,7 @@ class QueueMonitor:
             "total_failed": len(
                 [j for j in self.job_stats.values() if j["status"] == "failed"]
             ),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": pendulum.now("UTC").isoformat(),
         }
 
     def clear_stats(self):

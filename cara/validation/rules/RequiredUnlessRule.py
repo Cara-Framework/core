@@ -5,6 +5,8 @@ Field is required unless another field equals a given value.
 Usage: ``required_unless:other_field,value``.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter
@@ -46,8 +48,5 @@ class RequiredUnlessRule(BaseRule):
         other = parts[0] if parts else ""
         expected = parts[1] if len(parts) > 1 else ""
         if other and expected:
-            return (
-                f"The {attr.lower()} field is required unless "
-                f"{other} is '{expected}'."
-            )
+            return f"The {attr.lower()} field is required unless {other} is '{expected}'."
         return f"The {attr.lower()} field is required unless the given condition is met."

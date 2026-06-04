@@ -27,6 +27,7 @@ def test_normalize_email():
 
 def test_normalize_email_edge_cases():
     from cara.support.Str import normalize_email
+
     # None input
     assert normalize_email(None) == ""
     # tabs and mixed whitespace
@@ -88,6 +89,7 @@ def test_camel_case():
 
 def test_snake_case_edge_cases():
     from cara.support.Str import snake_case
+
     # acronyms: snake_case only splits lower-to-upper transitions, so
     # consecutive uppercase letters stay glued together
     assert snake_case("HTTPServer") == "httpserver"
@@ -105,6 +107,7 @@ def test_snake_case_edge_cases():
 
 def test_kebab_case_edge_cases():
     from cara.support.Str import kebab_case
+
     assert kebab_case("HTTPServer") == "httpserver"
     assert kebab_case("getHTTPResponse") == "get-httpresponse"
     assert kebab_case("foo--bar__baz") == "foo-bar-baz"
@@ -116,6 +119,7 @@ def test_kebab_case_edge_cases():
 
 def test_camel_case_edge_cases():
     from cara.support.Str import camel_case
+
     # underscores, hyphens, and spaces are all valid separators
     assert camel_case("hello_world") == "helloWorld"
     assert camel_case("hello-world") == "helloWorld"
@@ -132,6 +136,7 @@ def test_camel_case_edge_cases():
 
 def test_pluralize():
     from cara.support.Str import pluralize
+
     assert pluralize("cat") == "cats"
     assert pluralize("box") == "boxes"
     assert pluralize("bush") == "bushes"
@@ -146,6 +151,7 @@ def test_pluralize():
 
 def test_studly_case():
     from cara.support.Str import studly_case
+
     assert studly_case("foo_bar") == "FooBar"
     assert studly_case("hello-world") == "HelloWorld"
     assert studly_case("  foo__bar--baz  ") == "FooBarBaz"

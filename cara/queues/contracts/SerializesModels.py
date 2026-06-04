@@ -5,6 +5,8 @@ This mixin provides automatic serialization/deserialization of models and comple
 for queue jobs, avoiding circular reference issues.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 
@@ -18,6 +20,18 @@ class SerializesModels:
     3. Avoiding circular references and pickle issues
     """
 
+    #: Live, container-resolved service handles that a job may cache on
+    #: itself at run time. These MUST NOT be serialized: on a retry
+    #: republish they round-trip through ``_serialize_object`` /
+    #: ``_deserialize_object`` and come back as a broken ``DummyClass`` /
+    #: ``MockObject`` stand-in. ``_job_tracker`` in particular then makes
+    #: ``Trackable._mark_processing`` call ``MockObject.where(...)`` →
+    #: ``AttributeError`` → the job fails on tracking even though its work
+    #: was fine, retries, and finally dead-letters. They are always
+    #: re-resolved from the container at run time, so dropping them here is
+    #: lossless. ``_app`` is reset by the worker on every dispatch anyway.
+    _TRANSIENT_STATE_KEYS = frozenset({"_job_tracker", "_app", "_log_ctx"})
+
     def __getstate__(self) -> dict[str, Any]:
         """
         Custom serialization for queue jobs.
@@ -28,6 +42,8 @@ class SerializesModels:
         state = {}
 
         for key, value in self.__dict__.items():
+            if key in self._TRANSIENT_STATE_KEYS:
+                continue
             state[key] = self._serialize_property(value)
 
         return state
@@ -41,6 +57,14 @@ class SerializesModels:
         """
         for key, value in state.items():
             setattr(self, key, self._deserialize_property(value))
+
+        # Transient service handles were intentionally not serialized.
+        # Default them to None so the run-time accessor re-resolves them
+        # from the container instead of tripping over a missing attribute
+        # (pickle bypasses __init__, so they'd otherwise be absent).
+        for key in self._TRANSIENT_STATE_KEYS:
+            if not hasattr(self, key):
+                setattr(self, key, None)
 
     def _serialize_property(self, value: Any) -> Any:
         """

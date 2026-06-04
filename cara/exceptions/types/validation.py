@@ -4,6 +4,8 @@ Validation Exception Type for the Cara framework.
 This module defines exception types related to validation operations.
 """
 
+from __future__ import annotations
+
 __all__ = [
     "ValidationException",
     "RuleNotFoundException",

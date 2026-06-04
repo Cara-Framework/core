@@ -11,6 +11,8 @@ Supports:
 - Async/sync listener execution
 """
 
+from __future__ import annotations
+
 import asyncio
 import inspect
 from collections.abc import Callable
@@ -283,11 +285,7 @@ class Event:
             listener: The listener instance to remove. Identity
                 comparison (``is``), not equality.
         """
-        bucket_map = (
-            self._wildcard_listeners
-            if "*" in event_name
-            else self._listeners
-        )
+        bucket_map = self._wildcard_listeners if "*" in event_name else self._listeners
         with self._lock:
             bucket = bucket_map.get(event_name)
             if not bucket:
@@ -692,6 +690,7 @@ class Event:
         except Exception as e:
             try:
                 from cara.facades import Log as _Log
+
                 _Log.error(
                     f"Fire-and-forget listener failed with exception: "
                     f"{e.__class__.__name__}: {e}",
@@ -703,6 +702,7 @@ class Event:
                 # as a last resort so the exception isn't fully
                 # swallowed.
                 import sys
+
                 print(
                     f"[cara.events] fire-and-forget task raised "
                     f"{e.__class__.__name__}: {e}",

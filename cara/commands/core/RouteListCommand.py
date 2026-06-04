@@ -4,6 +4,8 @@ Route Listing Command for the Cara framework.
 This module provides a CLI command to list application routes with enhanced UX.
 """
 
+from __future__ import annotations
+
 import inspect
 import re
 from typing import Any

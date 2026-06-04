@@ -1,5 +1,7 @@
 """Present rule (key must exist; value can be empty). Usage: ``present``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

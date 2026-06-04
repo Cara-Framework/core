@@ -1,5 +1,7 @@
 """Not-regex rule. Usage: ``not_regex:/foo/``."""
 
+from __future__ import annotations
+
 import re
 from typing import Any
 

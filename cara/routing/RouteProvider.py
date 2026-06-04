@@ -5,6 +5,8 @@ This module handles route registration, controller discovery, and route group ma
 framework. It supports controller-based routing and route decorators.
 """
 
+from __future__ import annotations
+
 from cara.foundation import DeferredProvider
 from cara.routing import Router
 from cara.routing.loaders import (

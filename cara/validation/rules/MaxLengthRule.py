@@ -4,6 +4,8 @@ Max Length Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a string value does not exceed a maximum length.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter
@@ -37,6 +39,7 @@ class MaxLengthRule(BaseRule):
             # rule that pass-through'd on a misconfigured cap).
             try:
                 from cara.facades import Log
+
                 Log.warning(
                     f"MaxLengthRule: non-numeric max_length "
                     f"parameter {max_length!r} on field {field!r}; "

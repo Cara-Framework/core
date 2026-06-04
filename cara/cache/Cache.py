@@ -7,6 +7,8 @@ operations to the appropriate driver instance.
 Supports Laravel-style cache tags and cache locks for distributed systems.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.cache.contracts import Cache

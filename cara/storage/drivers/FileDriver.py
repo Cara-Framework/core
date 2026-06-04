@@ -5,6 +5,8 @@ This module implements a storage driver that saves and retrieves binary data as 
 directory.
 """
 
+from __future__ import annotations
+
 import os
 
 from cara.exceptions import (

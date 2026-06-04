@@ -1,5 +1,7 @@
 """Different rule. Usage: ``different:other_field``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

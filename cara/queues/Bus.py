@@ -5,6 +5,8 @@ Automatically decides whether to run jobs synchronously or dispatch to queue
 based on execution context. Inspired by Laravel's Bus facade.
 """
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -252,6 +254,7 @@ class Bus:
             import asyncio
 
             from cara.events.Event import fresh_dispatch_scope
+            from cara.queues.contracts import JobThrottledException
             from cara.queues.middleware import run_through_middleware_async
 
             async def job_handler(j):
@@ -267,13 +270,14 @@ class Bus:
             with fresh_dispatch_scope():
                 result = await run_through_middleware_async(job, job_handler)
 
-            # If middleware skipped the job (returned None), still mark success
-            if result is None:
-                if has_tracking and hasattr(job, "_mark_success"):
-                    job._mark_success()
-                if tracker and job_id:
-                    tracker.update_job_status(job_id, "completed")
-                return None
+            # ``None`` is a legitimate successful return: every cheapa pipeline
+            # stage routes its work through wrap_with_idempotency(_do_work) and
+            # _do_work returns None on success, so ``result is None`` is the
+            # NORMAL success case — not a skip. Recording completion only for a
+            # non-None result left every Trackable pipeline job stuck at
+            # 'processing' forever on --sync runs. The idempotency layer caches
+            # None via its own sentinel rather than treating it as "did
+            # nothing"; mirror that here and record completion unconditionally.
 
             # Mark as success in unified job table
             if has_tracking and hasattr(job, "_mark_success"):
@@ -284,6 +288,11 @@ class Bus:
                 tracker.update_job_status(job_id, "completed")
 
             return result
+
+        except JobThrottledException:
+            if tracker and job_id:
+                tracker.update_job_status(job_id, "throttled")
+            return None
 
         except Exception as e:
             # Mark as failed in unified job table

@@ -1,4 +1,10 @@
-from typing import Self
+from __future__ import annotations
+
+try:
+    from typing import Self
+except ImportError:  # Python <3.11
+    from typing_extensions import Self  # noqa: F401
+
 
 class ConstraintManager:
     """Single Responsibility: Manages table constraints and indexes"""

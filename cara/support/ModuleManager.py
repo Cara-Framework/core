@@ -4,6 +4,8 @@ Module Manager for Python module paths in the Cara framework.
 This module provides utilities for handling Python module imports and paths.
 """
 
+from __future__ import annotations
+
 
 class ModuleManager:
     """

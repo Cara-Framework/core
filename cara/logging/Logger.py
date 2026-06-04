@@ -4,6 +4,8 @@ Logger Implementation for the Cara framework.
 This module provides a clean, simple logger with style-based formatting.
 """
 
+from __future__ import annotations
+
 import inspect
 import sys
 import traceback

@@ -5,6 +5,8 @@ Provides thread-safe dependency injection without any app-specific knowledge.
 Pure infrastructure code - completely generic and reusable.
 """
 
+from __future__ import annotations
+
 from contextvars import ContextVar
 from typing import Any
 

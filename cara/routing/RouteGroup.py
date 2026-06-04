@@ -6,6 +6,8 @@ framework, allowing shared attributes like URL prefixes and middleware to be app
 multiple routes, making route management more efficient and maintainable.
 """
 
+from __future__ import annotations
+
 from cara.support.Collection import flatten
 
 

@@ -5,6 +5,8 @@ This driver sends emails using Mailgun API service,
 supporting all Mailgun features including regions and attachments.
 """
 
+from __future__ import annotations
+
 import os
 from typing import Any
 

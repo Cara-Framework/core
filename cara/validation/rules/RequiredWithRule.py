@@ -5,6 +5,8 @@ Field becomes required when ANY of the listed fields are present.
 Usage: ``required_with:field1,field2,...``.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

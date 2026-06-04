@@ -5,6 +5,8 @@ Single responsibility: Handle all date-related operations cleanly and efficientl
 Follows DRY and KISS principles for date management.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Any
 

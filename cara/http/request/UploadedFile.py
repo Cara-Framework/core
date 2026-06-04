@@ -4,6 +4,8 @@ Uploaded File Handler for Cara Framework.
 Laravel-style file upload handling with clean, minimal API.
 """
 
+from __future__ import annotations
+
 import uuid
 from dataclasses import dataclass
 from pathlib import Path

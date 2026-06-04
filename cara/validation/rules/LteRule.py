@@ -1,5 +1,7 @@
 """Less-than-or-equal rule. Usage: ``lte:10`` or ``lte:field``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

@@ -4,6 +4,8 @@ Command Listing Command for the Cara framework.
 This module provides a CLI command to list all registered commands with enhanced UX.
 """
 
+from __future__ import annotations
+
 from collections import defaultdict
 from typing import Any
 

@@ -2,6 +2,8 @@
 Authorization service provider.
 """
 
+from __future__ import annotations
+
 from cara.authorization import Gate
 from cara.configuration import config
 from cara.facades import Auth

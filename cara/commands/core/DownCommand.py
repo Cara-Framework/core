@@ -4,6 +4,8 @@ Maintenance Mode Command for the Cara framework.
 This module provides a CLI command to enable maintenance mode with enhanced UX.
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any

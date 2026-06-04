@@ -1,6 +1,6 @@
 from .BaseJob import BaseJob
 from .BaseQueueable import BaseQueueable
-from .CancellableJob import CancellableJob, JobCancelledException
+from .CancellableJob import CancellableJob, JobCancelledException, JobThrottledException
 from .Queue import Queue
 from .Queueable import Queueable
 from .SerializesModels import SerializesModels
@@ -12,6 +12,7 @@ __all__ = [
     "BaseQueueable",
     "CancellableJob",
     "JobCancelledException",
+    "JobThrottledException",
     "Queue",
     "Queueable",
     "SerializesModels",

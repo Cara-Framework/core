@@ -7,6 +7,8 @@ is detected at decryption time.
 Payload layout (base64-encoded):  nonce (12 bytes) || tag (16 bytes) || ciphertext
 """
 
+from __future__ import annotations
+
 import hashlib
 from base64 import b64decode, b64encode
 

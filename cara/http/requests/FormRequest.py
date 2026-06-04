@@ -4,6 +4,8 @@ Laravel-style FormRequest for Cara Framework.
 Encapsulates validation, authorization, and custom validation hooks for a single endpoint.
 """
 
+from __future__ import annotations
+
 
 class FormRequest:
     """

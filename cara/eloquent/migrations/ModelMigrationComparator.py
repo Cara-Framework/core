@@ -3,6 +3,8 @@ ModelMigrationComparator: Compare model definitions with migration files.
 Uses migration files as source of truth.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 

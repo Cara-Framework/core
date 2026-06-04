@@ -95,9 +95,7 @@ def test_with_trashed_removes_soft_delete_scope():
 
     returned = scope._with_trashed(sentinel_model, builder)
 
-    builder.remove_global_scope.assert_called_once_with(
-        "_soft_delete", action="select"
-    )
+    builder.remove_global_scope.assert_called_once_with("_soft_delete", action="select")
     # Returns the builder for chaining (.with_trashed().where(...).get())
     assert returned is builder
 
@@ -108,9 +106,7 @@ def test_only_trashed_removes_scope_and_filters_for_deleted():
 
     scope._only_trashed(None, builder)
 
-    builder.remove_global_scope.assert_called_once_with(
-        "_soft_delete", action="select"
-    )
+    builder.remove_global_scope.assert_called_once_with("_soft_delete", action="select")
     builder.where_not_null.assert_called_once_with("product.deleted_at")
 
 
@@ -120,9 +116,7 @@ def test_restore_removes_scope_and_clears_deleted_at():
 
     scope._restore(None, builder)
 
-    builder.remove_global_scope.assert_called_once_with(
-        "_soft_delete", action="select"
-    )
+    builder.remove_global_scope.assert_called_once_with("_soft_delete", action="select")
     builder.update.assert_called_once_with({"deleted_at": None})
 
 
@@ -251,10 +245,7 @@ def test_on_boot_registers_all_five_macros():
 
     scope.on_boot(builder)
 
-    macro_names = [
-        c.args[0]
-        for c in builder.macro.call_args_list
-    ]
+    macro_names = [c.args[0] for c in builder.macro.call_args_list]
     assert set(macro_names) == {
         "with_trashed",
         "only_trashed",

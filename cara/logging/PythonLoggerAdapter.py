@@ -6,6 +6,8 @@ allowing external libraries to use Cara's logging system seamlessly.
 Laravel-style approach: inject our logger into external libraries with category support.
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 

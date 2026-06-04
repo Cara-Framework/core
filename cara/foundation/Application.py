@@ -7,6 +7,8 @@ requests and lifespan events. The Application class is responsible for bootstrap
 and coordinating all its components.
 """
 
+from __future__ import annotations
+
 import inspect
 import threading
 from typing import Any

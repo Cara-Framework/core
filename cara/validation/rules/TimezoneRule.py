@@ -1,5 +1,7 @@
 """Timezone rule (IANA name, e.g. ``Europe/Istanbul``). Usage: ``timezone``."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

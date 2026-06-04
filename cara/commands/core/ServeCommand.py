@@ -4,6 +4,8 @@ Development Server Command for the Cara framework.
 This module provides a CLI command to start the development server with enhanced UX.
 """
 
+from __future__ import annotations
+
 import os
 import platform
 import subprocess

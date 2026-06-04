@@ -4,6 +4,8 @@ Regex Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value matches a given regular expression.
 """
 
+from __future__ import annotations
+
 import re
 from typing import Any
 

@@ -7,6 +7,8 @@ Importing from ``cara.helpers`` lets application code write::
 without needing to know the canonical module path of each helper.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import Any, TypeVar
 

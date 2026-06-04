@@ -90,7 +90,8 @@ def _body_contains_try(body: list[ast.stmt]) -> bool:
                     return True
                 # except Exception / except BaseException — accept.
                 if isinstance(handler.type, ast.Name) and handler.type.id in {
-                    "Exception", "BaseException",
+                    "Exception",
+                    "BaseException",
                 }:
                     return True
                 # except (Exception, ...): tuple form — accept if
@@ -98,7 +99,8 @@ def _body_contains_try(body: list[ast.stmt]) -> bool:
                 if isinstance(handler.type, ast.Tuple):
                     for elt in handler.type.elts:
                         if isinstance(elt, ast.Name) and elt.id in {
-                            "Exception", "BaseException",
+                            "Exception",
+                            "BaseException",
                         }:
                             return True
     return False
@@ -156,6 +158,6 @@ def test_every_channel_helper_is_fail_soft(
         f"    try:\n"
         f"        ...existing body...\n"
         f"    except Exception as e:\n"
-        f"        Log.warning(f\"[NotificationProvider] X channel \"\n"
-        f"                    f\"registration failed: {{e}}\")\n"
+        f'        Log.warning(f"[NotificationProvider] X channel "\n'
+        f'                    f"registration failed: {{e}}")\n'
     )

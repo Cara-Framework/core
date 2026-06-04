@@ -5,6 +5,8 @@ This module provides the deferred service provider that configures and registers
 functionality, making the RateLimiter available throughout the application based on configuration.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.configuration import config

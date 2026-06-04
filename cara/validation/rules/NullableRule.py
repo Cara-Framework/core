@@ -5,6 +5,8 @@ This module provides a validation rule that allows null/None values to pass vali
 When a field is nullable, other validation rules are skipped if the value is null.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

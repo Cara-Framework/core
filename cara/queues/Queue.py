@@ -5,6 +5,8 @@ This module provides the Queue class, which manages job queues and delegates que
 registered driver instances.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 

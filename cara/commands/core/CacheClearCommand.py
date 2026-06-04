@@ -4,6 +4,8 @@ Cache Clear Command for the Cara framework.
 This module provides a CLI command to clear the application cache with enhanced UX.
 """
 
+from __future__ import annotations
+
 import os
 
 from cara.cache import Cache

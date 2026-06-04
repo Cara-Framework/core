@@ -4,6 +4,8 @@ ViewInstance - Individual view instance for Cara framework
 This file provides individual view instance functionality.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 

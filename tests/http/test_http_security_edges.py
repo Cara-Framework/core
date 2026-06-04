@@ -55,6 +55,7 @@ from cara.exceptions import BadRequestException
 class TestLocationCRLF:
     def setup_method(self):
         from cara.http.response.HeaderManager import HeaderManager
+
         # HeaderManager wraps a list-of-tuples header store; pass a
         # MagicMock with the same surface so we don't drag in the
         # full Response constructor here.
@@ -64,13 +65,16 @@ class TestLocationCRLF:
         self.mgr.location("https://example.com/next")
         # No raise; sanity that the normal path works.
 
-    @pytest.mark.parametrize("evil", [
-        "https://example.com/\r\nSet-Cookie: poisoned=1",
-        "https://example.com/\nX-Injected: yes",
-        "https://example.com/\rX-Injected: yes",
-        "https://example.com/foo\r\n",
-        "/path\nGET /admin HTTP/1.1",  # request-line smuggle into intermediary
-    ])
+    @pytest.mark.parametrize(
+        "evil",
+        [
+            "https://example.com/\r\nSet-Cookie: poisoned=1",
+            "https://example.com/\nX-Injected: yes",
+            "https://example.com/\rX-Injected: yes",
+            "https://example.com/foo\r\n",
+            "/path\nGET /admin HTTP/1.1",  # request-line smuggle into intermediary
+        ],
+    )
     def test_crlf_in_url_raises_value_error(self, evil):
         # Response-splitting protection: the bytes after CR/LF would
         # be parsed by the next header consumer as additional headers,
@@ -87,6 +91,7 @@ class TestLocationCRLF:
         class _StrPayload:
             def __str__(self):
                 return "https://x/\r\ninjected"
+
         with pytest.raises(ValueError):
             self.mgr.location(_StrPayload())  # type: ignore[arg-type]
 
@@ -99,38 +104,47 @@ class TestUploadedFileNullByte:
         # Minimal UploadedFile clone — UploadedFile.__init__ pulls in
         # framework facades we don't need for the null-byte guard.
         from cara.http.request.UploadedFile import UploadedFile
+
         f = UploadedFile.__new__(UploadedFile)
         f.content = b"payload bytes"
         f.filename = "ignored-by-test"
         return f
 
-    @pytest.mark.parametrize("bad_filename", [
-        "innocent.txt\x00.php",   # extension smuggle
-        "\x00malicious",            # leading null
-        "trailing\x00",             # trailing null
-        "mid\x00dle.txt",          # mid-string null
-    ])
+    @pytest.mark.parametrize(
+        "bad_filename",
+        [
+            "innocent.txt\x00.php",  # extension smuggle
+            "\x00malicious",  # leading null
+            "trailing\x00",  # trailing null
+            "mid\x00dle.txt",  # mid-string null
+        ],
+    )
     def test_null_byte_in_filename_raises(self, bad_filename, tmp_path, monkeypatch):
         # ``cara.support`` re-exports ``paths`` as a function name,
         # shadowing the submodule, so we go through ``sys.modules``
         # to grab the actual submodule for the monkeypatch.
         import sys
+
         paths_module = sys.modules["cara.support.paths"]
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
         with pytest.raises(BadRequestException, match="null byte"):
             self._file()._store_file("uploads", bad_filename)
 
-    @pytest.mark.parametrize("bad_dir", [
-        "uploads\x00",
-        "\x00escape",
-        "up\x00loads",
-    ])
+    @pytest.mark.parametrize(
+        "bad_dir",
+        [
+            "uploads\x00",
+            "\x00escape",
+            "up\x00loads",
+        ],
+    )
     def test_null_byte_in_directory_raises(self, bad_dir, tmp_path, monkeypatch):
         # ``cara.support`` re-exports ``paths`` as a function name,
         # shadowing the submodule, so we go through ``sys.modules``
         # to grab the actual submodule for the monkeypatch.
         import sys
+
         paths_module = sys.modules["cara.support.paths"]
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
@@ -142,6 +156,7 @@ class TestUploadedFileNullByte:
         # shadowing the submodule, so we go through ``sys.modules``
         # to grab the actual submodule for the monkeypatch.
         import sys
+
         paths_module = sys.modules["cara.support.paths"]
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
@@ -161,6 +176,7 @@ class TestSSEMultilineData:
         # Bypass __init__ — we only need the static-ish formatter
         # (it reads no instance state past ``self``).
         from cara.http.response.StreamingResponse import StreamingResponse
+
         sr = StreamingResponse.__new__(StreamingResponse)
         return sr._format_sse_event(event)
 

@@ -5,6 +5,8 @@ This module defines the contract that any queue driver must implement, specifyin
 for queue operations.
 """
 
+from __future__ import annotations
+
 from typing import Any, Protocol
 
 

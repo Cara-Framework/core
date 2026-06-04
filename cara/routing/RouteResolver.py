@@ -382,9 +382,19 @@ class RouteResolver:
         return kwargs
 
     def _http_providers(self, request, response):
+        # Match by type identity AND by parameter name. The name-based keys
+        # are essential for controllers that use ``from __future__ import
+        # annotations`` (PEP 563): there the ``request: Request`` hint is the
+        # string ``"Request"`` at runtime, so the ``t is Request`` type check
+        # never matches and the parameter would fail to resolve ("Could not
+        # resolve parameter: request"). Matching the conventional ``request``
+        # / ``response`` parameter names keeps DI working regardless of how
+        # the annotation evaluates.
         providers = {
             (lambda t: t is Request): lambda: request,
             (lambda t: t is Response): lambda: response,
+            "request": lambda: request,
+            "response": lambda: response,
         }
 
         # Add route parameters with automatic type conversion

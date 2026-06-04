@@ -5,6 +5,8 @@ Field becomes required when another field equals a given value.
 Usage: ``required_if:other_field,value`` (e.g. ``required_if:type,paid``).
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter
@@ -37,10 +39,7 @@ class RequiredIfRule(BaseRule):
         other = parts[0] if parts else ""
         expected = parts[1] if len(parts) > 1 else ""
         if expected:
-            return (
-                f"The {attr.lower()} field is required when "
-                f"{other} is '{expected}'."
-            )
+            return f"The {attr.lower()} field is required when {other} is '{expected}'."
         return (
             f"The {attr.lower()} field is required when {other} equals the given value."
         )

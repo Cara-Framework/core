@@ -5,6 +5,8 @@ This mixin provides utility helper methods for URL handling, path matching,
 and query parameter access.
 """
 
+from __future__ import annotations
+
 import re
 from typing import Any
 

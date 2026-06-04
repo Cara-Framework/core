@@ -3,6 +3,8 @@
 Usage: ``gte:10`` or ``gte:other_field``.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

@@ -5,6 +5,8 @@ This module defines the contract for rate limiter drivers, specifying the requir
 limiting implementations.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
 

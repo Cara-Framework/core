@@ -6,6 +6,8 @@ controller functionality with dependency injection, middleware support, and stan
 handling.
 """
 
+from __future__ import annotations
+
 from cara.http import Request, Response
 
 

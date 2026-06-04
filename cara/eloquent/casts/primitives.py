@@ -4,6 +4,8 @@ Primitive Cast Types for Cara ORM
 Handles basic data types like bool, int, float, decimal.
 """
 
+from __future__ import annotations
+
 import json
 from decimal import Decimal, InvalidOperation
 

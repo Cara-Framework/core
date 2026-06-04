@@ -5,6 +5,8 @@ This module defines the contract that any event class must implement, specifying
 for event handling.
 """
 
+from __future__ import annotations
+
 from typing import Any, Protocol
 
 

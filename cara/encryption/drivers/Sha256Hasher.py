@@ -5,6 +5,8 @@ This module provides the Sha256Hasher class, which implements password hashing a
 using the SHA-256 algorithm.
 """
 
+from __future__ import annotations
+
 import hashlib
 import hmac
 

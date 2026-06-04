@@ -4,6 +4,8 @@ JWT Authentication Guard.
 Clean, focused JWT authentication with all functionality in a single class.
 """
 
+from __future__ import annotations
+
 import hashlib
 import time
 from contextvars import ContextVar
@@ -252,9 +254,7 @@ class JWTGuard(Guard):
                 # Token already past its natural lifetime; refuse rather
                 # than write a zero-TTL key that vanishes immediately.
                 return False
-            return bool(
-                Cache.add(f"jwt_blacklist:{_hash_token(token)}", True, ttl)
-            )
+            return bool(Cache.add(f"jwt_blacklist:{_hash_token(token)}", True, ttl))
         except Exception:
             return False
 
@@ -529,6 +529,7 @@ class JWTGuard(Guard):
                     CacheConfigurationException,
                     DriverNotRegisteredException,
                 )
+
                 cache_failure_types = cache_failure_types + (
                     CacheConfigurationException,
                     DriverNotRegisteredException,

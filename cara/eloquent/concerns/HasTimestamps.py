@@ -5,6 +5,8 @@ Single Responsibility: Handle timestamp operations for Eloquent models.
 Clean and simple date management following DRY and KISS principles.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 
 import pendulum

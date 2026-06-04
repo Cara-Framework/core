@@ -2,6 +2,8 @@
 Authorization Gate - Centralized authorization logic for Cara framework.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import Any
 

@@ -5,6 +5,8 @@ Core response functionality with ASGI support and basic properties.
 Laravel-inspired design with clean separation of concerns.
 """
 
+from __future__ import annotations
+
 import json
 from typing import Any
 

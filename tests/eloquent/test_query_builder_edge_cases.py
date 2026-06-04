@@ -67,9 +67,7 @@ def test_where_in_all_none_collapses_to_match_nothing():
     qb = _qb().where_in("id", [None, None])
     sql = qb.to_sql()
     assert "0 = 1" in sql, f"all-None IN should be 0=1, got: {sql}"
-    assert "None" not in sql, (
-        f"None literal must not be spliced into SQL, got: {sql}"
-    )
+    assert "None" not in sql, f"None literal must not be spliced into SQL, got: {sql}"
 
 
 def test_where_in_mixed_none_keeps_non_none_values():
@@ -111,9 +109,7 @@ def test_where_not_in_all_none_emits_explicit_tautology():
     qb = _qb().where_not_in("id", [None, None])
     sql = qb.to_sql()
     assert "WHERE 1 = 1" in sql, sql
-    assert "NOT IN" not in sql, (
-        f"all-None NOT IN must not generate 'NOT IN', got: {sql}"
-    )
+    assert "NOT IN" not in sql, f"all-None NOT IN must not generate 'NOT IN', got: {sql}"
 
 
 def test_where_not_in_with_values_unchanged():
@@ -218,9 +214,13 @@ def test_nested_or_where_three_levels_deep():
     """Closure-based nested where groups must compose correctly with
     or_where at multiple depths. Pre-existing case-sensitivity bug
     used to downgrade inner OR keywords to AND silently."""
-    qb = _qb().where("a", 1).where(
-        lambda q: q.where("b", 2).or_where(
-            lambda q2: q2.where("c", 3).or_where("d", 4)
+    qb = (
+        _qb()
+        .where("a", 1)
+        .where(
+            lambda q: q.where("b", 2).or_where(
+                lambda q2: q2.where("c", 3).or_where("d", 4)
+            )
         )
     )
     sql = qb.to_sql()

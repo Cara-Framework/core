@@ -4,6 +4,8 @@ SelectExpression - Simple expression class for SELECT statements
 Handles SELECT column expressions in a clean, simple way.
 """
 
+from __future__ import annotations
+
 
 class SelectExpression:
     """Expression for SELECT clauses.

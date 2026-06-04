@@ -5,6 +5,8 @@ Provides a generic interface for jobs that can be cancelled during execution.
 This is framework-level functionality, not app-specific.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
 
@@ -104,3 +106,17 @@ class JobCancelledException(Exception):
     ):
         super().__init__(message)
         self.tracking_id = tracking_id
+
+
+class JobThrottledException(Exception):
+    """Raised when middleware skips job execution due to throttling."""
+
+    def __init__(
+        self,
+        message: str = "Job was throttled",
+        key: str | None = None,
+        retry_after: int | None = None,
+    ):
+        super().__init__(message)
+        self.key = key
+        self.retry_after = retry_after

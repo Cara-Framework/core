@@ -2,6 +2,8 @@
 Policy - Base policy class for authorization policies.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.authorization.contracts import Policy

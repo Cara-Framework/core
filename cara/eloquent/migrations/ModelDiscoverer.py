@@ -2,6 +2,8 @@
 ModelDiscoverer: Discover and parse model files.
 """
 
+from __future__ import annotations
+
 import ast
 import re
 from pathlib import Path
@@ -553,6 +555,8 @@ class ModelDiscoverer:
                         params["nullable"] = True
                     elif method_name == "unique":
                         params["unique"] = True
+                    elif method_name == "use_current":
+                        params["use_current"] = True
                     elif method_name == "default":
                         if current.args and isinstance(current.args[0], ast.Constant):
                             params["default"] = current.args[0].value

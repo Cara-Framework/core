@@ -65,7 +65,8 @@ def dispatcher() -> EventDispatcher:
 
 class TestSubscribeDeduplication:
     def test_same_listener_subscribed_twice_only_invoked_once(
-        self, dispatcher: EventDispatcher,
+        self,
+        dispatcher: EventDispatcher,
     ):
         listener = _RecordingListener()
         dispatcher.subscribe("user.registered", listener)
@@ -81,7 +82,8 @@ class TestSubscribeDeduplication:
         )
 
     def test_dedup_is_by_identity_not_equality(
-        self, dispatcher: EventDispatcher,
+        self,
+        dispatcher: EventDispatcher,
     ):
         # A listener class with custom ``__eq__`` (e.g. tagging two
         # listeners "equal" because they target the same channel)
@@ -115,7 +117,8 @@ class TestSubscribeDeduplication:
         )
 
     def test_wildcard_double_subscribe_also_deduplicated(
-        self, dispatcher: EventDispatcher,
+        self,
+        dispatcher: EventDispatcher,
     ):
         listener = _RecordingListener()
         dispatcher.subscribe("user.*", listener)
@@ -133,7 +136,8 @@ class TestSubscribeDeduplication:
 
 class TestUnsubscribe:
     def test_removes_subscribed_listener_by_identity(
-        self, dispatcher: EventDispatcher,
+        self,
+        dispatcher: EventDispatcher,
     ):
         listener = _RecordingListener()
         dispatcher.subscribe("evt", listener)
@@ -168,7 +172,8 @@ class TestUnsubscribe:
         assert bucket[0] is b, "Sibling listener must survive the targeted remove"
 
     def test_unsubscribe_supports_wildcard_buckets(
-        self, dispatcher: EventDispatcher,
+        self,
+        dispatcher: EventDispatcher,
     ):
         listener = _RecordingListener()
         dispatcher.subscribe("user.*", listener)
@@ -176,7 +181,8 @@ class TestUnsubscribe:
         assert "user.*" not in dispatcher._wildcard_listeners
 
     def test_unsubscribe_pattern_does_not_walk_buckets(
-        self, dispatcher: EventDispatcher,
+        self,
+        dispatcher: EventDispatcher,
     ):
         # Contract: unsubscribe(pattern) MUST match the exact pattern
         # the consumer subscribed with — it does NOT walk wildcards
@@ -221,7 +227,8 @@ class TestHandleListenerJobRehydrateValidation:
         # Sanity: the happy path still works — well-formed payload
         # rehydrates and returns an event the listener can use.
         event = _instantiate_event(
-            _ValidatedEvent, {"user_id": 42, "email": "a@b.com"},
+            _ValidatedEvent,
+            {"user_id": 42, "email": "a@b.com"},
         )
         assert event.user_id == 42
         assert event.email == "a@b.com"
@@ -236,7 +243,8 @@ class TestHandleListenerJobRehydrateValidation:
         # recovery.
         with pytest.raises(ValueError, match="missing/invalid fields"):
             _instantiate_event(
-                _ValidatedEvent, {"user_id": 42},  # email missing
+                _ValidatedEvent,
+                {"user_id": 42},  # email missing
             )
 
     def test_validator_raising_is_surfaced_with_event_class_name(self):

@@ -6,6 +6,8 @@ Compatible with BaseGrammar.process_wheres which reads .equality,
 .value, .value_type, .raw, .keyword, .low, .high, and .column.
 """
 
+from __future__ import annotations
+
 
 class BetweenExpression:
     """Represents a BETWEEN / NOT BETWEEN condition in SQL."""

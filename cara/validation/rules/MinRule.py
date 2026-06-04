@@ -4,6 +4,8 @@ Minimum Value Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value meets a minimum threshold.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation import MessageFormatter

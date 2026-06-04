@@ -10,6 +10,8 @@ Supported extras (passed as kwargs):
   - middleware: List[Any]      # list of middleware classes or callables
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, TypedDict

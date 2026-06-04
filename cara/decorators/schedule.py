@@ -4,6 +4,8 @@ Schedule Decorator for the Cara framework.
 This module provides a decorator for registering scheduled jobs in the application.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 

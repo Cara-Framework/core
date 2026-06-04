@@ -2,6 +2,8 @@
 AttributeHelper - Utility for attribute operations
 """
 
+from __future__ import annotations
+
 
 class AttributeHelper:
     """Helper for attribute manipulation operations."""

@@ -5,6 +5,8 @@ This module provides the service provider that registers the Hash and Crypt util
 to the application container with the configured application key.
 """
 
+from __future__ import annotations
+
 from cara.configuration import config
 from cara.encryption import Crypt, Hash
 from cara.exceptions import EncryptionException

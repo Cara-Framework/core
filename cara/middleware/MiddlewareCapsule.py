@@ -3,6 +3,8 @@ Middleware capsule for managing middleware execution.
 Laravel-style middleware management with parameter parsing support.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 
 from cara.exceptions import RouteMiddlewareNotFoundException

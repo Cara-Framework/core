@@ -5,6 +5,8 @@ This module provides a utility class for parsing query strings with support for 
 structures, arrays, and Laravel-style bracket notation.
 """
 
+from __future__ import annotations
+
 import re
 from collections import defaultdict
 from typing import Any

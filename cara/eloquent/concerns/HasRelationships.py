@@ -5,7 +5,14 @@ Single Responsibility: Handle relationship operations for Eloquent models.
 Clean separation of relationship logic from main model class.
 """
 
-from typing import Any, Self
+from __future__ import annotations
+
+from typing import Any
+
+try:
+    from typing import Self
+except ImportError:  # Python <3.11
+    from typing_extensions import Self  # noqa: F401
 
 
 class HasRelationships:

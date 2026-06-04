@@ -4,6 +4,8 @@ Reloadable Mixin for the Cara framework.
 This module provides a mixin class that adds reload functionality to commands.
 """
 
+from __future__ import annotations
+
 import signal
 import time
 

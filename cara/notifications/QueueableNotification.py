@@ -5,6 +5,8 @@ This class provides DRY functionality specifically for notification operations
 that need to be queued for background processing.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.queues.contracts.BaseQueueable import BaseQueueable

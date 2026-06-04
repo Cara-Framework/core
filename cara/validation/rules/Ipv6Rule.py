@@ -1,5 +1,7 @@
 """IPv6-only rule. Usage: ``ipv6``."""
 
+from __future__ import annotations
+
 import ipaddress
 from typing import Any
 

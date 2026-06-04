@@ -2,6 +2,8 @@
 Can middleware for authorization checks.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 from cara.exceptions import AuthorizationFailedException

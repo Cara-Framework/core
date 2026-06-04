@@ -28,17 +28,13 @@ import pytest
 
 # Resolve commons/database/migrations relative to this test file.
 # tests/ → cara/ → commons/ → cara/.. → commons/database/migrations
-_MIGRATIONS_DIR = (
-    Path(__file__).resolve().parents[3] / "database" / "migrations"
-)
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "database" / "migrations"
 
 
 def _migration_files() -> list[Path]:
     if not _MIGRATIONS_DIR.is_dir():
         return []
-    return sorted(
-        p for p in _MIGRATIONS_DIR.glob("*.py") if p.name != "__init__.py"
-    )
+    return sorted(p for p in _MIGRATIONS_DIR.glob("*.py") if p.name != "__init__.py")
 
 
 _FILES = _migration_files()
@@ -86,13 +82,9 @@ def test_migration_file_defines_migration_subclass_with_up_and_down(path):
     migration_classes = [
         obj
         for obj in vars(module).values()
-        if isinstance(obj, type)
-        and issubclass(obj, Migration)
-        and obj is not Migration
+        if isinstance(obj, type) and issubclass(obj, Migration) and obj is not Migration
     ]
-    assert migration_classes, (
-        f"{path.name} defines no Migration subclass"
-    )
+    assert migration_classes, f"{path.name} defines no Migration subclass"
     assert len(migration_classes) == 1, (
         f"{path.name} defines {len(migration_classes)} Migration subclasses; "
         "the executor's discovery assumes exactly one per file"

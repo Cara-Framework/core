@@ -5,6 +5,8 @@ This module provides the Storage class, which manages multiple storage drivers a
 operations to the appropriate driver instance.
 """
 
+from __future__ import annotations
+
 from cara.exceptions import DriverNotRegisteredException
 from cara.storage.contracts import Storage
 

@@ -5,6 +5,8 @@ This module provides the Request class, encapsulating HTTP request data and util
 request handling.
 """
 
+from __future__ import annotations
+
 import ipaddress
 import os
 import uuid

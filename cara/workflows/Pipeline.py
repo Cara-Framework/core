@@ -5,6 +5,8 @@ Supports both command workflows and job chaining with topic exchange routing.
 Laravel-inspired pipeline pattern with async support and priority routing.
 """
 
+from __future__ import annotations
+
 import asyncio
 import uuid
 from collections.abc import Callable

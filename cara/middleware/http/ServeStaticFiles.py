@@ -5,6 +5,8 @@ This middleware serves static files from the public directory, similar to Larave
 static file serving capability. It handles files like images, CSS, JS, etc.
 """
 
+from __future__ import annotations
+
 import mimetypes
 import os
 

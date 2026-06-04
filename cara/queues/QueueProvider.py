@@ -5,6 +5,8 @@ This module provides the deferred service provider that configures and registers
 subsystem, including various queue drivers.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.configuration import config

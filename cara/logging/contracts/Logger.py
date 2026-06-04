@@ -5,6 +5,8 @@ This module defines the contract that any logger class must implement, specifyin
 for logging operations.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any
 

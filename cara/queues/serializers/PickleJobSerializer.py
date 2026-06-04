@@ -4,6 +4,8 @@ Pickle Job Serializer - Traditional Python serialization.
 Use JsonJobSerializer for new projects (more secure and portable).
 """
 
+from __future__ import annotations
+
 import pickle
 from typing import Any
 

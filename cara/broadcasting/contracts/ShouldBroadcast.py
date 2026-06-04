@@ -16,6 +16,8 @@ before dispatch. Callers don't need to think about Channel vs string
 when implementing their event.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Any, Union

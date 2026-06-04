@@ -4,6 +4,8 @@ Boolean Validation Rule for the Cara framework.
 This module provides a validation rule that checks if a value is a boolean.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.validation.rules import BaseRule

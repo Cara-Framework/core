@@ -118,9 +118,7 @@ class TestNonSensitiveHeaderValuesAreSanitized:
         value = out["x-app-id"]
         # The latin-1 round-trip might mangle non-latin chars, but
         # whatever survives must not contain control bytes.
-        assert not any(
-            ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f for c in value
-        )
+        assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F for c in value)
 
 
 # ── Combined: redacted sensitive + sanitized non-sensitive ─────────
@@ -129,11 +127,13 @@ class TestNonSensitiveHeaderValuesAreSanitized:
 class TestMixedHeaders:
     def test_authorization_redacted_alongside_sanitized_user_agent(self) -> None:
         ua = "Mozilla/5.0\nFAKE-LINE"
-        out = _redact([
-            (b"authorization", b"Bearer s3cr3t"),
-            (b"user-agent", ua.encode("latin-1")),
-            (b"accept", b"application/json"),
-        ])
+        out = _redact(
+            [
+                (b"authorization", b"Bearer s3cr3t"),
+                (b"user-agent", ua.encode("latin-1")),
+                (b"accept", b"application/json"),
+            ]
+        )
         # Sensitive: still REDACTED.
         assert out["authorization"] == "[REDACTED]"
         # Non-sensitive + injection-bearing: sanitized.

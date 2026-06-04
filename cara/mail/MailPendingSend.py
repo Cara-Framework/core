@@ -5,6 +5,8 @@ This class allows chaining operations before sending emails,
 similar to Laravel's mail queueing system.
 """
 
+from __future__ import annotations
+
 
 class MailPendingSend:
     def __init__(self, manager, mailable):

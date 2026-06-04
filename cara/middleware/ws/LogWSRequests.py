@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from collections.abc import Callable
 
@@ -34,9 +36,14 @@ class LogWSRequests(Middleware):
         except Exception as e:
             elapsed = (time.perf_counter() - started) * 1000
             # Client-close race on send raises WebSocketException(4002) — benign.
+            # RouteNotFoundException = client connected to an unregistered /ws
+            # path (e.g. a live-feed client pointed at this jobs process
+            # instead of api/:8300). Not a server fault — debug, not warning.
             name = type(e).__name__
             code = getattr(e, "code", None)
-            is_benign = name == "WebSocketException" and code == 4002
+            is_benign = (
+                name == "WebSocketException" and code == 4002
+            ) or name == "RouteNotFoundException"
             msg = f"🔌 WS: {ip}:{port} -> CLOSE {path} ✗ {name} | {elapsed:.2f}ms"
             if is_benign:
                 Log.debug(msg, category="cara.websocket")

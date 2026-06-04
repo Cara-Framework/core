@@ -1,5 +1,7 @@
 """Shared helpers for queue job instantiation and container binding."""
 
+from __future__ import annotations
+
 import inspect
 
 

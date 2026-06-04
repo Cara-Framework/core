@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Self
+try:
+    from typing import Self
+except ImportError:  # Python <3.11
+    from typing_extensions import Self  # noqa: F401
 
 import re
 

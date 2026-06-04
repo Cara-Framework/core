@@ -4,6 +4,8 @@ View Renderer - Rendering functionality for Cara view engine
 This file provides view rendering capabilities.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.view import ViewEngine

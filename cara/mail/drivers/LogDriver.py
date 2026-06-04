@@ -5,6 +5,8 @@ This driver logs emails instead of sending them,
 useful for development and testing.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from cara.mail.contracts import Mail

@@ -66,6 +66,7 @@ class ArrayCast(BaseCast):
             # return value so existing callers don't break.
             try:
                 from cara.facades import Log
+
                 Log.warning(
                     f"ArrayCast: dropped {type(value).__name__} input "
                     f"(repr={value!r}); expected list — storing as '[]'",
@@ -76,10 +77,12 @@ class ArrayCast(BaseCast):
                 # fall back to stdlib logging so the warning still
                 # lands in test capture and any plain Python harness.
                 import logging
+
                 logging.getLogger("cara.cast.array").warning(
                     "ArrayCast: dropped %s input (repr=%r); "
                     "expected list — storing as '[]'",
-                    type(value).__name__, value,
+                    type(value).__name__,
+                    value,
                 )
             return "[]"
 

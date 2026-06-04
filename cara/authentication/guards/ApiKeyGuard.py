@@ -4,6 +4,8 @@ API Key Authentication Guard.
 Clean, focused API Key authentication with all functionality in a single class.
 """
 
+from __future__ import annotations
+
 from contextvars import ContextVar
 from typing import Any
 
@@ -309,9 +311,8 @@ class ApiKeyGuard(Guard):
 
         try:
             cache_key = f"api_key_rate_limit:{api_key}"
-            current_count = int(
-                Cache.increment(cache_key, 0, self.rate_limit_window) or 0
-            )
+            increment_result = Cache.increment(cache_key, 0, self.rate_limit_window)
+            current_count = int(increment_result if increment_result is not None else 0)
             return current_count < self.rate_limit_max_attempts
         except Exception:
             return True

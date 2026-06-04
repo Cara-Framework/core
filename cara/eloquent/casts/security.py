@@ -6,6 +6,8 @@ Encryption delegates to the ``Crypt`` facade (AES-CBC) registered in the
 container by :class:`EncryptionProvider`.
 """
 
+from __future__ import annotations
+
 import hashlib
 from typing import Any
 

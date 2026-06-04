@@ -4,6 +4,8 @@ Tinker Script Runner - Script execution functionality for Cara Tinker
 This file contains the script runner for executing Tinker scripts with Rich integration.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 

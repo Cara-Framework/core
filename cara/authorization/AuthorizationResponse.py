@@ -2,6 +2,8 @@
 Authorization Response - Response object for authorization inspections.
 """
 
+from __future__ import annotations
+
 
 class AuthorizationResponse:
     """

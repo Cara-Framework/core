@@ -4,6 +4,8 @@ Scheduling Core for the Cara framework.
 This module implements the core scheduling logic, managing scheduled jobs and their execution.
 """
 
+from __future__ import annotations
+
 import uuid
 from typing import Any
 

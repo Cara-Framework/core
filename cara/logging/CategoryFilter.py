@@ -4,6 +4,8 @@ Logging Category Filter for the Cara framework.
 This module provides a filter for categorizing log records by category.
 """
 
+from __future__ import annotations
+
 import logging as pylogging
 
 from cara.configuration import config

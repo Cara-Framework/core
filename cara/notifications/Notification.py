@@ -5,6 +5,8 @@ This module provides the Notification class, which manages multiple notification
 notification operations to the appropriate channel instances.
 """
 
+from __future__ import annotations
+
 from cara.exceptions import DriverNotRegisteredException
 from cara.facades import Log, Queue
 from cara.notifications.contracts import NotificationChannel
