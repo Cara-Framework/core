@@ -19,6 +19,7 @@ import pika
 
 from cara.exceptions import DriverLibraryNotFoundException
 from cara.facades import Log
+from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
 from cara.queues.job_instantiation import instantiate_job
 from cara.support.Console import HasColoredOutput
@@ -140,6 +141,10 @@ class AMQPDriver(HasColoredOutput, Queue):
                     else 0
                 ),
             }
+            # Stash the current trace context in the payload (same rail
+            # as ``attempts``) so the consumer re-parents the job's span
+            # → one product = one trace across workers. No-op when off.
+            payload["_otel"] = _Trace.inject({})
 
             try:
                 self._connect_and_publish(payload, merged_opts)
@@ -734,6 +739,10 @@ class AMQPDriver(HasColoredOutput, Queue):
                 callback_name = payload.get("callback", "handle")
                 args = payload.get("args", ())
                 instance = instantiate_job(self.application, raw, args)
+                if instance is not None:
+                    # Carry the dispatcher's trace context onto the job
+                    # so BaseJob.handle re-parents its span (Obs-4).
+                    instance._otel_carrier = payload.get("_otel")
 
                 # Propagate tracing context so logs show real IDs
                 # instead of [job_id=unknown].

@@ -209,6 +209,24 @@ class Logger(Logger):
         except Exception:
             return str(uuid.uuid4())[:8]
 
+    @staticmethod
+    def _get_trace_id() -> str:
+        """Hex trace id of the active OTel span, or '' when none/off.
+
+        Lets log lines carry ``trace_id=<hex>`` so Grafana can jump from
+        a Loki line straight to its Tempo trace. Fully optional — when
+        opentelemetry isn't installed or no span is active, returns ''.
+        """
+        try:
+            from opentelemetry import trace as _otel_trace
+
+            ctx = _otel_trace.get_current_span().get_span_context()
+            if getattr(ctx, "is_valid", False) and ctx.trace_id:
+                return format(ctx.trace_id, "032x")
+        except Exception:
+            pass
+        return ""
+
     def _format_exception(self, exc_info: bool | Exception | tuple) -> str | None:
         """Format exception information."""
         if not exc_info:
@@ -268,6 +286,13 @@ class Logger(Logger):
             formatted_message = HttpColorizer.colorize_http_message(message)
         else:
             formatted_message = message
+
+        # Append the active OpenTelemetry trace id (if any) so Loki can
+        # pivot a log line → its Tempo trace via the Grafana derived
+        # field ``trace_id=(\w+)``. Empty/no-op when tracing is off.
+        _tid = self._get_trace_id()
+        if _tid:
+            formatted_message = f"{formatted_message} trace_id={_tid}"
 
         # Get log method and execute with our pre-formatted message
         getattr(_loguru_logger, level.lower())

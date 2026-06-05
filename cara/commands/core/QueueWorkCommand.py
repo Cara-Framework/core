@@ -561,6 +561,10 @@ class JobProcessor:
                 _mx_record("orphan")
                 return True
             instance = msg.get("obj")
+            if instance is not None:
+                # Carry the dispatcher's trace context onto the job so
+                # BaseJob.handle re-parents its span (Obs-4 propagation).
+                instance._otel_carrier = msg.get("_otel")
             callback = msg.get("callback", "handle")
             init_args = msg.get("args", ())
             db_job_id = msg.get("db_job_id")

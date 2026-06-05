@@ -24,6 +24,7 @@ from .RouteListCommand import RouteListCommand
 from .RouteOpenApiCommand import RouteOpenApiCommand
 from .ScheduleWorkCommand import ScheduleWorkCommand
 from .ServeCommand import ServeCommand
+from .StorageLinkCommand import StorageLinkCommand
 from .TinkerCommand import TinkerCommand
 from .UpCommand import UpCommand
 
@@ -54,6 +55,7 @@ __all__ = [
     "RouteOpenApiCommand",
     "ScheduleWorkCommand",
     "ServeCommand",
+    "StorageLinkCommand",
     "TinkerCommand",
     "UpCommand",
 ]
