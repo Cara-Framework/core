@@ -170,19 +170,26 @@ class ConnectionResolver:
         connection dangling.
         """
         connection = self._get_active_connection(connection_name)
-        self._remove_active_connection(connection_name)
-        try:
-            connection.commit()
-        finally:
+        connection.commit()
+        # Only unpin + return the connection to the pool once the OUTERMOST
+        # transaction has committed. ``db.transaction()`` nests (a job's
+        # transaction calls a repo/sibling that opens its own) and the
+        # connection handles that with SAVEPOINTs via ``transaction_level``.
+        # Popping the registry + closing on every (incl. nested) commit left
+        # the ENCLOSING transaction with no registry entry — which surfaced as
+        # "No active transaction found for connection: app" at the outer commit.
+        if getattr(connection, "transaction_level", 0) <= 0:
+            self._remove_active_connection(connection_name)
             self._safe_close(connection)
 
     def rollback(self, connection_name):
         """Rollback the transaction opened in this context on ``connection_name``."""
         connection = self._get_active_connection(connection_name)
-        self._remove_active_connection(connection_name)
-        try:
-            connection.rollback()
-        finally:
+        connection.rollback()
+        # Mirror ``commit``: a nested rollback only unwinds its SAVEPOINT, so
+        # keep the connection pinned for the still-open enclosing transaction.
+        if getattr(connection, "transaction_level", 0) <= 0:
+            self._remove_active_connection(connection_name)
             self._safe_close(connection)
 
     @staticmethod
