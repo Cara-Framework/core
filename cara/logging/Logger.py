@@ -257,12 +257,17 @@ class Logger(Logger):
         exc_info: bool | Exception | tuple | None = None,
         color: str | None = None,
         _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         """Internal logging method.
 
         Args:
             color: Optional hex color (e.g. '#a855f7') to override the message color.
             _module_override: Override the caller module name (used by adapters).
+            context: Optional structured key/values folded into the message as
+                ``[k=v]`` suffixes. Accepted on every public method so callers
+                can attach diagnostic context (e.g. ``context={"traceback": ...}``)
+                without the call raising ``unexpected keyword argument 'context'``.
         """
         # Check if we should log this based on category filters
         if category and not CategoryFilter.should_log(level, category):
@@ -290,6 +295,13 @@ class Logger(Logger):
         # Append the active OpenTelemetry trace id (if any) so Loki can
         # pivot a log line → its Tempo trace via the Grafana derived
         # field ``trace_id=(\w+)``. Empty/no-op when tracing is off.
+        # Fold structured context into the line as ``[k=v]`` suffixes,
+        # matching the bound-context child logger's format.
+        if context:
+            _ctx_suffix = " ".join(f"[{k}={v}]" for k, v in context.items())
+            if _ctx_suffix:
+                formatted_message = f"{formatted_message} {_ctx_suffix}"
+
         _tid = self._get_trace_id()
         if _tid:
             formatted_message = f"{formatted_message} trace_id={_tid}"
@@ -385,6 +397,7 @@ class Logger(Logger):
         color: str | None = None,
         exc_info: bool | Exception | tuple | None = None,
         _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         """Log debug message."""
         self._log(
@@ -394,6 +407,7 @@ class Logger(Logger):
             exc_info=exc_info,
             color=color,
             _module_override=_module_override,
+            context=context,
         )
 
     def info(
@@ -404,6 +418,7 @@ class Logger(Logger):
         color: str | None = None,
         exc_info: bool | Exception | tuple | None = None,
         _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         """Log info message."""
         self._log(
@@ -413,6 +428,7 @@ class Logger(Logger):
             exc_info=exc_info,
             color=color,
             _module_override=_module_override,
+            context=context,
         )
 
     def warning(
@@ -423,6 +439,7 @@ class Logger(Logger):
         color: str | None = None,
         exc_info: bool | Exception | tuple | None = None,
         _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         """Log warning message."""
         self._log(
@@ -432,6 +449,7 @@ class Logger(Logger):
             exc_info=exc_info,
             color=color,
             _module_override=_module_override,
+            context=context,
         )
 
     def error(
@@ -443,6 +461,7 @@ class Logger(Logger):
         exception: Exception | None = None,
         exc_info: bool | Exception | tuple | None = None,
         _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         """Log error message."""
         self._log(
@@ -453,6 +472,7 @@ class Logger(Logger):
             exc_info,
             color=color,
             _module_override=_module_override,
+            context=context,
         )
 
     def critical(
@@ -463,6 +483,7 @@ class Logger(Logger):
         color: str | None = None,
         exc_info: bool | Exception | tuple | None = None,
         _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         """Log critical message."""
         self._log(
@@ -472,6 +493,7 @@ class Logger(Logger):
             exc_info=exc_info,
             color=color,
             _module_override=_module_override,
+            context=context,
         )
 
     def exception(
@@ -481,6 +503,7 @@ class Logger(Logger):
         category: str | None = None,
         exc_info: bool | Exception | tuple | None = True,
         _module_override: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         """Log an exception message with backtrace."""
         self._log(
@@ -489,6 +512,7 @@ class Logger(Logger):
             category,
             exc_info=exc_info,
             _module_override=_module_override,
+            context=context,
         )
 
     def withContext(self, **context: Any) -> ContextualLogger:
