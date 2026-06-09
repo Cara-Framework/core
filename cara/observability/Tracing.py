@@ -111,22 +111,53 @@ def _init_tracing(service_name: str, release: str) -> None:
     if not _truthy(_env("tracing.enabled", "")):
         return  # disabled — opt-in only, nothing installed/started
 
-    # ``opentelemetry`` is an optional dep. Import inside the helper so
-    # projects that don't install it are unaffected at import time.
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-        OTLPSpanExporter,
-    )
-    from opentelemetry.propagate import set_global_textmap
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from opentelemetry.trace import (
-        get_tracer_provider,
-        set_tracer_provider,
-    )
-    from opentelemetry.trace.propagation.tracecontext import (
-        TraceContextTextMapPropagator,
-    )
+    # ``opentelemetry`` is an OPTIONAL dependency. Tracing defaults ON
+    # (config/tracing.py) so the monitoring stack works out of the box,
+    # but a clean install without the OTel wheels is a fully supported
+    # configuration — NOT an error. Catch the missing import here and
+    # degrade to a silent no-op (one debug line, not a per-boot warning)
+    # so we never make ``opentelemetry`` a hard requirement. Letting the
+    # ImportError escape would surface as a ``Log.warning`` on every boot.
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from opentelemetry.propagate import set_global_textmap
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.sampling import (
+            ParentBased,
+            TraceIdRatioBased,
+        )
+        from opentelemetry.trace import (
+            get_tracer_provider,
+            set_tracer_provider,
+        )
+        from opentelemetry.trace.propagation.tracecontext import (
+            TraceContextTextMapPropagator,
+        )
+    except ImportError as e:
+        # opentelemetry not installed → tracing is a no-op. Debug-level,
+        # category-tagged, emitted once (setup is idempotent), so a
+        # normal boot stays quiet. Fall back to a single concise stderr
+        # line if the Log facade isn't ready this early in bootstrap.
+        try:
+            from cara.facades import Log
+
+            Log.debug(
+                f"[cara.observability] tracing disabled: opentelemetry "
+                f"not installed ({e.name or e}); install the OTel extras "
+                f"to enable span export",
+                category="observability",
+            )
+        except Exception:
+            print(
+                "[cara.observability] tracing disabled: opentelemetry "
+                "not installed (no-op)",
+                file=sys.stderr,
+            )
+        return
 
     # Another entry point in this process may already have installed a
     # real provider — don't stack a second one.
@@ -144,11 +175,7 @@ def _init_tracing(service_name: str, release: str) -> None:
     # Sampler: 100% by default (tracing.sample_ratio = 1.0); dial down
     # at scale instead of turning tracing off. ParentBased makes child
     # spans inherit the root's decision, so a sampled trace stays whole.
-    from opentelemetry.sdk.trace.sampling import (
-        ParentBased,
-        TraceIdRatioBased,
-    )
-
+    # (ParentBased / TraceIdRatioBased imported in the guarded block above.)
     try:
         _ratio = float(_env("tracing.sample_ratio", "1.0"))
     except Exception:
