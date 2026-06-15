@@ -47,4 +47,4 @@ class Seeder:
         if not self.dry:
             database_seeder(connection=self.connection).run()
         else:
-            Log.info(f"Running {database_seeder}")
+            Log.info("Running %s", database_seeder)

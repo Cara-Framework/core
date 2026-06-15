@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.migrations.Migration import Migration
@@ -91,32 +89,10 @@ class MigrateRollbackCommand(CommandBase):
             self.error("💡 Try running with --show to see the SQL that would be executed")
             raise
 
-    def _is_production(self) -> bool:
-        """Check if we're running in production environment."""
-        try:
-            from cara.configuration import config
-
-            env = str(config("app.ENV", "")).lower()
-        except Exception:
-            env = os.getenv("APP_ENV", "").lower()
-        return env in ["production", "prod"]
-
     def _confirm_production(self) -> bool:
         """Confirm rollback in production environment."""
         self.warning("⚠️  You are about to ROLLBACK migrations in PRODUCTION!")
         self.warning("   This operation will UNDO database schema changes.")
         self.warning("   This may result in DATA LOSS if tables/columns are dropped.")
         self.warning("   Make sure you have a backup before proceeding.")
-
-        while True:
-            answer = (
-                input("\n🤔 Are you absolutely sure you want to continue? (yes/no): ")
-                .strip()
-                .lower()
-            )
-            if answer in ["yes", "y"]:
-                return True
-            elif answer in ["no", "n"]:
-                return False
-            else:
-                self.warning("Please answer 'yes' or 'no'")
+        return self._confirm_yes_no("Are you absolutely sure you want to continue?")

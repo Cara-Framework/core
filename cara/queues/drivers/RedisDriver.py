@@ -311,9 +311,13 @@ class RedisDriver(HasColoredOutput, Queue):
         self.info(f"RedisDriver.retry: {count} re-enqueued, {dead} dead-lettered")
 
     def chain(self, jobs: list, options: dict[str, Any]) -> None:
-        """Chain jobs: push each job in sequence."""
-        for job in jobs:
-            self.push(job, options=options)
+        """Chain jobs: dispatch via ChainRunnerJob for true sequential execution."""
+        if not jobs:
+            return
+
+        from cara.queues.Chain import Chain
+
+        Chain(jobs).dispatch()
 
     def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
         """Batch push: push all jobs at once."""

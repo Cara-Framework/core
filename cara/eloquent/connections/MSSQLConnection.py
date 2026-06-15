@@ -97,7 +97,7 @@ class MSSQLConnection(BaseConnection):
         return MSSQLPostProcessor
 
     def reconnect(self):
-        pass
+        """No-op — MSSQL connections are re-established by the pool."""
 
     def commit(self):
         """Transaction."""
@@ -173,7 +173,7 @@ class MSSQLConnection(BaseConnection):
             if self.get_transaction_level() <= 0:
                 try:
                     self._connection.close()
-                except Exception:
+                except (OSError, RuntimeError, AttributeError):
                     pass
 
     def format_cursor_results(self, cursor_result):

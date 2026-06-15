@@ -91,12 +91,12 @@ class MySQLConnection(BaseConnection):
                     try:
                         # Bypass any monkey-patch — we want the real driver close.
                         type(self._connection).close(self._connection)
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError):
                         pass
         else:
             try:
                 type(self._connection).close(self._connection)
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 pass
 
         self.open = 0
@@ -183,7 +183,7 @@ class MySQLConnection(BaseConnection):
             self.open = 0
             try:
                 self._connection.close()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 pass
 
     def dry(self) -> Self:
@@ -205,7 +205,7 @@ class MySQLConnection(BaseConnection):
             self.open = 0
             try:
                 self._connection.close()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 pass
 
     def get_transaction_level(self):

@@ -55,8 +55,13 @@ class MultipleRecordsFoundException(ORMException):
     pass
 
 
-class InvalidArgumentException(ORMException):
-    """Exception raised when an invalid argument is provided."""
+class InvalidArgumentException(ORMException, ValueError):
+    """Exception raised when an invalid argument is provided.
+
+    Also a ``ValueError`` (an invalid argument IS a value error) so callers
+    and tests that catch ``ValueError`` keep working — mirrors the canonical
+    ``types.model.InvalidArgumentException``.
+    """
 
     pass
 

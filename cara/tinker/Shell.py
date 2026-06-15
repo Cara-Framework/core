@@ -333,7 +333,7 @@ class Shell:
                     return Cache.get(key)
                 else:
                     return Cache
-            except Exception:
+            except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
                 return None
 
         def route(name, parameters=None):

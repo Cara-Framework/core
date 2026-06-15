@@ -44,11 +44,11 @@ class ValidationHelpersMixin:
         validation = Validation.make(payload, rules, messages or {})
 
         self._validation_instance = validation
-        self.validated = validation.validated()
 
         if validation.fails():
             raise ValidationException(validation_errors=validation.errors())
 
+        self.validated = validation.validated()
         return self.validated
 
     def fails(self) -> bool:

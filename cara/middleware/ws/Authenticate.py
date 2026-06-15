@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.configuration import config
 from cara.exceptions.types.websocket import WebSocketException
@@ -18,7 +19,9 @@ class Authenticate(Middleware):
             application.make("auth").get_default_guard()  # usually "jwt"
         ]
 
-    async def handle(self, socket: Socket, next_fn: Callable):
+    async def handle(
+        self, socket: Socket, next_fn: Callable[[Any], Awaitable[Any]]
+    ) -> Any:
         """Authenticate the WebSocket handshake using configured guards."""
         # Origin allowlist — defence-in-depth on top of the JWT check.
         # Browser WebSocket API doesn't let third-party JS set arbitrary
@@ -28,13 +31,10 @@ class Authenticate(Middleware):
         # config so it stays empty (= unrestricted, matches legacy
         # behaviour) until ops opts in.
         if not self._origin_is_allowed(socket):
-            Log.warning(
-                f"WebSocket origin rejected: {self._read_origin(socket)!r}",
-                category="cara.websocket",
-            )
+            Log.warning("WebSocket origin rejected: %s", self._read_origin(socket), category='cara.websocket')
             try:
                 await socket.send({"type": "websocket.close", "code": 4003})
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
             raise WebSocketException("Origin not allowed", 4003)
 
@@ -42,7 +42,7 @@ class Authenticate(Middleware):
             if await self._authenticate_socket(socket):
                 return await next_fn(socket)
         except Exception as e:
-            Log.error(f"WebSocket auth error: {e}", category="cara.websocket")
+            Log.error("WebSocket auth error: %s", e, category='cara.websocket')
             # Don't try to send close message on error - just raise the exception
             raise WebSocketException("Unauthorized WebSocket", 4006) from e
 
@@ -51,10 +51,7 @@ class Authenticate(Middleware):
             await socket.send({"type": "websocket.close", "code": 4006})
         except Exception as e:
             # Connection might already be closed, just log and continue
-            Log.debug(
-                f"Could not send close message to WebSocket: {e}",
-                category="cara.websocket",
-            )
+            Log.debug("Could not send close message to WebSocket: %s", e, category='cara.websocket')
 
         raise WebSocketException("Unauthorized WebSocket", 4006)
 
@@ -72,18 +69,15 @@ class Authenticate(Middleware):
             try:
                 if hasattr(guard, "validate_token") and guard.validate_token(token):
                     # Set guard state for this connection
-                    user = guard._resolve_user_from_token(token)  # type: ignore
+                    user = guard._resolve_user_from_token(token)  # type: ignore[attr-defined]
                     if not user:
                         continue
-                    guard._user = user  # type: ignore
+                    guard._user = user  # type: ignore[attr-defined]
                     socket._user = user  # attach to socket
-                    Log.debug(
-                        f"WebSocket auth succeeded via {guard_name} for user {user}",
-                        category="cara.websocket",
-                    )
+                    Log.debug("WebSocket auth succeeded via %s for user %s", guard_name, user, category='cara.websocket')
                     return True
             except Exception as e:
-                Log.warning(f"Guard {guard_name} failed: {e}", category="cara.websocket")
+                Log.warning("Guard %s failed: %s", guard_name, e, category='cara.websocket')
                 continue
         return False
 
@@ -93,7 +87,7 @@ class Authenticate(Middleware):
             for k, v in socket.scope.get("headers", []):
                 if k == b"origin":
                     return v.decode("latin-1", errors="replace")
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
         return ""
 

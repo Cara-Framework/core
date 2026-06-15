@@ -13,7 +13,13 @@ from cara.exceptions import (
     InvalidConfigurationLocationException,
     InvalidConfigurationSetupException,
 )
-from cara.facades import Loader
+
+# Import the Loader facade from its submodule (not ``from cara.facades import
+# Loader``): config loads during early boot, and if another import has
+# ``cara.facades`` mid-initialisation, the package-level name can still be the
+# submodule rather than the facade class. The submodule path always resolves to
+# the class.
+from cara.facades.Loader import Loader
 from cara.support.Structures import data
 
 

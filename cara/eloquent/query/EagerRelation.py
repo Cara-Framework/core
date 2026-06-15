@@ -41,7 +41,7 @@ class EagerRelations:
         except Exception as e:
             from cara.facades import Log
 
-            Log.error(f"Error in register: {str(e)}")
+            Log.error("Error in register: %s", str(e))
             raise
         return self
 

@@ -67,7 +67,7 @@ def test_no_active_transaction_does_not_borrow_another_connections_pin():
     registry.clear()
     registry["other"] = other_pin
     try:
-        resolver = dm.get_resolver()
+        dm.get_resolver()
         # 'app' has no pinned connection → the resolver must NOT return the
         # 'other' connection's pin. (It would proceed to build a real
         # connection; we only assert it doesn't hand back the wrong pin.)

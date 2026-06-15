@@ -124,11 +124,7 @@ class RouteDecorator:
                 except Exception as e:
                     from cara.facades import Log
 
-                    Log.error(
-                        f"Exception in route handler: {e}",
-                        category="cara.routing",
-                        exc_info=True,
-                    )
+                    Log.error("Exception in route handler: %s", e, category='cara.routing', exc_info=True)
                     raise
 
             # Store route metadata for registration

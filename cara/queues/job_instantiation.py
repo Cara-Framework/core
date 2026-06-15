@@ -40,8 +40,6 @@ def instantiate_job(application, raw, init_args=()):
 
     if hasattr(instance, "__dict__"):
         instance._app = application
-        if hasattr(type(instance), "_app"):
-            type(instance)._app = application
 
     return instance
 
@@ -51,19 +49,8 @@ def _emit_make_failure(job_class, error: Exception) -> None:
     try:
         from cara.facades import Log
 
-        Log.warning(
-            f"queues.instantiate_job: container.make({job_class.__name__}) "
-            f"failed ({error.__class__.__name__}: {error}); falling back "
-            f"to no-arg constructor",
-            category="queues",
-        )
+        Log.warning("queues.instantiate_job: container.make(%s) failed (%s: %s); falling back to no-arg constructor", job_class.__name__, error.__class__.__name__, error, category='queues')
     except Exception:
-        # Log facade itself blew up — happens only during partial-boot.
-        # Last resort: stderr so the failure isn't completely silent.
-        import sys
+        from cara.facades import Log
 
-        print(
-            f"[queues.instantiate_job] container.make({job_class.__name__}) "
-            f"failed: {error.__class__.__name__}: {error}",
-            file=sys.stderr,
-        )
+        Log.error("queues.instantiate_job: container.make(%s) failed (%s: %s); falling back to no-arg constructor", job_class.__name__, error.__class__.__name__, error, category='queues', exc_info=True)

@@ -20,16 +20,16 @@ from .DistinctRule import DistinctRule
 from .EmailRule import EmailRule
 from .EndsWithRule import EndsWithRule
 from .ExistsRule import ExistsRule
-from .GteRule import GteRule
 from .GtRule import GtRule
+from .GteRule import GteRule
 from .InRule import InRule
 from .IntegerRule import IntegerRule
 from .IpRule import IpRule
 from .Ipv4Rule import Ipv4Rule
 from .Ipv6Rule import Ipv6Rule
 from .JsonRule import JsonRule
-from .LteRule import LteRule
 from .LtRule import LtRule
+from .LteRule import LteRule
 from .MaxRule import MaxRule
 from .MaxLengthRule import MaxLengthRule
 from .MinRule import MinRule
@@ -74,16 +74,16 @@ __all__ = [
     "EmailRule",
     "EndsWithRule",
     "ExistsRule",
-    "GteRule",
     "GtRule",
+    "GteRule",
     "InRule",
     "IntegerRule",
     "IpRule",
     "Ipv4Rule",
     "Ipv6Rule",
     "JsonRule",
-    "LteRule",
     "LtRule",
+    "LteRule",
     "MaxLengthRule",
     "MaxRule",
     "MinLengthRule",

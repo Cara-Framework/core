@@ -6,8 +6,6 @@ This module provides a CLI command to clear the application cache with enhanced 
 
 from __future__ import annotations
 
-import os
-
 from cara.cache import Cache
 from cara.commands import CommandBase
 from cara.decorators import command
@@ -83,33 +81,11 @@ class CacheClearCommand(CommandBase):
             self.error("💡 Try checking your cache configuration")
             raise
 
-    def _is_production(self) -> bool:
-        """Check if we're running in production environment."""
-        try:
-            from cara.configuration import config
-
-            env = str(config("app.ENV", "")).lower()
-        except Exception:
-            env = os.getenv("APP_ENV", "").lower()
-        return env in ["production", "prod"]
-
     def _confirm_production(self) -> bool:
         """Confirm cache clear in production environment."""
         self.warning("⚠️  You are about to clear cache in PRODUCTION!")
         self.warning("   This may temporarily impact application performance.")
-
-        while True:
-            answer = (
-                input("\n🤔 Are you sure you want to continue? (yes/no): ")
-                .strip()
-                .lower()
-            )
-            if answer in ["yes", "y"]:
-                return True
-            elif answer in ["no", "n"]:
-                return False
-            else:
-                self.warning("Please answer 'yes' or 'no'")
+        return self._confirm_yes_no()
 
     def _show_cache_info(self, cache: Cache, tag_list: list) -> None:
         """Show cache information in dry run mode."""

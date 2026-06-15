@@ -92,7 +92,7 @@ class MailgunDriver(Mail):
                     handle = inner[1] if isinstance(inner, (tuple, list)) else inner
                     if hasattr(handle, "close"):
                         handle.close()
-                except Exception:
+                except (OSError, RuntimeError, AttributeError, ConnectionError):
                     pass
 
     def _prepare_data(self, mailable_data: dict[str, Any]) -> dict[str, Any]:

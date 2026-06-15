@@ -128,7 +128,7 @@ class ReloadableMixin:
         if hasattr(self, "command_watcher") and self.command_watcher:
             try:
                 self.command_watcher.shutdown()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
 
     def should_continue(self) -> bool:

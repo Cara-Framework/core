@@ -6,6 +6,7 @@ This module provides the base class for all CLI commands in the application.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from rich.console import Console as RichConsole
@@ -71,3 +72,30 @@ class CommandBase:
 
     def progress(self, items, description="Processing"):
         return track(items, description=description)
+
+    def _is_production(self) -> bool:
+        """Check if running in production environment."""
+        try:
+            from cara.configuration import config
+
+            env = str(config("app.env", "")).lower()
+        except Exception:
+            env = os.getenv("APP_ENV", "").lower()
+        return env in ("production", "prod")
+
+    def confirm(
+        self, prompt: str = "Are you sure you want to continue?", default: bool = False
+    ) -> bool:
+        """Prompt the user for yes/no confirmation. Returns True for yes."""
+        _ = default  # reserved for future default-on-enter behaviour
+        return self._confirm_yes_no(prompt)
+
+    def _confirm_yes_no(self, prompt: str = "Are you sure you want to continue?") -> bool:
+        """Prompt the user for yes/no confirmation. Returns True for yes."""
+        while True:
+            answer = input(f"\n{prompt} (yes/no): ").strip().lower()
+            if answer in ("yes", "y"):
+                return True
+            if answer in ("no", "n"):
+                return False
+            self.warning("Please answer 'yes' or 'no'")

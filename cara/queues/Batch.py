@@ -120,18 +120,13 @@ class Batch:
                 Queue.push(job)
                 dispatched += 1
             except Exception as e:
-                Log.error(
-                    f"Batch {self.batch_id}: failed to dispatch {type(job).__name__}: {e}"
-                )
+                Log.error("Batch %s: failed to dispatch %s: %s", self.batch_id, type(job).__name__, e)
                 if self.catch_callback:
                     self.catch_callback(e, job)
                 # Decrement pending since this job will never run.
                 _decrement_pending(self.batch_id, self.then_callback)
 
-        Log.debug(
-            f"Batch {self.batch_id}: dispatched {dispatched}/{total} jobs",
-            category="cara.queue.batch",
-        )
+        Log.debug("Batch %s: dispatched %s/%s jobs", self.batch_id, dispatched, total, category='cara.queue.batch')
         return self.batch_id
 
 
@@ -232,12 +227,12 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
     try:
         remaining = Cache.decrement(_batch_pending_key(batch_id))
     except Exception as e:
-        Log.error(f"Batch {batch_id}: failed to decrement pending counter: {e}")
+        Log.error("Batch %s: failed to decrement pending counter: %s", batch_id, e)
         return
 
     if remaining is not None and int(remaining) <= 0:
         # Last job — fire the then() callback.
-        Log.info(f"Batch {batch_id}: all jobs completed", category="cara.queue.batch")
+        Log.info("Batch %s: all jobs completed", batch_id, category='cara.queue.batch')
 
         meta = Cache.get(_batch_key(batch_id)) or {}
         # Failed counter is written via ``Cache.increment`` (INCRBY →
@@ -263,7 +258,7 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
                     }
                 )
             except Exception as e:
-                Log.error(f"Batch {batch_id}: then() callback raised: {e}")
+                Log.error("Batch %s: then() callback raised: %s", batch_id, e)
 
         # Cleanup cache keys.
         for key in (

@@ -50,14 +50,10 @@ class ExplicitRouteLoader:
                 return []
 
         except (ImportError, AttributeError) as e:
-            Log.warning(
-                f"'{module_name}' not found OR error when importing this module: {e}"
-            )
+            Log.warning("'%s' not found OR error when importing this module: %s", module_name, e)
             return []
         except Exception as e:
-            Log.error(
-                f"Unexpected error during route registration from {module_name}: {e}"
-            )
+            Log.error("Unexpected error during route registration from %s: %s", module_name, e)
             raise RouteRegistrationException(
                 f"Unexpected error during route registration from {module_name}: {e}"
             ) from e

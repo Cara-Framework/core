@@ -137,7 +137,7 @@ class Migration:
             self.tracker.ensure_migrations_table()
             ran_migrations = set(self.tracker.get_ran_migrations())
             if migration in ran_migrations:
-                Log.info(f"Migration {migration} already ran; skipping.")
+                Log.info("Migration %s already ran; skipping.", migration)
                 if output and self.command_class:
                     self.command_class.info("Migrations completed.")
                 return
@@ -146,7 +146,7 @@ class Migration:
             for file_path in migration_files:
                 migration_name = self.file_manager.get_migration_name_from_file(file_path)
                 if migration_name == migration:
-                    Log.info(f"Running migration: {migration_name}")
+                    Log.info("Running migration: %s", migration_name)
                     batch = self.tracker.get_last_batch_number() + 1
                     transactional = self.executor._migration_is_transactional(file_path)
                     if transactional:
@@ -156,7 +156,7 @@ class Migration:
                     else:
                         self.executor._run_migration(file_path, "up")
                         self.tracker.record_migration(migration_name, batch)
-                    Log.info(f"Migrated: {migration_name}")
+                    Log.info("Migrated: %s", migration_name)
                     break
 
         if output and self.command_class:
@@ -186,9 +186,7 @@ class Migration:
             self.tracker.ensure_migrations_table()
             ran_migrations = set(self.tracker.get_ran_migrations())
             if migration not in ran_migrations:
-                Log.info(
-                    f"Migration {migration} was not in the tracker; nothing to rollback."
-                )
+                Log.info("Migration %s was not in the tracker; nothing to rollback.", migration)
                 if output and self.command_class:
                     self.command_class.info("Rollback completed.")
                 return
@@ -200,7 +198,7 @@ class Migration:
                 file_map[name] = file_path
 
             if migration in file_map:
-                Log.info(f"Rolling back: {migration}")
+                Log.info("Rolling back: %s", migration)
                 transactional = self.executor._migration_is_transactional(
                     file_map[migration]
                 )
@@ -211,7 +209,7 @@ class Migration:
                 else:
                     self.executor._run_migration(file_map[migration], "down")
                     self.tracker.remove_migration(migration)
-                Log.info(f"Rolled back: {migration}")
+                Log.info("Rolled back: %s", migration)
 
         if output and self.command_class:
             self.command_class.info("Rollback completed.")
@@ -230,10 +228,10 @@ class Migration:
 
             for migration_name in ran_migrations:
                 if migration_name in file_map:
-                    Log.info(f"Rolling back: {migration_name}")
+                    Log.info("Rolling back: %s", migration_name)
                     self.executor._run_migration(file_map[migration_name], "down")
                     self.tracker.remove_migration(migration_name)
-                    Log.info(f"Rolled back: {migration_name}")
+                    Log.info("Rolled back: %s", migration_name)
 
     def refresh(self, migration="all"):
         """Refresh migrations (reset + migrate)"""

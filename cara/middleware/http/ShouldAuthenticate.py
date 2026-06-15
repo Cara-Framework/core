@@ -7,7 +7,8 @@ Users can extend this in their app for custom authentication needs.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.facades import Log
 from cara.http import Request, Response
@@ -30,12 +31,12 @@ class ShouldAuthenticate(Middleware):
             auth_manager = application.make("auth")
             self.guards = [auth_manager.get_default_guard()]
         except Exception as e:
-            Log.warning(
-                f"ShouldAuthenticate: failed to resolve default guard, falling back to jwt: {e}"
-            )
+            Log.warning("ShouldAuthenticate: failed to resolve default guard, falling back to jwt: %s", e)
             self.guards = ["jwt"]
 
-    async def handle(self, request: Request, next_fn: Callable) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[[Any], Awaitable[Any]]
+    ) -> Response:
         """Handle authentication check."""
         # Check if authentication should be skipped
         if self.should_skip_authentication(request):

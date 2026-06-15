@@ -608,7 +608,7 @@ class JWTGuard(Guard):
             except ImportError:
                 pass
             try:
-                import redis as _redis  # type: ignore
+                import redis as _redis  # type: ignore[import-untyped]
 
                 cache_failure_types = cache_failure_types + (
                     _redis.exceptions.RedisError,  # type: ignore[attr-defined]
@@ -630,12 +630,7 @@ class JWTGuard(Guard):
                 try:
                     from cara.facades import Log
 
-                    Log.error(
-                        f"JWTGuard._decode_token: revocation-cutoff cache "
-                        f"read failed for sub={sub!r}; failing closed: "
-                        f"{type(exc).__name__}: {exc}",
-                        category="cara.auth.jwt",
-                    )
+                    Log.error("JWTGuard._decode_token: revocation-cutoff cache read failed for sub=%s; failing closed: %s: %s", sub, type(exc).__name__, exc, category='cara.auth.jwt')
                 except ImportError:
                     pass
                 raise TokenBlacklistedException(
@@ -670,10 +665,7 @@ class JWTGuard(Guard):
             try:
                 from cara.facades import Log
 
-                Log.error(
-                    f"JWTGuard.revoke_user_sessions failed for user_id={user_id}",
-                    category="cara.auth.jwt",
-                )
+                Log.error("JWTGuard.revoke_user_sessions failed for user_id=%s", user_id, category='cara.auth.jwt')
             except ImportError:
                 pass
 
@@ -751,15 +743,18 @@ class JWTGuard(Guard):
             try:
                 from cara.facades import Log
 
-                Log.warning(
-                    f"JWT blacklist add failed (token ignored): {exc}",
-                    category="cara.auth.jwt",
-                )
+                Log.warning("JWT blacklist add failed (token ignored): %s", exc, category='cara.auth.jwt')
             except ImportError:
                 pass
 
     def _is_blacklisted(self, token: str) -> bool:
-        """Check if token is blacklisted (by hash — see _blacklist_token)."""
+        """Check if token is blacklisted (by hash — see _blacklist_token).
+
+        Fails CLOSED: if the cache is unavailable, we treat the token
+        as blacklisted (reject). This aligns with the revocation cutoff
+        fail-closed policy and prevents revoked tokens from authenticating
+        during Redis outages.
+        """
         if not self.blacklist_enabled:
             return False
 
@@ -767,10 +762,10 @@ class JWTGuard(Guard):
             return Cache.get(f"jwt_blacklist:{_hash_token(token)}", False)
         except Exception:
             _logger.warning(
-                "JWT blacklist check failed unexpectedly",
+                "JWT blacklist check failed — failing closed (treating as blacklisted)",
                 exc_info=True,
             )
-            return False
+            return True
 
     def _load_user_class(self, user_model: str):
         """Load user model class safely."""

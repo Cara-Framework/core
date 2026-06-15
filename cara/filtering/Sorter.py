@@ -204,7 +204,7 @@ class SortRegistry:
         Auto-generated from the registry so a new sorter dimension
         never has to coordinate with the FormRequest manually.
         """
-        return "nullable|string|in:" + ",".join(self.all_names())
+        return f"nullable|string|in:{','.join(self.all_names())}"
 
     def describe(self) -> dict[str, Any]:
         """JSON-serialisable spec for the wizard."""

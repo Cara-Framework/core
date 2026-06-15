@@ -89,7 +89,7 @@ class CircuitBreaker:
             if time.time() - self._last_failure_time >= self.recovery_timeout:
                 self._state = CircuitState.HALF_OPEN
                 self._half_open_calls = 0
-                Log.info(f"Circuit '{self.name}' transitioning to HALF_OPEN")
+                Log.info("Circuit '%s' transitioning to HALF_OPEN", self.name)
         return self._state
 
     @property
@@ -152,7 +152,7 @@ class CircuitBreaker:
             self._success_count += 1
             if self._state == CircuitState.HALF_OPEN:
                 self._state = CircuitState.CLOSED
-                Log.info(f"Circuit '{self.name}' recovered → CLOSED")
+                Log.info("Circuit '%s' recovered → CLOSED", self.name)
 
     def _on_failure(self, error: Exception) -> None:
         with self._lock:
@@ -161,12 +161,12 @@ class CircuitBreaker:
 
             if self._state == CircuitState.HALF_OPEN:
                 self._state = CircuitState.OPEN
-                Log.warning(f"Circuit '{self.name}' failed in HALF_OPEN → OPEN: {error}")
+                Log.warning(
+                    "Circuit '%s' failed in HALF_OPEN → OPEN: %s", self.name, error
+                )
             elif self._failure_count >= self.failure_threshold:
                 self._state = CircuitState.OPEN
-                Log.warning(
-                    f"Circuit '{self.name}' OPENED after {self._failure_count} failures: {error}"
-                )
+                Log.warning("Circuit '%s' OPENED after %s failures: %s", self.name, self._failure_count, error)
 
     def __enter__(self) -> CircuitBreaker:
         self._acquire()

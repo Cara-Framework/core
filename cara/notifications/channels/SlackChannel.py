@@ -182,13 +182,11 @@ class SlackChannel(BaseChannel):
         try:
             from cara.facades import Log
 
-            Log.error(
-                f"{message}: {error}",
-                category="cara.notifications.slack",
-                exc_info=True,
-            )
-        except ImportError:
-            pass
+            Log.error("%s: %s", message, error, category='cara.notifications.slack', exc_info=True)
+        except (ImportError, RuntimeError):
+            import sys
+
+            print(f"[SlackChannel] {message}: {error}", file=sys.stderr)
 
     def format_simple_message(
         self, title: str, message: str, color: str = "good"

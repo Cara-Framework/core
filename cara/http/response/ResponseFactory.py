@@ -85,6 +85,24 @@ class ResponseFactory:
             self.headers.merge(headers)
         return self.response
 
+    def envelope(
+        self,
+        data: Any,
+        meta: dict | None = None,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> BaseResponse:
+        """Return a standard API envelope: {"data": ..., "meta": {...}}.
+
+        Omits the meta key when None is passed (lighter payloads for
+        single-resource responses). Pass an empty dict explicitly to
+        include an empty meta object for contract consistency.
+        """
+        payload: dict = {"data": data}
+        if meta is not None:
+            payload["meta"] = meta
+        return self.json(payload, status, headers)
+
     def html(
         self,
         content: str,

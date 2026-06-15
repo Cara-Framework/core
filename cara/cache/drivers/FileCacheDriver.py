@@ -74,12 +74,10 @@ def _resolve_hmac_key() -> bytes:
 
     Resolution order:
 
-    1. ``config("cache.integrity_key")`` if explicitly set — apps that
-       want a separate key from the app secret use this.
-    2. ``config("app.key")`` — the canonical Laravel-style secret.
-    3. ``APP_KEY`` env var as a final fallback for boot scenarios
+    1. ``config("app.key")`` — the canonical Laravel-style secret.
+    2. ``APP_KEY`` env var as a final fallback for boot scenarios
        where the config layer isn't ready.
-    4. A per-process random key, with a loud warning. Dev works; a
+    3. A per-process random key, with a loud warning. Dev works; a
        production deploy missing APP_KEY now leaves a paper trail
        instead of silently rotating the cache on every restart.
     """
@@ -92,7 +90,7 @@ def _resolve_hmac_key() -> bytes:
     try:
         from cara.configuration import config
 
-        secret = config("cache.integrity_key") or config("app.key") or None
+        secret = config("app.key") or None
     except Exception:
         _logger.debug("config unavailable during boot", exc_info=True)
         secret = None
@@ -104,14 +102,13 @@ def _resolve_hmac_key() -> bytes:
         secret = uuid.uuid4().hex
         try:
             Log.warning(
-                "FileCacheDriver: no app.key / APP_KEY / cache.integrity_key "
-                "configured; HMAC integrity key will be regenerated on every "
+                "FileCacheDriver: no app.key / APP_KEY configured; HMAC integrity key will be regenerated on every "
                 "process restart, which invalidates every cache file written "
                 "before this boot. Set APP_KEY to a stable secret in production.",
                 category="cache",
             )
-        except Exception:
-            pass
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
+            pass  # logging infra unavailable during early boot
 
     # Domain-separated derivation so the cache integrity key isn't
     # identical to the app secret on the wire (encryption / signed
@@ -271,12 +268,12 @@ class FileCacheDriver(Cache):
                     f.write(payload)
                 return True
             except Exception as e:
-                Log.warning(f"[FileCacheDriver] add write failed: {e}", category="cache")
+                Log.warning("[FileCacheDriver] add write failed: %s", e, category='cache')
                 # Roll back the empty/partial file we created.
                 try:
                     os.remove(file_path)
                 except OSError:
-                    pass
+                    pass  # best-effort cleanup of partial file
                 return False
 
         return False
@@ -395,12 +392,12 @@ class FileCacheDriver(Cache):
                 f.write(payload)
             os.replace(tmp_path, file_path)
         except Exception as e:
-            Log.warning(f"[FileCacheDriver] write failed: {e}", category="cache")
+            Log.warning("[FileCacheDriver] write failed: %s", e, category='cache')
             # Best-effort cleanup of the tmp file.
             try:
                 os.remove(tmp_path)
             except OSError:
-                pass
+                pass  # best-effort cleanup of temp file
 
     def _delete_file(self, file_path: str) -> bool:
         try:
@@ -497,6 +494,6 @@ class FileCacheDriver(Cache):
                 if self._delete_file(file_path):
                     deleted_count += 1
         except Exception as e:
-            Log.warning(f"[FileCacheDriver] forget_pattern failed: {e}", category="cache")
+            Log.warning("[FileCacheDriver] forget_pattern failed: %s", e, category='cache')
 
         return deleted_count

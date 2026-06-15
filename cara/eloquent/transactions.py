@@ -103,8 +103,23 @@ class Atomic:
         caller A's rollback closes B's connection. Any sync-ORM call
         site decorated with ``@atomic()`` and reached from threads or
         ``asyncio.to_thread`` was vulnerable.
+
+        Supports both sync and async functions: async functions are
+        wrapped with an async wrapper so the transaction boundaries
+        correctly encompass the awaited coroutine body.
         """
+        import asyncio
+        import inspect
+
         connection_name = self.connection_name
+
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with Atomic(connection=connection_name):
+                    return await func(*args, **kwargs)
+
+            return async_wrapper
 
         @wraps(func)
         def wrapper(*args, **kwargs):

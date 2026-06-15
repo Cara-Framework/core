@@ -105,7 +105,7 @@ class Trackable:
             return self._job_uid
 
         except Exception as e:
-            Log.warning(f"Failed to start job tracking: {str(e)}")
+            Log.warning("Failed to start job tracking: %s", str(e))
             return None
 
     def _mark_processing(self) -> None:
@@ -126,7 +126,7 @@ class Trackable:
             if job_tracker:
                 job_tracker.track_job_processing(self._job_uid)
         except Exception as e:
-            Log.warning(f"Failed to mark job as processing: {str(e)}")
+            Log.warning("Failed to mark job as processing: %s", str(e))
 
     def _mark_success(self, result_data: dict | None = None) -> None:
         """Mark job as successful (tracking failures must not fail the job)."""
@@ -138,7 +138,7 @@ class Trackable:
             if job_tracker:
                 job_tracker.track_job_success(self._job_uid, result_data)
         except Exception as e:
-            Log.warning(f"Failed to mark job as successful: {str(e)}")
+            Log.warning("Failed to mark job as successful: %s", str(e))
 
     def _mark_failed(self, error: str, should_retry: bool = True) -> str | None:
         """Mark job as failed and handle retry logic."""
@@ -149,11 +149,9 @@ class Trackable:
             job_tracker = self._get_job_tracker()
             if job_tracker:
                 return job_tracker.track_job_failed(self._job_uid, error, should_retry)
-            Log.error(
-                f"💥 Job failed: {self._job_uid} - {error}", category="cara.queue.jobs"
-            )
+            Log.error("💥 Job failed: %s - %s", self._job_uid, error, category='cara.queue.jobs')
         except Exception as e:
-            Log.warning(f"Failed to mark job as failed: {str(e)}")
+            Log.warning("Failed to mark job as failed: %s", str(e))
         return None
 
     def _should_continue(self) -> bool:
@@ -167,7 +165,7 @@ class Trackable:
                 entity_id = self._get_entity_id()
                 return job_tracker.should_job_continue(self._job_uid, entity_id)
         except Exception as e:
-            Log.warning(f"Failed to check job continuation: {str(e)}")
+            Log.warning("Failed to check job continuation: %s", str(e))
         return True
 
     def _validate_or_cancel(self, operation: str = "operation") -> None:
@@ -184,7 +182,7 @@ class Trackable:
             # Re-raise specific exceptions but log others
             if e.__class__.__name__ == "JobCancelledException":
                 raise
-            Log.warning(f"Failed to validate job continuation: {str(e)}")
+            Log.warning("Failed to validate job continuation: %s", str(e))
 
     #: Class-level hook — override in subclasses to declare which attribute
     #: identifies the entity being worked on (Laravel-style convention).

@@ -158,6 +158,6 @@ def test_every_channel_helper_is_fail_soft(
         f"    try:\n"
         f"        ...existing body...\n"
         f"    except Exception as e:\n"
-        f'        Log.warning(f"[NotificationProvider] X channel "\n'
-        f'                    f"registration failed: {{e}}")\n'
+        f'        Log.warning("[NotificationProvider] X channel "\n'
+        f'                    "registration failed: %s", e)\n'
     )

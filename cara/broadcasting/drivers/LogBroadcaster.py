@@ -31,12 +31,8 @@ class LogBroadcaster(Broadcaster):
     ) -> None:
         if isinstance(channels, str):
             channels = [channels]
-        Log.info(
-            f"📡 [log] Broadcasting '{event}' to {channels} "
-            f"(except_socket_id={except_socket_id or '-'})",
-            category="cara.broadcasting",
-        )
-        Log.debug(f"📡 [log] Payload: {data}", category="cara.broadcasting")
+        Log.info("📡 [log] Broadcasting '%s' to %s (except_socket_id=%s)", event, channels, except_socket_id or '-', category='cara.broadcasting')
+        Log.debug("📡 [log] Payload: %s", data, category="cara.broadcasting")
 
     async def add_connection(
         self,
@@ -45,29 +41,17 @@ class LogBroadcaster(Broadcaster):
         user_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        Log.info(
-            f"🔗 [log] Connection added: {connection_id} (user={user_id or '-'})",
-            category="cara.broadcasting",
-        )
+        Log.info("🔗 [log] Connection added: %s (user=%s)", connection_id, user_id or '-', category='cara.broadcasting')
 
     async def remove_connection(self, connection_id: str) -> None:
-        Log.info(
-            f"🔗 [log] Connection removed: {connection_id}",
-            category="cara.broadcasting",
-        )
+        Log.info("🔗 [log] Connection removed: %s", connection_id, category='cara.broadcasting')
 
     async def subscribe(self, connection_id: str, channel: str) -> bool:
-        Log.info(
-            f"📺 [log] {connection_id} subscribed to {channel}",
-            category="cara.broadcasting",
-        )
+        Log.info("📺 [log] %s subscribed to %s", connection_id, channel, category='cara.broadcasting')
         return True
 
     async def unsubscribe(self, connection_id: str, channel: str) -> bool:
-        Log.info(
-            f"📺 [log] {connection_id} unsubscribed from {channel}",
-            category="cara.broadcasting",
-        )
+        Log.info("📺 [log] %s unsubscribed from %s", connection_id, channel, category='cara.broadcasting')
         return True
 
     async def broadcast_to_user(
@@ -78,11 +62,8 @@ class LogBroadcaster(Broadcaster):
         *,
         except_socket_id: str | None = None,
     ) -> None:
-        Log.info(
-            f"👤 [log] Broadcasting '{event}' to user {user_id}",
-            category="cara.broadcasting",
-        )
-        Log.debug(f"👤 [log] Payload: {data}", category="cara.broadcasting")
+        Log.info("👤 [log] Broadcasting '%s' to user %s", event, user_id, category='cara.broadcasting')
+        Log.debug("👤 [log] Payload: %s", data, category="cara.broadcasting")
 
     def get_connection_count(self) -> int:
         return 0

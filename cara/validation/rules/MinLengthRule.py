@@ -42,12 +42,7 @@ class MinLengthRule(BaseRule):
             try:
                 from cara.facades import Log
 
-                Log.warning(
-                    f"MinLengthRule: non-numeric min_length "
-                    f"parameter {min_length!r} on field {field!r}; "
-                    f"failing value as defensive default",
-                    category="cara.validation",
-                )
+                Log.warning("MinLengthRule: non-numeric min_length parameter %s on field %s; failing value as defensive default", min_length, field, category='cara.validation')
             except ImportError:
                 pass
             return False

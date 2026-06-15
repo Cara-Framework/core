@@ -112,11 +112,11 @@ class MakeModelCommand(CommandBase):
 
         # Simple pluralization rules
         if name.endswith("y"):
-            return name[:-1] + "ies"
+            return f"{name[:-1]}ies"
         elif name.endswith(("s", "sh", "ch", "x", "z")):
-            return name + "es"
+            return f"{name}es"
         else:
-            return name + "s"
+            return f"{name}s"
 
     def _check_existing_file(self, model_info: dict) -> bool:
         """Check if model file already exists."""

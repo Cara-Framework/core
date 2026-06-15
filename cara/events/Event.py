@@ -166,7 +166,7 @@ class Event:
 
             cls._app = application
             return application
-        except Exception:
+        except (ImportError, RuntimeError, AttributeError):
             return None
 
     def register_event(self, event_class: type[Event]) -> None:
@@ -383,17 +383,9 @@ class Event:
                 missing = validator()
             except Exception as _vexc:
                 missing = None
-                Log.warning(
-                    f"Event {event_name!r} validate_payload() raised "
-                    f"{_vexc.__class__.__name__}: {_vexc}; dispatching anyway",
-                    category="cara.events",
-                )
+                Log.warning("Event %s validate_payload() raised %s: %s; dispatching anyway", event_name, _vexc.__class__.__name__, _vexc, category='cara.events')
             if missing:
-                Log.warning(
-                    f"Event {event_name!r} failed validate_payload(); "
-                    f"missing/invalid fields: {missing!r}. Skipping dispatch.",
-                    category="cara.events",
-                )
+                Log.warning("Event %s failed validate_payload(); missing/invalid fields: %s. Skipping dispatch.", event_name, missing, category='cara.events')
                 return
 
         # Cycle guard. If this same event name is already in flight on
@@ -494,7 +486,7 @@ class Event:
 
             try:
                 from app.support.Metrics import Metrics as _M
-            except Exception:
+            except (ImportError, RuntimeError):
                 _M = None  # type: ignore[assignment]
 
             _lst_name = listener.__class__.__name__
@@ -516,11 +508,7 @@ class Event:
                 try:
                     from cara.facades import Log
 
-                    Log.error(
-                        f"Event listener {_lst_name} failed: "
-                        f"{_listener_exc.__class__.__name__}: {_listener_exc}",
-                        category="cara.events",
-                    )
+                    Log.error("Event listener %s failed: %s: %s", _lst_name, _listener_exc.__class__.__name__, _listener_exc, category='cara.events')
                 except (ImportError, RuntimeError):
                     pass
                 # Pipeline-critical listeners opt in via
@@ -637,7 +625,7 @@ class Event:
             return True
 
         except Exception as e:
-            Log.error(f"Failed to queue listener: {str(e)}")
+            Log.error("Failed to queue listener: %s", str(e))
             # Pipeline-critical listeners opt into propagation via
             # ``propagate_failures = True``. Pre-fix this branch
             # swallowed every queue-side failure (broker offline,
@@ -687,8 +675,9 @@ class Event:
                 from cara.facades import Log as _Log
 
                 _Log.error(
-                    f"Fire-and-forget listener failed with exception: "
-                    f"{e.__class__.__name__}: {e}",
+                    "Fire-and-forget listener failed with exception: %s: %s",
+                    e.__class__.__name__,
+                    e,
                     category="cara.events",
                 )
             except Exception:

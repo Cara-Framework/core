@@ -70,7 +70,7 @@ class QueueMonitor:
                 "last_job": None,
             }
 
-        Log.debug(f"[QueueMonitor] Job started: {job_name} on queue '{queue_name}'")
+        Log.debug("[QueueMonitor] Job started: %s on queue '%s'", job_name, queue_name)
         return job_id
 
     def job_completed(
@@ -110,9 +110,7 @@ class QueueMonitor:
             queue_stat["jobs_failed"] += 1
 
         status_emoji = "✅" if success else "❌"
-        Log.debug(
-            f"[QueueMonitor] {status_emoji} Job {job_stat['status']}: {job_stat['job_name']} ({job_stat['duration']:.2f}s)"
-        )
+        Log.debug("[QueueMonitor] %s Job %s: %s (%.2fs)", status_emoji, job_stat['status'], job_stat['job_name'], job_stat['duration'])
 
         # Clean up old job stats (keep last 1000).
         # ROOT-CAUSE: the previous eviction sorted by dict KEY (which is

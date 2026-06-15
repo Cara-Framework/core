@@ -6,6 +6,7 @@ from .JobContext import JobContext
 from .job_instantiation import instantiate_job
 from .Queue import Queue
 from .QueueProvider import QueueProvider
+from .retry import MakesRetryable
 
 __all__ = [
     "Batch",
@@ -13,6 +14,7 @@ __all__ = [
     "Bus",
     "Chain",
     "JobContext",
+    "MakesRetryable",
     "Queue",
     "QueueProvider",
     "instantiate_job",

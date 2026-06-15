@@ -168,10 +168,7 @@ class Pipeline:
 
     async def execute(self) -> dict[str, Any]:
         """Execute the pipeline based on type."""
-        Log.info(
-            f"🚀 Executing pipeline: {self.name} Type: {self.pipeline_type.value}",
-            category="cara.pipeline",
-        )
+        Log.info("🚀 Executing pipeline: %s Type: %s", self.name, self.pipeline_type.value, category='cara.pipeline')
 
         if self.pipeline_type == PipelineType.SYNC:
             return await self._execute_sync()
@@ -187,10 +184,7 @@ class Pipeline:
         if self.pipeline_type == PipelineType.SYNC:
             raise InvalidArgumentException("Cannot dispatch sync pipeline. Use execute() instead.")
 
-        Log.info(
-            f"📡 Dispatching pipeline: {self.name} Type: {self.pipeline_type.value}",
-            category="cara.pipeline",
-        )
+        Log.info("📡 Dispatching pipeline: %s Type: %s", self.name, self.pipeline_type.value, category='cara.pipeline')
 
         # For async pipelines, we queue the first job and let it chain
         if self.pipeline_type == PipelineType.ASYNC_CHAIN:
@@ -206,16 +200,10 @@ class Pipeline:
         for i, step in enumerate(self.steps, 1):
             # Check condition
             if step.condition and not step.condition(self.context):
-                Log.info(
-                    f"⏭️ Skipping step {i}: {step.step_class.__name__} (condition not met)",
-                    category="cara.pipeline",
-                )
+                Log.info("⏭️ Skipping step %s: %s (condition not met)", i, step.step_class.__name__, category='cara.pipeline')
                 continue
 
-            Log.info(
-                f"🔄 Executing step {i}/{total_steps}: {step.step_class.__name__}",
-                category="cara.pipeline",
-            )
+            Log.info("🔄 Executing step %s/%s: %s", i, total_steps, step.step_class.__name__, category='cara.pipeline')
 
             try:
                 # Execute command - instantiate with constructor args only
@@ -254,10 +242,7 @@ class Pipeline:
                 if step.on_success:
                     step.on_success(step_result, self.context)
 
-                Log.info(
-                    f"✅ Step completed: {step.step_class.__name__}",
-                    category="cara.pipeline",
-                )
+                Log.info("✅ Step completed: %s", step.step_class.__name__, category='cara.pipeline')
 
             except Exception as e:
                 step_result = {
@@ -272,10 +257,7 @@ class Pipeline:
                 if step.on_failure:
                     step.on_failure(step_result, self.context)
 
-                Log.error(
-                    f"❌ Step failed: {step.step_class.__name__} - {str(e)}",
-                    category="cara.pipeline",
-                )
+                Log.error("❌ Step failed: %s - %s", step.step_class.__name__, str(e), category='cara.pipeline')
 
         success_rate = successful_steps / total_steps if total_steps > 0 else 0
 
@@ -290,10 +272,7 @@ class Pipeline:
             "pipeline_type": self.pipeline_type.value,
         }
 
-        Log.info(
-            f"🏁 Pipeline completed: {self.name} Success: {successful_steps}/{total_steps}",
-            category="cara.pipeline",
-        )
+        Log.info("🏁 Pipeline completed: %s Success: %s/%s", self.name, successful_steps, total_steps, category='cara.pipeline')
         return result
 
     async def _execute_async_chain(self) -> dict[str, Any]:
@@ -301,9 +280,7 @@ class Pipeline:
         if not self.steps:
             return {"success": False, "error": "No steps to execute"}
 
-        Log.info(
-            f"🔗 Executing async chain: {len(self.steps)} steps", category="cara.pipeline"
-        )
+        Log.info("🔗 Executing async chain: %s steps", len(self.steps), category='cara.pipeline')
 
         successful_steps = 0
         total_steps = len(self.steps)
@@ -311,16 +288,10 @@ class Pipeline:
         for i, step in enumerate(self.steps, 1):
             # Check condition
             if step.condition and not step.condition(self.context):
-                Log.info(
-                    f"⏭️ Skipping step {i}: {step.step_class.__name__} (condition not met)",
-                    category="cara.pipeline",
-                )
+                Log.info("⏭️ Skipping step %s: %s (condition not met)", i, step.step_class.__name__, category='cara.pipeline')
                 continue
 
-            Log.info(
-                f"🔄 Dispatching step {i}/{total_steps}: {step.step_class.__name__}",
-                category="cara.pipeline",
-            )
+            Log.info("🔄 Dispatching step %s/%s: %s", i, total_steps, step.step_class.__name__, category='cara.pipeline')
 
             try:
                 # Check if it's a job class with dispatch method
@@ -348,10 +319,7 @@ class Pipeline:
                     if step.on_success:
                         step.on_success(step_result, self.context)
 
-                    Log.info(
-                        f"✅ Step dispatched: {step.step_class.__name__} [{job_id}]",
-                        category="cara.pipeline",
-                    )
+                    Log.info("✅ Step dispatched: %s [%s]", step.step_class.__name__, job_id, category='cara.pipeline')
                 else:
                     raise InvalidArgumentException(
                         f"Step {step.step_class.__name__} is not a dispatchable job"
@@ -370,10 +338,7 @@ class Pipeline:
                 if step.on_failure:
                     step.on_failure(step_result, self.context)
 
-                Log.error(
-                    f"❌ Step dispatch failed: {step.step_class.__name__} - {str(e)}",
-                    category="cara.pipeline",
-                )
+                Log.error("❌ Step dispatch failed: %s - %s", step.step_class.__name__, str(e), category='cara.pipeline')
 
         success_rate = successful_steps / total_steps if total_steps > 0 else 0
 
@@ -388,10 +353,7 @@ class Pipeline:
             "pipeline_type": self.pipeline_type.value,
         }
 
-        Log.info(
-            f"🏁 Async chain completed: {self.name} Success: {successful_steps}/{total_steps}",
-            category="cara.pipeline",
-        )
+        Log.info("🏁 Async chain completed: %s Success: %s/%s", self.name, successful_steps, total_steps, category='cara.pipeline')
         return result
 
     async def _execute_async_parallel(self) -> dict[str, Any]:
@@ -437,11 +399,7 @@ class Pipeline:
 
             job_id = getattr(pending, "job_id", pending)
 
-            Log.info(
-                f"Chain started: {first_step.step_class.__name__} "
-                f"({len(remaining_steps)} follow-ups) [{job_id}]",
-                category="cara.pipeline",
-            )
+            Log.info("Chain started: %s (%s follow-ups) [%s]", first_step.step_class.__name__, len(remaining_steps), job_id, category='cara.pipeline')
 
             return {
                 "success": True,
@@ -453,11 +411,7 @@ class Pipeline:
             }
 
         except Exception as e:
-            Log.error(
-                f"Chain dispatch failed: {str(e)}",
-                category="cara.pipeline",
-                exc_info=True,
-            )
+            Log.error("Chain dispatch failed: %s", str(e), category='cara.pipeline', exc_info=True)
             return {"success": False, "error": str(e)}
 
     def _dispatch_parallel(self) -> dict[str, Any]:
@@ -483,21 +437,12 @@ class Pipeline:
                         }
                     )
 
-                    Log.info(
-                        f"📡 Dispatched: {step.step_class.__name__} [{job_id}]",
-                        category="cara.pipeline",
-                    )
+                    Log.info("📡 Dispatched: %s [%s]", step.step_class.__name__, job_id, category='cara.pipeline')
 
             except Exception as e:
-                Log.error(
-                    f"❌ Failed to dispatch {step.step_class.__name__}: {str(e)}",
-                    category="cara.pipeline",
-                )
+                Log.error("❌ Failed to dispatch %s: %s", step.step_class.__name__, str(e), category='cara.pipeline')
 
-        Log.info(
-            f"🚀 Parallel dispatch completed: {len(job_ids)} jobs",
-            category="cara.pipeline",
-        )
+        Log.info("🚀 Parallel dispatch completed: %s jobs", len(job_ids), category='cara.pipeline')
 
         return {
             "success": len(job_ids) > 0,

@@ -92,7 +92,7 @@ class Bus:
                     # Lock already held — another instance is pending/processing.
                     from cara.facades import Log
 
-                    Log.debug(f"UniqueJob skipped (lock held): {uid}")
+                    Log.debug("UniqueJob skipped (lock held): %s", uid)
                     try:
                         from app.support.Metrics import Metrics as _M
 

@@ -190,7 +190,7 @@ class SecurityHeaders(Middleware):
                         return True
                 except ValueError:
                     continue
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError):
             return False
         return False
 
@@ -202,12 +202,6 @@ class SecurityHeaders(Middleware):
 
             Log.debug(msg, category="cara.http.security_headers")
         except Exception as e:
-            # Don't recurse into Log if Log itself failed; emit a
-            # last-resort stderr line so the issue isn't fully invisible.
-            import sys
+            from cara.facades import Log
 
-            print(
-                f"SecurityHeaders: log facade unavailable ({e.__class__.__name__}: {e}); "
-                f"original msg: {msg}",
-                file=sys.stderr,
-            )
+            Log.warning("SecurityHeaders: log facade unavailable (%s: %s); original msg: %s", e.__class__.__name__, e, msg, exc_info=True)

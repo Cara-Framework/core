@@ -1,66 +1,48 @@
-"""Number helpers — generic numeric utilities used across apps.
+"""Decimal-safe number utilities — coercion and safe division.
 
-Like ``cara.support.Str``, this module collects small, dependency-free
-numeric helpers so each app doesn't grow its own ``clamp.py`` /
-``round_to_step.py`` / ``percent_diff.py`` copies.
+Generic math helpers for any application dealing with precise numeric
+values (money, measurements, percentages). Floats are routed through
+``str()`` before ``Decimal()`` to avoid binary-float drift.
 """
 
 from __future__ import annotations
 
-from typing import Union
-
-# NOTE: ``cara.exceptions`` is imported lazily inside ``clamp`` for the same
-# reason ``cara.support.Currency`` defers ``cara.configuration`` —
-# ``cara.support`` is imported during ``cara.foundation.Application`` boot
-# (via ``PathManager``), and ``cara.exceptions.__init__`` itself transitively
-# pulls in ``cara.foundation``. A top-level import here re-enters a
-# partially-initialised ``cara.exceptions`` package.
+from decimal import Decimal, DivisionByZero, InvalidOperation
+from typing import Any
 
 
-Number = Union[int, float]
+def to_decimal(value: Any) -> Decimal:
+    """Coerce ``value`` to ``Decimal``, returning ``Decimal('0')`` for
+    None / invalid input.
 
-
-def clamp(value: Number, lo: Number, hi: Number) -> Number:
-    """Clamp ``value`` into the inclusive range ``[lo, hi]``.
-
-    Trivial helper, but sufficiently common (limit / offset bounds,
-    price guards, retry counts) that every app eventually grows its
-    own copy. Keeping the canonical version in cara so all callers
-    agree on edge-case semantics:
-
-    * Empty range (``lo == hi``) returns ``lo`` (== ``hi``).
-    * ``value`` already in range is returned unchanged — no float
-      rounding, no type coercion.
-    * Inverted bounds (``lo > hi``) raise ``InvalidArgumentException``;
-      silently swapping them would mask caller bugs and give surprising
-      outputs in tests.
-
-    Args:
-        value: The value to clamp.
-        lo: Lower bound (inclusive).
-        hi: Upper bound (inclusive).
-
-    Returns:
-        ``lo`` if ``value < lo``, ``hi`` if ``value > hi``, otherwise ``value``.
-
-    Raises:
-        InvalidArgumentException: If ``lo > hi``.
-
-    Examples:
-        >>> clamp(5, 0, 10)
-        5
-        >>> clamp(-3, 0, 10)
-        0
-        >>> clamp(42, 0, 10)
-        10
+    Accepts None, str, int, float, Decimal. Floats are routed through
+    ``str()`` first so we never store the binary-float drift that
+    ``Decimal(float)`` would introduce.
     """
-    if lo > hi:
-        from cara.exceptions import InvalidArgumentException  # lazy: see module note
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    try:
+        if isinstance(value, float):
+            return Decimal(str(value))
+        return Decimal(value)
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal("0")
 
-        raise InvalidArgumentException(
-            f"clamp(lo={lo}, hi={hi}): lower bound must be <= upper bound"
-        )
-    return max(lo, min(value, hi))
+
+def safe_divide_decimal(num: Any, den: Any) -> Decimal:
+    """Decimal division that returns ``Decimal('0')`` when the divisor
+    is zero (or coerces to zero) instead of raising ``ZeroDivisionError``.
+    """
+    n = to_decimal(num)
+    d = to_decimal(den)
+    if d == 0:
+        return Decimal("0")
+    try:
+        return n / d
+    except (DivisionByZero, InvalidOperation):
+        return Decimal("0")
 
 
-__all__ = ["clamp"]
+__all__ = ["safe_divide_decimal", "to_decimal"]

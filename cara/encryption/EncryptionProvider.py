@@ -7,9 +7,6 @@ to the application container with the configured application key.
 
 from __future__ import annotations
 
-from functools import partial
-from types import SimpleNamespace
-
 from cara.configuration import config
 from cara.encryption.Crypt import Crypt
 from cara.encryption.Hash import Hash
@@ -52,19 +49,15 @@ class EncryptionProvider(DeferredProvider):
         if not app_key:
             raise EncryptionException("Application key is not set in config")
 
-        algorithm = config("encryption.hash_algorithm", "sha256")
-
-        # ``Hash`` exposes only classmethods and has no ``__init__``, so
-        # ``Hash(algorithm=algorithm)`` raised ``TypeError`` the moment the
-        # factory was invoked (same shape as the ``Crypt(cipher=)`` bug
-        # noted below). Bind a thin proxy that pins the configured algorithm
-        # onto the classmethods instead.
-        hash_service = SimpleNamespace(
-            make=partial(Hash.make, algorithm=algorithm),
-            check=partial(Hash.check, algorithm=algorithm),
-            needs_rehash=partial(Hash.needs_rehash, algorithm=algorithm),
-        )
-        self.application.bind("hash", lambda: hash_service)
+        # Bind the ``Hash`` class itself so the ``Hash`` facade mirrors the
+        # full class API: ``Hash.make(value)`` uses the secure bcrypt default
+        # for passwords, while ``Hash.make(value, algorithm="sha256")`` yields a
+        # deterministic digest for at-rest token storage, and ``Hash.check``
+        # auto-detects the algorithm. ``Hash`` is all classmethods (no
+        # ``__init__``), so the class *is* the service — the previous proxy
+        # pinned a single algorithm (sha256), which would have silently weakened
+        # any password hashed through the binding.
+        self.application.bind("hash", lambda: Hash)
         # ``Crypt`` accepts only ``key`` — pre-fix the provider also
         # passed ``cipher=`` here which raised ``TypeError`` the moment
         # the factory was actually invoked. AES-GCM is the only mode

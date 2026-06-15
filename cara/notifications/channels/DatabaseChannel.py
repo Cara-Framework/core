@@ -7,7 +7,6 @@ storing notifications in the database for later retrieval.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 import pendulum

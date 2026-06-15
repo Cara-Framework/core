@@ -114,10 +114,7 @@ class ConnectionManager:
             # Idempotency: a re-add with the same id replaces the old
             # connection. Mirrors how a browser tab reload arrives at
             # the same conn_id under some ASGI servers.
-            Log.debug(
-                f"Connection {connection_id} re-added; replacing prior entry",
-                category="cara.broadcasting",
-            )
+            Log.debug("Connection %s re-added; replacing prior entry", connection_id, category='cara.broadcasting')
             await self.remove_connection(connection_id)
 
         if user_id and self.max_connections_per_user > 0:
@@ -132,11 +129,7 @@ class ConnectionManager:
                         "connected_at", 0
                     ),
                 )
-                Log.info(
-                    f"User {user_id} hit per-user cap "
-                    f"({self.max_connections_per_user}); dropping oldest {oldest}",
-                    category="cara.broadcasting",
-                )
+                Log.info("User %s hit per-user cap (%s); dropping oldest %s", user_id, self.max_connections_per_user, oldest, category='cara.broadcasting')
                 # Tell the dropped tab WHY it lost the socket so the
                 # client can show "you signed in elsewhere" instead of
                 # silently retry-storming. Best-effort: a closed peer
@@ -156,17 +149,11 @@ class ConnectionManager:
                         )
                     except Exception as e:
                         if not _is_connection_closed_error(e):
-                            Log.debug(
-                                f"Eviction notice to {oldest} failed: {e}",
-                                category="cara.broadcasting",
-                            )
+                            Log.debug("Eviction notice to %s failed: %s", oldest, e, category='cara.broadcasting')
                 await self.remove_connection(oldest)
 
         if len(self.connections) >= self.max_connections:
-            Log.warning(
-                f"Max connections ({self.max_connections}) reached, rejecting {connection_id}",
-                category="cara.broadcasting",
-            )
+            Log.warning("Max connections (%s) reached, rejecting %s", self.max_connections, connection_id, category='cara.broadcasting')
             raise ConnectionError(
                 f"Maximum connections ({self.max_connections}) exceeded"
             )
@@ -192,11 +179,7 @@ class ConnectionManager:
         if user_id:
             self.user_connections[user_id].add(connection_id)
 
-        Log.debug(
-            f"Connection added: {connection_id} (user={user_id or '-'}, "
-            f"total={len(self.connections)})",
-            category="cara.broadcasting",
-        )
+        Log.debug("Connection added: %s (user=%s, total=%s)", connection_id, user_id or '-', len(self.connections), category='cara.broadcasting')
 
         if self.heartbeat_interval > 0:
             self._heartbeat_tasks[connection_id] = asyncio.create_task(
@@ -255,10 +238,7 @@ class ConnectionManager:
                 if not user_set:
                     self.user_connections.pop(meta["user_id"], None)
 
-        Log.debug(
-            f"Connection removed: {connection_id} (remaining={len(self.connections)})",
-            category="cara.broadcasting",
-        )
+        Log.debug("Connection removed: %s (remaining=%s)", connection_id, len(self.connections), category='cara.broadcasting')
 
     # ------------------------------------------------------------------
     # Subscription management
@@ -417,15 +397,9 @@ class ConnectionManager:
         for (connection_id, _), result in zip(targets, results):
             if isinstance(result, Exception):
                 if _is_connection_closed_error(result):
-                    Log.debug(
-                        f"Subscriber {connection_id} closed mid-send on {label}",
-                        category="cara.broadcasting",
-                    )
+                    Log.debug("Subscriber %s closed mid-send on %s", connection_id, label, category='cara.broadcasting')
                 else:
-                    Log.warning(
-                        f"Send to {connection_id} on {label} failed: {result}",
-                        category="cara.broadcasting",
-                    )
+                    Log.warning("Send to %s on %s failed: %s", connection_id, label, result, category='cara.broadcasting')
                 failed.append(connection_id)
             else:
                 delivered += 1
@@ -440,10 +414,7 @@ class ConnectionManager:
             )
 
         if delivered:
-            Log.debug(
-                f"Delivered to {delivered}/{len(targets)} on {label}",
-                category="cara.broadcasting",
-            )
+            Log.debug("Delivered to %s/%s on %s", delivered, len(targets), label, category='cara.broadcasting')
         return delivered
 
     # ------------------------------------------------------------------
@@ -495,15 +466,9 @@ class ConnectionManager:
                     await ws.send_json({"event": "ping", "ts": time.time()})
                 except Exception as e:
                     if _is_connection_closed_error(e):
-                        Log.debug(
-                            f"Heartbeat: {connection_id} closed",
-                            category="cara.broadcasting",
-                        )
+                        Log.debug("Heartbeat: %s closed", connection_id, category='cara.broadcasting')
                     else:
-                        Log.warning(
-                            f"Heartbeat to {connection_id} failed: {e}",
-                            category="cara.broadcasting",
-                        )
+                        Log.warning("Heartbeat to %s failed: %s", connection_id, e, category='cara.broadcasting')
                     await self.remove_connection(connection_id)
                     return
         except asyncio.CancelledError:
@@ -522,10 +487,7 @@ class ConnectionManager:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            Log.error(
-                f"Connection cleanup loop crashed: {e}",
-                category="cara.broadcasting",
-            )
+            Log.error("Connection cleanup loop crashed: %s", e, category='cara.broadcasting')
 
     async def _sweep_idle_connections(self) -> None:
         now = time.time()
@@ -542,11 +504,7 @@ class ConnectionManager:
                 else (connected_at if connected_at is not None else 0)
             )
             if now - last > self.idle_timeout:
-                Log.debug(
-                    f"Sweeping idle connection {connection_id} "
-                    f"(last activity {now - last:.0f}s ago)",
-                    category="cara.broadcasting",
-                )
+                Log.debug("Sweeping idle connection %s (last activity %.0fs ago)", connection_id, now - last, category='cara.broadcasting')
                 await self.remove_connection(connection_id)
 
     async def cleanup(self) -> None:

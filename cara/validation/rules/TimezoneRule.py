@@ -10,7 +10,7 @@ from cara.validation.rules.BaseRule import BaseRule
 try:
     from zoneinfo import ZoneInfo, available_timezones
 except ImportError:  # py < 3.9 fallback (shouldn't hit in this codebase)
-    ZoneInfo = None  # type: ignore
+    ZoneInfo = None  # type: ignore[assignment]
 
     def available_timezones() -> set:  # type: ignore[no-redef]
         """Fallback when ``zoneinfo`` isn't on the import path."""
@@ -24,7 +24,7 @@ class TimezoneRule(BaseRule):
         try:
             ZoneInfo(value)
             return True
-        except Exception:
+        except (KeyError, ValueError, TypeError):
             return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:

@@ -31,11 +31,16 @@ class TenantScope(BaseScope):
         builder.remove_global_scope("_tenant_injector", action="insert")
 
     def _apply_tenant_filter(self, builder):
-        """Apply tenant filtering based on current request context."""
+        """Apply tenant filtering based on current request context.
+
+        Fails CLOSED: if tenant resolution raises, we apply an impossible
+        filter (1=0) that returns zero rows. This prevents cross-tenant
+        data exposure during transient failures. The previous behaviour
+        of skipping the filter was a data-leak vector.
+        """
         try:
             tenant_id = self._get_current_tenant_id()
 
-            # Only apply filter if tenant_id is available
             if tenant_id is not None:
                 table_name = builder.get_table_name()
                 return builder.where(f"{table_name}.{self.tenant_column}", tenant_id)
@@ -44,28 +49,34 @@ class TenantScope(BaseScope):
 
         except Exception:
             _logger.error(
-                "Tenant filter failed; skipping tenant scope (potential data leak)",
+                "Tenant filter failed — failing CLOSED (returning empty set)",
                 exc_info=True,
             )
-            return builder
+            return builder.where_raw("1 = 0")
 
     def _inject_tenant_id(self, builder):
-        """Automatically inject tenant_id into create/insert operations."""
+        """Automatically inject tenant_id into create/insert operations.
+
+        Fails CLOSED: if tenant resolution raises, we raise rather than
+        inserting a row without a tenant_id (which would be invisible to
+        subsequent scoped queries and constitute a data integrity failure).
+        """
         try:
             tenant_id = self._get_current_tenant_id()
 
             if tenant_id is not None and self.tenant_column not in builder._creates:
-                # Inject tenant_id into the creates dictionary (like TimeStampsScope does)
                 builder._creates.update({self.tenant_column: tenant_id})
 
             return builder
 
         except Exception:
             _logger.error(
-                "Tenant ID injection failed; skipping tenant scope (potential data leak)",
+                "Tenant ID injection failed — aborting insert to prevent orphan row",
                 exc_info=True,
             )
-            return builder
+            raise RuntimeError(
+                "Cannot insert without tenant_id: tenant resolution failed"
+            )
 
     def _get_current_tenant_id(self):
         """Get current tenant_id from request context or thread-local storage."""

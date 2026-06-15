@@ -928,7 +928,6 @@ async def test_cycle_stack_resets_when_listener_raises(dispatcher):
     the cycle stack MUST be popped — otherwise the next dispatch of
     the same event in the same task would false-positive as a cycle.
     Tests the ContextVar reset is in the right ``finally`` block."""
-    from cara.exceptions import EventDispatchCycleException  # noqa: F401
 
     class Boomer:
         propagate_failures = True

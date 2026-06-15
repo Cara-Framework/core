@@ -6,7 +6,6 @@ This module provides a CLI command to generate and set secure application keys w
 
 from __future__ import annotations
 
-import os
 import secrets
 from pathlib import Path
 
@@ -149,7 +148,7 @@ class GenerateKeyCommand(CommandBase):
             for line in lines:
                 if line.strip().startswith("APP_KEY="):
                     return line.strip().split("=", 1)[1] if "=" in line else ""
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
 
         return None
@@ -246,29 +245,8 @@ class GenerateKeyCommand(CommandBase):
 
         return key_replaced
 
-    def _is_production(self) -> bool:
-        """Check if running in production environment."""
-        try:
-            from cara.configuration import config
-
-            env = str(config("app.ENV", "")).lower()
-        except Exception:
-            env = os.getenv("APP_ENV", "").lower()
-        return env in ["production", "prod"]
-
     def _confirm_production(self) -> bool:
         """Get user confirmation for production key generation."""
-        while True:
-            answer = (
-                input(
-                    "\n🤔 Are you sure you want to generate a new key in PRODUCTION? (yes/no): "
-                )
-                .strip()
-                .lower()
-            )
-            if answer in ["yes", "y"]:
-                return True
-            elif answer in ["no", "n"]:
-                return False
-            else:
-                print("Please answer 'yes' or 'no'")
+        return self._confirm_yes_no(
+            "Are you sure you want to generate a new key in PRODUCTION?"
+        )

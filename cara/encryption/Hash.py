@@ -8,7 +8,12 @@ verification using multiple algorithms (bcrypt, sha256).
 from __future__ import annotations
 
 from cara.encryption.drivers import BcryptHasher, Sha256Hasher
-from cara.exceptions import EncryptionException
+
+# An unsupported ``algorithm`` is a bad ARGUMENT, not an encryption-operation
+# failure — so it raises ``InvalidArgumentException`` (a ``ValueError``
+# subclass), not ``EncryptionException`` (which is reserved for genuine
+# cipher/key failures). Callers that validate inputs catch it as ``ValueError``.
+from cara.exceptions import InvalidArgumentException
 
 
 class Hash:
@@ -26,7 +31,7 @@ class Hash:
     ) -> str:
         driver = cls.drivers.get(algorithm)
         if not driver:
-            raise EncryptionException(f"Unsupported algorithm: {algorithm}")
+            raise InvalidArgumentException(f"Unsupported algorithm: {algorithm}")
         if algorithm == "bcrypt":
             return driver.make(value, rounds)
         return driver.make(value)
@@ -45,7 +50,7 @@ class Hash:
             algorithm = "bcrypt"
         driver = cls.drivers.get(algorithm)
         if not driver:
-            raise EncryptionException(f"Unsupported algorithm: {algorithm}")
+            raise InvalidArgumentException(f"Unsupported algorithm: {algorithm}")
         return driver.check(value, hashed)
 
     @classmethod
@@ -57,7 +62,7 @@ class Hash:
     ) -> bool:
         driver = cls.drivers.get(algorithm)
         if not driver:
-            raise EncryptionException(f"Unsupported algorithm: {algorithm}")
+            raise InvalidArgumentException(f"Unsupported algorithm: {algorithm}")
         if algorithm == "bcrypt":
             return driver.needs_rehash(hashed, rounds)
         return driver.needs_rehash(hashed)

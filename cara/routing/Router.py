@@ -113,7 +113,7 @@ class Router:
         if extras:
             import urllib.parse as _up
 
-            url = url + "?" + _up.urlencode(extras, doseq=True)
+            url = f"{url}?{_up.urlencode(extras, doseq=True)}"
         return url
 
     def model(

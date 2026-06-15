@@ -7,9 +7,12 @@ Similar to Laravel facades - services are resolved on first access.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cara.exceptions import CaraException
+
+if TYPE_CHECKING:
+    from cara.logging import Logger
 
 
 class Facade(type):
@@ -96,7 +99,7 @@ class Facade(type):
             return getattr(service, attribute)
         except Exception as e:
             logger = cls.get_logger()
-            logger.error(f"Facade resolution failed for '{cls.key}': {str(e)}")
+            logger.error("Facade resolution failed for '%s': %s", cls.key, str(e))
             raise AttributeError(
                 f"Facade '{cls.key}' could not resolve '{attribute}': {str(e)}"
             ) from e
@@ -138,7 +141,7 @@ class Facade(type):
         return f"Facade({cls.key})"
 
     @classmethod
-    def get_logger(cls) -> "Logger":
+    def get_logger(cls) -> Logger:
         """Get a logger instance for this facade.
 
         Returns:

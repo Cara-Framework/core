@@ -45,11 +45,7 @@ class BetweenRule(BaseRule):
             try:
                 from cara.facades import Log
 
-                Log.warning(
-                    f"BetweenRule misconfig: field={field!r} has inverted "
-                    f"bounds (min={min_val} > max={max_val}) — every input "
-                    f"fails by design. Check the rule spec.",
-                )
+                Log.warning("BetweenRule misconfig: field=%s has inverted bounds (min=%s > max=%s) — every input fails by design. Check the rule spec.", field, min_val, max_val)
             except (ImportError, RuntimeError):
                 pass
 

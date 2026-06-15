@@ -149,10 +149,7 @@ class LogHttpRequests(Middleware):
             qs = request.scope.get("query_string", b"").decode()
             if qs:
                 path += f"?{_sanitize_log_path(_redact_query_string(qs))}"
-            Log.warning(
-                f"🌐 HTTP FAIL: {client_ip} -> {method} {path} — {type(exc).__name__}: {exc}",
-                category="cara.http.requests",
-            )
+            Log.warning("🌐 HTTP FAIL: %s -> %s %s — %s: %s", client_ip, method, path, type(exc).__name__, exc, category='cara.http.requests')
             raise
 
         # Calculate timing
@@ -195,10 +192,7 @@ class LogHttpRequests(Middleware):
         raw_headers = request.scope.get("headers", [])
         if raw_headers:
             safe_headers = _redact_headers(raw_headers)
-            Log.debug(
-                f"  Headers: {safe_headers}",
-                category="cara.http.requests",
-            )
+            Log.debug("  Headers: %s", safe_headers, category='cara.http.requests')
 
         return response
 

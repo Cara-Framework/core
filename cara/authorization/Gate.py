@@ -22,7 +22,6 @@ Design
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -41,8 +40,9 @@ class Gate(GateContract):
     def __init__(self, user_resolver: Callable[[], Any] | None = None):
         self._user_resolver = user_resolver
         self._abilities: dict[str, Callable | str] = {}
-        self._policies: dict[str, str] = {}
-        self._policy_cache: dict[str, Any] = {}
+        # value is a policy class or a "module.Path" import string.
+        self._policies: dict[str, Any] = {}
+        self._policy_cache: dict[Any, Any] = {}
         self._before_callbacks: list[Callable] = []
         self._after_callbacks: list[Callable] = []
         self._current_user: Any = None
@@ -71,14 +71,21 @@ class Gate(GateContract):
         return self
 
     def policy(self, model_class: Any, policy_class: Any) -> Gate:
-        """Bind one policy class to one model class."""
+        """Bind one policy to a model class.
+
+        ``policy_class`` may be the policy class itself (preferred — instantiated
+        directly, no re-import) or a ``"module.Path"`` import string (resolved
+        lazily, handy for avoiding circular imports at registration time).
+        """
         model_name = self._model_name(model_class)
         if not model_name:
             raise TypeError(f"Cannot derive a model name from {model_class!r}")
-        policy_path = self._policy_path(policy_class)
-        if not policy_path:
-            raise TypeError(f"Cannot derive a policy path from {policy_class!r}")
-        self._policies[model_name] = policy_path
+        if not isinstance(policy_class, (str, type)):
+            raise TypeError(
+                "policy_class must be a class or an import-path string, got "
+                f"{policy_class!r}"
+            )
+        self._policies[model_name] = policy_class
         return self
 
     def register_policies(self, policies: list[tuple]) -> Gate:
@@ -214,12 +221,12 @@ class Gate(GateContract):
             return AuthorizationResponse(False, "Authorization check failed.")
 
     def _call_policy(
-        self, policy_path: str, method: str, user: Any, *args: Any
+        self, policy_ref: Any, method: str, user: Any, *args: Any
     ) -> AuthorizationResponse:
         try:
-            policy = self._instantiate_policy(policy_path)
+            policy = self._instantiate_policy(policy_ref)
         except Exception as exc:  # noqa: BLE001 — fail closed
-            self._log(f"policy '{policy_path}' could not be instantiated: {exc}")
+            self._log(f"policy {policy_ref!r} could not be instantiated: {exc}")
             return AuthorizationResponse(False, "Authorization check failed.")
 
         # policy.before hook may short-circuit.
@@ -264,20 +271,23 @@ class Gate(GateContract):
             )
             return None
 
-    def _instantiate_policy(self, policy_path: str) -> Any:
-        cached = self._policy_cache.get(policy_path)
+    def _instantiate_policy(self, policy_ref: Any) -> Any:
+        cached = self._policy_cache.get(policy_ref)
         if cached is not None:
             return cached
 
-        if "." in policy_path:
-            module_path, class_name = policy_path.rsplit(".", 1)
+        if isinstance(policy_ref, str):
+            if "." in policy_ref:
+                module_path, class_name = policy_ref.rsplit(".", 1)
+            else:
+                module_path, class_name = "app.policies", policy_ref
+            module = __import__(module_path, fromlist=[class_name])
+            policy_cls = getattr(module, class_name)
         else:
-            module_path, class_name = "app.policies", policy_path
+            policy_cls = policy_ref  # already a class
 
-        module = __import__(module_path, fromlist=[class_name])
-        policy_cls = getattr(module, class_name)
         instance = policy_cls()
-        self._policy_cache[policy_path] = instance
+        self._policy_cache[policy_ref] = instance
         return instance
 
     # -- helpers ----------------------------------------------------------- #
@@ -297,14 +307,6 @@ class Gate(GateContract):
         cls = getattr(obj, "__class__", None)
         return cls.__name__.lower() if cls is not None else None
 
-    @staticmethod
-    def _policy_path(policy_class: Any) -> str | None:
-        if isinstance(policy_class, str):
-            return policy_class
-        module = getattr(policy_class, "__module__", None)
-        name = getattr(policy_class, "__name__", None)
-        return f"{module}.{name}" if module and name else None
-
     def _resolve_user(self) -> Any | None:
         if self._current_user is not None:
             return self._current_user
@@ -322,4 +324,6 @@ class Gate(GateContract):
 
             Log.error(message, category="cara.authorization", exc_info=True)
         except Exception:  # noqa: BLE001 — logging must never raise
-            print(f"[cara.authorization] {message}", file=sys.stderr)
+            from cara.facades import Log
+
+            Log.error(message, category="cara.authorization", exc_info=True)

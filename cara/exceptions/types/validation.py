@@ -115,14 +115,8 @@ class ValidationException(CaraException):
             except Exception as exc:
                 if Log is not None:
                     try:
-                        Log.debug(
-                            f"ValidationException: errors() method on "
-                            f"{type(self.validation_errors).__name__} raised "
-                            f"{type(exc).__name__}: {exc} — falling back to "
-                            f"generic envelope",
-                            category="validation",
-                        )
-                    except Exception:
+                        Log.debug("ValidationException: errors() method on %s raised %s: %s — falling back to generic envelope", type(self.validation_errors).__name__, type(exc).__name__, exc, category='validation')
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
 
         # Try first_error() method for main message
@@ -134,14 +128,8 @@ class ValidationException(CaraException):
             except Exception as exc:
                 if Log is not None:
                     try:
-                        Log.debug(
-                            f"ValidationException: first_error() method on "
-                            f"{type(self.validation_errors).__name__} raised "
-                            f"{type(exc).__name__}: {exc} — falling back to "
-                            f"generic envelope",
-                            category="validation",
-                        )
-                    except Exception:
+                        Log.debug("ValidationException: first_error() method on %s raised %s: %s — falling back to generic envelope", type(self.validation_errors).__name__, type(exc).__name__, exc, category='validation')
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
 
     def _extract_first_error_from_dict(self, errors_dict: dict[str, Any]) -> None:

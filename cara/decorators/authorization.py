@@ -40,11 +40,11 @@ def _resolve_user(func_args: tuple) -> Any | None:
         if callable(user_fn):
             try:
                 return user_fn()
-            except Exception:  # noqa: BLE001 — fall through to the Auth facade
+            except (ImportError, RuntimeError, AttributeError):  # noqa: BLE001 — fall through to the Auth facade
                 break
     try:
         return Auth.user()
-    except Exception:  # noqa: BLE001 — treat an unresolved user as a guest
+    except (ImportError, RuntimeError, AttributeError):  # noqa: BLE001 — treat an unresolved user as a guest
         return None
 
 
@@ -142,8 +142,3 @@ def guest_only(func: Callable) -> Callable:
             )
 
     return _guard(check)(func)
-
-
-# Common aliases.
-authenticated = authenticated_only
-admin = admin_only

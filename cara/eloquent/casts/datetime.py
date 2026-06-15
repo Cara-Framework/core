@@ -22,7 +22,7 @@ class DateCast(BaseCast):
             return None
         try:
             return pendulum.parse(str(value)).to_date_string()
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             return str(value) if value else None
 
     def set(self, value):
@@ -31,7 +31,7 @@ class DateCast(BaseCast):
             return None
         try:
             return pendulum.parse(str(value)).to_date_string()
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             return str(value) if value else None
 
 
@@ -85,10 +85,9 @@ class DateTimeCast(BaseCast):
             else:
                 dt = pendulum.parse(str(value), tz="UTC")  # Database always UTC
 
-            # Convert to application timezone from config
-            from cara.environment import env
+            from cara.configuration import config
 
-            app_timezone = env("APP_TIMEZONE", "UTC")
+            app_timezone = config("app.timezone", "UTC")
             dt = dt.in_timezone(app_timezone)
 
             # ``pendulum.DateTime`` IS a ``datetime.datetime`` subclass,
@@ -99,7 +98,7 @@ class DateTimeCast(BaseCast):
             # NAIVE LOCAL-TIME datetime — TypeError when compared against
             # ``pendulum.now("UTC")`` and silent local/UTC drift.
             return dt
-        except Exception:
+        except (ValueError, TypeError, OverflowError, ImportError):
             return None
 
     def set(self, value):
@@ -116,9 +115,9 @@ class DateTimeCast(BaseCast):
             return None
 
         try:
-            from cara.environment import env
+            from cara.configuration import config
 
-            app_timezone = env("APP_TIMEZONE", "UTC")
+            app_timezone = config("app.timezone", "UTC")
 
             if isinstance(value, datetime):
                 if value.tzinfo is None:
@@ -136,7 +135,7 @@ class DateTimeCast(BaseCast):
                 dt = pendulum.parse(s, tz=None if has_tz else app_timezone)
 
             return dt.in_timezone("UTC").to_datetime_string()
-        except Exception:
+        except (ValueError, TypeError, OverflowError, ImportError):
             return str(value) if value else None
 
 
@@ -160,7 +159,7 @@ class TimestampCast(BaseCast):
                 dt = pendulum.parse(str(value))
 
             return int(dt.timestamp())
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             return None
 
     def set(self, value):
@@ -172,7 +171,7 @@ class TimestampCast(BaseCast):
             if isinstance(value, (int, float)):
                 return pendulum.from_timestamp(value).to_datetime_string()
             return self.get(value)
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             return None
 
 
@@ -206,7 +205,7 @@ class TimeCast(BaseCast):
             else:
                 # Try to parse as string
                 return self.get(str(value))
-        except Exception:
+        except (ValueError, TypeError, OverflowError, AttributeError):
             # If all parsing fails, return as string
             return str(value) if value else None
 
@@ -236,5 +235,5 @@ class TimeCast(BaseCast):
             else:
                 # Try to parse as string
                 return self.set(str(value))
-        except Exception:
+        except (ValueError, TypeError, OverflowError, AttributeError):
             return str(value) if value else None

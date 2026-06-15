@@ -125,52 +125,6 @@ def _get_smart_module_path(component: str) -> str:
     return ModuleManager.app_module(component)
 
 
-# Convenience functions for common use cases
-def module_exists(path: str) -> bool:
-    """Check if a module exists."""
-    return ModuleManager.module_exists(modules(path))
-
-
-def import_module(path: str):
-    """Import a module dynamically."""
-    return ModuleManager.import_module(modules(path))
-
-
 def get_classes(path: str, base_class=None):
     """Get classes from a module."""
     return ModuleManager.get_module_classes(modules(path), base_class)
-
-
-def get_functions(path: str):
-    """Get functions from a module."""
-    return ModuleManager.get_module_functions(modules(path))
-
-
-# Ultra-short aliases for power users
-def m(path: str = "", base: str | None = None) -> str:
-    """Ultra-short alias for modules()."""
-    return modules(path, base)
-
-
-# Dynamic attribute access for even cleaner syntax
-class ModuleHelper:
-    """Dynamic module access with dot notation."""
-
-    def __init__(self, base_path: str = ""):
-        self.base = base_path
-
-    def __getattr__(self, name: str) -> str:
-        path = f"{self.base}.{name}" if self.base else name
-        return modules(path)
-
-    def __call__(self, path: str = "") -> str:
-        if path:
-            full_path = f"{self.base}.{path}" if self.base else path
-            return modules(full_path)
-        return modules(self.base) if self.base else modules()
-
-
-# Pre-configured module helpers
-app = ModuleHelper("app")
-routes = ModuleHelper("routes")
-config = ModuleHelper("config")

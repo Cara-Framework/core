@@ -30,8 +30,10 @@ from cara.queues.contracts import UniqueJob
 # (e.g. tests) doesn't require the services-tree ``app.support.Metrics``.
 try:
     from app.support.Metrics import Metrics as _M
-except Exception:  # pragma: no cover
+except (ImportError, RuntimeError):  # pragma: no cover
     _M = None  # type: ignore[assignment]
+
+_logger = logging.getLogger("cara.queue.worker")
 
 
 def _queue_label(
@@ -118,7 +120,7 @@ class AMQPConnectionManager:
                 except Exception:
                     try:
                         self.connection.close()
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
                     self.connection = None
 
@@ -129,9 +131,11 @@ class AMQPConnectionManager:
             try:
                 from cara.facades import Log
 
-                Log.error(f"Failed to connect to RabbitMQ: {e}")
-            except ImportError:
-                pass
+                Log.error("Failed to connect to RabbitMQ: %s", e)
+            except (ImportError, RuntimeError):
+                import sys
+
+                print(f"[QueueWorkCommand] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
             self.connection = None
             return False
 
@@ -170,7 +174,7 @@ class AMQPConnectionManager:
         if self.connection and not self.connection.is_closed:
             try:
                 self.connection.close()
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
 
 
@@ -295,7 +299,7 @@ class JobProcessor:
         try:
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
         except Exception as ack_err:
-            Log.error(f"Failed to ACK before retry republish: {ack_err}")
+            Log.error("Failed to ACK before retry republish: %s", ack_err)
             # Fall through — pika may have already auto-rejected.
 
         attempts_done = int(
@@ -360,14 +364,18 @@ class JobProcessor:
             # one; ``Queue.later`` already handles that delegation.
             _Queue.later(delay_seconds, instance, **retry_options)
             Log.info(
-                f"↻ Retry queued for {instance.__class__.__name__} "
-                f"(attempt {next_attempt}, +{delay_seconds}s, "
-                f"reason={type(exc).__name__})"
+                "↻ Retry queued for %s (attempt %s, +%ss, reason=%s)",
+                instance.__class__.__name__,
+                next_attempt,
+                delay_seconds,
+                type(exc).__name__,
             )
         except Exception as republish_err:
             Log.error(
-                f"Retry republish failed for {instance.__class__.__name__}: "
-                f"{republish_err}. Falling back to DLQ to avoid losing the payload."
+                "Retry republish failed for %s: %s. "
+                "Falling back to DLQ to avoid losing the payload.",
+                instance.__class__.__name__,
+                republish_err,
             )
             JobProcessor._ack_to_dlq(channel, method_frame, msg, str(exc))
 
@@ -424,22 +432,37 @@ class JobProcessor:
         if instance is not None and isinstance(instance, UniqueJob):
             try:
                 UniqueJob.release_unique_lock(instance.unique_id())
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
 
     @staticmethod
     def _ack_to_dlq(channel, method_frame, msg, error_msg):
-        """ACK message and log to dead letter pattern for failed jobs."""
+        """ACK the poison message after logging its full payload to the DLQ
+        error log.
+
+        We ACK rather than ``basic_nack``:
+          * ``basic_nack(requeue=False)`` SILENTLY DISCARDS the message on any
+            queue without a configured dead-letter exchange — the payload is
+            then lost forever, with no forensic trail.
+          * ``basic_nack(requeue=True)`` loops the poison message back to the
+            queue head and re-delivers it at 100% CPU under prefetch=1.
+
+        ACK removes the message from the queue exactly once; the structured
+        ``Log.error`` below (with the full payload) IS the durable DLQ record.
+        """
         try:
-            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-            # Log to DLQ-style pattern for monitoring
             dlq_queue = f"{msg.get('queue', 'unknown')}.dlq" if msg else "unknown.dlq"
             job_id = msg.get("job_id", "unknown") if msg else "unknown"
             Log.error(
-                f"💀 Job moved to DLQ: {job_id} | Queue: {dlq_queue} | Error: {error_msg}"
+                "Job moved to DLQ via ACK: %s | Queue: %s | Error: %s | Payload: %r",
+                job_id,
+                dlq_queue,
+                error_msg,
+                msg,
             )
+            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
         except Exception as e:
-            Log.error(f"Failed to ACK message: {e}")
+            Log.error("Failed to ACK message to DLQ: %s", e)
 
     @staticmethod
     def process_message(
@@ -482,7 +505,7 @@ class JobProcessor:
                         queue=_mx_queue,
                         job=_mx_job,
                     ).dec()
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
 
         _mx_recorded = False
@@ -490,7 +513,9 @@ class JobProcessor:
         # CRITICAL FIX #4: Validate payload size before unpickling
         if len(body) > JobProcessor.MAX_PAYLOAD_SIZE:
             Log.error(
-                f"❌ Payload exceeds max size ({len(body)} > {JobProcessor.MAX_PAYLOAD_SIZE})"
+                "❌ Payload exceeds max size (%s > %s)",
+                len(body),
+                JobProcessor.MAX_PAYLOAD_SIZE,
             )
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
             _mx_record("oversized")
@@ -553,8 +578,10 @@ class JobProcessor:
                     msg = pickle.loads(body)
             except (ModuleNotFoundError, AttributeError, ImportError) as e:
                 Log.warning(
-                    f"Dropping orphan message (class not importable in this service): "
-                    f"{e.__class__.__name__}: {e}"
+                    "Dropping orphan message (class not importable in this service): "
+                    "%s: %s",
+                    e.__class__.__name__,
+                    e,
                 )
                 channel.basic_ack(delivery_tag=method_frame.delivery_tag)
                 _mx_queue = _queue_label(msg, queue_name=queue_name)
@@ -585,8 +612,9 @@ class JobProcessor:
             # the trail exists.
             if instance is None:
                 Log.error(
-                    f"❌ Malformed payload (missing 'obj'): job_id={msg.get('job_id')} "
-                    f"keys={sorted(msg.keys())} — routing to DLQ"
+                    "❌ Malformed payload (missing 'obj'): job_id=%s keys=%s — routing to DLQ",
+                    msg.get("job_id"),
+                    sorted(msg.keys()),
                 )
                 JobProcessor._ack_to_dlq(
                     channel, method_frame, msg, "payload missing 'obj'"
@@ -621,7 +649,7 @@ class JobProcessor:
                         job=_mx_job,
                     ).inc()
                     _mx_inflight_entered = True
-                except Exception:
+                except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
                 if wait_secs is not None:
                     try:
@@ -629,7 +657,7 @@ class JobProcessor:
                             queue=_mx_queue,
                             job=_mx_job,
                         ).observe(wait_secs)
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
 
             # Set up job tracking
@@ -653,10 +681,11 @@ class JobProcessor:
                 instance._mark_processing()
 
             # Stamp container on job so BaseJob and method-level DI can use it.
+            # Only set on the INSTANCE — never on type(instance) — to avoid
+            # thread-safety issues where concurrent workers overwrite each
+            # other's container binding on the shared job class.
             if app_instance is not None and hasattr(instance, "__dict__"):
                 instance._app = app_instance
-                if hasattr(type(instance), "_app"):
-                    type(instance)._app = app_instance
 
             # Execute job — auto-inject type-hinted deps via container.call()
             #
@@ -671,6 +700,12 @@ class JobProcessor:
             # that gap; if the job has no middleware the helper is
             # effectively a passthrough.
             method_to_call = getattr(instance, callback, None)
+            if not callable(method_to_call):
+                raise AttributeError(
+                    f"Job {instance.__class__.__name__} has no callable "
+                    f"'{callback}' method — treating as terminal failure"
+                )
+
             if callable(method_to_call):
                 from cara.queues.middleware import run_through_middleware_async
 
@@ -725,9 +760,10 @@ class JobProcessor:
                     UniqueJob.release_unique_lock(instance.unique_id())
                 except Exception as release_err:
                     Log.warning(
-                        f"UniqueJob lock release failed for "
-                        f"{instance.__class__.__name__}: {release_err}. "
-                        f"Lock will expire on its TTL — proceeding to ACK."
+                        "UniqueJob lock release failed for %s: %s. "
+                        "Lock will expire on its TTL — proceeding to ACK.",
+                        instance.__class__.__name__,
+                        release_err,
                     )
 
             # Acknowledge message
@@ -736,7 +772,7 @@ class JobProcessor:
             return "success"
 
         except TimeoutError as timeout_error:
-            Log.error(f"⏱️ Job timeout: {str(timeout_error)}")
+            Log.error("⏱️ Job timeout: %s", timeout_error)
 
             # Mark as failed in unified job table
             if instance and hasattr(instance, "_mark_failed"):
@@ -763,7 +799,7 @@ class JobProcessor:
                         asyncio.run(failed_method(msg, str(timeout_error)))
                     else:
                         failed_method(msg, str(timeout_error))
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
 
             _mx_record("timeout")
@@ -772,8 +808,8 @@ class JobProcessor:
         except Exception as job_error:
             import traceback
 
-            Log.error(f"❌ Job failed: {str(job_error)}")
-            Log.error(f"   Traceback: {traceback.format_exc()}")
+            Log.error("❌ Job failed: %s", job_error)
+            Log.error("   Traceback: %s", traceback.format_exc())
 
             # Mark as failed in unified job table
             if instance and hasattr(instance, "_mark_failed"):
@@ -800,7 +836,7 @@ class JobProcessor:
                         asyncio.run(failed_method(msg, str(job_error)))
                     else:
                         failed_method(msg, str(job_error))
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
 
             _mx_record("failed")
@@ -835,10 +871,9 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # own ORM pool + HTTP clients + parser state) so multi-threaded
         # workers don't hit the limit after a handful of scrapes.
         try:
-            from cara.environment import env as _env
+            from cara.configuration import config
 
-            default_mb = 512
-            limit_mb = int(_env("WORKER_MEMORY_LIMIT_MB", default_mb))
+            limit_mb = int(config("queue.worker_memory_limit_mb", 512))
         except Exception:
             limit_mb = 512
         # Bumped minimum so multi-thread scrape workloads (BrowserPool +
@@ -892,13 +927,13 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
             _port = _start_metrics()
             if _port:
-                Log.info(f"📈 Metrics server on :{_port}/metrics")
+                Log.info("📈 Metrics server on :%s/metrics", _port)
         except ImportError:
             # Module only exists in services project — silently skip in other projects.
             pass
         except Exception as e:
             # Non-fatal: worker keeps running with no metrics exposure.
-            Log.warning(f"metrics server startup failed: {e}")
+            Log.warning("metrics server startup failed: %s", e)
 
         # Background DB sampler — emits domain gauges (product lifecycle,
         # queue depth, job table, entity counts) every 30s so the
@@ -911,7 +946,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             # Module only exists in services project — silently skip in other projects.
             pass
         except Exception as e:
-            Log.warning(f"metrics sampler startup failed: {e}")
+            Log.warning("metrics sampler startup failed: %s", e)
 
         # Parse concurrency early so we can use it to gate the reload path
         # (auto-reload restarts the whole worker — fine with 1 thread, but
@@ -1062,7 +1097,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             # Mapping "prefix." → "prefix.*" routes it through the same
             # expansion the wildcard form already uses.
             if pattern.endswith(".") and "*" not in pattern:
-                pattern = pattern + "*"
+                pattern = f"{pattern}*"
 
             if "*" in pattern:
                 expanded_queues.extend(self._expand_wildcard_pattern(pattern))
@@ -1132,7 +1167,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 name for name, _routing in bindings if _fnmatch.fnmatch(name, pattern)
             }
             static |= bound
-        except Exception:
+        except (ImportError, RuntimeError, AttributeError, OSError):
             pass
 
         # Sort by priority rank, NOT alphabetically. The worker polls this
@@ -1357,7 +1392,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                         # log it and keep polling. The original _run_worker
                         # swallowed these via _handle_queue_error; we
                         # mirror that behaviour.
-                        Log.warning(f"[worker-{slot_idx}] cycle error: {e}")
+                        Log.warning("[worker-%s] cycle error: %s", slot_idx, e)
                         outcome = False
 
                     # Per-slot counter increments. ``_stats_lock`` (set
@@ -1416,12 +1451,12 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             for t in threads:
                 try:
                     t.join(timeout=10)
-                except Exception:
+                except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
             for mgr in managers:
                 try:
                     mgr.close()
-                except Exception:
+                except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
 
     def _check_memory_usage(self) -> bool:
@@ -1440,8 +1475,10 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 limit_mb = self.memory_limit_bytes / (1024 * 1024)
                 current_mb = rss_bytes / (1024 * 1024)
                 Log.warning(
-                    f"⚠️ Memory limit exceeded: {current_mb:.1f}MB > {limit_mb:.1f}MB. "
-                    f"Initiating graceful shutdown for supervisor restart."
+                    "⚠️ Memory limit exceeded: %.1fMB > %.1fMB. "
+                    "Initiating graceful shutdown for supervisor restart.",
+                    current_mb,
+                    limit_mb,
                 )
                 self.shutdown_requested = True
                 return False
@@ -1460,13 +1497,15 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                                 limit_mb = self.memory_limit_bytes / (1024 * 1024)
                                 current_mb = rss_bytes / (1024 * 1024)
                                 Log.warning(
-                                    f"⚠️ Memory limit exceeded: {current_mb:.1f}MB > {limit_mb:.1f}MB. "
-                                    f"Initiating graceful shutdown for supervisor restart."
+                                    "⚠️ Memory limit exceeded: %.1fMB > %.1fMB. "
+                                    "Initiating graceful shutdown for supervisor restart.",
+                                    current_mb,
+                                    limit_mb,
                                 )
                                 self.shutdown_requested = True
                                 return False
                             break
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
 
             return True
@@ -1628,7 +1667,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             # Always close channel
             try:
                 channel.close()
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
 
     def _handle_queue_error(
@@ -1711,9 +1750,8 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                 self.info(f"   Completed: {stats.get('completed_jobs', 0)}")
                 self.info(f"   Cancelled: {stats.get('cancelled_jobs', 0)}")
                 self.info(f"   Failed: {stats.get('failed_jobs', 0)}")
-        except Exception:
-            # If Job model not available or DB error, skip enhanced stats
-            pass
+        except Exception as exc:
+            _logger.debug("enhanced stats unavailable: %s", exc)
 
     def _resolve_job_model(self):
         """Resolve Job model from JobTracker."""
@@ -1788,7 +1826,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
             time.sleep(0.1)
 
-        except Exception:
+        except (ImportError, RuntimeError, AttributeError, OSError):
             pass
 
     def _cleanup_watching(self):
@@ -1796,5 +1834,5 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         if hasattr(self, "command_watcher") and self.command_watcher:
             try:
                 self.command_watcher.shutdown()
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError, OSError):
                 pass

@@ -176,7 +176,7 @@ class ExistsRule(BaseRule):
                     pass
 
             return None
-        except Exception:
+        except (ImportError, AttributeError, TypeError, RuntimeError):
             return None
 
     def _table_to_model_name_plural(self, table_name: str) -> str:

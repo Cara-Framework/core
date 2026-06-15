@@ -163,10 +163,7 @@ class ModelDiscoverer:
             try:
                 from cara.facades import Log
 
-                Log.warning(
-                    f"Could not parse {init_file}: {e}",
-                    category="cara.eloquent.migrations",
-                )
+                Log.warning("Could not parse %s: %s", init_file, e, category='cara.eloquent.migrations')
             except Exception:
                 _logger.warning("model discovery logging failed", exc_info=True)
 

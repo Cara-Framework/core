@@ -75,7 +75,7 @@ class CursorPaginator(BasePaginator):
         try:
             raw = base64.urlsafe_b64decode(cursor + padding).decode("utf-8")
             payload = json.loads(raw)
-        except Exception:
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             return None
         if not isinstance(payload, dict):
             return None

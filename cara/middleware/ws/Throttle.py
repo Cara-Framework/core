@@ -25,10 +25,10 @@ The implementation mirrors ``ThrottleRequests`` for parity:
     starve each other.
   * Per-bucket limits come from ``rate.<name>`` config keys
     (e.g. ``rate.ws_connect``) so ops can tune without a code change.
-  * Cache failure fails OPEN (allow the connection through) — a
-    Redis blip shouldn't break the live feed for every user. Mirrors
-    the HTTP throttle's safety contract documented in
-    ``ThrottleRequests.handle``.
+  * Cache failure defaults to fail-CLOSED (reject the handshake) —
+    mirrors the HTTP throttle's ``_DEFAULT_FAIL_OPEN = False``
+    contract in ``ThrottleRequests``. Operators who want the legacy
+    fail-open posture can flip ``rate.fail_open`` in config.
   * Limit-exceeded rejects with WebSocket close code 4008, which
     the framework already documents in
     :class:`cara.exceptions.types.websocket.WebSocketException` as
@@ -53,6 +53,7 @@ from cara.websocket import Socket
 
 
 _RATE_LIMIT_CLOSE_CODE = 4008  # WebSocketException docs: "Rate limit exceeded"
+_DEFAULT_FAIL_OPEN = False
 _DEFAULT_LIMIT_PER_MINUTE = 30
 _DEFAULT_WINDOW_SECONDS = 60
 
@@ -73,29 +74,20 @@ class Throttle(Middleware):
         path = self._path(socket)
         key = f"throttle:ws:{self.name}:{ip}:{path}"
 
-        # Cache.increment(key, 1, ttl) atomically INCRBY's the counter
-        # and sets the TTL only on the first hit in the window (when
-        # ``new_val == amount`` — see RedisCacheDriver.increment). That
-        # gives us a rolling-window cap with one round-trip per
-        # connection attempt instead of an INCR + EXPIRE pair that
-        # races under load. Fail OPEN on cache exceptions to match
-        # the HTTP throttle contract — a Redis blip must not silence
-        # the live feed for every user.
-        try:
-            current = Cache.increment(key, 1, window)
-        except Exception as e:
-            Log.warning(
-                f"WebSocket throttle cache failure for key {key!r}; failing open. {e}",
-                category="cara.websocket",
-            )
-            return await next_fn(socket)
+        # Shared counting + Redis-down fallback via the same helper the
+        # HTTP throttle uses so both transports honour
+        # ``rate.fallback_mode`` / ``rate.fail_open`` uniformly.
+        from cara.exceptions import ServiceUnavailableException
+        from cara.rates.MemoryRateStore import attempt_with_fallback
 
-        if current > limit:
-            Log.warning(
-                f"WebSocket throttle exceeded: ip={ip} path={path} "
-                f"name={self.name} count={current} limit={limit}",
-                category="cara.websocket",
+        try:
+            allowed, _remaining, _reset_in, _backend = attempt_with_fallback(
+                cache_key=key,
+                window_seconds=window,
+                max_attempts=limit,
             )
+        except ServiceUnavailableException as e:
+            Log.warning("WebSocket throttle cache failure for key %s; failing closed. %s", key, e, category='cara.websocket')
             try:
                 await socket.send(
                     {
@@ -103,14 +95,44 @@ class Throttle(Middleware):
                         "code": _RATE_LIMIT_CLOSE_CODE,
                     }
                 )
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
             raise WebSocketException(
-                f"WebSocket connect rate exceeded ({current}/{limit} per {window}s)",
+                "WebSocket rate limiter temporarily unavailable",
+                _RATE_LIMIT_CLOSE_CODE,
+            ) from e
+
+        if not allowed:
+            Log.warning("WebSocket throttle exceeded: ip=%s path=%s name=%s limit=%s", ip, path, self.name, limit, category='cara.websocket')
+            try:
+                await socket.send(
+                    {
+                        "type": "websocket.close",
+                        "code": _RATE_LIMIT_CLOSE_CODE,
+                    }
+                )
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
+                pass
+            raise WebSocketException(
+                f"WebSocket connect rate exceeded (>{limit} per {window}s)",
                 _RATE_LIMIT_CLOSE_CODE,
             )
 
         return await next_fn(socket)
+
+    def _fail_open_mode(self) -> bool:
+        """Whether to allow handshakes when the cache backend is down.
+
+        Default False (fail-closed). Mirrors ``ThrottleRequests`` so
+        operators flip ``rate.fail_open`` in config when availability
+        outweighs abuse protection.
+        """
+        try:
+            from cara.facades import Config
+
+            return bool(Config.get("rate.fail_open", _DEFAULT_FAIL_OPEN))
+        except Exception:
+            return _DEFAULT_FAIL_OPEN
 
     def _limits(self) -> tuple[int, int]:
         """Read per-named-throttle limit + window from config.

@@ -157,10 +157,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         client = self._redis_async.Redis(connection_pool=self._redis_pools[loop_id])
         await client.ping()
         self._redis_clients[loop_id] = client
-        Log.debug(
-            f"RedisBroadcaster: created client for loop {loop_id}",
-            category="cara.broadcasting",
-        )
+        Log.debug("RedisBroadcaster: created client for loop %s", loop_id, category='cara.broadcasting')
         return client
 
     # ------------------------------------------------------------------
@@ -218,10 +215,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 unprefixed, event, data, except_socket_id=except_socket_id
             )
         except Exception as e:
-            Log.warning(
-                f"Local fan-out failed for '{event}' on {unprefixed}: {e}",
-                category="cara.broadcasting",
-            )
+            Log.warning("Local fan-out failed for '%s' on %s: %s", event, unprefixed, e, category='cara.broadcasting')
 
         # Cross-process publish. Skip-self is encoded into the payload
         # so the listener can drop messages we originated.
@@ -239,10 +233,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             client = await self._redis()
             await client.publish(self._prefixed(unprefixed), payload)
         except Exception as e:
-            Log.debug(
-                f"Redis publish failed for {unprefixed} (local delivery succeeded): {e}",
-                category="cara.broadcasting",
-            )
+            Log.debug("Redis publish failed for %s (local delivery succeeded): %s", unprefixed, e, category='cara.broadcasting')
 
     # ------------------------------------------------------------------
     # broadcast_to_user — cross-process via per-user Redis channel.
@@ -276,10 +267,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 self._prefixed(f"{_USER_CHANNEL_PREFIX}{user_id}"), payload
             )
         except Exception as e:
-            Log.debug(
-                f"Redis publish to user {user_id} failed (local delivery succeeded): {e}",
-                category="cara.broadcasting",
-            )
+            Log.debug("Redis publish to user %s failed (local delivery succeeded): %s", user_id, e, category='cara.broadcasting')
 
     # ------------------------------------------------------------------
     # Connection lifecycle (with cross-process per-user channel
@@ -380,10 +368,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                     try:
                         await pubsub.subscribe(prefixed_channel)
                     except Exception as e:
-                        Log.warning(
-                            f"Failed to subscribe Redis listener to {prefixed_channel}: {e}",
-                            category="cara.broadcasting",
-                        )
+                        Log.warning("Failed to subscribe Redis listener to %s: %s", prefixed_channel, e, category='cara.broadcasting')
                         self._redis_subscribed.discard(prefixed_channel)
 
     async def _drop_redis_subscription(self, prefixed_channel: str) -> None:
@@ -395,10 +380,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             try:
                 await pubsub.unsubscribe(prefixed_channel)
             except Exception as e:
-                Log.debug(
-                    f"Redis unsubscribe of {prefixed_channel} failed: {e}",
-                    category="cara.broadcasting",
-                )
+                Log.debug("Redis unsubscribe of %s failed: %s", prefixed_channel, e, category='cara.broadcasting')
         # Optimisation: if we no longer have any subscriptions, the
         # listener can shut down to free a connection.
         if (
@@ -438,18 +420,13 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             except Exception as e:
                 attempt += 1
                 backoff = min(60, 2 ** min(attempt - 1, 6))
-                Log.error(
-                    f"Redis listener crashed (attempt {attempt}): {e}; "
-                    f"retrying in {backoff}s",
-                    category="cara.broadcasting",
-                    exc_info=True,
-                )
+                Log.error("Redis listener crashed (attempt %s): %s; retrying in %ss", attempt, e, backoff, category='cara.broadcasting', exc_info=True)
                 await asyncio.sleep(backoff)
             finally:
                 if self._listener_pubsub is not None:
                     try:
                         await self._listener_pubsub.aclose()
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
                     self._listener_pubsub = None
                 self._listener_ready.clear()
@@ -470,10 +447,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         try:
             payload = json.loads(message.get("data") or "{}")
         except Exception:
-            Log.warning(
-                f"Discarding non-JSON pubsub frame on {channel_raw}",
-                category="cara.broadcasting",
-            )
+            Log.warning("Discarding non-JSON pubsub frame on %s", channel_raw, category='cara.broadcasting')
             return
 
         if not isinstance(payload, dict):
@@ -511,15 +485,9 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                     await ws.send_json({"event": "ping", "ts": time.time()})
                 except Exception as e:
                     if _is_connection_closed_error(e):
-                        Log.debug(
-                            f"Heartbeat: {connection_id} closed",
-                            category="cara.broadcasting",
-                        )
+                        Log.debug("Heartbeat: %s closed", connection_id, category='cara.broadcasting')
                     else:
-                        Log.warning(
-                            f"Heartbeat to {connection_id} failed: {e}",
-                            category="cara.broadcasting",
-                        )
+                        Log.warning("Heartbeat to %s failed: %s", connection_id, e, category='cara.broadcasting')
                     await self.remove_connection(connection_id)
                     return
         except asyncio.CancelledError:
@@ -539,21 +507,21 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         if self._listener_pubsub is not None:
             try:
                 await self._listener_pubsub.aclose()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
             self._listener_pubsub = None
 
         for client in self._redis_clients.values():
             try:
                 await client.aclose()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
         self._redis_clients.clear()
 
         for pool in self._redis_pools.values():
             try:
                 await pool.disconnect()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
         self._redis_pools.clear()
 

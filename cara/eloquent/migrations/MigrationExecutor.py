@@ -51,7 +51,7 @@ class MigrationExecutor:
         # ``CREATE INDEX CONCURRENTLY`` on Postgres) opt out by setting
         # the class attribute ``transactional = False``.
         for migration_name, file_path in pending_migrations:
-            Log.info(f"Running migration: {migration_name}")
+            Log.info("Running migration: %s", migration_name)
             transactional = self._migration_is_transactional(file_path)
             if transactional:
                 with self.db_manager.transaction():
@@ -60,7 +60,7 @@ class MigrationExecutor:
             else:
                 self._run_migration(file_path, "up")
                 self.tracker.record_migration(migration_name, batch)
-            Log.info(f"Migrated: {migration_name}")
+            Log.info("Migrated: %s", migration_name)
 
     def rollback_last_batch(self):
         """Rollback the last batch of migrations"""
@@ -85,7 +85,7 @@ class MigrationExecutor:
 
         for migration_name in migrations:
             if migration_name in file_map:
-                Log.info(f"Rolling back: {migration_name}")
+                Log.info("Rolling back: %s", migration_name)
                 transactional = self._migration_is_transactional(file_map[migration_name])
                 if transactional:
                     with self.db_manager.transaction():
@@ -94,7 +94,7 @@ class MigrationExecutor:
                 else:
                     self._run_migration(file_map[migration_name], "down")
                     self.tracker.remove_migration(migration_name)
-                Log.info(f"Rolled back: {migration_name}")
+                Log.info("Rolled back: %s", migration_name)
 
     def _run_migration(self, file_path, direction):
         """Run a single migration in specified direction"""
@@ -113,7 +113,10 @@ class MigrationExecutor:
             import traceback
 
             Log.error(
-                f"Error running migration {file_path}: {e}\n{traceback.format_exc()}"
+                "Error running migration %s: %s\n%s",
+                file_path,
+                e,
+                traceback.format_exc(),
             )
             raise
 

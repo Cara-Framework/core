@@ -48,9 +48,9 @@ class URLCast(BaseCast):
         # Basic URL validation and normalization
         if not url.startswith(("http://", "https://")):
             if url.startswith("//"):
-                url = "https:" + url
+                url = f"https:{url}"
             elif url and not url.startswith(("ftp://", "file://")):
-                url = "https://" + url
+                url = f"https://{url}"
 
         return url if url else None
 

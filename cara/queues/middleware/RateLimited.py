@@ -107,11 +107,7 @@ class RateLimited:
                 try:
                     from cara.facades import Log
 
-                    Log.warning(
-                        f"Job {rate_key} rate limited "
-                        f"({self.max_attempts}/{self.decay_seconds}s)",
-                        category="cara.queue.middleware",
-                    )
+                    Log.warning("Job %s rate limited (%s/%ss)", rate_key, self.max_attempts, self.decay_seconds, category='cara.queue.middleware')
                 except ImportError:
                     pass
                 return None
@@ -238,9 +234,6 @@ class WithoutOverlapping:
         try:
             from cara.facades import Log
 
-            Log.debug(
-                f"Job {lock_key} skipped (overlapping)",
-                category="cara.queue.middleware",
-            )
+            Log.debug("Job %s skipped (overlapping)", lock_key, category='cara.queue.middleware')
         except ImportError:
             pass

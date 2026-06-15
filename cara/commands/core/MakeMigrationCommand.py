@@ -147,7 +147,7 @@ class MakeMigrationCommand(CommandBase):
                         else:
                             file_path.unlink()
                             self.info(f"Removed: {file_path.name}")
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass  # Skip files that can't be deleted
 
     def _create_fresh_migration(self, model_info, dependency_order=0):

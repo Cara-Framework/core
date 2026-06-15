@@ -201,7 +201,7 @@ class ThrottleRequests(Middleware):
             )
             return str(client_ip) in trusted
         except Exception as e:
-            Log.warning(f"ThrottleRequests internal failure: {e}")
+            Log.warning("ThrottleRequests internal failure: %s", e)
             return False
 
     def _resolve_limit_config(self, request: Request):

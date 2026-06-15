@@ -22,7 +22,7 @@ class TimeStampsScope(BaseScope):
         )
 
     def on_remove(self, builder):
-        pass
+        """No cleanup needed when timestamps scope is removed."""
 
     def set_timestamp_create(self, builder):
         if not builder._model.__timestamps__:

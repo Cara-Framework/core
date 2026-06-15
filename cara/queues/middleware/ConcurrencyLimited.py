@@ -211,10 +211,7 @@ class ConcurrencyLimited:
         try:
             from cara.facades import Log
 
-            Log.debug(
-                f"Concurrency limit reached for {key}, requeueing with delay",
-                category="cara.queue.middleware",
-            )
+            Log.debug("Concurrency limit reached for %s, requeueing with delay", key, category='cara.queue.middleware')
         except ImportError:
             pass
 

@@ -127,14 +127,11 @@ class JobTracker:
                     job_record.metadata = enriched_metadata
                     job_record.save()
 
-            Log.debug(
-                f"🚀 Job started: {job_name}[{job_uid}] for entity {entity_id}",
-                category="cara.queue.jobs",
-            )
+            Log.debug("🚀 Job started: %s[%s] for entity %s", job_name, job_uid, entity_id, category='cara.queue.jobs')
             return job_uid
 
         except Exception as e:
-            Log.warning(f"Failed to track job start: {str(e)}")
+            Log.warning("Failed to track job start: %s", str(e))
             return job_uid
 
     def track_job_processing(self, job_uid: str) -> None:
@@ -180,15 +177,13 @@ class JobTracker:
         """
         try:
             if not self.job_model:
-                Log.error(
-                    f"💥 Job failed: {job_uid} - {error}", category="cara.queue.jobs"
-                )
+                Log.error("💥 Job failed: %s - %s", job_uid, error, category='cara.queue.jobs')
                 return None
 
             # Get current job info
             job_record = self.job_model.where("job_uid", job_uid).first()
             if not job_record:
-                Log.error(f"Job not found for {job_uid}", category="cara.queue.jobs")
+                Log.error("Job not found for %s", job_uid, category='cara.queue.jobs')
                 return None
 
             # Mark current attempt as failed
@@ -206,14 +201,11 @@ class JobTracker:
                 return self._schedule_retry(job_record, error)
             else:
                 self._move_to_dead_letter(job_record, error)
-                Log.error(
-                    f"💀 Job failed permanently: {job_uid} after {job_record.attempt} attempts",
-                    category="cara.queue.jobs",
-                )
+                Log.error("💀 Job failed permanently: %s after %s attempts", job_uid, job_record.attempt, category='cara.queue.jobs')
                 return None
 
         except Exception as e:
-            Log.warning(f"Failed to track job failure: {str(e)}")
+            Log.warning("Failed to track job failure: %s", str(e))
             return None
 
     def should_job_continue(self, job_uid: str, entity_id: str | None = None) -> bool:
@@ -241,7 +233,7 @@ class JobTracker:
             return True
 
         except Exception as e:
-            Log.warning(f"Error checking job status {job_uid}: {str(e)}")
+            Log.warning("Error checking job status %s: %s", job_uid, str(e))
             return True
 
     def validate_job_or_cancel(
@@ -340,7 +332,7 @@ class JobTracker:
             }
 
         except Exception as e:
-            Log.error(f"Failed to get job analytics: {str(e)}")
+            Log.error("Failed to get job analytics: %s", str(e))
             return {"error": str(e)}
 
     def _cancel_conflicting_jobs(
@@ -376,14 +368,12 @@ class JobTracker:
                 job_record.cancelled_at = pendulum.now("UTC")
                 job_record.save()
                 cancelled_count += 1
-                Log.debug(
-                    f"Cancelled conflicting job: {job_record.job_uid} for entity {entity_id}"
-                )
+                Log.debug("Cancelled conflicting job: %s for entity %s", job_record.job_uid, entity_id)
 
             return cancelled_count
 
         except Exception as e:
-            Log.warning(f"Failed to cancel conflicting jobs: {str(e)}")
+            Log.warning("Failed to cancel conflicting jobs: %s", str(e))
             return 0
 
     def _schedule_retry(self, job_record, error: str) -> str | None:
@@ -411,13 +401,11 @@ class JobTracker:
             job_record.metadata = metadata
             job_record.save()
 
-            Log.debug(
-                f"🔄 Retry scheduled: {job_record.name}[{retry_job_uid}] attempt {next_attempt} in {delay_seconds}s"
-            )
+            Log.debug("🔄 Retry scheduled: %s[%s] attempt %s in %ss", job_record.name, retry_job_uid, next_attempt, delay_seconds)
             return retry_job_uid
 
         except Exception as e:
-            Log.error(f"Failed to schedule retry: {str(e)}")
+            Log.error("Failed to schedule retry: %s", str(e))
             return None
 
     def _move_to_dead_letter(self, job_record, final_error: str) -> None:
@@ -429,12 +417,10 @@ class JobTracker:
             job_record.metadata = metadata
             job_record.save()
 
-            Log.error(
-                f"💀 Job moved to dead letter: {job_record.name}[{job_record.job_uid}] - {final_error}"
-            )
+            Log.error("💀 Job moved to dead letter: %s[%s] - %s", job_record.name, job_record.job_uid, final_error)
 
         except Exception as e:
-            Log.warning(f"Failed to move job to dead letter: {str(e)}")
+            Log.warning("Failed to move job to dead letter: %s", str(e))
 
     def create_sync_job_record(
         self,
@@ -498,7 +484,7 @@ class JobTracker:
             return job_record.id
 
         except Exception as e:
-            Log.warning(f"Failed to create sync job record: {str(e)}")
+            Log.warning("Failed to create sync job record: %s", str(e))
             return None
 
     def update_job_status(self, job_id: int, status: str) -> None:

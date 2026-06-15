@@ -7,7 +7,6 @@ Manages global execution context for the application, including sync/async mode.
 from __future__ import annotations
 
 import asyncio
-import copy
 from collections.abc import Callable
 from contextvars import ContextVar, copy_context
 from typing import Any, TypeVar

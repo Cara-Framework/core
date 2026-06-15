@@ -199,9 +199,11 @@ class Image:
               worker on memory.
         """
         if isinstance(source, str):
-            image = PILImage.open(source)
+            with PILImage.open(source) as opened:
+                image = opened.copy()
         elif isinstance(source, bytes):
-            image = PILImage.open(BytesIO(source))
+            with PILImage.open(BytesIO(source)) as opened:
+                image = opened.copy()
         else:
             raise InvalidArgumentException(f"Unsupported source type: {type(source)}")
 

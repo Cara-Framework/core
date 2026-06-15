@@ -192,13 +192,11 @@ class MailChannel(BaseChannel):
         try:
             from cara.facades import Log
 
-            Log.error(
-                f"{message}: {error}",
-                category="cara.notifications.mail",
-                exc_info=True,
-            )
-        except ImportError:
-            pass
+            Log.error("%s: %s", message, error, category='cara.notifications.mail', exc_info=True)
+        except (ImportError, RuntimeError):
+            import sys
+
+            print(f"[MailChannel] {message}: {error}", file=sys.stderr)
 
     def _get_recipient(self, notifiable, notification) -> str | None:
         """

@@ -15,11 +15,9 @@ from cara.middleware import Middleware
 
 class TrimStrings(Middleware):
     async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
-        # HTTP string trimming logic
-        # Only works for dict-like input bags
-        if hasattr(request, "input_bag"):
-            for k, v in request.input_bag.all().items():
+        if hasattr(request, "_input") and request._input is not None:
+            for k, v in request._input.all().items():
                 if isinstance(v, str):
-                    request.input_bag[k] = v.strip()
+                    request._input.set(k, v.strip())
 
         return await next_fn(request)

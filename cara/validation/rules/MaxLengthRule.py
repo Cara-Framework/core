@@ -40,12 +40,7 @@ class MaxLengthRule(BaseRule):
             try:
                 from cara.facades import Log
 
-                Log.warning(
-                    f"MaxLengthRule: non-numeric max_length "
-                    f"parameter {max_length!r} on field {field!r}; "
-                    f"failing value as defensive default",
-                    category="cara.validation",
-                )
+                Log.warning("MaxLengthRule: non-numeric max_length parameter %s on field %s; failing value as defensive default", max_length, field, category='cara.validation')
             except ImportError:
                 pass
             return False

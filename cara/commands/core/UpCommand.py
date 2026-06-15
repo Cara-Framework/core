@@ -7,7 +7,6 @@ This module provides a CLI command to disable maintenance mode with enhanced UX.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -165,29 +164,8 @@ class UpCommand(CommandBase):
         except Exception as e:
             raise StorageException(f"Failed to remove maintenance file: {e}") from e
 
-    def _is_production(self) -> bool:
-        """Check if running in production environment."""
-        try:
-            from cara.configuration import config
-
-            env = str(config("app.ENV", "")).lower()
-        except Exception:
-            env = os.getenv("APP_ENV", "").lower()
-        return env in ["production", "prod"]
-
     def _confirm_production_action(self) -> bool:
         """Get user confirmation for production actions."""
-        while True:
-            answer = (
-                input(
-                    "\n🤔 Are you sure you want to disable maintenance mode in PRODUCTION? (yes/no): "
-                )
-                .strip()
-                .lower()
-            )
-            if answer in ["yes", "y"]:
-                return True
-            elif answer in ["no", "n"]:
-                return False
-            else:
-                print("Please answer 'yes' or 'no'")
+        return self._confirm_yes_no(
+            "Are you sure you want to disable maintenance mode in PRODUCTION?"
+        )

@@ -164,10 +164,8 @@ class QueueableNotification(BaseQueueable):
         try:
             from cara.facades import Log
 
-            Log.error(
-                f"Notification {self.__class__.__name__} failed for channel {channel}: {str(error)}"
-            )
+            Log.error("Notification %s failed for channel %s: %s", self.__class__.__name__, channel, str(error))
             if self.notifiable:
-                Log.error(f"Notifiable: {self.notifiable}")
+                Log.error("Notifiable: %s", self.notifiable)
         except ImportError:
             pass

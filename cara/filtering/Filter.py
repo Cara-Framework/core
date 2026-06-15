@@ -251,7 +251,7 @@ class Filter(ABC):
             parts = [
                 f"{k}={Filter._serialize_value(value[k])}" for k in sorted(value.keys())
             ]
-            return "{" + ";".join(parts) + "}"
+            return f"{{{';'.join(parts)}}}"
         return str(value).strip()
 
     # Hard cap on multi-select payload length (brand_slugs, conditions,

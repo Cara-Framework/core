@@ -90,7 +90,7 @@ def safe_call(
         try:
             result = fn(...)
         except Exception as e:
-            Log.warning(f"...: {e}")
+            Log.warning("...: %s", e)
             result = DEFAULT
 
     pattern in one call. ``log_message`` is formatted with ``{error}`` if
@@ -112,11 +112,15 @@ def safe_call(
                     else f"{log_message}: {error}"
                 )
                 Log.warning(msg)
-            except Exception as e:
+            except (ImportError, RuntimeError, AttributeError):
                 from cara.facades import Log
 
-                Log.warning(f"safe_call swallowed: {e}")
-                return None
+                msg = (
+                    log_message.format(error=error)
+                    if "{error}" in log_message
+                    else f"{log_message}: {error}"
+                )
+                Log.warning(msg, exc_info=True)
         return default
 
 
@@ -148,29 +152,6 @@ def value(target: Any, *args: Any, **kwargs: Any) -> Any:
     if callable(target):
         return target(*args, **kwargs)
     return target
-
-
-def data_get(target: Any, key: str | None, default: Any = None) -> Any:
-    """Read ``key`` from a nested dict / list using dot-notation.
-
-    Thin alias around :meth:`cara.support.Arr.get` so the canonical
-    Laravel helper name resolves at the global ``cara.helpers`` import
-    path. Supports the ``"*"`` wildcard segment to map across lists.
-    """
-    from cara.support.Arr import Arr
-
-    return Arr.get(target, key, default)
-
-
-def data_set(target: dict[str, Any], key: str, value: Any) -> dict[str, Any]:
-    """Write ``key`` into a nested dict using dot-notation.
-
-    Thin alias around :meth:`cara.support.Arr.set`. Mutates ``target``
-    (Laravel parity); returns the same object for chaining.
-    """
-    from cara.support.Arr import Arr
-
-    return Arr.set(target, key, value)
 
 
 class _OptionalProxy:
@@ -329,7 +310,7 @@ def blank(value: Any) -> bool:
         return len(value) == 0
     try:
         return not bool(value)
-    except Exception:
+    except (TypeError, ValueError, RuntimeError):
         return False
 
 
@@ -368,9 +349,7 @@ def last(items: Any) -> Any:
     if isinstance(items, dict):
         if not items:
             return None
-        for k in items:
-            pass
-        return items[k]
+        return next(reversed(items.values()))
     if isinstance(items, (list, tuple)):
         return items[-1] if items else None
     try:
@@ -419,18 +398,11 @@ def report(exception: BaseException) -> None:
     try:
         from cara.facades import Log
 
-        Log.error(
-            f"{exception.__class__.__name__}: {exception}",
-            context={"exception_type": exception.__class__.__name__},
-        )
+        Log.error("%s: %s", exception.__class__.__name__, exception, context={'exception_type': exception.__class__.__name__})
     except Exception as log_err:
-        import sys as _sys
+        from cara.facades import Log
 
-        print(
-            f"[cara.helpers.report] Log facade failed ({log_err}); "
-            f"original={exception.__class__.__name__}: {exception}",
-            file=_sys.stderr,
-        )
+        Log.error("cara.helpers.report: Log facade failed (%s); original=%s: %s", log_err, exception.__class__.__name__, exception, exc_info=True)
 
 
 def report_if(condition: Any, exception: BaseException) -> Any:
@@ -576,8 +548,6 @@ __all__ = [
     "class_basename",
     "collect",
     "config",
-    "data_get",
-    "data_set",
     "dispatch",
     "e",
     "env",

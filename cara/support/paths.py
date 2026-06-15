@@ -124,48 +124,11 @@ def storage_path(relative: str = "") -> str:
     return paths("storage", relative)
 
 
-def config_path(relative: str = "") -> str:
-    """Get config path: /project/config[/relative]"""
-    return paths("config", relative)
-
-
 def public_path(relative: str = "") -> str:
     """Get public path: /project/public[/relative]"""
     return paths("public", relative)
 
 
-def app_path(relative: str = "") -> str:
-    """Get app path: /project/app[/relative]"""
-    return paths("app", relative)
-
-
 def base_path(relative: str = "") -> str:
     """Get base project path: /project[/relative]"""
     return PathManager.base_path(relative)
-
-
-# Ultra-short alias
-def p(path: str = "", relative: str = "") -> str:
-    """Ultra-short alias for paths()."""
-    return paths(path, relative)
-
-
-# Dynamic attribute access for even cleaner syntax
-class PathHelper:
-    """Dynamic path access with dot notation."""
-
-    def __init__(self, base_path: str = ""):
-        self.base = base_path
-
-    def __getattr__(self, name: str) -> str:
-        path = f"{self.base}.{name}" if self.base else name
-        return paths(path)
-
-    def __call__(self, relative: str = "") -> str:
-        return paths(self.base, relative) if self.base else paths("", relative)
-
-
-# Pre-configured path helpers
-storage = PathHelper("storage")
-config = PathHelper("config")
-app = PathHelper("app")

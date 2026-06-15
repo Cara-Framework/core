@@ -441,7 +441,7 @@ class Model(
         Returns:
             str
         """
-        return underscore(self.__class__.__name__ + "_" + self.get_primary_key())
+        return underscore(f"{self.__class__.__name__}_{self.get_primary_key()}")
 
     # NOTE: ``query`` is defined later in this class as a ``@classmethod``
     # (Laravel parity — ``Model.query()``). The instance-level shadow that
@@ -482,7 +482,7 @@ class Model(
                 class_name = base_class.__name__
 
                 if class_name.endswith("Mixin"):
-                    getattr(self, "boot_" + class_name)(self.get_builder())
+                    getattr(self, f"boot_{class_name}")(self.get_builder())
                 elif (
                     base_class != Model
                     and issubclass(base_class, Model)
@@ -544,10 +544,7 @@ class Model(
                 # Log error but don't stop other listeners
                 from cara.facades import Log
 
-                Log.error(
-                    f"Model event error in {listener_method.__name__}: {e}",
-                    exc_info=True,
-                )
+                Log.error("Model event error in %s: %s", listener_method.__name__, e, exc_info=True)
 
         return True  # All listeners passed, continue
 
@@ -634,7 +631,7 @@ class Model(
         except Exception as e:
             from cara.facades import Log
 
-            Log.error(f"Save operation failed: {e}", exc_info=True)
+            Log.error("Save operation failed: %s", e, exc_info=True)
             return False
 
     def delete(self, **kwargs: Any) -> bool:
@@ -668,7 +665,7 @@ class Model(
         except Exception as e:
             from cara.facades import Log
 
-            Log.error(f"Delete operation failed: {e}", exc_info=True)
+            Log.error("Delete operation failed: %s", e, exc_info=True)
             return False
 
     def _touch_parents(self):
@@ -808,10 +805,6 @@ class Model(
                 if key in model.get_dates() and value:
                     value = model.get_new_date(value)
                 dic.update({key: value})
-
-            # Hydration logging disabled for performance
-            # from cara.facades import Log
-            # Log.debug(f"Hydrating Model {cls.__name__}", category="cara.eloquent.hydrate")
 
             model.observe_events(model, "hydrating")
             model.__attributes__.update(dic or {})
@@ -978,6 +971,11 @@ class Model(
             data = {k: v for k, v in data.items() if k in include}
         if exclude:
             data = {k: v for k, v in data.items() if k not in exclude}
+
+        # Apply __visible__ whitelist (if set, only these keys are exposed)
+        visible = getattr(self, "__visible__", [])
+        if visible:
+            data = {k: v for k, v in data.items() if k in visible}
 
         # Apply hidden attributes
         hidden = getattr(self, "__hidden__", [])
@@ -1402,7 +1400,7 @@ class Model(
                 return accessor_method(self, raw_value)
 
         # Check for non-decorated accessor methods (Laravel-style naming convention)
-        non_decorated_accessor = "get_" + attribute + "_attribute"
+        non_decorated_accessor = f"get_{attribute}_attribute"
         if non_decorated_accessor in self.__class__.__dict__:
             accessor_method = self.__class__.__dict__[non_decorated_accessor]
             # Get the raw value for non-decorated accessors
@@ -1748,12 +1746,10 @@ class Model(
     def _get_user_timezone(self) -> str:
         """Get user timezone from config or request context."""
         try:
-            # Try to get from config first
-            from config.app import APP_TIMEZONE
+            from cara.configuration import config
 
-            return APP_TIMEZONE
-        except ImportError:
-            # Fallback to UTC
+            return config("app.timezone", "UTC")
+        except Exception:
             return "UTC"
 
     def set_appends(self, appends) -> Self:

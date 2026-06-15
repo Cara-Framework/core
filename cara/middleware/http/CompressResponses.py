@@ -189,7 +189,7 @@ class CompressResponses(Middleware):
                             existing = v
                             break
             return bool(existing) and str(existing).strip().lower() != "identity"
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError):
             return False
 
     @staticmethod
@@ -200,7 +200,7 @@ class CompressResponses(Middleware):
                 ct = headers.get("Content-Type")
                 if ct:
                     return str(ct).split(";", 1)[0].strip().lower()
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
         return ""
 
@@ -224,7 +224,7 @@ class CompressResponses(Middleware):
             # defeats the streaming and risks OOM on large feeds.
             if isinstance(content, (Iterable,)) and not isinstance(content, (bytes, str)):
                 return None
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError):
             return None
         return None
 
@@ -251,6 +251,6 @@ class CompressResponses(Middleware):
 
             Log.debug(msg, category="cara.http.compress_responses")
         except Exception:
-            import sys
+            from cara.facades import Log
 
-            print(msg, file=sys.stderr)
+            Log.warning(msg, exc_info=True)

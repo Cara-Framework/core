@@ -149,10 +149,10 @@ class ScriptRunner:
         for result in failed_results:
             table.add_row(
                 str(result["line"]),
-                result["command"][:50] + "..."
+                f"{result['command'][:50]}..."
                 if len(result["command"]) > 50
                 else result["command"],
-                result["error"][:100] + "..."
+                f"{result['error'][:100]}..."
                 if len(result["error"]) > 100
                 else result["error"],
             )

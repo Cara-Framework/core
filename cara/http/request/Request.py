@@ -8,7 +8,6 @@ request handling.
 from __future__ import annotations
 
 import ipaddress
-import os
 import uuid
 from functools import lru_cache
 from typing import Any
@@ -58,9 +57,9 @@ def _trusted_proxy_networks() -> tuple:
     try:
         from cara.configuration import config
 
-        raw = str(config("app.TRUSTED_PROXIES", "") or "")
+        raw = str(config("app.trusted_proxies", "") or "")
     except Exception:
-        raw = os.environ.get("TRUSTED_PROXIES", "")
+        raw = ""
     nets = []
     # Loopback only — safe to auto-trust because spoofing the
     # loopback peer requires being the process itself.
@@ -241,6 +240,14 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         if params:
             self.params = params
         return self
+
+    def set_input(self, name: str, value: Any) -> None:
+        """Merge a value into the request input bag.
+
+        Used by controllers to inject path parameters so FormRequest
+        validation can access them as regular input fields.
+        """
+        self._input.set(name, value)
 
     # -----------------------
     # Route and Auth Helpers

@@ -160,9 +160,7 @@ class HasAttributes:
                 from cara.facades import Log
 
                 model_name = cls.__name__ if hasattr(cls, "__name__") else str(cls)
-                Log.warning(
-                    f"[MassAssignment] {model_name}: dropped non-fillable keys {dropped}"
-                )
+                Log.warning("[MassAssignment] %s: dropped non-fillable keys %s", model_name, dropped)
             except Exception:
                 _logger.debug("mass assignment warning log failed", exc_info=True)
 
@@ -347,12 +345,10 @@ class HasAttributes:
     def _get_user_timezone(self) -> str:
         """Get user timezone from config or request context."""
         try:
-            # Try to get from config first
-            from config.app import APP_TIMEZONE
+            from cara.configuration import config
 
-            return APP_TIMEZONE
-        except ImportError:
-            # Fallback to UTC
+            return config("app.timezone", "UTC")
+        except Exception:
             return "UTC"
 
     def _serialize_relations(self) -> dict[str, Any]:

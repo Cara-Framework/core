@@ -128,7 +128,7 @@ class HttpConductor:
             # errors here to avoid noisy double-logging of 404s etc.
             status = getattr(e, "status_code", 500)
             if status >= 500:
-                Log.error(f"Error in HTTP connection: {e}")
+                Log.error("Error in HTTP connection: %s", e)
             raise
         finally:
             # CRITICAL: terminate middleware MUST run on every code path,
@@ -152,9 +152,7 @@ class HttpConductor:
                 )
             except Exception as term_exc:
                 # Never let a terminate failure mask the real exception.
-                Log.error(
-                    f"Terminable middleware sweep failed: {term_exc}",
-                )
+                Log.error("Terminable middleware sweep failed: %s", term_exc)
 
         # Send response via ASGI
         resp = final_response or response
@@ -218,7 +216,7 @@ class HttpConductor:
         try:
             await reset_auth_middleware.terminate(request, response)
         except Exception as e:
-            Log.error(f"Critical error in auth cache cleanup: {e}")
+            Log.error("Critical error in auth cache cleanup: %s", e)
 
         # Collect instances that actually executed during this request.
         executed: list = []
@@ -264,4 +262,4 @@ class HttpConductor:
                     await result
             except Exception as e:
                 name = type(instance).__name__
-                Log.error(f"Error in terminable middleware {name}: {e}")
+                Log.error("Error in terminable middleware %s: %s", name, e)

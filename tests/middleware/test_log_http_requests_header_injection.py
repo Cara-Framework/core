@@ -14,7 +14,8 @@ at line ~191-195 still walked raw header values verbatim:
     if raw_headers:
         safe_headers = _redact_headers(raw_headers)
         Log.debug(
-            f"  Headers: {safe_headers}",
+            "  Headers: %s",
+            safe_headers,
             category="cara.http.requests",
         )
 

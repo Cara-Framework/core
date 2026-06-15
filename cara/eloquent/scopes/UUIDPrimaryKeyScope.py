@@ -21,7 +21,7 @@ class UUIDPrimaryKeyScope(BaseScope):
         )
 
     def on_remove(self, builder):
-        pass
+        """No cleanup needed when UUID scope is removed."""
 
     def generate_uuid(self, builder, uuid_version, bytes=False):
         # UUID 3 and 5 requires parameters

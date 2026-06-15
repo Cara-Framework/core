@@ -240,7 +240,7 @@ class HeaderBag:
         elif name.lower() == "content-length":
             return "CONTENT_LENGTH"
         else:
-            return "HTTP_" + name.replace("-", "_").upper()
+            return f"HTTP_{name.replace('-', '_').upper()}"
 
     @staticmethod
     def from_server_format(name: str) -> str:

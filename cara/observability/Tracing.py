@@ -94,11 +94,7 @@ def _try(fn, *args, **kwargs) -> None:
         try:
             from cara.facades import Log
 
-            Log.warning(
-                f"[cara.observability] {fn.__name__} failed: "
-                f"{e.__class__.__name__}: {e}",
-                category="observability",
-            )
+            Log.warning("[cara.observability] %s failed: %s: %s", fn.__name__, e.__class__.__name__, e, category='observability')
         except Exception as log_err:
             print(
                 f"[cara.observability._try] Log.warning failed after "
@@ -145,12 +141,7 @@ def _init_tracing(service_name: str, release: str) -> None:
         try:
             from cara.facades import Log
 
-            Log.debug(
-                f"[cara.observability] tracing disabled: opentelemetry "
-                f"not installed ({e.name or e}); install the OTel extras "
-                f"to enable span export",
-                category="observability",
-            )
+            Log.debug("[cara.observability] tracing disabled: opentelemetry not installed (%s); install the OTel extras to enable span export", e.name or e, category='observability')
         except Exception:
             print(
                 "[cara.observability] tracing disabled: opentelemetry "

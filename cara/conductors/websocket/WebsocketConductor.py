@@ -119,10 +119,7 @@ class WebsocketConductor:
         except WebSocketException as e:
             # Known/expected WS errors (e.g. client-close race on send → 4002).
             # These are benign — client dropped mid-handler. Log at debug only.
-            Log.debug(
-                f"WebSocket connection ended: {e}",
-                category="cara.websocket",
-            )
+            Log.debug("WebSocket connection ended: %s", e, category='cara.websocket')
             # WebSocketException carries its own close code (4xxx). Use
             # it directly so the client sees an accurate reason rather
             # than the catch-all 1011.
@@ -138,14 +135,10 @@ class WebsocketConductor:
             # application" traceback for what is a benign client mistake.
             # ``clean_exit`` stays False so the finally closes with the code
             # set below.
-            Log.debug(
-                f"No WS route for path "
-                f"'{getattr(self.socket, 'path', '?')}'; closing 1008",
-                category="cara.websocket",
-            )
+            Log.debug("No WS route for path '%s'; closing 1008", getattr(self.socket, 'path', '?'), category='cara.websocket')
             self._wsx_close_code = 1008
         except Exception as e:
-            Log.error(f"Error in WebSocket connection: {e}")
+            Log.error("Error in WebSocket connection: %s", e)
             raise
         finally:
             # Clean up socket broadcasting first
@@ -164,7 +157,7 @@ class WebsocketConductor:
                     reason = "Internal error" if code == 1011 else ""
                 try:
                     await self.socket.close(code, reason)
-                except Exception:
+                except (OSError, RuntimeError, AttributeError, ConnectionError):
                     pass  # Already closed by client or transport
             # Always run terminable middleware on the EXACT instances
             # that executed for this request — same contract as the
@@ -175,10 +168,7 @@ class WebsocketConductor:
                     route_pipeline_holder[0] if route_pipeline_holder else None,
                 )
             except Exception as term_exc:
-                Log.error(
-                    f"WebSocket terminable middleware sweep failed: {term_exc}",
-                    category="cara.websocket",
-                )
+                Log.error("WebSocket terminable middleware sweep failed: %s", term_exc, category='cara.websocket')
 
     def get_global_middleware(self):
         """
@@ -241,10 +231,7 @@ class WebsocketConductor:
             # ResetAuth ws variant not present in this build — fine.
             pass
         except Exception as e:
-            Log.error(
-                f"Critical error in WebSocket auth cache cleanup: {e}",
-                category="cara.websocket",
-            )
+            Log.error("Critical error in WebSocket auth cache cleanup: %s", e, category='cara.websocket')
 
         # Collect the middleware instances that actually ran. The
         # Pipeline records each instance it walks through into
@@ -315,8 +302,4 @@ class WebsocketConductor:
             try:
                 await terminate_fn(self.socket)
             except Exception as e:
-                Log.error(
-                    f"Error in terminable WebSocket middleware "
-                    f"{type(instance).__name__}: {e}",
-                    category="cara.websocket",
-                )
+                Log.error("Error in terminable WebSocket middleware %s: %s", type(instance).__name__, e, category='cara.websocket')

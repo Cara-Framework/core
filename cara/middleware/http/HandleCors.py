@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from cara.configuration import config
+from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
@@ -68,6 +69,12 @@ class HandleCors(Middleware):
         outer handler can replace the body but the headers will
         already be set.
         """
+        # Skip CORS processing entirely for paths outside the configured
+        # scope. Without this, CORS headers are applied to ALL routes
+        # (including admin/internal) regardless of the ``paths`` config.
+        if not self._path_matches_cors_config(request):
+            return await next_fn(request)
+
         # Handle preflight OPTIONS requests
         if request.method.upper() == "OPTIONS":
             return self._handle_preflight(request)
@@ -90,7 +97,7 @@ class HandleCors(Middleware):
                     # exception path. Browsers handle missing CORS
                     # headers gracefully (visible CORS error) — far
                     # better than losing the original failure cause.
-                    pass
+                    Log.debug("CORS header attachment failed", exc_info=True)
 
     def _handle_preflight(self, request: Request) -> Response:
         """Handle OPTIONS preflight request."""
@@ -164,6 +171,24 @@ class HandleCors(Middleware):
 
         # Access-Control-Max-Age
         response.header("Access-Control-Max-Age", str(self.config["max_age"]))
+
+    def _path_matches_cors_config(self, request: Request) -> bool:
+        """Check if the request path is within the CORS-configured paths.
+
+        Supports simple glob patterns like ``api/*``. An empty paths
+        list means "apply to all" (backward compatible default).
+        """
+        paths = self.config.get("paths")
+        if not paths:
+            return True
+
+        import fnmatch
+
+        request_path = request.path.lstrip("/")
+        for pattern in paths:
+            if fnmatch.fnmatch(request_path, pattern):
+                return True
+        return False
 
     def _is_origin_allowed(self, origin: str) -> bool:
         """Check if origin is allowed (any rule)."""

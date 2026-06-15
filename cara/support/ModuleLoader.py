@@ -37,7 +37,7 @@ def load(
             from cara.facades import Log
 
             Log.warning(error_message, category="cara.support.module_loader")
-        except Exception:
+        except (ImportError, RuntimeError):
             pass
 
         if raise_exception:

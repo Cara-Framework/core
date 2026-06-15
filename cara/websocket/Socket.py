@@ -144,11 +144,6 @@ class Socket:
         return self._socket_id
 
     @property
-    def id(self) -> str:
-        # Backwards-compatible alias for ``connection_id``.
-        return self._connection_id
-
-    @property
     def closed(self) -> bool:
         return self._closed
 
@@ -360,10 +355,7 @@ class Socket:
         try:
             allowed = await Broadcast.authorize_subscription(channel, self._user)
         except Exception as e:
-            Log.warning(
-                f"Channel auth callback raised for {channel}: {e}",
-                category="cara.websocket",
-            )
+            Log.warning("Channel auth callback raised for %s: %s", channel, e, category='cara.websocket')
             allowed = False
 
         if not allowed:
@@ -387,10 +379,7 @@ class Socket:
                         channel, "presence.joined", {"user": allowed}
                     )
                 except Exception as e:
-                    Log.debug(
-                        f"Presence join broadcast failed on {channel}: {e}",
-                        category="cara.websocket",
-                    )
+                    Log.debug("Presence join broadcast failed on %s: %s", channel, e, category='cara.websocket')
         return success
 
     async def unsubscribe_channel(self, channel: str) -> bool:
@@ -445,26 +434,17 @@ class Socket:
                 try:
                     await Broadcast.unsubscribe(self._connection_id, channel)
                 except Exception as e:
-                    Log.debug(
-                        f"unsubscribe({channel}) during cleanup raised: {e}",
-                        category="cara.websocket",
-                    )
+                    Log.debug("unsubscribe(%s) during cleanup raised: %s", channel, e, category='cara.websocket')
             self._subscribed_channels.clear()
 
             if self._connection_registered:
                 try:
                     await Broadcast.remove_connection(self._connection_id)
                 except Exception as e:
-                    Log.debug(
-                        f"remove_connection during cleanup raised: {e}",
-                        category="cara.websocket",
-                    )
+                    Log.debug("remove_connection during cleanup raised: %s", e, category='cara.websocket')
                 self._connection_registered = False
         except Exception as e:
-            Log.error(
-                f"Broadcasting cleanup for {self._connection_id} failed: {e}",
-                category="cara.websocket",
-            )
+            Log.error("Broadcasting cleanup for %s failed: %s", self._connection_id, e, category='cara.websocket')
 
     # ------------------------------------------------------------------
     # Helpers.

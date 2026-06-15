@@ -48,7 +48,7 @@ class ViewCompiler:
 
                 # If no content follows, add pass
                 if not next_line_has_content:
-                    compiled_lines.append("    " * self.indent_level + "pass")
+                    compiled_lines.append(f"{'    ' * self.indent_level}pass")
 
         return "\n".join(compiled_lines)
 

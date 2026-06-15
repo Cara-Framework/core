@@ -69,11 +69,7 @@ class ArrayCast(BaseCast):
             try:
                 from cara.facades import Log
 
-                Log.warning(
-                    f"ArrayCast: dropped {type(value).__name__} input "
-                    f"(repr={value!r}); expected list — storing as '[]'",
-                    category="cast.array",
-                )
+                Log.warning("ArrayCast: dropped %s input (repr=%s); expected list — storing as '[]'", type(value).__name__, value, category='cast.array')
             except Exception:
                 # Facade not bound (unit-test boot order, etc.) —
                 # fall back to stdlib logging so the warning still

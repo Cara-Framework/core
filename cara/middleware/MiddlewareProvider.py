@@ -125,7 +125,7 @@ class MiddlewareProvider(DeferredProvider):
             if middleware_class:  # Skip None values
                 MiddlewareProvider.validate_middleware_interface(middleware_class)
             else:
-                Log.error(f"Middleware {middleware_class} is None")
+                Log.error("Middleware %s is None", middleware_class)
 
     @staticmethod
     def build_capsule_from_config(

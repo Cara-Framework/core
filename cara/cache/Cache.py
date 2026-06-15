@@ -10,6 +10,7 @@ Supports Laravel-style cache tags and cache locks for distributed systems.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from cara.cache.contracts import Cache
@@ -218,7 +219,7 @@ class CacheTaggedStore:
     def flush(self) -> int:
         """Flush all entries with these tags."""
         # Flush all keys matching tag pattern
-        pattern = ":".join(self.tags) + ":*"
+        pattern = f"{':'.join(self.tags)}:*"
         return self.cache.forget_pattern(pattern)
 
 
@@ -431,6 +432,34 @@ class Cache:
         value = callback()
         driver.put(key, value, ttl)
         return value
+
+    def remember_with_negative(
+        self,
+        key: str,
+        hit_ttl: int,
+        miss_ttl: int,
+        callback: Callable[[], Any],
+        driver_name: str | None = None,
+        *,
+        sentinel: Any = "",
+    ) -> Any | None:
+        """Like remember(), but stores a sentinel on cache-miss to prevent repeated computation.
+
+        Returns None when the sentinel is found (indicating a previous miss).
+        """
+        driver = self.driver(driver_name)
+
+        _MISSING = object()
+        cached = driver.get(key, _MISSING)
+        if cached is not _MISSING:
+            return None if cached == sentinel else cached
+
+        result = callback()
+        if result is not None:
+            driver.put(key, result, hit_ttl)
+        else:
+            driver.put(key, sentinel, miss_ttl)
+        return result
 
     def forget_pattern(self, pattern: str, driver_name: str | None = None) -> int:
         """

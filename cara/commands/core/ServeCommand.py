@@ -6,6 +6,7 @@ This module provides a CLI command to start the development server with enhanced
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import subprocess
@@ -18,6 +19,8 @@ from cara.configuration import config
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException
 from cara.support.LogColors import LogColors
+
+_logger = logging.getLogger("cara.serve")
 
 
 @command(
@@ -189,7 +192,7 @@ class ServeCommand(CommandBase):
                 self.console.print(
                     f"[#e5c07b]│[/#e5c07b] [white]Network:[/white] [bold white]http://{local_ip}:{port}[/bold white]"
                 )
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
 
         self.console.print("[#e5c07b]└─[/#e5c07b]")
@@ -270,12 +273,12 @@ class ServeCommand(CommandBase):
                             process.wait(timeout=5)
                         except subprocess.TimeoutExpired:
                             process.kill()
-                except Exception:
+                except (OSError, RuntimeError, AttributeError, ConnectionError):
                     pass
                 if process.stdout is not None:
                     try:
                         process.stdout.close()
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
 
     def _show_routes_compact(self) -> None:
@@ -301,9 +304,8 @@ class ServeCommand(CommandBase):
 
             self.console.print("[#e5c07b]└─[/#e5c07b]")
 
-        except Exception:
-            # Silently ignore route listing errors
-            pass
+        except Exception as exc:
+            _logger.debug("route listing unavailable: %s", exc)
 
     def _build_server_command(self, config: dict) -> list:
         """Build the server command based on configuration."""

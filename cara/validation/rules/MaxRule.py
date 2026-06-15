@@ -49,11 +49,7 @@ class MaxRule(BaseRule):
             try:
                 from cara.facades import Log
 
-                Log.warning(
-                    f"MaxRule misconfig: field={field!r} has a negative "
-                    f"max threshold ({max_threshold}) in a length context — "
-                    f"every input fails by design. Check the rule spec.",
-                )
+                Log.warning("MaxRule misconfig: field=%s has a negative max threshold (%s) in a length context — every input fails by design. Check the rule spec.", field, max_threshold)
             except (ImportError, RuntimeError):
                 pass
 

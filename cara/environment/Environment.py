@@ -15,8 +15,6 @@ import os
 import re
 from pathlib import Path
 
-from cara.exceptions import ConfigurationException
-
 
 class LoadEnvironment:
     """This class is used for loading the environment from .env and .env.* files."""
@@ -89,7 +87,7 @@ def _cast_bool(name, raw, default):
             return True
         if lower in _BOOL_FALSY:
             return False
-        raise ConfigurationException(
+        raise ValueError(
             f"Environment variable {name}={raw!r} cannot be cast to bool. "
             f"Allowed values: true/false, yes/no, on/off, 1/0."
         )
@@ -125,7 +123,7 @@ def _cast_typed(name, raw, target_type, default):
         try:
             return target_type(stripped)
         except (TypeError, ValueError) as exc:
-            raise ConfigurationException(
+            raise ValueError(
                 f"Environment variable {name}={raw!r} cannot be cast to "
                 f"{target_type.__name__}: {exc}"
             ) from exc
@@ -135,7 +133,7 @@ def _cast_typed(name, raw, target_type, default):
     try:
         return target_type(raw)
     except (TypeError, ValueError) as exc:
-        raise ConfigurationException(
+        raise ValueError(
             f"Environment variable {name}={raw!r} cannot be cast to "
             f"{target_type.__name__}: {exc}"
         ) from exc

@@ -132,7 +132,7 @@ class RouteOpenApiCommand(CommandBase):
         if out:
             target = Path(out).resolve()
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(body + "\n")
+            target.write_text(f"{body}\n")
             self.info(
                 f"✓ OpenAPI spec written to {target} "
                 f"({len(spec['paths'])} paths, {skipped} skipped)"
@@ -164,7 +164,7 @@ class RouteOpenApiCommand(CommandBase):
                     "schema": schema,
                 }
             )
-            return "{" + name + "}"
+            return f"{{{name}}}"
 
         path = _PARAM_RE.sub(_replace, cara_url)
         return path, params

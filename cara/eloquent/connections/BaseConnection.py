@@ -41,7 +41,12 @@ class BaseConnection:
     ):
         from cara.facades import Log
 
-        Log.database(f"Running query {query}, {bindings}. Executed in {query_time}ms")
+        Log.database(
+            "Running query %s, %s. Executed in %sms",
+            query,
+            bindings,
+            query_time,
+        )
 
     @staticmethod
     def _normalize_query_for_log(query: str, max_len: int = 1000) -> str:
@@ -99,12 +104,7 @@ class BaseConnection:
                 if hasattr(self, "get_transaction_level")
                 else 0
             )
-            Log.warning(
-                f"SLOW QUERY ({elapsed_ms:.0f}ms, "
-                f"params={n_bindings}, tx={tx_level}): "
-                f"{self._normalize_query_for_log(query)}",
-                category="slow_query",
-            )
+            Log.warning("SLOW QUERY (%.0fms, params=%s, tx=%s): %s", elapsed_ms, n_bindings, tx_level, self._normalize_query_for_log(query), category='slow_query')
 
         # Log query if either connection-specific log_queries is True
         # or if LOG_DB_QUERIES is enabled via logging config

@@ -25,7 +25,7 @@ def _release_connection(connection) -> None:
         close = getattr(connection, "close_connection", None)
         if callable(close):
             close()
-    except Exception:
+    except (OSError, RuntimeError, AttributeError):
         # Cleanup must never mask the real result.
         pass
 

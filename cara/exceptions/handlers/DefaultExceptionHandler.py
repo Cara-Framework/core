@@ -383,7 +383,7 @@ class DefaultExceptionHandler:
             elif isinstance(custom_hsts, str):
                 hsts = custom_hsts
             hsts_preload = bool(config("security.security.hsts_preload", False))
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
 
         out: list = [
@@ -408,7 +408,7 @@ class DefaultExceptionHandler:
                 if hsts_preload and "preload" not in value:
                     value = f"{value}; preload"
                 out.append([b"strict-transport-security", value.encode()])
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
 
         return out
@@ -685,7 +685,7 @@ class DefaultExceptionHandler:
             from cara.configuration import config
 
             return config("app.debug", False)
-        except Exception:
+        except (ImportError, RuntimeError, TypeError):
             return False
 
     def get_exception_file(self, exception: Exception) -> str | None:
@@ -696,7 +696,7 @@ class DefaultExceptionHandler:
                 while tb.tb_next:
                     tb = tb.tb_next
                 return tb.tb_frame.f_code.co_filename
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
         return None
 
@@ -708,7 +708,7 @@ class DefaultExceptionHandler:
                 while tb.tb_next:
                     tb = tb.tb_next
                 return tb.tb_lineno
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
         return None
 
@@ -716,5 +716,5 @@ class DefaultExceptionHandler:
         """Get formatted traceback."""
         try:
             return traceback.format_exc().split("\n")
-        except Exception:
+        except (RuntimeError, TypeError, ValueError):
             return []

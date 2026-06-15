@@ -101,10 +101,10 @@ class PostgresConnection(BaseConnection):
         try:
             self._connection.autocommit = True
             self.enable_disable_foreign_keys()
-        except Exception:
+        except (OSError, RuntimeError, AttributeError):
             try:
                 self.close_connection()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 pass
             raise
 
@@ -196,7 +196,7 @@ class PostgresConnection(BaseConnection):
                         conn = psycopg2.connect(**self._connect_kwargs())
                         conn.autocommit = True
                         CONNECTION_POOL.append(conn)
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError):
                         break
             _pool_initialized = True
 
@@ -264,19 +264,19 @@ class PostgresConnection(BaseConnection):
                     finally:
                         try:
                             cursor.close()
-                        except Exception:
+                        except (OSError, RuntimeError, AttributeError):
                             pass
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 try:
                     connection.close()
-                except Exception:
+                except (OSError, RuntimeError, AttributeError):
                     pass
                 connection = None
 
         if not connection:
             try:
                 connection = self._connect_with_retry(psycopg2)
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 _pool_semaphore.release()
                 self._pool_slot_acquired = False
                 raise
@@ -347,15 +347,15 @@ class PostgresConnection(BaseConnection):
                             self._connection.autocommit = True
                             CONNECTION_POOL.append(self._connection)
                         # else: already closed, discard
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError):
                         try:
                             self._connection.close()
-                        except Exception:
+                        except (OSError, RuntimeError, AttributeError):
                             pass
                 else:
                     try:
                         self._connection.close()
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError):
                         pass
 
             if (
@@ -367,7 +367,7 @@ class PostgresConnection(BaseConnection):
         else:
             try:
                 self._connection.close()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 pass
 
         self._connection = None

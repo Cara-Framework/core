@@ -96,7 +96,7 @@ class BaseQueueable(Queueable, ShouldQueue):
             try:
                 from cara.facades import Log
 
-                Log.warning(f"Queue failed, running synchronously: {str(e)}")
+                Log.warning("Queue failed, running synchronously: %s", str(e))
             except ImportError:
                 pass
 
@@ -163,9 +163,9 @@ class BaseQueueable(Queueable, ShouldQueue):
         try:
             from cara.facades import Log
 
-            Log.error(f"{self.__class__.__name__} failed: {str(error)}")
+            Log.error("%s failed: %s", self.__class__.__name__, str(error))
             if hasattr(self, "payload"):
-                Log.error(f"Job payload: {self.payload}")
+                Log.error("Job payload: %s", self.payload)
         except ImportError:
             # Silently fail if Log facade not available - this is a framework component
             pass

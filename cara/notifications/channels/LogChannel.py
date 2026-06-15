@@ -136,7 +136,7 @@ class LogChannel(BaseChannel):
                     try:
                         with open(self.log_file, "a", encoding="utf-8") as f:
                             f.write(f"{log_message}\n")
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass  # Ignore file write errors
 
         except Exception as e:
@@ -147,13 +147,11 @@ class LogChannel(BaseChannel):
         try:
             from cara.facades import Log
 
-            Log.error(
-                f"{message}: {error}",
-                category="cara.notifications.log",
-                exc_info=True,
-            )
-        except ImportError:
-            pass
+            Log.error("%s: %s", message, error, category='cara.notifications.log', exc_info=True)
+        except (ImportError, RuntimeError):
+            import sys
+
+            print(f"[LogChannel] {message}: {error}", file=sys.stderr)
 
     def clear_log(self) -> bool:
         """
@@ -168,7 +166,7 @@ class LogChannel(BaseChannel):
                     f.write("")
                 return True
             return False
-        except Exception:
+        except (OSError, IOError):
             return False
 
     def get_log_contents(self) -> str:
@@ -183,5 +181,5 @@ class LogChannel(BaseChannel):
                 with open(self.log_file, "r", encoding="utf-8") as f:
                     return f.read()
             return ""
-        except Exception:
+        except (OSError, IOError):
             return ""

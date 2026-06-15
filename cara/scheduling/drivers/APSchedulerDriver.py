@@ -97,10 +97,7 @@ def _wrap_without_overlapping(
 
         async def _async_locked(*a, **kw):
             if not _Cache.add(lock_key, "1", lock_timeout):
-                Log.info(
-                    f"Scheduled job '{identifier}' skipped — previous run still in flight.",
-                    category="scheduler",
-                )
+                Log.info("Scheduled job '%s' skipped — previous run still in flight.", identifier, category='scheduler')
                 return None
             try:
                 return await callback(*a, **kw)
@@ -117,10 +114,7 @@ def _wrap_without_overlapping(
 
     def _sync_locked(*a, **kw):
         if not _Cache.add(lock_key, "1", lock_timeout):
-            Log.info(
-                f"Scheduled job '{identifier}' skipped — previous run still in flight.",
-                category="scheduler",
-            )
+            Log.info("Scheduled job '%s' skipped — previous run still in flight.", identifier, category='scheduler')
             return None
         try:
             return callback(*a, **kw)
@@ -142,20 +136,16 @@ def _wrap_without_overlapping(
 def _job_error_listener(event) -> None:
     """Forward APScheduler job errors to Cara's Log facade."""
     if event.exception:
-        Log.error(
-            f"Scheduled job '{event.job_id}' failed: {event.exception}",
-            category="scheduler",
-        )
+        Log.error("Scheduled job '%s' failed: %s", event.job_id, event.exception, category='scheduler')
         if event.traceback:
             Log.debug(
-                f"Scheduled job '{event.job_id}' traceback:\n{event.traceback}",
+                "Scheduled job '%s' traceback:\n%s",
+                event.job_id,
+                event.traceback,
                 category="scheduler",
             )
     else:
-        Log.debug(
-            f"Scheduled job '{event.job_id}' executed successfully.",
-            category="scheduler",
-        )
+        Log.debug("Scheduled job '%s' executed successfully.", event.job_id, category='scheduler')
 
 
 # ── Driver ────────────────────────────────────────────────────────────
@@ -267,11 +257,11 @@ class APSchedulerDriver(Scheduling):
                 )
             except Exception as e:
                 if not silent:
-                    Log.error(f"Failed to schedule job '{identifier}': {e}")
+                    Log.error("Failed to schedule job '%s': %s", identifier, e)
                 raise
 
         if not silent:
-            Log.info(f"Registered scheduled job '{identifier}'.")
+            Log.info("Registered scheduled job '%s'.", identifier)
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -298,11 +288,11 @@ class APSchedulerDriver(Scheduling):
                     **job_opts,
                 )
             except Exception as e:
-                Log.warning(f"Failed to add job '{identifier}' on start: {e}")
+                Log.warning("Failed to add job '%s' on start: %s", identifier, e)
 
         job_count = len(self._job_registry)
         self.scheduler.start()
-        Log.info(f"APScheduler started with {job_count} jobs (background mode).")
+        Log.info("APScheduler started with %s jobs (background mode).", job_count)
 
     def shutdown(self, wait: bool = True) -> None:
         try:
@@ -310,7 +300,7 @@ class APSchedulerDriver(Scheduling):
                 self.scheduler.shutdown(wait=wait)
                 Log.info("APScheduler shut down.")
         except Exception as e:
-            Log.warning(f"Error shutting down APScheduler: {e}")
+            Log.warning("Error shutting down APScheduler: %s", e)
 
     def remove_job(self, identifier: str) -> None:
         self._job_registry = [

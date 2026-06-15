@@ -138,7 +138,7 @@ class SendWelcomeEmail(Queueable, ShouldQueue):
             "data": {"user": user}
         })
 
-        Log.info(f"Welcome email sent to {user.email}")
+        Log.info("Welcome email sent to %s", user.email)
 ```
 
 #### 4. Database Migrations

@@ -120,7 +120,7 @@ class CommandRunner:
                     non_none = [a for a in get_args(ann) if a is not type(None)]
                     if len(non_none) == 1:
                         ann = non_none[0]
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
             if ann is inspect.Parameter.empty or ann in primitive_types:
                 # Replace the parameter's raw (PEP 563 string) annotation
@@ -428,7 +428,7 @@ class CommandRunner:
                         from cara.configuration import config
 
                         _push_interval = int(config("metrics.pushgateway_interval_s", 15))
-                    except Exception:
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         _push_interval = int(
                             __import__("os").environ.get(
                                 "METRICS_PUSHGATEWAY_INTERVAL_S", "15"
@@ -437,7 +437,7 @@ class CommandRunner:
                     _start_autopush(interval_seconds=_push_interval)
                 except (ImportError, AttributeError):
                     pass
-            except Exception:
+            except (ImportError, RuntimeError):
                 _M = None  # type: ignore[assignment]
 
             _cmd_start = _t.time()
@@ -461,7 +461,7 @@ class CommandRunner:
                         _M.command_duration_seconds.labels(
                             command=name,
                         ).observe(_t.time() - _cmd_start)
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
                 raise typer.Exit(code=1)
 
@@ -474,7 +474,7 @@ class CommandRunner:
                     _M.command_duration_seconds.labels(
                         command=name,
                     ).observe(_t.time() - _cmd_start)
-                except Exception:
+                except (OSError, RuntimeError, AttributeError, ConnectionError):
                     pass
 
             if isinstance(result, int):

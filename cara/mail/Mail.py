@@ -138,7 +138,7 @@ class Mail:
 
         except Exception as e:
             # Log error using facade
-            Log.error(f"Failed to queue mailable: {e}")
+            Log.error("Failed to queue mailable: %s", e)
             return False
 
     def _send_now(self, mailable: Mailable, driver_name: str | None = None) -> bool:

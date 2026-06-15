@@ -7,7 +7,6 @@ including all validation rules.
 
 from __future__ import annotations
 
-from cara.configuration import config
 from cara.foundation import DeferredProvider
 from cara.validation.Validation import Validation
 
@@ -25,6 +24,16 @@ class ValidationProvider(DeferredProvider):
 
     def register(self) -> None:
         """Register validation services with configuration."""
+        # Lazy import — NOT module-level. ``cara.configuration`` pulls in
+        # ``facades → http → validation`` during its own package init, so a
+        # top-level ``from cara.configuration import config`` here closes a
+        # boot-time cycle whenever something imports ``cara.configuration``
+        # before it finishes initialising (e.g. ``cara.ai.Client`` being the
+        # first config consumer after Kernel's imports got isort-sorted).
+        # ``register()`` only runs at provider-resolve time, long after boot,
+        # so importing here is free of the cycle.
+        from cara.configuration import config
+
         settings = config("validation", {})
 
         # Register validation service

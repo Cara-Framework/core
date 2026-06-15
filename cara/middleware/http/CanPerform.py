@@ -4,7 +4,8 @@ Can middleware for authorization checks.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.exceptions import AuthorizationFailedException
 from cara.http import Request, Response
@@ -19,7 +20,9 @@ class CanPerform(Middleware):
         self.ability = ability
         self.resource = resource
 
-    async def handle(self, request: Request, next_fn: Callable) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[[Any], Awaitable[Any]]
+    ) -> Response:
         """Handle authorization check."""
         try:
             # Get gate from container
@@ -38,14 +41,7 @@ class CanPerform(Middleware):
 
             return await next_fn(request)
 
-        except Exception as e:
-            # Authorization failed - return 403 Forbidden.
-            # Canonical envelope: ``{error, type}`` — same shape the
-            # global exception handler uses on every other 4xx/5xx
-            # path. Pre-fix this middleware emitted
-            # ``{error, message}`` which forced clients to substring-
-            # match the human-readable text to discriminate between
-            # 403 sources.
+        except AuthorizationFailedException as e:
             response = Response(self.application)
             return response.json(
                 {
@@ -54,6 +50,12 @@ class CanPerform(Middleware):
                 },
                 403,
             )
+        except Exception:
+            # Non-auth exceptions (DB, connection, etc.) must NOT be
+            # masked as 403. Re-raise so the global exception handler
+            # surfaces the real error (500) instead of misleading
+            # clients into thinking they lack permission.
+            raise
 
     def _extract_parameters(self, request: Request) -> list:
         """Extract parameters for the ability check."""

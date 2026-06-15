@@ -52,7 +52,7 @@ class ResetAuth(Middleware):
             if callable(setter):
                 try:
                     setter(None)
-                except Exception:
+                except (OSError, RuntimeError, AttributeError, ConnectionError):
                     pass
             elif hasattr(request, "_user"):
                 request._user = None
@@ -75,8 +75,4 @@ class ResetAuth(Middleware):
         except Exception as exc:
             # CRITICAL: Never let cache cleanup break the application,
             # but do log so operators can diagnose cache-leak risks.
-            Log.warning(
-                f"ResetAuth cleanup failed: {exc}",
-                category="cara.middleware.reset_auth",
-                exc_info=True,
-            )
+            Log.warning("ResetAuth cleanup failed: %s", exc, category='cara.middleware.reset_auth', exc_info=True)

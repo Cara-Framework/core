@@ -158,7 +158,7 @@ class AutoReloadMixin:
             try:
                 self._observer.stop()
                 self._observer.join()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
             finally:
                 self._observer = None

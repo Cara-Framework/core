@@ -295,7 +295,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             # idempotency job lock + any WithoutOverlapping middleware.
             try:
                 instance.idempotency_cache_results = False
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
 
             # Resolve handle() parameters via DI container if needed.
@@ -311,7 +311,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
                 elif param.annotation != inspect.Parameter.empty:
                     try:
                         handle_kwargs[param_name] = _app.make(param.annotation)
-                    except Exception:
+                    except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
 
             result = handle_method(**handle_kwargs)
@@ -559,7 +559,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             # when the command exits (Ctrl-C, auto-reload, --once).
             try:
                 driver.shutdown(wait=False)
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
 
     def _show_final_stats(self):

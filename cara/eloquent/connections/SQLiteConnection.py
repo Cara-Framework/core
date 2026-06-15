@@ -95,7 +95,7 @@ class SQLiteConnection(BaseConnection):
         return self.database
 
     def reconnect(self):
-        pass
+        """No-op — SQLite connections are file-backed and always available."""
 
     def commit(self) -> Self:
         """Transaction."""
@@ -105,7 +105,7 @@ class SQLiteConnection(BaseConnection):
             self._connection.isolation_level = None
             try:
                 self._connection.close()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 pass
             self.open = 0
 
@@ -124,7 +124,7 @@ class SQLiteConnection(BaseConnection):
             self._connection.rollback()
             try:
                 self._connection.close()
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 pass
             self.open = 0
 
@@ -176,7 +176,7 @@ class SQLiteConnection(BaseConnection):
             if self.get_transaction_level() <= 0:
                 try:
                     self._connection.close()
-                except Exception:
+                except (OSError, RuntimeError, AttributeError):
                     pass
                 self.open = 0
 
@@ -203,6 +203,6 @@ class SQLiteConnection(BaseConnection):
             if self.get_transaction_level() <= 0:
                 try:
                     self._connection.close()
-                except Exception:
+                except (OSError, RuntimeError, AttributeError):
                     pass
                 self.open = 0

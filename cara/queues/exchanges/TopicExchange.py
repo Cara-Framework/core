@@ -164,10 +164,7 @@ class TopicExchange:
             # Only log once when binding is first created
             binding_key = f"{queue_name}->{routing_pattern}"
             if binding_key not in self._logged_bindings:
-                Log.debug(
-                    f"Queue bound: {queue_name} -> {routing_pattern}",
-                    category="cara.queue.exchange",
-                )
+                Log.debug("Queue bound: %s -> %s", queue_name, routing_pattern, category='cara.queue.exchange')
                 self._logged_bindings.add(binding_key)
 
     def get_matching_queues(self, routing_key: str) -> list[str]:
@@ -291,10 +288,7 @@ class TopicExchange:
                     job_id = Queue.later(delay, job_instance)
                 else:
                     job_id = Queue.push(job_instance)
-                Log.debug(
-                    f"Job dispatched: {routing_key} -> {target_queue} [{job_id}]",
-                    category="cara.queue.exchange",
-                )
+                Log.debug("Job dispatched: %s -> %s [%s]", routing_key, target_queue, job_id, category='cara.queue.exchange')
                 return str(job_id)
             except Exception as publish_err:
                 if attempt < self._DISPATCH_MAX_RETRIES - 1 and self._is_connection_error(
@@ -307,17 +301,10 @@ class TopicExchange:
                     # pipe) are recovered by the reconnect-and-retry below, so
                     # an intermediate attempt is not operator-actionable. Only
                     # the final give-up (Log.error) is. Keep retries at debug.
-                    Log.debug(
-                        f"Dispatch attempt {attempt + 1} failed for {routing_key}, "
-                        f"retrying in {wait:.1f}s: {publish_err}",
-                        category="cara.queue.exchange",
-                    )
+                    Log.debug("Dispatch attempt %s failed for %s, retrying in %.1fs: %s", attempt + 1, routing_key, wait, publish_err, category='cara.queue.exchange')
                     time.sleep(wait)
                     continue
-                Log.error(
-                    f"Job dispatch failed: {routing_key} - {publish_err}",
-                    category="cara.queue.exchange",
-                )
+                Log.error("Job dispatch failed: %s - %s", routing_key, publish_err, category='cara.queue.exchange')
                 raise
 
         # Defensive — should not reach here because the loop either

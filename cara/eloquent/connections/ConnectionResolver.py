@@ -238,7 +238,7 @@ class ConnectionResolver:
         except BaseException:
             try:
                 self.rollback(connection_name)
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 # Best-effort: surface the original exception, not the
                 # rollback failure (likely "no active transaction").
                 pass
@@ -249,7 +249,7 @@ class ConnectionResolver:
         except BaseException:
             try:
                 self.rollback(connection_name)
-            except Exception:
+            except (OSError, RuntimeError, AttributeError):
                 pass
             raise
 

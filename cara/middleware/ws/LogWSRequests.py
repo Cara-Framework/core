@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.facades import Log
 from cara.middleware import Middleware
@@ -15,7 +16,9 @@ class LogWSRequests(Middleware):
     events in the same server output as ``LogHttpRequests``.
     """
 
-    async def handle(self, socket: Socket, next_fn: Callable):
+    async def handle(
+        self, socket: Socket, next_fn: Callable[[Any], Awaitable[Any]]
+    ) -> Any:
         client = socket.scope.get("client")
         if client and isinstance(client, (tuple, list)) and len(client) == 2:
             ip, port = client
@@ -26,10 +29,7 @@ class LogWSRequests(Middleware):
         started = time.perf_counter()
         # Routine connect/close are debug-level — per-connection traffic would
         # flood the log otherwise. Only abnormal closes are elevated.
-        Log.debug(
-            f"🔌 WS: {ip}:{port} -> CONNECT {path}",
-            category="cara.websocket",
-        )
+        Log.debug("🔌 WS: %s:%s -> CONNECT %s", ip, port, path, category='cara.websocket')
 
         try:
             result = await next_fn(socket)
@@ -52,8 +52,5 @@ class LogWSRequests(Middleware):
             raise
         else:
             elapsed = (time.perf_counter() - started) * 1000
-            Log.debug(
-                f"🔌 WS: {ip}:{port} -> CLOSE {path} ✓ | {elapsed:.2f}ms",
-                category="cara.websocket",
-            )
+            Log.debug("🔌 WS: %s:%s -> CLOSE %s ✓ | %.2fms", ip, port, path, elapsed, category='cara.websocket')
             return result

@@ -193,8 +193,11 @@ class SerializesModels:
 
             module = __import__(module_name, fromlist=[class_name])
             return getattr(module, class_name)
-        except (ImportError, AttributeError, KeyError, TypeError):
-            return type("DummyClass", (), {})
+        except (ImportError, AttributeError, KeyError, TypeError) as e:
+            from cara.facades import Log
+
+            Log.warning("[SerializesModels] _resolve_class failed for %s.%s: %s. Returning NoneType stand-in — job attributes may be missing.", data.get('__class_module__', '?'), data.get('__class_name__', '?'), e, category='cara.queue')
+            return type("UnresolvableClass", (), {"__unresolvable__": True})
 
     def _deserialize_object(self, data: dict[str, Any]) -> Any:
         """
@@ -234,12 +237,18 @@ class SerializesModels:
 
             return obj
 
-        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
-            # Fallback: create a mock object
-            class MockObject:
-                def __init__(self, data):
-                    for k, v in data.items():
-                        if not k.startswith("__"):
-                            setattr(self, k, v)
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as e:
+            from cara.facades import Log
 
-            return MockObject(data)
+            Log.error("[SerializesModels] _deserialize_object failed: %s. Module=%s, Class=%s. Returning stub — downstream attribute access will likely fail.", e, data.get('__class_module__', '?'), data.get('__class_name__', '?'), category='cara.queue')
+
+            class _FailedDeserializationStub:
+                __deserialization_failed__ = True
+
+                def __init__(self, raw_data):
+                    self._raw_data = raw_data
+
+                def __repr__(self):
+                    return f"<FailedDeserializationStub keys={list(self._raw_data.keys())[:5]}>"
+
+            return _FailedDeserializationStub(data)

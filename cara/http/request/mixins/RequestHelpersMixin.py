@@ -96,16 +96,20 @@ class RequestHelpersMixin:
         return out
 
     def user_or_401(self) -> Any:
-        """Return ``self.user`` or raise AuthenticationException (HTTP 401).
+        """Return the authenticated user or raise AuthenticationException (HTTP 401).
 
         Controllers pair this with auth middleware — if middleware is
         misconfigured or the user context is missing, this surfaces a
         predictable 401 instead of a 500.
         """
-        user = getattr(self, "user", None)
-        if user is None:
+        # Must CALL self.user() (it's a method, not a property).
+        # The previous code used getattr(self, "user", None) which
+        # always returned the bound method object (truthy), so it
+        # could never raise 401.
+        resolved = self.user() if callable(getattr(self, "user", None)) else getattr(self, "_user", None)
+        if resolved is None:
             raise AuthenticationException("Authentication required")
-        return user
+        return resolved
 
     def query(self, key: str | None = None, default: Any = None) -> Any:
         """

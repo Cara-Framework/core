@@ -148,7 +148,7 @@ class JWTGenerateCommand(CommandBase):
                 user = User.find(identifier)
                 if user:
                     return user
-            except Exception:
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
 
             return None

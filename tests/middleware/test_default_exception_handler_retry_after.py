@@ -220,7 +220,6 @@ async def test_retry_after_survives_5xx_prod_redaction() -> None:
     follow because it reads from the post-redaction body.
     """
     # Stub config so is_debug_mode() returns False (prod).
-    import cara.exceptions.handlers.DefaultExceptionHandler as _hm
 
     class _ProdConfig:
         @staticmethod

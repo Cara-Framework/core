@@ -11,7 +11,7 @@ from datetime import datetime
 
 import pendulum
 
-from cara.environment import env
+from cara.configuration import config
 
 
 class HasTimestamps:
@@ -74,7 +74,7 @@ class HasTimestamps:
             _datetime = pendulum.instance(_datetime)
 
         # Get application timezone for display
-        app_timezone = env("APP_TIMEZONE", "UTC")
+        app_timezone = config("app.timezone", "UTC")
         return _datetime.in_timezone(app_timezone).to_datetime_string()
 
     def fresh_timestamp(self) -> str:

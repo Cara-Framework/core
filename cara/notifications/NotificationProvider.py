@@ -54,7 +54,7 @@ class NotificationProvider(DeferredProvider):
             )
             notification_manager.add_channel(MailChannel.channel_name, channel)
         except Exception as e:
-            Log.warning(f"[NotificationProvider] Mail channel registration failed: {e}")
+            Log.warning("[NotificationProvider] Mail channel registration failed: %s", e)
 
     def _add_database_channel(self, notification_manager: Notification) -> None:
         """Register database notification channel with configuration.
@@ -84,9 +84,7 @@ class NotificationProvider(DeferredProvider):
             )
             notification_manager.add_channel(DatabaseChannel.channel_name, channel)
         except Exception as e:
-            Log.warning(
-                f"[NotificationProvider] Database channel registration failed: {e}",
-            )
+            Log.warning("[NotificationProvider] Database channel registration failed: %s", e)
 
     def _add_slack_channel(self, notification_manager: Notification) -> None:
         """Register Slack notification channel with configuration.
@@ -111,9 +109,7 @@ class NotificationProvider(DeferredProvider):
             )
             notification_manager.add_channel(SlackChannel.channel_name, channel)
         except Exception as e:
-            Log.warning(
-                f"[NotificationProvider] Slack channel registration failed: {e}",
-            )
+            Log.warning("[NotificationProvider] Slack channel registration failed: %s", e)
 
     def _add_log_channel(self, notification_manager: Notification) -> None:
         """Register log notification channel with configuration.
@@ -135,6 +131,4 @@ class NotificationProvider(DeferredProvider):
             )
             notification_manager.add_channel(LogChannel.channel_name, channel)
         except Exception as e:
-            Log.warning(
-                f"[NotificationProvider] Log channel registration failed: {e}",
-            )
+            Log.warning("[NotificationProvider] Log channel registration failed: %s", e)

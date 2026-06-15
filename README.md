@@ -14,7 +14,7 @@ A Laravel-inspired Python framework for rapid application development.
 - 🎯 **Middleware**: HTTP middleware pipeline
 - 📊 **Caching**: Multi-driver caching system (Redis, Memory, etc.)
 - 🔔 **Notifications**: Multi-channel notification system
-- ⚡ **Queue System**: Background job processing with Celery
+- ⚡ **Queue System**: Background job processing with RabbitMQ (AMQP via pika)
 - 🌐 **Broadcasting**: Real-time event broadcasting
 - 📁 **Storage**: File storage abstraction layer
 

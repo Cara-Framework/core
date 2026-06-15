@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
 
 
 class MemoryRateLimitStore:
@@ -234,7 +233,7 @@ def resolve_fallback_mode() -> str:
     facade is fully bound (early bootstrap, test harnesses).
     """
     try:
-        from cara.facades import Config  # type: ignore
+        from cara.facades import Config  # type: ignore[import-not-found]
 
         mode = Config.get("rate.fallback_mode", None)
         if isinstance(mode, str):
@@ -282,12 +281,8 @@ def attempt_with_fallback(
         mode = resolve_fallback_mode()
         if _health_state.record_failure(exc):
             try:
-                Log.warning(
-                    "Rate-limit cache backend unhealthy "
-                    f"({exc.__class__.__name__}: {exc}); fallback_mode={mode}",
-                    category="rate.fallback",
-                )
-            except Exception:
+                Log.warning("Rate-limit cache backend unhealthy (%s: %s); fallback_mode=%s", exc.__class__.__name__, exc, mode, category='rate.fallback')
+            except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
 
         if mode == "memory":
@@ -320,7 +315,7 @@ def attempt_with_fallback(
                 "globally-coordinated counting",
                 category="rate.fallback",
             )
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
         _memory_store.clear()
 

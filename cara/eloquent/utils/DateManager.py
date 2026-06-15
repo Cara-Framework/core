@@ -357,15 +357,13 @@ class DateManager:
         if date_value is None:
             return None
 
-        # Import here to avoid circular imports
         try:
-            from config.app import APP_TIMEZONE
+            from cara.configuration import config
 
-            user_timezone = user_timezone or APP_TIMEZONE
-        except ImportError:
+            user_timezone = user_timezone or config("app.timezone", "UTC")
+        except Exception:
             user_timezone = user_timezone or "UTC"
 
-        # Parse as UTC first (database format)
         parsed_date = cls.parse(date_value, "UTC")
         if not parsed_date:
             return None
@@ -390,15 +388,13 @@ class DateManager:
         if date_value is None:
             return None
 
-        # Import here to avoid circular imports
         try:
-            from config.app import APP_TIMEZONE
+            from cara.configuration import config
 
-            user_timezone = user_timezone or APP_TIMEZONE
-        except ImportError:
+            user_timezone = user_timezone or config("app.timezone", "UTC")
+        except Exception:
             user_timezone = user_timezone or "UTC"
 
-        # Parse in user timezone
         parsed_date = cls.parse(date_value, user_timezone)
         if not parsed_date:
             return None

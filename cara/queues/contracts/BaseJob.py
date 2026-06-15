@@ -163,9 +163,7 @@ class BaseJob(BaseQueueable):
         try:
             from cara.facades import Log
 
-            Log.info(
-                f"Job {self.__class__.__name__} progress: {progress_data['percentage']}% - {message}"
-            )
+            Log.info("Job %s progress: %s%% - %s", self.__class__.__name__, progress_data['percentage'], message)
         except ImportError:
             # Silently fail if Log facade not available - this is a framework component
             pass
@@ -189,9 +187,9 @@ class BaseJob(BaseQueueable):
         try:
             from cara.facades import Log
 
-            Log.error(f"Job {self.__class__.__name__} failed: {str(error)}")
-            Log.error(f"Job payload: {self.payload}")
-            Log.error(f"Job tags: {self.tags}")
+            Log.error("Job %s failed: %s", self.__class__.__name__, str(error))
+            Log.error("Job payload: %s", self.payload)
+            Log.error("Job tags: %s", self.tags)
         except ImportError:
             # Silently fail if Log facade not available - this is a framework component
             pass

@@ -2708,7 +2708,7 @@ class QueryBuilder(ObservesEvents):
                     except Exception as e:
                         from cara.facades import Log
 
-                        Log.error(f"Error processing eager {relation}: {str(e)}")
+                        Log.error("Error processing eager %s: %s", relation, str(e))
                         raise
 
             if collection:
@@ -2872,7 +2872,7 @@ class QueryBuilder(ObservesEvents):
         except Exception as e:
             from cara.facades import Log
 
-            Log.error(f"Eager relation register failed: {str(e)}")
+            Log.error("Eager relation register failed: %s", str(e))
             raise
         return self
 
@@ -3055,8 +3055,8 @@ class QueryBuilder(ObservesEvents):
         from cara.facades import Log
 
         sql, bindings = self.dump_sql()
-        Log.debug(f"[SQL] {sql}", category="db.debug")
-        Log.debug(f"[BIND] {bindings}", category="db.debug")
+        Log.debug("[SQL] %s", sql, category='db.debug')
+        Log.debug("[BIND] %s", bindings, category='db.debug')
         return self
 
     def run_scopes(self) -> Self:

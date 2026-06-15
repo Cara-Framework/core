@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.migrations import Migration
@@ -64,32 +62,12 @@ class MigrateCommand(CommandBase):
             self.error(f"× Migration failed: {str(e)}")
             self.error("Try running with --show to see the SQL that would be executed")
 
-    def _is_production(self) -> bool:
-        """Check if we're running in production environment."""
-        try:
-            from cara.configuration import config
-
-            env = str(config("app.ENV", "")).lower()
-        except Exception:
-            env = os.getenv("APP_ENV", "").lower()
-        return env in ["production", "prod"]
-
     def _confirm_production(self) -> bool:
         """Confirm migration in production environment."""
         self.warning("⚠ You are about to run migrations in PRODUCTION!")
         self.warning("   This operation may modify your database schema.")
         self.warning("   Make sure you have a backup before proceeding.")
-
-        while True:
-            answer = (
-                input("\nAre you sure you want to continue? (yes/no): ").strip().lower()
-            )
-            if answer in ["yes", "y"]:
-                return True
-            elif answer in ["no", "n"]:
-                return False
-            else:
-                self.warning("Please answer 'yes' or 'no'")
+        return self._confirm_yes_no()
 
     def _build_migration(self) -> Migration:
         """Build migration instance with proper configuration."""
@@ -155,14 +133,3 @@ class MigrateCommand(CommandBase):
         self.info("\n" + "=" * 60)
         self.info("No actual changes were made to the database.")
 
-    def _confirm_production_migration(self) -> bool:
-        # This method is no longer used in the new handle method
-        return True
-
-    def _get_migration_manager(self) -> Migration:
-        # This method is no longer used in the new handle method
-        return self._build_migration()
-
-    def _show_sql_preview(self, migration_manager: Migration, pending: list):
-        # This method is no longer used in the new handle method
-        self._show_migration_preview(pending)

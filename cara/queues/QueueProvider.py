@@ -113,12 +113,7 @@ class QueueProvider(DeferredProvider):
         except Exception as exc:
             from cara.facades import Log
 
-            Log.warning(
-                f"Failed to declare dead-letter exchange at boot: {exc}. "
-                f"Failed messages will be silently dropped until the DLX "
-                f"is created manually.",
-                category="cara.queue.amqp",
-            )
+            Log.warning("Failed to declare dead-letter exchange at boot: %s. Failed messages will be silently dropped until the DLX is created manually.", exc, category='cara.queue.amqp')
 
     def _add_async_driver(self, queue_manager: Queue) -> None:
         """Register async queue driver with configuration."""
@@ -155,9 +150,7 @@ class QueueProvider(DeferredProvider):
             # Redis driver is optional, only fail if explicitly required
             from cara.facades import Log
 
-            Log.warning(
-                f"Redis driver not available (Redis connection failed): {e}. Skipping Redis driver registration."
-            )
+            Log.warning("Redis driver not available (Redis connection failed): %s. Skipping Redis driver registration.", e)
             # Don't raise exception - allow queue system to work with other drivers
             return
 

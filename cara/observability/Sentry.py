@@ -96,10 +96,7 @@ def _try(fn, *args, **kwargs) -> None:
         try:
             from cara.facades import Log
 
-            Log.warning(
-                f"[cara.observability] {fn.__name__} failed: {e.__class__.__name__}: {e}",
-                category="observability",
-            )
+            Log.warning("[cara.observability] %s failed: %s: %s", fn.__name__, e.__class__.__name__, e, category='observability')
         except Exception as log_err:
             # Last-resort stderr — the Log facade itself blew up.
             print(
@@ -137,7 +134,7 @@ def _init_sentry(service_name: str, release: str) -> None:
     try:
         from cara.facades import Log
 
-        Log.info(f"Sentry/GlitchTip enabled (service={service_name}, release={release})")
+        Log.info("Sentry/GlitchTip enabled (service=%s, release=%s)", service_name, release)
     except Exception as e:
         print(
             f"[cara.observability] Sentry enabled but Log.info failed: {e}",
@@ -168,11 +165,11 @@ def set_request_user(user_id: Any, email: str | None = None) -> None:
             if local and domain:
                 head = local[0] if local else ""
                 payload["email"] = f"{head}***@{domain}"
-        except Exception:
+        except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
     try:
         sentry_sdk.set_user(payload)
-    except Exception:
+    except (OSError, RuntimeError, AttributeError, ConnectionError):
         pass
 
 
@@ -188,7 +185,7 @@ def set_request_tag(key: str, value: Any) -> None:
         import sentry_sdk
 
         sentry_sdk.set_tag(key, str(value)[:200])
-    except Exception:
+    except (OSError, RuntimeError, AttributeError, ConnectionError):
         pass
 
 
@@ -202,7 +199,7 @@ def clear_scope() -> None:
         scope = sentry_sdk.Scope.get_isolation_scope()
         scope.set_user(None)
         scope.clear_breadcrumbs()
-    except Exception:
+    except (OSError, RuntimeError, AttributeError, ConnectionError):
         pass
 
 
@@ -226,12 +223,7 @@ def _git_short_sha(repo_dir: str | None = None) -> str | None:
         try:
             from cara.facades import Log
 
-            Log.warning(
-                f"[cara.observability._git_short_sha] resolve failed, "
-                f"falling back to 'dev' release tag: "
-                f"{e.__class__.__name__}: {e}",
-                category="observability",
-            )
+            Log.warning("[cara.observability._git_short_sha] resolve failed, falling back to 'dev' release tag: %s: %s", e.__class__.__name__, e, category='observability')
         except Exception as log_err:
             print(
                 f"[cara.observability._git_short_sha] git rev-parse failed "

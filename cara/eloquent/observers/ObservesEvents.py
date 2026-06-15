@@ -19,11 +19,7 @@ class ObservesEvents:
                     try:
                         from cara.facades import Log
 
-                        Log.error(
-                            f"Observer {observer.__class__.__name__}.{event} failed: "
-                            f"{exc.__class__.__name__}: {exc}",
-                            category="cara.eloquent.observers",
-                        )
+                        Log.error("Observer %s.%s failed: %s: %s", observer.__class__.__name__, event, exc.__class__.__name__, exc, category='cara.eloquent.observers')
                     except Exception:
                         _logger.error(
                             "observer error handler failed", exc_info=True

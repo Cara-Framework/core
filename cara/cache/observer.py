@@ -31,6 +31,25 @@ CacheObserver = Callable[[str, str, str, int | None], None]
 _OBSERVER: CacheObserver | None = None
 
 
+_KNOWN_SCOPES = frozenset({
+    "product", "products", "category", "search", "trending",
+    "brand", "home", "deals", "sitemap", "admin", "analytics",
+    "experiment", "lock", "stampede", "idempotency", "health", "budget",
+})
+
+
+def scope_for_cache_key(key: str) -> str:
+    """Bucket a raw cache key into a low-cardinality ``scope`` label."""
+    if not key:
+        return "generic"
+    head = key.split(":", 1)[0]
+    if head in _KNOWN_SCOPES:
+        return head
+    if head.startswith("verify"):
+        return "verify"
+    return "generic"
+
+
 def set_cache_observer(observer: CacheObserver | None) -> None:
     """Register (or clear with ``None``) the process-wide observer."""
     global _OBSERVER

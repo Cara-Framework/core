@@ -21,7 +21,7 @@ class DateFormatRule(BaseRule):
         try:
             datetime.strptime(str(value), fmt)
             return True
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:

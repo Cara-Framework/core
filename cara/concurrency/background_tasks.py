@@ -81,7 +81,7 @@ def schedule_deduped_task(
         try:
             acquired = bool(add(dedup_key, "1", inflight_ttl))
         except Exception as e:
-            Log.warning(f"[{label}] inflight add failed for {dedup_key}: {e}")
+            Log.warning("[%s] inflight add failed for %s: %s", label, dedup_key, e)
             # On cache failure prefer running over skipping.
             acquired = True
         if not acquired:
@@ -91,22 +91,19 @@ def schedule_deduped_task(
             if Cache.has(dedup_key):
                 return False
         except Exception as e:
-            Log.warning(f"[{label}] inflight check failed for {dedup_key}: {e}")
+            Log.warning("[%s] inflight check failed for %s: %s", label, dedup_key, e)
 
         try:
             Cache.put(dedup_key, "1", inflight_ttl)
         except Exception as e:
-            Log.warning(f"[{label}] inflight write failed for {dedup_key}: {e}")
+            Log.warning("[%s] inflight write failed for %s: %s", label, dedup_key, e)
             # Continue anyway — losing the dedup is better than skipping work.
 
     async def _run() -> None:
         try:
             await coro_factory()
         except Exception as exc:
-            Log.warning(
-                f"[{label}] background task failed for {dedup_key}: "
-                f"{exc.__class__.__name__}: {exc}"
-            )
+            Log.warning("[%s] background task failed for %s: %s: %s", label, dedup_key, exc.__class__.__name__, exc)
         finally:
             # Forget the inflight sentinel so a retry can re-trigger
             # immediately if the work itself failed silently. The
@@ -115,7 +112,7 @@ def schedule_deduped_task(
             try:
                 Cache.forget(dedup_key)
             except Exception as e:
-                Log.debug(f"[{label}] inflight cleanup failed for {dedup_key}: {e}")
+                Log.debug("[%s] inflight cleanup failed for %s: %s", label, dedup_key, e)
 
     try:
         task = asyncio.create_task(_run())
@@ -125,11 +122,11 @@ def schedule_deduped_task(
     except RuntimeError as e:
         # No running loop — possible during sync test contexts. Run
         # synchronously as a fallback so the cache still gets warmed.
-        Log.debug(f"[{label}] no event loop, running sync: {e}")
+        Log.debug("[%s] no event loop, running sync: %s", label, e)
         try:
             asyncio.run(_run())
         except Exception as inner:
-            Log.warning(f"[{label}] sync fallback failed for {dedup_key}: {inner}")
+            Log.warning("[%s] sync fallback failed for %s: %s", label, dedup_key, inner)
         return True
 
 

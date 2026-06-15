@@ -83,10 +83,7 @@ class PendingDispatch:
             try:
                 from cara.facades import Log
 
-                Log.error(
-                    f"PendingDispatch auto-dispatch failed during GC: {e}",
-                    category="cara.queue",
-                )
+                Log.error("PendingDispatch auto-dispatch failed during GC: %s", e, category='cara.queue')
             except (ImportError, RuntimeError):
                 pass
 

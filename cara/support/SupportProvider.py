@@ -26,4 +26,4 @@ class SupportProvider(Provider):
         builtins.app = app
 
     def boot(self):
-        pass
+        """No boot-time actions required for the support provider."""

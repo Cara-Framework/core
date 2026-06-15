@@ -164,17 +164,10 @@ class Broadcasting:
                 event.broadcast_unless()
             )
         except Exception as e:
-            Log.warning(
-                f"broadcast_when/unless on {type(event).__name__} raised: {e}",
-                category="cara.broadcasting",
-            )
+            Log.warning("broadcast_when/unless on %s raised: %s", type(event).__name__, e, category='cara.broadcasting')
             return
         if not should_fire:
-            Log.debug(
-                f"Broadcast skipped for {type(event).__name__} "
-                f"(broadcast_when/unless gated it)",
-                category="cara.broadcasting",
-            )
+            Log.debug("Broadcast skipped for %s (broadcast_when/unless gated it)", type(event).__name__, category='cara.broadcasting')
             return
 
         names = self._normalize_channels(event.broadcast_on())
@@ -191,12 +184,7 @@ class Broadcasting:
         except Exception:
             driver_name = None
 
-        Log.debug(
-            f"Broadcasting '{event_name}' on {names} "
-            f"(driver={driver_name or self.default_driver}, "
-            f"except_socket_id={except_sid or '-'})",
-            category="cara.broadcasting",
-        )
+        Log.debug("Broadcasting '%s' on %s (driver=%s, except_socket_id=%s)", event_name, names, driver_name or self.default_driver, except_sid or '-', category='cara.broadcasting')
         try:
             await self.driver(driver_name).broadcast(
                 names, event_name, data, except_socket_id=except_sid
@@ -206,11 +194,7 @@ class Broadcasting:
             # behaviour and it hid real bugs (Redis down, payload too
             # large, etc.). Callers who want best-effort dispatch can
             # wrap their own try/except.
-            Log.error(
-                f"Broadcast failed for '{event_name}' on {names}: {e}",
-                category="cara.broadcasting",
-                exc_info=True,
-            )
+            Log.error("Broadcast failed for '%s' on %s: %s", event_name, names, e, category='cara.broadcasting', exc_info=True)
             raise
 
     # ------------------------------------------------------------------

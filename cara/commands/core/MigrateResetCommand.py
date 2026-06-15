@@ -6,8 +6,6 @@ This module provides a CLI command to completely reset the database schema.
 
 from __future__ import annotations
 
-import os
-
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.DatabaseManager import get_database_manager
@@ -96,24 +94,12 @@ class MigrateResetCommand(CommandBase):
 
     def _get_user_confirmation(self) -> bool:
         """Get user confirmation."""
-        print("\n⚠️  FINAL WARNING:")
-        print("   • ALL TABLES will be DROPPED")
-        print("   • ALL DATA will be LOST")
-        print("   • This action is IRREVERSIBLE")
-        print("   • Make sure you have backups!")
-
-        while True:
-            answer = (
-                input("\n🤔 Are you sure you want to continue? (yes/no): ")
-                .strip()
-                .lower()
-            )
-            if answer in ["yes", "y"]:
-                return True
-            elif answer in ["no", "n"]:
-                return False
-            else:
-                print("Please answer 'yes' or 'no'")
+        self.warning("⚠️  FINAL WARNING:")
+        self.warning("   • ALL TABLES will be DROPPED")
+        self.warning("   • ALL DATA will be LOST")
+        self.warning("   • This action is IRREVERSIBLE")
+        self.warning("   • Make sure you have backups!")
+        return self._confirm_yes_no()
 
     def _get_configuration(self) -> dict:
         """Get command configuration."""
@@ -292,12 +278,3 @@ END $do$;"""
         self.error(f"❌ Reset failed: {str(error)}")
         raise
 
-    def _is_production(self) -> bool:
-        """Check if running in production environment."""
-        try:
-            from cara.configuration import config
-
-            env = str(config("app.ENV", "")).lower()
-        except Exception:
-            env = os.getenv("APP_ENV", "").lower()
-        return env in ["production", "prod"]

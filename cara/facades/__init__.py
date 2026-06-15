@@ -6,7 +6,10 @@ from .Crypt import Crypt
 from .DB import DB
 from .Event import Event
 from .Facade import Facade
+from .AI import AI
 from .Gate import Gate
+from .Hash import Hash
+from .Http import Http
 from .Loader import Loader
 from .Log import Log
 from .Mail import Mail
@@ -30,6 +33,7 @@ from .View import View
 # surface stays free of eloquent-side state and the cycle stays broken.
 
 __all__ = [
+    "AI",
     "Auth",
     "Broadcast",
     "Cache",
@@ -39,6 +43,8 @@ __all__ = [
     "Event",
     "Facade",
     "Gate",
+    "Hash",
+    "Http",
     "Loader",
     "Log",
     "Mail",

@@ -72,18 +72,12 @@ async def safe_dispatch(
                 # Intermediate retry of a transient broker blip — recovered
                 # below. Not operator-actionable; only the final failure
                 # (Log.error) is. Keep retries at debug to avoid noise.
-                Log.debug(
-                    f"Dispatch attempt {attempt + 1} failed for "
-                    f"{job.__class__.__name__}: {e}. Retrying…"
-                )
+                Log.debug("Dispatch attempt %s failed for %s: %s. Retrying…", attempt + 1, job.__class__.__name__, e)
                 # Linear backoff — keeps the total tail bounded for the
                 # default 3-attempt window (1s + 2s = 3s max wait).
                 await asyncio.sleep(1 * (attempt + 1))
             else:
-                Log.error(
-                    f"Failed to dispatch {job.__class__.__name__} after "
-                    f"{max_retries} attempts: {e}"
-                )
+                Log.error("Failed to dispatch %s after %s attempts: %s", job.__class__.__name__, max_retries, e)
                 raise
 
     # Defensive: the loop only exits via ``return True`` or ``raise``,

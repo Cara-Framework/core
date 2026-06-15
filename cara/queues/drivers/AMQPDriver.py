@@ -170,14 +170,19 @@ class AMQPDriver(HasColoredOutput, Queue):
         self.push(*jobs, options=options)
 
     def chain(self, jobs: list, options: dict[str, Any]) -> None:
-        """Chain jobs: push each job in sequence."""
+        """Chain jobs: dispatch via ChainRunnerJob for true sequential execution.
+
+        Previous implementation pushed all jobs in parallel which violated
+        chain semantics (Job₂ should only run after Job₁ succeeds).
+        """
         if not jobs:
             return
 
-        for job in jobs:
-            self.push(job, options=options)
+        from cara.queues.Chain import Chain
 
-    def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> None:
+        Chain(jobs).dispatch()
+
+    def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> str | list[str]:
         """Schedule job for future execution using AMQP delayed plugin."""
         merged_opts = {**self.options, **options}
 
@@ -204,10 +209,10 @@ class AMQPDriver(HasColoredOutput, Queue):
         # ``_build_url`` ignores at connection time.
         merged_opts["message_headers"] = {
             **merged_opts.get("message_headers", {}),
-            "x-delay": delay_ms,
+            "x-delay": max(delay_ms, 0),
         }
 
-        self.push(job, options=merged_opts)
+        return self.push(job, options=merged_opts)
 
     def later(
         self, delay: int | pendulum.Duration, job: Any, options: dict[str, Any] = None
@@ -224,7 +229,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             options: Queue options
 
         Returns:
-            Job ID(s)
+            Job ID(s) — the real IDs assigned by push(), not fabricated ones.
         """
         import pendulum as pendulum_module
 
@@ -235,7 +240,6 @@ class AMQPDriver(HasColoredOutput, Queue):
         if isinstance(delay, int):
             delay_seconds = delay
         else:
-            # Assume it's a Duration-like object
             delay_seconds = (
                 int(delay.total_seconds()) if hasattr(delay, "total_seconds") else delay
             )
@@ -248,12 +252,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             seconds=delay_seconds
         )
 
-        # Use schedule method which handles AMQP delayed plugin
-        self.schedule(job, when, merged_opts)
-
-        # Generate and return job ID
-        job_id = str(uuid.uuid4())
-        return job_id
+        return self.schedule(job, when, merged_opts)
 
     def retry(
         self,
@@ -288,10 +287,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         if attempts_made >= attempts:
             # Max attempts reached, send to dead letter
-            Log.error(
-                f"Job {job.__class__.__name__} exceeded max retry attempts ({attempts}). "
-                f"Sending to dead letter queue."
-            )
+            Log.error("Job %s exceeded max retry attempts (%s). Sending to dead letter queue.", job.__class__.__name__, attempts)
             self._send_to_dead_letter(job, options, attempts_made)
             return None
 
@@ -307,10 +303,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             delay_seconds = int(backoff) if backoff else 300  # Default 5 minutes
 
         attempts_made += 1
-        Log.info(
-            f"Retrying job {job.__class__.__name__} (attempt {attempts_made}/{attempts}) "
-            f"with {delay_seconds}s delay"
-        )
+        Log.info("Retrying job %s (attempt %s/%s) with %ss delay", job.__class__.__name__, attempts_made, attempts, delay_seconds)
 
         # Update options with retry info
         retry_opts = {
@@ -467,17 +460,11 @@ class AMQPDriver(HasColoredOutput, Queue):
                     attempts=int(payload.get("attempts", 0)),
                 )
             except Exception as e:
-                Log.warning(
-                    f"_handle_failed_message: DLX after unpickle failure raised: {e}"
-                )
+                Log.warning("_handle_failed_message: DLX after unpickle failure raised: %s", e)
             return False
 
         if getattr(exc, "do_not_retry", False):
-            Log.error(
-                f"Job {instance.__class__.__name__} raised "
-                f"{type(exc).__name__} marked do_not_retry — "
-                f"sending straight to DLX"
-            )
+            Log.error("Job %s raised %s marked do_not_retry — sending straight to DLX", instance.__class__.__name__, type(exc).__name__)
             self._send_to_dead_letter(
                 job=instance,
                 options=dlx_options,
@@ -491,11 +478,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         )
 
         if attempts_made >= max_attempts:
-            Log.error(
-                f"Job {instance.__class__.__name__} exhausted "
-                f"{max_attempts} attempts (last error: "
-                f"{type(exc).__name__}: {exc}). Routing to DLX."
-            )
+            Log.error("Job %s exhausted %s attempts (last error: %s: %s). Routing to DLX.", instance.__class__.__name__, max_attempts, type(exc).__name__, exc)
             self._send_to_dead_letter(
                 job=instance, options=dlx_options, attempts=attempts_made
             )
@@ -515,12 +498,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         base_delay = int(backoff_schedule[idx])
         delay_seconds = self._apply_retry_jitter(base_delay, instance)
 
-        Log.info(
-            f"Job {instance.__class__.__name__} attempt "
-            f"{attempts_made}/{max_attempts} failed "
-            f"({type(exc).__name__}: {exc}). Retrying in "
-            f"{delay_seconds}s (base {base_delay}s + jitter)."
-        )
+        Log.info("Job %s attempt %s/%s failed (%s: %s). Retrying in %ss (base %ss + jitter).", instance.__class__.__name__, attempts_made, max_attempts, type(exc).__name__, exc, delay_seconds, base_delay)
 
         retry_options = {
             **options,
@@ -534,11 +512,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             # delivery, so the job is lost unless we surface this.
             # Best-effort DLX hop so the message at least survives
             # in the dead-letter store for manual recovery.
-            Log.error(
-                f"Job {instance.__class__.__name__}: retry republish "
-                f"failed ({republish_exc}). Falling back to DLX so "
-                f"the payload isn't lost."
-            )
+            Log.error("Job %s: retry republish failed (%s). Falling back to DLX so the payload isn't lost.", instance.__class__.__name__, republish_exc)
             try:
                 self._send_to_dead_letter(
                     job=instance,
@@ -546,11 +520,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     attempts=attempts_made,
                 )
             except Exception:
-                Log.error(
-                    f"Job {instance.__class__.__name__}: DLX fallback "
-                    f"also failed — payload IS lost",
-                    exc_info=True,
-                )
+                Log.error("Job %s: DLX fallback also failed — payload IS lost", instance.__class__.__name__, exc_info=True)
             return False
 
     def _send_to_dead_letter(
@@ -591,7 +561,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     body = pickle.dumps(payload)
 
                 # Publish to dead letter exchange
-                dlx_name = options.get("exchange", "default") + ".dlx"
+                dlx_name = f'{options.get("exchange", "default")}.dlx'
                 dlq_routing_key = f"dead.{options.get('queue', 'default')}"
 
                 self.channel.basic_publish(
@@ -614,13 +584,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # NOTE: cara's Log.error() does not accept an ``extra=``
                 # kwarg (TypeError on every call). The structured fields
                 # are folded into the message string instead.
-                Log.error(
-                    f"Job dead-lettered after {attempts} attempts: "
-                    f"{job.__class__.__name__} → {dlq_routing_key} "
-                    f"(job_class={job.__class__.__name__}, "
-                    f"attempts={attempts}, "
-                    f"dlq_routing_key={dlq_routing_key})",
-                )
+                Log.error("Job dead-lettered after %s attempts: %s → %s (job_class=%s, attempts=%s, dlq_routing_key=%s)", attempts, job.__class__.__name__, dlq_routing_key, job.__class__.__name__, attempts, dlq_routing_key)
 
                 # Best-effort metric increment so dashboards / Prometheus
                 # alerts can fire when DLQ rate spikes.
@@ -937,7 +901,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             return db_job_id
 
         except Exception as e:
-            Log.warning(f"Failed to create job record: {e}")
+            Log.warning("Failed to create job record: %s", e)
             return None
 
     def _resolve_job_tracker(self):
@@ -998,7 +962,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 exchange=dlx_name, queue=dlq_name, routing_key="dead.*"
             )
 
-            Log.info(f"Dead letter exchange configured: {dlx_name}")
+            Log.info("Dead letter exchange configured: %s", dlx_name)
 
             # Close connection
             try:
@@ -1008,7 +972,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 pass
 
         except Exception as e:
-            Log.error(f"Failed to declare dead letter exchange: {e}")
+            Log.error("Failed to declare dead letter exchange: %s", e)
 
     def get_dead_letter_messages(
         self, queue_name: str = "dead.letter.queue", limit: int = 100
@@ -1068,7 +1032,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 pass
 
         except Exception as e:
-            Log.error(f"Failed to get dead letter messages: {e}")
+            Log.error("Failed to get dead letter messages: %s", e)
 
         return messages
 
@@ -1113,7 +1077,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                         ),
                     )
                     replayed += 1
-                    Log.info(f"Replayed message {msg_id} to {queue_name}")
+                    Log.info("Replayed message %s to %s", msg_id, queue_name)
                     # ACK MUST happen here, before any ``break``.
                     # Pre-fix the targeted-match branch broke out of
                     # the loop and the trailing ``basic_ack`` below
@@ -1139,7 +1103,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     self.channel.basic_nack(method.delivery_tag, requeue=True)
 
         except Exception as e:
-            Log.error(f"Failed to replay dead letter messages: {e}")
+            Log.error("Failed to replay dead letter messages: %s", e)
         finally:
             # Pre-fix the close lines sat after the loop *inside* the
             # try block: any exception mid-loop (broker hiccup during
@@ -1347,11 +1311,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 mandatory=True,
             )
         except pika.exceptions.UnroutableError as exc:
-            Log.error(
-                f"AMQPDriver: message unroutable to queue='{queue_name}' "
-                f"exchange='{opts.get('exchange', '')}': {exc}",
-                category="cara.queue.amqp",
-            )
+            Log.error("AMQPDriver: message unroutable to queue='%s' exchange='%s': %s", queue_name, opts.get('exchange', ''), exc, category='cara.queue.amqp')
             raise
 
         # No close — caller (``_connect_and_publish``) returns the
@@ -1424,7 +1384,16 @@ class AMQPDriver(HasColoredOutput, Queue):
             if not (conn.is_open and chan.is_open):
                 conn.close()
                 return
-        except (OSError, ConnectionError, RuntimeError, AttributeError):
+        except (
+            OSError,
+            ConnectionError,
+            RuntimeError,
+            AttributeError,
+            pika.exceptions.AMQPError,
+        ):
+            # A dead/closed connection that we're dropping must not turn its
+            # own ``close()`` (pika ``*WrongStateError`` on an already-closed
+            # handle) into a publish-time failure.
             return
 
         with self._pool_lock:
@@ -1432,7 +1401,13 @@ class AMQPDriver(HasColoredOutput, Queue):
             if len(pool) >= self._max_pool_per_url:
                 try:
                     conn.close()
-                except (OSError, ConnectionError, RuntimeError, AttributeError):
+                except (
+                    OSError,
+                    ConnectionError,
+                    RuntimeError,
+                    AttributeError,
+                    pika.exceptions.AMQPError,
+                ):
                     pass
                 return
             pool.append((conn, chan))
@@ -1447,7 +1422,18 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 if handle is not None:
                     handle.close()
-            except (OSError, ConnectionError, RuntimeError, AttributeError):
+            except (
+                OSError,
+                ConnectionError,
+                RuntimeError,
+                AttributeError,
+                pika.exceptions.AMQPError,
+            ):
+                # Best-effort discard: closing an ALREADY-closed channel /
+                # connection makes pika raise ``ChannelWrongStateError`` /
+                # ``ConnectionWrongStateError`` (both ``AMQPError`` subclasses).
+                # The whole point here is to drop a dead handle, so a
+                # "already closed" close is success, not a failure to surface.
                 pass
 
     def _connect(self, opts: dict[str, Any]) -> None:

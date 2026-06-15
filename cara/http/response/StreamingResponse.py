@@ -143,7 +143,7 @@ class StreamingResponse:
 
         async def json_chunk_generator():
             async for data in data_generator:
-                json_line = json.dumps(data, ensure_ascii=False, default=str) + "\n"
+                json_line = f"{json.dumps(data, ensure_ascii=False, default=str)}\n"
                 yield json_line.encode("utf-8")
 
         await self.stream(

@@ -92,5 +92,5 @@ class MailMessage:
         except Exception as e:
             from cara.facades import Log
 
-            Log.error(f"Failed to queue mail message: {e}")
+            Log.error("Failed to queue mail message: %s", e)
             return False

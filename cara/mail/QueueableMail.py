@@ -111,14 +111,12 @@ class QueueableMail(BaseQueueable):
         try:
             from cara.facades import Log
 
-            Log.error(f"Mail delivery failed for {self.__class__.__name__}: {str(error)}")
+            Log.error("Mail delivery failed for %s: %s", self.__class__.__name__, str(error))
             if self.user:
                 # Mask the recipient — raw emails must not land in log
                 # aggregation (Loki). email_mask returns "" on empty/None.
                 from cara.support.Str import email_mask
 
-                Log.error(
-                    f"Recipient: {email_mask(getattr(self.user, 'email', '') or '') or 'unknown'}"
-                )
+                Log.error("Recipient: %s", email_mask(getattr(self.user, 'email', '') or '') or 'unknown')
         except ImportError:
             pass

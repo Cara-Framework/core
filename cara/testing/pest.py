@@ -39,7 +39,7 @@ def _slugify(text: str) -> str:
     if not slug:
         return "anonymous"
     if slug[0].isdigit():
-        slug = "_" + slug
+        slug = f"_{slug}"
     return slug
 
 
