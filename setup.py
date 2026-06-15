@@ -30,7 +30,7 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: Internet :: WWW/HTTP :: ASGI :: Application",
     ],
-    python_requires=">=3.14",
+    python_requires=">=3.11",
     install_requires=[
         "fastapi>=0.68.0",
         "uvicorn[standard]>=0.15.0",

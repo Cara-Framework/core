@@ -31,7 +31,7 @@ Quick start
 
 from .Expectation import Expectation, ExpectationFailed, expect
 from .TestCase import TestCase
-from .pest import describe, it
+from .facade_swap import register, reset, swap, uninstall_patch
 from .fakes import (
     CacheFake,
     EventFake,
@@ -40,8 +40,6 @@ from .fakes import (
     NotificationFake,
     QueueFake,
 )
-from .mocks import Mock, Spy, returning, when
-from .facade_swap import register, reset, swap, uninstall_patch
 from .loader import (
     load_contract,
     load_module,
@@ -49,6 +47,8 @@ from .loader import (
     stub_modules,
     stub_modules_scoped,
 )
+from .mocks import Mock, Spy, returning, when
+from .pest import describe, it
 
 __all__ = [
     "CacheFake",

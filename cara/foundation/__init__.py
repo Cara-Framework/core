@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
-from .Provider import Provider
-from .DeferredProvider import DeferredProvider
 from .Application import Application
+from .DeferredProvider import DeferredProvider
+from .Provider import Provider
 
 T = TypeVar("T")
 
