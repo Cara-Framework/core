@@ -12,7 +12,7 @@ from typing import Any
 try:
     from typing import Self
 except ImportError:  # Python <3.11
-    from typing_extensions import Self  # noqa: F401
+    from typing import Self  # noqa: F401
 
 # ``order_by`` SQL injection guard: accept ``column`` or
 # ``table.column`` identifiers only. Anything fancier (functions,
@@ -200,7 +200,23 @@ class QueryBuilder(ObservesEvents):
 
     def reset(self) -> Self:
         """Resets the query builder instance so you can make multiple calls with the same builder
-        instance."""
+        instance.
+
+        ROOT-CAUSE (2026-06 extractor audit): pre-fix this method
+        omitted ``_limit``, ``_offset``, ``_distinct``, and
+        ``_columns``, so a ``first()`` (which sets ``limit(1)``)
+        followed by any reuse of the same builder silently carried
+        ``LIMIT 1`` into the next query even though all WHERE /
+        ORDER BY clauses were wiped.  The most visible symptom was
+        ``Product.primary_listing()``'s buy-box → cheapest fallback:
+        the first ``.first()`` wiped ``_wheres`` but left
+        ``_limit = 1``, so the second query — which rebuilt its
+        WHEREs via a fresh ``_base()`` call — accidentally kept the
+        stale limit (harmless in that case but semantically wrong
+        for any caller that expected ``reset()`` to truly reset).
+        Adding these fields completes the contract: after
+        ``reset()`` the builder is indistinguishable from a freshly
+        constructed one (minus table/model/connection bindings)."""
 
         self.set_action("select")
 
@@ -212,6 +228,11 @@ class QueryBuilder(ObservesEvents):
         self._joins = ()
         self._having = ()
         self._aggregates = ()
+
+        self._limit = False
+        self._offset = False
+        self._distinct = False
+        self._columns = ()
 
         return self
 
