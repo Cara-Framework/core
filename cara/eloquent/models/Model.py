@@ -18,6 +18,7 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import logging
 from collections.abc import Callable
 from datetime import date as datetimedate
 from datetime import datetime
@@ -34,6 +35,8 @@ from inflection import tableize, underscore
 
 from cara.exceptions import InvalidArgumentException, ModelNotFoundException
 from cara.support.Collection import Collection
+
+_logger = logging.getLogger("cara.eloquent.models")
 
 # Import cast system
 from ..casts.collections import ArrayCast, CollectionCast
@@ -990,8 +993,9 @@ class Model(
                         # Use the proper cast system
                         data[key] = self._cast_attribute(key, value)
                     except Exception:
-                        # If casting fails, keep original value
-                        pass
+                        _logger.warning(
+                            "cast failed for attribute %s", key, exc_info=True
+                        )
 
         # Handle remaining datetime and decimal types (including casted ones)
         # This runs AFTER casting to ensure ALL Decimals are JSON-serializable

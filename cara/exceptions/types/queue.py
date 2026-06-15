@@ -4,6 +4,8 @@ Queue Exception Type for the Cara framework.
 This module defines exception types related to queue operations.
 """
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

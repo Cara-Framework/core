@@ -141,7 +141,7 @@ class ConcurrencyLimited:
                         str(int(key_ttl)),
                     )
                     return bool(int(result if result is not None else 0))
-                except Exception:
+                except (OSError, ConnectionError, RuntimeError, ValueError):
                     # If EVAL itself fails (script error, redis cluster
                     # quirk), fall through to the legacy path below
                     # rather than dropping every dispatch.
@@ -162,7 +162,7 @@ class ConcurrencyLimited:
             redis.zadd(redis_key, {slot_id: now + self.slot_ttl})
             redis.expire(redis_key, self.slot_ttl + 60)
             return True
-        except Exception:
+        except (OSError, ConnectionError, TimeoutError, RuntimeError):
             return True  # degrade gracefully on Redis errors
 
     def _release(self, cache, redis_key: str, slot_id: str) -> None:
@@ -170,7 +170,7 @@ class ConcurrencyLimited:
             redis = self._get_redis(cache)
             if redis:
                 redis.zrem(redis_key, slot_id)
-        except Exception:
+        except (OSError, ConnectionError, TimeoutError, RuntimeError):
             pass  # TTL ensures cleanup
 
     @staticmethod
@@ -191,7 +191,7 @@ class ConcurrencyLimited:
             if redis_attr:
                 return redis_attr
             return None
-        except Exception:
+        except (AttributeError, TypeError):
             return None
 
     @staticmethod
@@ -203,7 +203,7 @@ class ConcurrencyLimited:
             if cache_service is None:
                 return None
             return cache_service
-        except Exception:
+        except (ImportError, RuntimeError, AttributeError):
             return None
 
     @staticmethod

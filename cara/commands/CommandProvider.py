@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.commands import Command
+from cara.commands.Command import Command
 from cara.facades import Config
 from cara.foundation import Provider
 

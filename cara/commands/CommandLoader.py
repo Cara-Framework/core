@@ -4,6 +4,8 @@ Command Loader for the Cara framework.
 This module provides utilities for dynamically loading CLI command classes from the application.
 """
 
+from __future__ import annotations
+
 import importlib
 import pkgutil
 

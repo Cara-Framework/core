@@ -1,5 +1,7 @@
 """Application-level exceptions that don't fit elsewhere."""
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

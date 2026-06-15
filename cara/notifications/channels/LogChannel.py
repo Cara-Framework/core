@@ -12,7 +12,7 @@ from typing import Any
 
 import pendulum
 
-from cara.notifications.channels import BaseChannel
+from cara.notifications.channels.BaseChannel import BaseChannel
 
 
 class LogChannel(BaseChannel):

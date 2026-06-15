@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class AggregateExpression:
     def __init__(self, aggregate=None, column=None, alias=False):
         self.aggregate = aggregate

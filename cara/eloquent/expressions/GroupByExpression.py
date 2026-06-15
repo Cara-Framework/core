@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class GroupByExpression:
     """A helper class to manage select expressions."""
 

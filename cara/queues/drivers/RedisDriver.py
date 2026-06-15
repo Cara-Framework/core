@@ -297,7 +297,7 @@ class RedisDriver(HasColoredOutput, Queue):
             # Validate payload before re-enqueuing
             try:
                 pickle.loads(data)
-            except Exception:
+            except (pickle.UnpicklingError, ImportError, AttributeError, EOFError, ValueError):
                 self._dead_letter(data, queue_name, reason="retry: corrupt payload")
                 dead += 1
                 continue
@@ -467,11 +467,11 @@ class RedisDriver(HasColoredOutput, Queue):
                 )
             except (AttributeError, TypeError):
                 pass
-            except Exception:
+            except (OSError, ConnectionError, TimeoutError, RuntimeError):
                 return None
         try:
             return self._redis.brpoplpush(src, dst, timeout=self.blocking_timeout)
-        except Exception:
+        except (OSError, ConnectionError, TimeoutError, RuntimeError):
             return None
 
     def _maybe_reap_processing(self, merged: dict[str, Any], queue_name: str) -> None:
@@ -639,7 +639,7 @@ class RedisDriver(HasColoredOutput, Queue):
 
             if isinstance(instance, UniqueJob):
                 UniqueJob.release_unique_lock(instance.unique_id())
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             pass
 
     @staticmethod
@@ -650,5 +650,5 @@ class RedisDriver(HasColoredOutput, Queue):
             from cara.queues.Batch import auto_dispatch_batch_completion
 
             auto_dispatch_batch_completion(instance, exception)
-        except Exception:
+        except (ImportError, OSError, ConnectionError, RuntimeError):
             pass

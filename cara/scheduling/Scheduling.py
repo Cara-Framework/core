@@ -10,7 +10,7 @@ import uuid
 from typing import Any
 
 from cara.exceptions import DriverNotRegisteredException, InvalidArgumentException
-from cara.scheduling import ScheduleBuilder
+from cara.scheduling.ScheduleBuilder import ScheduleBuilder
 from cara.scheduling.contracts import Scheduling
 
 

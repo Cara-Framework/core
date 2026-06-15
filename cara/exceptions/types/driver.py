@@ -1,5 +1,7 @@
 """Driver-related exceptions (queue drivers, logging drivers, etc.)."""
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

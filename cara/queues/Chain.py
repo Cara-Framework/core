@@ -11,7 +11,7 @@ non-idempotent steps (e.g. scrape → validate → consolidate) could fire
 their side-effects twice for the same input.
 
 Usage:
-    from cara.queues import Chain
+    from cara.queues.Chain import Chain
 
     Chain([Job1(...), Job2(...), Job3(...)]).dispatch()
 
@@ -70,7 +70,7 @@ class ChainRunnerJob(ShouldQueue, Queueable):
             if value is None:
                 return 0
             return int(value)
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError, ValueError):
             return 0
 
     def _save_progress(self, next_index: int) -> None:
@@ -82,7 +82,7 @@ class ChainRunnerJob(ShouldQueue, Queueable):
                 next_index,
                 self.CHAIN_PROGRESS_TTL,
             )
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             pass
 
     def _clear_progress(self) -> None:
@@ -90,7 +90,7 @@ class ChainRunnerJob(ShouldQueue, Queueable):
             from cara.facades import Cache
 
             Cache.forget(_chain_progress_key(self.chain_id))
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             pass
 
     async def handle(self) -> None:

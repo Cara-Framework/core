@@ -8,7 +8,7 @@ container.
 from __future__ import annotations
 
 from cara.foundation import DeferredProvider
-from cara.loader import Loader
+from cara.loader.Loader import Loader
 
 
 class LoaderProvider(DeferredProvider):

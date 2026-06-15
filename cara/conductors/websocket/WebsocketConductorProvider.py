@@ -7,7 +7,7 @@ container.
 
 from __future__ import annotations
 
-from cara.conductors.websocket import WebsocketConductor
+from cara.conductors.websocket.WebsocketConductor import WebsocketConductor
 from cara.foundation import DeferredProvider
 
 

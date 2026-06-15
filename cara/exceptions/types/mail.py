@@ -2,6 +2,8 @@
 Mail-related exceptions for the Cara framework.
 """
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

@@ -9,10 +9,13 @@ Supports Laravel-style cache tags and cache locks for distributed systems.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from cara.cache.contracts import Cache
 from cara.exceptions import DriverNotRegisteredException
+
+_logger = logging.getLogger("cara.cache")
 
 
 class CacheLock:
@@ -355,6 +358,7 @@ class Cache:
         try:
             won = driver.add(lock_key, "1", stampede_lock_seconds)
         except Exception:
+            _logger.debug("stampede lock acquisition failed", exc_info=True)
             won = False
 
         if won:
@@ -368,7 +372,7 @@ class Cache:
                 try:
                     driver.forget(lock_key)
                 except Exception:
-                    pass
+                    _logger.debug("stampede lock cleanup failed", exc_info=True)
 
         # Lost the race — wait briefly for the winner to populate the
         # key, then re-read. The poll interval is short (50ms) but
@@ -405,6 +409,7 @@ class Cache:
             try:
                 re_won = driver.add(lock_key, "1", stampede_lock_seconds)
             except Exception:
+                _logger.debug("stampede lock acquisition failed", exc_info=True)
                 re_won = False
             if re_won:
                 try:
@@ -415,7 +420,7 @@ class Cache:
                     try:
                         driver.forget(lock_key)
                     except Exception:
-                        pass
+                        _logger.debug("stampede lock cleanup failed", exc_info=True)
             _time.sleep(0.05)
 
         # Winner crashed AND no loser could claim the secondary slot
@@ -477,6 +482,7 @@ class Cache:
         try:
             return ttl_fn(key)
         except Exception:
+            _logger.warning("ttl() lookup failed", exc_info=True)
             return None
 
     def increment(

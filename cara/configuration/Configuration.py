@@ -5,6 +5,8 @@ This module provides the Configuration class, responsible for loading, merging, 
 application configuration settings from various sources.
 """
 
+from __future__ import annotations
+
 import threading
 
 from cara.exceptions import (

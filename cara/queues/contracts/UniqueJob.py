@@ -65,7 +65,7 @@ class UniqueJob:
 
             if Cache.get(cache_key) is not None:
                 return True
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             # ImportError (boot) OR any runtime Cache failure (Redis
             # down, timeout, misconfigured facade). Fall through to the
             # in-memory check below — we cannot afford to raise out of
@@ -107,7 +107,7 @@ class UniqueJob:
                 return True
             # Lock already exists in Cache
             return False
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             # Cache-facade ImportError at boot OR a runtime Cache
             # failure (Redis ConnectionError, TimeoutError, misconfigured
             # binding). Fall through to the in-memory branch — see
@@ -144,7 +144,7 @@ class UniqueJob:
             from cara.facades import Cache
 
             Cache.forget(cache_key)
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             # Cache unavailable (boot) OR runtime failure — see acquire
             # for the same rationale. Releasing is best-effort; the
             # in-memory clear below still runs.

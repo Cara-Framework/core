@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class PostgresPostProcessor:
     """
     Post processor classes are responsable for modifying the result after a query.

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from cara.exceptions import RouteMiddlewareNotFoundException
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
 
 MiddlewareType = type[Middleware]
 

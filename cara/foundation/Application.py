@@ -17,8 +17,14 @@ from cara.container import Container
 from cara.environment import LoadEnvironment
 from cara.exceptions.types.base import CaraException
 
-# Lazy import to avoid circular imports
-from cara.foundation import DeferredProvider, Provider
+# Direct module imports — NOT ``from cara.foundation import ...``. Application
+# is imported by ``cara.foundation.__init__`` BEFORE that package binds the
+# ``Provider`` / ``DeferredProvider`` CLASSES, so the package import resolves
+# to the SUBMODULES (modules, not classes) and any subclassing downstream
+# raises "module() takes at most 2 arguments (3 given)". The direct paths are
+# immune to ``__init__`` import ordering.
+from cara.foundation.DeferredProvider import DeferredProvider
+from cara.foundation.Provider import Provider
 from cara.support.PathManager import PathManager
 
 

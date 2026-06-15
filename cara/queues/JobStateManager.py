@@ -101,7 +101,7 @@ class JobStateManager:
             if callback:
                 try:
                     callback(job_id, reason)
-                except Exception:
+                except (TypeError, ValueError, RuntimeError, OSError):
                     # Don't let callback errors prevent cancellation
                     pass
 

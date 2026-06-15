@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import importlib
 
-from cara.broadcasting import Broadcasting
+from cara.broadcasting.Broadcasting import Broadcasting
 from cara.broadcasting.drivers import (
     LogBroadcaster,
     MemoryBroadcaster,

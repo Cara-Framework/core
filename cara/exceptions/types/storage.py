@@ -4,6 +4,8 @@ Storage Exception Type for the Cara framework.
 This module defines exception types related to storage operations.
 """
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

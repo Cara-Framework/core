@@ -9,7 +9,8 @@ from __future__ import annotations
 from cara.configuration import config
 from cara.foundation import DeferredProvider
 from cara.support import paths
-from cara.view import View, ViewEngine
+from cara.view.View import View
+from cara.view.ViewEngine import ViewEngine
 
 
 class ViewProvider(DeferredProvider):

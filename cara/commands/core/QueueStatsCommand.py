@@ -3,6 +3,8 @@ QueueStatsCommand: Display enhanced queue statistics and job status breakdown.
 Shows comprehensive job tracking information from the enhanced job management system.
 """
 
+from __future__ import annotations
+
 import time
 
 import pendulum

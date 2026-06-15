@@ -17,7 +17,7 @@ from cara.exceptions import (
     InvalidRuleFormatException,
     RuleNotFoundException,
 )
-from cara.validation import ValidationErrors
+from cara.validation.ValidationErrors import ValidationErrors
 from cara.validation.contracts import (
     Rule,
 )

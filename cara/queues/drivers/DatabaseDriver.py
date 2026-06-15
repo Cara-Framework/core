@@ -39,7 +39,7 @@ def _release_unique_lock_if_any(instance) -> None:
 
         if isinstance(instance, UniqueJob):
             UniqueJob.release_unique_lock(instance.unique_id())
-    except Exception as exc:
+    except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError) as exc:
         import logging
 
         logging.getLogger("cara.queue.database").warning(
@@ -62,7 +62,7 @@ def _dispatch_batch_completion(instance, exception=None) -> None:
         from cara.queues.Batch import auto_dispatch_batch_completion
 
         auto_dispatch_batch_completion(instance, exception)
-    except Exception as exc:
+    except (ImportError, OSError, ConnectionError, RuntimeError) as exc:
         import logging
 
         logging.getLogger("cara.queue.database").warning(
@@ -332,7 +332,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             # SKIP LOCKED, others get the CAS fallback.
             connection_info = db.get_connection_info(connection_name)
             driver = (connection_info.get("driver") or "").lower()
-        except Exception:
+        except (AttributeError, KeyError, TypeError, RuntimeError):
             driver = ""
 
         if driver in ("postgres", "postgresql", "mysql"):
@@ -596,7 +596,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
                     if isinstance(current_metadata, str):
                         try:
                             current_metadata = json.loads(current_metadata)
-                        except Exception:
+                        except (json.JSONDecodeError, ValueError, TypeError):
                             current_metadata = {}
                     elif not isinstance(current_metadata, dict):
                         current_metadata = {}

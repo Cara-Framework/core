@@ -4,6 +4,8 @@ Command Registry for the Cara framework.
 This module provides a registry for managing and discovering CLI commands in the application.
 """
 
+from __future__ import annotations
+
 from cara.decorators import get_registered_commands
 
 

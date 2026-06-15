@@ -1,68 +1,65 @@
-"""
-Policy - Base policy class for authorization policies.
+"""Base policy class for authorization policies.
+
+Subclass this and override the abilities you support. Every ability may return
+a ``bool`` or an :class:`AuthorizationResponse` (to attach a denial message).
+Unoverridden abilities deny by default — policies fail closed.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from cara.authorization.AuthorizationResponse import AuthorizationResponse
 from cara.authorization.contracts import Policy as PolicyContract
+
+# What an ability method or hook may return.
+PolicyResult = bool | AuthorizationResponse | None
 
 
 class Policy(PolicyContract):
-    """
-    Base policy class that provides common functionality for all policies.
-    """
+    """Common functionality and safe defaults for all policies."""
 
-    def __init__(self):
-        """
-        Initialize the base policy.
-        """
-        pass
+    def before(self, user: Any, ability: str, *args: Any) -> PolicyResult:
+        """Run before any ability check.
 
-    def before(self, user: Any, ability: str, *args) -> bool | None:
-        """
-        Perform pre-authorization checks.
-        This method runs before any ability checks.
-        Return True to allow, False to deny, or None to continue to ability check.
-        """
-        # No default authorization logic - this should be defined in app code
-        return None
-
-    def after(self, user: Any, ability: str, result: bool, *args) -> bool | None:
-        """
-        Perform post-authorization checks.
-        This method runs after the ability check is complete.
-        Return True to allow, False to deny, or None to keep original result.
+        Return ``True`` to allow, ``False`` to deny, or ``None`` to defer to the
+        ability method. Override for role bypasses (e.g. super-admins).
         """
         return None
 
-    def create(self, user: Any) -> bool:
+    def after(self, user: Any, ability: str, result: bool, *args: Any) -> PolicyResult:
+        """Run after the ability check.
+
+        Return ``True``/``False`` to override, or ``None`` to keep the result.
         """
-        Determine whether the user can create models.
-        """
+        return None
+
+    # Standard CRUD abilities — deny by default. ------------------------- #
+
+    def view_any(self, user: Any, model: Any = None) -> PolicyResult:
+        """Whether the user can list models."""
         return False
 
-    def update(self, user: Any, model: Any) -> bool:
-        """
-        Determine whether the user can update the model.
-        """
+    def view(self, user: Any, model: Any = None) -> PolicyResult:
+        """Whether the user can view the model."""
         return False
 
-    def delete(self, user: Any, model: Any) -> bool:
-        """
-        Determine whether the user can delete the model.
-        """
+    def create(self, user: Any, model: Any = None) -> PolicyResult:
+        """Whether the user can create models."""
         return False
 
-    def restore(self, user: Any, model: Any) -> bool:
-        """
-        Determine whether the user can restore the model.
-        """
+    def update(self, user: Any, model: Any) -> PolicyResult:
+        """Whether the user can update the model."""
         return False
 
-    def force_delete(self, user: Any, model: Any) -> bool:
-        """
-        Determine whether the user can permanently delete the model.
-        """
+    def delete(self, user: Any, model: Any) -> PolicyResult:
+        """Whether the user can delete the model."""
+        return False
+
+    def restore(self, user: Any, model: Any) -> PolicyResult:
+        """Whether the user can restore the soft-deleted model."""
+        return False
+
+    def force_delete(self, user: Any, model: Any) -> PolicyResult:
+        """Whether the user can permanently delete the model."""
         return False

@@ -7,7 +7,7 @@ subsystem, including file and Redis cache drivers.
 
 from __future__ import annotations
 
-from cara.cache import Cache
+from cara.cache.Cache import Cache
 from cara.cache.drivers import FileCacheDriver, RedisCacheDriver
 from cara.configuration import config
 from cara.exceptions import CacheConfigurationException

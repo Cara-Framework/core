@@ -5,10 +5,13 @@ Uses migration files as source of truth.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 from cara.support import paths
+
+_logger = logging.getLogger("cara.migrations.comparator")
 
 
 class ModelMigrationComparator:
@@ -138,8 +141,9 @@ class ModelMigrationComparator:
                 self._process_update_migration(content, schema)
 
         except Exception:
-            # Skip files that can't be read
-            pass
+            _logger.warning(
+                "unreadable migration file: %s", migration_file, exc_info=True
+            )
 
     def _process_create_migration(self, content: str, schema: dict):
         """Process CREATE TABLE migration to extract initial fields."""

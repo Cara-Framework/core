@@ -27,7 +27,6 @@ class HashCast(BaseCast):
         "bcrypt": "_hash_bcrypt",
         "sha256": "_hash_sha256",
         "sha512": "_hash_sha512",
-        "md5": "_hash_md5",
     }
 
     def __init__(self, algorithm: str = "bcrypt"):
@@ -68,10 +67,6 @@ class HashCast(BaseCast):
 
     def _hash_sha512(self, value: Any) -> str:
         return hashlib.sha512(str(value).encode("utf-8")).hexdigest()
-
-    def _hash_md5(self, value: Any) -> str:
-        """Hash using MD5 — provided for legacy interop only; do not use for passwords."""
-        return hashlib.md5(str(value).encode("utf-8")).hexdigest()
 
 
 class EncryptedCast(BaseCast):

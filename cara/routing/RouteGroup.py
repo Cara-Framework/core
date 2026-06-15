@@ -30,7 +30,7 @@ class RouteGroup:
 
     def routes(self, *routes):
         """Add routes to the group, applying prefix and middleware."""
-        from cara.routing import Route
+        from cara.routing.Route import Route
 
         flattened = flatten(routes)
         output: list[Route] = []

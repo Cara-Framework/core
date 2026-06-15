@@ -4,6 +4,8 @@ Tinker Command for the Cara framework.
 This module provides a CLI command to start the interactive Tinker shell with enhanced UX.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from cara.commands import CommandBase

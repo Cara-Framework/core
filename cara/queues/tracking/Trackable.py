@@ -21,7 +21,7 @@ class Trackable:
     Integrates with Cara's queue system to provide comprehensive job monitoring.
 
     Usage:
-        from cara.queues.tracking import Trackable
+        from cara.queues.tracking.Trackable import Trackable
 
         class MyJob(Trackable, Queueable, ShouldQueue):
             def __init__(self, entity_id):

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class Constraint:
     def __init__(self, name, constraint_type, columns=None):
         self.name = name

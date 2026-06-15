@@ -10,7 +10,7 @@ from __future__ import annotations
 from cara.configuration import config
 from cara.exceptions import MailConfigurationException
 from cara.foundation import DeferredProvider
-from cara.mail import Mail
+from cara.mail.Mail import Mail
 from cara.mail.drivers import ArrayDriver, LogDriver, MailgunDriver, SmtpDriver
 
 

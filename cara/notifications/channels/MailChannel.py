@@ -11,7 +11,7 @@ import hashlib
 import hmac
 from typing import Any
 
-from cara.notifications.channels import BaseChannel
+from cara.notifications.channels.BaseChannel import BaseChannel
 
 
 class MailChannel(BaseChannel):

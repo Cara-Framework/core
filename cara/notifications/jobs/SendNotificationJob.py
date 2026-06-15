@@ -5,6 +5,8 @@ This job is automatically created when notifications implement ShouldQueue.
 Uses BaseJob which includes SerializesModels for proper serialization.
 """
 
+from __future__ import annotations
+
 from cara.exceptions.types.base import CaraException
 from cara.queues.contracts import BaseJob
 

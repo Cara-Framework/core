@@ -528,4 +528,3 @@ class PostgresConnection(BaseConnection):
             if self.get_transaction_level() <= 0:
                 self.open = 0
                 self.close_connection()
-                # self._connection.close()

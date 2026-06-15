@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class OnValueClause:
     """A helper class to manage ON expressions in joins with a value."""
 

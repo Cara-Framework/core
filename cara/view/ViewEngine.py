@@ -9,7 +9,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from cara.view import ViewCompiler, ViewDirectives, ViewDirectivesRegistry
+from cara.view.ViewCompiler import ViewCompiler
+from cara.view.ViewDirectives import ViewDirectives
+from cara.view.ViewDirectivesRegistry import ViewDirectivesRegistry
 
 
 class ViewEngine:

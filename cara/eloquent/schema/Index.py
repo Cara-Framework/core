@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class Index:
     def __init__(self, column, name, index_type):
         self.column = column

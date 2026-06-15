@@ -630,7 +630,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     Metrics.queue_jobs_dead_lettered_total.labels(
                         job=job.__class__.__name__,
                     ).inc()
-                except Exception:
+                except (ImportError, RuntimeError, AttributeError):
                     pass
 
             except Exception:
@@ -651,12 +651,12 @@ class AMQPDriver(HasColoredOutput, Queue):
                 try:
                     if self.channel is not None:
                         self.channel.close()
-                except Exception:
+                except (OSError, ConnectionError, RuntimeError, AttributeError):
                     pass
                 try:
                     if self.connection is not None:
                         self.connection.close()
-                except Exception:
+                except (OSError, ConnectionError, RuntimeError, AttributeError):
                     pass
                 self.channel = None
                 self.connection = None
@@ -803,7 +803,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # republish raises.
                 try:
                     ch.basic_ack(delivery_tag=method.delivery_tag)
-                except Exception:
+                except (OSError, ConnectionError, RuntimeError):
                     pass
                 retry_scheduled = False
                 try:
@@ -858,7 +858,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             self.info(f"AMQPDriver: received {sig_name}, stopping consumer gracefully…")
             try:
                 channel.stop_consuming()
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError):
                 pass
 
         prev_term = signal.signal(signal.SIGTERM, _graceful_stop)
@@ -876,7 +876,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 channel.close()
                 connection.close()
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
 
     @staticmethod
@@ -888,7 +888,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
             if isinstance(instance, UniqueJob):
                 UniqueJob.release_unique_lock(instance.unique_id())
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             pass
 
     @staticmethod
@@ -899,7 +899,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             from cara.queues.Batch import auto_dispatch_batch_completion
 
             auto_dispatch_batch_completion(instance, exception)
-        except Exception:
+        except (ImportError, OSError, ConnectionError, RuntimeError):
             pass
 
     def _create_job_record(self, job, job_id: str, opts: dict[str, Any]) -> int | None:
@@ -1004,7 +1004,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 self.channel.close()
                 self.connection.close()
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
 
         except Exception as e:
@@ -1039,10 +1039,10 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # Decode payload
                 try:
                     payload = pickle.loads(body)
-                except Exception:
+                except (pickle.UnpicklingError, ImportError, AttributeError, EOFError, ValueError):
                     try:
                         payload = json.loads(body.decode("utf-8"))
-                    except Exception:
+                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
                         payload = {"raw": body.decode("utf-8", errors="ignore")}
 
                 messages.append(
@@ -1064,7 +1064,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 self.channel.close()
                 self.connection.close()
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
 
         except Exception as e:
@@ -1150,12 +1150,12 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 if self.channel is not None:
                     self.channel.close()
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
             try:
                 if self.connection is not None:
                     self.connection.close()
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
             self.channel = None
             self.connection = None
@@ -1281,7 +1281,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 try:
                     self.channel = self.connection.channel()
                     self.channel.confirm_delivery()
-                except Exception:
+                except (OSError, ConnectionError, RuntimeError):
                     self._connect(opts)
                 self.channel.queue_declare(
                     queue=queue_name,
@@ -1384,7 +1384,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 if self.connection.is_open and self.channel.is_open:
                     return
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
             # Stale handle — drop it and fall through.
             self._discard_thread_connection()
@@ -1399,12 +1399,12 @@ class AMQPDriver(HasColoredOutput, Queue):
                         self.connection = conn
                         self.channel = chan
                         return
-                except Exception:
+                except (OSError, ConnectionError, RuntimeError, AttributeError):
                     pass
                 # Stale entry — close and try the next.
                 try:
                     conn.close()
-                except Exception:
+                except (OSError, ConnectionError, RuntimeError, AttributeError):
                     pass
 
         # Pool empty / nothing healthy — open a fresh connection.
@@ -1424,7 +1424,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             if not (conn.is_open and chan.is_open):
                 conn.close()
                 return
-        except Exception:
+        except (OSError, ConnectionError, RuntimeError, AttributeError):
             return
 
         with self._pool_lock:
@@ -1432,7 +1432,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             if len(pool) >= self._max_pool_per_url:
                 try:
                     conn.close()
-                except Exception:
+                except (OSError, ConnectionError, RuntimeError, AttributeError):
                     pass
                 return
             pool.append((conn, chan))
@@ -1447,7 +1447,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 if handle is not None:
                     handle.close()
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
 
     def _connect(self, opts: dict[str, Any]) -> None:
@@ -1461,7 +1461,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 if self.connection.is_open and self.channel.is_open:
                     return
-            except Exception:
+            except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
         self.connection, self.channel = self._open_new_connection(opts)
 

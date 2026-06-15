@@ -7,6 +7,7 @@ Clean, focused JWT authentication with all functionality in a single class.
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from contextvars import ContextVar
 from typing import Any
@@ -30,6 +31,15 @@ from cara.facades import Cache
 # header (cross-request identity leak under concurrency).
 _REQUEST_USER: ContextVar[Any] = ContextVar("jwt_guard_user", default=None)
 _REQUEST_TOKEN: ContextVar[Any] = ContextVar("jwt_guard_token", default=None)
+
+_logger = logging.getLogger("cara.auth.jwt")
+
+_AUTH_FAILURES = (
+    TokenInvalidException,
+    TokenExpiredException,
+    TokenBlacklistedException,
+    UserNotFoundException,
+)
 
 # Token type claims — tokens carry `typ` so an access token can't be
 # swapped in where a refresh token is required (and vice versa).
@@ -118,7 +128,14 @@ class JWTGuard(Guard):
         """Check if the current request is authenticated."""
         try:
             return self.user() is not None
+        except _AUTH_FAILURES:
+            _logger.debug("JWT authentication check failed", exc_info=True)
+            return False
         except Exception:
+            _logger.warning(
+                "JWT authentication check failed unexpectedly",
+                exc_info=True,
+            )
             return False
 
     def guest(self) -> bool:
@@ -177,6 +194,10 @@ class JWTGuard(Guard):
 
             return False
         except Exception:
+            _logger.warning(
+                "JWT credential authentication failed unexpectedly",
+                exc_info=True,
+            )
             return False
 
     def login(self, user: Authenticatable) -> str:
@@ -200,7 +221,14 @@ class JWTGuard(Guard):
         try:
             user = self._resolve_user_from_token(token)
             return user is not None
+        except _AUTH_FAILURES:
+            _logger.debug("JWT token validation failed", exc_info=True)
+            return False
         except Exception:
+            _logger.warning(
+                "JWT token validation failed unexpectedly",
+                exc_info=True,
+            )
             return False
 
     def resolve_refresh_token_user(self, token: str) -> Any | None:
@@ -213,7 +241,14 @@ class JWTGuard(Guard):
             if payload.get("typ") != TOKEN_TYPE_REFRESH:
                 return None
             return self._resolve_user_by_id(user_id, payload)
+        except _AUTH_FAILURES:
+            _logger.debug("Refresh token user resolution failed", exc_info=True)
+            return None
         except Exception:
+            _logger.warning(
+                "Refresh token user resolution failed unexpectedly",
+                exc_info=True,
+            )
             return None
 
     def blacklist_token(self, token: str) -> None:
@@ -255,7 +290,14 @@ class JWTGuard(Guard):
                 # than write a zero-TTL key that vanishes immediately.
                 return False
             return bool(Cache.add(f"jwt_blacklist:{_hash_token(token)}", True, ttl))
+        except (jwt.InvalidTokenError, jwt.ExpiredSignatureError):
+            _logger.debug("Refresh token consume failed", exc_info=True)
+            return False
         except Exception:
+            _logger.warning(
+                "Refresh token consume failed unexpectedly",
+                exc_info=True,
+            )
             return False
 
     def validate_refresh_token(self, token: str) -> bool:
@@ -269,8 +311,7 @@ class JWTGuard(Guard):
                 return False
 
             # Enforce token-type claim: a leaked access token must not be
-            # usable as a refresh token. We treat legacy tokens without a
-            # `typ` claim as invalid for refresh (they must re-auth).
+            # usable as a refresh token.
             if payload.get("typ") != TOKEN_TYPE_REFRESH:
                 return False
 
@@ -288,7 +329,14 @@ class JWTGuard(Guard):
             # Resolve user
             user = self._resolve_user_by_id(user_id, payload)
             return user is not None
+        except _AUTH_FAILURES:
+            _logger.debug("Refresh token validation failed", exc_info=True)
+            return False
         except Exception:
+            _logger.warning(
+                "Refresh token validation failed unexpectedly",
+                exc_info=True,
+            )
             return False
 
     def refresh(self) -> str:
@@ -391,7 +439,14 @@ class JWTGuard(Guard):
             if header_value[:prefix_len].lower() != self.header_prefix.lower():
                 return None
             return header_value[prefix_len + 1 :]
+        except (LookupError, RuntimeError):
+            _logger.debug("No request context for JWT extraction", exc_info=True)
+            return None
         except Exception:
+            _logger.warning(
+                "JWT token extraction failed unexpectedly",
+                exc_info=True,
+            )
             return None
 
     def _resolve_user_from_token(self, token: str) -> Any | None:
@@ -401,15 +456,10 @@ class JWTGuard(Guard):
         rejects access tokens passed to ``/auth/refresh`` via the
         symmetric ``typ == refresh`` check, but the inverse — a
         refresh token presented in the ``Authorization`` header on
-        any auth-protected route — was previously accepted as if it
-        were an access token. Refresh tokens carry a much longer
-        lifetime (3 days vs. 30 minutes for access) and are intended
-        for the single ``/refresh`` endpoint only, so accepting one
-        as an access token effectively extended every authenticated
-        session by the refresh TTL. We treat legacy tokens without a
-        ``typ`` claim as access tokens for backwards compatibility —
-        the field was added recently and any in-flight token at
-        rollout will still resolve.
+        any auth-protected route — must not authenticate as an access
+        token. Refresh tokens carry a much longer lifetime and are
+        intended for the single ``/refresh`` endpoint only. Tokens
+        without a ``typ`` claim are rejected.
         """
         try:
             payload = self._decode_token(token)
@@ -418,13 +468,19 @@ class JWTGuard(Guard):
             if not user_id:
                 return None
 
-            typ = payload.get("typ")
-            if typ is not None and typ != TOKEN_TYPE_ACCESS:
+            if payload.get("typ") != TOKEN_TYPE_ACCESS:
                 return None
 
             user = self._resolve_user_by_id(user_id, payload)
             return user
+        except _AUTH_FAILURES:
+            _logger.debug("JWT user resolution from token failed", exc_info=True)
+            return None
         except Exception:
+            _logger.warning(
+                "JWT user resolution from token failed unexpectedly",
+                exc_info=True,
+            )
             return None
 
     def _resolve_user_by_id(
@@ -449,6 +505,10 @@ class JWTGuard(Guard):
             return user
 
         except Exception:
+            _logger.warning(
+                "JWT user resolution by ID failed unexpectedly",
+                exc_info=True,
+            )
             return None
 
     def _validate_password(self, user: Any, password: str) -> bool:
@@ -462,6 +522,10 @@ class JWTGuard(Guard):
                 return Hash.check(password, user.get_auth_password())
             return False
         except Exception:
+            _logger.warning(
+                "JWT password validation failed unexpectedly",
+                exc_info=True,
+            )
             return False
 
     def _decode_token(self, token: str, verify_exp: bool = True) -> dict[str, Any]:
@@ -702,6 +766,10 @@ class JWTGuard(Guard):
         try:
             return Cache.get(f"jwt_blacklist:{_hash_token(token)}", False)
         except Exception:
+            _logger.warning(
+                "JWT blacklist check failed unexpectedly",
+                exc_info=True,
+            )
             return False
 
     def _load_user_class(self, user_model: str):

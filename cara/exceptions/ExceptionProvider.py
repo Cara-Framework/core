@@ -8,7 +8,16 @@ escaping the HTTP conductor is forwarded to that handler.
 from __future__ import annotations
 
 from cara.exceptions.handlers import DefaultExceptionHandler
-from cara.foundation import Provider
+
+# Direct submodule import — NOT ``from cara.foundation import Provider``.
+# ``cara.exceptions`` is pulled in DURING ``cara.foundation`` boot (via
+# ``cara.environment``), so the foundation package is mid-init and its
+# namespace hasn't bound the ``Provider`` CLASS yet — the package import would
+# resolve to the SUBMODULE and ``class ExceptionProvider(Provider)`` would
+# raise "module() takes at most 2 arguments". Importing the submodule directly
+# loads ``Provider`` (which only depends on ``abc``) regardless of the
+# foundation package's init state.
+from cara.foundation.Provider import Provider
 
 
 class ExceptionProvider(Provider):

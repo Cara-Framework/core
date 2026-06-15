@@ -43,10 +43,9 @@ _DEFAULT_CACHE: str | None = None
 # code as a prefix (``"PLN 50.00"``) — explicit and unambiguous.
 _CURRENCY_SYMBOLS = {
     "USD": "$",
-    "CAD": "$",  # Canadian dollar shares the symbol — recipients
-    # already see it on their localised storefront.
-    "AUD": "$",
-    "MXN": "$",
+    "CAD": "CA$",
+    "AUD": "A$",
+    "MXN": "MX$",
     "EUR": "€",
     "GBP": "£",
     "JPY": "¥",
@@ -54,7 +53,7 @@ _CURRENCY_SYMBOLS = {
     "TRY": "₺",
     "INR": "₹",
     "BRL": "R$",
-    "CHF": "CHF ",  # No common single-char symbol — prefix.
+    "CHF": "CHF ",
 }
 
 

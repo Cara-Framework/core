@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.validation.rules import BaseRule
+from cara.validation.rules.BaseRule import BaseRule
 
 
 class MaxRule(BaseRule):

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.view import ViewEngine
+from cara.view.ViewEngine import ViewEngine
 
 
 class ViewRenderer:

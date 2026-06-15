@@ -4,6 +4,8 @@ WebSocket Exception Types for the Cara framework.
 This module defines exception types related to WebSocket operations.
 """
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

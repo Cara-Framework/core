@@ -4,6 +4,8 @@ Rate Limiting Exception Type for the Cara framework.
 This module defines exception types related to rate limiting operations.
 """
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

@@ -16,8 +16,8 @@ from .ContentTypeDetector import ContentTypeDetector
 from .HeaderManager import HeaderManager
 from .Response import Response
 from .ResponseFactory import ResponseFactory
-from .ResponseProvider import ResponseProvider
 from .StreamingResponse import StreamingResponse
+from .ResponseProvider import ResponseProvider
 
 __all__ = [
     "BaseResponse",

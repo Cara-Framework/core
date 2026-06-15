@@ -18,9 +18,8 @@ derived from the application secret (``config("app.key")`` or
 ``APP_KEY`` env var); a missing key triggers an auto-generated
 per-process ephemeral key with a clear log warning so dev still works.
 
-Files written under the legacy plain-pickle format are detected (no
-HMAC prefix) and rejected as cache misses, so a deploy can roll out
-without a full cache flush.
+Files with a missing or invalid HMAC tag are deleted on read and
+treated as cache misses.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import hmac
+import logging
 import os
 import pickle
 import re
@@ -39,6 +39,8 @@ from typing import Any
 from cara.cache.contracts import Cache
 from cara.exceptions import CacheConfigurationException, ConfigurationException
 from cara.facades import Log
+
+_logger = logging.getLogger("cara.cache.file")
 
 # Anything outside this whitelist gets replaced before being used in a
 # filename. Keeping ``:`` (Cara cache key separator) and ``-`` / ``.``
@@ -92,6 +94,7 @@ def _resolve_hmac_key() -> bytes:
 
         secret = config("cache.integrity_key") or config("app.key") or None
     except Exception:
+        _logger.debug("config unavailable during boot", exc_info=True)
         secret = None
 
     if not secret:
@@ -340,11 +343,8 @@ class FileCacheDriver(Cache):
         payload whose HMAC tag doesn't match, so an attacker who
         gains write access to the cache directory can't pivot to RCE.
 
-        Backwards-compat: legacy plain-pickle files (no HMAC prefix)
-        are detected by reading the first 32 bytes and treating any
-        validation failure as a cache miss. The next ``put`` rewrites
-        the file in the new format. No flush is required during a
-        rolling deploy.
+        Files with missing/invalid HMAC or corrupt payloads are deleted
+        and treated as cache misses.
         """
         try:
             with open(file_path, "rb") as f:
@@ -353,20 +353,21 @@ class FileCacheDriver(Cache):
             return False, None, None
 
         if len(blob) <= _HMAC_TAG_LEN:
+            self._delete_file(file_path)
             return False, None, None
 
         tag = blob[:_HMAC_TAG_LEN]
         payload = blob[_HMAC_TAG_LEN:]
         expected = hmac.new(_resolve_hmac_key(), payload, hashlib.sha256).digest()
         if not hmac.compare_digest(tag, expected):
-            # Either tampering, a legacy plain-pickle file, or the app
-            # secret rotated. None of those should reach pickle.loads.
+            self._delete_file(file_path)
             return False, None, None
 
         try:
             expires_at, value = pickle.loads(payload)
             return True, expires_at, value
         except Exception:
+            self._delete_file(file_path)
             return False, None, None
 
     def _write_file(
@@ -408,6 +409,7 @@ class FileCacheDriver(Cache):
         except FileNotFoundError:
             return False
         except Exception:
+            _logger.warning("cache file deletion failed", exc_info=True)
             return False
 
     def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:

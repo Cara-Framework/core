@@ -158,7 +158,7 @@ class WithoutOverlapping:
             finally:
                 try:
                     cache.forget(redis_key)
-                except Exception:
+                except (OSError, ConnectionError, TimeoutError, RuntimeError):
                     # TTL on the key still bounds the lock if forget fails.
                     pass
             return None  # unreachable, satisfies type-checkers
@@ -205,7 +205,7 @@ class WithoutOverlapping:
             # to the in-memory implementation rather than failing the job.
             Cache.has("__cara_overlap_probe__")
             return Cache
-        except Exception:
+        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             return None
 
     def _try_acquire_redis(self, cache, redis_key: str) -> bool:
@@ -219,7 +219,7 @@ class WithoutOverlapping:
         if callable(add):
             try:
                 return bool(add(redis_key, "1", self.expire_after))
-            except Exception:
+            except (OSError, ConnectionError, TimeoutError, RuntimeError):
                 pass
 
         # Fallback path — has + put. Subject to a TOCTOU window between
@@ -230,7 +230,7 @@ class WithoutOverlapping:
                 return False
             cache.put(redis_key, "1", self.expire_after)
             return True
-        except Exception:
+        except (OSError, ConnectionError, TimeoutError, RuntimeError):
             return False
 
     @staticmethod

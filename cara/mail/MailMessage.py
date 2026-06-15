@@ -7,7 +7,7 @@ creating custom Mailable classes.
 
 from __future__ import annotations
 
-from cara.mail import Mailable
+from cara.mail.Mailable import Mailable
 
 
 class MailMessage:

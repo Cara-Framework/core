@@ -145,7 +145,7 @@ class Bus:
                 if isinstance(job, UniqueJob):
                     try:
                         UniqueJob.release_unique_lock(job.unique_id())
-                    except Exception:
+                    except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
                         pass
                 raise
 
@@ -308,7 +308,7 @@ class Bus:
             return None
         try:
             return builtins.app()
-        except Exception:
+        except (TypeError, AttributeError, RuntimeError):
             return None
 
     @staticmethod

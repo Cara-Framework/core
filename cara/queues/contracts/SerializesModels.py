@@ -107,7 +107,7 @@ class SerializesModels:
         # Fallback: convert to string
         try:
             return str(value)
-        except Exception:
+        except (TypeError, ValueError, RuntimeError, RecursionError):
             return None
 
     def _serialize_object(self, obj: Any) -> dict[str, Any]:
@@ -136,7 +136,7 @@ class SerializesModels:
 
             try:
                 serialized[key] = self._serialize_property(value)
-            except Exception:  # Skip if can't serialize
+            except (TypeError, ValueError, RuntimeError, RecursionError, AttributeError):
                 continue
 
         return serialized
@@ -193,7 +193,7 @@ class SerializesModels:
 
             module = __import__(module_name, fromlist=[class_name])
             return getattr(module, class_name)
-        except Exception:  # Fallback: return a dummy class
+        except (ImportError, AttributeError, KeyError, TypeError):
             return type("DummyClass", (), {})
 
     def _deserialize_object(self, data: dict[str, Any]) -> Any:
@@ -218,23 +218,23 @@ class SerializesModels:
                 try:
                     # Try with empty constructor
                     obj = cls()
-                except Exception:
+                except (TypeError, ValueError, RuntimeError, AttributeError):
                     try:
                         # Try with data as dict
                         obj = cls(obj_data)
-                    except Exception:  # Create minimal instance
+                    except (TypeError, ValueError, RuntimeError, AttributeError):
                         obj = cls.__new__(cls)
 
             # Set attributes
             for key, value in obj_data.items():
                 try:
                     setattr(obj, key, self._deserialize_property(value))
-                except Exception:
+                except (TypeError, ValueError, AttributeError):
                     continue
 
             return obj
 
-        except Exception:
+        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError):
             # Fallback: create a mock object
             class MockObject:
                 def __init__(self, data):

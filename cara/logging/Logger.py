@@ -14,7 +14,7 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
-from cara.logging import CategoryFilter
+from cara.logging.CategoryFilter import CategoryFilter
 from cara.logging.contracts import Logger
 from cara.logging.HttpColorizer import HttpColorizer
 

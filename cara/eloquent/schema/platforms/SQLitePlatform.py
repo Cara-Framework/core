@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from ...schema import Schema
 from ..Table import Table
 from .Platform import Platform

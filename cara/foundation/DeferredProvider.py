@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from abc import abstractmethod
 
-from cara.foundation import Provider
+# Direct module import — NOT ``from cara.foundation import Provider``. This
+# module is imported while ``cara.foundation.__init__`` is still executing, so
+# the package namespace doesn't yet bind the ``Provider`` CLASS and the package
+# import resolves to the SUBMODULE instead — ``class DeferredProvider(Provider)``
+# then raises "module() takes at most 2 arguments (3 given)". The direct path
+# is immune to ``__init__`` import ordering.
+from cara.foundation.Provider import Provider
 
 
 class DeferredProvider(Provider):

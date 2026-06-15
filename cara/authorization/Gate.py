@@ -1,9 +1,28 @@
-"""
-Authorization Gate - Centralized authorization logic for Cara framework.
+"""Authorization Gate — centralized authorization for the Cara framework.
+
+Laravel-style API: define abilities, register model policies, then check with
+``allows`` / ``denies`` / ``authorize`` / ``inspect`` / ``any`` / ``none``.
+
+Design
+------
+* **One resolution path.** Every public check funnels through ``_resolve`` so
+  before/after callbacks, guest handling, response normalization and logging
+  behave identically regardless of how the check was invoked.
+* **Rich responses.** Abilities and policy methods may return a ``bool`` *or* an
+  :class:`AuthorizationResponse`, so a policy can attach a denial message that
+  surfaces through ``inspect()`` and the exception raised by ``authorize()``.
+* **Fails closed, fails loud.** Any exception while *evaluating* a check is
+  logged and treated as a denial (safe). Misconfiguration while *registering* a
+  policy raises immediately at boot (loud) — a silently-dropped policy is a
+  security hole.
+* **Per-request scoping.** ``for_user(user)`` returns a lightweight view that
+  shares the root gate's registries (registration happens once at boot) and
+  only overrides the resolved user. Cheap enough to call per request.
 """
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -11,317 +30,296 @@ from cara.authorization.AuthorizationResponse import AuthorizationResponse
 from cara.authorization.contracts import Gate as GateContract
 from cara.exceptions import AuthorizationFailedException
 
+# Sentinel separating "no decision" (None) from an explicit deny when a
+# before/after callback or policy hook returns a value.
+_UNAUTHENTICATED = "Unauthenticated."
+
 
 class Gate(GateContract):
-    """Gate for authorization checks with Laravel-style API."""
+    """Authorization gate with a Laravel-style fluent API."""
 
-    def __init__(self, user_resolver: Callable | None = None):
+    def __init__(self, user_resolver: Callable[[], Any] | None = None):
         self._user_resolver = user_resolver
         self._abilities: dict[str, Callable | str] = {}
         self._policies: dict[str, str] = {}
+        self._policy_cache: dict[str, Any] = {}
         self._before_callbacks: list[Callable] = []
         self._after_callbacks: list[Callable] = []
-        self._current_user: Any | None = None
+        self._current_user: Any = None
 
-    def before(self, callback: Callable) -> None:
-        """Register a callback to be called before authorization checks."""
+    # -- configuration ----------------------------------------------------- #
+
+    def before(self, callback: Callable) -> Gate:
+        """Register a callback run before every check. Return ``True``/``False``
+        to short-circuit, or ``None`` to defer to the ability/policy."""
         self._before_callbacks.append(callback)
+        return self
 
-    def after(self, callback: Callable) -> None:
-        """Register a callback to be called after authorization checks."""
+    def after(self, callback: Callable) -> Gate:
+        """Register a callback run after every check. Return ``True``/``False``
+        to override the result, or ``None`` to keep it."""
         self._after_callbacks.append(callback)
+        return self
 
-    def define(self, ability: str, callback: Callable | str) -> None:
-        """Define a new ability."""
+    def define(self, ability: str, callback: Callable | str) -> Gate:
+        """Define a standalone ability.
+
+        ``callback`` is either a callable ``(user, *args) -> bool | Response`` or
+        a ``"module.path.PolicyClass@method"`` string.
+        """
         self._abilities[ability] = callback
+        return self
 
-    def register_policies(self, policies: list[tuple]) -> None:
-        """
-        Register multiple policies with model binding.
+    def policy(self, model_class: Any, policy_class: Any) -> Gate:
+        """Bind one policy class to one model class."""
+        model_name = self._model_name(model_class)
+        if not model_name:
+            raise TypeError(f"Cannot derive a model name from {model_class!r}")
+        policy_path = self._policy_path(policy_class)
+        if not policy_path:
+            raise TypeError(f"Cannot derive a policy path from {policy_class!r}")
+        self._policies[model_name] = policy_path
+        return self
 
-        Args:
-            policies: List of (Model, PolicyClass) tuples
-        """
-        for model_class, policy_class in policies:
+    def register_policies(self, policies: list[tuple]) -> Gate:
+        """Bind multiple ``(Model, Policy)`` tuples. Raises on malformed input."""
+        for entry in policies:
             try:
-                # Get model name from class
-                model_name = (
-                    model_class.__name__.lower()
-                    if hasattr(model_class, "__name__")
-                    else str(model_class).lower()
-                )
+                model_class, policy_class = entry
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    "register_policies expects (Model, Policy) tuples, got: "
+                    f"{entry!r}"
+                ) from exc
+            self.policy(model_class, policy_class)
+        return self
 
-                # Get policy class path
-                if hasattr(policy_class, "__module__") and hasattr(
-                    policy_class, "__name__"
-                ):
-                    policy_path = f"{policy_class.__module__}.{policy_class.__name__}"
-                else:
-                    policy_path = str(policy_class)
+    def has(self, ability: str) -> bool:
+        """Whether a standalone ability has been defined."""
+        return ability in self._abilities
 
-                # Register the policy
-                self._policies[model_name] = policy_path
-
-            except Exception as exc:
-                import sys
-
-                print(
-                    f"[cara.authorization] Policy registration skipped for "
-                    f"{model_class}: {exc}",
-                    file=sys.stderr,
-                )
-                continue
+    # -- checks ------------------------------------------------------------ #
 
     def allows(self, ability: str, *args: Any) -> bool:
-        """Check if the current user is authorized for the given ability."""
-        user = self._resolve_user()
+        """``True`` if the current user may perform ``ability``."""
+        return self._resolve(self._resolve_user(), ability, *args).allowed()
 
-        # Run before callbacks
-        for callback in self._before_callbacks:
-            try:
-                result = callback(user, ability, *args)
-                if result is True:
-                    self._run_after_callbacks(user, ability, True, *args)
-                    return True
-                elif result is False:
-                    self._run_after_callbacks(user, ability, False, *args)
-                    return False
-                # Continue if result is None
-            except Exception as exc:
-                import sys
-
-                print(
-                    f"[cara.authorization] before-callback failed for "
-                    f"ability='{ability}': {exc}",
-                    file=sys.stderr,
-                )
-                continue
-
-        # Guest users are not authorized by default
-        if user is None:
-            result = False
-        else:
-            # Check if it's a model-based ability
-            result = self._check_model_ability(ability, user, *args)
-
-        # Run after callbacks
-        self._run_after_callbacks(user, ability, result, *args)
-        return result
-
-    def denies(self, ability: str, *args) -> bool:
-        """Check if the current user is denied the given ability."""
+    def denies(self, ability: str, *args: Any) -> bool:
+        """``True`` if the current user may *not* perform ``ability``."""
         return not self.allows(ability, *args)
 
-    def any(self, abilities: list[str], *args) -> bool:
-        """Check if the current user has any of the given abilities."""
-        return any(self.allows(ability, *args) for ability in abilities)
+    def check(self, ability: str, *args: Any) -> bool:
+        """Alias of :meth:`allows`."""
+        return self.allows(ability, *args)
 
-    def none(self, abilities: list[str], *args) -> bool:
-        """Check if the current user has none of the given abilities."""
-        return not any(self.allows(ability, *args) for ability in abilities)
-
-    def inspect(self, ability: str, *args) -> AuthorizationResponse:
-        """Inspect the authorization result with detailed response."""
+    def any(self, abilities: list[str], *args: Any) -> bool:
+        """``True`` if the user has *any* of ``abilities``."""
         user = self._resolve_user()
+        return any(self._resolve(user, a, *args).allowed() for a in abilities)
 
-        # Check authorization
-        allowed = self.allows(ability, *args)
+    def none(self, abilities: list[str], *args: Any) -> bool:
+        """``True`` if the user has *none* of ``abilities``."""
+        return not self.any(abilities, *args)
 
-        # Create detailed message
-        if allowed:
-            message = f"User authorized for '{ability}'"
-            if user:
-                message += f" (user: {getattr(user, 'id', 'unknown')})"
-        else:
-            message = f"User not authorized for '{ability}'"
-            if user is None:
-                message += " (no authenticated user)"
-            else:
-                message += f" (user: {getattr(user, 'id', 'unknown')})"
+    def inspect(self, ability: str, *args: Any) -> AuthorizationResponse:
+        """Return the full :class:`AuthorizationResponse` (with message)."""
+        return self._resolve(self._resolve_user(), ability, *args)
 
-        return AuthorizationResponse(allowed, message)
-
-    def authorize(self, ability: str, *args) -> None:
-        """Authorize the given ability or raise an exception."""
-        if not self.allows(ability, *args):
-            user = self._resolve_user()
-            resource = args[0] if args else None
-
+    def authorize(self, ability: str, *args: Any) -> AuthorizationResponse:
+        """Authorize or raise :class:`AuthorizationFailedException`."""
+        user = self._resolve_user()
+        response = self._resolve(user, ability, *args)
+        if response.denied():
             raise AuthorizationFailedException(
-                message=f"This action is unauthorized. Missing ability: {ability}",
+                message=response.message()
+                or f"This action is unauthorized. Missing ability: {ability}",
                 ability=ability,
                 user=user,
-                resource=resource,
+                resource=args[0] if args else None,
             )
+        return response
 
     def for_user(self, user: Any) -> Gate:
-        """Get a gate instance for the given user."""
-        gate = Gate(self._user_resolver)
-        gate._abilities = self._abilities.copy()
-        gate._policies = self._policies.copy()
-        gate._before_callbacks = self._before_callbacks.copy()
-        gate._after_callbacks = self._after_callbacks.copy()
-        gate._current_user = user
-        return gate
+        """Return a user-scoped view sharing this gate's registries."""
+        scoped = Gate(self._user_resolver)
+        # Share by reference: registration only happens on the root (singleton)
+        # gate at boot, so scoped per-request gates stay read-only and cheap.
+        scoped._abilities = self._abilities
+        scoped._policies = self._policies
+        scoped._policy_cache = self._policy_cache
+        scoped._before_callbacks = self._before_callbacks
+        scoped._after_callbacks = self._after_callbacks
+        scoped._current_user = user
+        return scoped
 
-    def _check_model_ability(self, ability: str, user: Any, *args) -> bool:
-        """Check model-based ability using policies."""
-        # Direct ability check
+    # -- resolution -------------------------------------------------------- #
+
+    def _resolve(self, user: Any, ability: str, *args: Any) -> AuthorizationResponse:
+        """The single resolution path shared by every public check."""
+        # 1) before callbacks may short-circuit (e.g. a root-user bypass).
+        for callback in self._before_callbacks:
+            try:
+                decision = callback(user, ability, *args)
+            except Exception as exc:  # noqa: BLE001 — log and skip a bad guard
+                self._log(f"before-callback failed for ability='{ability}': {exc}")
+                continue
+            if decision is not None:
+                return self._run_after(user, ability, self._normalize(decision), *args)
+
+        # 2) Guests are denied by default unless a before-callback allowed them.
+        if user is None:
+            response = AuthorizationResponse(False, _UNAUTHENTICATED)
+        else:
+            response = self._evaluate(user, ability, *args)
+
+        # 3) after callbacks may override the result.
+        return self._run_after(user, ability, response, *args)
+
+    def _evaluate(self, user: Any, ability: str, *args: Any) -> AuthorizationResponse:
+        """Resolve a non-guest check against a defined ability or model policy."""
         if ability in self._abilities:
             return self._call_ability(self._abilities[ability], user, ability, *args)
 
-        # Model-based ability check
-        if args and hasattr(args[0], "__class__"):
-            # Get model name from instance
-            model_name = args[0].__class__.__name__.lower()
-        elif args and hasattr(args[0], "__name__"):
-            # Get model name from class
-            model_name = args[0].__name__.lower()
-        else:
-            return False
+        model_name = self._model_name(args[0]) if args else None
+        if model_name and model_name in self._policies:
+            return self._call_policy(self._policies[model_name], ability, user, *args)
 
-        # Find policy for model
-        if model_name in self._policies:
-            policy_class = self._policies[model_name]
-            return self._call_policy_method(policy_class, ability, user, *args)
+        return AuthorizationResponse(
+            False, f"No ability or policy is registered for '{ability}'."
+        )
 
-        return False
-
-    def _resolve_user(self) -> Any | None:
-        """Resolve the current user."""
-        if self._current_user is not None:
-            return self._current_user
-
-        if self._user_resolver:
-            try:
-                return self._user_resolver()
-            except Exception as exc:
-                import sys
-
-                print(
-                    f"[cara.authorization] user resolver failed: {exc}",
-                    file=sys.stderr,
-                )
-                return None
-
-        return None
-
-    def _run_after_callbacks(self, user: Any, ability: str, result: bool, *args: Any) -> None:
-        """Run after callbacks."""
+    def _run_after(
+        self, user: Any, ability: str, response: AuthorizationResponse, *args: Any
+    ) -> AuthorizationResponse:
         for callback in self._after_callbacks:
             try:
-                callback(user, ability, result, *args)
-            except Exception as exc:
-                import sys
-
-                print(
-                    f"[cara.authorization] after-callback failed for "
-                    f"ability='{ability}': {exc}",
-                    file=sys.stderr,
-                )
+                override = callback(user, ability, response.allowed(), *args)
+            except Exception as exc:  # noqa: BLE001 — log and skip a bad guard
+                self._log(f"after-callback failed for ability='{ability}': {exc}")
                 continue
+            if override is not None:
+                response = self._normalize(override)
+        return response
 
     def _call_ability(
         self, callback: Callable | str, user: Any, ability: str, *args: Any
-    ) -> bool:
-        """Call an ability callback."""
+    ) -> AuthorizationResponse:
         try:
-            if callable(callback):
-                return bool(callback(user, *args))
-            elif isinstance(callback, str) and "@" in callback:
-                class_name, method_name = callback.split("@", 1)
-                return self._call_policy_method(class_name, method_name, user, *args)
-            return False
-        except Exception as exc:
-            import sys
+            if isinstance(callback, str):
+                class_path, _, method = callback.partition("@")
+                return self._call_policy(class_path, method or ability, user, *args)
+            return self._normalize(callback(user, *args))
+        except Exception as exc:  # noqa: BLE001 — fail closed
+            self._log(f"ability '{ability}' evaluation failed: {exc}")
+            return AuthorizationResponse(False, "Authorization check failed.")
 
-            print(
-                f"[cara.authorization] ability '{ability}' evaluation failed: {exc}",
-                file=sys.stderr,
+    def _call_policy(
+        self, policy_path: str, method: str, user: Any, *args: Any
+    ) -> AuthorizationResponse:
+        try:
+            policy = self._instantiate_policy(policy_path)
+        except Exception as exc:  # noqa: BLE001 — fail closed
+            self._log(f"policy '{policy_path}' could not be instantiated: {exc}")
+            return AuthorizationResponse(False, "Authorization check failed.")
+
+        # policy.before hook may short-circuit.
+        before = getattr(policy, "before", None)
+        if callable(before):
+            pre = self._safe_hook(before, policy, "before", user, method, *args)
+            if pre is not None:
+                return self._normalize(pre)
+
+        handler = getattr(policy, method, None)
+        if not callable(handler):
+            return AuthorizationResponse(
+                False, f"{type(policy).__name__} has no '{method}' ability."
             )
-            return False
 
-    def _call_policy_method(
-        self, policy_class: str, method: str, user: Any, *args
-    ) -> bool:
-        """Call a policy method."""
         try:
-            policy_instance = self._instantiate_policy(policy_class)
+            result = handler(user, *args)
+        except Exception as exc:  # noqa: BLE001 — fail closed
+            self._log(f"policy '{method}' on {type(policy).__name__} raised: {exc}")
+            return AuthorizationResponse(False, "Authorization check failed.")
 
-            if not hasattr(policy_instance, method):
-                return False
+        response = self._normalize(result)
 
-            # Call before method if exists
-            if hasattr(policy_instance, "before"):
-                try:
-                    before_result = policy_instance.before(user, method, *args)
-                    if before_result is not None:
-                        return bool(before_result)
-                except Exception as exc:
-                    self._log_policy_hook_error("before", policy_instance, method, exc)
+        # policy.after hook may override.
+        after = getattr(policy, "after", None)
+        if callable(after):
+            post = self._safe_hook(
+                after, policy, "after", user, method, response.allowed(), *args
+            )
+            if post is not None:
+                response = self._normalize(post)
+        return response
 
-            # Call the ability method
-            method_func = getattr(policy_instance, method)
-            result = method_func(user, *args)
+    def _safe_hook(
+        self, hook: Callable, policy: Any, kind: str, *hook_args: Any
+    ) -> Any:
+        try:
+            return hook(*hook_args)
+        except Exception as exc:  # noqa: BLE001 — a bad hook must not crash a check
+            self._log(
+                f"policy {kind}-hook on {type(policy).__name__} raised: {exc}"
+            )
+            return None
 
-            # Call after method if exists
-            if hasattr(policy_instance, "after"):
-                try:
-                    after_result = policy_instance.after(
-                        user, method, bool(result), *args
-                    )
-                    if after_result is not None:
-                        return bool(after_result)
-                except Exception as exc:
-                    self._log_policy_hook_error("after", policy_instance, method, exc)
+    def _instantiate_policy(self, policy_path: str) -> Any:
+        cached = self._policy_cache.get(policy_path)
+        if cached is not None:
+            return cached
 
-            return bool(result)
+        if "." in policy_path:
+            module_path, class_name = policy_path.rsplit(".", 1)
+        else:
+            module_path, class_name = "app.policies", policy_path
 
-        except Exception as exc:
+        module = __import__(module_path, fromlist=[class_name])
+        policy_cls = getattr(module, class_name)
+        instance = policy_cls()
+        self._policy_cache[policy_path] = instance
+        return instance
+
+    # -- helpers ----------------------------------------------------------- #
+
+    @staticmethod
+    def _normalize(result: Any) -> AuthorizationResponse:
+        if isinstance(result, AuthorizationResponse):
+            return result
+        return AuthorizationResponse(bool(result))
+
+    @staticmethod
+    def _model_name(obj: Any) -> str | None:
+        if obj is None:
+            return None
+        if isinstance(obj, type):
+            return obj.__name__.lower()
+        cls = getattr(obj, "__class__", None)
+        return cls.__name__.lower() if cls is not None else None
+
+    @staticmethod
+    def _policy_path(policy_class: Any) -> str | None:
+        if isinstance(policy_class, str):
+            return policy_class
+        module = getattr(policy_class, "__module__", None)
+        name = getattr(policy_class, "__name__", None)
+        return f"{module}.{name}" if module and name else None
+
+    def _resolve_user(self) -> Any | None:
+        if self._current_user is not None:
+            return self._current_user
+        if self._user_resolver:
             try:
-                from cara.facades import Log
+                return self._user_resolver()
+            except Exception as exc:  # noqa: BLE001 — never let resolution crash a check
+                self._log(f"user resolver failed: {exc}")
+        return None
 
-                Log.error(
-                    f"Policy '{method}' evaluation failed: {exc}",
-                    category="cara.authorization",
-                    exc_info=True,
-                )
-            except ImportError:
-                pass
-            return False
-
-    def _log_policy_hook_error(
-        self, hook: str, policy_instance: Any, method: str, exc: Exception
-    ) -> None:
-        """Log a failure in a policy before/after hook with stderr fallback."""
-        policy_name = type(policy_instance).__name__
-        message = f"Policy {hook}-hook for '{method}' on {policy_name} raised: {exc}"
+    @staticmethod
+    def _log(message: str) -> None:
         try:
             from cara.facades import Log
 
             Log.error(message, category="cara.authorization", exc_info=True)
-        except ImportError:
-            pass
-
-    def _instantiate_policy(self, policy_class: str):
-        """Instantiate a policy class from string."""
-        try:
-            if "." in policy_class:
-                module_path, class_name = policy_class.rsplit(".", 1)
-                module = __import__(module_path, fromlist=[class_name])
-                policy_cls = getattr(module, class_name)
-            else:
-                try:
-                    module = __import__("app.policies", fromlist=[policy_class])
-                    policy_cls = getattr(module, policy_class)
-                except (ImportError, AttributeError):
-                    raise ImportError(f"Policy class {policy_class} not found")
-
-            return policy_cls()
-
-        except ImportError:
-            raise
-        except AttributeError:
-            raise
-        except Exception:
-            raise
+        except Exception:  # noqa: BLE001 — logging must never raise
+            print(f"[cara.authorization] {message}", file=sys.stderr)

@@ -93,14 +93,6 @@ class Manager:
         """True if ``name`` is currently instantiated (warm cache)."""
         return name in self._drivers
 
-    def forget_drivers(self) -> None:
-        """Discard every memoised driver — Laravel ``forgetDrivers``."""
-        self._drivers.clear()
-
-    def get_drivers(self) -> dict[str, Any]:
-        """Return a snapshot of currently-instantiated drivers."""
-        return dict(self._drivers)
-
     # ── Internals ──────────────────────────────────────────────────
 
     def _resolve(self, name: str) -> Any:

@@ -5,6 +5,8 @@ This module provides context management utilities for HTTP requests, such as sto
 request-scoped data.
 """
 
+from __future__ import annotations
+
 import contextvars
 
 current_request = contextvars.ContextVar("current_request")

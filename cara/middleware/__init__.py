@@ -1,7 +1,7 @@
 from .Middleware import Middleware, MiddlewareParameterParser
 from .MiddlewareCapsule import MiddlewareCapsule
-from .MiddlewareProvider import MiddlewareProvider
 from .MiddlewareRegistry import MiddlewareRegistry
+from .MiddlewareProvider import MiddlewareProvider
 
 __all__ = [
     "Middleware",

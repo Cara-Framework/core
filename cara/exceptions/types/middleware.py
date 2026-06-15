@@ -1,5 +1,7 @@
 """Exceptions related to Cara's middleware system."""
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

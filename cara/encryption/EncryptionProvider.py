@@ -11,7 +11,8 @@ from functools import partial
 from types import SimpleNamespace
 
 from cara.configuration import config
-from cara.encryption import Crypt, Hash
+from cara.encryption.Crypt import Crypt
+from cara.encryption.Hash import Hash
 from cara.exceptions import EncryptionException
 from cara.foundation import DeferredProvider
 

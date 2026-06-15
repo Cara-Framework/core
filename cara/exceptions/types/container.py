@@ -1,5 +1,7 @@
 """Container / dependency injection-related exceptions."""
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

@@ -8,7 +8,7 @@ fails, the ``.catch()`` callback fires once per failure.
 
 Usage::
 
-    from cara.queues import Batch
+    from cara.queues.Batch import Batch
 
     Batch([Job1(), Job2(), ...]) \\
         .then(lambda result: print("All done:", result)) \\
@@ -176,14 +176,14 @@ class BatchAware:
             # key with no expiry and the failed-counter slowly fills
             # Redis. Explicit TTL guarantees the key dies with the batch.
             Cache.increment(_batch_failed_key(batch_id), 1, Batch.BATCH_TTL)
-        except Exception:
+        except (ConnectionError, TimeoutError, OSError, RuntimeError):
             pass
 
         catch_cb = getattr(self, "_batch_catch_callback", None)
         if catch_cb:
             try:
                 catch_cb(exc, self)
-            except Exception:
+            except (TypeError, ValueError, RuntimeError):
                 pass
 
         then_cb = getattr(self, "_batch_then_callback", None)
@@ -220,7 +220,7 @@ def auto_dispatch_batch_completion(
             failed = getattr(instance, "batch_failed", None)
             if callable(failed):
                 failed(exception)
-    except Exception:
+    except (TypeError, ValueError, RuntimeError, OSError, ConnectionError):
         # Never let batch bookkeeping break the worker loop.
         pass
 
@@ -273,5 +273,5 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
         ):
             try:
                 Cache.forget(key)
-            except Exception:
+            except (ConnectionError, TimeoutError, OSError, RuntimeError):
                 pass

@@ -9,7 +9,7 @@ upstream (one breaker per Amazon API, eBay search, Stripe charge,
 
 Usage:
 
-    from cara.resilience import CircuitBreaker
+    from cara.resilience.CircuitBreaker import CircuitBreaker
 
     breaker = CircuitBreaker(
         name="amazon_api",

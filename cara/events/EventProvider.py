@@ -7,7 +7,7 @@ application.
 
 from __future__ import annotations
 
-from cara.events import Event
+from cara.events.Event import Event
 from cara.foundation import DeferredProvider
 
 

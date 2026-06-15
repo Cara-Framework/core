@@ -2,9 +2,7 @@
 
 Always uses BackgroundScheduler internally so the calling command
 retains control of the main thread (required for auto-reload, graceful
-shutdown, health-check endpoints, etc.). The ``mode`` setting in config
-is kept for backward compatibility but has no effect — background mode
-is the only sane option when the command layer manages its own loop.
+shutdown, health-check endpoints, etc.).
 
 Job registration is decoupled from scheduler lifecycle: jobs are stored
 in a local registry and (re-)applied to the underlying APScheduler
@@ -16,6 +14,7 @@ scheduler to sit idle for hours.
 from __future__ import annotations
 
 import inspect
+import logging
 import time as _time
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -23,6 +22,8 @@ from typing import Any
 from cara.exceptions import InvalidArgumentException
 from cara.facades import Log
 from cara.scheduling.contracts import Scheduling
+
+_logger = logging.getLogger("cara.scheduling")
 
 # ── Prometheus instrumentation wrapper ────────────────────────────────
 
@@ -107,7 +108,9 @@ def _wrap_without_overlapping(
                 try:
                     _Cache.forget(lock_key)
                 except Exception:
-                    pass
+                    _logger.debug(
+                        "lock release failed for %s", identifier, exc_info=True
+                    )
 
         _async_locked.__name__ = getattr(callback, "__name__", f"locked_{identifier}")
         return _async_locked
@@ -125,7 +128,9 @@ def _wrap_without_overlapping(
             try:
                 _Cache.forget(lock_key)
             except Exception:
-                pass
+                _logger.debug(
+                    "lock release failed for %s", identifier, exc_info=True
+                )
 
     _sync_locked.__name__ = getattr(callback, "__name__", f"locked_{identifier}")
     return _sync_locked
@@ -252,7 +257,7 @@ class APSchedulerDriver(Scheduling):
             try:
                 self.scheduler.remove_job(job_id=identifier)
             except Exception:
-                pass
+                _logger.debug("pre-add job removal skipped", exc_info=True)
             try:
                 self.scheduler.add_job(
                     func=instrumented,
@@ -278,7 +283,9 @@ class APSchedulerDriver(Scheduling):
             try:
                 self.scheduler.shutdown(wait=False)
             except Exception:
-                pass
+                _logger.warning(
+                    "scheduler shutdown failed during restart", exc_info=True
+                )
             self.scheduler = self._create_scheduler()
 
         # Apply every registered job to the fresh scheduler.
@@ -314,12 +321,15 @@ class APSchedulerDriver(Scheduling):
         try:
             self.scheduler.remove_job(job_id=identifier)
         except Exception:
-            pass
+            _logger.warning(
+                "job removal failed: %s", identifier, exc_info=True
+            )
 
     def list_jobs(self) -> Iterable[Any]:
         try:
             return self.scheduler.get_jobs()
         except Exception:
+            _logger.warning("list_jobs failed, returning empty", exc_info=True)
             return []
 
     # ── Trigger builders ──────────────────────────────────────────────

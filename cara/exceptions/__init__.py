@@ -27,14 +27,17 @@ Canonical winners (preserved from the legacy wildcard order):
 
 from __future__ import annotations
 
-# NOTE: ``ExceptionProvider`` is imported LAST (bottom of this module), NOT
-# here. Its transitive chain (foundation → Application → support → Collection)
-# imports ``cara.exceptions.InvalidArgumentException`` — if ExceptionProvider
-# is imported before that name is bound below, the package is only partially
-# initialised and the import raises a circular-import ImportError that breaks
-# the entire framework. Keep this import at the end; do NOT let an import
-# sorter hoist it up here. isort:skip_file is intentionally avoided so the
-# rest stays sorted; the ExceptionProvider line carries its own guard comment.
+# NOTE: ``ExceptionProvider`` is intentionally NOT imported at module load
+# time — see the lazy ``__getattr__`` at the bottom. Its transitive chain
+# (foundation → Application → support → Collection) imports BOTH
+# ``cara.exceptions.InvalidArgumentException`` (needs the names below bound
+# first) AND ``cara.foundation.Provider`` (a module that is itself only
+# partially initialised whenever ``cara.exceptions`` is imported DURING
+# foundation/environment boot). Importing ExceptionProvider eagerly — at the
+# top OR the bottom — therefore deadlocks one cycle or the other depending on
+# the entry point. A PEP 562 lazy import sidesteps both: the provider (and its
+# foundation dependency) is only resolved when something actually accesses
+# ``cara.exceptions.ExceptionProvider``, never during this module's own load.
 from .types.application import (
     AppException,
     ControllerMethodNotFoundException,
@@ -185,13 +188,6 @@ from .types.validation import (
 )
 from .types.websocket import WebSocketException
 
-# Imported LAST on purpose — see the guard note at the top of this module.
-# Its foundation→support→Collection chain reaches back into this package for
-# ``InvalidArgumentException``, which must already be bound (above) by the
-# time this line runs. ``# noqa: E402`` because it intentionally follows the
-# other imports.
-from .ExceptionProvider import ExceptionProvider  # noqa: E402
-
 __all__ = [
     "ApiKeyInvalidException",
     "AppException",
@@ -280,3 +276,15 @@ __all__ = [
     "ValidationException",
     "WebSocketException",
 ]
+
+# Eager import LAST (after every exception name above is bound). A PEP 562
+# lazy ``__getattr__`` does NOT work here: the submodule is also named
+# ``ExceptionProvider``, so the first ``from .ExceptionProvider import …``
+# registers the MODULE as ``cara.exceptions.ExceptionProvider`` and every later
+# ``from cara.exceptions import ExceptionProvider`` then resolves to the module
+# (Kernel's provider list got a module → ``issubclass() arg 1 must be a class``).
+# Binding the CLASS here overrides that. The foundation circular import this
+# used to trigger is now broken inside ``ExceptionProvider.py`` itself (it
+# imports ``cara.foundation.Provider`` directly), so this eager line is safe
+# regardless of whether ``cara.exceptions`` is loaded during foundation boot.
+from .ExceptionProvider import ExceptionProvider  # noqa: E402

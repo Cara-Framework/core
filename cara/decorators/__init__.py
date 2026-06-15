@@ -6,7 +6,6 @@ from .authorization import (
     can,
     can_any,
     guest_only,
-    policy,
 )
 from .command import (
     _run_after,

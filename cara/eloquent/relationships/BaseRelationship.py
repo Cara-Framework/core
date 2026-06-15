@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class BaseRelationship:
     def __init__(self, fn, local_key=None, foreign_key=None):
         if isinstance(fn, str):

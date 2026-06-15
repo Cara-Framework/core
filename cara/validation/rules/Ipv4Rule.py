@@ -6,7 +6,7 @@ import ipaddress
 from typing import Any
 
 from cara.validation import MessageFormatter
-from cara.validation.rules import BaseRule
+from cara.validation.rules.BaseRule import BaseRule
 
 
 class Ipv4Rule(BaseRule):

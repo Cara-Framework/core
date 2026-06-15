@@ -1,5 +1,7 @@
 """HTTP Request Provider."""
 
+from __future__ import annotations
+
 from cara.foundation import DeferredProvider
 
 

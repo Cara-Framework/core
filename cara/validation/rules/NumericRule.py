@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 from cara.validation import MessageFormatter
-from cara.validation.rules import BaseRule
+from cara.validation.rules.BaseRule import BaseRule
 
 
 class NumericRule(BaseRule):

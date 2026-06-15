@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from cara.notifications.channels import BaseChannel
+from cara.notifications.channels.BaseChannel import BaseChannel
 
 
 class SlackChannel(BaseChannel):

@@ -8,9 +8,12 @@ Extracted from Model.py to follow SRP and DRY principles.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from cara.support.Collection import Collection
+
+_logger = logging.getLogger("cara.eloquent.attributes")
 
 
 class HasAttributes:
@@ -161,7 +164,7 @@ class HasAttributes:
                     f"[MassAssignment] {model_name}: dropped non-fillable keys {dropped}"
                 )
             except Exception:
-                pass
+                _logger.debug("mass assignment warning log failed", exc_info=True)
 
         return {
             key: value for key, value in attributes.items() if key in cls.__fillable__
@@ -210,10 +213,6 @@ class HasAttributes:
     def to_json(self, **kwargs) -> str:
         """Convert model to JSON string."""
         return json.dumps(self.to_array(), default=str, **kwargs)
-
-    def serialize(self, exclude=None, include=None) -> dict[str, Any]:
-        """Legacy method - uses to_array internally."""
-        return self.to_array(exclude=exclude, include=include)
 
     # ===== Visibility Control =====
 

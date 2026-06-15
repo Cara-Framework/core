@@ -253,15 +253,6 @@ class ConnectionResolver:
                 pass
             raise
 
-    # ── Backwards-compat alias for callers that still read the old class dict ──
-    # Prior code (and a few tests) reach into ``ConnectionResolver._active_connections``
-    # directly for diagnostics. Expose a read-only snapshot of the current
-    # context's registry so those callers keep working without being able to
-    # mutate cross-context state.
-    @property
-    def _active_connections(self) -> dict[str, object]:
-        return dict(_get_registry())
-
     def _get_active_connection(self, connection_name):
         """Helper method - DRY principle"""
         registry = _get_registry()

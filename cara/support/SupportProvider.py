@@ -5,6 +5,8 @@ This module provides a service provider that registers global helper functions a
 makes common framework functionality available globally through Python's builtin namespace.
 """
 
+from __future__ import annotations
+
 import builtins
 
 from cara.foundation import Provider

@@ -6,6 +6,7 @@ Manages authentication guards and user sessions.
 
 from __future__ import annotations
 
+import logging
 from contextvars import ContextVar
 from typing import Any
 
@@ -23,6 +24,8 @@ from cara.exceptions import ConfigurationException
 # if a future caller routes through ``auth_manager.user()`` instead
 # of going to ``auth_manager.guard("jwt").user()`` directly.
 _REQUEST_USER: ContextVar[Any] = ContextVar("auth_manager_user", default=None)
+
+_logger = logging.getLogger("cara.auth")
 
 
 class Authentication:
@@ -74,6 +77,7 @@ class Authentication:
 
             return None
         except Exception:
+            _logger.debug("guard detection failed", exc_info=True)
             return None
 
     def get_default_guard(self) -> str:
@@ -130,7 +134,3 @@ class Authentication:
     def validate_token(self, token: str) -> bool:
         """Validate a token."""
         return self.guard().validate_token(token)
-
-    def using(self, guard_name: str):
-        """Use a specific guard for the next authentication action."""
-        return self.guard(guard_name)

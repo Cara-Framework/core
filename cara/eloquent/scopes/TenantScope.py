@@ -1,4 +1,10 @@
+from __future__ import annotations
+
+import logging
+
 from .BaseScope import BaseScope
+
+_logger = logging.getLogger("cara.tenant")
 
 
 class TenantScope(BaseScope):
@@ -37,7 +43,10 @@ class TenantScope(BaseScope):
             return builder
 
         except Exception:
-            # If anything goes wrong, don't break the query - just skip filtering
+            _logger.error(
+                "Tenant filter failed; skipping tenant scope (potential data leak)",
+                exc_info=True,
+            )
             return builder
 
     def _inject_tenant_id(self, builder):
@@ -52,7 +61,10 @@ class TenantScope(BaseScope):
             return builder
 
         except Exception:
-            # If anything goes wrong, don't break the query - just skip injection
+            _logger.error(
+                "Tenant ID injection failed; skipping tenant scope (potential data leak)",
+                exc_info=True,
+            )
             return builder
 
     def _get_current_tenant_id(self):
@@ -69,12 +81,20 @@ class TenantScope(BaseScope):
             try:
                 request = current_request.get()
                 return getattr(request, "tenant_id", None)
-            except (
-                Exception
-            ):  # If no request context (e.g., in CLI, jobs, etc.), return None
+            except (LookupError, RuntimeError):
+                return None
+            except Exception:
+                _logger.error(
+                    "Unexpected error resolving tenant_id from request context",
+                    exc_info=True,
+                )
                 return None
 
         except Exception:
+            _logger.error(
+                "Unexpected error resolving current tenant_id",
+                exc_info=True,
+            )
             return None
 
     @classmethod

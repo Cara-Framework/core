@@ -100,8 +100,7 @@ class DateTimeCast(BaseCast):
             # ``pendulum.now("UTC")`` and silent local/UTC drift.
             return dt
         except Exception:
-            # If parsing fails, try to return as string for backwards compatibility
-            return str(value) if value else None
+            return None
 
     def set(self, value):
         """Set datetime value from various input formats.

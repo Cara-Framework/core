@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pydoc
 
 from cara.exceptions import InvalidArgumentException

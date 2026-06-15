@@ -70,7 +70,7 @@ class LoggerProvider(Provider):
         Args:
             logging_config: Configuration from config/logging.py
         """
-        from cara.logging import Logger
+        from cara.logging.Logger import Logger
 
         # Set configuration for Logger class
         Logger.set_config(logging_config)

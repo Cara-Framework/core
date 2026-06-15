@@ -4,6 +4,8 @@ Cache Exception Type for the Cara framework.
 This module defines exception types related to cache operations.
 """
 
+from __future__ import annotations
+
 from .base import CaraException
 
 

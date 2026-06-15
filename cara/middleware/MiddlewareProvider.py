@@ -11,7 +11,8 @@ from cara.configuration import config
 from cara.exceptions import MiddlewareException
 from cara.facades import Log
 from cara.foundation import DeferredProvider
-from cara.middleware import Middleware, MiddlewareCapsule
+from cara.middleware.Middleware import Middleware
+from cara.middleware.MiddlewareCapsule import MiddlewareCapsule
 from cara.middleware.http import (
     AttachRequestID,
     CanPerform,

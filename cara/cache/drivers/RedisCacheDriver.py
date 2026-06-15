@@ -13,12 +13,15 @@ from __future__ import annotations
 # ``CARA_CACHE_LARGE_VALUE_BYTES`` environment variable; default 256 KB.
 import os
 import pickle
+import logging
 from typing import Any
 
 from cara.cache.contracts import Cache
 from cara.cache.observer import notify_cache_event
 from cara.exceptions import CacheConfigurationException
 from cara.facades import Log
+
+_logger = logging.getLogger("cara.cache.redis")
 
 # Resolved lazily on first cache write — NOT at import time. The driver
 # module is imported during bootstrap, before ``load_dotenv`` populates
@@ -170,7 +173,7 @@ class RedisCacheDriver(Cache):
             try:
                 self._client.delete(redis_key)
             except Exception:
-                pass
+                _logger.warning("self-heal delete failed", exc_info=True)
             notify_cache_event("get", "error", key, None)
             return default
 
@@ -278,6 +281,7 @@ class RedisCacheDriver(Cache):
         try:
             return self._client.exists(redis_key) > 0
         except Exception:
+            _logger.warning("redis operation failed", exc_info=True)
             return False
 
     def add(
@@ -425,6 +429,7 @@ class RedisCacheDriver(Cache):
         try:
             t = self._client.ttl(redis_key)
         except Exception:
+            _logger.warning("redis operation failed", exc_info=True)
             return None
         if t is None or t < 0:
             return None
@@ -463,4 +468,5 @@ class RedisCacheDriver(Cache):
 
             return deleted_count
         except Exception:
+            _logger.warning("redis operation failed", exc_info=True)
             return 0

@@ -7,6 +7,7 @@ Clean, focused API Key authentication with all functionality in a single class.
 from __future__ import annotations
 
 import hmac
+import logging
 from contextvars import ContextVar
 from typing import Any
 
@@ -24,6 +25,8 @@ from cara.facades import Cache
 # silently inherit the cross-request leak without this scoping.
 _REQUEST_USER: ContextVar[Any] = ContextVar("api_key_guard_user", default=None)
 _REQUEST_TOKEN: ContextVar[Any] = ContextVar("api_key_guard_token", default=None)
+
+_logger = logging.getLogger("cara.auth.apikey")
 
 
 class ApiKeyGuard(Guard):
@@ -101,7 +104,14 @@ class ApiKeyGuard(Guard):
         """Check if the current request is authenticated."""
         try:
             return self.user() is not None
+        except TokenInvalidException:
+            _logger.debug("API key authentication check failed", exc_info=True)
+            return False
         except Exception:
+            _logger.warning(
+                "API key authentication check failed unexpectedly",
+                exc_info=True,
+            )
             return False
 
     def guest(self) -> bool:
@@ -178,12 +188,15 @@ class ApiKeyGuard(Guard):
                 return True
 
             return False
-        except Exception:
+        except TokenInvalidException:
+            _logger.debug("API key token validation failed", exc_info=True)
             return False
-
-    def validate_api_key(self, api_key: str) -> bool:
-        """Validate an API key (alias for validate_token)."""
-        return self.validate_token(api_key)
+        except Exception:
+            _logger.warning(
+                "API key token validation failed unexpectedly",
+                exc_info=True,
+            )
+            return False
 
     def get_api_key_info(self, api_key: str) -> dict[str, Any] | None:
         """
@@ -204,7 +217,14 @@ class ApiKeyGuard(Guard):
                     **(user if isinstance(user, dict) else {"user": user}),
                 }
             return None
+        except TokenInvalidException:
+            _logger.debug("API key info lookup failed", exc_info=True)
+            return None
         except Exception:
+            _logger.warning(
+                "API key info lookup failed unexpectedly",
+                exc_info=True,
+            )
             return None
 
     # ========================================================================
@@ -229,10 +249,15 @@ class ApiKeyGuard(Guard):
                 return header_value
 
             return None
-        except Exception:
+        except (LookupError, RuntimeError):
+            _logger.debug("No request context for API key extraction", exc_info=True)
             return None
-
-    def _resolve_user_from_api_key(self, api_key: str) -> Any | None:
+        except Exception:
+            _logger.warning(
+                "API key extraction failed unexpectedly",
+                exc_info=True,
+            )
+            return None
         """
         Resolve user/info from API key - Generic API Key authentication.
 
@@ -253,6 +278,10 @@ class ApiKeyGuard(Guard):
                 # Fallback to field lookup
                 return self._user_class.where(self.api_key_field, api_key).first()
             except Exception:
+                _logger.warning(
+                    "API key user resolution failed unexpectedly",
+                    exc_info=True,
+                )
                 return None
 
         # Static API keys
@@ -325,6 +354,10 @@ class ApiKeyGuard(Guard):
             current_count = int(increment_result if increment_result is not None else 0)
             return current_count < self.rate_limit_max_attempts
         except Exception:
+            _logger.warning(
+                "API key rate limit check failed (rate limiting degraded)",
+                exc_info=True,
+            )
             return True
 
     def _record_usage(self, api_key: str) -> None:
@@ -343,12 +376,7 @@ class ApiKeyGuard(Guard):
             # emulates with a per-key lock — both safe under concurrency.
             Cache.increment(cache_key, 1, self.rate_limit_window)
         except Exception as exc:
-            # Rate limiting degraded — log so operators notice, but don't
-            # block the request.  Silent pass here previously hid cache
-            # outages that disabled rate limiting entirely.
-            import logging
-
-            logging.getLogger("cara.auth.apikey").warning(
+            _logger.warning(
                 "Rate limit cache write failed (rate limiting degraded): %s", exc
             )
 

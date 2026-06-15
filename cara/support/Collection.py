@@ -2030,32 +2030,6 @@ class Collection(Macroable):
             return self._items.items()
         return self._items
 
-    def where_in(self, key, args: list) -> Collection:
-        """
-        Alias for whereIn method for compatibility.
-
-        Args:
-            key: The key to filter by.
-            args: The values to filter by.
-
-        Returns:
-            A new Collection instance with the filtered items.
-        """
-        return self.where_in(key, args)
-
-    def where_not_in(self, key, args: list) -> Collection:
-        """
-        Alias for whereNotIn method for compatibility.
-
-        Args:
-            key: The key to filter by.
-            args: The values to filter by.
-
-        Returns:
-            A new Collection instance with the filtered items.
-        """
-        return self.where_not_in(key, args)
-
     def ensure(self, *types):
         """
         Ensures all items in the collection are of the specified types.

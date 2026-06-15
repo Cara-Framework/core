@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class HavingExpression:
     """A helper class to manage having expressions."""
 

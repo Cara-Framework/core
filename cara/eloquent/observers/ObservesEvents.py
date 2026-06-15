@@ -1,4 +1,8 @@
-from contextlib import contextmanager
+from __future__ import annotations
+
+import logging
+
+_logger = logging.getLogger("cara.eloquent.observers")
 
 
 class ObservesEvents:
@@ -21,7 +25,9 @@ class ObservesEvents:
                             category="cara.eloquent.observers",
                         )
                     except Exception:
-                        pass
+                        _logger.error(
+                            "observer error handler failed", exc_info=True
+                        )
 
     @classmethod
     def observe(cls, observer):
@@ -41,30 +47,3 @@ class ObservesEvents:
         """Sets __has_events__ attribute on model to True."""
         cls.__has_events__ = True
         return cls
-
-    def save_quietly(self):
-        """Save without firing events (instance-level, no race condition)."""
-        self._events_disabled = True
-        try:
-            return self.save()
-        finally:
-            self._events_disabled = False
-
-    def delete_quietly(self):
-        """Delete without firing events (instance-level, no race condition)."""
-        self._events_disabled = True
-        try:
-            return self.delete()
-        finally:
-            self._events_disabled = False
-
-    @classmethod
-    @contextmanager
-    def without_events_context(cls):
-        """Context manager for disabling events safely (restores state after)."""
-        previous = cls.__has_events__
-        cls.__has_events__ = False
-        try:
-            yield cls
-        finally:
-            cls.__has_events__ = previous

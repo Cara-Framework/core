@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
-from .Application import Application
-from .DeferredProvider import DeferredProvider
+# Import Provider (and DeferredProvider) BEFORE Application: Application's
+# import chain pulls in providers that do `from cara.foundation import Provider`
+# while this package is mid-init. Binding Provider first prevents Python from
+# returning the submodule instead of the class (circular-import at boot).
 from .Provider import Provider
+from .DeferredProvider import DeferredProvider
+from .Application import Application
 
 T = TypeVar("T")
 

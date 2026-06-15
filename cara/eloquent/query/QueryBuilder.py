@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import re
 from collections.abc import Callable
 from copy import deepcopy
@@ -47,6 +48,8 @@ from ..pagination import LengthAwarePaginator, SimplePaginator
 from ..schema import Schema
 from ..scopes import BaseScope
 from .EagerRelation import EagerRelations
+
+_logger = logging.getLogger("cara.eloquent.query")
 
 
 class TransactionContext:
@@ -2907,6 +2910,9 @@ class QueryBuilder(ObservesEvents):
             try:
                 pk = self.get_primary_key() if hasattr(self, "get_primary_key") else None
             except Exception:
+                _logger.warning(
+                    "primary key detection failed for pagination", exc_info=True
+                )
                 pk = None
             if pk:
                 self.order_by(pk, "ASC")

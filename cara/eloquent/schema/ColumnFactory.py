@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class ColumnFactory:
     """Single Responsibility: Creates different types of columns"""
 

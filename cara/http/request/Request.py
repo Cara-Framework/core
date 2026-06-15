@@ -14,7 +14,7 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import parse_qs
 
-from cara.http.request import UploadedFile
+from cara.http.request.UploadedFile import UploadedFile
 from cara.http.request.context import current_request
 from cara.http.request.Header import HeaderBag
 from cara.http.request.Input import InputBag

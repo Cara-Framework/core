@@ -30,7 +30,7 @@ class JobTracker:
 
     Usage:
         # In app, provide unified Job model
-        from cara.queues.tracking import JobTracker
+        from cara.queues.tracking.JobTracker import JobTracker
 
         # Configure with app's Job model
         tracker = JobTracker(job_model=Job)
@@ -62,7 +62,7 @@ class JobTracker:
             retry_delays: List of delay seconds for retries
 
         Example (ApplicationProvider):
-            from cara.queues.tracking import JobTracker
+            from cara.queues.tracking.JobTracker import JobTracker
             from app.models import Job
 
             tracker = JobTracker(job_model=Job)

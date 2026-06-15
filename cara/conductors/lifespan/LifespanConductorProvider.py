@@ -8,7 +8,9 @@ The provider ensures proper handling of application lifecycle events in accordan
 specifications.
 """
 
-from cara.conductors.lifespan import LifespanConductor
+from __future__ import annotations
+
+from cara.conductors.lifespan.LifespanConductor import LifespanConductor
 from cara.foundation import DeferredProvider
 
 

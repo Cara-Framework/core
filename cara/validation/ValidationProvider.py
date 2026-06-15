@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from cara.configuration import config
 from cara.foundation import DeferredProvider
-from cara.validation import Validation
+from cara.validation.Validation import Validation
 
 
 class ValidationProvider(DeferredProvider):

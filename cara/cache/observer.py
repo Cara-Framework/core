@@ -21,7 +21,10 @@ swallows exceptions so a broken observer cannot break the cache.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
+
+_logger = logging.getLogger("cara.cache.observer")
 
 CacheObserver = Callable[[str, str, str, int | None], None]
 
@@ -47,4 +50,5 @@ def notify_cache_event(
     try:
         cb(operation, outcome, key, size_bytes)
     except Exception:
+        _logger.warning("cache observer callback failed", exc_info=True)
         return

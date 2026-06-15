@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from cara.eloquent.expressions import UpdateQueryExpression
 
 from .BaseScope import BaseScope

@@ -13,7 +13,7 @@ from typing import Any
 import pendulum
 
 from cara.exceptions import ConfigurationException
-from cara.notifications.channels import BaseChannel
+from cara.notifications.channels.BaseChannel import BaseChannel
 
 
 class DatabaseChannel(BaseChannel):

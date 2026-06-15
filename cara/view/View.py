@@ -9,7 +9,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from cara.view import ViewEngine, ViewInstance
+from cara.view.ViewEngine import ViewEngine
+from cara.view.ViewInstance import ViewInstance
 
 
 class View:

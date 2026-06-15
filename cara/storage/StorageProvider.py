@@ -10,7 +10,7 @@ from __future__ import annotations
 from cara.configuration import config
 from cara.exceptions import StorageConfigurationException
 from cara.foundation import DeferredProvider
-from cara.storage import Storage
+from cara.storage.Storage import Storage
 from cara.storage.drivers import FileDriver
 from cara.support import paths
 

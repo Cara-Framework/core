@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class SubGroupExpression:
     """A helper class to manage subgroup expressions."""
 

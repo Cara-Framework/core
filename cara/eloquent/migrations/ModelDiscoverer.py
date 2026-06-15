@@ -5,10 +5,13 @@ ModelDiscoverer: Discover and parse model files.
 from __future__ import annotations
 
 import ast
+import logging
 import re
 from pathlib import Path
 
 from cara.support import paths
+
+_logger = logging.getLogger("cara.migrations.discoverer")
 
 
 class ModelDiscoverer:
@@ -165,7 +168,7 @@ class ModelDiscoverer:
                     category="cara.eloquent.migrations",
                 )
             except Exception:
-                pass
+                _logger.warning("model discovery logging failed", exc_info=True)
 
         return models
 
@@ -881,8 +884,7 @@ class ModelDiscoverer:
                                 }
 
         except Exception:
-            # Silently continue if we can't extract dependencies
-            pass
+            _logger.debug("dependency extraction skipped", exc_info=True)
 
     def _extract_sql_from_function(self, function_node: ast.FunctionDef) -> str:
         """Extract SQL content from DB.statement() calls in function."""

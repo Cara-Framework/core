@@ -9,7 +9,11 @@ migrations leaks N pool slots and the runner hits ``pool_max`` after
 
 from __future__ import annotations
 
+import logging
+
 from cara.exceptions import ORMException
+
+_logger = logging.getLogger("cara.migrations")
 
 
 def _release(connection) -> None:
@@ -22,7 +26,7 @@ def _release(connection) -> None:
             close()
     except Exception:
         # Cleanup must never mask the caller's primary error.
-        pass
+        _logger.debug("migration connection close failed", exc_info=True)
 
 
 class MigrationTracker:
@@ -88,6 +92,7 @@ class MigrationTracker:
             connection.query(f"SELECT 1 FROM {self.table_name} LIMIT 1")
             return True
         except Exception:
+            _logger.warning("migration state query failed", exc_info=True)
             return False
         finally:
             _release(connection)
@@ -101,6 +106,7 @@ class MigrationTracker:
             )
             return True
         except Exception:
+            _logger.warning("migration state query failed", exc_info=True)
             return False
         finally:
             _release(connection)
@@ -154,6 +160,7 @@ class MigrationTracker:
                         migrations.append(row[0])
             return migrations
         except Exception:
+            _logger.warning("migration state query failed", exc_info=True)
             return []
         finally:
             _release(connection)
@@ -174,6 +181,7 @@ class MigrationTracker:
                 batch = 0
             return batch
         except Exception:
+            _logger.warning("migration state query failed", exc_info=True)
             return 0
         finally:
             _release(connection)

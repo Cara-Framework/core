@@ -5,6 +5,8 @@ This file provides default directive registration functionality.
 """
 
 
+from __future__ import annotations
+
 class ViewDirectivesRegistry:
     """Registry for default view directives."""
 

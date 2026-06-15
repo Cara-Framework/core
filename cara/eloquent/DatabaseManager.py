@@ -6,9 +6,12 @@ except ImportError:  # Python <3.11
     from typing_extensions import Self  # noqa: F401
 
 import threading
+import logging
 from contextlib import contextmanager
 
 from cara.exceptions import ConfigurationException, ConnectionNotRegisteredException
+
+_logger = logging.getLogger("cara.database")
 
 
 class DatabaseManager:
@@ -218,7 +221,9 @@ class DatabaseManager:
                     conn.open = 0
                     conn.close_connection()
                 except Exception:
-                    pass
+                    _logger.debug(
+                        "connection close failed in select()", exc_info=True
+                    )
 
     def select_one(self, query, bindings=(), connection=None):
         """Execute a raw SELECT and return the first row as a dict, or None.
@@ -267,17 +272,6 @@ class DatabaseManager:
     def get_default_connection(self):
         """Returns default connection name"""
         return self._default_connection
-
-    def get_available_connections(self):
-        """List available connections"""
-        return list(self._connections.keys())
-
-    def has_connection(self, connection):
-        """Check if connection exists"""
-        connection_name = (
-            connection if connection != "default" else self._default_connection
-        )
-        return connection_name in self._connections
 
     def get_connection_info(self, connection=None):
         """Get connection information"""
@@ -337,7 +331,7 @@ class DatabaseManager:
         except Exception:
             # Defensive — if the registry lookup ever fails we still want
             # to fall through to a fresh connection rather than crash.
-            pass
+            _logger.warning("transaction registry lookup failed", exc_info=True)
 
         connection_info = self.get_connection_info(connection_name)
         connection_class = self.get_connection_class(connection_name)

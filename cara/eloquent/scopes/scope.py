@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class scope:
     def __init__(self, callback, *params, **kwargs):
         self.fn = callback

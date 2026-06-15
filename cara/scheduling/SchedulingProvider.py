@@ -16,7 +16,7 @@ from cara.exceptions import (
     SchedulingException,
 )
 from cara.foundation import DeferredProvider
-from cara.scheduling import Scheduling
+from cara.scheduling.Scheduling import Scheduling
 from cara.scheduling.drivers import APSchedulerDriver
 
 

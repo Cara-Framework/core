@@ -12,7 +12,7 @@ from typing import Any
 from cara.configuration import config
 from cara.exceptions import RateLimitConfigurationException
 from cara.foundation import DeferredProvider
-from cara.rates import RateLimiter
+from cara.rates.RateLimiter import RateLimiter
 
 
 class RateLimitProvider(DeferredProvider):

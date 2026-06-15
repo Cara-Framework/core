@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # lazy config import inside register() to avoid circular configuration <-> eloquent
 from cara.eloquent.DatabaseManager import DatabaseManager
 from cara.foundation import Provider

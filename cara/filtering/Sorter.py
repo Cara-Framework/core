@@ -2,9 +2,9 @@
 
 A ``Sorter`` describes ONE sort strategy end-to-end:
 
-* its canonical name (``"price_asc"``, ``"newest"``, ``"trending"``)
-* its UI label / group / aliases (e.g. ``"newest"`` aliased to
-  ``"recent"`` for backward-compat without two registry rows)
+* its canonical name (``"price_asc"``, ``"recent"``, ``"trending"``)
+* its UI label / group / aliases (e.g. ``"savings"`` aliased to
+  ``"discount_pct"`` without two registry rows)
 * how to apply itself to a Cara QueryBuilder
 * its describe() output for the same wizard introspection that
   ``Filter.describe`` produces
@@ -42,9 +42,8 @@ class Sorter(ABC):
     #: Short help text.
     description: str = ""
 
-    #: Alternate names that should resolve to this sorter (kept for
-    #: backwards-compat without growing the registry — e.g.
-    #: ``"newest"`` aliases to the canonical ``"recent"``).
+    #: Alternate names that should resolve to this sorter without
+    #: growing the registry (e.g. ``"savings"`` → ``"discount_pct"``).
     aliases: tuple[str, ...] = ()
 
     #: True for the default sort that should be picked when the
