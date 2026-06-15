@@ -21,7 +21,7 @@ from threading import RLock
 
 from cara.events.contracts import Event, Listener
 from cara.exceptions import EventDispatchCycleException, EventNameConflictException
-from cara.facades import Log, Queue
+from cara.facades import Log
 from cara.queues.contracts import ShouldQueue
 
 # Per-task stack of event names currently being dispatched. Used to
@@ -598,25 +598,6 @@ class Event:
             True if listener implements ShouldQueue, False otherwise
         """
         return isinstance(listener, ShouldQueue)
-
-    def _handle_task_exception(self, task: asyncio.Task) -> None:
-        """
-        Handle exceptions from fire-and-forget async listener tasks.
-
-        Called when a fire-and-forget task completes. If the task raised an exception,
-        logs it via Log.error() to prevent silent exception loss.
-
-        Args:
-            task: The completed asyncio task
-        """
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            pass  # Task was cancelled, ignore
-        except Exception as e:
-            Log.error(
-                f"Fire-and-forget listener failed with exception: {str(e)}", exc_info=True
-            )
 
     def _queue_listener(self, listener: Listener, event: Event) -> bool:
         """

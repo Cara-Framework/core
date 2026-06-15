@@ -34,7 +34,9 @@ def _find_services_root() -> Path:
     for candidate in [here, *here.parents]:
         if (candidate / "pytest.ini").exists() and (candidate / "app").is_dir():
             return candidate
-    raise RuntimeError(
+    from cara.exceptions import CaraException
+
+    raise CaraException(
         "Could not locate services root from "
         f"{Path(__file__)!s}; expected pytest.ini + app/ on an ancestor."
     )

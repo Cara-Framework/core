@@ -1,8 +1,7 @@
-[project]
-name = "cara-framework"
-version = "0.1.0"
-description = "Cara — Laravel-inspired async ASGI Python framework"
-requires-python = ">=3.14"
+# Project metadata (name, version, deps, entry points, python_requires)
+# lives in setup.py — the sole packaging source. Declaring a partial
+# [project] table here conflicts with setup.py under PEP 621 and breaks
+# `pip install git+...` (wheel build error). Keep only tool config below.
 
 # Framework code is the foundation api/ and services/ build on, so the
 # lint surface MUST match the two consumer trees — drift here means a

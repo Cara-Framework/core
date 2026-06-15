@@ -39,8 +39,12 @@ def _release_unique_lock_if_any(instance) -> None:
 
         if isinstance(instance, UniqueJob):
             UniqueJob.release_unique_lock(instance.unique_id())
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("cara.queue.database").warning(
+            "Failed to release unique lock: %s", exc
+        )
 
 
 def _dispatch_batch_completion(instance, exception=None) -> None:
@@ -58,8 +62,12 @@ def _dispatch_batch_completion(instance, exception=None) -> None:
         from cara.queues.Batch import auto_dispatch_batch_completion
 
         auto_dispatch_batch_completion(instance, exception)
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("cara.queue.database").warning(
+            "Batch completion dispatch failed: %s", exc
+        )
 
 
 class DatabaseDriver(HasColoredOutput, Queue):
@@ -625,9 +633,12 @@ class DatabaseDriver(HasColoredOutput, Queue):
 
             self._get_builder({}).where("id", job_id).update(update_data)
 
-        except Exception:
-            # Don't fail job processing if status update fails
-            pass
+        except Exception as exc:
+            import logging
+
+            logging.getLogger("cara.queue.database").warning(
+                "Job status update failed for job_id=%s: %s", job_id, exc
+            )
 
     def _handle_failed_job(
         self,
@@ -645,7 +656,12 @@ class DatabaseDriver(HasColoredOutput, Queue):
         try:
             decoded_payload = base64.b64decode(job["payload"])
             data = pickle.loads(decoded_payload)
-        except Exception:
+        except Exception as exc:
+            import logging
+
+            logging.getLogger("cara.queue.database").warning(
+                "Failed to unpickle job payload for job_id=%s: %s", job.get("id"), exc
+            )
             return
 
         raw = data.get("obj")

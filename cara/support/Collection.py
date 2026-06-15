@@ -146,7 +146,7 @@ class Collection(Macroable):
 
         return filtered[0]
 
-    def firstWhere(self, key, operator="==", value=None):
+    def first_where(self, key, operator="==", value=None):
         """
         Returns the first item where the given key's value matches the criteria.
 
@@ -328,7 +328,7 @@ class Collection(Macroable):
             items.append(self[i : i + size])
         return self.__class__(items)
 
-    def splitIn(self, groups: int):
+    def split_in(self, groups: int):
         """
         Splits the collection into the given number of groups.
 
@@ -411,7 +411,7 @@ class Collection(Macroable):
         """
         return len(self._items)
 
-    def countBy(self, callback=None):
+    def count_by(self, callback=None):
         """
         Counts the occurrences of values in the collection.
 
@@ -447,7 +447,7 @@ class Collection(Macroable):
         items = self.__get_items(items)
         return self.__class__([x for x in self if x not in items])
 
-    def diffAssoc(self, items):
+    def diff_assoc(self, items):
         """
         Returns the items in the collection whose keys and values are not present in the given
         items.
@@ -467,7 +467,7 @@ class Collection(Macroable):
             {k: v for k, v in self._items.items() if k not in items or items[k] != v}
         )
 
-    def diffKeys(self, items):
+    def diff_keys(self, items):
         """
         Returns the items in the collection whose keys are not present in the given items.
 
@@ -753,7 +753,7 @@ class Collection(Macroable):
         """
         return not self
 
-    def isNotEmpty(self):
+    def is_not_empty(self):
         """
         Determines if the collection is not empty.
 
@@ -1132,7 +1132,7 @@ class Collection(Macroable):
         self._items = sorted(self)
         return self
 
-    def sortBy(self, callback=None):
+    def sort_by(self, callback=None):
         """
         Sorts the collection by the given callback or key.
 
@@ -1169,7 +1169,7 @@ class Collection(Macroable):
                 )
             )
 
-    def sortByDesc(self, callback=None):
+    def sort_by_desc(self, callback=None):
         """
         Sorts the collection in descending order by the given callback or key.
 
@@ -1397,7 +1397,7 @@ class Collection(Macroable):
 
         return self.__class__(attributes)
 
-    def whereIn(self, key, values):
+    def where_in(self, key, values):
         """
         Filters the collection by the given key-value pairs.
 
@@ -1429,7 +1429,7 @@ class Collection(Macroable):
                 [item for item in self._items if self._data_get(item, key) in values]
             )
 
-    def whereNotIn(self, key, values):
+    def where_not_in(self, key, values):
         """
         Filters the collection by the given key-value pairs, removing matching items.
 
@@ -1461,7 +1461,7 @@ class Collection(Macroable):
                 [item for item in self._items if self._data_get(item, key) not in values]
             )
 
-    def whereBetween(self, key, values):
+    def where_between(self, key, values):
         """
         Filters the collection by determining if a specified item value is within a given range.
 
@@ -1485,7 +1485,7 @@ class Collection(Macroable):
             ]
         )
 
-    def whereNotBetween(self, key, values):
+    def where_not_between(self, key, values):
         """
         Filters the collection by determining if a specified item value is outside a given range.
 
@@ -1510,7 +1510,7 @@ class Collection(Macroable):
             ]
         )
 
-    def whereNull(self, key=None):
+    def where_null(self, key=None):
         """
         Filter items where the given key is null.
 
@@ -1527,7 +1527,7 @@ class Collection(Macroable):
             [item for item in self._items if self._data_get(item, key) is None]
         )
 
-    def whereNotNull(self, key=None):
+    def where_not_null(self, key=None):
         """
         Filter items where the given key is not null.
 
@@ -2041,7 +2041,7 @@ class Collection(Macroable):
         Returns:
             A new Collection instance with the filtered items.
         """
-        return self.whereIn(key, args)
+        return self.where_in(key, args)
 
     def where_not_in(self, key, args: list) -> Collection:
         """
@@ -2054,7 +2054,7 @@ class Collection(Macroable):
         Returns:
             A new Collection instance with the filtered items.
         """
-        return self.whereNotIn(key, args)
+        return self.where_not_in(key, args)
 
     def ensure(self, *types):
         """

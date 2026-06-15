@@ -577,7 +577,7 @@ class Container:
         except (TypeError, ValueError):
             return False
 
-    def fire_hook(self, action: str, key: Any, obj: Any):
+    def fire_hook(self, action: str, key: Any, obj: Any) -> None:
         """Fire hooks for bind/make/resolve actions."""
         # If bound object is a class, invoke class-based hooks
         if inspect.isclass(obj) and obj in self._hooks[action]:
@@ -716,7 +716,7 @@ class Container:
 
         return None
 
-    def get_parameters(self, obj: Any):
+    def get_parameters(self, obj: Any) -> Any:
         """Return inspect.signature(obj).parameters.items() for parameter inspection."""
         return inspect.signature(obj).parameters.items()
 
