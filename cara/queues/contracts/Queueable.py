@@ -18,9 +18,9 @@ from .SerializesModels import SerializesModels
 
 class PendingDispatch:
     """
-    Laravel-style PendingDispatch for method chaining.
+    PendingDispatch for method chaining.
 
-    Allows chaining like: MyJob.dispatch().onQueue('high').delay(30)
+    Allows chaining like: MyJob.dispatch().on_queue('high').delay(30)
     Enhanced with routing key support for topic exchange.
     """
 
@@ -36,60 +36,34 @@ class PendingDispatch:
         # Idempotency guard — __del__ must not redispatch or raise during GC.
         self._dispatched = False
 
-    def onQueue(self, queue: str) -> PendingDispatch:
-        """Set the queue name (Laravel naming convention)."""
+    def on_queue(self, queue: str) -> PendingDispatch:
+        """Set the queue name."""
         self._queue_name = queue
         if hasattr(self.job, "queue"):
             self.job.queue = queue
         return self
-
-    def on_queue(self, queue: str) -> PendingDispatch:
-        """Python naming alias for onQueue."""
-        return self.onQueue(queue)
 
     def delay(self, seconds: int) -> PendingDispatch:
         """Set delay in seconds."""
         self._delay = seconds
         return self
 
-    def onConnection(self, connection: str) -> PendingDispatch:
-        """Set connection (Laravel naming)."""
+    def on_connection(self, connection: str) -> PendingDispatch:
+        """Set connection."""
         self._connection = connection
         return self
 
-    def withRoutingKey(self, routing_key: str) -> PendingDispatch:
-        """
-        Set routing key for topic exchange dispatch.
-
-        Args:
-            routing_key: Routing key (e.g., "jobs.process.high")
-
-        Usage:
-            MyJob.dispatch().withRoutingKey("jobs.process.high")
-        """
+    def with_routing_key(self, routing_key: str) -> PendingDispatch:
+        """Set routing key for topic exchange dispatch."""
         self._routing_key = routing_key
         self._use_exchange = True
         return self
 
-    def with_routing_key(self, routing_key: str) -> PendingDispatch:
-        """Python naming alias for withRoutingKey."""
-        return self.withRoutingKey(routing_key)
-
-    def toExchange(self, exchange_name: str | None = None) -> PendingDispatch:
-        """
-        Force dispatch to specific exchange.
-
-        Args:
-            exchange_name: Name of the exchange. If None, the configured default
-                from ``config('queue.topic_exchange_name')`` is used at dispatch time.
-        """
+    def to_exchange(self, exchange_name: str | None = None) -> PendingDispatch:
+        """Force dispatch to specific exchange."""
         self._exchange_name = exchange_name
         self._use_exchange = True
         return self
-
-    def to_exchange(self, exchange_name: str | None = None) -> PendingDispatch:
-        """Python naming alias for toExchange."""
-        return self.toExchange(exchange_name)
 
     def __del__(self):
         """Auto-dispatch when PendingDispatch is garbage collected (Laravel pattern).
@@ -105,7 +79,7 @@ class PendingDispatch:
         except Exception as e:
             # Log quietly — the dispatch call site already raises if caller
             # invoked _dispatch_now() directly, so this path only matters for
-            # fire-and-forget usage (MyJob.dispatch(...).withRoutingKey(...)).
+            # fire-and-forget usage (MyJob.dispatch(...).with_routing_key(...)).
             try:
                 from cara.facades import Log
 
@@ -113,8 +87,7 @@ class PendingDispatch:
                     f"PendingDispatch auto-dispatch failed during GC: {e}",
                     category="cara.queue",
                 )
-            except Exception:
-                # Log facade unavailable during interpreter shutdown — swallow.
+            except (ImportError, RuntimeError):
                 pass
 
     def _dispatch_now(self):
@@ -325,12 +298,12 @@ class Queueable(SerializesModels, CancellableJob):
     @classmethod
     def dispatch(cls, *args, **kwargs) -> PendingDispatch:
         """
-        Laravel-style job dispatch with method chaining support.
+        Job dispatch with method chaining support.
 
-        Returns PendingDispatch for chaining methods like onQueue(), delay(), etc.
+        Returns PendingDispatch for chaining methods like on_queue(), delay(), etc.
 
         Usage:
-            MyJob.dispatch(param1, param2).onQueue('high-priority').delay(30)
+            MyJob.dispatch(param1, param2).on_queue('high-priority').delay(30)
         """
         # Create job instance
         instance = cls(*args, **kwargs)
@@ -339,18 +312,13 @@ class Queueable(SerializesModels, CancellableJob):
         return PendingDispatch(instance)
 
     @classmethod
-    def dispatchAfter(cls, delay, *args, **kwargs):
-        """Laravel-style delayed job dispatch."""
+    def dispatch_after(cls, delay, *args, **kwargs):
+        """Delayed job dispatch."""
         return cls.dispatch(*args, **kwargs).delay(delay)
 
     @classmethod
-    def dispatch_after(cls, delay, *args, **kwargs):
-        """Python naming alias for dispatchAfter."""
-        return cls.dispatchAfter(delay, *args, **kwargs)
-
-    @classmethod
-    async def dispatchNow(cls, *args, **kwargs):
-        """Laravel-style immediate job execution."""
+    async def dispatch_now(cls, *args, **kwargs):
+        """Immediate job execution (bypasses queue)."""
         instance = cls(*args, **kwargs)
         if not hasattr(instance, "handle") or not callable(instance.handle):
             return None
@@ -366,11 +334,6 @@ class Queueable(SerializesModels, CancellableJob):
         if asyncio.iscoroutine(result):
             result = await result
         return result
-
-    @classmethod
-    async def dispatch_now(cls, *args, **kwargs):
-        """Python naming alias for dispatchNow."""
-        return await cls.dispatchNow(*args, **kwargs)
 
     def _safe_serialize(self) -> dict:
         """Safely serialize job data for database storage."""

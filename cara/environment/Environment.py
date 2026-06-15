@@ -9,8 +9,13 @@ The environment system follows the 12-factor app methodology for configuration m
 environment variables.
 """
 
+from __future__ import annotations
+
 import os
+import re
 from pathlib import Path
+
+from cara.exceptions import ConfigurationException
 
 
 class LoadEnvironment:
@@ -84,7 +89,7 @@ def _cast_bool(name, raw, default):
             return True
         if lower in _BOOL_FALSY:
             return False
-        raise ValueError(
+        raise ConfigurationException(
             f"Environment variable {name}={raw!r} cannot be cast to bool. "
             f"Allowed values: true/false, yes/no, on/off, 1/0."
         )
@@ -120,7 +125,7 @@ def _cast_typed(name, raw, target_type, default):
         try:
             return target_type(stripped)
         except (TypeError, ValueError) as exc:
-            raise ValueError(
+            raise ConfigurationException(
                 f"Environment variable {name}={raw!r} cannot be cast to "
                 f"{target_type.__name__}: {exc}"
             ) from exc
@@ -130,7 +135,7 @@ def _cast_typed(name, raw, target_type, default):
     try:
         return target_type(raw)
     except (TypeError, ValueError) as exc:
-        raise ValueError(
+        raise ConfigurationException(
             f"Environment variable {name}={raw!r} cannot be cast to "
             f"{target_type.__name__}: {exc}"
         ) from exc
@@ -162,8 +167,16 @@ def env(value, default="", cast=True):
     if stripped == "":
         return default
 
-    if stripped.isnumeric():
-        return int(stripped)
+    # Auto-coerce integer-looking values. Use an explicit ``[+-]?\d+`` match
+    # rather than ``str.isnumeric()``: the latter is True for non-parseable
+    # characters like "½"/"²" (so ``X=²`` crashed startup with ValueError)
+    # and False for "-5" (so a negative int env var leaked through as a raw
+    # string and broke numeric comparisons downstream).
+    if re.fullmatch(r"[+-]?\d+", stripped):
+        try:
+            return int(stripped)
+        except ValueError:
+            pass
     # Robust boolean coercion. The previous version only matched
     # ``"true"`` / ``"True"`` (and lowercase ``"false"``) literally —
     # everything else (``"TRUE"``, ``"yes"``, ``"on"``, padded ``" true "``)

@@ -14,7 +14,7 @@ from typing import Any
 
 import pendulum
 
-from cara.exceptions import DriverLibraryNotFoundException, QueueException
+from cara.exceptions import QueueDriverLibraryNotFoundException, QueueException
 from cara.queues.contracts import Queue
 from cara.queues.job_instantiation import instantiate_job
 from cara.support.Console import HasColoredOutput
@@ -86,7 +86,7 @@ class RedisDriver(HasColoredOutput, Queue):
         try:
             import redis as _redis
         except ImportError:
-            raise DriverLibraryNotFoundException(
+            raise QueueDriverLibraryNotFoundException(
                 "RedisDriver requires 'redis'. Install with: pip install redis"
             )
 
@@ -136,7 +136,7 @@ class RedisDriver(HasColoredOutput, Queue):
         try:
             self._redis.ping()
         except Exception as e:
-            raise DriverLibraryNotFoundException(
+            raise QueueDriverLibraryNotFoundException(
                 f"Cannot connect to Redis at {host}:{port}: {e}"
             ) from e
 

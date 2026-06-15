@@ -7,6 +7,9 @@ to the application container with the configured application key.
 
 from __future__ import annotations
 
+from functools import partial
+from types import SimpleNamespace
+
 from cara.configuration import config
 from cara.encryption import Crypt, Hash
 from cara.exceptions import EncryptionException
@@ -50,7 +53,17 @@ class EncryptionProvider(DeferredProvider):
 
         algorithm = config("encryption.hash_algorithm", "sha256")
 
-        self.application.bind("hash", lambda: Hash(algorithm=algorithm))
+        # ``Hash`` exposes only classmethods and has no ``__init__``, so
+        # ``Hash(algorithm=algorithm)`` raised ``TypeError`` the moment the
+        # factory was invoked (same shape as the ``Crypt(cipher=)`` bug
+        # noted below). Bind a thin proxy that pins the configured algorithm
+        # onto the classmethods instead.
+        hash_service = SimpleNamespace(
+            make=partial(Hash.make, algorithm=algorithm),
+            check=partial(Hash.check, algorithm=algorithm),
+            needs_rehash=partial(Hash.needs_rehash, algorithm=algorithm),
+        )
+        self.application.bind("hash", lambda: hash_service)
         # ``Crypt`` accepts only ``key`` — pre-fix the provider also
         # passed ``cipher=`` here which raised ``TypeError`` the moment
         # the factory was actually invoked. AES-GCM is the only mode

@@ -29,6 +29,8 @@ from typing import Any
 from .FilterSet import FilterSet
 from .Sorter import SortRegistry
 
+from cara.exceptions import InvalidArgumentException
+
 
 class FilterPipeline:
     """Fluent composer over a Cara QueryBuilder.
@@ -79,7 +81,7 @@ class FilterPipeline:
         round-trip parse — same end state, half the work.
         """
         if self._filters is None:
-            raise RuntimeError(
+            raise InvalidArgumentException(
                 "FilterPipeline.filter_by called without a filter set; "
                 "construct the pipeline with ``filters=<your FilterSet>``."
             )
@@ -102,7 +104,7 @@ class FilterPipeline:
         type-unsafe (e.g. running a list through a CSV splitter).
         """
         if self._filters is None:
-            raise RuntimeError(
+            raise InvalidArgumentException(
                 "FilterPipeline.filtered_by called without a filter set; "
                 "construct the pipeline with ``filters=<your FilterSet>``."
             )
@@ -116,7 +118,7 @@ class FilterPipeline:
     def sort_by(self, name: str | None) -> FilterPipeline:
         """Layer the configured ``SortRegistry`` ORDER BY (+ JOIN/SELECT)."""
         if self._sorts is None:
-            raise RuntimeError(
+            raise InvalidArgumentException(
                 "FilterPipeline.sort_by called without a sort registry; "
                 "construct the pipeline with ``sorts=<your SortRegistry>``."
             )

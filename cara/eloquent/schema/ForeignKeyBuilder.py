@@ -6,6 +6,9 @@ except ImportError:  # Python <3.11
     from typing_extensions import Self  # noqa: F401
 
 
+from cara.exceptions import InvalidArgumentException
+
+
 class ForeignKeyBuilder:
     """Single Responsibility: Builds foreign key relationships"""
 
@@ -62,7 +65,7 @@ class ForeignKeyBuilder:
     def add_foreign(self, columns, name=None):
         """Add foreign key using dot notation: from_column.to_column.table"""
         if len(columns.split(".")) != 3:
-            raise Exception(
+            raise InvalidArgumentException(
                 "Wrong add_foreign argument, the structure is from_column.to_column.table"
             )
 

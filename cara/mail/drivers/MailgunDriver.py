@@ -12,6 +12,7 @@ from typing import Any
 
 import requests
 
+from cara.exceptions import ConfigurationException
 from cara.mail.contracts import Mail
 
 
@@ -34,7 +35,7 @@ class MailgunDriver(Mail):
         self.endpoint = self._get_endpoint()
 
         if not self.secret or not self.domain:
-            raise ValueError("Mailgun driver requires 'secret' and 'domain' in config")
+            raise ConfigurationException("Mailgun driver requires 'secret' and 'domain' in config")
 
     def _get_endpoint(self) -> str:
         """Get Mailgun API endpoint based on region."""

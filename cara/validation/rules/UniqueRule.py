@@ -53,7 +53,7 @@ class UniqueRule(BaseRule):
                     f"{exc.__class__.__name__}: {exc}",
                     category="cara.validation.unique",
                 )
-            except Exception:
+            except (ImportError, RuntimeError):
                 pass
             return False
 

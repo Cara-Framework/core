@@ -12,6 +12,7 @@ from typing import Any
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import CaraException
 from cara.routing import RouteResolver
 
 
@@ -52,7 +53,7 @@ class RouteListCommand(CommandBase):
         routes = list(router.routes)
 
         if not routes:
-            raise RuntimeError("No routes are registered")
+            raise CaraException("No routes are registered")
 
         return routes
 

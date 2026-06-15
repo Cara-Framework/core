@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -28,7 +29,7 @@ class MakeMiddlewareCommand(CommandBase):
 
         try:
             middleware_info = self._prepare_middleware_info(name)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -47,7 +48,7 @@ class MakeMiddlewareCommand(CommandBase):
     def _prepare_middleware_info(self, name: str) -> dict:
         """Prepare middleware information."""
         if not name:
-            raise ValueError("Middleware name is required")
+            raise InvalidArgumentException("Middleware name is required")
 
         class_name = self._clean_class_name(name)
         middlewares_dir = Path(paths("middlewares"))
@@ -102,7 +103,7 @@ class MakeMiddlewareCommand(CommandBase):
             self._show_usage_tips(middleware_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write middleware file: {e}") from e
+            raise StorageException(f"Failed to write middleware file: {e}") from e
 
     def _generate_middleware_code(self, middleware_info: dict) -> str:
         """Generate the middleware class code."""

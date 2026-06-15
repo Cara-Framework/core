@@ -27,6 +27,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 
 class Sorter(ABC):
     """One sort dimension. Subclass to add a new dimension."""
@@ -104,17 +106,17 @@ class SortRegistry:
         self._sorters: list[Sorter] = list(sorters)
 
         if not self._sorters:
-            raise ValueError("SortRegistry requires at least one sorter")
+            raise InvalidArgumentException("SortRegistry requires at least one sorter")
 
         seen: dict[str, Sorter] = {}
         class_defaults: list[Sorter] = []
         for s in self._sorters:
             if not s.name:
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"Sorter {s.__class__.__name__!r} has no ``name`` attribute"
                 )
             if s.name in seen:
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"Duplicate sorter name {s.name!r} in registry "
                     f"({seen[s.name].__class__.__name__} vs "
                     f"{s.__class__.__name__})"
@@ -122,7 +124,7 @@ class SortRegistry:
             seen[s.name] = s
             for alias in s.aliases:
                 if alias in seen:
-                    raise ValueError(
+                    raise InvalidArgumentException(
                         f"Sorter alias {alias!r} (from {s.name!r}) collides "
                         f"with name of {seen[alias].__class__.__name__}"
                     )
@@ -136,20 +138,20 @@ class SortRegistry:
         if default is not None:
             chosen = seen.get(default)
             if chosen is None:
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"SortRegistry default={default!r} doesn't match any "
                     f"sorter name or alias in this registry"
                 )
         else:
             if not class_defaults:
-                raise ValueError(
+                raise InvalidArgumentException(
                     "SortRegistry needs exactly one default sorter — "
                     "set ``is_default = True`` on one or pass "
                     "``default=<name>`` explicitly"
                 )
             if len(class_defaults) > 1:
                 names = ", ".join(d.name for d in class_defaults)
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"Multiple class-level default sorters: {names}. "
                     f"Resolve by passing ``default=<name>`` to the registry."
                 )

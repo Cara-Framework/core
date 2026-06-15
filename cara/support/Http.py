@@ -1,5 +1,7 @@
 """Helpers for working with HTTP."""
 
+from __future__ import annotations
+
 HTTP_STATUS_CODES = {
     100: "100 Continue",
     101: "101 Switching Protocol",

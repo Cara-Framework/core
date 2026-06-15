@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from cara.configuration import config
+from cara.exceptions import ConfigurationException
 from cara.foundation import Provider
 
 
@@ -56,7 +57,7 @@ class LoggerProvider(Provider):
         for channel_name, channel_config in channels.items():
             level = channel_config.get("LEVEL", "DEBUG")
             if level.upper() not in valid_levels:
-                raise ValueError(
+                raise ConfigurationException(
                     f"Invalid log level '{level}' for channel '{channel_name}'. "
                     f"Valid levels: {', '.join(valid_levels)}. "
                     f"Check your .env file or config/logging.py"

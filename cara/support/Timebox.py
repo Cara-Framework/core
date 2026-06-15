@@ -28,6 +28,8 @@ import time
 from collections.abc import Callable
 from typing import TypeVar
 
+from cara.exceptions import InvalidArgumentException
+
 T = TypeVar("T")
 
 
@@ -47,7 +49,7 @@ class Timebox:
         should fail fast in development).
         """
         if microseconds < 0:
-            raise ValueError("microseconds must be non-negative")
+            raise InvalidArgumentException("microseconds must be non-negative")
 
         self._return_early = False
         target_seconds = microseconds / 1_000_000.0

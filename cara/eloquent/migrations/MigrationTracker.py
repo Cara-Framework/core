@@ -9,6 +9,8 @@ migrations leaks N pool slots and the runner hits ``pool_max`` after
 
 from __future__ import annotations
 
+from cara.exceptions import ORMException
+
 
 def _release(connection) -> None:
     """Return a borrowed connection to the pool (best-effort)."""
@@ -65,7 +67,7 @@ class MigrationTracker:
         """
         if self._table_exists():
             if not self._table_has_correct_structure():
-                raise RuntimeError(
+                raise ORMException(
                     f"Migrations table '{self.table_name}' exists but has "
                     f"an unexpected schema (missing id/migration/batch "
                     f"columns). Refusing to drop it automatically; "

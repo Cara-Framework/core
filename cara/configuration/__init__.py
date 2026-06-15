@@ -2,9 +2,9 @@ from .Configuration import Configuration
 from .ConfigurationProvider import ConfigurationProvider
 
 __all__ = [
-    "config",
     "Configuration",
     "ConfigurationProvider",
+    "config",
 ]
 
 

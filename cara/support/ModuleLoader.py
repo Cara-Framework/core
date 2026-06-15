@@ -1,5 +1,7 @@
 """Module loading utilities."""
 
+from __future__ import annotations
+
 import importlib
 
 from cara.exceptions import LoaderNotFoundException

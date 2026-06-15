@@ -11,6 +11,7 @@ import os
 from cara.commands import CommandBase
 from cara.decorators import command
 from cara.eloquent.DatabaseManager import get_database_manager
+from cara.exceptions import InvalidArgumentException
 
 
 @command(
@@ -142,7 +143,7 @@ class MigrateResetCommand(CommandBase):
         elif "sqlite" in db_type.lower():
             self._reset_sqlite(connection)
         else:
-            raise Exception(f"Unsupported database type: {db_type}")
+            raise InvalidArgumentException(f"Unsupported database type: {db_type}")
 
     def _get_database_connection(self, connection_name: str):
         """Get database connection."""

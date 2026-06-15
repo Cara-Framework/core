@@ -37,20 +37,46 @@ class ModelMigrationComparator:
         migration_fields = migration_schema["fields"]
         field_definitions = migration_schema["field_definitions"]
 
+        # Framework-managed columns. The model's Schema.build emits these via
+        # the ``big_increments()`` / ``increments()`` / ``timestamps()`` /
+        # ``soft_deletes()`` helpers, so ModelDiscoverer records pseudo-fields
+        # named ``id`` / ``timestamps`` / ``soft_deletes``. The migration
+        # parser, however, SKIPS the auto ``id`` and expands ``timestamps()``
+        # into ``created_at`` + ``updated_at`` (``soft_deletes`` → ``deleted_at``).
+        # Diffing the two representations directly made EVERY existing table
+        # look like it was "missing" ``id`` and ``timestamps`` and generated a
+        # spurious ``drop_column("id")`` / ``drop_column("timestamps")``
+        # migration. Excluding the managed names + helper types on BOTH sides
+        # keeps the diff to real, operator-defined columns only.
+        framework_fields = {
+            "id",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "timestamps",
+            "soft_deletes",
+        }
+        framework_types = {
+            "increments",
+            "big_increments",
+            "timestamps",
+            "soft_deletes",
+        }
+
         # Check for new fields in model
         for field_name, field_info in model_info["fields"].items():
             field_method = field_info.get("type", "string")
-
+            if field_name in framework_fields or field_method in framework_types:
+                continue
             if field_name not in migration_fields:
                 differences.append(f"Added field: {field_name} ({field_method})")
 
         # Check for removed fields (fields in migration but not in model)
         for field_name in migration_fields:
-            if field_name not in model_info["fields"] and field_name not in [
-                "id",
-                "created_at",
-                "updated_at",
-            ]:
+            if (
+                field_name not in model_info["fields"]
+                and field_name not in framework_fields
+            ):
                 field_def = field_definitions.get(
                     field_name, f'table.string("{field_name}")'
                 )

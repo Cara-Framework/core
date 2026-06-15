@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.notifications.contracts import Notifiable
+from cara.exceptions import CaraException
+from cara.notifications.contracts import Notifiable as NotifiableContract
 
 
-class Notifiable(Notifiable):
+class Notifiable(NotifiableContract):
     """
     Notifiable mixin for entities that can receive notifications.
 
@@ -92,104 +93,107 @@ class Notifiable(Notifiable):
             return self.slack_webhook_url
         return None
 
+    _notification_model = None
+    _preference_model = None
+
+    @classmethod
+    def set_notification_model(cls, model) -> None:
+        """Register the Notification model at app boot (e.g. in a ServiceProvider)."""
+        cls._notification_model = model
+
+    @classmethod
+    def set_preference_model(cls, model) -> None:
+        """Register the UserPreference model at app boot (e.g. in a ServiceProvider)."""
+        cls._preference_model = model
+
+    def _get_notification_model(self):
+        if self._notification_model is None:
+            raise CaraException(
+                "Notification model not registered. "
+                "Call Notifiable.set_notification_model() in a ServiceProvider."
+            )
+        return self._notification_model
+
     def notifications(self) -> list[dict[str, Any]]:
-        """
-        Get all notifications for this notifiable entity.
-
-        Returns:
-            List of notification dicts (or model instances)
-        """
+        """Get all notifications for this notifiable entity."""
         try:
-            from commons.models.core import Notification
-
+            model = self._get_notification_model()
             return list(
-                Notification.where("user_id", self.id)
+                model.where("user_id", self.id)
                 .order_by("created_at", "desc")
                 .get()
             )
-        except Exception:
+        except Exception as exc:
+            import sys
+
+            print(
+                f"[cara.notifications] notifications() failed for "
+                f"user_id={getattr(self, 'id', '?')}: {exc}",
+                file=sys.stderr,
+            )
             return []
 
     def unread_notifications(self) -> list[dict[str, Any]]:
-        """
-        Get all unread notifications for this notifiable entity.
-
-        Returns:
-            List of unread notification dicts (or model instances)
-        """
+        """Get all unread notifications for this notifiable entity."""
         try:
-            from commons.models.core import Notification
-
+            model = self._get_notification_model()
             return list(
-                Notification.where("user_id", self.id)
+                model.where("user_id", self.id)
                 .where_null("read_at")
                 .order_by("created_at", "desc")
                 .get()
             )
-        except Exception:
+        except Exception as exc:
+            import sys
+
+            print(
+                f"[cara.notifications] unread_notifications() failed for "
+                f"user_id={getattr(self, 'id', '?')}: {exc}",
+                file=sys.stderr,
+            )
             return []
 
     def read_notifications(self) -> list[dict[str, Any]]:
-        """
-        Get all read notifications for this notifiable entity.
-
-        Returns:
-            List of read notification dicts (or model instances)
-        """
+        """Get all read notifications for this notifiable entity."""
         try:
-            from commons.models.core import Notification
-
+            model = self._get_notification_model()
             return list(
-                Notification.where("user_id", self.id)
+                model.where("user_id", self.id)
                 .where_not_null("read_at")
                 .order_by("created_at", "desc")
                 .get()
             )
-        except Exception:
+        except Exception as exc:
+            import sys
+
+            print(
+                f"[cara.notifications] read_notifications() failed for "
+                f"user_id={getattr(self, 'id', '?')}: {exc}",
+                file=sys.stderr,
+            )
             return []
 
     def mark_as_read(self, notification_ids: list[str] | None = None) -> None:
-        """
-        Mark notifications as read.
-
-        Args:
-            notification_ids: List of notification IDs to mark as read.
-                            If None, marks all as read.
-        """
+        """Mark notifications as read."""
         import pendulum
-        from commons.models.core import Notification
 
-        query = Notification.where("user_id", self.id)
+        model = self._get_notification_model()
+        query = model.where("user_id", self.id)
 
         if notification_ids:
             query = query.where_in("id", notification_ids)
 
-        query.update(
-            {
-                "read_at": pendulum.now("UTC"),
-            }
-        )
+        query.update({"read_at": pendulum.now("UTC")})
 
     def mark_as_unread(self, notification_ids: list[str] | None = None) -> None:
-        """
-        Mark notifications as unread.
-
-        Args:
-            notification_ids: List of notification IDs to mark as unread.
-                            If None, marks all as unread.
-        """
-        from commons.models.core import Notification
-
-        query = Notification.where("user_id", self.id)
+        """Mark notifications as unread."""
+        model = self._get_notification_model()
+        query = model.where("user_id", self.id)
 
         if notification_ids:
             query = query.where_in("id", notification_ids)
 
-        query.update(
-            {
-                "read_at": None,
-            }
-        )
+        query.update({"read_at": None})
 
     def get_notification_key(self) -> Any:
         """
@@ -215,25 +219,14 @@ class Notifiable(Notifiable):
         return self.__class__.__name__
 
     def notification_preferences(self, notification_type: str) -> list[str]:
-        """
-        Get user's preferred channels for a notification type.
-
-        Checks the user_preference table for a key like "notification.{type}"
-        and returns the stored channel preferences. If no preference is set,
-        returns an empty list (allowing the notification to use its default channels).
-
-        Args:
-            notification_type: The type of notification (e.g., 'price_alert', 'deal_alert')
-
-        Returns:
-            List of preferred channel names, or empty list if no preference set
-        """
+        """Get user's preferred channels for a notification type."""
         import json
 
-        from commons.models.core import UserPreference
+        if self._preference_model is None:
+            return []
 
         pref = (
-            UserPreference.where("user_id", self.id)
+            self._preference_model.where("user_id", self.id)
             .where("key", f"notification.{notification_type}")
             .first()
         )
@@ -246,5 +239,4 @@ class Notifiable(Notifiable):
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        # Return empty list = use notification's default channels
         return []

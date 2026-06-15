@@ -1,10 +1,10 @@
-from .RouteParameterValidator import RouteParameterValidator
-from .RouteResolver import RouteResolver
+from .Route import Route
 from .RouteCompiler import RouteCompiler
 from .RouteGroup import RouteGroup
-from .Router import Router
-from .Route import Route
+from .RouteParameterValidator import RouteParameterValidator
 from .RouteProvider import RouteProvider
+from .RouteResolver import RouteResolver
+from .Router import Router
 
 __all__ = [
     "Route",
@@ -12,6 +12,6 @@ __all__ = [
     "RouteGroup",
     "RouteParameterValidator",
     "RouteProvider",
-    "Router",
     "RouteResolver",
+    "Router",
 ]

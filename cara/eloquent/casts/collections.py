@@ -4,6 +4,8 @@ Collection Cast Types for Cara ORM
 Handles arrays, lists, and Cara Collection objects.
 """
 
+from __future__ import annotations
+
 import json
 
 from .base import BaseCast

@@ -7,6 +7,7 @@ except ImportError:  # Python <3.11
 
 import re
 
+from cara.exceptions import InvalidArgumentException
 from cara.eloquent.expressions import (
     JoinClause,
     OnClause,
@@ -98,9 +99,18 @@ class BaseGrammar:
                     limit=self.process_limit(),
                     offset=self.process_offset(),
                     aggregates=self.process_aggregates(),
-                    order_by=self.process_order_by(),
+                    # Evaluation order MUST match SQL clause order
+                    # (GROUP BY → HAVING → ORDER BY). .format() is
+                    # keyword-matched so the rendered template is
+                    # unaffected by kwarg order, BUT process_group_by /
+                    # process_order_by append their raw `bindings` to
+                    # self._bindings as a side effect of being CALLED.
+                    # If order_by is evaluated before group_by, a query
+                    # carrying raw bindings on BOTH clauses binds them
+                    # into each other's %s slots (qmark/executed path).
                     group_by=self.process_group_by(),
                     having=self.process_having(),
+                    order_by=self.process_order_by(),
                     lock=self.process_locks(),
                 )
                 .strip()
@@ -117,9 +127,18 @@ class BaseGrammar:
                     limit=self.process_limit(),
                     offset=self.process_offset(),
                     aggregates=self.process_aggregates(),
-                    order_by=self.process_order_by(),
+                    # Evaluation order MUST match SQL clause order
+                    # (GROUP BY → HAVING → ORDER BY). .format() is
+                    # keyword-matched so the rendered template is
+                    # unaffected by kwarg order, BUT process_group_by /
+                    # process_order_by append their raw `bindings` to
+                    # self._bindings as a side effect of being CALLED.
+                    # If order_by is evaluated before group_by, a query
+                    # carrying raw bindings on BOTH clauses binds them
+                    # into each other's %s slots (qmark/executed path).
                     group_by=self.process_group_by(),
                     having=self.process_having(),
+                    order_by=self.process_order_by(),
                     lock=self.process_locks(),
                 )
                 .strip()
@@ -416,7 +435,7 @@ class BaseGrammar:
                 if order_bys.raw:
                     order_crit += order_bys.column
                     if not isinstance(order_bys.bindings, (list, tuple)):
-                        raise ValueError(
+                        raise InvalidArgumentException(
                             f"Bindings must be tuple or list. Received {type(order_bys.bindings)}"
                         )
 
@@ -630,7 +649,7 @@ class BaseGrammar:
                 sql += self.raw_query_string().format(keyword=keyword, query=where.column)
 
                 if not isinstance(where.bindings, (list, tuple)):
-                    raise ValueError(
+                    raise InvalidArgumentException(
                         f"Bindings must be tuple or list. Received {type(where.bindings)}"
                     )
 

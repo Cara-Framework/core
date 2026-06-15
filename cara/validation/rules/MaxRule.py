@@ -54,7 +54,7 @@ class MaxRule(BaseRule):
                     f"max threshold ({max_threshold}) in a length context — "
                     f"every input fails by design. Check the rule spec.",
                 )
-            except Exception:
+            except (ImportError, RuntimeError):
                 pass
 
         # For numeric values (int, float), compare numerically

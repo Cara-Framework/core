@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from cara.exceptions import EncryptionException, InvalidArgumentException
+
 from .base import BaseCast
 
 
@@ -31,7 +33,7 @@ class HashCast(BaseCast):
     def __init__(self, algorithm: str = "bcrypt"):
         self.algorithm = algorithm.lower()
         if self.algorithm not in self.ALGORITHMS:
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"Unknown hash algorithm '{algorithm}'. "
                 f"Supported: {sorted(self.ALGORITHMS)}"
             )
@@ -53,7 +55,7 @@ class HashCast(BaseCast):
         try:
             import bcrypt
         except ImportError as exc:
-            raise RuntimeError(
+            raise EncryptionException(
                 "bcrypt is required for HashCast(algorithm='bcrypt'). "
                 "Install it with `pip install bcrypt`."
             ) from exc
@@ -115,7 +117,7 @@ class TokenCast(BaseCast):
 
     def __init__(self, length: int = 32):
         if length <= 0:
-            raise ValueError("Token length must be positive")
+            raise InvalidArgumentException("Token length must be positive")
         self.length = length
 
     def get(self, value: Any) -> Any:

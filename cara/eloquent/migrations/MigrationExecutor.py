@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from cara.exceptions import InvalidArgumentException
 from cara.facades import Log
 
 
@@ -106,7 +107,7 @@ class MigrationExecutor:
             elif direction == "down":
                 migration_instance.down()
             else:
-                raise ValueError(f"Invalid migration direction: {direction}")
+                raise InvalidArgumentException(f"Invalid migration direction: {direction}")
 
         except Exception as e:
             import traceback

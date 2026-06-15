@@ -16,7 +16,7 @@ from loguru import logger as _loguru_logger
 
 from cara.logging import CategoryFilter
 from cara.logging.contracts import Logger
-from cara.logging.LogStyle import HttpColorizer
+from cara.logging.HttpColorizer import HttpColorizer
 
 
 class Logger(Logger):
@@ -515,16 +515,14 @@ class Logger(Logger):
             context=context,
         )
 
-    def withContext(self, **context: Any) -> ContextualLogger:
+    def with_context(self, **context: Any) -> ContextualLogger:
         """Return a scoped logger that auto-injects context into every message.
 
-        Laravel-style usage::
+        Usage::
 
-            logger = Log.withContext(job_id=self.job_id)
-            logger.info(
-                "Starting collect"
-            )  # → "[CollectProductJob] Starting collect [job_id=abc123]"
-            logger.error("Failed")  # → "[CollectProductJob] Failed [job_id=abc123]"
+            logger = Log.with_context(job_id=self.job_id)
+            logger.info("Starting collect")
+            logger.error("Failed")
         """
         return ContextualLogger(self, context)
 

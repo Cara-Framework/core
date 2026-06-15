@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -29,7 +30,7 @@ class MakePolicyCommand(CommandBase):
 
         try:
             policy_info = self._prepare_policy_info(name, model)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -48,7 +49,7 @@ class MakePolicyCommand(CommandBase):
     def _prepare_policy_info(self, name: str, model: str | None = None) -> dict:
         """Prepare policy information."""
         if not name:
-            raise ValueError("Policy name is required")
+            raise InvalidArgumentException("Policy name is required")
 
         class_name = self._clean_class_name(name)
         policies_dir = Path(paths("policies"))
@@ -106,7 +107,7 @@ class MakePolicyCommand(CommandBase):
             self._show_usage_tips(policy_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write policy file: {e}") from e
+            raise StorageException(f"Failed to write policy file: {e}") from e
 
     def _generate_policy_code(self, policy_info: dict) -> str:
         """Generate the policy class code."""

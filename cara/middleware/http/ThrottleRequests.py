@@ -8,7 +8,8 @@ knows when to retry. Otherwise, adds rate-limit info in response headers.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.facades import Log, RateLimiter
 from cara.http import Request, Response
@@ -65,11 +66,11 @@ class ThrottleRequests(Middleware):
         else:
             self.custom_window_minutes = None
 
-    async def handle(self, request: Request, next: Callable):
+    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
         """Handle rate limiting logic."""
         # Bypass for trusted IPs (monitoring, health checks, local dev).
         if self._is_trusted_ip(request):
-            return await next(request)
+            return await next_fn(request)
 
         # ROOT-CAUSE / scenario 6 (concurrent load probe).
         # ``ThrottleRequests`` is registered TWICE in the framework:
@@ -95,14 +96,14 @@ class ThrottleRequests(Middleware):
         # without taking protection away from any route that already
         # declared ``throttle:<name>``.
         if self.custom_limit is None and self.custom_window_minutes is None:
-            return await next(request)
+            return await next_fn(request)
 
         # First, check if parameter is a named limiter
         limit_config = self._resolve_limit_config(request)
 
         if limit_config is None:
             # If no limit config found, allow the request through
-            return await next(request)
+            return await next_fn(request)
 
         # Get the rate limit key
         key = self._resolve_key(request, limit_config)
@@ -137,7 +138,7 @@ class ThrottleRequests(Middleware):
             return resp
 
         # If allowed, call the next handler to get the response
-        response = await next(request)
+        response = await next_fn(request)
 
         # Attach headers so clients can see their quota
         max_attempts = getattr(limit_config, "max_attempts", self.custom_limit or 60)

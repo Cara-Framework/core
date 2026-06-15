@@ -8,6 +8,11 @@ Guards are singleton instances that persist across requests.
 This middleware runs automatically after every HTTP response is sent.
 """
 
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
@@ -25,7 +30,7 @@ class ResetAuth(Middleware):
     between different requests and users.
     """
 
-    async def handle(self, request: Request, next_fn):
+    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
         """This middleware only works as terminable, no pre-processing needed."""
         return await next_fn(request)
 

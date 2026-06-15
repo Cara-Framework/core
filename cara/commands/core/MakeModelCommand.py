@@ -10,6 +10,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -38,7 +39,7 @@ class MakeModelCommand(CommandBase):
         # Validate and prepare
         try:
             model_info = self._prepare_model_info(name, table, fillable)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -63,12 +64,12 @@ class MakeModelCommand(CommandBase):
     ) -> dict:
         """Prepare and validate model information."""
         if not name:
-            raise ValueError("Model name is required")
+            raise InvalidArgumentException("Model name is required")
 
         # Clean and validate name
         class_name = self._clean_class_name(name)
         if not class_name:
-            raise ValueError("Invalid model name")
+            raise InvalidArgumentException("Invalid model name")
 
         # Determine table name
         table_name = table or self._generate_table_name(class_name)
@@ -101,7 +102,7 @@ class MakeModelCommand(CommandBase):
 
         # Validate
         if not name.isidentifier():
-            raise ValueError(f"'{name}' is not a valid Python class name")
+            raise InvalidArgumentException(f"'{name}' is not a valid Python class name")
 
         return name
 
@@ -171,7 +172,7 @@ class MakeModelCommand(CommandBase):
             self._show_usage_tips(model_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write model file: {e}") from e
+            raise StorageException(f"Failed to write model file: {e}") from e
 
     def _generate_model_code(self, model_info: dict) -> str:
         """Generate the model class code."""

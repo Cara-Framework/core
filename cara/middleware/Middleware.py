@@ -17,6 +17,8 @@ from typing import (
     get_origin,
 )
 
+from cara.exceptions import BadRequestException
+
 
 class Middleware(ABC):
     """
@@ -140,7 +142,7 @@ class MiddlewareParameterParser:
                 raw_value = raw_parameters[index].strip()
             else:
                 if is_required:
-                    raise ValueError(f"Required parameter '{param_name}' is missing")
+                    raise BadRequestException(f"Required parameter '{param_name}' is missing")
                 parsed[param_name] = default_value
                 continue
 
@@ -152,7 +154,7 @@ class MiddlewareParameterParser:
                 parsed[param_name] = parsed_value
             except Exception as e:
                 if is_required:
-                    raise ValueError(f"Cannot parse parameter '{param_name}': {e}") from e
+                    raise BadRequestException(f"Cannot parse parameter '{param_name}': {e}") from e
                 parsed[param_name] = default_value
 
         return parsed

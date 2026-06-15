@@ -25,10 +25,11 @@ are production-safe for a JSON API:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.configuration import config
-from cara.http import Request
+from cara.http import Request, Response
 from cara.middleware import Middleware
 
 _DEFAULT_HEADERS: dict[str, str] = {
@@ -101,8 +102,8 @@ class SecurityHeaders(Middleware):
 
         return headers, hsts, preload
 
-    async def handle(self, request: Request, next: Callable):
-        response = await next(request)
+    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+        response = await next_fn(request)
 
         try:
             for name, value in self._headers.items():

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pendulum
 
+from cara.exceptions import InvalidArgumentException
 from cara.support import paths
 
 
@@ -47,7 +48,7 @@ class MigrationGenerator:
         """Generate CREATE TABLE migration content."""
         # Check if model has fields method
         if not model_info.get("has_fields_method", False):
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"❌ Model '{model_info['name']}' does not have a 'fields' property method!\n"
                 f"   📁 File: {model_info['filename']}\n"
                 f"   💡 Add a 'fields' property method to define table structure:\n"

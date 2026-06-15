@@ -16,6 +16,7 @@ from itertools import groupby
 
 from dotty_dict import Dotty
 
+from cara.exceptions import InvalidArgumentException
 from cara.support.Macroable import Macroable
 from cara.support.Structures import data_get
 
@@ -139,9 +140,9 @@ class Collection(Macroable):
         count = len(filtered)
 
         if count == 0:
-            raise ValueError("Collection is empty")
+            raise InvalidArgumentException("Collection is empty")
         elif count > 1:
-            raise ValueError("Collection contains more than one item")
+            raise InvalidArgumentException("Collection contains more than one item")
 
         return filtered[0]
 
@@ -833,7 +834,7 @@ class Collection(Macroable):
             return self
 
         if not isinstance(items, list):
-            raise ValueError("Unable to merge incompatible types")
+            raise InvalidArgumentException("Unable to merge incompatible types")
 
         self._items += items
         return self
@@ -851,7 +852,7 @@ class Collection(Macroable):
         values = self.__get_items(values)
 
         if len(self._items) != len(values):
-            raise ValueError("The number of keys must match the number of values")
+            raise InvalidArgumentException("The number of keys must match the number of values")
 
         return self.__class__(dict(zip(self._items, values)))
 
@@ -999,7 +1000,7 @@ class Collection(Macroable):
         if collection_count == 0:
             return None
         elif count and count > collection_count:
-            raise ValueError("count argument must be inferior to collection length.")
+            raise InvalidArgumentException("count argument must be inferior to collection length.")
         elif count:
             items = random.sample(self._items, k=count)
             return self.__class__(items)
@@ -1472,7 +1473,7 @@ class Collection(Macroable):
             A new Collection instance with the filtered items.
         """
         if len(values) != 2:
-            raise ValueError("Values must be an array with exactly 2 elements")
+            raise InvalidArgumentException("Values must be an array with exactly 2 elements")
 
         min_value, max_value = values
 
@@ -1496,7 +1497,7 @@ class Collection(Macroable):
             A new Collection instance with the filtered items.
         """
         if len(values) != 2:
-            raise ValueError("Values must be an array with exactly 2 elements")
+            raise InvalidArgumentException("Values must be an array with exactly 2 elements")
 
         min_value, max_value = values
 
@@ -1555,7 +1556,7 @@ class Collection(Macroable):
         """
         items = self.__get_items(items)
         if not isinstance(items, list):
-            raise ValueError("The 'items' parameter must be a list or a Collection")
+            raise InvalidArgumentException("The 'items' parameter must be a list or a Collection")
 
         _items = []
         for x, y in zip(self, items):
@@ -1735,7 +1736,7 @@ class Collection(Macroable):
         if not callable(callback):
             if not raise_exception:
                 return False
-            raise ValueError("The 'callback' should be a function")
+            raise InvalidArgumentException("The 'callback' should be a function")
         return True
 
     def _make_comparison(self, a, b, op):
@@ -2070,7 +2071,7 @@ class Collection(Macroable):
         """
         for item in self._items:
             if not isinstance(item, types):
-                raise ValueError(f"Item {item} is not of type {types}")
+                raise InvalidArgumentException(f"Item {item} is not of type {types}")
 
         return self
 

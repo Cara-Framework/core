@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 
 class Channel:
     """Public broadcasting channel — no authorization needed."""
@@ -36,7 +38,7 @@ class Channel:
 
     def __init__(self, name: str) -> None:
         if not isinstance(name, str) or not name:
-            raise ValueError(f"Channel name must be a non-empty string, got {name!r}")
+            raise InvalidArgumentException(f"Channel name must be a non-empty string, got {name!r}")
         # Strip any prefix the caller already attached, so
         # ``PrivateChannel("private-foo")`` and
         # ``PrivateChannel("foo")`` produce the same result.

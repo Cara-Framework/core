@@ -27,6 +27,8 @@ import random
 from collections.abc import Callable
 from typing import Any, ClassVar
 
+from cara.exceptions import InvalidArgumentException
+
 
 class Lottery:
     """Run a callback with ``chances/total`` probability."""
@@ -39,9 +41,9 @@ class Lottery:
 
     def __init__(self, chances: int, total: int) -> None:
         if total <= 0:
-            raise ValueError("total must be positive")
+            raise InvalidArgumentException("total must be positive")
         if chances < 0:
-            raise ValueError("chances must be non-negative")
+            raise InvalidArgumentException("chances must be non-negative")
         self._chances = chances
         self._total = total
         self._winner: Callable[[], Any] | None = None

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from cara.exceptions import InvalidArgumentException
+
 
 class ViewCompiler:
     """Template compiler for converting templates to Python code."""
@@ -190,7 +192,7 @@ class ViewCompiler:
                     compiled_lines.append("    " * self.indent_level + compiled_directive)
             else:
                 # Throw exception for invalid directives
-                raise ValueError(f"Unknown directive: @{directive_name}")
+                raise InvalidArgumentException(f"Unknown directive: @{directive_name}")
 
         # Handle any remaining content in the line after removing directives
         remaining_content = re.sub(directive_pattern, "", line).strip()

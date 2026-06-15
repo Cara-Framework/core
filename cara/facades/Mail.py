@@ -1,4 +1,6 @@
-from cara.facades import Facade
+from __future__ import annotations
+
+from .Facade import Facade
 
 
 class Mail(metaclass=Facade):

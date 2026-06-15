@@ -12,6 +12,7 @@ import time
 from cara.exceptions import (
     DatabaseUnavailableException,
     DriverNotFoundException,
+    InvalidArgumentException,
     QueryException,
 )
 
@@ -375,7 +376,7 @@ class PostgresConnection(BaseConnection):
     def _validate_savepoint_name(name: str) -> None:
         """Guard against SQL injection in savepoint identifiers."""
         if not _SAVEPOINT_RE.match(name):
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"Invalid savepoint name '{name}': "
                 "must be alphanumeric/underscore, starting with a letter or underscore"
             )

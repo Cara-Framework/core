@@ -14,6 +14,8 @@ from typing import Any
 
 import pendulum
 
+from cara.exceptions import InvalidArgumentException
+
 from cara.facades import Log
 
 
@@ -288,7 +290,7 @@ class QueueMonitor:
         if format.lower() == "json":
             return json.dumps(self.get_performance_summary(), indent=2)
         else:
-            raise ValueError(f"Unsupported export format: {format}")
+            raise InvalidArgumentException(f"Unsupported export format: {format}")
 
     def health_check(self) -> dict[str, Any]:
         """

@@ -56,11 +56,11 @@ class LogFake:
     def exception(self, message: Any, **kwargs: Any) -> None:
         self._record("exception", message, **kwargs)
 
-    def withContext(self, **context: Any) -> _FakeContextualLogger:
+    def with_context(self, **context: Any) -> _FakeContextualLogger:
         """Return a scoped fake logger that appends context tags.
 
-        Mirrors the real ``Logger.withContext`` so production code paths
-        like ``BaseJob`` (``Log.withContext(job_id=...).info(...)``)
+        Mirrors the real ``Logger.with_context`` so production code paths
+        like ``BaseJob`` (``Log.with_context(job_id=...).info(...)``)
         round-trip under tests — every message gets a ``[k=v]`` suffix
         and lands in this fake's ``records`` list under the same level.
         """

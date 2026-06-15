@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from cara.exceptions import InvalidArgumentException
+
 # SQL identifiers (table, column, schema, database names) must be
 # alphanumeric + underscore + dot (for schema.table).  This prevents
 # injection when identifiers are interpolated into information_schema
@@ -32,12 +34,12 @@ class Platform:
             The validated identifier string
 
         Raises:
-            ValueError: If the identifier contains invalid characters
+            InvalidArgumentException: If the identifier contains invalid characters
         """
         if not name or not isinstance(name, str):
-            raise ValueError(f"Invalid SQL {label}: must be a non-empty string")
+            raise InvalidArgumentException(f"Invalid SQL {label}: must be a non-empty string")
         if not _SQL_IDENTIFIER_RE.match(name):
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"Invalid SQL {label} '{name}': "
                 "must be alphanumeric/underscore/dot, starting with a letter or underscore"
             )

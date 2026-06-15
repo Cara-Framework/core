@@ -17,7 +17,7 @@ from typing import Any
 import pendulum
 import pika
 
-from cara.exceptions import DriverLibraryNotFoundException
+from cara.exceptions import QueueDriverLibraryNotFoundException
 from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
@@ -688,7 +688,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         try:
             import pika
         except ImportError:
-            raise DriverLibraryNotFoundException(
+            raise QueueDriverLibraryNotFoundException(
                 "pika is required for AMQPDriver. Install with: pip install pika"
             )
 
@@ -1363,7 +1363,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         try:
             import pika
         except ImportError:
-            raise DriverLibraryNotFoundException(
+            raise QueueDriverLibraryNotFoundException(
                 "pika is required for AMQPDriver. Install with: pip install pika"
             )
 

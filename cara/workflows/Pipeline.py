@@ -13,6 +13,7 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
 from cara.facades import Log
 
 
@@ -179,12 +180,12 @@ class Pipeline:
         elif self.pipeline_type == PipelineType.ASYNC_PARALLEL:
             return await self._execute_async_parallel()
         else:
-            raise ValueError(f"Unknown pipeline type: {self.pipeline_type}")
+            raise InvalidArgumentException(f"Unknown pipeline type: {self.pipeline_type}")
 
     def dispatch(self) -> dict[str, Any]:
         """Dispatch async pipeline (non-blocking)."""
         if self.pipeline_type == PipelineType.SYNC:
-            raise ValueError("Cannot dispatch sync pipeline. Use execute() instead.")
+            raise InvalidArgumentException("Cannot dispatch sync pipeline. Use execute() instead.")
 
         Log.info(
             f"📡 Dispatching pipeline: {self.name} Type: {self.pipeline_type.value}",
@@ -327,7 +328,7 @@ class Pipeline:
                     job_dispatch = step.step_class.dispatch(*step.args, **step.kwargs)
 
                     if step.routing_key:
-                        job_id = job_dispatch.withRoutingKey(step.routing_key)
+                        job_id = job_dispatch.with_routing_key(step.routing_key)
                     else:
                         job_id = job_dispatch
 
@@ -352,7 +353,7 @@ class Pipeline:
                         category="cara.pipeline",
                     )
                 else:
-                    raise ValueError(
+                    raise InvalidArgumentException(
                         f"Step {step.step_class.__name__} is not a dispatchable job"
                     )
 
@@ -413,7 +414,7 @@ class Pipeline:
 
         try:
             if not hasattr(first_step.step_class, "dispatch"):
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"Step {first_step.step_class.__name__} is not a dispatchable job"
                 )
 
@@ -421,8 +422,8 @@ class Pipeline:
                 *first_step.args, **first_step.kwargs
             )
 
-            if first_step.routing_key and hasattr(pending, "withRoutingKey"):
-                pending = pending.withRoutingKey(first_step.routing_key)
+            if first_step.routing_key and hasattr(pending, "with_routing_key"):
+                pending = pending.with_routing_key(first_step.routing_key)
 
             # Attach the rest of the chain if the dispatcher supports it.
             if remaining_steps and hasattr(pending, "chain"):
@@ -469,7 +470,7 @@ class Pipeline:
                     job_dispatch = step.step_class.dispatch(*step.args, **step.kwargs)
 
                     if step.routing_key:
-                        job_id = job_dispatch.withRoutingKey(step.routing_key)
+                        job_id = job_dispatch.with_routing_key(step.routing_key)
                     else:
                         job_id = job_dispatch
 

@@ -120,15 +120,9 @@ class Bus:
                 params = Bus.get_dispatch_params(job)
                 dispatch_call = job.__class__.dispatch(**params)
                 if routing_key:
-                    dispatch_call.withRoutingKey(routing_key)
+                    dispatch_call.with_routing_key(routing_key)
                 if queue:
-                    # PendingDispatch exposes both camelCase and snake_case helpers.
-                    # Prefer onQueue() for Laravel parity; fall back gracefully if
-                    # a driver supplies a different chainable.
-                    if hasattr(dispatch_call, "onQueue"):
-                        dispatch_call.onQueue(queue)
-                    elif hasattr(dispatch_call, "on_queue"):
-                        dispatch_call.on_queue(queue)
+                    dispatch_call.on_queue(queue)
                 if delay:
                     if hasattr(dispatch_call, "delay"):
                         dispatch_call.delay(delay)

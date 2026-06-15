@@ -134,7 +134,7 @@ class RequestHelpersMixin:
         path = self.path
         return f"{scheme}://{host}{path}"
 
-    def fullUrl(self) -> str:
+    def full_url(self) -> str:
         """
         Full URL with query string.
 

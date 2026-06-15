@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from cara.exceptions import QueueException
+
 
 class JsonJobSerializer:
     """
@@ -57,7 +59,7 @@ class JsonJobSerializer:
         try:
             return json.dumps(payload, default=JsonJobSerializer._json_default)
         except (TypeError, ValueError) as e:
-            raise ValueError(
+            raise QueueException(
                 f"Job {job_class.__name__} has non-serializable parameters. "
                 f"Only primitives (str, int, dict, list) are allowed in __init__. "
                 f"Error: {e}"
@@ -82,14 +84,14 @@ class JsonJobSerializer:
         try:
             payload = json.loads(json_string)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON payload: {e}") from e
+            raise QueueException(f"Invalid JSON payload: {e}") from e
 
         # Import the job class dynamically
         module_name = payload.get("module")
         class_name = payload.get("class")
 
         if not module_name or not class_name:
-            raise ValueError("Missing 'module' or 'class' in payload")
+            raise QueueException("Missing 'module' or 'class' in payload")
 
         try:
             import importlib
@@ -97,7 +99,7 @@ class JsonJobSerializer:
             module = importlib.import_module(module_name)
             job_class = getattr(module, class_name)
         except (ImportError, AttributeError) as e:
-            raise ValueError(f"Cannot import {module_name}.{class_name}: {e}") from e
+            raise QueueException(f"Cannot import {module_name}.{class_name}: {e}") from e
 
         return {
             "class": job_class,

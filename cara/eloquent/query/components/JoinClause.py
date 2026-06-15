@@ -6,11 +6,11 @@ except ImportError:  # Python <3.11
     from typing_extensions import Self  # noqa: F401
 
 """
-JoinClause - Simple JOIN clause component (different from expression)
+JoinComponent - Simple JOIN clause component (different from expression)
 """
 
 
-class JoinClause:
+class JoinComponent:
     """Simple JOIN clause component representation."""
 
     def __init__(self, join_type: str, table: str, on_conditions: list | None = None):

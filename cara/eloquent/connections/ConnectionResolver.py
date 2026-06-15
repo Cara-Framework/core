@@ -30,6 +30,12 @@ the ORM suite; see ``tests/cara/eloquent/test_concurrent_transactions.py``.
 from contextlib import contextmanager
 from contextvars import ContextVar
 
+from cara.exceptions import (
+    ConfigurationException,
+    DriverNotFoundException,
+    InvalidArgumentException,
+)
+
 # Per-context registry of "currently inside-transaction" connections.
 # Keyed by connection name (``"app"``, ``"mysql"``, …) so a single
 # context can hold transactions on multiple logical connections
@@ -100,7 +106,7 @@ class ConnectionResolver:
     def _get_connection_info(self, connection_name):
         """Get connection info from DatabaseManager"""
         if not self.database_manager:
-            raise RuntimeError("DatabaseManager not set on ConnectionResolver")
+            raise ConfigurationException("DatabaseManager not set on ConnectionResolver")
 
         return self.database_manager.get_connection_info(connection_name)
 
@@ -129,7 +135,7 @@ class ConnectionResolver:
         driver = connection_info.get("driver")
 
         if not driver:
-            raise ValueError(f"Driver not found for connection: {connection_name}")
+            raise DriverNotFoundException(f"Driver not found for connection: {connection_name}")
 
         connection_class = self.connection_factory.make(driver)
 
@@ -260,7 +266,7 @@ class ConnectionResolver:
         """Helper method - DRY principle"""
         registry = _get_registry()
         if connection_name not in registry:
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"No active transaction found for connection: {connection_name}"
             )
         return registry[connection_name]

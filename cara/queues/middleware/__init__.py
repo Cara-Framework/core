@@ -15,15 +15,17 @@ import asyncio
 from typing import Any
 from collections.abc import Callable
 
+from .ConcurrencyLimited import ConcurrencyLimited
 from .RateLimited import RateLimited, WithoutOverlapping
 from .ThrottlesExceptions import ThrottlesExceptions
 
 __all__ = [
+    "ConcurrencyLimited",
     "RateLimited",
-    "run_through_middleware",
-    "run_through_middleware_async",
     "ThrottlesExceptions",
     "WithoutOverlapping",
+    "run_through_middleware",
+    "run_through_middleware_async",
 ]
 
 

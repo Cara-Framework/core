@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -29,7 +30,7 @@ class MakeMailCommand(CommandBase):
 
         try:
             mail_info = self._prepare_mail_info(name)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -48,7 +49,7 @@ class MakeMailCommand(CommandBase):
     def _prepare_mail_info(self, name: str) -> dict:
         """Prepare mail information."""
         if not name:
-            raise ValueError("Mail name is required")
+            raise InvalidArgumentException("Mail name is required")
 
         class_name = self._clean_class_name(name)
         template_name = self._generate_template_name(class_name)
@@ -121,7 +122,7 @@ class MakeMailCommand(CommandBase):
             self._show_usage_tips(mail_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write mail file: {e}") from e
+            raise StorageException(f"Failed to write mail file: {e}") from e
 
     def _generate_mail_code(self, mail_info: dict) -> str:
         """Generate the mail class code."""

@@ -11,6 +11,7 @@ from typing import Any
 
 from cara.commands import CommandBase
 from cara.decorators import command, get_registered_commands
+from cara.exceptions import CaraException
 
 
 @command(
@@ -70,7 +71,7 @@ class ListCommandsCommand(CommandBase):
         registered_commands = get_registered_commands()
 
         if not registered_commands:
-            raise RuntimeError("No commands are registered")
+            raise CaraException("No commands are registered")
 
         commands = []
         for cmd_class in registered_commands:

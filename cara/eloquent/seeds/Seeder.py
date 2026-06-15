@@ -1,5 +1,6 @@
 import pydoc
 
+from cara.exceptions import InvalidArgumentException
 from cara.facades import Log
 
 
@@ -37,7 +38,7 @@ class Seeder:
         database_seeder = pydoc.locate(file_name)
 
         if not database_seeder:
-            raise ValueError(f"Could not find the {file_name} seeder file")
+            raise InvalidArgumentException(f"Could not find the {file_name} seeder file")
 
         self.ran_seeds.append(database_seeder)
 

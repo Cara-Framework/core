@@ -32,7 +32,7 @@ except ImportError:  # Python <3.11
 import pendulum
 from inflection import tableize, underscore
 
-from cara.exceptions import ModelNotFoundException
+from cara.exceptions import InvalidArgumentException, ModelNotFoundException
 from cara.support.Collection import Collection
 
 # Import cast system
@@ -48,7 +48,7 @@ from ..concerns.HasRelationships import HasRelationships
 from ..concerns.HasTimestamps import HasTimestamps
 from ..observers import ObservesEvents
 from ..query import QueryBuilder
-from ..scopes import TimeStampsMixin
+from ..scopes import TimestampsMixin
 
 
 class ModelMeta(type):
@@ -148,7 +148,7 @@ class ModelMeta(type):
 class Model(
     HasAttributes,
     HasRelationships,
-    TimeStampsMixin,
+    TimestampsMixin,
     ObservesEvents,
     HasTimestamps,
     metaclass=ModelMeta,
@@ -400,7 +400,7 @@ class Model(
         """Get the primary key column name."""
         return cls.__primary_key__
 
-    def get_primary_key_type(self):
+    def get_primary_key_type(self) -> str:
         """
         Gets the primary key column type.
 
@@ -409,7 +409,7 @@ class Model(
         """
         return self.__primary_key_type__
 
-    def get_primary_key_value(self):
+    def get_primary_key_value(self) -> Any:
         """
         Gets the primary key value.
 
@@ -428,7 +428,7 @@ class Model(
                 f"class '{name}' has no attribute {self.get_primary_key()}. Did you set the primary key correctly on the model using the __primary_key__ attribute?"
             )
 
-    def get_foreign_key(self):
+    def get_foreign_key(self) -> str:
         """
         Gets the foreign key based on this model name.
 
@@ -444,7 +444,7 @@ class Model(
     # (Laravel parity — ``Model.query()``). The instance-level shadow that
     # used to live here was dead code and has been removed.
 
-    def get_builder(self):
+    def get_builder(self) -> Any:
         if hasattr(self, "builder"):
             return self.builder
 
@@ -459,20 +459,20 @@ class Model(
 
         return self.builder
 
-    def get_selects(self):
+    def get_selects(self) -> list[str]:
         return self.__selects__
 
     @classmethod
-    def get_columns(cls):
+    def get_columns(cls) -> list[str]:
         row = cls.first()
         return list(row.__attributes__.keys()) if row else []
 
-    def get_connection_details(self):
+    def get_connection_details(self) -> dict[str, Any]:
         from cara.facades import DB
 
         return DB.get_connection_details()
 
-    def boot(self):
+    def boot(self) -> None:
         if not self._booted:
             self.observe_events(self, "booting")
             for base_class in inspect.getmro(self.__class__):
@@ -675,7 +675,7 @@ class Model(
             if related and hasattr(related, "touch"):
                 related.touch()
 
-    def touch(self):
+    def touch(self) -> None:
         """Update the model's updated_at timestamp."""
         # Get the timestamp column name
         timestamp_col = "updated_at"
@@ -703,7 +703,7 @@ class Model(
         return cls.__table__ or tableize(cls.__name__)
 
     @classmethod
-    def table(cls, table):
+    def table(cls, table) -> str:
         """
         Gets the table name.
 
@@ -768,14 +768,14 @@ class Model(
 
         return result
 
-    def is_loaded(self):
+    def is_loaded(self) -> bool:
         return bool(self.__attributes__)
 
-    def is_created(self):
+    def is_created(self) -> bool:
         return self.get_primary_key() in self.__attributes__
 
     @classmethod
-    def hydrate(cls, result, relations=None):
+    def hydrate(cls, result, relations=None) -> Any:
         """
         Takes a result and loads it into a model.
 
@@ -839,7 +839,7 @@ class Model(
         return self
 
     @classmethod
-    def new_collection(cls, data):
+    def new_collection(cls, data) -> Any:
         """
         Takes a result and puts it into a new collection. This is designed to be able to be
         overidden by the user.
@@ -915,7 +915,7 @@ class Model(
             return {}
         return {x: cls.cast_value(x, dictionary[x]) for x in dictionary}
 
-    def fresh(self):
+    def fresh(self) -> Any:
         """Return a newly-loaded instance of the same record (Laravel parity)."""
         return (
             self.get_builder()
@@ -931,11 +931,11 @@ class Model(
 
         Laravel parity — unlike :meth:`fresh`, this mutates ``self`` and
         returns ``self`` so callers can chain or ignore the return value.
-        Raises ``ValueError`` if the record no longer exists.
+        Raises ``ModelNotFoundException`` if the record no longer exists.
         """
         reloaded = self.fresh()
         if reloaded is None:
-            raise ValueError(
+            raise ModelNotFoundException(
                 f"Cannot refresh {self.__class__.__name__}: record "
                 f"{self.get_primary_key()}={self.get_primary_key_value()!r} "
                 "was not found."
@@ -950,7 +950,7 @@ class Model(
         self._relationships = {}
         return self
 
-    def serialize(self, exclude=None, include=None):
+    def serialize(self, exclude=None, include=None) -> dict[str, Any]:
         """
         Convert the model instance to a serializable dictionary.
         Uses the proper cast system to handle all data types.
@@ -1036,7 +1036,7 @@ class Model(
 
         return data
 
-    def to_array(self, exclude=None, include=None):
+    def to_array(self, exclude=None, include=None) -> dict[str, Any]:
         """
         Laravel-style alias for serialize().
 
@@ -1045,7 +1045,7 @@ class Model(
         """
         return self.serialize(exclude=exclude, include=include)
 
-    def to_json(self, **kwargs):
+    def to_json(self, **kwargs) -> str:
         """
         Convert the model instance to JSON.
         Laravel-style method with options.
@@ -1184,7 +1184,7 @@ class Model(
         return clone
 
     @classmethod
-    def first_or_create(cls, wheres, creates: dict | None = None):
+    def first_or_create(cls, wheres, creates: dict | None = None) -> Any:
         """
         Get the first record matching the attributes or create it.
 
@@ -1252,7 +1252,7 @@ class Model(
         return "duplicate key" in msg or "unique constraint" in msg
 
     @classmethod
-    def first_or_new(cls, wheres, values: dict | None = None):
+    def first_or_new(cls, wheres, values: dict | None = None) -> Any:
         """
         Laravel-style firstOrNew.
         Get the first record matching the attributes, or a new (unpersisted)
@@ -1275,7 +1275,7 @@ class Model(
         return instance
 
     @classmethod
-    def update_or_create(cls, wheres, updates):
+    def update_or_create(cls, wheres, updates) -> Any:
         """Upsert: update if a matching row exists, else create.
 
         Same TOCTOU race as ``first_or_create`` — the SELECT-then-
@@ -1309,7 +1309,7 @@ class Model(
         return self.where(wheres).first()
 
     @classmethod
-    def truncate(cls, foreign_keys=False):
+    def truncate(cls, foreign_keys=False) -> None:
         """
         Laravel-style truncate method.
         Truncate the table associated with the model.
@@ -1323,7 +1323,7 @@ class Model(
         return cls().get_builder().truncate(foreign_keys)
 
     @classmethod
-    def query(cls):
+    def query(cls) -> Any:
         """
         Laravel-style query method.
         Begin querying the model.
@@ -1360,7 +1360,7 @@ class Model(
         return new_dic
 
     # NOTE: timestamp methods (touch, _update_timestamps, _current_timestamp) are now
-    # provided by the HasTimestamps concern imported via TimeStampsMixin
+    # provided by the HasTimestamps concern imported via TimestampsMixin
 
     def __getattr__(self, attribute):
         """
@@ -1763,7 +1763,7 @@ class Model(
 
     def save_many(self, relation, relating_records):
         if isinstance(relating_records, Model):
-            raise ValueError(
+            raise InvalidArgumentException(
                 "Saving many records requires an iterable like a collection or a list of models and not a Model object. To attach a model, use the 'attach' method."
             )
 
@@ -1772,7 +1772,7 @@ class Model(
 
     def detach_many(self, relation, relating_records):
         if isinstance(relating_records, Model):
-            raise ValueError(
+            raise InvalidArgumentException(
                 "Detaching many records requires an iterable like a collection or a list of models and not a Model object. To detach a model, use the 'detach' method."
             )
 

@@ -10,6 +10,9 @@ from __future__ import annotations
 import mimetypes
 import os
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from cara.http import Request, Response
 from cara.middleware import Middleware
 from cara.support.paths import public_path
@@ -23,50 +26,54 @@ class ServeStaticFiles(Middleware):
     directory and serves it directly, bypassing the normal routing system.
     """
 
-    async def handle(self, request: Request, next_handler):
+    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
         """
         Handle the request - serve static file if it exists, otherwise continue.
 
         Args:
             request: The HTTP request
-            next_handler: The next middleware/handler in the chain
+            next_fn: The next middleware/handler in the chain
 
         Returns:
-            Response: Either the static file response or the result of next_handler
+            Response: Either the static file response or the result of next_fn
         """
         # Get the public directory path using Laravel-style helper
         public_dir = public_path()
 
         # Only handle GET and HEAD requests for static files
         if request.method not in ["GET", "HEAD"]:
-            return await next_handler(request)
+            return await next_fn(request)
 
         # Check if this looks like a static file request
         path = request.path.lstrip("/")
 
         # Skip if path is empty or doesn't exist
         if not path:
-            return await next_handler(request)
+            return await next_fn(request)
 
         if not os.path.exists(public_dir):
-            return await next_handler(request)
+            return await next_fn(request)
 
         # Check if the file exists in the public directory
         full_path = os.path.join(public_dir, path)
 
         # Security check: ensure the path is within public directory
         if not self._is_safe_path(full_path, public_dir):
-            return await next_handler(request)
+            return await next_fn(request)
 
         if not os.path.isfile(full_path):
-            return await next_handler(request)
+            return await next_fn(request)
 
-        # Serve the static file
         try:
             return self._serve_file(full_path, request.method == "HEAD")
-        except Exception:
-            # If static file serving fails, continue with normal routing
-            return await next_handler(request)
+        except Exception as exc:
+            import sys
+
+            print(
+                f"[cara.middleware] ServeStaticFiles failed for '{path}': {exc}",
+                file=sys.stderr,
+            )
+            return await next_fn(request)
 
     def _is_safe_path(self, path: str, public_dir: str) -> bool:
         """

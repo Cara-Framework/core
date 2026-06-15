@@ -13,6 +13,7 @@ from typing import Any
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import CaraException, StorageException
 from cara.support import paths
 
 
@@ -127,7 +128,7 @@ class UpCommand(CommandBase):
             self._show_success_tips()
 
         except Exception as e:
-            raise Exception(f"Failed to disable maintenance mode: {e}") from e
+            raise CaraException(f"Failed to disable maintenance mode: {e}") from e
 
     def _show_success_tips(self) -> None:
         """Show helpful tips after successful deactivation."""
@@ -162,7 +163,7 @@ class UpCommand(CommandBase):
         try:
             self.maintenance_file.unlink()
         except Exception as e:
-            raise Exception(f"Failed to remove maintenance file: {e}") from e
+            raise StorageException(f"Failed to remove maintenance file: {e}") from e
 
     def _is_production(self) -> bool:
         """Check if running in production environment."""

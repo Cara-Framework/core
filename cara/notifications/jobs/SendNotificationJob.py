@@ -5,6 +5,7 @@ This job is automatically created when notifications implement ShouldQueue.
 Uses BaseJob which includes SerializesModels for proper serialization.
 """
 
+from cara.exceptions.types.base import CaraException
 from cara.queues.contracts import BaseJob
 
 
@@ -47,4 +48,4 @@ class SendNotificationJob(BaseJob):
         result = Notification._send_now(self.notifiable, self.notification)
 
         if not result:
-            raise Exception("Failed to send notification through channels")
+            raise CaraException("Failed to send notification through channels")

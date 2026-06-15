@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from cara.exceptions import DriverNotFoundException
+
+
 class ConnectionFactory:
     """
     Single Responsibility: Creates database connections ONLY
@@ -34,7 +39,7 @@ class ConnectionFactory:
             driver_name {string} -- The driver name (sqlite, mysql, postgres, etc.)
 
         Raises:
-            Exception: Raises exception if driver not found
+            DriverNotFoundException: Raises exception if driver not found
 
         Returns:
             cara.eloquent.connection.BaseConnection -- Returns connection class.
@@ -42,6 +47,6 @@ class ConnectionFactory:
         if driver_name in self._connections:
             return self._connections[driver_name]
 
-        raise Exception(
+        raise DriverNotFoundException(
             f"The '{driver_name}' connection driver does not exist. Available drivers: {list(self._connections.keys())}"
         )

@@ -26,6 +26,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import CaraException, StorageException
 from cara.support import paths
 
 
@@ -392,13 +393,13 @@ class RouteGeneratorCommand(CommandBase):
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
         except Exception as e:
-            raise Exception(f"Cannot read file: {e}") from e
+            raise StorageException(f"Cannot read file: {e}") from e
 
         # Parse AST to find class
         try:
             tree = ast.parse(content)
         except SyntaxError as e:
-            raise Exception(f"Python syntax error in file: {e}") from e
+            raise CaraException(f"Python syntax error in file: {e}") from e
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
@@ -1113,7 +1114,7 @@ class RouteGeneratorCommand(CommandBase):
             else:
                 # Clean up temp file
                 temp_path.unlink(missing_ok=True)
-                raise Exception("Generated file failed validation tests")
+                raise CaraException("Generated file failed validation tests")
 
         except Exception as e:
             # Rollback if we have a backup
@@ -1126,7 +1127,7 @@ class RouteGeneratorCommand(CommandBase):
                 except Exception:
                     pass
 
-            raise Exception(f"Failed to write routes file: {e}") from e
+            raise StorageException(f"Failed to write routes file: {e}") from e
 
     def _test_generated_file(self, file_path: Path) -> bool:
         """Test the generated routes file."""

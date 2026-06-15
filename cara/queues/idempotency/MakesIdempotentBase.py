@@ -293,7 +293,15 @@ class MakesIdempotentBase:
             "job_class": self.__class__.__name__,
             "parameters": self.get_job_parameters(),
         }
-        return Cache.add(lock_key, lock_data, self.JOB_LOCK_TTL)
+        # The lock MUST outlive the job. With a flat 30m TTL, a job whose
+        # own ``timeout`` is also ~30m (e.g. CleanOrphansJob) could have its
+        # lock auto-expire at the moment it's still running — a second worker
+        # then starts a duplicate, and this worker's ``finally`` release
+        # deletes the SECOND worker's freshly-acquired lock, cascading into a
+        # third. Size the TTL strictly above the job's enforced timeout so the
+        # lock can never lapse mid-run.
+        ttl = max(self.JOB_LOCK_TTL, int(getattr(self, "timeout", 0) or 0) + 300)
+        return Cache.add(lock_key, lock_data, ttl)
 
     def release_job_lock(self) -> None:
         """Release the idempotency lock.

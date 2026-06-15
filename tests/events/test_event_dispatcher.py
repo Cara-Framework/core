@@ -2,7 +2,31 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from cara.events.Event import Event as EventDispatcher, EventSubscriber
-from cara.events.UserRegisteredEvent import UserRegisteredEvent
+
+
+class UserRegisteredEvent:
+    """Test-local event fixture (moved out of framework core)."""
+
+    name = "user.registered"
+
+    def __init__(self, user_id, email, **extra):
+        self.user_id = user_id
+        self.email = email
+        self.extra = extra
+        self._stopped = False
+
+    def payload(self):
+        return {"user_id": self.user_id, "email": self.email, **self.extra}
+
+    def to_dict(self):
+        return self.payload()
+
+    def stop_propagation(self):
+        self._stopped = True
+
+    @property
+    def is_propagation_stopped(self):
+        return self._stopped
 
 
 class SimpleListener:

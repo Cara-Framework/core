@@ -5,8 +5,11 @@ This module provides middleware that checks for maintenance mode and returns a 5
 enabled.
 """
 
+from __future__ import annotations
+
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.http import Request, Response
 from cara.middleware import Middleware
@@ -14,7 +17,7 @@ from cara.support import paths
 
 
 class CheckMaintenanceMode(Middleware):
-    async def handle(self, request: Request, next: Callable):
+    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
         # Use paths() helper to get base path with MAINTENANCE file
         maintenance_path = paths("base", "MAINTENANCE")
 
@@ -32,4 +35,4 @@ class CheckMaintenanceMode(Middleware):
                 503,
             )
 
-        return await next(request)
+        return await next_fn(request)

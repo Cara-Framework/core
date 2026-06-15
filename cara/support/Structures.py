@@ -1,6 +1,10 @@
 """Helpers for multiple data structures."""
 
+from __future__ import annotations
+
 from dotty_dict import dotty
+
+from cara.exceptions import InvalidArgumentException
 
 
 def data(dictionary=None):
@@ -49,7 +53,7 @@ def data_set(dictionary, key, value, overwrite=True):
         dictionary {dict} -- the edited dictionary
     """
     if "*" in key:
-        raise ValueError("You cannot set values with wildcards *")
+        raise InvalidArgumentException("You cannot set values with wildcards *")
     if not overwrite and data_get(dictionary, key):
         return
     data(dictionary)[key] = value

@@ -91,7 +91,7 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
     only()/except_()/has()/filled().
     """
 
-    def __init__(self, application):
+    def __init__(self, application: Any) -> None:
         self.application = application
         self.scope: dict[str, Any] = {}
         self.receive: Any = None
@@ -105,6 +105,7 @@ class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
         self._ip: str | None = None
         self._body: bytes | None = None
         self._body_consumed = False
+        self._validation_instance: Any = None
 
         self._query_params: dict[str, list[str]] | None = None
         self._form_params: dict[str, Any] | None = None

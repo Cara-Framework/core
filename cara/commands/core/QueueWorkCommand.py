@@ -21,6 +21,7 @@ from typing import Any
 from cara.commands import CommandBase
 from cara.commands.AutoReloadMixin import AutoReloadMixin
 from cara.configuration import config
+from cara.exceptions import ConfigurationException, InvalidArgumentException
 from cara.decorators import command
 from cara.facades import Log
 from cara.queues.contracts import UniqueJob
@@ -958,13 +959,13 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # Determine driver
         driver_name = driver or config("queue.default")
         if not driver_name:
-            raise Exception(
+            raise ConfigurationException(
                 "No driver specified and no default 'queue.default' configured"
             )
 
         drivers = config("queue.drivers", {})
         if driver_name not in drivers:
-            raise Exception(f"Driver '{driver_name}' is not configured")
+            raise ConfigurationException(f"Driver '{driver_name}' is not configured")
 
         # Parse timeout
         timeout_val = 5
@@ -972,9 +973,9 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             try:
                 timeout_val = int(timeout)
                 if timeout_val < 1:
-                    raise ValueError("Timeout must be at least 1 second")
+                    raise InvalidArgumentException("Timeout must be at least 1 second")
             except ValueError as e:
-                raise Exception(f"Invalid timeout value: {e}") from e
+                raise InvalidArgumentException(f"Invalid timeout value: {e}") from e
         else:
             # Get from driver config
             timeout_val = config(f"queue.drivers.{driver_name}.poll", 5)
@@ -985,18 +986,18 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
             try:
                 max_jobs_val = int(max_jobs)
                 if max_jobs_val <= 0:
-                    raise ValueError("max-jobs must be positive")
+                    raise InvalidArgumentException("max-jobs must be positive")
             except ValueError as e:
-                raise Exception(f"Invalid max-jobs value: {e}") from e
+                raise InvalidArgumentException(f"Invalid max-jobs value: {e}") from e
 
         max_time_val = None
         if max_time:
             try:
                 max_time_val = int(max_time)
                 if max_time_val <= 0:
-                    raise ValueError("max-time must be positive")
+                    raise InvalidArgumentException("max-time must be positive")
             except ValueError as e:
-                raise Exception(f"Invalid max-time value: {e}") from e
+                raise InvalidArgumentException(f"Invalid max-time value: {e}") from e
 
         return {
             "driver_name": driver_name,

@@ -77,7 +77,7 @@ class HasTimestamps:
         app_timezone = env("APP_TIMEZONE", "UTC")
         return _datetime.in_timezone(app_timezone).to_datetime_string()
 
-    def freshTimestamp(self) -> str:
+    def fresh_timestamp(self) -> str:
         """Get a fresh timestamp."""
         return self._current_timestamp()
 

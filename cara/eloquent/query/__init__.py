@@ -16,7 +16,7 @@ from .builders.SelectBuilder import SelectBuilder
 from .builders.UpdateBuilder import UpdateBuilder
 from .builders.WhereBuilder import WhereBuilder
 from .components.GroupByClause import GroupByClause
-from .components.JoinClause import JoinClause
+from .components.JoinClause import JoinComponent
 from .components.OrderByClause import OrderByClause
 
 # Query components
@@ -38,7 +38,7 @@ __all__ = [
     "InsertBuilder",
     "DeleteBuilder",
     "WhereClause",
-    "JoinClause",
+    "JoinComponent",
     "OrderByClause",
     "GroupByClause",
     "EagerRelations",

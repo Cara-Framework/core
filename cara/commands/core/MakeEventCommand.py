@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -28,7 +29,7 @@ class MakeEventCommand(CommandBase):
 
         try:
             event_info = self._prepare_event_info(name)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -47,7 +48,7 @@ class MakeEventCommand(CommandBase):
     def _prepare_event_info(self, name: str) -> dict:
         """Prepare event information."""
         if not name:
-            raise ValueError("Event name is required")
+            raise InvalidArgumentException("Event name is required")
 
         class_name = self._clean_class_name(name)
         event_name = self._generate_event_name(class_name)
@@ -121,7 +122,7 @@ class MakeEventCommand(CommandBase):
             self._show_usage_tips(event_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write event file: {e}") from e
+            raise StorageException(f"Failed to write event file: {e}") from e
 
     def _generate_event_code(self, event_info: dict) -> str:
         """Generate the event class code."""

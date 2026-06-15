@@ -521,7 +521,7 @@ class Event:
                         f"{_listener_exc.__class__.__name__}: {_listener_exc}",
                         category="cara.events",
                     )
-                except Exception:
+                except (ImportError, RuntimeError):
                     pass
                 # Pipeline-critical listeners opt in via
                 # ``propagate_failures = True``. Re-raising lets the
@@ -646,9 +646,13 @@ class Event:
                 else event.__dict__,
                 event_class=event.__class__.__name__,
             )
+            job.queue = queue_name
 
-            # Dispatch to queue
-            Queue.withQueue(queue_name).withRoutingKey(routing_key).dispatch(job)
+            from cara.queues.contracts.Queueable import PendingDispatch
+
+            pending = PendingDispatch(job)
+            pending.with_routing_key(routing_key)
+            pending._dispatch_now()
             return True
 
         except Exception as e:

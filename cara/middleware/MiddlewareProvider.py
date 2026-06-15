@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 
 from cara.configuration import config
+from cara.exceptions import MiddlewareException
 from cara.facades import Log
 from cara.foundation import DeferredProvider
 from cara.middleware import Middleware, MiddlewareCapsule
@@ -64,28 +65,28 @@ class MiddlewareProvider(DeferredProvider):
         Validate that middleware class implements the correct interface.
 
         Raises:
-            ValueError: If middleware doesn't implement required methods
+            MiddlewareException: If middleware doesn't implement required methods
         """
         try:
             if not issubclass(middleware_class, Middleware):
-                raise ValueError(
+                raise MiddlewareException(
                     f"Middleware {middleware_class.__name__} must inherit from Middleware base class"
                 )
         except TypeError as e:
             # Handle cases where middleware_class is not a class
-            raise ValueError(
+            raise MiddlewareException(
                 f"Invalid middleware: {middleware_class} is not a class"
             ) from e
 
         # Check if handle method exists and has correct signature
         if not hasattr(middleware_class, "handle"):
-            raise ValueError(
+            raise MiddlewareException(
                 f"Middleware {middleware_class.__name__} must implement 'handle(request, next)' method"
             )
 
         handle_method = middleware_class.handle
         if not callable(handle_method):
-            raise ValueError(
+            raise MiddlewareException(
                 f"Middleware {middleware_class.__name__}.handle must be callable"
             )
 
@@ -95,7 +96,7 @@ class MiddlewareProvider(DeferredProvider):
 
         # Expected: self, request, next (3 parameters)
         if len(params) < 3:
-            raise ValueError(
+            raise MiddlewareException(
                 f"Middleware {middleware_class.__name__}.handle must accept (self, request, next) parameters. "
                 f"Found parameters: {params}"
             )

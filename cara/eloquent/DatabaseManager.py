@@ -8,6 +8,8 @@ except ImportError:  # Python <3.11
 import threading
 from contextlib import contextmanager
 
+from cara.exceptions import ConfigurationException, ConnectionNotRegisteredException
+
 
 class DatabaseManager:
     """
@@ -150,7 +152,7 @@ class DatabaseManager:
         """Get connection config"""
         connection_name = self._resolve_connection_name(connection)
         if connection_name not in self._connections:
-            raise ValueError(f"Connection '{connection_name}' not found")
+            raise ConnectionNotRegisteredException(f"Connection '{connection_name}' not found")
         return self._connections[connection_name]
 
     def connection(self, connection=None):
@@ -302,7 +304,7 @@ class DatabaseManager:
         driver = config.get("driver")
 
         if not driver:
-            raise ValueError(f"No driver specified for connection '{connection_name}'")
+            raise ConfigurationException(f"No driver specified for connection '{connection_name}'")
 
         resolver = self._ensure_resolver()
         return resolver.connection_factory.make(driver)

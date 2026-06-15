@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     from typing import Self
@@ -34,10 +34,11 @@ from cara.eloquent.expressions import (
     UpdateQueryExpression,
 )
 from cara.exceptions import (
-    HTTP404Exception,
+    Http404Exception,
     InvalidArgumentException,
     ModelNotFoundException,
     MultipleRecordsFoundException,
+    QueryException,
 )
 from cara.support.Collection import Collection
 
@@ -80,27 +81,24 @@ class QueryBuilder(ObservesEvents):
 
     def __init__(
         self,
-        grammar=None,
-        connection=None,
-        connection_class=None,
-        table=None,
-        connection_details=None,
-        connection_driver=None,
-        model=None,
-        scopes=None,
-        schema=None,
-        dry=False,
-        config_path=None,
-    ):
-        """
-        QueryBuilder initializer.
+        grammar: Any = None,
+        connection: Any = None,
+        connection_class: type | None = None,
+        table: str | None = None,
+        connection_details: dict[str, Any] | None = None,
+        connection_driver: str | None = None,
+        model: Any = None,
+        scopes: dict[str, Callable] | None = None,
+        schema: str | None = None,
+        dry: bool = False,
+        config_path: str | None = None,
+    ) -> None:
+        """QueryBuilder initializer.
 
         Arguments:
-            grammar {eloquent.grammar.Grammar} -- A grammar class.
-
-        Keyword Arguments:
-            connection {eloquent.connection.Connection} -- A connection class (default: {None})
-            table {str} -- the name of the table (default: {""})
+            grammar -- A grammar class.
+            connection -- A connection class.
+            table -- the name of the table.
         """
         self.config_path = config_path
         self.grammar = grammar
@@ -299,13 +297,13 @@ class QueryBuilder(ObservesEvents):
     def commit(self):
         """Commit the active database transaction."""
         if not hasattr(self, "_connection") or self._connection is None:
-            raise RuntimeError("No active transaction to commit.")
+            raise QueryException("No active transaction to commit.")
         return self._connection.commit()
 
     def rollback(self) -> Self:
         """Roll back the active database transaction."""
         if not hasattr(self, "_connection") or self._connection is None:
-            raise RuntimeError("No active transaction to roll back.")
+            raise QueryException("No active transaction to roll back.")
         self._connection.rollback()
         return self
 
@@ -579,16 +577,16 @@ class QueryBuilder(ObservesEvents):
         id_key: str = "id",
         cast: bool = True,
         ignore_mass_assignment: bool = False,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> Any:
         """
-        Specifies a dictionary that should be used to create new values.
+        Create a new record from the given dictionary of values.
 
         Arguments:
             creates {dict} -- A dictionary of columns and values.
 
         Returns:
-            self
+            Model instance (when bound to a model) or raw insert result.
         """
         self.set_action("insert")
         model = None
@@ -638,20 +636,20 @@ class QueryBuilder(ObservesEvents):
 
         return processed_results
 
-    def hydrate(self, result, relations=None):
+    def hydrate(self, result: Any, relations: list[str] | None = None) -> Any:
         return self._model.hydrate(result, relations)
 
-    def delete(self, column=None, value=None, query=False):
+    def delete(self, column: str | None = None, value: Any = None, query: bool = False) -> Self | int:
         """
-        Specify the column and value to delete or deletes everything based on a previously used
-        where expression.
+        Delete rows matching a WHERE clause, or by column/value.
 
         Keyword Arguments:
-            column {string} -- The name of the column (default: {None})
-            value {string|int} -- The value of the column (default: {None})
+            column -- The name of the column (default: {None})
+            value -- The value of the column (default: {None})
+            query -- If True, return the builder instead of executing.
 
         Returns:
-            self
+            Row count affected, or self if query=True.
         """
         model = None
         self.set_action("delete")
@@ -1997,13 +1995,13 @@ class QueryBuilder(ObservesEvents):
             # ``True``/``False`` would coerce to 1/0 silently — almost
             # always a caller mistake. ``False`` matches the sentinel
             # for "no limit", but pinning it here makes intent explicit.
-            raise ValueError(f"limit() expects an int or None, got {amount!r}")
+            raise InvalidArgumentException(f"limit() expects an int or None, got {amount!r}")
         elif isinstance(amount, int):
             if amount < 0:
-                raise ValueError(f"limit() must be >= 0, got {amount!r}")
+                raise InvalidArgumentException(f"limit() must be >= 0, got {amount!r}")
             self._limit = amount
         else:
-            raise ValueError(f"limit() expects an int or None, got {amount!r}")
+            raise InvalidArgumentException(f"limit() expects an int or None, got {amount!r}")
         return self
 
     def offset(self, amount) -> Self:
@@ -2021,13 +2019,13 @@ class QueryBuilder(ObservesEvents):
         if amount is None:
             self._offset = False
         elif isinstance(amount, bool):
-            raise ValueError(f"offset() expects an int or None, got {amount!r}")
+            raise InvalidArgumentException(f"offset() expects an int or None, got {amount!r}")
         elif isinstance(amount, int):
             if amount < 0:
-                raise ValueError(f"offset() must be >= 0, got {amount!r}")
+                raise InvalidArgumentException(f"offset() must be >= 0, got {amount!r}")
             self._offset = amount
         else:
-            raise ValueError(f"offset() expects an int or None, got {amount!r}")
+            raise InvalidArgumentException(f"offset() expects an int or None, got {amount!r}")
         return self
 
     def skip(self, *args, **kwargs):
@@ -2315,14 +2313,14 @@ class QueryBuilder(ObservesEvents):
         for col in column.split(","):
             col = col.strip()
             if not _ORDER_BY_COLUMN_RE.match(col):
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"Invalid order_by column {col!r}. "
                     f"Expected ``name`` or ``table.column`` identifier; use "
                     f"``order_by_raw`` for expressions."
                 )
             dir_str = (direction or "ASC").upper()
             if dir_str not in ("ASC", "DESC"):
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"Invalid order_by direction {direction!r}; expected ASC or DESC"
                 )
             self._order_by += (OrderByExpression(col, direction=dir_str),)
@@ -2431,12 +2429,12 @@ class QueryBuilder(ObservesEvents):
             return 0 if function == "COUNT" else None
         return prepared[0]
 
-    def first(self, fields=None, query=False):
+    def first(self, fields: list[str] | None = None, query: bool = False) -> Any:
         """
         Gets the first record.
 
         Returns:
-            dictionary -- Returns a dictionary of results.
+            Model instance, dict, or None. Self if query=True.
         """
 
         if not fields:
@@ -2533,7 +2531,7 @@ class QueryBuilder(ObservesEvents):
     def _get_eager_load_result(self, related, collection):
         return related.eager_load_from_collection(collection)
 
-    def find(self, record_id, column=None, query=False):
+    def find(self, record_id: Any, column: str | None = None, query: bool = False) -> Any:
         """
         Finds a row by the primary key ID. Requires a model.
 
@@ -2541,7 +2539,7 @@ class QueryBuilder(ObservesEvents):
             record_id {int} -- The ID of the primary key to fetch.
 
         Returns:
-            Model|None
+            Model instance or None. Self if query=True.
         """
         if not column:
             if not self._model:
@@ -2622,7 +2620,7 @@ class QueryBuilder(ObservesEvents):
         try:
             return self.find_or_fail(record_id=record_id, column=column)
         except ModelNotFoundException:
-            raise HTTP404Exception()
+            raise Http404Exception()
 
     def first_or_fail(self, query=False):
         """
@@ -2836,12 +2834,12 @@ class QueryBuilder(ObservesEvents):
 
         return self.prepare_result(result, collection=True)
 
-    def get(self, selects=None):
+    def get(self, selects: list[str] | None = None) -> Any:
         """
-        Runs the select query built from the query builder.
+        Run the SELECT query and return a collection of results.
 
         Returns:
-            self
+            Collection of Model instances or list of dicts.
         """
         selects = selects or []
         self.select(*selects)
@@ -2849,17 +2847,16 @@ class QueryBuilder(ObservesEvents):
 
         return self.prepare_result(result, collection=True)
 
-    def new_connection(self):
+    def new_connection(self) -> Any:
         if self._connection:
             return self._connection
 
-        # Use DatabaseManager to create connection instance
         self._connection = self._db_manager.create_connection_instance(
             self.connection, self._schema
         )
         return self._connection
 
-    def get_connection(self):
+    def get_connection(self) -> Any:
         return self._connection
 
     def without_eager(self) -> Self:
@@ -2936,7 +2933,9 @@ class QueryBuilder(ObservesEvents):
         else:
             offset = (page * per_page) - per_page
 
-        result = self.limit(per_page).offset(offset).get()
+        # Fetch one extra row to detect whether a next page exists.
+        # SimplePaginator trims the sentinel row before exposing data.
+        result = self.limit(per_page + 1).offset(offset).get()
 
         paginator = SimplePaginator(result, per_page, page)
         return paginator
@@ -3171,7 +3170,7 @@ class QueryBuilder(ObservesEvents):
             value = args[0]
 
         if operator not in operators:
-            raise ValueError(
+            raise InvalidArgumentException(
                 "Invalid comparison operator. The operator can be %s"
                 % ", ".join(operators)
             )
@@ -3768,7 +3767,7 @@ class QueryBuilder(ObservesEvents):
         # swap the order. ``re.fullmatch`` (not ``match``) so a
         # trailing ``;`` doesn't slip past.
         if not isinstance(column, str) or not _ORDER_BY_COLUMN_RE.fullmatch(column):
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"chunk_by_id: invalid column name {column!r}. Allowed: "
                 f"``[A-Za-z_][A-Za-z0-9_]*`` optionally with a single "
                 f"``.<col>`` qualifier (table.column).",

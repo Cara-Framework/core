@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from cara.facades import Log
-from cara.http import Request
+from cara.http import Request, Response
 from cara.middleware import Middleware
 
 # Query params whose values must never land in access logs. Hitting any of
@@ -131,7 +132,7 @@ class LogHttpRequests(Middleware):
         "white": "\033[97m",
     }
 
-    async def handle(self, request: Request, next: Callable):
+    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
         """Handle the HTTP request and log it."""
         start_time = time.time()
 
@@ -141,7 +142,7 @@ class LogHttpRequests(Middleware):
         # Process the request. On exception, log the path so access logs
         # stay useful for debugging (exception handler swallows the URL).
         try:
-            response = await next(request)
+            response = await next_fn(request)
         except Exception as exc:
             method = request.method
             path = _sanitize_log_path(request.path)

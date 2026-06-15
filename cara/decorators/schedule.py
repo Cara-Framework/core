@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 
 def scheduled(
     *,
@@ -35,7 +37,7 @@ def scheduled(
             weekly is not None,
         ]
         if sum(provided) != 1:
-            raise ValueError(
+            raise InvalidArgumentException(
                 "Exactly one of cron/daily/hourly/interval/at/weekly must be provided."
             )
 

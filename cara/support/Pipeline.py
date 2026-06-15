@@ -23,6 +23,8 @@ from collections.abc import Awaitable, Callable
 from functools import reduce
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 
 class Pipeline:
     """Pipeline class for sequential data processing.
@@ -106,7 +108,7 @@ class Pipeline:
             destination = lambda payload: payload  # noqa: E731
 
         if len(self.pipes) > self.MAX_DEPTH:
-            raise RuntimeError(
+            raise InvalidArgumentException(
                 f"Pipeline depth ({len(self.pipes)}) exceeds maximum "
                 f"({self.MAX_DEPTH}). Check for circular middleware."
             )
@@ -234,7 +236,7 @@ class Pipeline:
             RuntimeError: If the pipeline exceeds MAX_DEPTH pipes
         """
         if len(self.pipes) > self.MAX_DEPTH:
-            raise RuntimeError(
+            raise InvalidArgumentException(
                 f"Pipeline depth ({len(self.pipes)}) exceeds maximum "
                 f"({self.MAX_DEPTH}). Check for circular middleware."
             )

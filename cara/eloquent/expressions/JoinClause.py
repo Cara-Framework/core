@@ -11,6 +11,8 @@ JoinClause - Simple expression class for JOIN statements
 Handles JOIN clauses in a clean, simple way.
 """
 
+from cara.exceptions import InvalidArgumentException
+
 from .OnClause import OnClause
 from .OnValueClause import OnValueClause
 
@@ -161,7 +163,7 @@ class JoinClause:
             value = args[0]
 
         if operator not in operators:
-            raise ValueError(
+            raise InvalidArgumentException(
                 "Invalid comparison operator. The operator can be %s"
                 % ", ".join(operators)
             )

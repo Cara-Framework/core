@@ -15,6 +15,7 @@ from cara.commands import CommandBase
 from cara.commands.AutoReloadMixin import AutoReloadMixin
 from cara.configuration import config
 from cara.decorators import command
+from cara.exceptions import CaraException, ConfigurationException, InvalidArgumentException
 from cara.facades import Queue, Schedule
 from cara.scheduling.contracts import ShouldSchedule
 
@@ -100,7 +101,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
         """Prepare and validate scheduler configuration."""
         driver_name = driver or config("scheduling.default")
         if not driver_name:
-            raise Exception("No scheduler driver specified and no default configured")
+            raise ConfigurationException("No scheduler driver specified and no default configured")
 
         return {
             "driver_name": driver_name,
@@ -439,7 +440,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
                     timezone=kwargs.get("timezone"),
                 )
             else:
-                raise Exception(f"Unknown schedule type '{schedule_type}'")
+                raise InvalidArgumentException(f"Unknown schedule type '{schedule_type}'")
 
             return {
                 "name": job_name,
@@ -449,7 +450,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             }
 
         except Exception as e:
-            raise Exception(f"Failed to configure schedule: {e}") from e
+            raise CaraException(f"Failed to configure schedule: {e}") from e
 
     def _queue_command(self, command_target: Any, driver_name: str | None = None):
         """Queue command for execution."""
@@ -552,7 +553,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
                     time.sleep(1)
 
         except Exception as e:
-            raise Exception(f"Failed to start scheduler: {e}") from e
+            raise CaraException(f"Failed to start scheduler: {e}") from e
         finally:
             # Ensure the background scheduler stops its thread pool
             # when the command exits (Ctrl-C, auto-reload, --once).

@@ -16,6 +16,7 @@ from multiprocessing import cpu_count
 from cara.commands import CommandBase
 from cara.configuration import config
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException
 from cara.support.LogColors import LogColors
 
 
@@ -51,7 +52,7 @@ class ServeCommand(CommandBase):
         # Prepare server configuration
         try:
             server_config = self._prepare_server_config(host, port, workers)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"× Configuration error: {e}")
             return
 
@@ -100,10 +101,10 @@ class ServeCommand(CommandBase):
             try:
                 port_num = int(port)
                 if port_num < 1 or port_num > 65535:
-                    raise ValueError("Port must be between 1 and 65535")
+                    raise InvalidArgumentException("Port must be between 1 and 65535")
                 return port_num
             except ValueError as e:
-                raise ValueError(f"Invalid port number: {e}") from e
+                raise InvalidArgumentException(f"Invalid port number: {e}") from e
 
         return config("server.port", 8000)
 
@@ -113,12 +114,12 @@ class ServeCommand(CommandBase):
             try:
                 worker_count = int(workers)
                 if worker_count < 1:
-                    raise ValueError("Worker count must be at least 1")
+                    raise InvalidArgumentException("Worker count must be at least 1")
                 if worker_count > 10:
                     self.warning("⚠ High worker count may impact performance")
                 return worker_count
             except ValueError as e:
-                raise ValueError(f"Invalid worker count: {e}") from e
+                raise InvalidArgumentException(f"Invalid worker count: {e}") from e
 
         return 1
 

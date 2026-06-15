@@ -10,6 +10,8 @@ import unicodedata
 from typing import Any
 from urllib import parse
 
+from cara.exceptions import InvalidArgumentException
+
 # --- Sanitization ---------------------------------------------------------
 # These patterns target the "user-supplied free text → JSON → HTML context"
 # pipeline. Reviews, comments, profile bios etc. should never carry markup
@@ -46,7 +48,7 @@ def random_string(length: int = 4) -> str:
         string
     """
     if length < 0:
-        raise ValueError("length must be non-negative")
+        raise InvalidArgumentException("length must be non-negative")
     alphabet = string.ascii_uppercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
@@ -310,7 +312,7 @@ def format_money_cents(cents: int, currency: str = "USD") -> str:
     if not isinstance(cents, int):
         raise TypeError("cents must be an integer")
     if cents < 0:
-        raise ValueError("cents must be non-negative")
+        raise InvalidArgumentException("cents must be non-negative")
 
     currency = currency.upper()
     symbols = {
@@ -322,7 +324,7 @@ def format_money_cents(cents: int, currency: str = "USD") -> str:
         "CAD": "C$",
     }
     if currency not in symbols:
-        raise ValueError(f"unsupported currency: {currency}")
+        raise InvalidArgumentException(f"unsupported currency: {currency}")
 
     symbol = symbols[currency]
     whole = cents // 100

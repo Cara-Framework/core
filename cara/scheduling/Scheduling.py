@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from cara.exceptions import DriverNotRegisteredException, InvalidArgumentException
 from cara.scheduling import ScheduleBuilder
 from cara.scheduling.contracts import Scheduling
 
@@ -28,12 +29,12 @@ class Scheduling:
         chosen = name or self._default_driver
         inst = self._drivers.get(chosen)
         if not inst:
-            raise RuntimeError(f"Scheduling driver '{chosen}' not registered.")
+            raise DriverNotRegisteredException(f"Scheduling driver '{chosen}' not registered.")
         return inst
 
     def call(self, callback: Any) -> ScheduleBuilder:
         if not callable(callback):
-            raise ValueError("call requires a callable.")
+            raise InvalidArgumentException("call requires a callable.")
         unique_id = f"call_{uuid.uuid4().hex}"
 
         def job_callback():

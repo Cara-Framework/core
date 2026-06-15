@@ -37,7 +37,7 @@ import uuid
 from typing import Any
 
 from cara.cache.contracts import Cache
-from cara.exceptions import CacheConfigurationException
+from cara.exceptions import CacheConfigurationException, ConfigurationException
 from cara.facades import Log
 
 # Anything outside this whitelist gets replaced before being used in a
@@ -322,7 +322,7 @@ class FileCacheDriver(Cache):
         resolved = os.path.realpath(candidate)
         root_with_sep = self.cache_directory.rstrip(os.sep) + os.sep
         if not (resolved == self.cache_directory or resolved.startswith(root_with_sep)):
-            raise ValueError(
+            raise ConfigurationException(
                 "FileCacheDriver: refusing to operate on cache file outside the cache root"
             )
         return candidate

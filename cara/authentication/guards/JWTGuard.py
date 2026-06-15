@@ -274,10 +274,15 @@ class JWTGuard(Guard):
             if payload.get("typ") != TOKEN_TYPE_REFRESH:
                 return False
 
-            # Check refresh window manually
+            # Check refresh window. The refresh token is minted with
+            # ``exp = iat + refresh_ttl`` (see generate_refresh_token), so
+            # ``exp`` already IS the end of the refresh window. Adding
+            # ``refresh_ttl`` again doubled it — a 3-day refresh token was
+            # accepted for 6 days, doubling the replay window of a stolen,
+            # never-consumed refresh token.
             exp = payload.get("exp", 0)
             now = int(time.time())
-            if now > exp + self.refresh_ttl:
+            if now > exp:
                 return False  # Beyond refresh window
 
             # Resolve user
@@ -315,10 +320,12 @@ class JWTGuard(Guard):
             if payload.get("typ") != TOKEN_TYPE_REFRESH:
                 raise TokenInvalidException("Provided token is not a refresh token")
 
-            # Check refresh window
+            # Check refresh window. ``exp`` is already ``iat + refresh_ttl``
+            # (see generate_refresh_token), so it IS the window end; adding
+            # refresh_ttl again doubled the accepted lifetime.
             exp = payload.get("exp", 0)
             now = int(time.time())
-            if now > exp + self.refresh_ttl:
+            if now > exp:
                 raise TokenExpiredException("Refresh token expired")
 
             # Resolve user

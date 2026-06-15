@@ -20,6 +20,7 @@ import time as _time
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
 from cara.facades import Log
 from cara.scheduling.contracts import Scheduling
 
@@ -326,13 +327,21 @@ class APSchedulerDriver(Scheduling):
     def _build_trigger(self, spec: dict[str, Any]):
         sched_type = spec.get("type")
         if not sched_type:
-            raise ValueError("schedule_spec must include 'type' key.")
+            raise InvalidArgumentException("schedule_spec must include 'type' key.")
 
         from apscheduler.triggers.cron import CronTrigger
         from apscheduler.triggers.date import DateTrigger
         from apscheduler.triggers.interval import IntervalTrigger
 
-        tz = spec.get("timezone")
+        # Fall back to the scheduler-configured timezone (e.g. "UTC") when a
+        # job spec doesn't set its own. Pre-fix this was bare
+        # ``spec.get("timezone")`` → ``None`` for every dict-config cron, and
+        # APScheduler resolves ``timezone=None`` to the LOCAL OS timezone at
+        # construction, NOT the scheduler default — so on a non-UTC host every
+        # "daily at 03:00" cron fired at 03:00 local while its SQL window used
+        # pendulum.now("UTC"), shifting the job off its data window. (Masked in
+        # prod only because the slim base image happens to be UTC.)
+        tz = spec.get("timezone") or self._settings.get("timezone")
 
         if sched_type == "interval":
             return IntervalTrigger(
@@ -346,10 +355,10 @@ class APSchedulerDriver(Scheduling):
         elif sched_type == "cron":
             expr = spec.get("expression", "")
             if not isinstance(expr, str) or not expr.strip():
-                raise ValueError("Cron type requires 'expression' string.")
+                raise InvalidArgumentException("Cron type requires 'expression' string.")
             parts = expr.split()
             if len(parts) != 5:
-                raise ValueError(
+                raise InvalidArgumentException(
                     "Cron expression must have 5 fields: minute hour day month day_of_week"
                 )
             minute, hour, day, month, day_of_week = parts
@@ -381,7 +390,7 @@ class APSchedulerDriver(Scheduling):
         elif sched_type == "date":
             run_date = spec.get("run_date")
             if not run_date:
-                raise ValueError("Date type requires 'run_date'.")
+                raise InvalidArgumentException("Date type requires 'run_date'.")
             return DateTrigger(run_date=run_date, timezone=tz)
         else:
-            raise ValueError(f"Unknown schedule type: {sched_type}")
+            raise InvalidArgumentException(f"Unknown schedule type: {sched_type}")

@@ -11,6 +11,7 @@ import pendulum
 from cara.commands import CommandBase
 from cara.configuration import config
 from cara.decorators import command
+from cara.exceptions import CaraException, ConfigurationException, InvalidArgumentException
 
 
 @command(
@@ -46,7 +47,7 @@ class JWTGenerateCommand(CommandBase):
             user_identifier = self._validate_parameters(user, email)
             token_ttl = self._parse_ttl(ttl)
             additional_payload = self._parse_payload(payload)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ Parameter error: {e}")
             return
 
@@ -84,10 +85,10 @@ class JWTGenerateCommand(CommandBase):
     def _validate_parameters(self, user: str | None, email: str | None) -> str:
         """Validate and return user identifier."""
         if not user and not email:
-            raise ValueError("Either --user or --email parameter is required")
+            raise InvalidArgumentException("Either --user or --email parameter is required")
 
         if user and email:
-            raise ValueError("Cannot specify both --user and --email")
+            raise InvalidArgumentException("Cannot specify both --user and --email")
 
         return user or email
 
@@ -103,12 +104,12 @@ class JWTGenerateCommand(CommandBase):
         try:
             ttl_seconds = int(ttl)
             if ttl_seconds <= 0:
-                raise ValueError("TTL must be positive")
+                raise InvalidArgumentException("TTL must be positive")
             if ttl_seconds > 31536000:  # 1 year
                 self.warning("⚠️  TTL is very long (over 1 year)")
             return ttl_seconds
         except ValueError as e:
-            raise ValueError(f"Invalid TTL value: {e}") from e
+            raise InvalidArgumentException(f"Invalid TTL value: {e}") from e
 
     def _parse_payload(self, payload: str | None) -> dict[str, Any]:
         """Parse additional payload JSON."""
@@ -118,10 +119,10 @@ class JWTGenerateCommand(CommandBase):
         try:
             parsed = json.loads(payload)
             if not isinstance(parsed, dict):
-                raise ValueError("Payload must be a JSON object")
+                raise InvalidArgumentException("Payload must be a JSON object")
             return parsed
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON payload: {e}") from e
+            raise InvalidArgumentException(f"Invalid JSON payload: {e}") from e
 
     def _find_user(self, identifier: str):
         """Find user by ID or email."""
@@ -153,7 +154,7 @@ class JWTGenerateCommand(CommandBase):
             return None
 
         except Exception as e:
-            raise Exception(f"Error finding user: {e}") from e
+            raise CaraException(f"Error finding user: {e}") from e
 
     def _show_user_info(self, user):
         """Display user information."""
@@ -249,7 +250,7 @@ class JWTGenerateCommand(CommandBase):
         try:
             import jwt as pyjwt
         except ImportError:
-            raise Exception(
+            raise ConfigurationException(
                 "PyJWT is required for JWT token generation. "
                 "Please install it with: pip install PyJWT"
             )

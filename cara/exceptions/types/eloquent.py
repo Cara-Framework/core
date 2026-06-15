@@ -25,7 +25,7 @@ class ModelNotFoundException(ORMException):
     status_code = 404
 
 
-class HTTP404Exception(CaraException):
+class Http404Exception(CaraException):
     """
     Exception for HTTP 404 errors.
     HTTP 404 Not Found.
@@ -86,7 +86,7 @@ __all__ = [
     "ORMException",
     "DriverNotFoundException",
     "ModelNotFoundException",
-    "HTTP404Exception",
+    "Http404Exception",
     "ConnectionNotRegisteredException",
     "QueryException",
     "MultipleRecordsFoundException",

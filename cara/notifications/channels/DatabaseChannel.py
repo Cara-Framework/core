@@ -12,6 +12,7 @@ from typing import Any
 
 import pendulum
 
+from cara.exceptions import ConfigurationException
 from cara.notifications.channels import BaseChannel
 
 
@@ -34,7 +35,7 @@ class DatabaseChannel(BaseChannel):
             table_name: Name of the notifications table
         """
         if database_manager is None:
-            raise ValueError("Database manager is required for DatabaseChannel")
+            raise ConfigurationException("Database manager is required for DatabaseChannel")
 
         self.database_manager = database_manager
         self.table_name = table_name

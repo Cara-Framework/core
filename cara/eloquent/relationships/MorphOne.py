@@ -5,6 +5,7 @@ try:
 except ImportError:  # Python <3.11
     from typing_extensions import Self  # noqa: F401
 
+from cara.exceptions import InvalidArgumentException
 from cara.support.Collection import Collection
 
 from .BaseRelationship import BaseRelationship
@@ -202,7 +203,7 @@ class MorphOne(BaseRelationship):
                 break
 
         if not record_type:
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"Could not find the record type key for the {relation} class"
             )
 

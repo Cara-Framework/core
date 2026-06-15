@@ -80,15 +80,22 @@ class CircuitBreaker:
         self._half_open_calls = 0
         self._lock = threading.Lock()
 
+    def _state_locked(self) -> CircuitState:
+        """Return the current state, performing the OPEN→HALF_OPEN recovery
+        transition if the window elapsed. MUST be called while holding
+        ``self._lock`` so the transition and any subsequent probe-slot
+        claim form a single atomic critical section."""
+        if self._state == CircuitState.OPEN:
+            if time.time() - self._last_failure_time >= self.recovery_timeout:
+                self._state = CircuitState.HALF_OPEN
+                self._half_open_calls = 0
+                Log.info(f"Circuit '{self.name}' transitioning to HALF_OPEN")
+        return self._state
+
     @property
     def state(self) -> CircuitState:
         with self._lock:
-            if self._state == CircuitState.OPEN:
-                if time.time() - self._last_failure_time >= self.recovery_timeout:
-                    self._state = CircuitState.HALF_OPEN
-                    self._half_open_calls = 0
-                    Log.info(f"Circuit '{self.name}' transitioning to HALF_OPEN")
-            return self._state
+            return self._state_locked()
 
     @property
     def is_available(self) -> bool:
@@ -100,18 +107,37 @@ class CircuitBreaker:
                 return self._half_open_calls < self.half_open_max_calls
         return False
 
-    def call(self, func: Callable, *args, **kwargs) -> Any:
-        """Execute ``func`` through the circuit; raise ``CircuitOpenError`` if OPEN."""
-        if not self.is_available:
-            raise CircuitOpenError(
-                f"Circuit '{self.name}' is OPEN. "
-                f"Recovery in {self.recovery_timeout - (time.time() - self._last_failure_time):.0f}s"
-            )
+    def _acquire(self) -> None:
+        """Atomically check availability and claim a HALF_OPEN probe slot.
 
+        The state transition, the OPEN/budget check, and the
+        ``_half_open_calls += 1`` claim run under a SINGLE lock. Pre-fix
+        ``call``/``__enter__`` did a racy check-then-act: ``is_available``
+        evaluated ``_half_open_calls < half_open_max_calls`` under the
+        lock, released it, then a SEPARATE lock block did the increment.
+        With ``half_open_max_calls=1``, N concurrent callers all observed
+        ``0 < 1`` and all incremented — so the recovery-probe burst was
+        bounded by caller count instead of the configured budget,
+        defeating the thundering-herd protection HALF_OPEN exists for.
+        """
         with self._lock:
-            if self._state == CircuitState.HALF_OPEN:
+            state = self._state_locked()
+            if state == CircuitState.OPEN:
+                raise CircuitOpenError(
+                    f"Circuit '{self.name}' is OPEN. "
+                    f"Recovery in {self.recovery_timeout - (time.time() - self._last_failure_time):.0f}s"
+                )
+            if state == CircuitState.HALF_OPEN:
+                if self._half_open_calls >= self.half_open_max_calls:
+                    raise CircuitOpenError(
+                        f"Circuit '{self.name}' is HALF_OPEN; probe budget "
+                        f"({self.half_open_max_calls}) exhausted"
+                    )
                 self._half_open_calls += 1
 
+    def call(self, func: Callable, *args, **kwargs) -> Any:
+        """Execute ``func`` through the circuit; raise ``CircuitOpenError`` if OPEN."""
+        self._acquire()
         try:
             result = func(*args, **kwargs)
             self._on_success()
@@ -143,11 +169,7 @@ class CircuitBreaker:
                 )
 
     def __enter__(self) -> CircuitBreaker:
-        if not self.is_available:
-            raise CircuitOpenError(f"Circuit '{self.name}' is OPEN")
-        with self._lock:
-            if self._state == CircuitState.HALF_OPEN:
-                self._half_open_calls += 1
+        self._acquire()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:

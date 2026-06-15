@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.exceptions import CaraException
+
 
 class Facade(type):
     """Metaclass for creating service facades.
@@ -29,7 +31,7 @@ class Facade(type):
             The attribute from the resolved service
 
         Raises:
-            RuntimeError: If bootstrap is unavailable and no fallback exists
+            CaraException: If bootstrap is unavailable and no fallback exists
             AttributeError: If service cannot be resolved or attribute doesn't exist
         """
         try:
@@ -78,7 +80,7 @@ class Facade(type):
 
                 return getattr(Validation, attribute)
             # No fallback available - raise clear error
-            raise RuntimeError(
+            raise CaraException(
                 f"Facade '{cls.key}' is unavailable: application container not bootstrapped. "
                 f"Ensure bootstrap.py is properly imported and the application is initialized."
             )

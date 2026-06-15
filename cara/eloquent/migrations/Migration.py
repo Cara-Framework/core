@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from cara.exceptions import ConnectionNotRegisteredException
 from cara.facades import DB, Log
 from cara.support import paths

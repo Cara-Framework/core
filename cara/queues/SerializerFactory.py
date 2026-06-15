@@ -6,6 +6,8 @@ Generic factory pattern for pluggable serialization.
 
 from __future__ import annotations
 
+from cara.exceptions import QueueException
+
 from .serializers import JsonJobSerializer, PickleJobSerializer
 
 
@@ -45,7 +47,7 @@ class SerializerFactory:
         serializer_class = cls._serializers.get(serializer_type.lower())
 
         if not serializer_class:
-            raise ValueError(
+            raise QueueException(
                 f"Unknown serializer type: {serializer_type}. "
                 f"Available: {list(cls._serializers.keys())}"
             )

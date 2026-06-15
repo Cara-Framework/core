@@ -5,6 +5,8 @@ This module provides a powerful class loading system for the Cara framework, imp
 class and object loading with support for module discovery, class filtering, and parameter loading.
 """
 
+from __future__ import annotations
+
 import inspect
 import os
 import pkgutil

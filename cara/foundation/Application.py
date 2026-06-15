@@ -15,6 +15,7 @@ from typing import Any
 
 from cara.container import Container
 from cara.environment import LoadEnvironment
+from cara.exceptions.types.base import CaraException
 
 # Lazy import to avoid circular imports
 from cara.foundation import DeferredProvider, Provider
@@ -199,15 +200,14 @@ class Application(Container):
         try:
             self.router = self.make("router")
         except Exception as e:
-            # Check if it's a RouteRegistrationException
-            from cara.exceptions import RouteRegistrationException
+            from cara.exceptions import CaraException, RouteRegistrationException
 
             if isinstance(e, RouteRegistrationException):
-                raise RuntimeError(
+                raise CaraException(
                     f"Application startup failed due to route configuration: {e}"
                 ) from e
             else:
-                raise RuntimeError(f"Application startup failed: {e}") from e
+                raise CaraException(f"Application startup failed: {e}") from e
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         """ASGI application interface: delegate to HTTP or lifespan conductor."""
@@ -220,16 +220,16 @@ class Application(Container):
         # Request by string "http_conductor" → may register that deferred provider now
         self.http_conductor = self.make("http_conductor")
         if not self.http_conductor:
-            raise Exception("HTTP conductor must be registered.")
+            raise CaraException("HTTP conductor must be registered.")
 
         # Request by string "lifespan_conductor" → may register that deferred provider now
         self.lifespan_conductor = self.make("lifespan_conductor")
         if not self.lifespan_conductor:
-            raise Exception("Lifespan conductor must be registered.")
+            raise CaraException("Lifespan conductor must be registered.")
 
         self.websocket_conductor = self.make("websocket_conductor")
         if not self.websocket_conductor:
-            raise Exception("Websocket conductor must be registered.")
+            raise CaraException("Websocket conductor must be registered.")
 
     def add_app_to_scope(self, scope: dict) -> None:
         """Attach application instance into ASGI scope for middleware/handlers."""

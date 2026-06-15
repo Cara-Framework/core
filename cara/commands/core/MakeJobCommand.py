@@ -10,6 +10,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -32,7 +33,7 @@ class MakeJobCommand(CommandBase):
         # Validate and prepare
         try:
             job_info = self._prepare_job_info(name)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -55,7 +56,7 @@ class MakeJobCommand(CommandBase):
     def _prepare_job_info(self, name: str) -> dict:
         """Prepare job information."""
         if not name:
-            raise ValueError("Job name is required")
+            raise InvalidArgumentException("Job name is required")
 
         class_name = self._clean_class_name(name)
         jobs_dir = Path(paths("jobs"))  # Using proper path helper
@@ -87,7 +88,7 @@ class MakeJobCommand(CommandBase):
 
         # Validate
         if not name.isidentifier():
-            raise ValueError(f"'{name}' is not a valid Python class name")
+            raise InvalidArgumentException(f"'{name}' is not a valid Python class name")
 
         return name
 
@@ -137,7 +138,7 @@ class MakeJobCommand(CommandBase):
             self._show_usage_tips(job_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write job file: {e}") from e
+            raise StorageException(f"Failed to write job file: {e}") from e
 
     def _generate_job_code(self, job_info: dict) -> str:
         """Generate the job class code."""
@@ -188,7 +189,7 @@ class MakeJobCommand(CommandBase):
             )
             self.info("")
             self.info("   Traditional queue dispatch:")
-            self.info(f"     {class_name}.dispatch().withRoutingKey('processing.high')")
+            self.info(f"     {class_name}.dispatch().with_routing_key('processing.high')")
             self.info("")
             self.info("   Explicit sync (testing/debugging):")
             self.info("     from cara.context import ExecutionContext")

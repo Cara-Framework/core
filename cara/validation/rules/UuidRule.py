@@ -22,9 +22,13 @@ class UuidRule(BaseRule):
         if not isinstance(value, str):
             value = str(value)
 
-        # Check if value is a valid UUID format (with or without hyphens)
-        uuid_pattern = r"^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$"
-        return bool(re.match(uuid_pattern, value))
+        # Check if value is a valid UUID format (with or without hyphens).
+        # ``fullmatch`` (not ``match``): under default mode ``$`` also
+        # matches just before a trailing newline, so ``re.match(...$)``
+        # accepts "<uuid>\n". fullmatch anchors the whole string — mirrors
+        # the hardening already applied to EmailRule/URLRule.
+        uuid_pattern = r"[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}"
+        return bool(re.fullmatch(uuid_pattern, value))
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must be a valid UUID format."

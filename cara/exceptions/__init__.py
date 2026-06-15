@@ -27,7 +27,14 @@ Canonical winners (preserved from the legacy wildcard order):
 
 from __future__ import annotations
 
-from .ExceptionProvider import ExceptionProvider
+# NOTE: ``ExceptionProvider`` is imported LAST (bottom of this module), NOT
+# here. Its transitive chain (foundation → Application → support → Collection)
+# imports ``cara.exceptions.InvalidArgumentException`` — if ExceptionProvider
+# is imported before that name is bound below, the package is only partially
+# initialised and the import raises a circular-import ImportError that breaks
+# the entire framework. Keep this import at the end; do NOT let an import
+# sorter hoist it up here. isort:skip_file is intentionally avoided so the
+# rest stays sorted; the ExceptionProvider line carries its own guard comment.
 from .types.application import (
     AppException,
     ControllerMethodNotFoundException,
@@ -84,7 +91,7 @@ from .types.driver import (
 )
 from .types.eloquent import (
     DatabaseUnavailableException,
-    HTTP404Exception,
+    Http404Exception,
     ConnectionNotRegisteredException,
     ORMException,
 )
@@ -178,6 +185,13 @@ from .types.validation import (
 )
 from .types.websocket import WebSocketException
 
+# Imported LAST on purpose — see the guard note at the top of this module.
+# Its foundation→support→Collection chain reaches back into this package for
+# ``InvalidArgumentException``, which must already be bound (above) by the
+# time this line runs. ``# noqa: E402`` because it intentionally follows the
+# other imports.
+from .ExceptionProvider import ExceptionProvider  # noqa: E402
+
 __all__ = [
     "ApiKeyInvalidException",
     "AppException",
@@ -217,7 +231,7 @@ __all__ = [
     "EventNameConflictException",
     "ExceptionProvider",
     "GenericContainerException",
-    "HTTP404Exception",
+    "Http404Exception",
     "HttpException",
     "HttpRouteMiddlewareNotFoundException",
     "InvalidArgumentException",

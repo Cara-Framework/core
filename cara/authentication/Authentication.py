@@ -10,6 +10,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from cara.authentication.contracts import Authenticatable
+from cara.exceptions import ConfigurationException
 
 # The Authentication manager is bound to the IoC container as a
 # process-wide singleton (see ``AuthenticationProvider.register``).
@@ -56,7 +57,7 @@ class Authentication:
             guard_name = self._detect_guard_from_request() or self.default_guard
 
         if guard_name not in self.guards:
-            raise ValueError(f"Guard '{guard_name}' not found")
+            raise ConfigurationException(f"Guard '{guard_name}' not found")
         return self.guards[guard_name]
 
     def _detect_guard_from_request(self) -> str | None:

@@ -21,10 +21,6 @@ class ValidationHelpersMixin:
     working with validated data.
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._validation_instance = None
-
     async def validate(
         self,
         rules: dict[str, str],

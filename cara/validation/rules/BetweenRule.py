@@ -50,7 +50,7 @@ class BetweenRule(BaseRule):
                     f"bounds (min={min_val} > max={max_val}) — every input "
                     f"fails by design. Check the rule spec.",
                 )
-            except Exception:
+            except (ImportError, RuntimeError):
                 pass
 
         chain = params.get("_rules") or ()

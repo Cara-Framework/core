@@ -3,12 +3,15 @@ Resolves route handlers and injects dependencies for HTTP, WebSocket, and other 
 Provides Laravel-style dependency injection by analyzing method signatures and automatically resolving dependencies from the container.
 """
 
+from __future__ import annotations
+
 import inspect
 from collections.abc import Callable
 from typing import Any
 
 from cara.exceptions import (
     ControllerMethodNotFoundException,
+    InvalidArgumentException,
     MissingContainerBindingException,
     RouteRegistrationException,
 )
@@ -249,7 +252,7 @@ class RouteResolver:
                 self._route_handler = instance.index
                 self._handler_signature = self._safe_signature(self._route_handler)
             else:
-                raise RuntimeError(f"Cannot resolve handler from class: {handler}")
+                raise RouteRegistrationException(f"Cannot resolve handler from class: {handler}")
 
         elif hasattr(handler, "__call__"):
             # Any callable object
@@ -257,7 +260,7 @@ class RouteResolver:
             self._handler_signature = self._safe_signature(self._route_handler)
 
         else:
-            raise RuntimeError(f"Cannot resolve handler: {handler}")
+            raise RouteRegistrationException(f"Cannot resolve handler: {handler}")
 
     def resolve_controller_string(self, handler_path: str) -> None:
         """
@@ -272,7 +275,7 @@ class RouteResolver:
             ControllerMethodNotFoundException: When method doesn't exist in controller
         """
         if "@" not in handler_path:
-            raise ValueError('Handler must be in format "Controller@method"')
+            raise InvalidArgumentException('Handler must be in format "Controller@method"')
 
         controller_path, method_name = handler_path.split("@")
         path_parts = modularize(controller_path).split(".")
@@ -360,7 +363,7 @@ class RouteResolver:
                         if param.default is not inspect._empty:
                             kwargs[name] = param.default
                             continue
-                        raise RuntimeError(
+                        raise RouteRegistrationException(
                             f"Failed to resolve required dependency by type: {annotation}"
                         )
                 # Name-based injection (only if no type hint)
@@ -372,13 +375,13 @@ class RouteResolver:
                         if param.default is not inspect._empty:
                             kwargs[name] = param.default
                             continue
-                        raise RuntimeError(
+                        raise RouteRegistrationException(
                             f"Failed to resolve required dependency by name: {name}"
                         )
                 if param.default is not inspect._empty:
                     kwargs[name] = param.default
                     continue
-                raise RuntimeError(f"Could not resolve parameter: {name}")
+                raise RouteRegistrationException(f"Could not resolve parameter: {name}")
         return kwargs
 
     def _http_providers(self, request, response):
@@ -446,7 +449,7 @@ class RouteResolver:
                 and all(isinstance(context[i], t) for i, t in enumerate(types))
             ):
                 return resolver
-        raise RuntimeError("Unknown context type for dependency resolution")
+        raise RouteRegistrationException("Unknown context type for dependency resolution")
 
     async def handle(self, context: Any) -> Any:
         """
@@ -475,7 +478,7 @@ class RouteResolver:
         else:
             route_handler = self._route_handler
             if not route_handler:
-                raise RuntimeError("No route handler has been resolved")
+                raise RouteRegistrationException("No route handler has been resolved")
 
         resolver = self._get_resolver(context)
         kwargs = resolver(context)

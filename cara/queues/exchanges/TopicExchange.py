@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cara.exceptions import QueueException
 from cara.facades import Log
 
 
@@ -41,7 +42,7 @@ class RoutingKey:
         """Parse routing key string into components."""
         parts = routing_key.split(".")
         if len(parts) != 3:
-            raise ValueError(
+            raise QueueException(
                 f"Invalid routing key format: {routing_key}. Expected: domain.subtype.priority"
             )
 
@@ -89,7 +90,7 @@ class TopicExchange:
 
         resolved = config("queue.topic_exchange_name", None)
         if not resolved:
-            raise ValueError(
+            raise QueueException(
                 "TopicExchange requires an exchange name. Pass it explicitly or "
                 "set 'queue.topic_exchange_name' in your configuration."
             )
@@ -136,7 +137,7 @@ class TopicExchange:
         app_bindings = config("queue.topic_exchange_bindings", None)
 
         if not app_bindings:
-            raise ValueError(
+            raise QueueException(
                 "TOPIC_EXCHANGE_BINDINGS not found in queue config. "
                 "Please define your queue bindings in config/queue.py"
             )
@@ -268,7 +269,7 @@ class TopicExchange:
                 f"routing_key — refusing to dispatch into a black hole."
             )
             Log.error(msg, category="cara.queue.exchange")
-            raise RuntimeError(msg)
+            raise QueueException(msg)
 
         target_queue = self._select_best_queue(matching_queues, parsed_key.priority)
 
@@ -322,7 +323,7 @@ class TopicExchange:
         # Defensive — should not reach here because the loop either
         # returns or raises; included so static analyzers see a
         # terminal statement.
-        raise RuntimeError(
+        raise QueueException(
             f"dispatch_job exhausted retries for routing_key={routing_key} "
             f"without raising — this should not be reachable."
         )

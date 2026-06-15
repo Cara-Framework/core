@@ -113,6 +113,12 @@ class QueueableMail(BaseQueueable):
 
             Log.error(f"Mail delivery failed for {self.__class__.__name__}: {str(error)}")
             if self.user:
-                Log.error(f"Recipient: {getattr(self.user, 'email', 'unknown')}")
+                # Mask the recipient — raw emails must not land in log
+                # aggregation (Loki). email_mask returns "" on empty/None.
+                from cara.support.Str import email_mask
+
+                Log.error(
+                    f"Recipient: {email_mask(getattr(self.user, 'email', '') or '') or 'unknown'}"
+                )
         except ImportError:
             pass

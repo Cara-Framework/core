@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
 from cara.eloquent.expressions.BetweenExpression import BetweenExpression
 from cara.eloquent.expressions.QueryExpression import QueryExpression
 from cara.support.Collection import Collection
@@ -270,7 +271,7 @@ class WhereBuilder:
         elif len(args) == 2:
             return args[0], args[1]
         else:
-            raise ValueError("Invalid number of arguments for WHERE condition")
+            raise InvalidArgumentException("Invalid number of arguments for WHERE condition")
 
     def reset(self) -> WhereBuilder:
         """Reset all WHERE conditions."""

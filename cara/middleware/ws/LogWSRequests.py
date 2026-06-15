@@ -15,7 +15,7 @@ class LogWSRequests(Middleware):
     events in the same server output as ``LogHttpRequests``.
     """
 
-    async def handle(self, socket: Socket, next: Callable):
+    async def handle(self, socket: Socket, next_fn: Callable):
         client = socket.scope.get("client")
         if client and isinstance(client, (tuple, list)) and len(client) == 2:
             ip, port = client
@@ -32,7 +32,7 @@ class LogWSRequests(Middleware):
         )
 
         try:
-            result = await next(socket)
+            result = await next_fn(socket)
         except Exception as e:
             elapsed = (time.perf_counter() - started) * 1000
             # Client-close race on send raises WebSocketException(4002) — benign.

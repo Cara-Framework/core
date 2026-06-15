@@ -180,14 +180,6 @@ class Validation(ValidationContract):
         for original_field, concrete_field, rule_string, value, is_wildcard in rule_plan:
             field_passed = True
 
-            # Handle nullable logic: if field is nullable and value is None/empty, skip validation
-            if "nullable" in rule_string and (
-                value is None or (isinstance(value, str) and value.strip() == "")
-            ):
-                if not is_wildcard:
-                    instance._validated[concrete_field] = value
-                continue
-
             # Precompute rule names for this field so individual rules can
             # consult the chain (Laravel parity: `min`/`max`/`between` treat
             # numeric-looking strings as numbers when `integer`/`numeric` is
@@ -195,6 +187,18 @@ class Validation(ValidationContract):
             _chain = tuple(
                 instance._split_token(tok)[0] for tok in rule_string.split("|")
             )
+
+            # Handle nullable logic: if 'nullable' is one of the RULE tokens
+            # and the value is None/empty, skip validation. Check the
+            # tokenized chain — NOT a substring of rule_string — so a value
+            # inside an ``in:nullable,active`` parameter can't accidentally
+            # make the field skip ``required``.
+            if "nullable" in _chain and (
+                value is None or (isinstance(value, str) and value.strip() == "")
+            ):
+                if not is_wildcard:
+                    instance._validated[concrete_field] = value
+                continue
 
             # Laravel ``bail`` modifier: stop running further rules for the
             # SAME field after the first failure. Detected via the chain.

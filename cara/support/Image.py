@@ -12,6 +12,8 @@ from io import BytesIO
 from PIL import ExifTags
 from PIL import Image as PILImage
 
+from cara.exceptions import InvalidArgumentException
+
 
 class ImageProcessor:
     """
@@ -87,20 +89,20 @@ class ImageProcessor:
         path string.
         """
         if not isinstance(path, str) or not path:
-            raise ValueError("save() requires a non-empty path string")
+            raise InvalidArgumentException("save() requires a non-empty path string")
         # NUL bytes in paths historically truncate the target on
         # ancient libc filesystems; on modern ones the kernel returns
         # an error but the helper should reject ahead of the syscall
         # so the error message identifies the cause.
         if "\x00" in path:
-            raise ValueError("save() path must not contain NUL bytes")
+            raise InvalidArgumentException("save() path must not contain NUL bytes")
         # Path-segment scan — refuse any ``..`` segment regardless of
         # whether the OS would resolve it inside or outside the
         # caller's intended base directory. Catches both ``a/../b``
         # and ``a\\..\\b`` (Windows separator).
         parts = path.replace("\\", "/").split("/")
         if any(part == ".." for part in parts):
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"save() path must not contain '..' segments (traversal): {path!r}"
             )
 
@@ -201,7 +203,7 @@ class Image:
         elif isinstance(source, bytes):
             image = PILImage.open(BytesIO(source))
         else:
-            raise ValueError(f"Unsupported source type: {type(source)}")
+            raise InvalidArgumentException(f"Unsupported source type: {type(source)}")
 
         # Format allowlist — gate on the Pillow-identified decoder,
         # not the file extension (which the uploader controls). The
@@ -210,14 +212,14 @@ class Image:
         fmt = (image.format or "").upper()
         if fmt not in ImageProcessor.ALLOWED_FORMATS:
             allowed = ", ".join(sorted(ImageProcessor.ALLOWED_FORMATS))
-            raise ValueError(f"Unsupported image format {fmt!r}; allowed: {allowed}")
+            raise InvalidArgumentException(f"Unsupported image format {fmt!r}; allowed: {allowed}")
 
         # Pixel-count guard — declared dimensions only, no full
         # decode. A 100_000 × 100_000 PNG-bomb header is rejected
         # here before ``.load()`` ever runs.
         width, height = image.size
         if width * height > ImageProcessor.MAX_PIXEL_COUNT:
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"Image exceeds the {ImageProcessor.MAX_PIXEL_COUNT}-"
                 f"pixel cap (got {width}x{height} = {width * height} pixels)"
             )

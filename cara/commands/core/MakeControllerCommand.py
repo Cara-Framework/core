@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -30,7 +31,7 @@ class MakeControllerCommand(CommandBase):
 
         try:
             controller_info = self._prepare_controller_info(name)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -49,7 +50,7 @@ class MakeControllerCommand(CommandBase):
     def _prepare_controller_info(self, name: str) -> dict:
         """Prepare controller information."""
         if not name:
-            raise ValueError("Controller name is required")
+            raise InvalidArgumentException("Controller name is required")
 
         class_name = self._clean_class_name(name)
         route_prefix = self._generate_route_prefix(class_name)
@@ -137,7 +138,7 @@ class MakeControllerCommand(CommandBase):
             self._show_usage_tips(controller_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write controller file: {e}") from e
+            raise StorageException(f"Failed to write controller file: {e}") from e
 
     def _generate_controller_code(self, controller_info: dict) -> str:
         """Generate the controller class code."""

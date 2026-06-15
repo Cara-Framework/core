@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.exceptions import ConfigurationException
+
 from .Middleware import Middleware
 
 
@@ -276,11 +278,11 @@ class MiddlewareRegistry:
             Configuration dictionary for the framework
 
         Raises:
-            ValueError: If configuration is invalid
+            ConfigurationException: If configuration is invalid
         """
         errors = self.validate()
         if errors:
-            raise ValueError(f"Invalid middleware configuration: {', '.join(errors)}")
+            raise ConfigurationException(f"Invalid middleware configuration: {', '.join(errors)}")
 
         return {
             "global": self.config["global"].copy(),

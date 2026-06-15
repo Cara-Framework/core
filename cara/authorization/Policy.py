@@ -6,10 +6,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.authorization.contracts import Policy
+from cara.authorization.contracts import Policy as PolicyContract
 
 
-class Policy(Policy):
+class Policy(PolicyContract):
     """
     Base policy class that provides common functionality for all policies.
     """

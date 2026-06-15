@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 from .BaseQueueable import BaseQueueable
 
 
@@ -84,7 +86,7 @@ class BaseJob(BaseQueueable):
         """
         if level not in self._PRIORITY_QUEUE_MAP:
             valid = ", ".join(sorted(self._PRIORITY_QUEUE_MAP.keys()))
-            raise ValueError(f"Unknown priority level {level!r}. Valid: {valid}")
+            raise InvalidArgumentException(f"Unknown priority level {level!r}. Valid: {valid}")
         self.job_priority = level
         self.queue_name = self._PRIORITY_QUEUE_MAP[level]
         return self

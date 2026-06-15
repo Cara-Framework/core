@@ -1,104 +1,65 @@
-"""
-Laravel-style FormRequest for Cara Framework.
+"""Laravel-style FormRequest for Cara Framework.
 
 Encapsulates validation, authorization, and custom validation hooks for a single endpoint.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
+from cara.exceptions import AuthorizationFailedException, ValidationException
+from cara.validation import Validation
+
 
 class FormRequest:
-    """
-    Laravel-style form request — encapsulates validation + authorization for one endpoint.
+    """Laravel-style form request — encapsulates validation + authorization for one endpoint.
 
     Subclasses override rules(), messages(), authorize(), and after() to customize behavior.
     """
 
-    def rules(self) -> dict:
-        """
-        Override — return {field: rule_string, ...}.
-
-        Example:
-            return {
-                "email": "required|email|unique:users,email",
-                "password": "required|min:8|confirmed",
-            }
-        """
+    def rules(self) -> dict[str, str]:
+        """Override — return {field: rule_string, ...}."""
         return {}
 
-    def messages(self) -> dict:
-        """
-        Override — return custom error messages {field.rule: message}.
-
-        Example:
-            return {
-                "email.unique": "This email is already registered.",
-                "password.min": "Password must be at least 8 characters.",
-            }
-        """
+    def messages(self) -> dict[str, str]:
+        """Override — return custom error messages {field.rule: message}."""
         return {}
 
-    def authorize(self, request) -> bool:
-        """
-        Override — return True if user allowed to make this request.
-
-        Example:
-            return bool(request.user() and request.user().is_admin)
-        """
+    def authorize(self, request: Any) -> bool:
+        """Override — return True if user allowed to make this request."""
         return True
 
-    def after(self, validator) -> None:
-        """
-        Override — run after built-in rules. Add errors via validator.errors().add(...).
-
-        Example:
-            def after(self, validator):
-                if validator.validated().get("password") != validator.validated().get("password_confirm"):
-                    validator.errors().add("password", "Passwords do not match.")
-        """
+    def after(self, validator: Any) -> None:
+        """Override — run after built-in rules. Add errors via validator.errors().add(...)."""
         pass
 
-    async def validate_request(self, request):
-        """
-        Main entry point. Returns validated dict. Raises AuthorizationFailedException or ValidationException.
+    async def validate_request(self, request: Any) -> dict[str, Any]:
+        """Main entry point. Returns validated dict.
 
-        Usage:
-            validated = await RegisterUserRequest().validate_request(request)
+        Raises:
+            AuthorizationFailedException: When authorize() returns False.
+            ValidationException: When validation rules fail.
         """
-        # Check authorization first
         if not self.authorize(request):
-            from cara.exceptions import AuthorizationFailedException
-
             raise AuthorizationFailedException("This action is unauthorized.")
 
-        # Get request data
         data = (
             await request.all()
             if hasattr(request, "all") and callable(request.all)
             else {}
         )
 
-        # Create validator
-        from cara.validation import Validation
-
         validator = Validation.make(data, self.rules(), self.messages())
-
-        # Register after hook
         validator.after(self.after)
 
-        # Run validation
         if validator.fails():
-            from cara.exceptions import ValidationException
-
             raise ValidationException(validation_errors=validator.errors())
 
-        # Extract validated data
         validated = validator.validated()
 
-        # Expose on request for downstream use
         try:
             request.validated = validated
-        except Exception:
+        except AttributeError:
             pass
 
         return validated

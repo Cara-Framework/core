@@ -8,11 +8,11 @@ from collections.abc import Callable
 from typing import Any
 
 from cara.authorization.AuthorizationResponse import AuthorizationResponse
-from cara.authorization.contracts import Gate
+from cara.authorization.contracts import Gate as GateContract
 from cara.exceptions import AuthorizationFailedException
 
 
-class Gate(Gate):
+class Gate(GateContract):
     """Gate for authorization checks with Laravel-style API."""
 
     def __init__(self, user_resolver: Callable | None = None):
@@ -62,10 +62,17 @@ class Gate(Gate):
                 # Register the policy
                 self._policies[model_name] = policy_path
 
-            except Exception:
+            except Exception as exc:
+                import sys
+
+                print(
+                    f"[cara.authorization] Policy registration skipped for "
+                    f"{model_class}: {exc}",
+                    file=sys.stderr,
+                )
                 continue
 
-    def allows(self, ability: str, *args) -> bool:
+    def allows(self, ability: str, *args: Any) -> bool:
         """Check if the current user is authorized for the given ability."""
         user = self._resolve_user()
 
@@ -80,7 +87,14 @@ class Gate(Gate):
                     self._run_after_callbacks(user, ability, False, *args)
                     return False
                 # Continue if result is None
-            except Exception:
+            except Exception as exc:
+                import sys
+
+                print(
+                    f"[cara.authorization] before-callback failed for "
+                    f"ability='{ability}': {exc}",
+                    file=sys.stderr,
+                )
                 continue
 
         # Guest users are not authorized by default
@@ -181,21 +195,34 @@ class Gate(Gate):
         if self._user_resolver:
             try:
                 return self._user_resolver()
-            except Exception:
+            except Exception as exc:
+                import sys
+
+                print(
+                    f"[cara.authorization] user resolver failed: {exc}",
+                    file=sys.stderr,
+                )
                 return None
 
         return None
 
-    def _run_after_callbacks(self, user: Any, ability: str, result: bool, *args) -> None:
+    def _run_after_callbacks(self, user: Any, ability: str, result: bool, *args: Any) -> None:
         """Run after callbacks."""
         for callback in self._after_callbacks:
             try:
                 callback(user, ability, result, *args)
-            except Exception:
+            except Exception as exc:
+                import sys
+
+                print(
+                    f"[cara.authorization] after-callback failed for "
+                    f"ability='{ability}': {exc}",
+                    file=sys.stderr,
+                )
                 continue
 
     def _call_ability(
-        self, callback: Callable | str, user: Any, ability: str, *args
+        self, callback: Callable | str, user: Any, ability: str, *args: Any
     ) -> bool:
         """Call an ability callback."""
         try:
@@ -205,7 +232,13 @@ class Gate(Gate):
                 class_name, method_name = callback.split("@", 1)
                 return self._call_policy_method(class_name, method_name, user, *args)
             return False
-        except Exception:
+        except Exception as exc:
+            import sys
+
+            print(
+                f"[cara.authorization] ability '{ability}' evaluation failed: {exc}",
+                file=sys.stderr,
+            )
             return False
 
     def _call_policy_method(

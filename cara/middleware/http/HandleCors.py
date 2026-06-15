@@ -7,6 +7,9 @@ Handles cross-origin requests with proper preflight support.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from cara.configuration import config
 from cara.http import Request, Response
 from cara.middleware import Middleware
@@ -47,7 +50,7 @@ class HandleCors(Middleware):
             "supports_credentials": config("cors.cors.supports_credentials", False),
         }
 
-    async def handle(self, request: Request, next_handler):
+    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
         """
         Handle CORS request (Laravel style).
 
@@ -71,7 +74,7 @@ class HandleCors(Middleware):
 
         response = None
         try:
-            response = await next_handler(request)
+            response = await next_fn(request)
             return response
         except Exception as exc:
             # Look for a response attached to the exception (framework

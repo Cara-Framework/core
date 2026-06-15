@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -29,7 +30,7 @@ class MakeListenerCommand(CommandBase):
 
         try:
             listener_info = self._prepare_listener_info(name, event)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -48,7 +49,7 @@ class MakeListenerCommand(CommandBase):
     def _prepare_listener_info(self, name: str, event: str | None = None) -> dict:
         """Prepare listener information."""
         if not name:
-            raise ValueError("Listener name is required")
+            raise InvalidArgumentException("Listener name is required")
 
         class_name = self._clean_class_name(name)
 
@@ -109,7 +110,7 @@ class MakeListenerCommand(CommandBase):
             self._show_usage_tips(listener_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write listener file: {e}") from e
+            raise StorageException(f"Failed to write listener file: {e}") from e
 
     def _generate_listener_code(self, listener_info: dict) -> str:
         """Generate the listener class code."""

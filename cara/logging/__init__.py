@@ -3,7 +3,7 @@ from .ChannelConfigurator import ChannelConfigurator
 from .InterceptHandler import InterceptHandler
 from .Logger import Logger
 from .LoggerProvider import LoggerProvider
-from .LogStyle import HttpColorizer
+from .HttpColorizer import HttpColorizer
 from .PythonLoggerAdapter import (
     CaraLoggerFactory,
     CaraPythonLoggerAdapter,
@@ -16,8 +16,8 @@ __all__ = [
     "CategoryFilter",
     "ChannelConfigurator",
     "HttpColorizer",
-    "install_cara_loggers",
     "InterceptHandler",
     "Logger",
     "LoggerProvider",
+    "install_cara_loggers",
 ]

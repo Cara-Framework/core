@@ -18,6 +18,8 @@ from typing import Any
 
 from .Filter import Filter
 
+from cara.exceptions import InvalidArgumentException
+
 
 class FilterSet:
     """An ordered, name-unique bundle of ``Filter`` instances."""
@@ -28,11 +30,11 @@ class FilterSet:
         seen: dict[str, Filter] = {}
         for f in self._filters:
             if not f.name:
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"Filter {f.__class__.__name__!r} has no ``name`` attribute"
                 )
             if f.name in seen:
-                raise ValueError(
+                raise InvalidArgumentException(
                     f"Duplicate filter name {f.name!r} in FilterSet "
                     f"({seen[f.name].__class__.__name__} vs "
                     f"{f.__class__.__name__})"
@@ -101,7 +103,7 @@ class FilterSet:
         for f in self._filters:
             for key, rule in f.validation_rules().items():
                 if key in merged:
-                    raise ValueError(
+                    raise InvalidArgumentException(
                         f"Filter {f.name!r} declares validation key "
                         f"{key!r} which conflicts with another filter"
                     )

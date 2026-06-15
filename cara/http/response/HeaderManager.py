@@ -7,6 +7,7 @@ Clean, robust header handling with explicit content-type tracking.
 
 from __future__ import annotations
 
+from cara.exceptions import InvalidArgumentException
 from cara.http.request import Header, HeaderBag
 
 
@@ -174,7 +175,7 @@ class HeaderManager:
         if not isinstance(url, str):
             url = str(url)
         if "\r" in url or "\n" in url:
-            raise ValueError(
+            raise InvalidArgumentException(
                 "Location header must not contain CR or LF "
                 "characters (response-splitting protection)",
             )

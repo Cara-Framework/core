@@ -2,6 +2,8 @@ import glob
 import importlib.util
 import os
 
+from cara.exceptions import ORMException
+
 
 class MigrationFileManager:
     """Single Responsibility: Handles migration file operations"""
@@ -35,7 +37,7 @@ class MigrationFileManager:
             ):
                 return attr
 
-        raise ValueError(f"No migration class found in {file_path}")
+        raise ORMException(f"No migration class found in {file_path}")
 
     def get_migration_name_from_file(self, file_path):
         """Extract migration name from file path"""

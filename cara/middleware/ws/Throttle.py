@@ -67,7 +67,7 @@ class Throttle(Middleware):
         super().__init__(application)
         self.name = name
 
-    async def handle(self, socket: Socket, next: Callable):
+    async def handle(self, socket: Socket, next_fn: Callable):
         limit, window = self._limits()
         ip = self._client_ip(socket)
         path = self._path(socket)
@@ -88,7 +88,7 @@ class Throttle(Middleware):
                 f"WebSocket throttle cache failure for key {key!r}; failing open. {e}",
                 category="cara.websocket",
             )
-            return await next(socket)
+            return await next_fn(socket)
 
         if current > limit:
             Log.warning(
@@ -110,7 +110,7 @@ class Throttle(Middleware):
                 _RATE_LIMIT_CLOSE_CODE,
             )
 
-        return await next(socket)
+        return await next_fn(socket)
 
     def _limits(self) -> tuple[int, int]:
         """Read per-named-throttle limit + window from config.

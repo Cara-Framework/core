@@ -6,6 +6,7 @@
 from .BaseRule import BaseRule
 from .AcceptedRule import AcceptedRule
 from .AfterRule import AfterRule
+from .AlphanumRule import AlphanumRule
 from .ArrayRule import ArrayRule
 from .BatchExistsRule import BatchExistsRule
 from .BeforeRule import BeforeRule
@@ -58,6 +59,7 @@ from .UuidRule import UuidRule
 __all__ = [
     "AcceptedRule",
     "AfterRule",
+    "AlphanumRule",
     "ArrayRule",
     "BaseRule",
     "BatchExistsRule",

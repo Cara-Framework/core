@@ -112,7 +112,7 @@ def saving(method: Callable) -> Callable:
         @saving
         def validate_data(self):
             if not self.email:
-                raise ValueError("Email is required")
+                raise InvalidArgumentException("Email is required")
     """
     return _register_model_event("saving", method)
 

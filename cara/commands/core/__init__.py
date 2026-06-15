@@ -20,6 +20,7 @@ from .MigrateStatusCommand import MigrateStatusCommand
 from .QueueCancelCommand import QueueCancelCommand
 from .QueueStatsCommand import QueueStatsCommand
 from .QueueWorkCommand import QueueWorkCommand
+from .RouteGeneratorCommand import RouteGeneratorCommand
 from .RouteListCommand import RouteListCommand
 from .RouteOpenApiCommand import RouteOpenApiCommand
 from .ScheduleWorkCommand import ScheduleWorkCommand
@@ -51,6 +52,7 @@ __all__ = [
     "QueueCancelCommand",
     "QueueStatsCommand",
     "QueueWorkCommand",
+    "RouteGeneratorCommand",
     "RouteListCommand",
     "RouteOpenApiCommand",
     "ScheduleWorkCommand",

@@ -20,8 +20,19 @@ from unittest.mock import patch
 import pytest
 
 from cara.events.Event import Event as EventDispatcher
-from cara.events.UserRegisteredEvent import UserRegisteredEvent
 from cara.queues.contracts import ShouldQueue
+
+
+class UserRegisteredEvent:
+    """Test-local event fixture."""
+    name = "user.registered"
+    def __init__(self, user_id, email, **extra):
+        self.user_id = user_id
+        self.email = email
+        self._stopped = False
+    @property
+    def is_propagation_stopped(self):
+        return self._stopped
 
 _SYNC = "cara.context.ExecutionContext.ExecutionContext.is_sync"
 

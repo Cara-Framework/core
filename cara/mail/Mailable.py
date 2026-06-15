@@ -30,6 +30,10 @@ class Mailable(SerializesModels):
         self._view_data: dict[str, Any] = {}
         self._priority: int = 3  # Normal priority (1-5)
         self._attachments: list[dict[str, str]] = []
+        # to_dict() emits ``"headers": self._headers``; without this init
+        # every send (sync Mail._send_now and queued SendMailableJob)
+        # raised AttributeError before any driver ran.
+        self._headers: dict[str, str] = {}
         self._application = None
 
     def to(self, address: str | list[str]) -> Mailable:

@@ -31,6 +31,8 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 # A channel auth callback receives (user, **placeholders) and returns
 # bool / dict / None / Awaitable[same].
 ChannelAuthCallback = Callable[..., bool | dict | None | Awaitable[bool | dict | None]]
@@ -71,7 +73,7 @@ class ChannelRegistry:
         details, not channel-name details.
         """
         if not pattern or not isinstance(pattern, str):
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"Channel pattern must be a non-empty string, got {pattern!r}"
             )
         if not callable(callback):

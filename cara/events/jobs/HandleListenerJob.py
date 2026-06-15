@@ -10,6 +10,7 @@ from typing import Any
 
 from cara.events import Event as EventDispatcher
 from cara.events.contracts import Listener
+from cara.exceptions import CaraException, InvalidArgumentException, ListenerNotFoundException
 from cara.queues.contracts import BaseJob
 
 
@@ -17,7 +18,7 @@ def _resolve_event_class(dispatcher: EventDispatcher, event_class_name: str) -> 
     for cls in dispatcher._registered_events.values():
         if cls.__name__ == event_class_name:
             return cls
-    raise ValueError(
+    raise InvalidArgumentException(
         f"Event class {event_class_name!r} is not registered on the dispatcher. "
         "Register it with dispatcher.register_event() before dispatching."
     )
@@ -34,7 +35,7 @@ def _resolve_listener_class(
                 if cls.__name__ == listener_class_name:
                     return cls
                 seen.add(id(cls))
-    raise ValueError(
+    raise ListenerNotFoundException(
         f"No subscribed listener with class name {listener_class_name!r} was found "
         "on the event dispatcher (subscribe the listener before queueing)."
     )
@@ -82,12 +83,12 @@ def _instantiate_event(event_cls: type[Any], data: dict[str, Any]) -> Any:
         except Exception as exc:
             # Validator raised — surface with the originating event
             # class name so the worker log points straight at the bug.
-            raise ValueError(
+            raise CaraException(
                 f"validate_payload() on rehydrated {event_cls.__name__} "
                 f"raised {exc.__class__.__name__}: {exc}",
             ) from exc
         if missing:
-            raise ValueError(
+            raise InvalidArgumentException(
                 f"Queued {event_cls.__name__} failed validate_payload(); "
                 f"missing/invalid fields: {missing!r}. Refusing to invoke "
                 f"listener with a malformed payload — same gate the sync "
@@ -132,7 +133,7 @@ class HandleListenerJob(BaseJob):
             try:
                 dispatcher = app.make("events")
             except Exception as e:
-                raise RuntimeError(
+                raise CaraException(
                     "HandleListenerJob requires the 'events' dispatcher binding on the application."
                 ) from e
             if not isinstance(dispatcher, EventDispatcher):

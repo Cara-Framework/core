@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -29,7 +30,7 @@ class MakeNotificationCommand(CommandBase):
 
         try:
             notification_info = self._prepare_notification_info(name, channels)
-        except ValueError as e:
+        except InvalidArgumentException as e:
             self.error(f"❌ {e}")
             return
 
@@ -48,7 +49,7 @@ class MakeNotificationCommand(CommandBase):
     def _prepare_notification_info(self, name: str, channels: str | None = None) -> dict:
         """Prepare notification information."""
         if not name:
-            raise ValueError("Notification name is required")
+            raise InvalidArgumentException("Notification name is required")
 
         class_name = self._clean_class_name(name)
         template_name = self._generate_template_name(class_name)
@@ -130,7 +131,7 @@ class MakeNotificationCommand(CommandBase):
             self._show_usage_tips(notification_info)
 
         except Exception as e:
-            raise Exception(f"Failed to write notification file: {e}") from e
+            raise StorageException(f"Failed to write notification file: {e}") from e
 
     def _generate_notification_code(self, notification_info: dict) -> str:
         """Generate the notification class code."""

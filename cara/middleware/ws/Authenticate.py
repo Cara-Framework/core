@@ -18,7 +18,7 @@ class Authenticate(Middleware):
             application.make("auth").get_default_guard()  # usually "jwt"
         ]
 
-    async def handle(self, socket: Socket, next: Callable):
+    async def handle(self, socket: Socket, next_fn: Callable):
         """Authenticate the WebSocket handshake using configured guards."""
         # Origin allowlist — defence-in-depth on top of the JWT check.
         # Browser WebSocket API doesn't let third-party JS set arbitrary
@@ -40,7 +40,7 @@ class Authenticate(Middleware):
 
         try:
             if await self._authenticate_socket(socket):
-                return await next(socket)
+                return await next_fn(socket)
         except Exception as e:
             Log.error(f"WebSocket auth error: {e}", category="cara.websocket")
             # Don't try to send close message on error - just raise the exception

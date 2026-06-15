@@ -4,8 +4,10 @@ from .SoftDeleteScope import SoftDeleteScope
 from .SoftDeletesMixin import SoftDeletesMixin
 from .TenantScope import TenantScope
 from .TenantScopeMixin import TenantScopeMixin
-from .TimeStampsMixin import TimeStampsMixin
+from .TimeStampsMixin import TimestampsMixin
 from .TimeStampsScope import TimeStampsScope
+
+TimeStampsMixin = TimestampsMixin
 from .UUIDPrimaryKeyMixin import UUIDPrimaryKeyMixin
 from .UUIDPrimaryKeyScope import UUIDPrimaryKeyScope
 
@@ -16,6 +18,7 @@ __all__ = [
     "SoftDeletesMixin",
     "TenantScope",
     "TenantScopeMixin",
+    "TimestampsMixin",
     "TimeStampsMixin",
     "TimeStampsScope",
     "UUIDPrimaryKeyMixin",

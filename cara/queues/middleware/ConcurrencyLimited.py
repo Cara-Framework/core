@@ -23,6 +23,8 @@ import asyncio
 import time
 from collections.abc import Callable
 
+from cara.exceptions.types.base import CaraException
+
 
 class ConcurrencyLimited:
     """Enforce max concurrent job executions via Redis semaphore.
@@ -217,7 +219,7 @@ class ConcurrencyLimited:
             pass
 
 
-class ConcurrencyExceeded(Exception):
+class ConcurrencyExceeded(CaraException):
     """Raised when concurrency limit is exceeded.
 
     The queue runner should requeue the job with a delay. This exception
@@ -226,11 +228,7 @@ class ConcurrencyExceeded(Exception):
 
     The ``is_throttle`` class-attribute is the load-bearing signal —
     ``JobProcessor._requeue_with_delay`` reads it via ``getattr`` to
-    suppress the normal ``attempts += 1`` write when republishing. Pre-
-    fix the docstring promised this behaviour but no code wired it up,
-    so a scrape-pipeline burst that triggered three throttles in a row
-    drained healthy jobs into the DLQ purely from losing the slot
-    lottery — not from any real failure.
+    suppress the normal ``attempts += 1`` write when republishing.
     """
 
     is_throttle: bool = True

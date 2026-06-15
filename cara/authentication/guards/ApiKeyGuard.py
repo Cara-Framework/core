@@ -6,6 +6,7 @@ Clean, focused API Key authentication with all functionality in a single class.
 
 from __future__ import annotations
 
+import hmac
 from contextvars import ContextVar
 from typing import Any
 
@@ -259,9 +260,18 @@ class ApiKeyGuard(Guard):
 
     def _resolve_static_api_key(self, api_key: str) -> Any | None:
         """Resolve API key from static configuration."""
-        # Handle list of API keys
+        # Handle list of API keys. Use constant-time comparison against
+        # every configured key: a plain ``api_key in self.api_keys`` does
+        # byte-by-byte ``==`` that short-circuits on the first differing
+        # character, leaking the valid key to a timing attacker. ``any``
+        # over ``compare_digest`` keeps each comparison constant-time and
+        # always scans the full list on a miss.
         if isinstance(self.api_keys, list):
-            if api_key in self.api_keys:
+            candidate = api_key.encode("utf-8")
+            if any(
+                hmac.compare_digest(candidate, str(k).encode("utf-8"))
+                for k in self.api_keys
+            ):
                 return {
                     "type": "api_key",
                     "api_key": api_key,

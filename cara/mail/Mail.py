@@ -7,6 +7,7 @@ handling different drivers and mail sending operations.
 
 from __future__ import annotations
 
+from cara.exceptions import DriverNotFoundException
 from cara.facades import Log, Queue
 from cara.mail import Mailable
 from cara.mail.contracts import Mail
@@ -64,7 +65,7 @@ class Mail:
         driver_name = name or self.default_driver
 
         if driver_name not in self.drivers:
-            raise ValueError(f"Unsupported mail driver: {driver_name}")
+            raise DriverNotFoundException(f"Unsupported mail driver: {driver_name}")
 
         # Return cached instance if exists
         if driver_name in self.driver_instances:

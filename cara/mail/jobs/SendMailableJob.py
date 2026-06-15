@@ -4,6 +4,7 @@ Queue job for sending mailables in background.
 This job is automatically created when mailables implement ShouldQueue.
 """
 
+from cara.exceptions.types.base import CaraException
 from cara.queues.contracts import BaseJob
 
 
@@ -43,4 +44,4 @@ class SendMailableJob(BaseJob):
         result = Mail._send_now(self.mailable, self.driver_name)
 
         if not result:
-            raise Exception("Failed to send mailable through driver")
+            raise CaraException("Failed to send mailable through driver")

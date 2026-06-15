@@ -12,6 +12,7 @@ from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.decorators import command
+from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
 
 
@@ -105,14 +106,14 @@ class GenerateKeyCommand(CommandBase):
         try:
             key_length = int(length)
             if key_length <= 0:
-                raise ValueError("Length must be a positive integer")
+                raise InvalidArgumentException("Length must be a positive integer")
             if key_length < 16:
-                raise ValueError("Length should be at least 16 for security")
+                raise InvalidArgumentException("Length should be at least 16 for security")
             if key_length > 256:
-                raise ValueError("Length should not exceed 256")
+                raise InvalidArgumentException("Length should not exceed 256")
             return key_length
         except ValueError as e:
-            raise Exception(f"Invalid length parameter: {e}") from e
+            raise InvalidArgumentException(f"Invalid length parameter: {e}") from e
 
     def _parse_encoding(self, encoding: str | None) -> str:
         """Parse and validate encoding parameter."""
@@ -121,7 +122,7 @@ class GenerateKeyCommand(CommandBase):
 
         encoding = encoding.lower()
         if encoding not in ["base64", "hex", "raw"]:
-            raise Exception(f"Invalid encoding '{encoding}'. Use: base64, hex, or raw")
+            raise InvalidArgumentException(f"Invalid encoding '{encoding}'. Use: base64, hex, or raw")
 
         return encoding
 
@@ -134,7 +135,7 @@ class GenerateKeyCommand(CommandBase):
         elif encoding == "raw":
             return secrets.token_urlsafe(length)
         else:
-            raise ValueError(f"Unsupported encoding: {encoding}")
+            raise InvalidArgumentException(f"Unsupported encoding: {encoding}")
 
     def _get_current_key(self) -> str | None:
         """Get current APP_KEY value from .env file."""
@@ -213,7 +214,7 @@ class GenerateKeyCommand(CommandBase):
             self.info("   • Backup your .env file before making changes in production")
 
         except Exception as e:
-            raise Exception(f"Failed to update application key: {e}") from e
+            raise StorageException(f"Failed to update application key: {e}") from e
 
     def _update_key_in_file(self, new_key: str) -> bool:
         """Update APP_KEY in .env file, return True if key was replaced, False if added."""
@@ -221,7 +222,7 @@ class GenerateKeyCommand(CommandBase):
             with open(self.env_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
         except Exception as e:
-            raise Exception(f"Failed to read .env file: {e}") from e
+            raise StorageException(f"Failed to read .env file: {e}") from e
 
         new_lines = []
         key_replaced = False
@@ -241,7 +242,7 @@ class GenerateKeyCommand(CommandBase):
             with open(self.env_file, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
         except Exception as e:
-            raise Exception(f"Failed to write .env file: {e}") from e
+            raise StorageException(f"Failed to write .env file: {e}") from e
 
         return key_replaced
 

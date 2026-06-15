@@ -5,6 +5,8 @@ This module provides console output utilities for the Cara framework, implementi
 and command-line formatting with support for different message types and styles.
 """
 
+from __future__ import annotations
+
 
 class HasColoredOutput:
     """

@@ -1,6 +1,6 @@
 from .MessageFormatter import MessageFormatter
-from .ValidationErrors import ValidationErrors
 from .Validation import Validation
+from .ValidationErrors import ValidationErrors
 from .ValidationProvider import ValidationProvider
 
 __all__ = [

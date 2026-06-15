@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from cara.exceptions import DriverNotRegisteredException
+from cara.exceptions import DriverNotRegisteredException, QueueException
 from cara.queues.contracts import Queue, ShouldQueue
 
 
@@ -144,7 +144,7 @@ class Queue:
         """Dispatch a job with a delay — Laravel ``Queue::later()`` parity.
 
         Delegates to the active driver's ``later()`` method if available,
-        otherwise falls back to ``schedule()``/``dispatchAfter()``.
+        otherwise falls back to ``schedule()``/``dispatch_after()``.
 
         Args:
             delay: Delay in seconds (or a ``pendulum.Duration``).
@@ -196,7 +196,7 @@ class Queue:
         # bypassing every retry/idempotency guarantee the queue is
         # there to provide. We now let driver-configuration errors
         # surface to the caller; explicit sync execution is available
-        # via ``dispatchNow`` / ``ExecutionContext.sync()``.
+        # via ``dispatch_now`` / ``ExecutionContext.sync()``.
         if isinstance(job, type):
             if hasattr(app, "make") and not args and not kwargs:
                 instance = app.make(job)
@@ -220,9 +220,9 @@ class Queue:
                 )
             return result  # Return handle result for sync execution
         else:
-            raise ValueError(f"Cannot dispatch job: {job!r} has no handle()")
+            raise QueueException(f"Cannot dispatch job: {job!r} has no handle()")
 
-    def dispatchAfter(
+    def dispatch_after(
         self,
         job: Any,
         delay: Any,
@@ -230,7 +230,7 @@ class Queue:
         driver_name: str | None = None,
         **kwargs: Any,
     ):
-        """Laravel-style delayed job dispatch."""
+        """Delayed job dispatch."""
         if isinstance(job, type) and issubclass(job, ShouldQueue):
             if hasattr(self.application, "make") and not args and not kwargs:
                 instance = self.application.make(job)
@@ -240,15 +240,15 @@ class Queue:
         elif not isinstance(job, type) and isinstance(job, ShouldQueue):
             return self.schedule(job, delay, driver_name=driver_name)
         else:
-            raise ValueError(f"dispatchAfter requires a ShouldQueue job, got: {job!r}")
+            raise QueueException(f"dispatch_after requires a ShouldQueue job, got: {job!r}")
 
-    def dispatchNow(
+    def dispatch_now(
         self,
         job: Any,
         *args: Any,
         **kwargs: Any,
     ):
-        """Laravel-style immediate job execution."""
+        """Immediate job execution (bypasses queue)."""
         if isinstance(job, type):
             if hasattr(self.application, "make") and not args and not kwargs:
                 instance = self.application.make(job)
@@ -265,24 +265,8 @@ class Queue:
                 result.close()
                 raise TypeError(
                     f"Job {instance.__class__.__name__}.handle() is async "
-                    f"but was dispatched via dispatchNow without an application container."
+                    f"but was dispatched via dispatch_now without an application container."
                 )
             return result
         else:
-            raise ValueError(f"Cannot execute job: {job!r} has no handle() method")
-
-    # Python-style aliases for Laravel-named APIs above.
-    def dispatch_after(
-        self,
-        job: Any,
-        delay: Any,
-        *args: Any,
-        driver_name: str | None = None,
-        **kwargs: Any,
-    ):
-        """Python naming alias for :meth:`dispatchAfter`."""
-        return self.dispatchAfter(job, delay, *args, driver_name=driver_name, **kwargs)
-
-    def dispatch_now(self, job: Any, *args: Any, **kwargs: Any):
-        """Python naming alias for :meth:`dispatchNow`."""
-        return self.dispatchNow(job, *args, **kwargs)
+            raise QueueException(f"Cannot execute job: {job!r} has no handle() method")

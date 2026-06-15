@@ -5,6 +5,8 @@ Provides utilities for registering CLI commands and executing them with Typer.
 Prints full traceback on errors for easier debugging.
 """
 
+from __future__ import annotations
+
 import asyncio
 import inspect
 import traceback

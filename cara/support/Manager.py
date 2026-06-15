@@ -38,6 +38,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from cara.exceptions import ConfigurationException, DriverNotFoundException
+
 
 class Manager:
     """Abstract driver-instance cache + dispatcher."""
@@ -66,7 +68,9 @@ class Manager:
         if name is None:
             name = self.get_default_driver()
         if not name:
-            raise ValueError(f"{type(self).__name__} has no default driver configured")
+            raise ConfigurationException(
+                f"{type(self).__name__} has no default driver configured"
+            )
         if name not in self._drivers:
             self._drivers[name] = self._resolve(name)
         return self._drivers[name]
@@ -106,7 +110,7 @@ class Manager:
             return self._custom_creators[name](self.application)
         creator = getattr(self, f"create_{name}_driver", None)
         if creator is None:
-            raise ValueError(
+            raise DriverNotFoundException(
                 f"Driver [{name}] not supported by {type(self).__name__}. "
                 f"Define create_{name}_driver() or call .extend({name!r}, factory)."
             )

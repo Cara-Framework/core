@@ -28,6 +28,8 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 
 class Benchmark:
     """Time callables and return elapsed milliseconds."""
@@ -80,7 +82,7 @@ class Benchmark:
     @staticmethod
     def _time_one(callback: Callable[[], Any], iterations: int) -> float:
         if iterations <= 0:
-            raise ValueError("iterations must be >= 1")
+            raise InvalidArgumentException("iterations must be >= 1")
         start = time.perf_counter()
         for _ in range(iterations):
             callback()

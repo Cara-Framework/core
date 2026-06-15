@@ -38,7 +38,7 @@ class Crypt:
         try:
             raw = b64decode(token)
             if len(raw) < _NONCE_LEN + _TAG_LEN:
-                raise ValueError("Ciphertext too short")
+                raise EncryptionException("Ciphertext too short")
             nonce = raw[:_NONCE_LEN]
             tag = raw[_NONCE_LEN : _NONCE_LEN + _TAG_LEN]
             ciphertext = raw[_NONCE_LEN + _TAG_LEN :]

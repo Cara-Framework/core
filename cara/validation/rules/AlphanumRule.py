@@ -22,8 +22,10 @@ class AlphanumRule(BaseRule):
         if not isinstance(value, str):
             value = str(value)
 
-        # Check if value contains only alphanumeric characters
-        return bool(re.match(r"^[a-zA-Z0-9]+$", value))
+        # Check if value contains only alphanumeric characters. ``fullmatch``
+        # (not ``match(...$)``): ``$`` also matches before a trailing newline,
+        # so "abc\n" would otherwise pass an "alphanumeric only" check.
+        return bool(re.fullmatch(r"[a-zA-Z0-9]+", value))
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must contain only alphanumeric characters."

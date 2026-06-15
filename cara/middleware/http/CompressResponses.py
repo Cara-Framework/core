@@ -36,11 +36,11 @@ Configurable via ``config/compression.py`` → ``COMPRESSION`` dict:
 from __future__ import annotations
 
 import gzip
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from cara.configuration import config
-from cara.http import Request
+from cara.http import Request, Response
 from cara.middleware import Middleware
 
 # Default compressible MIME prefixes. Match conservatively: anything
@@ -110,8 +110,8 @@ class CompressResponses(Middleware):
             )
         return enabled, min_size, level, prefixes
 
-    async def handle(self, request: Request, next: Callable):
-        response = await next(request)
+    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+        response = await next_fn(request)
 
         if not self._enabled:
             return response

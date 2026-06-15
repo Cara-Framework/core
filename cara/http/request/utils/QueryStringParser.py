@@ -12,6 +12,14 @@ from collections import defaultdict
 from typing import Any
 from urllib.parse import unquote_plus
 
+# Upper bound on a bracket array index (e.g. ``items[5]``). A larger
+# index is NOT treated as a list position — the nested-fill loops in
+# _set_nested_value pre-size the list up to the index, so an
+# unauthenticated ``?a[99999999]=x`` would allocate ~100M elements and
+# OOM the worker. Oversized indices fall through to nested-object-key
+# handling instead, capturing the value without unbounded allocation.
+_MAX_ARRAY_INDEX = 10_000
+
 
 class QueryStringParser:
     """
@@ -184,9 +192,17 @@ class QueryStringParser:
 
         for match in matches:
             name, index_str = match
-            if index_str.isdigit():
+            if index_str.isdigit() and int(index_str) <= _MAX_ARRAY_INDEX:
                 # Numeric index
                 parts.append(KeyPart(name, is_array_key=True, index=int(index_str)))
+            elif index_str.isdigit():
+                # Oversized numeric index — refuse to pre-size a huge list
+                # (_set_nested_value fills up to the index). Capture the
+                # value under a nested object key instead so a crafted
+                # ``?a[99999999]=x`` can't OOM the worker. See
+                # _MAX_ARRAY_INDEX.
+                parts.append(KeyPart(name, is_array_key=False))
+                parts.append(KeyPart(index_str, is_array_key=False))
             elif index_str == "":
                 # Empty brackets (array notation)
                 parts.append(KeyPart(name, is_array_key=True, index=0))

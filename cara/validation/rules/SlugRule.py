@@ -22,8 +22,10 @@ class SlugRule(BaseRule):
         if not isinstance(value, str):
             value = str(value)
 
-        # Check if value is a valid slug format: letters, numbers, hyphens, underscores
-        return bool(re.match(r"^[\w-]+$", value))
+        # Check if value is a valid slug format: letters, numbers, hyphens,
+        # underscores. ``fullmatch`` (not ``match(...$)``): ``$`` also matches
+        # before a trailing newline, so "abc\n" would otherwise pass.
+        return bool(re.fullmatch(r"[\w-]+", value))
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must be a valid slug (letters, numbers, hyphens, and underscores only)."

@@ -8,10 +8,10 @@ except ImportError:  # Python <3.11
 from .TimeStampsScope import TimeStampsScope
 
 
-class TimeStampsMixin:
-    """Global scope class to add soft deleting to models."""
+class TimestampsMixin:
+    """Global scope that auto-manages created_at / updated_at columns."""
 
-    def boot_TimeStampsMixin(self, builder):
+    def boot_TimestampsMixin(self, builder):
         builder.set_global_scope(TimeStampsScope())
 
     def activate_timestamps(self, boolean=True) -> Self:
