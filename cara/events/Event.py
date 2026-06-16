@@ -740,4 +740,9 @@ class Event:
             else:
                 Event._track(asyncio.create_task(coro))
         else:
-            Event._track(asyncio.create_task(coro))
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(coro)
+            else:
+                Event._track(asyncio.create_task(coro))
