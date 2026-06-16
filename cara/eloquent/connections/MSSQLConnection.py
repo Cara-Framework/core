@@ -3,7 +3,7 @@ from __future__ import annotations
 try:
     from typing import Self
 except ImportError:  # Python <3.11
-    from typing_extensions import Self  # noqa: F401
+    from typing import Self  # noqa: F401
 
 from cara.exceptions import DriverNotFoundException, QueryException
 
@@ -160,7 +160,7 @@ class MSSQLConnection(BaseConnection):
                         return {}
                     columnNames = [column[0] for column in cursor.description]
                     result = cursor.fetchone()
-                    return dict(zip(columnNames, result)) if result is not None else {}
+                    return dict(zip(columnNames, result, strict=False)) if result is not None else {}
                 else:
                     if not cursor.description:
                         return {}
@@ -183,6 +183,6 @@ class MSSQLConnection(BaseConnection):
         columnNames = [column[0] for column in cursor.description]
         results = []
         for record in cursor_result:
-            results.append(dict(zip(columnNames, record)))
+            results.append(dict(zip(columnNames, record, strict=False)))
 
         return results

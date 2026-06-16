@@ -166,7 +166,7 @@ class LogChannel(BaseChannel):
                     f.write("")
                 return True
             return False
-        except (OSError, IOError):
+        except OSError:
             return False
 
     def get_log_contents(self) -> str:
@@ -181,5 +181,5 @@ class LogChannel(BaseChannel):
                 with open(self.log_file, "r", encoding="utf-8") as f:
                     return f.read()
             return ""
-        except (OSError, IOError):
+        except OSError:
             return ""

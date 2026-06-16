@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 class UpdateQueryExpression:
     """A helper class to manage update expressions."""
 

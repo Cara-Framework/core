@@ -44,7 +44,6 @@ from typing import Any
 from cara.commands import CommandBase
 from cara.decorators import command
 
-
 # Cara compiler hints map to OpenAPI parameter schemas. ``str`` is the
 # default fallback so an unknown / missing compiler doesn't drop the
 # parameter.

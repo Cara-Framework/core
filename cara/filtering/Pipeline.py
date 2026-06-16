@@ -26,10 +26,10 @@ import hashlib
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 from .FilterSet import FilterSet
 from .Sorter import SortRegistry
-
-from cara.exceptions import InvalidArgumentException
 
 
 class FilterPipeline:

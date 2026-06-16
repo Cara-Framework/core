@@ -17,13 +17,13 @@ from cara.exceptions import (
     InvalidRuleFormatException,
     RuleNotFoundException,
 )
-from cara.validation.ValidationErrors import ValidationErrors
 from cara.validation.contracts import (
     Rule,
 )
 from cara.validation.contracts import (
     Validation as ValidationContract,
 )
+from cara.validation.ValidationErrors import ValidationErrors
 
 
 class Validation(ValidationContract):

@@ -7,14 +7,13 @@ triggers the leaky path and asserts the resource has been released.
 
 from __future__ import annotations
 
+import importlib
 import sys
 import threading
 import types
 from unittest.mock import MagicMock
 
 import pytest
-
-import importlib
 
 from cara.eloquent.connections.SQLiteConnection import SQLiteConnection
 

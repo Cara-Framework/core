@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 class SubSelectExpression:
     """A helper class to manage subselect expressions."""
 

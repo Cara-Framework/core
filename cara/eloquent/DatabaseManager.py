@@ -3,10 +3,10 @@ from __future__ import annotations
 try:
     from typing import Self
 except ImportError:  # Python <3.11
-    from typing_extensions import Self  # noqa: F401
+    from typing import Self  # noqa: F401
 
-import threading
 import logging
+import threading
 from contextlib import contextmanager
 
 from cara.exceptions import ConfigurationException, ConnectionNotRegisteredException

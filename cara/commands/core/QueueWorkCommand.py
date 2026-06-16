@@ -21,8 +21,8 @@ from typing import Any
 from cara.commands import CommandBase
 from cara.commands.AutoReloadMixin import AutoReloadMixin
 from cara.configuration import config
-from cara.exceptions import ConfigurationException, InvalidArgumentException
 from cara.decorators import command
+from cara.exceptions import ConfigurationException, InvalidArgumentException
 from cara.facades import Log
 from cara.queues.contracts import UniqueJob
 
@@ -231,7 +231,7 @@ class JobProcessor:
             asyncio.run(
                 asyncio.wait_for(method_to_call(*init_args), timeout=timeout_seconds)
             )
-        except (asyncio.TimeoutError, TimeoutError) as e:
+        except TimeoutError as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
 
     # Framework-default retry policy used when the failing job does

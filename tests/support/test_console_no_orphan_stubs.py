@@ -39,7 +39,6 @@ from pathlib import Path
 
 import pytest
 
-
 CONSOLE_PATH = (
     Path(__file__).resolve().parent.parent.parent / "cara" / "support" / "Console.py"
 )

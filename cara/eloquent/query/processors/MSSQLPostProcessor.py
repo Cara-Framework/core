@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 class MSSQLPostProcessor:
     """
     Post processor classes are responsable for modifying the result after a query.

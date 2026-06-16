@@ -47,7 +47,6 @@ from pathlib import Path
 
 import pytest
 
-
 PROVIDER_PATH = (
     Path(__file__).resolve().parent.parent.parent
     / "cara"

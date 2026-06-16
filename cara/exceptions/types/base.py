@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 class CaraException(Exception):
     """Base class for all Cara framework exceptions."""
 

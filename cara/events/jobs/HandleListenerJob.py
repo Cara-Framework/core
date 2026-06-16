@@ -10,7 +10,11 @@ from typing import Any
 
 from cara.events import Event as EventDispatcher
 from cara.events.contracts import Listener
-from cara.exceptions import CaraException, InvalidArgumentException, ListenerNotFoundException
+from cara.exceptions import (
+    CaraException,
+    InvalidArgumentException,
+    ListenerNotFoundException,
+)
 from cara.queues.contracts import BaseJob
 
 

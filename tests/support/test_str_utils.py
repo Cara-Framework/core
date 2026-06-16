@@ -1,9 +1,8 @@
 from cara.support.Str import (
-    modularize,
     as_filepath,
+    modularize,
     removesuffix,
 )
-
 
 # --- modularize ---
 

@@ -108,7 +108,6 @@ class Atomic:
         wrapped with an async wrapper so the transaction boundaries
         correctly encompass the awaited coroutine body.
         """
-        import asyncio
         import inspect
 
         connection_name = self.connection_name

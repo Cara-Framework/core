@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 class FromTable:
     """A helper class to manage having expressions."""
 

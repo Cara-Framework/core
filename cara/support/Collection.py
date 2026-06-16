@@ -854,7 +854,7 @@ class Collection(Macroable):
         if len(self._items) != len(values):
             raise InvalidArgumentException("The number of keys must match the number of values")
 
-        return self.__class__(dict(zip(self._items, values)))
+        return self.__class__(dict(zip(self._items, values, strict=False)))
 
     def pluck(self, value, key=None):
         """
@@ -1559,7 +1559,7 @@ class Collection(Macroable):
             raise InvalidArgumentException("The 'items' parameter must be a list or a Collection")
 
         _items = []
-        for x, y in zip(self, items):
+        for x, y in zip(self, items, strict=False):
             _items.append([x, y])
         return self.__class__(_items)
 

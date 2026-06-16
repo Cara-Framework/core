@@ -22,6 +22,7 @@ Example:
 
 from __future__ import annotations
 
+
 def mutator(attribute_name: str):
     """
     Decorator to define a mutator method for a model attribute.

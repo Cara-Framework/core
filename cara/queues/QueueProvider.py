@@ -12,8 +12,8 @@ from typing import Any
 from cara.configuration import config
 from cara.exceptions import QueueConfigurationException
 from cara.foundation import DeferredProvider
-from cara.queues.Queue import Queue
 from cara.queues.drivers import AMQPDriver, AsyncDriver, DatabaseDriver, RedisDriver
+from cara.queues.Queue import Queue
 
 
 class QueueProvider(DeferredProvider):

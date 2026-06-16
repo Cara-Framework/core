@@ -394,7 +394,7 @@ class ConnectionManager:
 
         delivered = 0
         failed: list[str] = []
-        for (connection_id, _), result in zip(targets, results):
+        for (connection_id, _), result in zip(targets, results, strict=False):
             if isinstance(result, Exception):
                 if _is_connection_closed_error(result):
                     Log.debug("Subscriber %s closed mid-send on %s", connection_id, label, category='cara.broadcasting')

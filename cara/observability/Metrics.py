@@ -30,6 +30,8 @@ from prometheus_client import (
     Gauge,
     Histogram,
     generate_latest,
+)
+from prometheus_client import (
     start_http_server as _prom_start_http_server,
 )
 from prometheus_client.exposition import CONTENT_TYPE_LATEST

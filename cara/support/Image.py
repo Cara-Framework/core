@@ -200,9 +200,11 @@ class Image:
         """
         if isinstance(source, str):
             with PILImage.open(source) as opened:
+                fmt = (opened.format or "").upper()
                 image = opened.copy()
         elif isinstance(source, bytes):
             with PILImage.open(BytesIO(source)) as opened:
+                fmt = (opened.format or "").upper()
                 image = opened.copy()
         else:
             raise InvalidArgumentException(f"Unsupported source type: {type(source)}")
@@ -211,7 +213,6 @@ class Image:
         # not the file extension (which the uploader controls). The
         # header bytes have been read at this point but no pixel
         # data has been decoded yet, so the check is cheap.
-        fmt = (image.format or "").upper()
         if fmt not in ImageProcessor.ALLOWED_FORMATS:
             allowed = ", ".join(sorted(ImageProcessor.ALLOWED_FORMATS))
             raise InvalidArgumentException(f"Unsupported image format {fmt!r}; allowed: {allowed}")

@@ -3,11 +3,10 @@ from __future__ import annotations
 try:
     from typing import Self
 except ImportError:  # Python <3.11
-    from typing_extensions import Self  # noqa: F401
+    from typing import Self  # noqa: F401
 
 import re
 
-from cara.exceptions import InvalidArgumentException
 from cara.eloquent.expressions import (
     JoinClause,
     OnClause,
@@ -15,6 +14,7 @@ from cara.eloquent.expressions import (
     SubGroupExpression,
     SubSelectExpression,
 )
+from cara.exceptions import InvalidArgumentException
 
 _MULTI_SPACE_RE = re.compile(r" +")
 

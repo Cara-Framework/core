@@ -14,8 +14,8 @@ from typing import Any
 from cara.http import Response
 from cara.routing.RouteCompiler import RouteCompiler
 from cara.routing.RouteGroup import RouteGroup
-from cara.routing.RouteResolver import RouteResolver
 from cara.routing.RouteParameterValidator import RouteParameterValidator
+from cara.routing.RouteResolver import RouteResolver
 from cara.support.Collection import flatten
 
 

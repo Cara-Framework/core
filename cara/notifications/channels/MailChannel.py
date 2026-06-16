@@ -275,7 +275,7 @@ class MailChannel(BaseChannel):
         if user_id is not None and email and secret:
             token = hmac.new(
                 secret.encode("utf-8"),
-                f"{user_id}:{email}".encode("utf-8"),
+                f"{user_id}:{email}".encode(),
                 hashlib.sha256,
             ).hexdigest()
             view_data["unsubscribe_url"] = (

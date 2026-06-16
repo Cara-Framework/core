@@ -14,8 +14,9 @@ survives the delayed-retry republish path.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 try:
     from opentelemetry import context as _ctx

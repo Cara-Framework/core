@@ -23,6 +23,7 @@ Example:
 
 from __future__ import annotations
 
+
 def accessor(attribute_name: str):
     """
     Decorator to define an accessor method for a model attribute.

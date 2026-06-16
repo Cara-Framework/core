@@ -48,7 +48,6 @@ import pytest
 
 from cara.exceptions import BadRequestException
 
-
 # ── Location CR/LF (response splitting) ─────────────────────────────
 
 

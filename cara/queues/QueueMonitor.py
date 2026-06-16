@@ -15,7 +15,6 @@ from typing import Any
 import pendulum
 
 from cara.exceptions import InvalidArgumentException
-
 from cara.facades import Log
 
 
@@ -157,13 +156,21 @@ class QueueMonitor:
             self.job_stats.values(), key=lambda x: x["started_at"], reverse=True
         )[:limit]
 
-        # Convert datetime objects to strings for JSON serialization
+        # Return COPIES with datetime→string conversion so the
+        # originals in self.job_stats stay as datetime objects.
+        # ROOT-CAUSE: the previous in-place mutation permanently
+        # replaced datetime values with strings, breaking
+        # get_stuck_jobs(), get_throughput(), and eviction sorting
+        # on subsequent calls.
+        result = []
         for job in recent_jobs:
-            job["started_at"] = job["started_at"].isoformat()
-            if "completed_at" in job:
-                job["completed_at"] = job["completed_at"].isoformat()
+            copy = dict(job)
+            copy["started_at"] = copy["started_at"].isoformat()
+            if "completed_at" in copy:
+                copy["completed_at"] = copy["completed_at"].isoformat()
+            result.append(copy)
 
-        return recent_jobs
+        return result
 
     def get_stuck_jobs(self, threshold_seconds: int = 300) -> list[dict[str, Any]]:
         """Return every job still in ``processing`` past the threshold.
@@ -231,13 +238,16 @@ class QueueMonitor:
             :limit
         ]
 
-        # Convert datetime objects to strings
+        # Return COPIES — same ROOT-CAUSE as get_job_stats.
+        result = []
         for job in recent_failed:
-            job["started_at"] = job["started_at"].isoformat()
-            if "completed_at" in job:
-                job["completed_at"] = job["completed_at"].isoformat()
+            copy = dict(job)
+            copy["started_at"] = copy["started_at"].isoformat()
+            if "completed_at" in copy:
+                copy["completed_at"] = copy["completed_at"].isoformat()
+            result.append(copy)
 
-        return recent_failed
+        return result
 
     def get_performance_summary(self) -> dict[str, Any]:
         """

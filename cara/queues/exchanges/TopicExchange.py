@@ -201,7 +201,7 @@ class TopicExchange:
         if len(routing_parts) != len(pattern_parts):
             return False
 
-        for routing_part, pattern_part in zip(routing_parts, pattern_parts):
+        for routing_part, pattern_part in zip(routing_parts, pattern_parts, strict=False):
             if pattern_part != "*" and pattern_part != routing_part:
                 return False
 

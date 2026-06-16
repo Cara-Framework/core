@@ -35,7 +35,6 @@ import pytest
 
 from cara.eloquent.scopes.SoftDeleteScope import SoftDeleteScope
 
-
 # ── Signature lock-in ────────────────────────────────────────────────
 
 

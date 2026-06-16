@@ -8,6 +8,11 @@ framework. It supports controller-based routing and route decorators.
 from __future__ import annotations
 
 from cara.foundation import DeferredProvider
+from cara.routing.loaders import (
+    ControllerRouteLoader,
+    ExplicitRouteLoader,
+    FunctionRouteLoader,
+)
 
 # Import the class from its submodule, NOT ``from cara.routing import Router``.
 # ``cara/routing/__init__.py`` imports ``RouteProvider`` (this module) before
@@ -18,11 +23,6 @@ from cara.foundation import DeferredProvider
 # "'module' object is not callable". The direct submodule import sidesteps the
 # partial-initialization window entirely.
 from cara.routing.Router import Router
-from cara.routing.loaders import (
-    ControllerRouteLoader,
-    ExplicitRouteLoader,
-    FunctionRouteLoader,
-)
 
 
 class RouteProvider(DeferredProvider):

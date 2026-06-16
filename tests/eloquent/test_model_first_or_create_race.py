@@ -56,7 +56,6 @@ from typing import Any
 
 import pytest
 
-
 _model_mod = importlib.import_module("cara.eloquent.models.Model")
 Model = _model_mod.Model
 
@@ -159,7 +158,7 @@ class _RecordingModelFOC:
         # Per-instance .where(wheres).first() captures.
         self._pending_wheres: dict | None = None
 
-    def where(self, wheres: dict) -> "_RecordingModelFOC":
+    def where(self, wheres: dict) -> _RecordingModelFOC:
         # Chainable — return self, stash wheres so first() can
         # record them.
         self._pending_wheres = dict(wheres)
@@ -188,7 +187,7 @@ class _FakeRow:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-    def fresh(self) -> "_FakeRow":
+    def fresh(self) -> _FakeRow:
         return self
 
 

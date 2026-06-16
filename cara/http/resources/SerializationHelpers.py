@@ -5,7 +5,7 @@ Eliminates duplicated opt_* functions across JsonResource and BaseResource.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 
@@ -59,7 +59,7 @@ def opt_datetime(value: Any) -> str | None:
         return None
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
+            value = value.replace(tzinfo=UTC)
         return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()
@@ -77,7 +77,7 @@ def opt_datetime(value: Any) -> str | None:
     try:
         parsed = datetime.fromisoformat(s.replace(" ", "T", 1))
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return parsed.isoformat()
     except ValueError:
         return s

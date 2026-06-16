@@ -67,11 +67,10 @@ async def test_should_queue_listener_is_queued_in_async_mode():
     d.subscribe("user.registered", _QueuedListener(log))
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
 
-    with patch(_SYNC, return_value=False):
-        with patch.object(
-            EventDispatcher, "_queue_listener", return_value=True
-        ) as mock_queue:
-            await d.dispatch(event)
+    with patch(_SYNC, return_value=False), patch.object(
+        EventDispatcher, "_queue_listener", return_value=True
+    ) as mock_queue:
+        await d.dispatch(event)
 
     mock_queue.assert_called_once()
     assert log == [], "async-mode ShouldQueue listener must be queued, not inline"

@@ -401,7 +401,7 @@ class ModelDiscoverer:
 
     def _parse_fields_dict(self, dict_node: ast.Dict, model_info: dict):
         """Parse __columns__ = {...} dictionary and extract Field.* definitions."""
-        for key, value in zip(dict_node.keys, dict_node.values):
+        for key, value in zip(dict_node.keys, dict_node.values, strict=False):
             if isinstance(key, ast.Constant) and isinstance(value, ast.Call):
                 field_name = key.value
                 field_definition = self._extract_field_definition(value)
@@ -705,7 +705,7 @@ class ModelDiscoverer:
             if not isinstance(elt, ast.Dict):
                 continue
             view_entry: dict[str, str] = {}
-            for key, value in zip(elt.keys, elt.values):
+            for key, value in zip(elt.keys, elt.values, strict=False):
                 if isinstance(key, ast.Constant) and isinstance(value, ast.Constant):
                     view_entry[key.value] = value.value
             if view_entry.get("name") and view_entry.get("sql"):
@@ -717,7 +717,7 @@ class ModelDiscoverer:
         has_up_function = False
         has_down_function = False
 
-        for key, value in zip(dict_node.keys, dict_node.values):
+        for key, value in zip(dict_node.keys, dict_node.values, strict=False):
             if isinstance(key, ast.Constant) and key.value in ["up", "down"]:
                 # Check if value is a function (ast.Name referring to a local function)
                 if isinstance(value, ast.Name):

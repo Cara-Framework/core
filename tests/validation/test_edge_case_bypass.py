@@ -7,7 +7,6 @@ shipped alongside this file.
 from cara.validation.rules.InRule import InRule
 from cara.validation.rules.RequiredRule import RequiredRule
 
-
 # ── RequiredRule: must reject empty collections ─────────────────────
 
 

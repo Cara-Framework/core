@@ -11,8 +11,6 @@ from cara.configuration import config
 from cara.exceptions import MiddlewareException
 from cara.facades import Log
 from cara.foundation import DeferredProvider
-from cara.middleware.Middleware import Middleware
-from cara.middleware.MiddlewareCapsule import MiddlewareCapsule
 from cara.middleware.http import (
     AttachRequestID,
     CanPerform,
@@ -21,7 +19,10 @@ from cara.middleware.http import (
     ThrottleRequests,
     TrimStrings,
 )
-from cara.middleware.ws import Authenticate, LogWSRequests, Throttle as WSThrottle
+from cara.middleware.Middleware import Middleware
+from cara.middleware.MiddlewareCapsule import MiddlewareCapsule
+from cara.middleware.ws import Authenticate, LogWSRequests
+from cara.middleware.ws import Throttle as WSThrottle
 
 MiddlewareClass = type[Middleware]
 

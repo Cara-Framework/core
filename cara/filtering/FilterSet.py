@@ -16,9 +16,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from .Filter import Filter
-
 from cara.exceptions import InvalidArgumentException
+
+from .Filter import Filter
 
 
 class FilterSet:

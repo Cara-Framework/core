@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 class MissingValue:
     """Represents an attribute that should be excluded from the resource output.
 

@@ -25,7 +25,6 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import MagicMock, patch
 
-
 from cara.commands.core.ServeCommand import ServeCommand
 
 

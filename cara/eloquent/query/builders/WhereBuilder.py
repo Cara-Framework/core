@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.exceptions import InvalidArgumentException
 from cara.eloquent.expressions.BetweenExpression import BetweenExpression
 from cara.eloquent.expressions.QueryExpression import QueryExpression
+from cara.exceptions import InvalidArgumentException
 from cara.support.Collection import Collection
 
 

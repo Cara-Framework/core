@@ -1,4 +1,4 @@
-from cara.validation.rules import MinLengthRule, MaxLengthRule, PhoneRule, SlugRule
+from cara.validation.rules import MaxLengthRule, MinLengthRule, PhoneRule, SlugRule
 
 
 def test_min_length_rule():

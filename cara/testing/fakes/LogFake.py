@@ -4,6 +4,10 @@ Tests can assert on what was logged without polluting stdout or files.
 Mirrors the surface used across the codebase: ``debug``, ``info``,
 ``warning``, ``error``, ``critical``, ``exception`` plus the optional
 ``category=`` kwarg Cara's logger accepts.
+
+Supports both direct string messages and printf-style format strings:
+  Log.warning("something happened")
+  Log.warning("value is %s and %d", val, num, category="x")
 """
 
 from __future__ import annotations
@@ -32,29 +36,36 @@ class LogFake:
 
     # ── Facade-compatible methods ────────────────────────────────────
 
-    def _record(self, level: str, message: Any, **kwargs: Any) -> None:
+    def _record(self, level: str, message: Any, *args: Any, **kwargs: Any) -> None:
         category = kwargs.pop("category", None)
+        kwargs.pop("exc_info", None)
+        text = str(message)
+        if args:
+            try:
+                text = text % args
+            except (TypeError, ValueError):
+                text = f"{text} {' '.join(str(a) for a in args)}"
         self.records.append(
-            LogRecord(level=level, message=str(message), category=category, extra=kwargs)
+            LogRecord(level=level, message=text, category=category, extra=kwargs)
         )
 
-    def debug(self, message: Any, **kwargs: Any) -> None:
-        self._record("debug", message, **kwargs)
+    def debug(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._record("debug", message, *args, **kwargs)
 
-    def info(self, message: Any, **kwargs: Any) -> None:
-        self._record("info", message, **kwargs)
+    def info(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._record("info", message, *args, **kwargs)
 
-    def warning(self, message: Any, **kwargs: Any) -> None:
-        self._record("warning", message, **kwargs)
+    def warning(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._record("warning", message, *args, **kwargs)
 
-    def error(self, message: Any, **kwargs: Any) -> None:
-        self._record("error", message, **kwargs)
+    def error(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._record("error", message, *args, **kwargs)
 
-    def critical(self, message: Any, **kwargs: Any) -> None:
-        self._record("critical", message, **kwargs)
+    def critical(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._record("critical", message, *args, **kwargs)
 
-    def exception(self, message: Any, **kwargs: Any) -> None:
-        self._record("exception", message, **kwargs)
+    def exception(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._record("exception", message, *args, **kwargs)
 
     def with_context(self, **context: Any) -> _FakeContextualLogger:
         """Return a scoped fake logger that appends context tags.
@@ -113,20 +124,20 @@ class _FakeContextualLogger:
         text = str(message)
         return f"{text} {self._suffix}" if self._suffix else text
 
-    def debug(self, message: Any, **kwargs: Any) -> None:
-        self._parent.debug(self._fmt(message), **kwargs)
+    def debug(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._parent.debug(self._fmt(message), *args, **kwargs)
 
-    def info(self, message: Any, **kwargs: Any) -> None:
-        self._parent.info(self._fmt(message), **kwargs)
+    def info(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._parent.info(self._fmt(message), *args, **kwargs)
 
-    def warning(self, message: Any, **kwargs: Any) -> None:
-        self._parent.warning(self._fmt(message), **kwargs)
+    def warning(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._parent.warning(self._fmt(message), *args, **kwargs)
 
-    def error(self, message: Any, **kwargs: Any) -> None:
-        self._parent.error(self._fmt(message), **kwargs)
+    def error(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._parent.error(self._fmt(message), *args, **kwargs)
 
-    def critical(self, message: Any, **kwargs: Any) -> None:
-        self._parent.critical(self._fmt(message), **kwargs)
+    def critical(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._parent.critical(self._fmt(message), *args, **kwargs)
 
-    def exception(self, message: Any, **kwargs: Any) -> None:
-        self._parent.exception(self._fmt(message), **kwargs)
+    def exception(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._parent.exception(self._fmt(message), *args, **kwargs)

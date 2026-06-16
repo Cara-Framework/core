@@ -27,8 +27,8 @@ from __future__ import annotations
 import pytest
 
 from cara.eloquent.DatabaseManager import DatabaseManager
-from cara.eloquent.query.QueryBuilder import QueryBuilder
 from cara.eloquent.query.grammars.SQLiteGrammar import SQLiteGrammar
+from cara.eloquent.query.QueryBuilder import QueryBuilder
 from cara.exceptions import QueryException
 
 

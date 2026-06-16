@@ -10,13 +10,13 @@ from __future__ import annotations
 from cara.configuration import config
 from cara.facades import Log
 from cara.foundation import DeferredProvider
-from cara.notifications.Notification import Notification
 from cara.notifications.channels import (
     DatabaseChannel,
     LogChannel,
     MailChannel,
     SlackChannel,
 )
+from cara.notifications.Notification import Notification
 
 
 class NotificationProvider(DeferredProvider):

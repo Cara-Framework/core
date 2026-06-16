@@ -675,7 +675,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # the queue, so the worker bound to ALL named queues but never
         # received a single ``ValidateProductJob`` / ``ConsolidateProductJob``
         # event. Explicit ``message_ttl=N`` in caller opts still wins.
-        message_ttl = merged_opts.get("message_ttl", None)
+        message_ttl = merged_opts.get("message_ttl")
         queue_args: dict[str, object] = {
             "x-dead-letter-exchange": (
                 f"{exchange_name}.dlx" if exchange_name else "dead.letter.dlx"
@@ -1180,7 +1180,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # ProductJob ever reached it. Explicit ``message_ttl=N`` via
         # caller opts still wins.
         exchange_name = opts.get("exchange", "")
-        message_ttl = opts.get("message_ttl", None)
+        message_ttl = opts.get("message_ttl")
 
         queue_args: dict[str, object] = {
             "x-dead-letter-exchange": f"{exchange_name}.dlx"

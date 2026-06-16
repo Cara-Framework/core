@@ -50,7 +50,6 @@ from typing import Any
 
 import pytest
 
-
 _conductor_mod = importlib.import_module("cara.conductors.http.HttpConductor")
 _capsule_mod = importlib.import_module("cara.middleware.MiddlewareCapsule")
 
@@ -294,7 +293,7 @@ class TestParameterizedProxyTerminateShape:
                 pass
 
             @classmethod
-            def create_with_parameters(cls, app: Any, _params: list) -> "_Base":
+            def create_with_parameters(cls, app: Any, _params: list) -> _Base:
                 return cls(app)
 
             async def handle(self, req: Any, next_fn: Any) -> Any:
@@ -320,7 +319,7 @@ class TestParameterizedProxyTerminateShape:
                 pass
 
             @classmethod
-            def create_with_parameters(cls, app: Any, _params: list) -> "_Base":
+            def create_with_parameters(cls, app: Any, _params: list) -> _Base:
                 return cls(app)
 
             async def handle(self, req: Any, next_fn: Any) -> Any:
@@ -347,7 +346,7 @@ class TestParameterizedProxyTerminateShape:
                 pass
 
             @classmethod
-            def create_with_parameters(cls, app: Any, _params: list) -> "_Base":
+            def create_with_parameters(cls, app: Any, _params: list) -> _Base:
                 return cls(app)
 
             async def handle(self, req: Any, next_fn: Any) -> Any:

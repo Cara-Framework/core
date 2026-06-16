@@ -62,7 +62,6 @@ from cara.eloquent.casts.primitives import (
     JsonCast,
 )
 
-
 # ── BoolCast: comprehensive truthy / falsy / null pinning ────────
 
 

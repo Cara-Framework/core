@@ -22,7 +22,9 @@ class EloquentProvider(Provider):
 
     def register(self):
         """Configure and register DatabaseManager as singleton"""
-        from cara.configuration import config  # lazy import: avoid circular import at boot
+        from cara.configuration import (
+            config,  # lazy import: avoid circular import at boot
+        )
         # Read database config explicitly (single responsibility)
         default_connection = config("database.default", "app")
         connection_details = config("database.drivers", {})

@@ -5,6 +5,7 @@ ScopeProxy - Simple scope proxy for model scopes
 
 from __future__ import annotations
 
+
 class ScopeProxy:
     """Simple proxy for model scopes."""
 

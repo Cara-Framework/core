@@ -7,12 +7,13 @@ supporting TTL-based expiration and all standard cache operations.
 
 from __future__ import annotations
 
+import logging
+
 # Payloads above this size emit a one-time warning per key so operators
 # notice runaway cache-as-blob patterns (e.g. caching a full search
 # response that ballooned past 1 MB). Configurable via the
 # ``cache.large_value_bytes`` config key; default 256 KB.
 import pickle
-import logging
 from typing import Any
 
 from cara.cache.contracts import Cache

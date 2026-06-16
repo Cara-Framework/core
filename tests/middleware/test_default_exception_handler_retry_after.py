@@ -39,7 +39,6 @@ from typing import Any
 
 import pytest
 
-
 _handler_mod = importlib.import_module("cara.exceptions.handlers.DefaultExceptionHandler")
 DefaultExceptionHandler = _handler_mod.DefaultExceptionHandler
 

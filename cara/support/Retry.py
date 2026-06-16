@@ -28,7 +28,8 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from typing import Any, Awaitable, Callable, Type
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 
 class RetryBuilder:
@@ -39,10 +40,10 @@ class RetryBuilder:
         self._backoff_base: float = 1.0
         self._backoff_jitter: float = 0.15
         self._max_delay: float = 60.0
-        self._catch_types: tuple[Type[BaseException], ...] = (Exception,)
+        self._catch_types: tuple[type[BaseException], ...] = (Exception,)
         self._on_retry: Callable[[int, BaseException], None] | None = None
 
-    def times(self, attempts: int) -> "RetryBuilder":
+    def times(self, attempts: int) -> RetryBuilder:
         """Set maximum retry attempts (total calls = attempts + 1)."""
         self._max_attempts = attempts
         return self
@@ -53,19 +54,19 @@ class RetryBuilder:
         *,
         jitter: float = 0.15,
         max_delay: float = 60.0,
-    ) -> "RetryBuilder":
+    ) -> RetryBuilder:
         """Configure exponential backoff: delay = base^attempt * (1 ± jitter)."""
         self._backoff_base = base
         self._backoff_jitter = jitter
         self._max_delay = max_delay
         return self
 
-    def catch(self, *exception_types: Type[BaseException]) -> "RetryBuilder":
+    def catch(self, *exception_types: type[BaseException]) -> RetryBuilder:
         """Only retry on these exception types (default: all Exception)."""
         self._catch_types = exception_types
         return self
 
-    def on_retry(self, callback: Callable[[int, BaseException], None]) -> "RetryBuilder":
+    def on_retry(self, callback: Callable[[int, BaseException], None]) -> RetryBuilder:
         """Register a callback invoked before each retry (for logging)."""
         self._on_retry = callback
         return self

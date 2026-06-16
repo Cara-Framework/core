@@ -50,7 +50,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")
 PostgresConnection = PGModule.PostgresConnection
 DatabaseUnavailableException = PGModule.DatabaseUnavailableException

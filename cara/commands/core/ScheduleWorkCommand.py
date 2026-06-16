@@ -15,7 +15,11 @@ from cara.commands import CommandBase
 from cara.commands.AutoReloadMixin import AutoReloadMixin
 from cara.configuration import config
 from cara.decorators import command
-from cara.exceptions import CaraException, ConfigurationException, InvalidArgumentException
+from cara.exceptions import (
+    CaraException,
+    ConfigurationException,
+    InvalidArgumentException,
+)
 from cara.facades import Queue, Schedule
 from cara.scheduling.contracts import ShouldSchedule
 
