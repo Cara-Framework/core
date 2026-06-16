@@ -64,41 +64,46 @@ class BatchExistsRule(BaseRule):
         # on it here.
         unique: list[Any] = list(dict.fromkeys(value))
 
-        # 1) Try the model-class path (cleaner than raw SQL when the
-        # framework already knows the table).
+        # Resolve the physical table name via model discovery so callers
+        # can write ``batch_exists:product,id`` instead of
+        # ``batch_exists:product,id`` (model ``__table__`` may differ
+        # from the logical name). Discovery is best-effort — on failure
+        # we fall through using the raw table string.
+        resolved_table = table
         try:
             from .ExistsRule import ExistsRule  # reuse model discovery
 
             model_class = ExistsRule()._discover_model(table)
             if model_class is not None:
-                query = model_class.where_in(column, unique)
-                if condition_column and condition_value is not None:
-                    query = query.where(condition_column, condition_value)
-                count = query.count()
-                return int(count) >= len(unique)
-        except Exception as exc:  # pragma: no cover - model path optional
-            self._log_debug(
-                f"BatchExistsRule: model-based query failed for "
-                f"{table}.{column}: {exc.__class__.__name__}: {exc}"
-            )
+                resolved_table = getattr(model_class, "__table__", table)
+        except Exception:
+            pass
 
-        # 2) Fall back to the DB facade with raw SELECT.
+        # Use COUNT(DISTINCT column) — NOT COUNT(*).  COUNT(*) over-
+        # counts when the column is not unique: if unique=[1,2,3] but
+        # only id=1 exists across 5 rows, COUNT(*)=5 >= 3 → spurious
+        # pass.  COUNT(DISTINCT column) returns the number of distinct
+        # matching VALUES which is the semantically correct check.
         try:
             from cara.facades import DB
 
             placeholders = ", ".join(["%s"] * len(unique))
-            sql = f'SELECT COUNT(*) as c FROM "{table}" WHERE "{column}" IN ({placeholders})'
-            params = list(unique)
+            sql = (
+                f'SELECT COUNT(DISTINCT "{column}") as c '
+                f'FROM "{resolved_table}" '
+                f'WHERE "{column}" IN ({placeholders})'
+            )
+            sql_params: list = list(unique)
             if condition_column and condition_value is not None:
                 sql += f' AND "{condition_column}" = %s'
-                params.append(condition_value)
-            row = DB.select_one(sql, params)
+                sql_params.append(condition_value)
+            row = DB.select_one(sql, sql_params)
             count = int((row or {}).get("c", 0))
             return count >= len(unique)
         except Exception as exc:
             self._log_debug(
-                f"BatchExistsRule: DB-fallback query failed for "
-                f"{table}.{column}: {exc.__class__.__name__}: {exc}"
+                f"BatchExistsRule: DB query failed for "
+                f"{resolved_table}.{column}: {exc.__class__.__name__}: {exc}"
             )
 
         # Fail closed if neither path resolved — silently passing on infra
