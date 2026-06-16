@@ -7,6 +7,7 @@ This module provides a CLI command to process jobs from the queue with enhanced 
 from __future__ import annotations
 
 import asyncio
+import atexit
 import builtins
 import concurrent.futures
 import inspect
@@ -14,6 +15,7 @@ import json
 import logging
 import os
 import pickle
+import signal
 import threading
 import time
 from typing import Any
@@ -889,6 +891,41 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # so newly-published queues are picked up.
         self._missing_queues: dict[str, float] = {}
         self._missing_queue_retry_s: float = 5.0
+        self._signal_handlers_installed = False
+        self._atexit_registered = False
+
+    def _setup_worker_lifecycle_hooks(self) -> None:
+        """Install graceful-shutdown hooks once per worker process.
+
+        Without SIGINT/SIGTERM handlers the worker only stopped when the
+        poll loop happened to check ``shutdown_requested`` — Ctrl+C could
+        abort mid-job and skip ``_shutdown_scrape_resources``. ``atexit``
+        covers abrupt ``sys.exit`` / supervisor SIGKILL-followup paths that
+        still run interpreter teardown.
+        """
+        if not self._signal_handlers_installed:
+            previous_int = signal.getsignal(signal.SIGINT)
+            previous_term = signal.getsignal(signal.SIGTERM)
+
+            def _graceful_stop(signum, _frame):
+                self.shutdown_requested = True
+                Log.info(
+                    "Queue worker received %s — draining current job then exiting",
+                    signal.Signals(signum).name
+                    if hasattr(signal, "Signals")
+                    else signum,
+                )
+                # Restore prior handlers so a second Ctrl+C force-quits.
+                signal.signal(signal.SIGINT, previous_int)
+                signal.signal(signal.SIGTERM, previous_term)
+
+            signal.signal(signal.SIGINT, _graceful_stop)
+            signal.signal(signal.SIGTERM, _graceful_stop)
+            self._signal_handlers_installed = True
+
+        if not self._atexit_registered:
+            atexit.register(self._shutdown_scrape_resources)
+            self._atexit_registered = True
 
     def handle(
         self,
@@ -969,6 +1006,8 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         # like "Can't instantiate abstract class …Contract".
         if self.option("reload"):
             self.enable_auto_reload()
+
+        self._setup_worker_lifecycle_hooks()
 
         # Start main worker loop
         try:
@@ -1368,6 +1407,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
 
             finally:
                 connection_manager.close()
+            self._shutdown_scrape_resources()
             return
 
         # Multi-threaded consumer mode.
@@ -1458,6 +1498,53 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
                     mgr.close()
                 except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
+            self._shutdown_scrape_resources()
+
+    @staticmethod
+    def _shutdown_scrape_resources() -> None:
+        """Release scrape drivers and browser pools on worker shutdown.
+
+        ScrapeDoDriver keeps a private ThreadPoolExecutor + BoundedSemaphore
+        per instance. Without an explicit close(), worker restarts leak OS
+        semaphores (observed as multiprocessing resource_tracker warnings on
+        Python 3.14 when the process exits abruptly). AmazonMarketplace's
+        shared BrowserPool holds Playwright/Chromium children that must be
+        torn down before the worker process exits or auto-reload purges modules.
+        """
+        try:
+            import asyncio
+
+            async def _close_all() -> None:
+                try:
+                    from packages.amazon.AmazonMarketplace import AmazonMarketplace
+
+                    await AmazonMarketplace.shutdown_pool()
+                except Exception as exc:
+                    Log.debug(
+                        "[QueueWorkCommand] BrowserPool shutdown skipped: %s", exc
+                    )
+
+                try:
+                    from bootstrap import application
+
+                    scrape = application.make("scrape")
+                    if scrape is not None and hasattr(scrape, "close"):
+                        await scrape.close()
+                except Exception as exc:
+                    Log.debug(
+                        "[QueueWorkCommand] scrape shutdown skipped: %s", exc
+                    )
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(_close_all())
+                else:
+                    loop.run_until_complete(_close_all())
+            except RuntimeError:
+                asyncio.run(_close_all())
+        except Exception as e:
+            Log.debug("[QueueWorkCommand] scrape shutdown skipped: %s", e)
 
     def _check_memory_usage(self) -> bool:
         """

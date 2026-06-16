@@ -182,6 +182,46 @@ class DatabaseManager:
         resolver = self._ensure_resolver()
         return resolver.rollback(connection_name)
 
+    def commit_open_transactions(self, connection=None) -> None:
+        """Commit every open transaction level on the context-pinned connection.
+
+        Sync pipeline jobs (``craft collect:products --sync``) run inline in
+        one asyncio task. When an outer ``with db.transaction()`` stays pinned
+        in the ContextVar registry, later ``with db.transaction()`` blocks
+        become SAVEPOINTs — releasing them does not persist rows. A rollback
+        when the root job finishes then drops listings that downstream stages
+        already read, and ``_verify_sync_collection`` sees an empty table.
+
+        Call at pipeline stage boundaries (match → validate → consolidate)
+        so each stage's writes are durably committed before the next stage
+        runs.
+        """
+        from .connections.ConnectionResolver import _get_registry
+
+        connection_name = self._resolve_connection_name(connection)
+        registry = _get_registry()
+        if connection_name not in registry:
+            return
+
+        resolver = self._ensure_resolver()
+        conn = registry.get(connection_name)
+        for _ in range(64):
+            level = getattr(conn, "transaction_level", 0) if conn is not None else 0
+            if level <= 0:
+                break
+            resolver.commit(connection_name)
+
+        registry.pop(connection_name, None)
+        if conn is not None and getattr(conn, "transaction_level", 0) <= 0:
+            try:
+                conn.open = 0
+                conn.close_connection()
+            except Exception:
+                _logger.debug(
+                    "commit_open_transactions: connection close failed",
+                    exc_info=True,
+                )
+
     @contextmanager
     def transaction(self, connection=None):
         """Context manager for transaction handling"""

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import threading
+from typing import Any
 
 from prometheus_client import (
     CollectorRegistry,
@@ -43,6 +44,98 @@ from cara.configuration import config
 # HTTP server (see ``start_http_server`` below) can use the exact same
 # registry the workload code writes into.
 REGISTRY: CollectorRegistry = CollectorRegistry(auto_describe=True)
+
+
+def _existing_collector(
+    name: str, registry: CollectorRegistry = REGISTRY
+) -> Counter | Gauge | Histogram | None:
+    """Return a collector already registered on *registry*, if any."""
+    collectors = getattr(registry, "_names_to_collectors", None)
+    if not collectors:
+        return None
+    return collectors.get(name)
+
+
+def counter(
+    name: str,
+    documentation: str,
+    labelnames: tuple[str, ...] | list[str] = (),
+    registry: CollectorRegistry = REGISTRY,
+    **kwargs: Any,
+) -> Counter:
+    """Create a Counter, or return the existing one after hot reload."""
+    existing = _existing_collector(name, registry)
+    if existing is not None:
+        return existing  # type: ignore[return-value]
+    try:
+        return Counter(
+            name,
+            documentation,
+            labelnames=labelnames,
+            registry=registry,
+            **kwargs,
+        )
+    except ValueError:
+        existing = _existing_collector(name, registry)
+        if existing is not None:
+            return existing  # type: ignore[return-value]
+        raise
+
+
+def gauge(
+    name: str,
+    documentation: str,
+    labelnames: tuple[str, ...] | list[str] = (),
+    registry: CollectorRegistry = REGISTRY,
+    **kwargs: Any,
+) -> Gauge:
+    """Create a Gauge, or return the existing one after hot reload."""
+    existing = _existing_collector(name, registry)
+    if existing is not None:
+        return existing  # type: ignore[return-value]
+    try:
+        return Gauge(
+            name,
+            documentation,
+            labelnames=labelnames,
+            registry=registry,
+            **kwargs,
+        )
+    except ValueError:
+        existing = _existing_collector(name, registry)
+        if existing is not None:
+            return existing  # type: ignore[return-value]
+        raise
+
+
+def histogram(
+    name: str,
+    documentation: str,
+    labelnames: tuple[str, ...] | list[str] = (),
+    buckets: tuple | None = None,
+    registry: CollectorRegistry = REGISTRY,
+    **kwargs: Any,
+) -> Histogram:
+    """Create a Histogram, or return the existing one after hot reload."""
+    existing = _existing_collector(name, registry)
+    if existing is not None:
+        return existing  # type: ignore[return-value]
+    if buckets is None:
+        buckets = histogram_buckets_long()
+    try:
+        return Histogram(
+            name,
+            documentation,
+            labelnames=labelnames,
+            buckets=buckets,
+            registry=registry,
+            **kwargs,
+        )
+    except ValueError:
+        existing = _existing_collector(name, registry)
+        if existing is not None:
+            return existing  # type: ignore[return-value]
+        raise
 
 
 def histogram_buckets_short() -> tuple:

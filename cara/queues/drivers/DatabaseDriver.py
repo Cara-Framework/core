@@ -586,11 +586,12 @@ class DatabaseDriver(HasColoredOutput, Queue):
     def _update_job_status(self, job_id: str, status: str, metadata: dict | None = None):
         """Update job status and metadata in database."""
         try:
+            opts = getattr(self, "options", None) or {}
             update_data = {"status": status}
 
             if metadata:
                 # Merge with existing metadata
-                current_job = self._get_builder(self.options).where("id", job_id).first()
+                current_job = self._get_builder(opts).where("id", job_id).first()
                 if current_job:
                     current_metadata = current_job.get("metadata", {})
                     if isinstance(current_metadata, str):
@@ -631,7 +632,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
             if metadata and "job_class" in metadata:
                 update_data["job_class"] = metadata["job_class"]
 
-            self._get_builder(self.options).where("id", job_id).update(update_data)
+            self._get_builder(opts).where("id", job_id).update(update_data)
 
         except Exception as exc:
             import logging

@@ -9,7 +9,6 @@ from __future__ import annotations
 from cara.cache import Cache
 from cara.commands import CommandBase
 from cara.decorators import command
-from cara.queues import Queue
 
 
 @command(
@@ -22,8 +21,9 @@ from cara.queues import Queue
     },
 )
 class CacheClearCommand(CommandBase):
-    def handle(self, cache: Cache, queue: Queue, tags: str | None = None):
+    def handle(self, tags: str | None = None):
         """Clear application cache with enhanced user experience."""
+        cache = self._resolve_cache()
         self.info("🧹 Cache Clear Operation")
 
         # Production safety check
@@ -80,6 +80,14 @@ class CacheClearCommand(CommandBase):
             self.error(f"❌ Cache clear failed: {str(e)}")
             self.error("💡 Try checking your cache configuration")
             raise
+
+    def _resolve_cache(self) -> Cache:
+        """Resolve the cache manager from the application container."""
+        if self.application is None:
+            raise RuntimeError(
+                "Cache manager is not bound — boot the application before running cache:clear"
+            )
+        return self.application.make(Cache)
 
     def _confirm_production(self) -> bool:
         """Confirm cache clear in production environment."""

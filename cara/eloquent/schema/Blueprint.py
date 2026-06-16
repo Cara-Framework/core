@@ -279,6 +279,12 @@ class Blueprint:
             column.nullable()
         return self
 
+    def use_current(self) -> Self:
+        """Set last column default to current timestamp"""
+        if self._last_column:
+            self._last_column.use_current()
+        return self
+
     def comment(self, comment) -> Self:
         """Add comment to last column"""
         if self._last_column:

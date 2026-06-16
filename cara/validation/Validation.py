@@ -90,6 +90,11 @@ class Validation(ValidationContract):
                         snake = self._camel_to_snake(base)
                         if snake != base.lower():
                             classes[snake] = obj
+        # Laravel parity aliases that CamelCase→snake does not produce
+        # (``AlphanumRule`` → ``alphanum``, but Laravel expects ``alpha_num``).
+        for alias, canonical in (("alpha_num", "alphanum"),):
+            if canonical in classes and alias not in classes:
+                classes[alias] = classes[canonical]
         return classes
 
     @staticmethod

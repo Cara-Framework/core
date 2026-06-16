@@ -176,6 +176,15 @@ class AutoReloadMixin:
         # Give current operation time to finish gracefully
         time.sleep(0.5)
 
+        # Release scrape executors / browser pools before purging modules —
+        # otherwise auto-reload leaks ThreadPoolExecutor semaphores every
+        # cycle (resource_tracker warnings on Python 3.14).
+        if hasattr(self, "_shutdown_scrape_resources"):
+            try:
+                self._shutdown_scrape_resources()
+            except Exception:
+                pass
+
         # Purge modules and restart
         self._purge_modules_for_reload()
         self._restart_command()

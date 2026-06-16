@@ -1,3 +1,4 @@
+from cara.validation.Validation import Validation
 from cara.validation.rules.AlphanumRule import AlphanumRule
 from cara.validation.rules.UuidRule import UuidRule
 
@@ -27,6 +28,12 @@ def test_alphanum_rule_message():
     rule = AlphanumRule()
     msg = rule.message("code", {})
     assert "code" in msg
+
+
+def test_alpha_num_laravel_alias_resolves():
+    """Laravel uses ``alpha_num``; ``AlphanumRule`` auto-registers as ``alphanum``."""
+    validator = Validation.make({"asin": "B012345678"}, {"asin": "required|size:10|alpha_num"})
+    assert validator.passes()
 
 
 def test_uuid_rule_valid_with_hyphens():
