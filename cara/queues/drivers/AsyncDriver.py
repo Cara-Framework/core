@@ -82,6 +82,7 @@ class AsyncDriver(HasColoredOutput, Queue):
 
     def _execute_job(self, job: Any, options: dict[str, Any], job_id: str):
         """Execute a single job immediately."""
+        instance = None
         try:
             callback = options.get("callback", "handle")
             init_args = options.get("args", ())
