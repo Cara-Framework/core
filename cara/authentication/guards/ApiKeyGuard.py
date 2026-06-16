@@ -258,6 +258,8 @@ class ApiKeyGuard(Guard):
                 exc_info=True,
             )
             return None
+
+    def _resolve_user_from_api_key(self, api_key):
         """
         Resolve user/info from API key - Generic API Key authentication.
 

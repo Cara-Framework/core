@@ -168,39 +168,21 @@ class Mailable(SerializesModels):
         return result
 
     def render_html(self):
-        """Render the HTML content for the email."""
+        """Render the HTML body.
+
+        Mail templates are standard Jinja2 (filters, ``is defined`` tests,
+        ``{% for %}`` loops) and render through :mod:`cara.mail.JinjaRenderer`.
+        A missing template or template error raises — mail rendering fails loud
+        rather than silently shipping an empty body.
+        """
         if self._html:
             return self._html
+        if not self._view:
+            return None
 
-        if self._view:
-            try:
-                # Try View facade first
-                from cara.facades import View
+        from cara.mail.JinjaRenderer import render_mail_view
 
-                result = View.render(self._view, self._view_data or {})
-                return result
-            except ImportError:
-                pass
-            except Exception as exc:
-                import logging
-
-                logging.getLogger("cara.mail").debug(
-                    "View facade render failed for '%s': %s", self._view, exc
-                )
-
-            # Try application view service
-            try:
-                view_service = self._application.make("view")
-                result = view_service.render(self._view, self._view_data or {})
-                return result
-            except Exception as exc:
-                import logging
-
-                logging.getLogger("cara.mail").warning(
-                    "View render failed for '%s': %s", self._view, exc
-                )
-
-        return None
+        return render_mail_view(self._application, self._view, self._view_data or {})
 
     def __str__(self) -> str:
         """String representation for debugging."""

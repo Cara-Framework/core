@@ -185,6 +185,16 @@ class MigrationGenerator:
         for placeholder, replacement in replacements.items():
             result = result.replace(placeholder, replacement)
 
+        # Append raw-SQL indexes/constraints/generated columns (from model
+        # __indexes__) so partial-unique / GIN / CHECK / GENERATED objects the
+        # Blueprint can't express are (re)created from the model on every
+        # ``make:migration --overwrite``. Injected BEFORE views so a view that
+        # reads a GENERATED column (e.g. listing_price_history.recorded_at) sees
+        # the column already added.
+        indexes = model_info.get("indexes", [])
+        if indexes:
+            result = self._inject_indexes_into_migration(result, indexes, table_name)
+
         # Append VIEW definitions (from model __views__) after CREATE TABLE.
         views = model_info.get("views", [])
         if views:
@@ -734,6 +744,50 @@ class {class_name}(Migration):
         migration_content = migration_content.replace(
             f'        self.schema.drop("{table_name}")',
             f'{down_view_block}\n        self.schema.drop("{table_name}")',
+        )
+
+        return migration_content
+
+    def _inject_indexes_into_migration(
+        self, migration_content: str, indexes: list[dict], table_name: str
+    ) -> str:
+        """Inject raw-SQL index/constraint/generated-column statements.
+
+        Adds each entry's ``up`` SQL as a ``DB.statement(...)`` after the
+        ``CREATE TABLE`` block in ``up()`` (declared order — so a GENERATED
+        column is added before the index that reads it), and the ``down`` SQL
+        into ``down()`` in REVERSE order (drop the index before the column it
+        depends on) before ``self.schema.drop(...)``.
+        """
+        up_lines = []
+        for entry in indexes:
+            sql = entry["up"].strip()
+            up_lines.append(
+                f'\n        DB.statement("""\n            {sql}\n        """)'
+            )
+        down_lines = []
+        for entry in reversed(indexes):
+            sql = entry["down"].strip()
+            down_lines.append(f'        DB.statement("""\n            {sql}\n        """)')
+
+        # Ensure ``from cara.facades import DB`` is present.
+        if "from cara.facades import DB" not in migration_content:
+            migration_content = migration_content.replace(
+                "from cara.eloquent.migrations import Migration",
+                "from cara.eloquent.migrations import Migration\n"
+                "from cara.facades import DB",
+            )
+
+        up_block = "\n".join(up_lines)
+        migration_content = migration_content.replace(
+            "\n    def down(self):",
+            f"{up_block}\n\n    def down(self):",
+        )
+
+        down_block = "\n".join(down_lines)
+        migration_content = migration_content.replace(
+            f'        self.schema.drop("{table_name}")',
+            f'{down_block}\n        self.schema.drop("{table_name}")',
         )
 
         return migration_content

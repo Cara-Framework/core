@@ -22,6 +22,15 @@ from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
 from cara.queues.job_instantiation import instantiate_job
+from cara.queues.retry.policy import (
+    DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
+)
+from cara.queues.retry.policy import (
+    DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS,
+)
+from cara.queues.retry.policy import (
+    DEFAULT_RETRY_JITTER_FRACTION as _RETRY_DEFAULT_JITTER_FRACTION,
+)
 from cara.support.Console import HasColoredOutput
 
 
@@ -40,24 +49,15 @@ class AMQPDriver(HasColoredOutput, Queue):
 
     driver_name = "amqp"
 
-    # Framework-level default retry policy. A job class may override
-    # both knobs by declaring ``max_attempts`` and ``retry_backoff``
-    # (list of per-attempt delays in seconds) at the class level.
-    # Pre-fix the consumer nacked every failure straight to the DLX
-    # which meant every transient hiccup (DB connection drop, AMQP
-    # broker blip, scrape.do 5xx) lost the job permanently. The 1/5/30
-    # schedule covers the fastest realistic recovery windows without
-    # holding a poisoned message in flight long enough to back the
-    # queue up.
-    DEFAULT_MAX_ATTEMPTS = 3
-    DEFAULT_RETRY_BACKOFF_SECONDS = (1, 5, 30)
-    # Fractional ± jitter applied to every retry delay. Without it,
-    # N workers that all failed on the same downstream blip (DB
-    # restart, broker reconnect, scrape.do 5xx) would all retry at
-    # the same second, recreating the spike that caused the original
-    # failure. 25 % spread is enough to smear the recovery wave
-    # while staying inside the schedule's intent.
-    DEFAULT_RETRY_JITTER_FRACTION = 0.25
+    # Framework-level default retry policy — SINGLE-SOURCED in
+    # ``cara.queues.retry.policy`` (the rationale for 1/5/30 + 25% jitter
+    # lives there) so this driver, the production worker
+    # (``QueueWorkCommand``) and the publisher-side ``retry`` can never
+    # silently drift. A job class still overrides per-job by declaring
+    # ``max_attempts`` / ``retry_backoff`` at the class level.
+    DEFAULT_MAX_ATTEMPTS = _RETRY_DEFAULT_MAX_ATTEMPTS
+    DEFAULT_RETRY_BACKOFF_SECONDS = _RETRY_DEFAULT_BACKOFF_SECONDS
+    DEFAULT_RETRY_JITTER_FRACTION = _RETRY_DEFAULT_JITTER_FRACTION
 
     def __init__(self, application, options: dict[str, Any]):
         super().__init__(module="queue.amqp")
@@ -626,7 +626,15 @@ class AMQPDriver(HasColoredOutput, Queue):
                 self.connection = None
 
     def consume(self, options: dict[str, Any]) -> None:
-        """Consume jobs from RabbitMQ.
+        """Consume jobs from RabbitMQ. **DEPRECATED / legacy path.**
+
+        The live production consumer is the ``queue:work`` command
+        (``QueueWorkCommand``); it spawns its own worker threads and does
+        NOT route through this method. This single-thread loop is kept
+        only for back-compat and the driver's unit tests — prefer
+        ``queue:work`` for all new code. Retry/DLX defaults are now
+        single-sourced from ``cara.queues.retry.policy`` so this path and
+        the production worker cannot diverge.
 
         Each invocation runs a single-thread blocking consume loop.
         ``QueueWorkCommand`` typically spawns one worker thread per
@@ -646,6 +654,11 @@ class AMQPDriver(HasColoredOutput, Queue):
             completion lifecycle on every completion path
             (success / failure / cancellation).
         """
+        Log.warning(
+            "AMQPDriver.consume() is the legacy consumer loop and is not "
+            "used in production — the live worker is the 'queue:work' "
+            "command (QueueWorkCommand). Kept for back-compat/tests only."
+        )
         merged_opts = {**self.options, **options}
         queue_name = merged_opts.get("queue", "default")
 

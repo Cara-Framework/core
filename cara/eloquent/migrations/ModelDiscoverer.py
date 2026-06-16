@@ -318,6 +318,15 @@ class ModelDiscoverer:
             # VIEW ...). The migration generator appends these as
             # DB.statement() calls after the CREATE TABLE block.
             "views": [],
+            # Raw-SQL schema objects the Blueprint can't express —
+            # partial/expression/GIN indexes, partial UNIQUE indexes (the
+            # ON CONFLICT targets), CHECK constraints and GENERATED columns.
+            # Defined via ``__indexes__`` on the model class, each entry a
+            # dict with ``name``, ``up`` (forward SQL) and ``down`` (rollback).
+            # The generator appends ``up`` after CREATE TABLE and ``down`` into
+            # down(), keeping the MODEL the single source of truth so
+            # ``make:migration --overwrite`` regenerates them.
+            "indexes": [],
         }
 
         # Check if model uses SoftDeletesMixin
@@ -398,6 +407,14 @@ class ModelDiscoverer:
                 # Parse __views__ = [{"name": "...", "sql": "..."}]
                 elif target.id == "__views__" and isinstance(assign_node.value, ast.List):
                     model_info["views"] = self._parse_views_attribute(assign_node.value)
+
+                # Parse __indexes__ = [{"name": "...", "up": "...", "down": "..."}]
+                elif target.id == "__indexes__" and isinstance(
+                    assign_node.value, ast.List
+                ):
+                    model_info["indexes"] = self._parse_indexes_attribute(
+                        assign_node.value
+                    )
 
     def _parse_fields_dict(self, dict_node: ast.Dict, model_info: dict):
         """Parse __columns__ = {...} dictionary and extract Field.* definitions."""
@@ -711,6 +728,31 @@ class ModelDiscoverer:
             if view_entry.get("name") and view_entry.get("sql"):
                 views.append(view_entry)
         return views
+
+    def _parse_indexes_attribute(self, list_node: ast.List) -> list:
+        """Parse ``__indexes__ = [{"name": .., "up": .., "down": ..}]`` from AST.
+
+        ``up`` is the forward SQL (CREATE [UNIQUE] INDEX …, ALTER TABLE … ADD
+        CONSTRAINT/COLUMN …). ``down`` is optional — when omitted it defaults to
+        ``DROP INDEX IF EXISTS <name>`` (the common case). Adjacent string
+        literals are merged by the parser, so multi-line SQL written as
+        implicitly-concatenated strings arrives here as a single constant.
+        """
+        indexes = []
+        for elt in list_node.elts:
+            if not isinstance(elt, ast.Dict):
+                continue
+            entry: dict[str, str] = {}
+            for key, value in zip(elt.keys, elt.values, strict=False):
+                if isinstance(key, ast.Constant) and isinstance(value, ast.Constant):
+                    entry[key.value] = value.value
+            name = entry.get("name")
+            up = entry.get("up")
+            if not name or not up:
+                continue
+            down = entry.get("down") or f"DROP INDEX IF EXISTS {name}"
+            indexes.append({"name": name, "up": up, "down": down})
+        return indexes
 
     def _parse_raw_sql_fields(self, dict_node: ast.Dict, model_info: dict):
         """Parse fields() method that returns {'up': function, 'down': function}."""

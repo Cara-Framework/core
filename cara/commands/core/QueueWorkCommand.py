@@ -27,6 +27,12 @@ from cara.decorators import command
 from cara.exceptions import ConfigurationException, InvalidArgumentException
 from cara.facades import Log
 from cara.queues.contracts import UniqueJob
+from cara.queues.retry.policy import (
+    DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
+)
+from cara.queues.retry.policy import (
+    DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS,
+)
 
 # Prometheus metrics — optional import so a bare ``cara`` package import
 # (e.g. tests) doesn't require the services-tree ``app.support.Metrics``.
@@ -236,14 +242,13 @@ class JobProcessor:
         except TimeoutError as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
 
-    # Framework-default retry policy used when the failing job does
-    # not declare its own ``max_attempts`` / ``retry_backoff``. Kept
-    # in lockstep with ``AMQPDriver`` so the production worker path
-    # (this command) and the legacy ``AMQPDriver.consume`` path agree
-    # on the budget. Pre-fix this command had its own broken policy
-    # that effectively gave every job zero retries.
-    DEFAULT_MAX_ATTEMPTS = 3
-    DEFAULT_RETRY_BACKOFF_SECONDS = (1, 5, 30)
+    # Framework-default retry policy used when the failing job does not
+    # declare its own ``max_attempts`` / ``retry_backoff``. SINGLE-SOURCED
+    # from ``cara.queues.retry.policy`` so this production worker and
+    # ``AMQPDriver`` can no longer drift apart — they previously kept
+    # hand-copied constants "in lockstep" by comment only.
+    DEFAULT_MAX_ATTEMPTS = _RETRY_DEFAULT_MAX_ATTEMPTS
+    DEFAULT_RETRY_BACKOFF_SECONDS = _RETRY_DEFAULT_BACKOFF_SECONDS
 
     @staticmethod
     def _should_retry_job(msg, instance) -> bool:
