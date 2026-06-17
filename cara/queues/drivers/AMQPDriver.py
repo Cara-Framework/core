@@ -977,12 +977,19 @@ class AMQPDriver(HasColoredOutput, Queue):
 
             Log.info("Dead letter exchange configured: %s", dlx_name)
 
-            # Close connection
+            # Close connection and DROP the references. Leaving stale,
+            # already-closed handles on self.channel/self.connection poisons
+            # the thread-local publish path: the first dispatch's
+            # _discard_thread_connection then calls .close() on an
+            # already-closed channel. Nulling here fixes it at the source so
+            # the next publish opens a fresh connection.
             try:
                 self.channel.close()
                 self.connection.close()
             except (OSError, ConnectionError, RuntimeError, AttributeError):
                 pass
+            self.channel = None
+            self.connection = None
 
         except Exception as e:
             Log.error("Failed to declare dead letter exchange: %s", e)
