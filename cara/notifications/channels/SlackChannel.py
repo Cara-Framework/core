@@ -169,8 +169,10 @@ class SlackChannel(BaseChannel):
                 webhook_url, data=data, headers={"Content-Type": "application/json"}
             )
 
-            # Send request
-            with urllib.request.urlopen(req) as response:
+            # Send request — hard timeout prevents indefinite hangs when
+            # the webhook endpoint is unresponsive (consistent with
+            # AlertSink.HTTP_TIMEOUT_SECONDS and logging SlackChannel).
+            with urllib.request.urlopen(req, timeout=5) as response:
                 return response.status == 200
 
         except Exception as e:

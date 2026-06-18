@@ -70,14 +70,54 @@ async def broadcast_to_user_async(
 # down per-loop Redis pools that other callers in this thread may
 # still be using.
 # ---------------------------------------------------------------------
+# Strong refs to fire-and-forget broadcast tasks scheduled from a sync
+# entry-point inside a running loop. ``asyncio`` only weakly references
+# tasks, so without an extra strong ref a broadcast Task whose caller
+# discarded the return value can be GC'd mid-flight and the real-time
+# message simply vanishes. The done-callback also surfaces (rather than
+# swallows) any exception. Mirrors ``cara.events.Event._track``.
+_pending_broadcast_tasks: set[asyncio.Task] = set()
+
+
+def _handle_broadcast_task_exception(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as e:
+        try:
+            from cara.facades import Log
+
+            Log.error(
+                "Fire-and-forget broadcast failed with exception: %s: %s",
+                e.__class__.__name__,
+                e,
+                category="cara.broadcasting",
+            )
+        except Exception:
+            import sys
+
+            print(
+                f"[cara.broadcasting] broadcast task raised "
+                f"{e.__class__.__name__}: {e}",
+                file=sys.stderr,
+            )
+
+
 def _run_or_schedule(coro: Awaitable[None]) -> asyncio.Task | None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         # No running loop in this thread → block-and-run.
         return asyncio.run(coro)  # type: ignore[func-returns-value]
-    # Loop running → schedule. Caller may await the returned task.
-    return loop.create_task(coro)
+    # Loop running → schedule. Caller may await the returned task; if they
+    # discard it, the strong ref + done-callback keep it alive and log any
+    # failure instead of letting it vanish or swallow the exception.
+    task = loop.create_task(coro)
+    _pending_broadcast_tasks.add(task)
+    task.add_done_callback(_pending_broadcast_tasks.discard)
+    task.add_done_callback(_handle_broadcast_task_exception)
+    return task
 
 
 def broadcast(
