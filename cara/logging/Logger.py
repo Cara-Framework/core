@@ -253,6 +253,24 @@ class Logger(Logger):
 
         return "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
 
+    @staticmethod
+    def _interpolate(message: str, args: tuple[Any, ...]) -> str:
+        """Apply printf-style ``%`` interpolation to ``message`` with ``args``.
+
+        Mirrors ``LogFake._record`` (the test double that encodes the
+        intended contract): ``Log.error("failed: %s", exc)`` must render
+        ``failed: <exc>``, not the literal template. On a placeholder/arg
+        mismatch (or a message with no ``%`` placeholders), fall back to
+        appending the stringified args so diagnostic data is never lost
+        and a logging call can never raise.
+        """
+        if not args:
+            return message
+        try:
+            return message % args
+        except (TypeError, ValueError):
+            return f"{message} {' '.join(str(a) for a in args)}"
+
     def _log(
         self,
         level: str,
@@ -263,6 +281,7 @@ class Logger(Logger):
         color: str | None = None,
         _module_override: str | None = None,
         context: dict[str, Any] | None = None,
+        message_args: tuple[Any, ...] = (),
     ) -> None:
         """Internal logging method.
 
@@ -273,7 +292,19 @@ class Logger(Logger):
                 ``[k=v]`` suffixes. Accepted on every public method so callers
                 can attach diagnostic context (e.g. ``context={"traceback": ...}``)
                 without the call raising ``unexpected keyword argument 'context'``.
+            message_args: printf-style ``%`` format arguments collected from the
+                public method's ``*args``. Interpolated into ``message`` before
+                any further formatting. Previously these were accepted by the
+                public API and the contract ("Any format arguments for the
+                message") but silently dropped here — so every
+                ``Log.x("...%s...", val)`` call across the codebase logged the
+                literal template and lost ``val``.
         """
+        # Interpolate printf-style args first so every downstream step
+        # (HTTP colorizer, context suffix, exception append) operates on
+        # the final user-facing text.
+        message = self._interpolate(message, message_args)
+
         # Check if we should log this based on category filters
         if category and not CategoryFilter.should_log(level, category):
             return
@@ -413,6 +444,7 @@ class Logger(Logger):
             color=color,
             _module_override=_module_override,
             context=context,
+            message_args=args,
         )
 
     def info(
@@ -434,6 +466,7 @@ class Logger(Logger):
             color=color,
             _module_override=_module_override,
             context=context,
+            message_args=args,
         )
 
     def warning(
@@ -455,6 +488,7 @@ class Logger(Logger):
             color=color,
             _module_override=_module_override,
             context=context,
+            message_args=args,
         )
 
     def error(
@@ -478,6 +512,7 @@ class Logger(Logger):
             color=color,
             _module_override=_module_override,
             context=context,
+            message_args=args,
         )
 
     def critical(
@@ -499,6 +534,7 @@ class Logger(Logger):
             color=color,
             _module_override=_module_override,
             context=context,
+            message_args=args,
         )
 
     def exception(
@@ -518,6 +554,7 @@ class Logger(Logger):
             exc_info=exc_info,
             _module_override=_module_override,
             context=context,
+            message_args=args,
         )
 
     def with_context(self, **context: Any) -> ContextualLogger:
