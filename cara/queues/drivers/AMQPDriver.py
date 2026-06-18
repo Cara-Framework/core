@@ -6,6 +6,7 @@ Modern, clean implementation for RabbitMQ-based job queue management.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import pickle
@@ -741,21 +742,42 @@ class AMQPDriver(HasColoredOutput, Queue):
                         f"Callback '{callback_name}' not found on {instance!r}"
                     )
 
-                if hasattr(self.application, "call"):
-                    result = self.application.call(method_to_call, *args)
-                else:
-                    result = method_to_call(*args) if args else method_to_call()
+                # Enforce job-level timeout — mirrors the timeout
+                # discipline in ``QueueWorkCommand.process_message``.
+                # Without this, a hung job (stuck HTTP call, dead DB
+                # pool) blocks the consumer thread indefinitely and
+                # no further messages are processed from this queue.
+                _job_timeout = (
+                    getattr(instance, "timeout", 300) if instance else 300
+                )
 
-                # ``BaseJob.handle`` is ``async def``. Container.call
-                # returns the bare coroutine — pre-fix the AMQP
-                # consumer dropped it on the floor (no await, no
-                # run_until_complete) so every async job consumed
-                # through this driver was silently lost while the
-                # ``basic_ack`` below cheerfully told the broker the
-                # work was done. Matches the pattern in
-                # ``QueueWorkCommand.process_message`` which is the
-                # production worker entry-point.
-                self._drive_to_completion(result)
+                def _run_job():
+                    if hasattr(self.application, "call"):
+                        r = self.application.call(method_to_call, *args)
+                    else:
+                        r = method_to_call(*args) if args else method_to_call()
+                    # ``BaseJob.handle`` is ``async def``.
+                    # Container.call returns the bare coroutine —
+                    # ``_drive_to_completion`` runs it to completion
+                    # (matches QueueWorkCommand.process_message).
+                    AMQPDriver._drive_to_completion(r)
+
+                _executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1
+                )
+                _future = _executor.submit(_run_job)
+                try:
+                    _future.result(timeout=_job_timeout)
+                except concurrent.futures.TimeoutError:
+                    _future.cancel()
+                    _cls = (
+                        instance.__class__.__name__ if instance else "?"
+                    )
+                    raise TimeoutError(
+                        f"Job {_cls} exceeded timeout of {_job_timeout}s"
+                    )
+                finally:
+                    _executor.shutdown(wait=True, cancel_futures=True)
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 self._dispatch_batch_completion(instance, None)
