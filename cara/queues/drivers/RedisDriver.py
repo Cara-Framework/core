@@ -600,9 +600,17 @@ class RedisDriver(HasColoredOutput, Queue):
                 )
 
             if hasattr(self.application, "call"):
-                self.application.call(method, *args)
+                result = self.application.call(method, *args)
             else:
-                method(*args) if args else method()
+                result = method(*args) if args else method()
+
+            # ``BaseJob.handle`` is ``async def``. Container.call
+            # returns the bare coroutine — drive it to completion so
+            # async handlers actually execute. Without this, the
+            # coroutine is garbage-collected un-awaited and the job
+            # silently does nothing while the worker reports success.
+            # Mirrors ``AMQPDriver._drive_to_completion``.
+            self._drive_to_completion(result)
 
             self.info(f"RedisDriver: job processed successfully, queue={queue_name}")
             # Batch lifecycle (success path).
@@ -633,6 +641,50 @@ class RedisDriver(HasColoredOutput, Queue):
             # ``unique_for`` (default 1h) expires, silently dropping
             # every retry / re-dispatch in the meantime.
             self._release_unique_lock_if_any(instance)
+
+    @staticmethod
+    def _drive_to_completion(result: Any) -> Any:
+        """Run a coroutine return value to completion.
+
+        When the job's ``handle`` is ``async def``, ``Container.call``
+        returns a coroutine — we must drive it here or it gets
+        garbage-collected un-run and the worker marks the job as
+        succeeded while no work was done.
+
+        Non-coroutine return values pass through unchanged so this
+        helper is safe to call from the hot path regardless of
+        whether the bound callback is sync or async.
+        """
+        import asyncio
+        import inspect
+
+        if not inspect.iscoroutine(result):
+            return result
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # Normal path: no asyncio loop on this thread.
+            return asyncio.run(result)
+
+        # An asyncio loop is already running — drive the coroutine
+        # on a dedicated thread to avoid nesting ``asyncio.run``.
+        import threading
+
+        container: dict[str, Any] = {}
+
+        def _runner() -> None:
+            try:
+                container["value"] = asyncio.run(result)
+            except BaseException as exc:
+                container["error"] = exc
+
+        worker = threading.Thread(target=_runner, daemon=True)
+        worker.start()
+        worker.join()
+        if "error" in container:
+            raise container["error"]
+        return container.get("value")
 
     @staticmethod
     def _release_unique_lock_if_any(instance) -> None:
