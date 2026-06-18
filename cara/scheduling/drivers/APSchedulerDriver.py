@@ -387,10 +387,16 @@ class APSchedulerDriver(Scheduling):
                 day_of_week=spec.get("day_of_week"),
                 timezone=tz,
             )
-        elif sched_type == "date":
+        elif sched_type in ("date", "at"):
+            # "at" is the canonical name from the Scheduling contract and
+            # ScheduleBuilder.at(); "date" mirrors APScheduler's own
+            # trigger name.  Pre-fix only "date" was handled — every
+            # ScheduleBuilder.at() call raised InvalidArgumentException
+            # because the builder emits type="at" (matching the contract
+            # docstring) but the driver only checked for "date".
             run_date = spec.get("run_date")
             if not run_date:
-                raise InvalidArgumentException("Date type requires 'run_date'.")
+                raise InvalidArgumentException("Date/at type requires 'run_date'.")
             return DateTrigger(run_date=run_date, timezone=tz)
         else:
             raise InvalidArgumentException(f"Unknown schedule type: {sched_type}")
