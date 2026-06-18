@@ -17,6 +17,7 @@ import pendulum
 from cara.exceptions import QueueDriverLibraryNotFoundException, QueueException
 from cara.queues.contracts import Queue
 from cara.queues.job_instantiation import instantiate_job
+from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.support.Console import HasColoredOutput
 
 
@@ -296,7 +297,7 @@ class RedisDriver(HasColoredOutput, Queue):
 
             # Validate payload before re-enqueuing
             try:
-                pickle.loads(data)
+                restricted_pickle_loads(data)
             except (pickle.UnpicklingError, ImportError, AttributeError, EOFError, ValueError):
                 self._dead_letter(data, queue_name, reason="retry: corrupt payload")
                 dead += 1
@@ -572,7 +573,7 @@ class RedisDriver(HasColoredOutput, Queue):
         failed_key = self._failed_key(queue_name)
 
         try:
-            msg = pickle.loads(data)
+            msg = restricted_pickle_loads(data)
         except Exception as e:
             self.danger(f"RedisDriver: could not unpickle payload: {e}")
             # Dead-letter unrecoverable payloads instead of silently dropping

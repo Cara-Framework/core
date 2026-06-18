@@ -19,6 +19,7 @@ import pendulum
 from cara.exceptions import QueueException
 from cara.queues.contracts import JobCancelledException, Queue
 from cara.queues.job_instantiation import instantiate_job
+from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.queues.JobStateManager import get_job_state_manager
 from cara.support.Console import HasColoredOutput
 from cara.support.Time import parse_human_time
@@ -477,7 +478,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         # Unpickle payload
         try:
             decoded_payload = base64.b64decode(job["payload"])
-            data = pickle.loads(decoded_payload)
+            data = restricted_pickle_loads(decoded_payload)
         except Exception as e:
             self._update_job_status(job_db_id, "failed", {"error": str(e)})
             raise QueueException(f"Invalid payload for job id {job['id']}: {e}") from e
@@ -656,7 +657,7 @@ class DatabaseDriver(HasColoredOutput, Queue):
         # Attempt to call failed() on the instance
         try:
             decoded_payload = base64.b64decode(job["payload"])
-            data = pickle.loads(decoded_payload)
+            data = restricted_pickle_loads(decoded_payload)
         except Exception as exc:
             import logging
 
@@ -708,5 +709,5 @@ class DatabaseDriver(HasColoredOutput, Queue):
     def _extract_job_id(self, job: dict[str, Any]) -> str:
         """Extract job ID from payload."""
         decoded_payload = base64.b64decode(job["payload"])
-        data = pickle.loads(decoded_payload)
+        data = restricted_pickle_loads(decoded_payload)
         return data.get("job_id", "unknown")

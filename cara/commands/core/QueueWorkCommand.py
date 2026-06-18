@@ -27,6 +27,7 @@ from cara.decorators import command
 from cara.exceptions import ConfigurationException, InvalidArgumentException
 from cara.facades import Log
 from cara.queues.contracts import UniqueJob
+from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.queues.retry.policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
@@ -380,11 +381,56 @@ class JobProcessor:
         except Exception as republish_err:
             Log.error(
                 "Retry republish failed for %s: %s. "
-                "Falling back to DLQ to avoid losing the payload.",
+                "Routing to dead letter exchange to preserve payload.",
                 instance.__class__.__name__,
                 republish_err,
             )
-            JobProcessor._ack_to_dlq(channel, method_frame, msg, str(exc))
+            # The original message was already ACKed above — calling
+            # _ack_to_dlq here is a harmless no-op (basic_ack on an
+            # already-ACKed delivery) that only logs. The payload is
+            # lost from the broker's perspective. Pre-fix that was the
+            # only path: every retry-republish failure silently dropped
+            # the job with nothing but a log line as a trail.
+            #
+            # Explicitly publish to the DLX instead, mirroring the
+            # legacy AMQPDriver._handle_failed_message fallback, so
+            # the payload survives for ``replay_dead_letter`` /
+            # ``CleanDeadLetterJob`` triage.
+            try:
+                driver = _Queue.driver()
+                if hasattr(driver, "_send_to_dead_letter"):
+                    driver._send_to_dead_letter(
+                        job=instance,
+                        options={
+                            "queue": queue_name or msg.get("queue", "default"),
+                            "error": {
+                                "class": type(exc).__name__,
+                                "message": str(exc)[:500],
+                                "republish_error": str(republish_err)[:200],
+                            },
+                            "args": msg.get("args", ()),
+                            "callback": msg.get("callback", "handle"),
+                        },
+                        attempts=int(
+                            msg.get("attempts", 0)
+                            if msg.get("attempts", 0) is not None
+                            else 0
+                        ),
+                    )
+                else:
+                    Log.error(
+                        "DLX publish unavailable (driver: %s). "
+                        "Payload for manual recovery: %r",
+                        type(driver).__name__,
+                        msg,
+                    )
+            except Exception as dlx_err:
+                Log.error(
+                    "DLX publish also failed (%s). "
+                    "Payload for manual recovery: %r",
+                    dlx_err,
+                    msg,
+                )
 
     @staticmethod
     def _route_failed_message(
@@ -441,6 +487,18 @@ class JobProcessor:
                 UniqueJob.release_unique_lock(instance.unique_id())
             except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
+
+        # Batch completion hook (terminal failure) — decrement the
+        # pending counter AND increment the failed counter so
+        # Batch.then() eventually fires with the correct failed tally.
+        # Only on terminal outcomes; retries (the ``can_retry`` branch
+        # above) must NOT decrement because the job will run again.
+        try:
+            from cara.queues.Batch import auto_dispatch_batch_completion
+
+            auto_dispatch_batch_completion(instance, exc)
+        except (ImportError, OSError, ConnectionError, RuntimeError):
+            pass
 
     @staticmethod
     def _ack_to_dlq(channel, method_frame, msg, error_msg):
@@ -582,7 +640,7 @@ class JobProcessor:
                         except TypeError:
                             msg["obj"] = cls()
                 else:
-                    msg = pickle.loads(body)
+                    msg = restricted_pickle_loads(body)
             except (ModuleNotFoundError, AttributeError, ImportError) as e:
                 Log.warning(
                     "Dropping orphan message (class not importable in this service): "
@@ -772,6 +830,19 @@ class JobProcessor:
                         instance.__class__.__name__,
                         release_err,
                     )
+
+            # Batch completion hook — decrement the pending counter so
+            # Batch.then() fires when all jobs finish. Without this,
+            # batch-dispatched jobs processed through the production
+            # worker never decremented their counter, so then()
+            # callbacks never fired and orphan batch keys lived for
+            # the full 24h TTL.
+            try:
+                from cara.queues.Batch import auto_dispatch_batch_completion
+
+                auto_dispatch_batch_completion(instance)
+            except (ImportError, OSError, ConnectionError, RuntimeError):
+                pass
 
             # Acknowledge message
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)

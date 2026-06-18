@@ -7,10 +7,15 @@ with support for custom messages, complex conditions, and multiple validation sc
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
+
+# Only allow safe SQL identifiers: letters, digits, underscores.
+# Prevents SQL injection through table/column name interpolation.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class ExistsRule(BaseRule):
@@ -47,6 +52,19 @@ class ExistsRule(BaseRule):
         # runs for ``value=0``.
         if not table or value is None or value == "":
             return False
+
+        # Defence-in-depth: reject identifiers that aren't plain
+        # alphanumeric/underscore names. The rule parameters originate
+        # from developer-authored request classes (e.g.
+        # ``"exists:users,email"``), not from user input, but
+        # validating them prevents any SQL injection through identifier
+        # interpolation in the raw-SQL fallback path below.
+        for ident in (table, column, condition_column):
+            if ident is not None and not _SAFE_IDENTIFIER_RE.match(ident):
+                self._log_debug(
+                    f"ExistsRule: rejected unsafe identifier '{ident}'"
+                )
+                return False
 
         try:
             # Smart model discovery based on table name

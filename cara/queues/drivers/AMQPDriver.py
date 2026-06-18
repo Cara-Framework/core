@@ -23,6 +23,7 @@ from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
 from cara.queues.job_instantiation import instantiate_job
+from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.queues.retry.policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
@@ -561,8 +562,27 @@ class AMQPDriver(HasColoredOutput, Queue):
                 else:
                     body = pickle.dumps(payload)
 
-                # Publish to dead letter exchange
-                dlx_name = f'{options.get("exchange", "default")}.dlx'
+                # Publish to dead letter exchange.
+                #
+                # MUST mirror the DLX name that queue declarations use
+                # (``_connect_and_publish_locked``):
+                #   exchange non-empty → ``{exchange}.dlx``
+                #   exchange empty/"" → ``dead.letter.dlx``
+                #
+                # Pre-fix this line was:
+                #   dlx_name = f'{options.get("exchange", "default")}.dlx'
+                # When the driver config has ``exchange: ""`` (the default
+                # exchange — every non-topic-routed job), the expression
+                # evaluated to ``".dlx"`` — an exchange that was never
+                # declared. The publish raised ``ChannelClosedByBroker``
+                # (404), the outer ``except Exception`` swallowed it, and
+                # the payload was silently lost instead of landing in the
+                # DLQ. The queue-side DLX wiring always pointed at
+                # ``dead.letter.dlx``, so the mismatch meant every
+                # default-exchange job that exhausted its retry budget
+                # vanished.
+                _dlx_exchange = options.get("exchange", "")
+                dlx_name = f"{_dlx_exchange}.dlx" if _dlx_exchange else "dead.letter.dlx"
                 dlq_routing_key = f"dead.{options.get('queue', 'default')}"
 
                 self.channel.basic_publish(
@@ -712,7 +732,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         def on_message(ch, method, properties, body):
             instance = None
             try:
-                payload = pickle.loads(body)
+                payload = restricted_pickle_loads(body)
                 raw = payload.get("obj")
                 callback_name = payload.get("callback", "handle")
                 args = payload.get("args", ())
@@ -1044,7 +1064,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
                 # Decode payload
                 try:
-                    payload = pickle.loads(body)
+                    payload = restricted_pickle_loads(body)
                 except (pickle.UnpicklingError, ImportError, AttributeError, EOFError, ValueError):
                     try:
                         payload = json.loads(body.decode("utf-8"))

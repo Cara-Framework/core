@@ -19,11 +19,15 @@ filter). A single missing or extra value fails the field.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
+
+# Only allow safe SQL identifiers: letters, digits, underscores.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class BatchExistsRule(BaseRule):
@@ -57,6 +61,16 @@ class BatchExistsRule(BaseRule):
         condition_value = parts[3] if len(parts) > 3 else None
         if not table:
             return False
+
+        # Defence-in-depth: reject identifiers that aren't plain
+        # alphanumeric/underscore names to prevent SQL injection
+        # through identifier interpolation in the raw SQL below.
+        for ident in (table, column, condition_column):
+            if ident is not None and not _SAFE_IDENTIFIER_RE.match(ident):
+                self._log_debug(
+                    f"BatchExistsRule: rejected unsafe identifier '{ident}'"
+                )
+                return False
 
         # Deduplicate the input set so the IN clause stays compact and
         # ``count == len(unique)`` is the right correctness check. The

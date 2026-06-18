@@ -12,10 +12,14 @@ Usage:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from cara.validation import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
+
+# Only allow safe SQL identifiers: letters, digits, underscores.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class UniqueRule(BaseRule):
@@ -32,6 +36,13 @@ class UniqueRule(BaseRule):
         column = parts[1] if len(parts) > 1 else field
         ignore_value = parts[2] if len(parts) > 2 else None
         ignore_column = parts[3] if len(parts) > 3 else "id"
+
+        # Defence-in-depth: reject identifiers that aren't plain
+        # alphanumeric/underscore names to prevent SQL injection
+        # through identifier interpolation in the raw SQL below.
+        for ident in (table, column, ignore_column):
+            if ident is not None and not _SAFE_IDENTIFIER_RE.match(ident):
+                return False
 
         try:
             from cara.facades import DB
