@@ -156,6 +156,17 @@ class Mailable(SerializesModels):
         result = {
             "to": self._to,
             "from": self._from,
+            # ``reply_to`` / ``cc`` / ``bcc`` / ``priority`` were set on the
+            # Mailable but never emitted here — so every driver (which reads
+            # them via ``data.get(...)``) and the queued ``SendMailableJob``
+            # (which round-trips through ``to_dict``) silently dropped them.
+            # ``Mail.to(x).cc(y).reply_to(z).send()`` lost cc + reply_to with
+            # no error. Emit them so what the caller sets is what the driver
+            # transmits.
+            "reply_to": self._reply_to,
+            "cc": self._cc,
+            "bcc": self._bcc,
+            "priority": self._priority,
             "subject": self._subject,
             "html": html_content,
             "text": self._text,

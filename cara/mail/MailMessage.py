@@ -7,6 +7,8 @@ creating custom Mailable classes.
 
 from __future__ import annotations
 
+from email.utils import formataddr
+
 from cara.mail.Mailable import Mailable
 
 
@@ -23,9 +25,30 @@ class MailMessage:
         self.mailable.to(addresses)
         return self
 
-    def from_(self, address):
-        """Set sender address."""
-        self.mailable.from_(address)
+    def from_(self, address, name=None):
+        """Set sender address, with an optional display name.
+
+        ``MailChannel`` (and Laravel-style callers) pass a name alongside
+        the address — ``message.from_(addr, "Cheapa")``. The previous
+        one-arg signature raised ``TypeError`` on every such call, which
+        ``MailChannel.send`` swallowed into a silent ``return False`` so the
+        notification never sent. When a name is given, encode an RFC 5322
+        ``"Name <addr>"`` value; ``SmtpDriver`` transmits via
+        ``server.send_message``, which derives the bare envelope sender from
+        this header, so the combined form is safe.
+        """
+        self.mailable.from_(formataddr((name, address)) if name else address)
+        return self
+
+    def reply_to(self, address):
+        """Set the reply-to address.
+
+        ``Mailable`` has always supported ``reply_to`` but ``MailMessage``
+        never exposed it, so ``MailChannel``'s ``message.reply_to(...)`` call
+        raised ``AttributeError`` (swallowed → silent send failure). Mirror
+        the other fluent proxies.
+        """
+        self.mailable.reply_to(address)
         return self
 
     def cc(self, addresses):
