@@ -625,7 +625,7 @@ class Event:
             return True
 
         except Exception as e:
-            Log.error("Failed to queue listener: %s", str(e))
+            Log.error("Failed to queue listener: %s", str(e), exc_info=True)
             # Pipeline-critical listeners opt into propagation via
             # ``propagate_failures = True``. Pre-fix this branch
             # swallowed every queue-side failure (broker offline,
@@ -679,6 +679,7 @@ class Event:
                     e.__class__.__name__,
                     e,
                     category="cara.events",
+                    exc_info=True,
                 )
             except Exception:
                 # Log facade may not be wired in a bare framework
