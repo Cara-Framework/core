@@ -514,7 +514,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             # delivery, so the job is lost unless we surface this.
             # Best-effort DLX hop so the message at least survives
             # in the dead-letter store for manual recovery.
-            Log.error("Job %s: retry republish failed (%s). Falling back to DLX so the payload isn't lost.", instance.__class__.__name__, republish_exc)
+            Log.error("Job %s: retry republish failed (%s). Falling back to DLX so the payload isn't lost.", instance.__class__.__name__, republish_exc, exc_info=True)
             try:
                 self._send_to_dead_letter(
                     job=instance,

@@ -372,6 +372,21 @@ class MetricsBase:
         registry=REGISTRY,
     )
 
+    # ─── Health probes ───────────────────────────────────────────────────
+    health_probe_duration_seconds = Histogram(
+        "cheapa_health_probe_duration_seconds",
+        "Wall-clock duration of each dependency health probe.",
+        labelnames=("dependency", "status"),
+        buckets=histogram_buckets_short(),
+        registry=REGISTRY,
+    )
+    health_probe_outcomes_total = Counter(
+        "cheapa_health_probe_outcomes_total",
+        "Health probe outcomes per dependency and status.",
+        labelnames=("dependency", "status"),
+        registry=REGISTRY,
+    )
+
     # ─── Cache ─────────────────────────────────────────────────────────
     cache_operations_total = Counter(
         "cheapa_cache_operations_total",

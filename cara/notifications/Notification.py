@@ -105,7 +105,7 @@ class Notification:
 
         except Exception as e:
             # Log error using facade
-            Log.error("Failed to queue notification: %s", e)
+            Log.error("Failed to queue notification: %s", e, exc_info=True)
             return False
 
     def _send_now(self, notifiable, notification) -> bool:

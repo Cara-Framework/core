@@ -223,7 +223,7 @@ class DefaultExceptionHandler:
         return response
 
     def log_exception(self, exception: Exception) -> None:
-        """Log the exception.
+        """Log the exception with structured context.
 
         4xx errors are expected application behaviour (not-found,
         validation, auth) so they log at WARNING. 5xx errors are
@@ -233,11 +233,30 @@ class DefaultExceptionHandler:
             from cara.facades import Log
 
             status = self.get_status_code(exception)
-            msg = f"{exception.__class__.__name__}: {str(exception)}"
+            exc_type = exception.__class__.__name__
             if status < 500:
-                Log.warning(msg, category="cara.exceptions")
+                Log.warning(
+                    '%s: %s',
+                    exc_type,
+                    exception,
+                    category="cara.exceptions",
+                    context={
+                        "status_code": status,
+                        "exception_type": exc_type,
+                    },
+                )
             else:
-                Log.error(msg, category="cara.exceptions", exc_info=True)
+                Log.error(
+                    '%s: %s',
+                    exc_type,
+                    exception,
+                    category="cara.exceptions",
+                    exc_info=True,
+                    context={
+                        "status_code": status,
+                        "exception_type": exc_type,
+                    },
+                )
         except ImportError:
             pass
 
