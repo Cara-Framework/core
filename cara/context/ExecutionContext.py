@@ -191,9 +191,30 @@ class ExecutionContext:
             )
         """
         ctx = copy_context()
+
+        def _runner() -> _T:
+            # A worker thread MUST NOT share the parent task's active DB
+            # transaction registry. ``copy_context()`` copies the ContextVar
+            # *mapping*, but ``ConnectionResolver._ACTIVE_CONNECTIONS`` holds a
+            # mutable dict shared BY REFERENCE — so any DB work ``func`` does
+            # in this thread (``with DB.transaction(): ...``) would overwrite
+            # then pop the SAME dict entry the parent task is mid-transaction
+            # on, and the parent's later commit raises "No active transaction
+            # found for connection: app" and the job dead-letters. Under
+            # concurrency this was the dominant queue error. A worker thread
+            # needs its own psycopg2 connection regardless (connections aren't
+            # safe to share across threads), so bind a FRESH, isolated
+            # registry for the thread. ``set`` inside ``ctx.run`` mutates only
+            # this copied context, never the parent's. Imported lazily to
+            # avoid an eloquent -> context import cycle.
+            from cara.eloquent.connections.ConnectionResolver import reset_registry
+
+            reset_registry()
+            return func(*args, **kwargs)
+
         return await asyncio.get_running_loop().run_in_executor(
             None,
-            lambda: ctx.run(func, *args, **kwargs),
+            lambda: ctx.run(_runner),
         )
 
 
