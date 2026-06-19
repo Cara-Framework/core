@@ -42,7 +42,7 @@ class Authenticate(Middleware):
             if await self._authenticate_socket(socket):
                 return await next_fn(socket)
         except Exception as e:
-            Log.error("WebSocket auth error: %s", e, category='cara.websocket')
+            Log.error("WebSocket auth error: %s", e, category='cara.websocket', exc_info=True)
             # Don't try to send close message on error - just raise the exception
             raise WebSocketException("Unauthorized WebSocket", 4006) from e
 

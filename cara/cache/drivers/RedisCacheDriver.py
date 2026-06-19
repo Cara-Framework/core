@@ -315,7 +315,7 @@ class RedisCacheDriver(Cache):
             notify_cache_event("add", "set" if won else "noop", key, payload_size)
             return won
         except Exception as e:
-            Log.error("[RedisCacheDriver] add() flight-claim failed for '%s': %s", key, e, category='cache')
+            Log.error("[RedisCacheDriver] add() flight-claim failed for '%s': %s", key, e, category='cache', exc_info=True)
             notify_cache_event("add", "error", key, payload_size)
             raise
 
