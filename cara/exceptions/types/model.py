@@ -27,6 +27,13 @@ class ModelNotFoundException(ModelException):
     is_http_exception = True
     status_code = 404
 
+    def to_dict(self) -> dict:
+        """Emit the same ``not_found`` type token that the service-layer
+        ``EntityNotFound`` uses, so clients keying on ``type`` get a
+        consistent discriminator regardless of which layer raised the 404.
+        """
+        return {"error": str(self) or "Not found", "type": "not_found"}
+
 
 class QueryException(ModelException):
     """Thrown when a SQL query fails (syntax, constraint, etc.)."""
