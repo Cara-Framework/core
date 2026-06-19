@@ -120,7 +120,7 @@ class Batch:
                 Queue.push(job)
                 dispatched += 1
             except Exception as e:
-                Log.error("Batch %s: failed to dispatch %s: %s", self.batch_id, type(job).__name__, e)
+                Log.error("Batch %s: failed to dispatch %s: %s", self.batch_id, type(job).__name__, e, exc_info=True)
                 if self.catch_callback:
                     self.catch_callback(e, job)
                 # Decrement pending since this job will never run.
@@ -227,7 +227,7 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
     try:
         remaining = Cache.decrement(_batch_pending_key(batch_id))
     except Exception as e:
-        Log.error("Batch %s: failed to decrement pending counter: %s", batch_id, e)
+        Log.error("Batch %s: failed to decrement pending counter: %s", batch_id, e, exc_info=True)
         return
 
     if remaining is not None and int(remaining) <= 0:
@@ -258,7 +258,7 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
                     }
                 )
             except Exception as e:
-                Log.error("Batch %s: then() callback raised: %s", batch_id, e)
+                Log.error("Batch %s: then() callback raised: %s", batch_id, e, exc_info=True)
 
         # Cleanup cache keys.
         for key in (

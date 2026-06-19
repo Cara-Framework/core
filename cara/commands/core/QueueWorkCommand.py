@@ -139,7 +139,7 @@ class AMQPConnectionManager:
             try:
                 from cara.facades import Log
 
-                Log.error("Failed to connect to RabbitMQ: %s", e)
+                Log.error("Failed to connect to RabbitMQ: %s", e, exc_info=True)
             except (ImportError, RuntimeError):
                 import sys
 
@@ -306,7 +306,7 @@ class JobProcessor:
         try:
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
         except Exception as ack_err:
-            Log.error("Failed to ACK before retry republish: %s", ack_err)
+            Log.error("Failed to ACK before retry republish: %s", ack_err, exc_info=True)
             # Fall through — pika may have already auto-rejected.
 
         attempts_done = int(
@@ -383,6 +383,7 @@ class JobProcessor:
                 "Routing to dead letter exchange to preserve payload.",
                 instance.__class__.__name__,
                 republish_err,
+                exc_info=True,
             )
             # The original message was already ACKed above — calling
             # _ack_to_dlq here is a harmless no-op (basic_ack on an
@@ -429,6 +430,7 @@ class JobProcessor:
                     "Payload for manual recovery: %r",
                     dlx_err,
                     msg,
+                    exc_info=True,
                 )
 
     @staticmethod
@@ -526,7 +528,7 @@ class JobProcessor:
             )
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
         except Exception as e:
-            Log.error("Failed to ACK message to DLQ: %s", e)
+            Log.error("Failed to ACK message to DLQ: %s", e, exc_info=True)
 
     @staticmethod
     def process_message(

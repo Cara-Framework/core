@@ -487,7 +487,7 @@ class ConnectionManager:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            Log.error("Connection cleanup loop crashed: %s", e, category='cara.broadcasting')
+            Log.error("Connection cleanup loop crashed: %s", e, category='cara.broadcasting', exc_info=True)
 
     async def _sweep_idle_connections(self) -> None:
         now = time.time()

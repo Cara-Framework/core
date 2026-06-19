@@ -77,7 +77,7 @@ async def safe_dispatch(
                 # default 3-attempt window (1s + 2s = 3s max wait).
                 await asyncio.sleep(1 * (attempt + 1))
             else:
-                Log.error("Failed to dispatch %s after %s attempts: %s", job.__class__.__name__, max_retries, e)
+                Log.error("Failed to dispatch %s after %s attempts: %s", job.__class__.__name__, max_retries, e, exc_info=True)
                 raise
 
     # Defensive: the loop only exits via ``return True`` or ``raise``,

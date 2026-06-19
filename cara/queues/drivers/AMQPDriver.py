@@ -1034,7 +1034,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             self.connection = None
 
         except Exception as e:
-            Log.error("Failed to declare dead letter exchange: %s", e)
+            Log.error("Failed to declare dead letter exchange: %s", e, exc_info=True)
 
     def get_dead_letter_messages(
         self, queue_name: str = "dead.letter.queue", limit: int = 100
@@ -1094,7 +1094,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 pass
 
         except Exception as e:
-            Log.error("Failed to get dead letter messages: %s", e)
+            Log.error("Failed to get dead letter messages: %s", e, exc_info=True)
 
         return messages
 
@@ -1165,7 +1165,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     self.channel.basic_nack(method.delivery_tag, requeue=True)
 
         except Exception as e:
-            Log.error("Failed to replay dead letter messages: %s", e)
+            Log.error("Failed to replay dead letter messages: %s", e, exc_info=True)
         finally:
             # Pre-fix the close lines sat after the loop *inside* the
             # try block: any exception mid-loop (broker hiccup during

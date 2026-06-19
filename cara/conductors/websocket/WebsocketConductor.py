@@ -138,7 +138,7 @@ class WebsocketConductor:
             Log.debug("No WS route for path '%s'; closing 1008", getattr(self.socket, 'path', '?'), category='cara.websocket')
             self._wsx_close_code = 1008
         except Exception as e:
-            Log.error("Error in WebSocket connection: %s", e)
+            Log.error("Error in WebSocket connection: %s", e, exc_info=True)
             raise
         finally:
             # Clean up socket broadcasting first
@@ -168,7 +168,7 @@ class WebsocketConductor:
                     route_pipeline_holder[0] if route_pipeline_holder else None,
                 )
             except Exception as term_exc:
-                Log.error("WebSocket terminable middleware sweep failed: %s", term_exc, category='cara.websocket')
+                Log.error("WebSocket terminable middleware sweep failed: %s", term_exc, category='cara.websocket', exc_info=True)
 
     def get_global_middleware(self):
         """
@@ -231,7 +231,7 @@ class WebsocketConductor:
             # ResetAuth ws variant not present in this build — fine.
             pass
         except Exception as e:
-            Log.error("Critical error in WebSocket auth cache cleanup: %s", e, category='cara.websocket')
+            Log.error("Critical error in WebSocket auth cache cleanup: %s", e, category='cara.websocket', exc_info=True)
 
         # Collect the middleware instances that actually ran. The
         # Pipeline records each instance it walks through into
@@ -302,4 +302,4 @@ class WebsocketConductor:
             try:
                 await terminate_fn(self.socket)
             except Exception as e:
-                Log.error("Error in terminable WebSocket middleware %s: %s", type(instance).__name__, e, category='cara.websocket')
+                Log.error("Error in terminable WebSocket middleware %s: %s", type(instance).__name__, e, category='cara.websocket', exc_info=True)

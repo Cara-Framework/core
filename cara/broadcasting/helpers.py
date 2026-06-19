@@ -93,6 +93,7 @@ def _handle_broadcast_task_exception(task: asyncio.Task) -> None:
                 e.__class__.__name__,
                 e,
                 category="cara.broadcasting",
+                exc_info=True,
             )
         except Exception:
             import sys

@@ -444,7 +444,7 @@ class Socket:
                     Log.debug("remove_connection during cleanup raised: %s", e, category='cara.websocket')
                 self._connection_registered = False
         except Exception as e:
-            Log.error("Broadcasting cleanup for %s failed: %s", self._connection_id, e, category='cara.websocket')
+            Log.error("Broadcasting cleanup for %s failed: %s", self._connection_id, e, category='cara.websocket', exc_info=True)
 
     # ------------------------------------------------------------------
     # Helpers.
