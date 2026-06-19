@@ -257,7 +257,7 @@ class APSchedulerDriver(Scheduling):
                 )
             except Exception as e:
                 if not silent:
-                    Log.error("Failed to schedule job '%s': %s", identifier, e)
+                    Log.error("Failed to schedule job '%s': %s", identifier, e, exc_info=True)
                 raise
 
         if not silent:

@@ -110,13 +110,11 @@ class MigrationExecutor:
                 raise InvalidArgumentException(f"Invalid migration direction: {direction}")
 
         except Exception as e:
-            import traceback
-
             Log.error(
-                "Error running migration %s: %s\n%s",
+                "Error running migration %s: %s",
                 file_path,
                 e,
-                traceback.format_exc(),
+                exc_info=True,
             )
             raise
 
