@@ -125,11 +125,24 @@ class Facade(type):
             "_repr_png_",
             "_repr_jpeg_",
             "_repr_svg_",
+            # asyncio.iscoroutinefunction() / inspect probe these
+            # single-underscore sentinels on whatever object they're handed.
+            "_is_coroutine_marker",
+            "_is_coroutine",
         }
         return (
             attribute.startswith("_ipython_")
             or attribute.startswith("_repr_")
             or attribute in private_methods
+            # Any dunder (``__partialmethod__``, ``__func__``, ``__wrapped__``,
+            # ``__test__``, ``__deepcopy__`` …) only reaches ``__getattr__``
+            # because it is genuinely absent on the facade class — real
+            # dunders resolve through normal type lookup and never get here.
+            # The correct response is a quiet AttributeError, not an ERROR
+            # log + container round-trip. Before this guard, framework
+            # introspection (asyncio / functools / inspect / pytest) spammed
+            # 90+ "Facade resolution failed for 'DB'" ERROR lines per run.
+            or (attribute.startswith("__") and attribute.endswith("__"))
         )
 
     def __repr__(cls) -> str:
