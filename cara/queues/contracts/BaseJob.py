@@ -183,16 +183,25 @@ class BaseJob(BaseQueueable):
         self.payload[key] = value
 
     def failed(self, job_data: Any, error: Exception) -> None:
-        """Handle job failure."""
+        """Handle job failure.
+
+        The failure message and payload are logged by the parent
+        ``BaseQueueable.failed`` (invoked via ``super()`` below). This
+        override previously re-logged BOTH before delegating, so every
+        failed job emitted the "failed" line and the FULL payload twice —
+        doubling log volume and doubling the exposure of any sensitive
+        values (tokens, emails) carried in the payload. Delegate the
+        shared logging to the parent and only add the ``tags`` line, which
+        the parent does not emit.
+        """
+        # Parent logs the failure message + payload exactly once.
+        super().failed(job_data, error)
+
         try:
             from cara.facades import Log
 
-            Log.error("Job %s failed: %s", self.__class__.__name__, str(error))
-            Log.error("Job payload: %s", self.payload)
-            Log.error("Job tags: %s", self.tags)
+            if getattr(self, "tags", None):
+                Log.error("Job %s tags: %s", self.__class__.__name__, self.tags)
         except ImportError:
-            # Silently fail if Log facade not available - this is a framework component
+            # Silently fail if Log facade not available - framework component
             pass
-
-        # Call parent failed method
-        super().failed(job_data, error)
