@@ -18,10 +18,12 @@ class _RestrictedUnpickler(pickle.Unpickler):
     vector: a crafted payload can import any module and call any
     callable. This restricted variant only permits classes under
     ``app.jobs`` / ``app.commands`` (the application's own job
-    hierarchy) and safe builtins needed to reconstruct the payload
-    dict (``dict``, ``tuple``, ``list``, ``set``, ``frozenset``,
-    ``bytes``, ``bytearray``).  Everything else raises
-    ``pickle.UnpicklingError``.
+    hierarchy), a closed set of safe immutable value types that jobs
+    routinely carry in their ``args`` / ``kwargs`` (``datetime``,
+    ``pendulum`` temporals, ``Decimal``, ``UUID``), and safe builtins
+    needed to reconstruct the payload dict (``dict``, ``tuple``,
+    ``list``, ``set``, ``frozenset``, ``bytes``, ``bytearray``).
+    Everything else raises ``pickle.UnpicklingError``.
     """
 
     _ALLOWED_JOB_PREFIXES = (
@@ -38,8 +40,64 @@ class _RestrictedUnpickler(pickle.Unpickler):
         "int", "float", "str", "bool", "complex",
     })
 
+    # Safe, immutable value types that legitimately appear inside a job's
+    # serialized ``args`` / ``kwargs`` (e.g. a ``pendulum.now()`` timestamp
+    # passed to a scheduled job, a ``Decimal`` price, a ``UUID`` correlation
+    # id). Before this allowlist, ANY job whose payload carried one of these
+    # — pendulum DateTimes especially, since the pipeline uses pendulum
+    # everywhere — failed to deserialize on dequeue and was dead-lettered
+    # with "Restricted unpickler denied: pendulum.datetime.DateTime". These
+    # are pure data classes: constructing them runs no side effects, so
+    # allowlisting them by EXACT (module, name) keeps the anti-RCE posture
+    # intact while making the serializer round-trip the values jobs actually
+    # use. Matched by exact pair (not prefix) so e.g. ``decimal.<other>`` or
+    # an attacker-supplied ``pendulum.<gadget>`` stays denied.
+    _ALLOWED_VALUE_CLASSES = frozenset({
+        ("datetime", "datetime"),
+        ("datetime", "date"),
+        ("datetime", "time"),
+        ("datetime", "timedelta"),
+        ("datetime", "timezone"),
+        ("decimal", "Decimal"),
+        ("uuid", "UUID"),
+        ("pendulum.datetime", "DateTime"),
+        ("pendulum.date", "Date"),
+        ("pendulum.time", "Time"),
+        ("pendulum.duration", "Duration"),
+        ("pendulum.tz.timezone", "Timezone"),
+        ("pendulum.tz.timezone", "FixedTimezone"),
+    })
+
+    @staticmethod
+    def _guarded_getattr(obj: Any, name: Any) -> Any:
+        """``getattr`` exposed to the unpickler with dunder access blocked.
+
+        ``pendulum``'s ``Timezone`` reduce reconstructs itself via
+        ``getattr(Timezone, "_unpickle")`` + REDUCE, so the unpickler must
+        resolve ``builtins.getattr``. Exposing the bare builtin would,
+        however, hand a crafted payload the canonical pickle escalation
+        primitive: ``getattr(<allowed cls>, "__init__").__globals__`` →
+        ``getattr(dict, "__getitem__")`` → ``os`` → RCE. Blocking every
+        dunder name severs that chain (``__globals__``, ``__getitem__``,
+        ``__class__``, … all denied) while still permitting the public
+        ``_unpickle`` hook pendulum relies on. Non-dunder attributes of the
+        allowlisted *value* classes are plain methods/classmethods with no
+        reachable side-effecting gadget.
+        """
+        if not isinstance(name, str) or name.startswith("__"):
+            raise pickle.UnpicklingError(
+                f"Restricted unpickler denied getattr of {name!r}"
+            )
+        return getattr(obj, name)
+
     def find_class(self, module: str, name: str) -> Any:
         if module == "builtins" and name in self._ALLOWED_BUILTINS:
+            return super().find_class(module, name)
+        if module == "builtins" and name == "getattr":
+            # Needed by pendulum temporal reduces; hardened against the
+            # getattr-gadget escalation by ``_guarded_getattr``.
+            return self._guarded_getattr
+        if (module, name) in self._ALLOWED_VALUE_CLASSES:
             return super().find_class(module, name)
         if any(module.startswith(prefix) for prefix in self._ALLOWED_JOB_PREFIXES):
             return super().find_class(module, name)
