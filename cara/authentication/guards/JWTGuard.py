@@ -630,7 +630,7 @@ class JWTGuard(Guard):
                 try:
                     from cara.facades import Log
 
-                    Log.error("JWTGuard._decode_token: revocation-cutoff cache read failed for sub=%s; failing closed: %s: %s", sub, type(exc).__name__, exc, category='cara.auth.jwt')
+                    Log.error("JWTGuard._decode_token: revocation-cutoff cache read failed for sub=%s; failing closed: %s: %s", sub, type(exc).__name__, exc, category='cara.auth.jwt', exc_info=True)
                 except ImportError:
                     pass
                 raise TokenBlacklistedException(
@@ -665,7 +665,7 @@ class JWTGuard(Guard):
             try:
                 from cara.facades import Log
 
-                Log.error("JWTGuard.revoke_user_sessions failed for user_id=%s", user_id, category='cara.auth.jwt')
+                Log.error("JWTGuard.revoke_user_sessions failed for user_id=%s", user_id, category='cara.auth.jwt', exc_info=True)
             except ImportError:
                 pass
 
