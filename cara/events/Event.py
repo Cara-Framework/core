@@ -508,7 +508,7 @@ class Event:
                 try:
                     from cara.facades import Log
 
-                    Log.error("Event listener %s failed: %s: %s", _lst_name, _listener_exc.__class__.__name__, _listener_exc, category='cara.events')
+                    Log.error("Event listener %s failed: %s: %s", _lst_name, _listener_exc.__class__.__name__, _listener_exc, category='cara.events', exc_info=True)
                 except (ImportError, RuntimeError):
                     pass
                 # Pipeline-critical listeners opt in via

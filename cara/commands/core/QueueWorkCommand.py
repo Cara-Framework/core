@@ -851,7 +851,7 @@ class JobProcessor:
             return "success"
 
         except TimeoutError as timeout_error:
-            Log.error("⏱️ Job timeout: %s", timeout_error)
+            Log.error("Job timeout: %s", timeout_error, exc_info=True)
 
             # Mark as failed in unified job table
             if instance and hasattr(instance, "_mark_failed"):
@@ -885,10 +885,7 @@ class JobProcessor:
             return "failure"
 
         except Exception as job_error:
-            import traceback
-
-            Log.error("❌ Job failed: %s", job_error)
-            Log.error("   Traceback: %s", traceback.format_exc())
+            Log.error("Job failed: %s", job_error, exc_info=True)
 
             # Mark as failed in unified job table
             if instance and hasattr(instance, "_mark_failed"):
