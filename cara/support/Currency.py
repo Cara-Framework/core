@@ -26,6 +26,8 @@ follows. Callers can pass ``currency`` explicitly to bypass it.
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 # NOTE: ``cara.configuration`` is imported lazily inside ``default_currency``
 # to avoid a circular import — ``cara.support`` is imported during
 # ``cara.foundation.Application`` boot (via ``PathManager``), which itself is
@@ -54,7 +56,23 @@ _CURRENCY_SYMBOLS = {
     "INR": "₹",
     "BRL": "R$",
     "CHF": "CHF ",
+    "KRW": "₩",
+    "HKD": "HK$",
+    "SGD": "S$",
+    "NZD": "NZ$",
+    "ZAR": "R",
+    "RUB": "₽",
+    "PLN": "zł ",
 }
+
+# ISO 4217 zero-decimal currencies — these currencies have no minor unit
+# (no "cents"), so displaying "¥1500.00" or "₩25000.00" is wrong.
+# ``format_money`` auto-detects these when ``decimals`` is not explicitly
+# overridden so callers don't have to remember per-currency precision.
+_ZERO_DECIMAL_CURRENCIES = frozenset({
+    "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW",
+    "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
+})
 
 
 def default_currency() -> str:
@@ -90,39 +108,57 @@ def currency_symbol(currency: str | None = None) -> str:
 
 
 def format_money(
-    amount: float,
+    amount: object,
     currency: str | None = None,
     *,
-    decimals: int = 2,
+    decimals: int | None = None,
 ) -> str:
     """Render ``amount`` with the right currency symbol.
 
     Args:
-        amount: Numeric value. Coerced via ``float()``; non-numeric /
-            ``None`` collapses to ``0.0`` so callers can chain without
-            guards.
+        amount: Numeric value (``Decimal`` / ``float`` / ``int`` /
+            numeric ``str``). Coerced via ``Decimal(str(...))`` so the
+            EXACT decimal value is formatted — never the binary-float
+            approximation ``float(amount)`` would introduce (a stored
+            ``Decimal('1234.50')`` must not display as ``1234.49``).
+            Non-numeric / ``None`` collapses to ``0`` so callers can
+            chain without guards.
         currency: ISO 4217 code (``"USD"``, ``"EUR"``, …). Empty /
             ``None`` falls back to :func:`default_currency`.
-        decimals: Trailing-precision digits. Default ``2`` covers most
-            consumer prices; pass ``0`` for whole-unit currencies
-            (``"¥1500"`` not ``"¥1500.00"``).
+        decimals: Trailing-precision digits. ``None`` (default) auto-
+            detects from the currency: 0 for zero-decimal currencies
+            (JPY, KRW, …), 2 for everything else. Pass an explicit
+            int to override.
+
+    The integer part is grouped with thousands separators so a
+    ``$1234.50`` price renders as ``$1,234.50`` (and ``¥1500000`` as
+    ``¥1,500,000``) instead of an unreadable run of digits.
 
     Examples::
 
         >>> format_money(19.99)
         '$19.99'
-        >>> format_money(19.99, "EUR")
-        '€19.99'
-        >>> format_money(1500, "JPY", decimals=0)
-        '¥1500'
+        >>> format_money(1234.5, "EUR")
+        '€1,234.50'
+        >>> format_money(1500, "JPY")
+        '¥1,500'
         >>> format_money(50, "PLN")
-        'PLN 50.00'
+        'zł 50.00'
     """
-    try:
-        value = float(amount)
-    except (TypeError, ValueError):
-        value = 0.0
-    return f"{currency_symbol(currency)}{value:.{decimals}f}"
+    if isinstance(amount, Decimal):
+        value = amount
+    else:
+        try:
+            value = Decimal(str(amount))
+        except (InvalidOperation, TypeError, ValueError):
+            value = Decimal("0")
+    if decimals is None:
+        code = (currency or default_currency() or "").strip().upper()
+        decimals = 0 if code in _ZERO_DECIMAL_CURRENCIES else 2
+    # ``,`` groups thousands; ``.{decimals}f`` fixes the precision and
+    # rounds at the display boundary using Decimal's context (ROUND_HALF_EVEN
+    # by default), so the formatted string matches the stored value.
+    return f"{currency_symbol(currency)}{value:,.{decimals}f}"
 
 
 __all__ = ["default_currency", "currency_symbol", "format_money"]
