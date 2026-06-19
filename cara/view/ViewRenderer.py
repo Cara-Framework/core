@@ -18,7 +18,18 @@ class ViewRenderer:
         """Initialize view renderer."""
         self.engine = engine or ViewEngine()
         self.factory = factory
-        self.debug = True  # Enable debug mode by default
+        # Re-raise template-render errors ONLY in debug mode; otherwise the
+        # render path returns the safe "Template Error" string. This was
+        # hardcoded ``True``, which re-raised raw template exceptions (and
+        # their stack traces / internal context) to end users in
+        # production. Tie it to ``app.debug`` and fail closed to ``False``
+        # if config isn't loaded yet, so production never leaks internals.
+        try:
+            from cara.configuration import config
+
+            self.debug = bool(config("app.debug", False))
+        except Exception:
+            self.debug = False
 
     def render(self, view: str, data: dict[str, Any] = None) -> str:
         """Render a view template."""
