@@ -370,6 +370,10 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             for k in ("hour", "minute", "day_of_week"):
                 if k in spec:
                     cron_kw[k] = spec[k]
+            # Forward per-job timezone override so dict-config entries
+            # can pin a timezone just like spec-config entries can.
+            if spec.get("timezone"):
+                builder.timezone(spec["timezone"])
             # APScheduler cron via expression
             # Build a cron expression or use daily/hourly helpers
             if "day_of_week" in cron_kw:
