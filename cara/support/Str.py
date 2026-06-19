@@ -189,6 +189,92 @@ def email_mask(email: str) -> str:
     return f"{masked_local}@{domain}"
 
 
+def mask_token(token: str) -> str:
+    """Mask a token/key/secret for safe log output.
+
+    Shows only the first 4 and last 4 characters of long tokens;
+    shorter values are fully masked.  Empty / ``None`` returns
+    ``"***"``.
+
+    Examples:
+        >>> mask_token("sk_live_abc123xyz789")
+        'sk_l***z789'
+        >>> mask_token("short")
+        '*****'
+        >>> mask_token("")
+        '***'
+    """
+    if not token:
+        return "***"
+    if len(token) <= 8:
+        return "*" * len(token)
+    return f"{token[:4]}***{token[-4:]}"
+
+
+def mask_ip(ip: str) -> str:
+    """Partially mask an IP address for safe log output.
+
+    IPv4: shows the first two octets, masks the rest
+    (``192.168.x.x``).  IPv6: shows the first group, masks the
+    rest.  Empty / invalid input returns ``"*.*.*.*"``.
+
+    Examples:
+        >>> mask_ip("192.168.1.42")
+        '192.168.x.x'
+        >>> mask_ip("2001:0db8:85a3::8a2e:0370:7334")
+        '2001:****'
+        >>> mask_ip("")
+        '*.*.*.*'
+    """
+    if not ip:
+        return "*.*.*.*"
+    ip = ip.strip()
+    if ":" in ip:
+        # IPv6 — show only the first group.
+        first = ip.split(":")[0]
+        return f"{first}:****"
+    parts = ip.split(".")
+    if len(parts) == 4:
+        return f"{parts[0]}.{parts[1]}.x.x"
+    return "*.*.*.*"
+
+
+def mask_proxy_url(url: str) -> str:
+    """Strip credentials from a proxy URL for safe log output.
+
+    Proxy URLs often contain ``user:pass@host:port``.  This keeps
+    the scheme and host:port but replaces any embedded credentials
+    with ``***:***``.
+
+    Examples:
+        >>> mask_proxy_url("http://user:pass@proxy.example.com:3128")
+        'http://***:***@proxy.example.com:3128'
+        >>> mask_proxy_url("http://proxy.example.com:3128")
+        'http://proxy.example.com:3128'
+        >>> mask_proxy_url("")
+        '***'
+    """
+    if not url:
+        return "***"
+    try:
+        from urllib.parse import urlparse, urlunparse
+
+        parsed = urlparse(url)
+        if parsed.username or parsed.password:
+            # Replace netloc with masked credentials.
+            host_port = parsed.hostname or ""
+            if parsed.port:
+                host_port = f"{host_port}:{parsed.port}"
+            masked_netloc = f"***:***@{host_port}"
+            return urlunparse(
+                (parsed.scheme, masked_netloc, parsed.path,
+                 parsed.params, parsed.query, parsed.fragment)
+            )
+        return url
+    except Exception:
+        return "***"
+
+
 def strip_tags(text: str) -> str:
     """Strip HTML/XML tags and dangerous block contents from ``text``.
 

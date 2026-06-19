@@ -6,6 +6,7 @@ from typing import Any
 
 from cara.facades import Log
 from cara.middleware import Middleware
+from cara.support.Str import mask_ip
 from cara.websocket import Socket
 
 
@@ -25,11 +26,12 @@ class LogWSRequests(Middleware):
         else:
             ip, port = "-", "-"
 
+        masked = mask_ip(str(ip)) if ip != "-" else "-"
         path = socket.path
         started = time.perf_counter()
         # Routine connect/close are debug-level — per-connection traffic would
         # flood the log otherwise. Only abnormal closes are elevated.
-        Log.debug("🔌 WS: %s:%s -> CONNECT %s", ip, port, path, category='cara.websocket')
+        Log.debug("🔌 WS: %s:%s -> CONNECT %s", masked, port, path, category='cara.websocket')
 
         try:
             result = await next_fn(socket)
@@ -44,7 +46,7 @@ class LogWSRequests(Middleware):
             is_benign = (
                 name == "WebSocketException" and code == 4002
             ) or name == "RouteNotFoundException"
-            msg = f"🔌 WS: {ip}:{port} -> CLOSE {path} ✗ {name} | {elapsed:.2f}ms"
+            msg = f"🔌 WS: {masked}:{port} -> CLOSE {path} ✗ {name} | {elapsed:.2f}ms"
             if is_benign:
                 Log.debug(msg, category="cara.websocket")
             else:
@@ -52,5 +54,5 @@ class LogWSRequests(Middleware):
             raise
         else:
             elapsed = (time.perf_counter() - started) * 1000
-            Log.debug("🔌 WS: %s:%s -> CLOSE %s ✓ | %.2fms", ip, port, path, elapsed, category='cara.websocket')
+            Log.debug("🔌 WS: %s:%s -> CLOSE %s ✓ | %.2fms", masked, port, path, elapsed, category='cara.websocket')
             return result

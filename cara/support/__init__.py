@@ -23,6 +23,9 @@ from .Retry import Retry
 from .Sleep import Sleep
 from .Str import (
     email_mask,
+    mask_ip,
+    mask_proxy_url,
+    mask_token,
     sanitize_text,
     slugify,
     strip_tags,
@@ -56,6 +59,9 @@ __all__ = [
     "default_currency",
     "email_mask",
     "flatten",
+    "mask_ip",
+    "mask_proxy_url",
+    "mask_token",
     "format_money",
     "get_classes",
     "modules",

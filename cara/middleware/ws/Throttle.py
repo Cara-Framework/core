@@ -49,6 +49,7 @@ from cara.exceptions.types.websocket import WebSocketException
 from cara.facades import Log
 from cara.http.request.Request import _is_trusted_proxy
 from cara.middleware import Middleware
+from cara.support.Str import mask_ip
 from cara.websocket import Socket
 
 _RATE_LIMIT_CLOSE_CODE = 4008  # WebSocketException docs: "Rate limit exceeded"
@@ -102,7 +103,7 @@ class Throttle(Middleware):
             ) from e
 
         if not allowed:
-            Log.warning("WebSocket throttle exceeded: ip=%s path=%s name=%s limit=%s", ip, path, self.name, limit, category='cara.websocket')
+            Log.warning("WebSocket throttle exceeded: ip=%s path=%s name=%s limit=%s", mask_ip(ip), path, self.name, limit, category='cara.websocket')
             try:
                 await socket.send(
                     {

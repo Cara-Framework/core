@@ -15,6 +15,7 @@ from typing import Any
 from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
+from cara.support.Str import mask_ip
 
 # Query params whose values must never land in access logs. Hitting any of
 # these by accident (links, redirects, mis-placed auth) leaks the secret to
@@ -136,8 +137,8 @@ class LogHttpRequests(Middleware):
         """Handle the HTTP request and log it."""
         start_time = time.time()
 
-        # Get client IP (sync method)
-        client_ip = request.ip() or "unknown"
+        # Get client IP (sync method) — mask for PII protection.
+        client_ip = mask_ip(request.ip() or "unknown")
 
         # Process the request. On exception, log the path so access logs
         # stay useful for debugging (exception handler swallows the URL).
