@@ -404,13 +404,27 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         while True:
             try:
                 client = await self._redis()
-                self._listener_pubsub = client.pubsub()
+                if client is None:
+                    # ``_redis()`` normally raises on failure, but guard
+                    # anyway: ``client.pubsub()`` on None surfaces as the
+                    # confusing "'NoneType' object has no attribute 'pubsub'".
+                    # Treat as a connection failure -> backoff + retry.
+                    raise ConnectionError("Redis client unavailable")
+                # Bind the pubsub to a LOCAL before iterating. ``cleanup()``
+                # (graceful shutdown) and the ``finally`` below both null
+                # ``self._listener_pubsub`` from another task; iterating the
+                # instance attribute let it be set to None between creation
+                # and ``.listen()`` -> the "'NoneType' object has no attribute
+                # 'listen'" crash logged on every restart. A local ref is
+                # stable for the lifetime of this iteration.
+                pubsub = client.pubsub()
+                self._listener_pubsub = pubsub
                 if self._redis_subscribed:
-                    await self._listener_pubsub.subscribe(*self._redis_subscribed)
+                    await pubsub.subscribe(*self._redis_subscribed)
                 self._listener_ready.set()
                 attempt = 0  # Reset after a successful (re)connect.
 
-                async for message in self._listener_pubsub.listen():
+                async for message in pubsub.listen():
                     if message.get("type") != "message":
                         continue
                     await self._dispatch_pubsub_message(message)
