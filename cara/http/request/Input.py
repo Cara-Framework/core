@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, TypeVar
 
 from cara.http.request.utils.QueryStringParser import QueryStringParser
-from cara.support.Structures import data_get
+from cara.support import data_get
 
 T = TypeVar("T", bound="InputBag")
 

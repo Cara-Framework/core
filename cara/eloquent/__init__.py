@@ -1,9 +1,9 @@
-from .DatabaseManager import DatabaseManager
+from .DatabaseManager import DatabaseManager, get_database_manager
+from .EloquentProvider import EloquentProvider
 from .factories.Factory import Factory
-from .integrity import is_unique_violation
+from .Integrity import is_unique_violation
 from .models import Model
 from .schema.Schema import Schema
-from .EloquentProvider import EloquentProvider
 
 __all__ = [
     "DatabaseManager",
@@ -11,5 +11,6 @@ __all__ = [
     "Factory",
     "Model",
     "Schema",
+    "get_database_manager",
     "is_unique_violation",
 ]

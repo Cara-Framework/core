@@ -1,23 +1,23 @@
 from .BaseScope import BaseScope
-from .scope import scope
+from .ScopeDecorator import scope
 from .SoftDeleteScope import SoftDeleteScope
-from .SoftDeletesMixin import SoftDeletesMixin
+from .MakesSoftDeletes import MakesSoftDeletes
 from .TenantScope import TenantScope
-from .TenantScopeMixin import TenantScopeMixin
-from .TimeStampsMixin import TimestampsMixin
+from .MakesTenantScope import MakesTenantScope
+from .MakesTimestamps import MakesTimestamps
 from .TimeStampsScope import TimeStampsScope
-from .UUIDPrimaryKeyMixin import UUIDPrimaryKeyMixin
+from .MakesUUIDPrimaryKey import MakesUUIDPrimaryKey
 from .UUIDPrimaryKeyScope import UUIDPrimaryKeyScope
 
 __all__ = [
     "BaseScope",
     "scope",
     "SoftDeleteScope",
-    "SoftDeletesMixin",
+    "MakesSoftDeletes",
     "TenantScope",
-    "TenantScopeMixin",
-    "TimestampsMixin",
+    "MakesTenantScope",
+    "MakesTimestamps",
     "TimeStampsScope",
-    "UUIDPrimaryKeyMixin",
+    "MakesUUIDPrimaryKey",
     "UUIDPrimaryKeyScope",
 ]

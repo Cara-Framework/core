@@ -14,7 +14,7 @@ from typing import Any
 
 from cara.http import Request, Response
 from cara.middleware import Middleware
-from cara.support.paths import public_path
+from cara.support.Paths import public_path
 
 
 class ServeStaticFiles(Middleware):

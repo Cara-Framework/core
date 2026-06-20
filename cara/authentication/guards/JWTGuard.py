@@ -421,7 +421,7 @@ class JWTGuard(Guard):
         every token invalid).
         """
         try:
-            from cara.http.request.context import current_request
+            from cara.http.request.Context import current_request
 
             request = current_request.get()
             header_value = request.header(self.header_name)

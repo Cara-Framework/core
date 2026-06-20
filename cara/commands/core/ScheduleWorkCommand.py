@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 from cara.commands import CommandBase
-from cara.commands.AutoReloadMixin import AutoReloadMixin
+from cara.commands.MakesAutoReload import MakesAutoReload
 from cara.configuration import config
 from cara.decorators import command
 from cara.exceptions import (
@@ -34,7 +34,7 @@ from cara.scheduling.contracts import ShouldSchedule
         "--reload": "Enable auto-reload on file changes",
     },
 )
-class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
+class ScheduleWorkCommand(MakesAutoReload, CommandBase):
     """Run schedule worker with enhanced monitoring and task registration."""
 
     def __init__(self, application=None):
@@ -67,7 +67,7 @@ class ScheduleWorkCommand(AutoReloadMixin, CommandBase):
             self._show_final_stats()
 
     def _run_main_loop(self, *args, **kwargs):
-        """Main scheduler loop - called by AutoReloadMixin on restart."""
+        """Main scheduler loop - called by MakesAutoReload on restart."""
         # Use stored parameters from store_restart_params
         if hasattr(self, "_restart_params") and self._restart_params:
             driver = self._restart_params[0] if self._restart_params else None

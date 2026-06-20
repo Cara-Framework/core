@@ -202,7 +202,7 @@ class Logger(Logger):
         except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
         try:
-            from cara.http.request.context import current_request
+            from cara.http.request.Context import current_request
 
             req = current_request.get()
             return getattr(req, "request_id", str(uuid.uuid4())[:8])

@@ -20,17 +20,17 @@ import time
 from typing import Any
 
 from cara.commands import CommandBase
-from cara.commands.AutoReloadMixin import AutoReloadMixin
+from cara.commands.MakesAutoReload import MakesAutoReload
 from cara.configuration import config
 from cara.decorators import command
 from cara.exceptions import ConfigurationException, InvalidArgumentException
 from cara.facades import Log
 from cara.queues.contracts import UniqueJob
 from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
-from cara.queues.retry.policy import (
+from cara.queues.retry.Policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
-from cara.queues.retry.policy import (
+from cara.queues.retry.Policy import (
     DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS,
 )
 
@@ -244,7 +244,7 @@ class JobProcessor:
 
     # Framework-default retry policy used when the failing job does not
     # declare its own ``max_attempts`` / ``retry_backoff``. SINGLE-SOURCED
-    # from ``cara.queues.retry.policy`` so this production worker and
+    # from ``cara.queues.retry.Policy`` so this production worker and
     # ``AMQPDriver`` can no longer drift apart — they previously kept
     # hand-copied constants "in lockstep" by comment only.
     DEFAULT_MAX_ATTEMPTS = _RETRY_DEFAULT_MAX_ATTEMPTS
@@ -933,7 +933,7 @@ class JobProcessor:
         "--reload": "Enable auto-reload on file changes",
     },
 )
-class QueueWorkCommand(AutoReloadMixin, CommandBase):
+class QueueWorkCommand(MakesAutoReload, CommandBase):
     """Run queue worker with enhanced monitoring and graceful shutdown."""
 
     def __init__(self, application=None):
@@ -1926,7 +1926,7 @@ class QueueWorkCommand(AutoReloadMixin, CommandBase):
         return None
 
     def _run_main_loop(self, *args, **kwargs):
-        """Main worker loop - called by AutoReloadMixin on restart."""
+        """Main worker loop - called by MakesAutoReload on restart."""
         # Use stored parameters from store_restart_params
         if hasattr(self, "_restart_params") and self._restart_params:
             driver, queue, timeout, max_jobs, max_time = self._restart_params

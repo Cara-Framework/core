@@ -5,6 +5,6 @@ cache keys and coroutine factories; cara owns the dedup + cleanup
 plumbing.
 """
 
-from .background_tasks import schedule_deduped_task
+from .BackgroundTasks import schedule_deduped_task
 
 __all__ = ["schedule_deduped_task"]

@@ -48,7 +48,7 @@ def _body_limits() -> dict[str, int]:
         }
 
 
-class BodyParsingMixin:
+class MakesBodyParsing:
     """
     Mixin providing body parsing functionality for HTTP requests.
 
@@ -70,21 +70,21 @@ class BodyParsingMixin:
         """Resolved per-request max body size. Class override beats config default."""
         cfg = _body_limits()["MAX_BODY_SIZE"]
         # If the subclass overrode the class attribute, honour it.
-        if cls.MAX_BODY_SIZE != BodyParsingMixin.MAX_BODY_SIZE:
+        if cls.MAX_BODY_SIZE != MakesBodyParsing.MAX_BODY_SIZE:
             return cls.MAX_BODY_SIZE
         return cfg
 
     @classmethod
     def _max_file_size(cls) -> int:
         cfg = _body_limits()["MAX_FILE_SIZE"]
-        if cls.MAX_FILE_SIZE != BodyParsingMixin.MAX_FILE_SIZE:
+        if cls.MAX_FILE_SIZE != MakesBodyParsing.MAX_FILE_SIZE:
             return cls.MAX_FILE_SIZE
         return cfg
 
     @classmethod
     def _max_files(cls) -> int:
         cfg = _body_limits()["MAX_FILES"]
-        if cls.MAX_FILES != BodyParsingMixin.MAX_FILES:
+        if cls.MAX_FILES != MakesBodyParsing.MAX_FILES:
             return cls.MAX_FILES
         return cfg
 
@@ -522,7 +522,7 @@ class BodyParsingMixin:
                 import logging
 
                 logging.getLogger("cara.http.body").debug(
-                    "BodyParsingMixin.all(): form parse swallowed "
+                    "MakesBodyParsing.all(): form parse swallowed "
                     "for content-type %r — caller will see query "
                     "params only. Cause: %s",
                     content_type,
@@ -564,7 +564,7 @@ class BodyParsingMixin:
                     import logging
 
                     logging.getLogger("cara.http.body").debug(
-                        "BodyParsingMixin.all(): both JSON and form "
+                        "MakesBodyParsing.all(): both JSON and form "
                         "parse failed on a no-Content-Type request — "
                         "caller will see query params only. "
                         "json_cause=%s form_cause=%s",

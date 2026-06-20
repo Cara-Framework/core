@@ -61,6 +61,12 @@ class MigrateCommand(CommandBase):
         except Exception as e:
             self.error(f"× Migration failed: {str(e)}")
             self.error("Try running with --show to see the SQL that would be executed")
+            # Fail-fast: a failed migration MUST exit non-zero so callers (CI,
+            # the coordinated regen+reset `&&` chain) stop instead of marching
+            # on against a half-built schema. The runner maps this return into
+            # ``typer.Exit(code=1)``; the previous bare fall-through returned
+            # None → exit 0, which silently masked a mid-migration failure.
+            return 1
 
     def _confirm_production(self) -> bool:
         """Confirm migration in production environment."""

@@ -99,7 +99,7 @@ class UploadedFile:
         a sibling directory.
         """
         from cara.exceptions import BadRequestException
-        from cara.support.paths import paths
+        from cara.support.Paths import paths
 
         if "\x00" in filename or "\x00" in directory:
             raise BadRequestException(

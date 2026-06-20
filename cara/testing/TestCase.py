@@ -17,7 +17,7 @@ from typing import Any
 
 from .Expectation import Expectation
 from .Expectation import expect as _expect
-from .facade_swap import register, reset, uninstall_patch
+from .FacadeSwap import register, reset, uninstall_patch
 from .fakes import (
     CacheFake,
     EventFake,

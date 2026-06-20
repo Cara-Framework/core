@@ -1,5 +1,5 @@
 from .Cache import Cache
-from .observer import notify_cache_event, set_cache_observer
+from .Observer import notify_cache_event, set_cache_observer
 from .CacheProvider import CacheProvider
 
 __all__ = [

@@ -1,5 +1,5 @@
 from .MakesRetryable import MakesRetryable
-from .policy import (
+from .Policy import (
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_SECONDS,
     DEFAULT_RETRY_JITTER_FRACTION,

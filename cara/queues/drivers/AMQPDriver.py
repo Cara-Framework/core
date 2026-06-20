@@ -22,18 +22,18 @@ from cara.exceptions import QueueDriverLibraryNotFoundException
 from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
-from cara.queues.job_instantiation import instantiate_job
+from cara.queues.JobInstantiation import instantiate_job
 from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
-from cara.queues.retry.policy import (
+from cara.queues.retry.Policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
-from cara.queues.retry.policy import (
+from cara.queues.retry.Policy import (
     DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS,
 )
-from cara.queues.retry.policy import (
+from cara.queues.retry.Policy import (
     DEFAULT_RETRY_JITTER_FRACTION as _RETRY_DEFAULT_JITTER_FRACTION,
 )
-from cara.support.Console import HasColoredOutput
+from cara.support import HasColoredOutput
 
 
 class AMQPDriver(HasColoredOutput, Queue):
@@ -52,7 +52,7 @@ class AMQPDriver(HasColoredOutput, Queue):
     driver_name = "amqp"
 
     # Framework-level default retry policy — SINGLE-SOURCED in
-    # ``cara.queues.retry.policy`` (the rationale for 1/5/30 + 25% jitter
+    # ``cara.queues.retry.Policy`` (the rationale for 1/5/30 + 25% jitter
     # lives there) so this driver, the production worker
     # (``QueueWorkCommand``) and the publisher-side ``retry`` can never
     # silently drift. A job class still overrides per-job by declaring
@@ -654,7 +654,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         NOT route through this method. This single-thread loop is kept
         only for back-compat and the driver's unit tests — prefer
         ``queue:work`` for all new code. Retry/DLX defaults are now
-        single-sourced from ``cara.queues.retry.policy`` so this path and
+        single-sourced from ``cara.queues.retry.Policy`` so this path and
         the production worker cannot diverge.
 
         Each invocation runs a single-thread blocking consume loop.

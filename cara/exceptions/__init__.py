@@ -59,7 +59,7 @@ from .types.authorization import (
     AuthorizationException,
     AuthorizationFailedException,
 )
-from .types.base import CaraException
+from .types.Base import CaraException
 from .types.broadcasting import (
     BroadcastingChannelException,
     BroadcastingConfigurationException,
@@ -92,25 +92,25 @@ from .types.driver import (
 from .types.driver import (
     QueueException as DriverQueueException,
 )
-from .types.eloquent import (
+from .types.Eloquent import (
     DatabaseUnavailableException,
     Http404Exception,
     ConnectionNotRegisteredException,
     ORMException,
 )
-from .types.eloquent import (
+from .types.Eloquent import (
     DriverNotFoundException as EloquentDriverNotFoundException,
 )
-from .types.eloquent import (
+from .types.Eloquent import (
     InvalidArgumentException as EloquentInvalidArgumentException,
 )
-from .types.eloquent import (
+from .types.Eloquent import (
     ModelNotFoundException as EloquentModelNotFoundException,
 )
-from .types.eloquent import (
+from .types.Eloquent import (
     MultipleRecordsFoundException as EloquentMultipleRecordsFoundException,
 )
-from .types.eloquent import (
+from .types.Eloquent import (
     QueryException as EloquentQueryException,
 )
 from .types.encryption import EncryptionException
@@ -145,8 +145,8 @@ from .types.middleware import (
     MiddlewareNotFoundException,
 )
 
-# Canonical shared names come from ``types.model`` (matches legacy last-wins).
-from .types.model import (
+# Canonical shared names come from ``types.ModelExceptions`` (matches legacy last-wins).
+from .types.ModelExceptions import (
     DriverNotFoundException,
     InvalidArgumentException,
     ModelException,

@@ -14,7 +14,7 @@ from cara.exceptions.types.authentication import AuthenticationException
 from cara.exceptions.types.validation import ValidationException
 
 
-class RequestHelpersMixin:
+class MakesRequestHelpers:
     """
     Mixin providing utility helper methods for HTTP requests.
 

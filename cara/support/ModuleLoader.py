@@ -37,7 +37,12 @@ def load(
             from cara.facades import Log
 
             Log.warning(error_message, category="cara.support.module_loader")
-        except (ImportError, RuntimeError):
+        except Exception:
+            # Logging here is best-effort. During early bootstrap the ``logger``
+            # facade isn't bound yet (config loads BEFORE LoggerProvider), so the
+            # Facade raises AttributeError; any logging failure must NEVER mask
+            # the real import error or fatal the bootstrap. Swallow it and let
+            # ``raise_exception`` surface the true LoaderNotFoundException below.
             pass
 
         if raise_exception:

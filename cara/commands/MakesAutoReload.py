@@ -73,12 +73,12 @@ class AutoReloadHandler(FileSystemEventHandler):
         return any(pattern in file_path for pattern in ignore_patterns)
 
 
-class AutoReloadMixin:
+class MakesAutoReload:
     """
     Universal auto-reload mixin for Cara commands.
 
     Usage:
-        class MyLongRunningCommand(AutoReloadMixin, CommandBase):
+        class MyLongRunningCommand(MakesAutoReload, CommandBase):
             def handle(self):
                 self.enable_auto_reload()  # Enable hot reload
                 self._run_main_loop()      # Your main loop

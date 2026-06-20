@@ -23,7 +23,7 @@ import asyncio
 import time
 from collections.abc import Callable
 
-from cara.exceptions.types.base import CaraException
+from cara.exceptions.types.Base import CaraException
 
 
 class ConcurrencyLimited:

@@ -5,7 +5,7 @@ from .AIResponse import AIResponse
 from .AIServiceProvider import AIServiceProvider
 from .Client import AIClient
 from .exceptions import AIException, AIResponseError
-from .parsing import parse_json
+from .Parsing import parse_json
 
 __all__ = [
     "AIClient",

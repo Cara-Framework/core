@@ -18,11 +18,10 @@ import pendulum
 
 from cara.exceptions import QueueException
 from cara.queues.contracts import JobCancelledException, Queue
-from cara.queues.job_instantiation import instantiate_job
+from cara.queues.JobInstantiation import instantiate_job
 from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.queues.JobStateManager import get_job_state_manager
-from cara.support.Console import HasColoredOutput
-from cara.support.Time import parse_human_time
+from cara.support import HasColoredOutput, parse_human_time
 
 
 def _release_unique_lock_if_any(instance) -> None:

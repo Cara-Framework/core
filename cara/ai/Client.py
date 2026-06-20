@@ -16,7 +16,7 @@ import requests
 from cara.ai.AIProvider import AIProvider
 from cara.ai.AIResponse import AIResponse
 from cara.ai.exceptions import AIResponseError
-from cara.ai.parsing import parse_json as _parse_json
+from cara.ai.Parsing import parse_json as _parse_json
 from cara.configuration import config
 from cara.context import ExecutionContext
 from cara.facades import Log

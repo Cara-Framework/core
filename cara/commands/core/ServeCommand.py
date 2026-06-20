@@ -18,7 +18,7 @@ from cara.commands import CommandBase
 from cara.configuration import config
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException
-from cara.support.LogColors import LogColors
+from cara.support import LogColors
 
 _logger = logging.getLogger("cara.serve")
 

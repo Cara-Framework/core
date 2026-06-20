@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from cara.commands import CommandBase
 from cara.decorators import command
-from cara.eloquent.DatabaseManager import get_database_manager
+from cara.eloquent import get_database_manager
 from cara.exceptions import InvalidArgumentException
 
 

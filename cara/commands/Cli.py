@@ -1,6 +1,6 @@
 """CLI entry point for the Cara framework.
 
-Referenced by ``setup.py`` console_scripts as ``cara=cara.commands.cli:main``.
+Referenced by ``setup.py`` console_scripts as ``cara=cara.commands.Cli:main``.
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ from typing import Any
 
 from cara.eloquent.expressions.Raw import Raw
 from cara.eloquent.expressions.SelectExpression import SelectExpression
-from cara.support.Collection import Collection
+from cara.support import Collection
 
 
 class SelectBuilder:

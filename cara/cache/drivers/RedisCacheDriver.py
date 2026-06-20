@@ -17,7 +17,7 @@ import pickle
 from typing import Any
 
 from cara.cache.contracts import Cache
-from cara.cache.observer import notify_cache_event
+from cara.cache.Observer import notify_cache_event
 from cara.exceptions import CacheConfigurationException
 from cara.facades import Log
 

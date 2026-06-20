@@ -13,7 +13,7 @@ from cara.exceptions.types.validation import ValidationException
 from cara.validation import Validation
 
 
-class ValidationHelpersMixin:
+class MakesValidationHelpers:
     """
     Mixin providing validation functionality for HTTP requests.
 

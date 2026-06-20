@@ -6,7 +6,7 @@ This module defines exception types related to encryption operations.
 
 from __future__ import annotations
 
-from .base import CaraException
+from .Base import CaraException
 
 
 class EncryptionException(CaraException):

@@ -2,10 +2,10 @@
 Query Components Package
 """
 
-from .WhereClause import WhereClause
-from .OrderByClause import OrderByClause
 from .GroupByClause import GroupByClause
 from .JoinClause import JoinComponent
+from .OrderByClause import OrderByClause
+from .WhereClause import WhereClause
 
 __all__ = [
     "GroupByClause",

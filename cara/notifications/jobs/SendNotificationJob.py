@@ -7,7 +7,7 @@ Uses BaseJob which includes SerializesModels for proper serialization.
 
 from __future__ import annotations
 
-from cara.exceptions.types.base import CaraException
+from cara.exceptions.types.Base import CaraException
 from cara.queues.contracts import BaseJob
 
 

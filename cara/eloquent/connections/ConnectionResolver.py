@@ -61,6 +61,28 @@ def _get_registry() -> dict[str, object]:
     return registry
 
 
+def reset_registry() -> None:
+    """Bind a FRESH, empty active-transaction registry to the current context.
+
+    A new asyncio task (or thread) created via ``copy_context()`` inherits the
+    parent's ContextVar bindings — and ``_ACTIVE_CONNECTIONS`` holds a *mutable
+    dict by reference*, so the child task ends up sharing the SAME registry
+    object as its parent and peer tasks. Under concurrent job execution
+    (workers run up to ``WORKER_SCRAPE_CONCURRENCY`` jobs as peer tasks) two
+    jobs would then share one registry: job A's transaction ``commit`` pops the
+    connection out of the shared dict while job B is still mid-transaction on
+    it, so B's own ``commit``/``rollback`` raises "No active transaction found
+    for connection: app" and dead-letters.
+
+    Calling this at a job-execution boundary rebinds a brand-new dict in the
+    *current* context only (``ContextVar.set`` is context-local), giving each
+    job a truly isolated transaction registry. Direct in-process ``execute()``
+    sub-calls (which share the caller's context and must see its open
+    transaction) are unaffected — they never cross this boundary.
+    """
+    _ACTIVE_CONNECTIONS.set({})
+
+
 class ConnectionResolver:
     """
     Single Responsibility: Manages connections and transactions ONLY.

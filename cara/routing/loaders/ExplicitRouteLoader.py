@@ -7,7 +7,7 @@ from __future__ import annotations
 from cara.exceptions import RouteRegistrationException
 from cara.facades import Log
 from cara.routing import Route
-from cara.support.ModuleLoader import load
+from cara.support import load
 
 
 class ExplicitRouteLoader:

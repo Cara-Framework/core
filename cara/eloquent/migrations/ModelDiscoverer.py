@@ -329,9 +329,9 @@ class ModelDiscoverer:
             "indexes": [],
         }
 
-        # Check if model uses SoftDeletesMixin
+        # Check if model uses MakesSoftDeletes
         for base in class_node.bases:
-            if isinstance(base, ast.Name) and base.id == "SoftDeletesMixin":
+            if isinstance(base, ast.Name) and base.id == "MakesSoftDeletes":
                 model_info["uses_soft_deletes"] = True
 
         for node in class_node.body:

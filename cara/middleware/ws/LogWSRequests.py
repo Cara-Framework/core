@@ -6,7 +6,7 @@ from typing import Any
 
 from cara.facades import Log
 from cara.middleware import Middleware
-from cara.support.Str import mask_ip
+from cara.support import mask_ip
 from cara.websocket import Socket
 
 

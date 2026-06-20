@@ -5,12 +5,12 @@ This package contains mixin classes that provide specific functionality to the R
 promoting separation of concerns and maintainability.
 """
 
-from .BodyParsingMixin import BodyParsingMixin
-from .ValidationHelpersMixin import ValidationHelpersMixin
-from .RequestHelpersMixin import RequestHelpersMixin
+from .MakesBodyParsing import MakesBodyParsing
+from .MakesValidationHelpers import MakesValidationHelpers
+from .MakesRequestHelpers import MakesRequestHelpers
 
 __all__ = [
-    "BodyParsingMixin",
-    "RequestHelpersMixin",
-    "ValidationHelpersMixin",
+    "MakesBodyParsing",
+    "MakesRequestHelpers",
+    "MakesValidationHelpers",
 ]

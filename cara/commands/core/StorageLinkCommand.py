@@ -11,7 +11,7 @@ import os
 
 from cara.commands import CommandBase
 from cara.decorators import command
-from cara.support.paths import public_path, storage_path
+from cara.support.Paths import public_path, storage_path
 
 
 @command(
@@ -140,7 +140,7 @@ class StorageLinkCommand(CommandBase):
     def _get_relative_path(self, path: str) -> str:
         """Get path relative to project root for display."""
         try:
-            from cara.support.paths import base_path
+            from cara.support.Paths import base_path
 
             return os.path.relpath(path, base_path())
         except Exception:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import CaraException
+from .Base import CaraException
 
 
 class ModelException(CaraException):

@@ -234,7 +234,7 @@ class ApiKeyGuard(Guard):
     def _extract_api_key(self) -> str | None:
         """Extract API key from request headers."""
         try:
-            from cara.http.request.context import current_request
+            from cara.http.request.Context import current_request
 
             request = current_request.get()
             header_value = request.header(self.header_name)

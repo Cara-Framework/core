@@ -29,7 +29,7 @@ class RegexRule(BaseRule):
         except re.error:
             return False
 
-        return bool(pattern.match(value))
+        return bool(pattern.fullmatch(value))
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' format is invalid."

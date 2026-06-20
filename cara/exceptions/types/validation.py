@@ -14,7 +14,7 @@ __all__ = [
 
 from typing import Any
 
-from .base import CaraException
+from .Base import CaraException
 
 
 class ValidationException(CaraException):

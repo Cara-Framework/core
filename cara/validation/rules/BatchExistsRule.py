@@ -90,8 +90,11 @@ class BatchExistsRule(BaseRule):
             model_class = ExistsRule()._discover_model(table)
             if model_class is not None:
                 resolved_table = getattr(model_class, "__table__", table)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log_debug(
+                f"BatchExistsRule: model discovery failed for '{table}': "
+                f"{exc.__class__.__name__}: {exc}"
+            )
 
         # Use COUNT(DISTINCT column) — NOT COUNT(*).  COUNT(*) over-
         # counts when the column is not unique: if unique=[1,2,3] but

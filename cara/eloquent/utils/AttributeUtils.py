@@ -1,12 +1,12 @@
 """
-AttributeHelper - Utility for attribute operations
+AttributeUtils - Utility for attribute operations
 """
 
 from __future__ import annotations
 
 
-class AttributeHelper:
-    """Helper for attribute manipulation operations."""
+class AttributeUtils:
+    """Utility for attribute manipulation operations."""
 
     @staticmethod
     def clean_attribute_name(name: str) -> str:

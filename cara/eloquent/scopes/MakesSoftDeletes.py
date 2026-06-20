@@ -3,12 +3,12 @@ from __future__ import annotations
 from .SoftDeleteScope import SoftDeleteScope
 
 
-class SoftDeletesMixin:
+class MakesSoftDeletes:
     """Global scope class to add soft deleting to models."""
 
     __deleted_at__ = "deleted_at"
 
-    def boot_SoftDeletesMixin(self, builder):
+    def boot_MakesSoftDeletes(self, builder):
         builder.set_global_scope(SoftDeleteScope(self.__deleted_at__))
 
     def get_deleted_at_column(self):

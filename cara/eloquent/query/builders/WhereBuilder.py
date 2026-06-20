@@ -12,7 +12,7 @@ from typing import Any
 from cara.eloquent.expressions.BetweenExpression import BetweenExpression
 from cara.eloquent.expressions.QueryExpression import QueryExpression
 from cara.exceptions import InvalidArgumentException
-from cara.support.Collection import Collection
+from cara.support import Collection
 
 
 class WhereBuilder:

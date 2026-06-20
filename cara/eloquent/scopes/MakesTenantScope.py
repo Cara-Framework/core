@@ -3,10 +3,10 @@ from __future__ import annotations
 from .TenantScope import TenantScope
 
 
-class TenantScopeMixin:
+class MakesTenantScope:
     """Mixin to add automatic tenant scoping to models."""
 
-    def boot_TenantScopeMixin(self, builder):
+    def boot_MakesTenantScope(self, builder):
         """Boot the tenant scope mixin."""
         builder.set_global_scope(TenantScope())
 

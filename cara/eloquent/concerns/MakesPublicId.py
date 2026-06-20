@@ -8,22 +8,22 @@ from __future__ import annotations
 import ulid
 
 
-class PublicIdMixin:
+class MakesPublicId:
     """Provides generate_public_id() from a declarative prefix."""
 
     __public_id_prefix__: str = ""
 
-    def boot_PublicIdMixin(self, builder):
+    def boot_MakesPublicId(self, builder):
         """Required by ``Model.boot``.
 
         ``Model.boot`` walks the MRO and, for every base class whose name
-        ends in ``Mixin``, unconditionally calls ``boot_<ClassName>`` (see
+        starts with ``Makes``, unconditionally calls ``boot_<ClassName>`` (see
         ``cara/eloquent/models/Model.py``). The sibling mixins satisfy this
-        contract — ``SoftDeletesMixin.boot_SoftDeletesMixin`` registers a
-        global scope, etc. Without a matching ``boot_PublicIdMixin`` here,
+        contract — ``MakesSoftDeletes.boot_MakesSoftDeletes`` registers a
+        global scope, etc. Without a matching ``boot_MakesPublicId`` here,
         booting ANY model that mixes this in (Product, Listing,
         ProductContainer, …) raises ``AttributeError: class model 'X' has
-        no attribute boot_PublicIdMixin`` on the first query — which
+        no attribute boot_MakesPublicId`` on the first query — which
         surfaced as 500s across every Product-eager-loading endpoint
         (e.g. ``/api/wishlist``).
 

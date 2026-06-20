@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .MissingValue import MissingValue
-from .SerializationHelpers import (
+from .Serialization import (
     opt_bool,
     opt_datetime,
     opt_float,

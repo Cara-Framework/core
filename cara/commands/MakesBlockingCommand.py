@@ -11,10 +11,10 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .AutoReloadMixin import AutoReloadMixin
+from .MakesAutoReload import MakesAutoReload
 
 
-class BlockingCommandMixin(AutoReloadMixin, ABC):
+class MakesBlockingCommand(MakesAutoReload, ABC):
     """
     Base mixin for blocking commands with consistent UX.
 
@@ -26,7 +26,7 @@ class BlockingCommandMixin(AutoReloadMixin, ABC):
     - Error handling with stack traces
 
     Usage:
-        class MyBlockingCommand(BlockingCommandMixin, CommandBase):
+        class MyBlockingCommand(MakesBlockingCommand, CommandBase):
             def get_command_name(self) -> str:
                 return "My Service"
 
@@ -87,7 +87,7 @@ class BlockingCommandMixin(AutoReloadMixin, ABC):
             self._show_final_stats()
 
     def _run_main_loop(self, *args, **kwargs):
-        """Main service loop - called by AutoReloadMixin on restart."""
+        """Main service loop - called by MakesAutoReload on restart."""
         # Use stored parameters from store_restart_params
         if hasattr(self, "_restart_params") and self._restart_params:
             params = self._restart_kwargs

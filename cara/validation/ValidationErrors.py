@@ -6,6 +6,8 @@ This module provides the ValidationErrors class to handle validation errors in L
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 
 class ValidationErrors:
     """Helper class to handle validation errors in Laravel style."""
@@ -120,7 +122,7 @@ class ValidationErrors:
         """Length - total number of error messages."""
         return self.count()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         """Iterate over field names."""
         return iter(self._errors.keys())
 

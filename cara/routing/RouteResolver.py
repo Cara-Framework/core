@@ -18,7 +18,7 @@ from cara.exceptions import (
 from cara.facades import Loader
 from cara.http import Request, Response
 from cara.routing.RouteParameterValidator import RouteParameterValidator
-from cara.support.Str import modularize
+from cara.support import modularize
 from cara.websocket import Socket
 
 

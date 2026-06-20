@@ -21,7 +21,7 @@ from .Validation import Validation
 from .View import View
 
 # NOTE: ``atomic`` (DB transaction context manager) intentionally lives
-# in ``cara.eloquent.transactions`` — NOT here. Re-exporting it from
+# in ``cara.eloquent.Transactions`` — NOT here. Re-exporting it from
 # ``cara.facades`` would force ``cara.facades`` to import
 # ``cara.eloquent`` at module load, which closes a circular dependency:
 #
@@ -29,7 +29,7 @@ from .View import View
 #
 # (``EloquentProvider`` does a top-level ``from cara.configuration
 # import config``.) All callers already use ``from
-# cara.eloquent.transactions import atomic`` directly, so the facades
+# cara.eloquent.Transactions import atomic`` directly, so the facades
 # surface stays free of eloquent-side state and the cycle stays broken.
 
 __all__ = [

@@ -87,7 +87,7 @@ class TenantScope(BaseScope):
                 return thread_tenant_id
 
             # Then try request context using Cara's context system
-            from cara.http.request.context import current_request
+            from cara.http.request.Context import current_request
 
             try:
                 request = current_request.get()

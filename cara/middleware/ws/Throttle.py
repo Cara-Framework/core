@@ -49,7 +49,7 @@ from cara.exceptions.types.websocket import WebSocketException
 from cara.facades import Log
 from cara.http.request.Request import _is_trusted_proxy
 from cara.middleware import Middleware
-from cara.support.Str import mask_ip
+from cara.support import mask_ip
 from cara.websocket import Socket
 
 _RATE_LIMIT_CLOSE_CODE = 4008  # WebSocketException docs: "Rate limit exceeded"

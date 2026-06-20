@@ -6,7 +6,7 @@ except ImportError:  # Python <3.11
     from typing import Self  # noqa: F401
 
 from cara.exceptions import InvalidArgumentException
-from cara.support.Collection import Collection
+from cara.support import Collection
 
 from .BaseRelationship import BaseRelationship
 

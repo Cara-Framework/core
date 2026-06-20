@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-_logger = logging.getLogger("cara.cache.observer")
+_logger = logging.getLogger("cara.cache.Observer")
 
 CacheObserver = Callable[[str, str, str, int | None], None]
 

@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-from cara.support.Collection import Collection
+from cara.support import Collection
 
 _logger = logging.getLogger("cara.eloquent.attributes")
 

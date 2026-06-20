@@ -16,9 +16,9 @@ import pendulum
 
 from cara.exceptions import QueueDriverLibraryNotFoundException, QueueException
 from cara.queues.contracts import Queue
-from cara.queues.job_instantiation import instantiate_job
+from cara.queues.JobInstantiation import instantiate_job
 from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
-from cara.support.Console import HasColoredOutput
+from cara.support import HasColoredOutput
 
 
 class RedisDriver(HasColoredOutput, Queue):

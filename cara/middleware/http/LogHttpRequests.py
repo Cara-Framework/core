@@ -15,7 +15,7 @@ from typing import Any
 from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
-from cara.support.Str import mask_ip
+from cara.support import mask_ip
 
 # Query params whose values must never land in access logs. Hitting any of
 # these by accident (links, redirects, mis-placed auth) leaks the secret to

@@ -34,16 +34,16 @@ import pendulum
 from inflection import tableize, underscore
 
 from cara.exceptions import InvalidArgumentException, ModelNotFoundException
-from cara.support.Collection import Collection
+from cara.support import Collection
 
 _logger = logging.getLogger("cara.eloquent.models")
 
 # Import cast system
-from ..casts.collections import ArrayCast, CollectionCast
-from ..casts.datetime import DateCast, DateTimeCast, TimestampCast
+from ..casts.Collections import ArrayCast, CollectionCast
+from ..casts.DateTime import DateCast, DateTimeCast, TimestampCast
 from ..casts.primitives import BoolCast, DecimalCast, FloatCast, IntCast, JsonCast
-from ..casts.security import EncryptedCast, HashCast
-from ..casts.validation import EmailCast, URLCast, UUIDCast
+from ..casts.Security import EncryptedCast, HashCast
+from ..casts.Validation import EmailCast, URLCast, UUIDCast
 
 # Import concerns for clean architecture
 from ..concerns.HasAttributes import HasAttributes
@@ -51,7 +51,7 @@ from ..concerns.HasRelationships import HasRelationships
 from ..concerns.HasTimestamps import HasTimestamps
 from ..observers import ObservesEvents
 from ..query import QueryBuilder
-from ..scopes import TimestampsMixin
+from ..scopes import MakesTimestamps
 
 
 class ModelMeta(type):
@@ -151,7 +151,7 @@ class ModelMeta(type):
 class Model(
     HasAttributes,
     HasRelationships,
-    TimestampsMixin,
+    MakesTimestamps,
     ObservesEvents,
     HasTimestamps,
     metaclass=ModelMeta,
@@ -481,7 +481,7 @@ class Model(
             for base_class in inspect.getmro(self.__class__):
                 class_name = base_class.__name__
 
-                if class_name.endswith("Mixin"):
+                if class_name.startswith("Makes"):
                     getattr(self, f"boot_{class_name}")(self.get_builder())
                 elif (
                     base_class != Model
@@ -510,7 +510,7 @@ class Model(
             dict: Mapping of event names to list of listener methods
         """
         if self._model_events is None:
-            from cara.decorators.events import get_model_events
+            from cara.decorators.Events import get_model_events
 
             self._model_events = get_model_events(self.__class__)
         return self._model_events
@@ -1018,7 +1018,7 @@ class Model(
                 data[relation_name] = None
             elif isinstance(relation_value, list):
                 # Collection of models
-                from cara.support.Collection import Collection
+                from cara.support import Collection
 
                 data[relation_name] = Collection(relation_value).serialize()
             elif hasattr(relation_value, "serialize"):
@@ -1362,7 +1362,7 @@ class Model(
         return new_dic
 
     # NOTE: timestamp methods (touch, _update_timestamps, _current_timestamp) are now
-    # provided by the HasTimestamps concern imported via TimestampsMixin
+    # provided by the HasTimestamps concern imported via MakesTimestamps
 
     def __getattr__(self, attribute):
         """

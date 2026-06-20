@@ -15,7 +15,7 @@ from typing import Any
 
 from cara.container import Container
 from cara.environment import LoadEnvironment
-from cara.exceptions.types.base import CaraException
+from cara.exceptions.types.Base import CaraException
 
 # Direct module imports — NOT ``from cara.foundation import ...``. Application
 # is imported by ``cara.foundation.__init__`` BEFORE that package binds the

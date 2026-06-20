@@ -13,13 +13,13 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import parse_qs
 
-from cara.http.request.context import current_request
+from cara.http.request.Context import current_request
 from cara.http.request.Header import HeaderBag
 from cara.http.request.Input import InputBag
 from cara.http.request.mixins import (
-    BodyParsingMixin,
-    RequestHelpersMixin,
-    ValidationHelpersMixin,
+    MakesBodyParsing,
+    MakesRequestHelpers,
+    MakesValidationHelpers,
 )
 from cara.http.request.UploadedFile import UploadedFile
 
@@ -81,7 +81,7 @@ def _is_trusted_proxy(addr: str) -> bool:
     return any(ip_obj in net for net in _trusted_proxy_networks())
 
 
-class Request(BodyParsingMixin, ValidationHelpersMixin, RequestHelpersMixin):
+class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
     """
     HTTP Request object for ASGI‐based APIs.
 

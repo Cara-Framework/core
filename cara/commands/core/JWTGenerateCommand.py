@@ -319,7 +319,7 @@ class JWTGenerateCommand(CommandBase):
         self.info("💡 Usage Examples:")
         self.info("   cURL:")
         self.info(
-            f"     curl -H 'Authorization: Bearer {token[:20]}...' http://localhost:8000/api/user/resolve"
+            f"     curl -H 'Authorization: Bearer {token[:20]}...' http://localhost:8300/api/user/resolve"
         )
         self.info("")
         self.info("   JavaScript:")

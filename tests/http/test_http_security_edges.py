@@ -124,7 +124,7 @@ class TestUploadedFileNullByte:
         # to grab the actual submodule for the monkeypatch.
         import sys
 
-        paths_module = sys.modules["cara.support.paths"]
+        paths_module = sys.modules["cara.support.Paths"]
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
         with pytest.raises(BadRequestException, match="null byte"):
@@ -144,7 +144,7 @@ class TestUploadedFileNullByte:
         # to grab the actual submodule for the monkeypatch.
         import sys
 
-        paths_module = sys.modules["cara.support.paths"]
+        paths_module = sys.modules["cara.support.Paths"]
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
         with pytest.raises(BadRequestException, match="null byte"):
@@ -156,7 +156,7 @@ class TestUploadedFileNullByte:
         # to grab the actual submodule for the monkeypatch.
         import sys
 
-        paths_module = sys.modules["cara.support.paths"]
+        paths_module = sys.modules["cara.support.Paths"]
         monkeypatch.setattr(paths_module, "paths", lambda _="": str(tmp_path))
 
         result = self._file()._store_file("uploads", "receipt.pdf")

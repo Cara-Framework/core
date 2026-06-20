@@ -66,7 +66,7 @@ class Authentication:
     def _detect_guard_from_request(self) -> str | None:
         """Detect which guard should be used from route middleware, not headers."""
         try:
-            from cara.http.request.context import current_request
+            from cara.http.request.Context import current_request
 
             request = current_request.get()
 

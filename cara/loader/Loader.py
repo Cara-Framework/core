@@ -12,8 +12,7 @@ import os
 import pkgutil
 
 from cara.exceptions import LoaderNotFoundException
-from cara.support.ModuleLoader import load
-from cara.support.Str import as_filepath
+from cara.support import as_filepath, load
 
 
 def parameters_filter(obj_name, obj):

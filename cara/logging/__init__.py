@@ -1,7 +1,7 @@
 from .CategoryFilter import CategoryFilter
 from .ChannelConfigurator import ChannelConfigurator
 from .InterceptHandler import InterceptHandler
-from .Logger import Logger
+from .Logger import ContextualLogger, Logger
 from .HttpColorizer import HttpColorizer
 from .PythonLoggerAdapter import (
     CaraLoggerFactory,
@@ -15,6 +15,7 @@ __all__ = [
     "CaraPythonLoggerAdapter",
     "CategoryFilter",
     "ChannelConfigurator",
+    "ContextualLogger",
     "HttpColorizer",
     "InterceptHandler",
     "Logger",

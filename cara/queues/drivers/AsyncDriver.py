@@ -12,8 +12,8 @@ from typing import Any
 
 from cara.exceptions import QueueException
 from cara.queues.contracts.Queue import Queue
-from cara.queues.job_instantiation import instantiate_job
-from cara.support.Console import HasColoredOutput
+from cara.queues.JobInstantiation import instantiate_job
+from cara.support import HasColoredOutput
 
 
 class AsyncDriver(HasColoredOutput, Queue):

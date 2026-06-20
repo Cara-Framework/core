@@ -53,7 +53,7 @@ from decimal import Decimal
 
 import pytest
 
-from cara.eloquent.casts.collections import ArrayCast
+from cara.eloquent.casts.Collections import ArrayCast
 from cara.eloquent.casts.primitives import (
     BoolCast,
     DecimalCast,

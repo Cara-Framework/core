@@ -16,7 +16,7 @@ from .authentication import (
     UserNotFoundException,
 )
 from .authorization import AuthorizationException, AuthorizationFailedException
-from .base import CaraException
+from .Base import CaraException
 from .broadcasting import (
     BroadcastingChannelException,
     BroadcastingConfigurationException,
@@ -43,7 +43,7 @@ from .driver import (
     DriverNotFoundException,
 )
 from .driver import QueueException as DriverQueueException
-from .eloquent import (
+from .Eloquent import (
     ConnectionNotRegisteredException,
     DatabaseUnavailableException,
     Http404Exception,
@@ -76,7 +76,7 @@ from .mail import (
     MailSendException,
 )
 from .middleware import MiddlewareException, MiddlewareNotFoundException
-from .model import ModelException
+from .ModelExceptions import ModelException
 from .queue import QueueConfigurationException, QueueException
 from .rates import RateLimitConfigurationException
 from .routing import RouteException

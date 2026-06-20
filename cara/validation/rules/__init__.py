@@ -5,21 +5,28 @@
 # (the .py file) instead of the class, causing "module() takes at most 2 arguments".
 from .BaseRule import BaseRule
 from .AcceptedRule import AcceptedRule
+from .AfterOrEqualRule import AfterOrEqualRule
 from .AfterRule import AfterRule
+from .AlphaDashRule import AlphaDashRule
+from .AlphaRule import AlphaRule
 from .AlphanumRule import AlphanumRule
 from .ArrayRule import ArrayRule
 from .BatchExistsRule import BatchExistsRule
+from .BeforeOrEqualRule import BeforeOrEqualRule
 from .BeforeRule import BeforeRule
 from .BetweenRule import BetweenRule
 from .BooleanRule import BooleanRule
 from .ConfirmedRule import ConfirmedRule
 from .DateFormatRule import DateFormatRule
 from .DateRule import DateRule
+from .DigitsBetweenRule import DigitsBetweenRule
+from .DigitsRule import DigitsRule
 from .DifferentRule import DifferentRule
 from .DistinctRule import DistinctRule
 from .EmailRule import EmailRule
 from .EndsWithRule import EndsWithRule
 from .ExistsRule import ExistsRule
+from .FilledRule import FilledRule
 from .GtRule import GtRule
 from .GteRule import GteRule
 from .InRule import InRule
@@ -40,6 +47,7 @@ from .NumericRule import NumericRule
 from .NullableRule import NullableRule
 from .PhoneRule import PhoneRule
 from .PresentRule import PresentRule
+from .ProhibitedRule import ProhibitedRule
 from .RegexRule import RegexRule
 from .RequiredIfRule import RequiredIfRule
 from .RequiredRule import RequiredRule
@@ -58,22 +66,29 @@ from .UuidRule import UuidRule
 
 __all__ = [
     "AcceptedRule",
+    "AfterOrEqualRule",
     "AfterRule",
+    "AlphaDashRule",
+    "AlphaRule",
     "AlphanumRule",
     "ArrayRule",
     "BaseRule",
     "BatchExistsRule",
+    "BeforeOrEqualRule",
     "BeforeRule",
     "BetweenRule",
     "BooleanRule",
     "ConfirmedRule",
     "DateFormatRule",
     "DateRule",
+    "DigitsBetweenRule",
+    "DigitsRule",
     "DifferentRule",
     "DistinctRule",
     "EmailRule",
     "EndsWithRule",
     "ExistsRule",
+    "FilledRule",
     "GtRule",
     "GteRule",
     "InRule",
@@ -94,6 +109,7 @@ __all__ = [
     "NumericRule",
     "PhoneRule",
     "PresentRule",
+    "ProhibitedRule",
     "RegexRule",
     "RequiredIfRule",
     "RequiredRule",

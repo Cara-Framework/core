@@ -10,7 +10,7 @@ import signal
 import time
 
 
-class ReloadableMixin:
+class MakesReloadable:
     """Mixin that adds reload functionality to commands."""
 
     def __init__(self, *args, **kwargs):

@@ -1,12 +1,12 @@
 """
-QueryHelper - Utility for query operations
+QueryUtils - Utility for query operations
 """
 
 from __future__ import annotations
 
 
-class QueryHelper:
-    """Helper for query building operations."""
+class QueryUtils:
+    """Utility for query building operations."""
 
     @staticmethod
     def sanitize_table_name(table_name: str) -> str:

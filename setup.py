@@ -61,7 +61,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "cara=cara.commands.cli:main",
+            "cara=cara.commands.Cli:main",
         ],
     },
     include_package_data=True,

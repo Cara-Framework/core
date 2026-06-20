@@ -6,7 +6,7 @@ This module defines exception types related to event operations.
 
 from __future__ import annotations
 
-from .base import CaraException
+from .Base import CaraException
 
 
 class ListenerNotFoundException(CaraException):

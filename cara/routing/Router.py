@@ -14,7 +14,7 @@ from cara.exceptions import (
     MethodNotAllowedException,
     RouteNotFoundException,
 )
-from cara.support.Collection import flatten
+from cara.support import flatten
 
 from .Route import Route
 

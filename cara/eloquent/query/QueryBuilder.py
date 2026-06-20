@@ -41,7 +41,7 @@ from cara.exceptions import (
     MultipleRecordsFoundException,
     QueryException,
 )
-from cara.support.Collection import Collection
+from cara.support import Collection
 
 from ..observers import ObservesEvents
 from ..pagination import LengthAwarePaginator, SimplePaginator

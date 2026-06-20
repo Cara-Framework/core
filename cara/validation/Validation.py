@@ -309,7 +309,7 @@ class Validation(ValidationContract):
     def validated(self) -> dict[str, Any]:
         return self._validated.copy()
 
-    def _split_token(self, token: str) -> (str, dict[str, Any]):
+    def _split_token(self, token: str) -> tuple[str, dict[str, Any]]:
         """Given "min:5" or "required", returns ("min", {"min": "5"}) or ("required", {})."""
         if ":" in token:
             name, raw_param = token.split(":", 1)
