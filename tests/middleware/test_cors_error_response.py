@@ -84,10 +84,15 @@ def cors_middleware():
         restore()
 
 
-def _make_request(method="GET", origin="https://app.example.com"):
+def _make_request(method="GET", origin="https://app.example.com", path="/api/test"):
     req = MagicMock()
     req.method = method
     req.header = MagicMock(return_value=origin)
+    # ``path`` MUST be set: HandleCors only applies CORS to requests whose path
+    # matches the configured ``paths`` (``["api/*"]`` in the fake config) — a
+    # MagicMock path never matches, so without this the middleware correctly
+    # SKIPS CORS and no headers are attached. Use an in-scope api/ path.
+    req.path = path
     return req
 
 

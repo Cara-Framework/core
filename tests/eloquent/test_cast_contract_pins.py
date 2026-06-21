@@ -338,8 +338,18 @@ class TestArrayCastNullPreservation:
 
         warnings: list[tuple[str, dict]] = []
 
-        def _capture(msg, *_a, **kwargs):
-            warnings.append((str(msg), kwargs))
+        def _capture(msg, *args, **kwargs):
+            # cara's Log.warning uses lazy %-style logging (template + deferred
+            # args), so the dropped type lives in the ARGS, not the raw
+            # template. Render ``msg % args`` here to assert on the line the
+            # logger actually EMITS — the same string ops greps in production.
+            rendered = str(msg)
+            if args:
+                try:
+                    rendered = rendered % args
+                except (TypeError, ValueError):
+                    rendered = f"{rendered} {args!r}"
+            warnings.append((rendered, kwargs))
 
         fake_log = SimpleNamespace(warning=_capture)
         monkeypatch.setattr(facades_module, "Log", fake_log)

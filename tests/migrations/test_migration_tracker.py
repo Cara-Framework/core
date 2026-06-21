@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cara.eloquent.migrations.MigrationTracker import MigrationTracker
+from cara.exceptions import ORMException
 
 
 def _fake_db_manager(driver="postgres", queries_made=None, query_handler=None):
@@ -88,7 +89,10 @@ def test_ensure_table_raises_on_structure_mismatch_instead_of_dropping():
 
     manager, _, _ = _fake_db_manager(query_handler=handler)
     tracker = MigrationTracker(manager)
-    with pytest.raises(RuntimeError, match="unexpected schema"):
+    # The tracker raises the framework's ORM-domain exception (ORMException),
+    # not a bare RuntimeError — a schema mismatch on the migration table is an
+    # ORM concern and callers catch the domain type. Assert the correct type.
+    with pytest.raises(ORMException, match="unexpected schema"):
         tracker.ensure_migrations_table()
 
     assert not any("DROP TABLE" in q.upper() for q in queries), (
