@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from cara.commands import CommandBase
+from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
-from cara.eloquent.migrations.Migration import Migration
 from cara.support import paths
 
 
@@ -24,6 +23,12 @@ class MigrateRollbackCommand(CommandBase):
         """
         Roll back migrations with improved safety and user experience.
         """
+        global Migration
+        try:
+            from cara.eloquent.migrations.Migration import Migration
+        except ImportError as exc:
+            raise missing_optional("db", exc) from exc
+
         self.info("🔄 Starting migration rollback...")
 
         # Production safety check

@@ -6,9 +6,8 @@ This module provides a CLI command to completely reset the database schema.
 
 from __future__ import annotations
 
-from cara.commands import CommandBase
+from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
-from cara.eloquent import get_database_manager
 from cara.exceptions import InvalidArgumentException
 
 
@@ -35,6 +34,12 @@ class MigrateResetCommand(CommandBase):
         production guard (``_should_block_execution``) still applies
         either way.
         """
+        global get_database_manager
+        try:
+            from cara.eloquent import get_database_manager
+        except ImportError as exc:
+            raise missing_optional("db", exc) from exc
+
         self._display_warning()
 
         if self._should_block_execution():

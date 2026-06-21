@@ -30,34 +30,61 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: Internet :: WWW/HTTP :: ASGI :: Application",
     ],
-    python_requires=">=3.11",
+    python_requires=">=3.10",
+    # CORE runtime deps — what the framework imports on every code path that a
+    # service uses regardless of whether it talks to a DB or a queue: config /
+    # env loading, the CLI, HTTP serving, templating, logging, metrics, crypto
+    # (Hash / app key). These were previously WRONG (the list named fastapi,
+    # sqlalchemy, alembic, celery, pydantic, click, python-jose, passlib — none
+    # of which cara uses; it has its own ORM, its own pika-based queue, and uses
+    # typer not click). Now they reflect cara's actual ``import`` graph.
     install_requires=[
-        "fastapi>=0.68.0",
-        "uvicorn[standard]>=0.15.0",
-        "pydantic>=1.8.0",
-        "sqlalchemy>=1.4.0",
-        "alembic>=1.7.0",
-        "redis>=4.0.0",
-        "celery>=5.2.0",
-        "jinja2>=3.0.0",
-        "python-multipart>=0.0.5",
-        "python-jose[cryptography]>=3.3.0",
-        "passlib[bcrypt]>=1.7.4",
-        "python-dotenv>=0.19.0",
-        "click>=8.0.0",
-        "rich>=12.0.0",
+        "uvicorn[standard]>=0.30",  # ASGI server (ServeCommand)
+        "python-dotenv>=1.0",  # .env loading (cara.environment)
+        "dotty-dict>=1.3",  # cara.support.Collection dot-access
+        "pendulum>=3.0",  # date/time across the framework
+        "inflection>=0.5",  # cara.support string inflection
+        "ulid-py>=1.1",  # MakesPublicId
+        "typer>=0.24",  # CLI command runner
+        "rich>=12.0",  # CLI output
+        "Jinja2>=3.1",  # view templating
+        "python-multipart>=0.0.9",  # request form parsing
+        "prometheus-client>=0.20",  # cara.observability.Metrics
+        "watchdog>=4.0",  # CLI hot-reload file watcher
+        "httpx>=0.27",  # http client
+        "requests>=2.31",  # http client (sync)
+        "loguru>=0.7",  # logging sink
+        "cryptography>=42.0",  # cara.encryption
+        "bcrypt>=4.0",  # cara.encryption.Hash
     ],
+    # OPTIONAL feature groups — a service installs only what it uses. A DB-less
+    # HTTP/render service (e.g. studio) installs neither; ``cara.commands.core``
+    # now imports its DB/queue command groups LAZILY, so the CLI (serve, routes,
+    # make:*) works without these and the migrate:* / queue:* commands fail with
+    # a clear "install cara[db]/[queue]" message instead of silently vanishing.
     extras_require={
-        "dev": [
-            "pytest>=6.2.0",
-            "pytest-asyncio>=0.18.0",
-            "black>=21.0.0",
-            "flake8>=4.0.0",
-            "mypy>=0.910",
+        # DB / ORM stack: cara.eloquent (Postgres driver + factory data gen).
+        "db": [
+            "psycopg2-binary>=2.9",
+            "faker>=20.0",
         ],
-        "mysql": ["pymysql>=1.0.0"],
-        "postgresql": ["psycopg2-binary>=2.9.0"],
-        "sqlite": ["aiosqlite>=0.17.0"],
+        # Queue stack: cara.queues AMQP worker + Redis driver/cache backend.
+        "queue": [
+            "pika>=1.3",
+            "redis>=4.0",
+        ],
+        "dev": [
+            "pytest>=8.0",
+            "pytest-asyncio>=0.23",
+            "ruff>=0.6",
+        ],
+        # Everything: a full backend service (services/api) wants db + queue.
+        "all": [
+            "psycopg2-binary>=2.9",
+            "faker>=20.0",
+            "pika>=1.3",
+            "redis>=4.0",
+        ],
     },
     entry_points={
         "console_scripts": [

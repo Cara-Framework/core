@@ -25,6 +25,13 @@ from cara.configuration import config
 from cara.decorators import command
 from cara.exceptions import ConfigurationException, InvalidArgumentException
 from cara.facades import Log
+
+# These live under ``cara.queues``. The package is import-safe WITHOUT the
+# optional 'queue' extra (pika) — ``AMQPDriver`` degrades its pika import to
+# ``None`` and re-checks at connection time — so importing them at module top
+# no longer forces every service to install pika just to load the command
+# package. A worker that actually runs still needs pika and fails LOUD when it
+# opens a connection.
 from cara.queues.contracts import UniqueJob
 from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.queues.retry.Policy import (

@@ -5,11 +5,8 @@ Orchestrates model discovery, schema comparison, and migration generation.
 
 from __future__ import annotations
 
-from cara.commands import CommandBase
+from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
-from cara.eloquent.migrations.MigrationGenerator import MigrationGenerator
-from cara.eloquent.migrations.ModelDiscoverer import ModelDiscoverer
-from cara.eloquent.migrations.ModelMigrationComparator import ModelMigrationComparator
 
 
 @command(
@@ -24,6 +21,19 @@ from cara.eloquent.migrations.ModelMigrationComparator import ModelMigrationComp
 class MakeMigrationCommand(CommandBase):
     def __init__(self, application):
         super().__init__(application)
+        # Lazy DB import (optional 'db' extra: eloquent → psycopg2/faker). Runs
+        # at command INSTANTIATION (only when make:migration is actually
+        # invoked), so the module imports cleanly on a DB-less service.
+        try:
+            from cara.eloquent.migrations.MigrationGenerator import (
+                MigrationGenerator,
+            )
+            from cara.eloquent.migrations.ModelDiscoverer import ModelDiscoverer
+            from cara.eloquent.migrations.ModelMigrationComparator import (
+                ModelMigrationComparator,
+            )
+        except ImportError as exc:
+            raise missing_optional("db", exc) from exc
         self.discoverer = ModelDiscoverer()
         self.comparator = ModelMigrationComparator()
         self.generator = MigrationGenerator()

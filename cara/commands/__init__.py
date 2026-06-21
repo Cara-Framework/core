@@ -7,6 +7,7 @@ from .CommandRegistry import CommandRegistry
 from .CommandRunner import CommandRunner
 from .MakesReloadable import MakesReloadable
 from .CommandProvider import CommandProvider
+from ._optional import OptionalDependencyError, missing_optional
 
 __all__ = [
     "MakesAutoReload",
@@ -18,4 +19,6 @@ __all__ = [
     "CommandRegistry",
     "CommandRunner",
     "MakesReloadable",
+    "OptionalDependencyError",
+    "missing_optional",
 ]

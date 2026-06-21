@@ -16,14 +16,26 @@ import uuid
 from typing import Any
 
 import pendulum
-import pika
+
+try:
+    # ``pika`` is the optional 'queue' extra (cara[queue]). Import it at module
+    # top WHEN PRESENT so the hot publish/consume paths reference ``pika.*``
+    # with no per-call import cost — but degrade to ``None`` when absent so a
+    # service that never runs a queue worker (e.g. a DB-less HTTP/render app)
+    # can still import ``cara.queues`` and its command package. Every code path
+    # that actually opens an AMQP connection re-checks and raises
+    # ``QueueDriverLibraryNotFoundException`` with an install hint (see the
+    # guarded ``import pika`` in the connection methods), so a missing pika
+    # fails LOUD at use, never silently.
+    import pika
+except ImportError:  # pragma: no cover - exercised only without the extra
+    pika = None  # type: ignore[assignment]
 
 from cara.exceptions import QueueDriverLibraryNotFoundException
 from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
 from cara.queues.JobInstantiation import instantiate_job
-from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.queues.retry.Policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
@@ -33,6 +45,7 @@ from cara.queues.retry.Policy import (
 from cara.queues.retry.Policy import (
     DEFAULT_RETRY_JITTER_FRACTION as _RETRY_DEFAULT_JITTER_FRACTION,
 )
+from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.support import HasColoredOutput
 
 

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from cara.commands import CommandBase
+from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
-from cara.eloquent.migrations import Migration
 from cara.support import paths
 
 
@@ -21,6 +20,15 @@ from cara.support import paths
 class MigrateCommand(CommandBase):
     def handle(self):
         """Execute database migrations with enhanced UX."""
+        # Lazy DB import: ``cara.eloquent`` pulls psycopg2/faker (the optional
+        # 'db' extra). Defer it to run time so a DB-less service can still
+        # import this command module — and fail LOUD here, not at module load.
+        global Migration
+        try:
+            from cara.eloquent.migrations import Migration
+        except ImportError as exc:
+            raise missing_optional("db", exc) from exc
+
         self.info("Starting database migration...")
 
         # Check for production environment
