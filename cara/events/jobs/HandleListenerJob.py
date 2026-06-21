@@ -87,7 +87,12 @@ def _instantiate_event(event_cls: type[Any], data: dict[str, Any]) -> Any:
         except Exception as exc:
             # Validator raised — surface with the originating event
             # class name so the worker log points straight at the bug.
-            raise CaraException(
+            # Use InvalidArgumentException (a ValueError subclass, same type
+            # the ``missing``-fields branch below raises) so the queue
+            # runner's standard ValueError-based retry+DLQ path owns the
+            # recovery uniformly — not a bare CaraException that the runner
+            # treats as an unexpected crash.
+            raise InvalidArgumentException(
                 f"validate_payload() on rehydrated {event_cls.__name__} "
                 f"raised {exc.__class__.__name__}: {exc}",
             ) from exc
