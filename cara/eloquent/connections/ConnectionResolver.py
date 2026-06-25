@@ -178,13 +178,33 @@ class ConnectionResolver:
     # === Transaction Management - Single Responsibility ===
 
     def begin_transaction(self, connection_name):
-        """Start transaction — pinned to the current execution context.
+        """Start (or NEST) a transaction — pinned to the current execution context.
 
-        The resulting connection instance is stored in the per-context
-        registry so sibling threads can't observe or commit it.
+        If a transaction is ALREADY active on this connection in the current
+        context, reuse that SAME connection so ``.begin()`` opens a SAVEPOINT
+        (incrementing ``transaction_level``) instead of opening a SECOND
+        connection. Opening a fresh connection per nested ``db.transaction()``
+        overwrote the registry entry, so the inner commit popped the
+        connection and the OUTER commit raised "No active transaction found
+        for connection: {name}". This bit every nested transaction — e.g.
+        ``MatchListingJob``'s refresh path on a re-scrape, which wraps a
+        persister that opens its own ``db.transaction()`` — and made
+        ``collect:products --sync`` fail with ``match_failed`` for any product
+        that already existed.
+
+        The connection instance is stored in the per-context registry so
+        sibling threads / async tasks can't observe or commit it.
         """
+        registry = _get_registry()
+        existing = registry.get(connection_name)
+        if existing is not None:
+            # Nested transaction in the same context → SAVEPOINT on the
+            # connection that ``transaction_level`` (and commit/rollback)
+            # already track. Do NOT open a second connection.
+            existing.begin()
+            return existing
         connection = self._create_connection_instance(connection_name).begin()
-        _get_registry()[connection_name] = connection
+        registry[connection_name] = connection
         return connection
 
     def commit(self, connection_name):

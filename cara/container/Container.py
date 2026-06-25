@@ -35,6 +35,46 @@ def _get_container_exceptions():
     )
 
 
+def _extract_optional_class(ann: Any, module: Any) -> type | None:
+    """Return the single class wrapped by an ``Optional[X]`` / ``X | None``
+    annotation, or ``None`` for anything else.
+
+    Auto-injection only fired for params annotated with a *plain* class
+    (``inspect.isclass(ann)``); an ``X | None`` annotation — extremely common
+    for "inject in prod, default for unit tests" services — is a ``Union`` /
+    ``types.UnionType`` (or, under ``from __future__ import annotations``, the
+    raw string ``"X | None"``), neither of which is a class, so the container
+    silently fell through to the ``None`` default and the dependency never got
+    injected. This recognises the single-class Optional shape in both runtime
+    and postponed-string forms so the caller can resolve it like a plain class.
+    Multi-arg unions and unresolvable names return ``None`` (unchanged
+    behaviour).
+    """
+    import types as _types
+
+    # Runtime union objects (annotations not postponed): ``X | None`` (PEP 604)
+    # or ``typing.Optional[X]`` / ``typing.Union[X, None]``.
+    if isinstance(ann, _types.UnionType) or getattr(ann, "__origin__", None) is Union:
+        args = [a for a in getattr(ann, "__args__", ()) if a is not type(None)]
+        return args[0] if len(args) == 1 and inspect.isclass(args[0]) else None
+
+    # Postponed string forms: ``"X | None"``, ``"None | X"``, ``"Optional[X]"``.
+    if isinstance(ann, str):
+        s = ann.strip()
+        name: str | None = None
+        if s.startswith("Optional[") and s.endswith("]"):
+            name = s[len("Optional[") : -1].strip()
+        elif "|" in s:
+            non_none = [p.strip() for p in s.split("|") if p.strip() not in ("None", "NoneType")]
+            if len(non_none) == 1:
+                name = non_none[0]
+        if name and module is not None:
+            cand = module.__dict__.get(name.rsplit(".", 1)[-1])
+            if inspect.isclass(cand):
+                return cand
+    return None
+
+
 _resolving_stack_var: ContextVar[list[Any]] = ContextVar("cara.container.resolving_stack")
 
 
@@ -424,6 +464,22 @@ class Container:
                 module = inspect.getmodule(obj)
                 if module is not None:
                     ann = module.__dict__.get(ann, ann)
+
+            # Optional[class] / `class | None`: resolve the wrapped class like a
+            # plain class, but fail soft — if it isn't bindable, fall back to the
+            # signature default (usually None) instead of raising, preserving the
+            # "inject in prod, default in tests" contract these params encode.
+            optional_cls = _extract_optional_class(ann, inspect.getmodule(obj))
+            if optional_cls is not None:
+                try:
+                    dep = self.make(optional_cls)
+                except Exception:
+                    dep = param.default if param.default is not inspect._empty else None
+                if is_keyword_only:
+                    keyword_objects[param.name] = dep
+                else:
+                    objects.append(dep)
+                continue
 
             # Treat typing.Any as an untyped slot: pull from passed args
             # or fall back to None/default handling below.
