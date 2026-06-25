@@ -144,8 +144,19 @@ class ViewRenderer:
         return self.render(component_view, data)
 
     def render_mail_template(self, template: str, data: dict[str, Any] = None) -> str:
-        """Render mail template specifically."""
-        # Add mail-specific data and helpers
+        """Render a mail template through the dedicated Jinja2 renderer.
+
+        Mail / notification templates under ``resources/views/mail`` are
+        authored in standard Jinja2 (``| default`` / ``| float`` / ``| length``
+        filters, ``~`` concatenation, ``{% for %}`` loops). The cara Blade
+        compiler evaluates ``{{ ... }}`` as raw Python and implements none of
+        these, so routing mail through ``self.render`` raised at render time
+        (``unsupported operand type(s) for |`` / ``invalid syntax``) and the
+        emails never rendered. Jinja2 (autoescape on) is the correct engine for
+        mail; the cara compiler stays the engine for web views.
+        """
+        from cara.mail.JinjaRenderer import render_mail_view
+
         mail_data = {
             "app_name": "Cara Application",
             "app_url": "http://localhost",
@@ -155,7 +166,8 @@ class ViewRenderer:
         if data:
             mail_data.update(data)
 
-        return self.render(template, mail_data)
+        application = getattr(self.factory, "application", None)
+        return render_mail_view(application, template, mail_data)
 
     def render_notification_template(
         self, template: str, data: dict[str, Any] = None

@@ -27,6 +27,12 @@ class ModelNotFoundException(ModelException):
     is_http_exception = True
     status_code = 404
 
+    def __init__(self, message: str = "Not found"):
+        # Override the base ``CaraException`` default ("An error occurred")
+        # so a bare ``ModelNotFoundException()`` serialises the 404-correct
+        # "Not found" message instead of the generic fallback.
+        super().__init__(message)
+
     def to_dict(self) -> dict:
         """Emit the same ``not_found`` type token that the service-layer
         ``EntityNotFound`` uses, so clients keying on ``type`` get a
