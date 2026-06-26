@@ -141,7 +141,7 @@ class CacheFake:
 
         Convenience wrapper over :meth:`forget_pattern` — matches the
         real ``Cache.forget_by_prefix`` so prefix-sweep callers
-        (``Cache.forget_by_prefix("category:facets:")``) behave the
+        (``Cache.forget_by_prefix("reports:daily:")``) behave the
         same in production and in tests.
         """
         return self.forget_pattern(f"{prefix}*")

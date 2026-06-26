@@ -285,9 +285,9 @@ class Schema:
             if_not_exists {bool}  -- Emit IF NOT EXISTS for idempotent migrations.
 
         Examples:
-            schema.gin_index("brand", "name", opclass="gin_trgm_ops")
-            schema.gin_index("product", "search_vector")
-            schema.gin_index("brand", "aliases", opclass="jsonb_path_ops")
+            schema.gin_index("author", "name", opclass="gin_trgm_ops")
+            schema.gin_index("article", "search_vector")
+            schema.gin_index("author", "aliases", opclass="jsonb_path_ops")
         """
         return self._create_using_index(
             "GIN", table, column, opclass, name, if_not_exists

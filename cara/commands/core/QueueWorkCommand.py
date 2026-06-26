@@ -41,10 +41,10 @@ from cara.queues.retry.Policy import (
     DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS,
 )
 
-# Prometheus metrics — optional import so a bare ``cara`` package import
-# (e.g. tests) doesn't require the services-tree ``app.support.Metrics``.
+# Prometheus metrics — framework-owned MetricsBase carries the queue/worker
+# metrics. Guarded so a partial import never breaks the worker.
 try:
-    from app.support.Metrics import Metrics as _M
+    from cara.observability.Metrics import MetricsBase as _M
 except (ImportError, RuntimeError):  # pragma: no cover
     _M = None  # type: ignore[assignment]
 
@@ -115,7 +115,7 @@ class AMQPConnectionManager:
         """Ensure AMQP connection is alive.
 
         Treats any prior operational failure (``StreamLostError``,
-        ``ConnectionClosedByBroker``, TCP RST during a long scrape)
+        ``ConnectionClosedByBroker``, TCP RST during a long job)
         as "connection is dead" even when ``is_closed`` still reports
         False. pika's BlockingConnection occasionally keeps a zombie
         connection object after the underlying stream dies; the next
@@ -167,7 +167,7 @@ class AMQPConnectionManager:
             port=self.config("queue.drivers.amqp.port", 5672),
             virtual_host=self.config("queue.drivers.amqp.vhost", "/"),
             credentials=credentials,
-            # Long-running jobs (Amazon browser scrape + proxy rotation ~30-120s)
+            # Long-running jobs (heavy external I/O — browser automation, proxy rotation ~30-120s)
             # blocked pika's I/O thread past the default 60s heartbeat → broker
             # closed the channel → basic_ack fails → RabbitMQ re-delivers →
             # second worker picks up same job → idempotency lock collision.
@@ -631,18 +631,22 @@ class JobProcessor:
                         # with individual known keys from the payload.
                         init_kwargs = msg.get("init_kwargs", {})
                         if not init_kwargs:
-                            # Try to extract constructor args from the
-                            # payload itself (e.g. product_id, asin).
-                            for key in (
-                                "product_id",
-                                "asin",
-                                "container_id",
-                                "url",
-                                "keyword",
-                                "category_id",
-                            ):
-                                if key in msg and key != "obj":
-                                    init_kwargs[key] = msg[key]
+                            # Derive constructor args from the job class's own
+                            # __init__ signature instead of a hard-coded domain
+                            # key list — keeps the framework worker agnostic to
+                            # any specific job's parameter vocabulary.
+                            try:
+                                sig_params = inspect.signature(cls.__init__).parameters
+                                for key, param in sig_params.items():
+                                    if key == "self" or param.kind in (
+                                        inspect.Parameter.VAR_POSITIONAL,
+                                        inspect.Parameter.VAR_KEYWORD,
+                                    ):
+                                        continue
+                                    if key in msg and key != "obj":
+                                        init_kwargs[key] = msg[key]
+                            except (TypeError, ValueError):
+                                pass
                         try:
                             msg["obj"] = cls(**init_kwargs)
                         except TypeError:
@@ -959,7 +963,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             limit_mb = int(config("queue.worker_memory_limit_mb", 512))
         except Exception:
             limit_mb = 512
-        # Bumped minimum so multi-thread scrape workloads (BrowserPool +
+        # Bumped minimum so multi-thread heavy workloads (browser pools +
         # extractor pipelines + HTTP clients per thread) breathe without
         # bouncing. Override with the env if 2 GB is too aggressive for
         # the deploy box.
@@ -980,7 +984,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
         Without SIGINT/SIGTERM handlers the worker only stopped when the
         poll loop happened to check ``shutdown_requested`` — Ctrl+C could
-        abort mid-job and skip ``_shutdown_scrape_resources``. ``atexit``
+        abort mid-job and skip ``_shutdown_worker_resources``. ``atexit``
         covers abrupt ``sys.exit`` / supervisor SIGKILL-followup paths that
         still run interpreter teardown.
         """
@@ -1005,7 +1009,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             self._signal_handlers_installed = True
 
         if not self._atexit_registered:
-            atexit.register(self._shutdown_scrape_resources)
+            atexit.register(self._shutdown_worker_resources)
             self._atexit_registered = True
 
     def handle(
@@ -1041,30 +1045,20 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         # Stand up /metrics on a side-thread HTTP server so Prometheus
         # can scrape the worker. Opt out with METRICS_PORT=0.
         try:
-            from app.support.Metrics import start_http_server as _start_metrics
+            from cara.observability import start_http_server as _start_metrics
 
             _port = _start_metrics()
             if _port:
                 Log.info("📈 Metrics server on :%s/metrics", _port)
-        except ImportError:
-            # Module only exists in services project — silently skip in other projects.
-            pass
         except Exception as e:
             # Non-fatal: worker keeps running with no metrics exposure.
             Log.warning("metrics server startup failed: %s", e)
 
-        # Background DB sampler — emits domain gauges (product lifecycle,
-        # queue depth, job table, entity counts) every 30s so the
-        # dashboard never has to hit the database itself.
-        try:
-            from app.support.MetricsSampler import start as _start_sampler
-
-            _start_sampler()
-        except ImportError:
-            # Module only exists in services project — silently skip in other projects.
-            pass
-        except Exception as e:
-            Log.warning("metrics sampler startup failed: %s", e)
+        # Worker-startup hooks — declared by the app in
+        # config/queue.py::WORKER_STARTUP_HOOKS (dotted paths to sync
+        # callables, e.g. a domain metrics sampler). Kept out of the
+        # framework so cara carries no app/domain startup logic.
+        self._run_worker_startup_hooks()
 
         # Parse concurrency early so we can use it to gate the reload path
         # (auto-reload restarts the whole worker — fine with 1 thread, but
@@ -1212,7 +1206,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             # the ``"*" in pattern`` check and was polled as a LITERAL queue
             # name. RabbitMQ has no queue called "discovery.", so the worker
             # lazily created an empty one and consumed from it forever while
-            # the real discovery.default (where DiscoverProductsJob actually
+            # the real discovery.default (where a discovery job actually
             # lands) was never read — the whole pipeline stalled at dispatch.
             # Mapping "prefix." → "prefix.*" routes it through the same
             # expansion the wildcard form already uses.
@@ -1488,7 +1482,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
             finally:
                 connection_manager.close()
-            self._shutdown_scrape_resources()
+            self._shutdown_worker_resources()
             return
 
         # Multi-threaded consumer mode.
@@ -1579,53 +1573,73 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     mgr.close()
                 except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
-            self._shutdown_scrape_resources()
+            self._shutdown_worker_resources()
 
     @staticmethod
-    def _shutdown_scrape_resources() -> None:
-        """Release scrape drivers and browser pools on worker shutdown.
+    def _run_worker_startup_hooks() -> None:
+        """Run app-declared worker-startup hooks.
 
-        ScrapeDoDriver keeps a private ThreadPoolExecutor + BoundedSemaphore
-        per instance. Without an explicit close(), worker restarts leak OS
-        semaphores (observed as multiprocessing resource_tracker warnings on
-        Python 3.14 when the process exits abruptly). AmazonMarketplace's
-        shared BrowserPool holds Playwright/Chromium children that must be
-        torn down before the worker process exits or auto-reload purges modules.
+        Hooks live in the APP (``config/queue.py::WORKER_STARTUP_HOOKS``) as
+        dotted paths to sync, non-blocking module-level callables (they should
+        spawn their own background threads). Keeping them in config means the
+        framework worker holds no app/domain startup logic (e.g. a metrics
+        sampler that queries product tables).
         """
+        import importlib
+
         try:
-            import asyncio
-
-            async def _close_all() -> None:
-                try:
-                    from packages.amazon.AmazonMarketplace import AmazonMarketplace
-
-                    await AmazonMarketplace.shutdown_pool()
-                except Exception as exc:
-                    Log.debug(
-                        "[QueueWorkCommand] BrowserPool shutdown skipped: %s", exc
-                    )
-
-                try:
-                    from bootstrap import application
-
-                    scrape = application.make("scrape")
-                    if scrape is not None and hasattr(scrape, "close"):
-                        await scrape.close()
-                except Exception as exc:
-                    Log.debug(
-                        "[QueueWorkCommand] scrape shutdown skipped: %s", exc
-                    )
-
+            hooks = config("queue.worker_startup_hooks", []) or []
+        except Exception:
+            hooks = []
+        for path in hooks:
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(_close_all())
-                else:
-                    loop.run_until_complete(_close_all())
-            except RuntimeError:
-                asyncio.run(_close_all())
-        except Exception as e:
-            Log.debug("[QueueWorkCommand] scrape shutdown skipped: %s", e)
+                module_path, attr = path.rsplit(".", 1)
+                fn = getattr(importlib.import_module(module_path), attr)
+                fn()
+            except Exception as exc:
+                Log.warning("worker startup hook %s failed: %s", path, exc)
+
+    @staticmethod
+    def _shutdown_worker_resources() -> None:
+        """Run app-declared worker-shutdown hooks (release pooled resources).
+
+        Hooks live in the APP (``config/queue.py::WORKER_SHUTDOWN_HOOKS``) as
+        dotted paths to callables (sync or async); coroutine results are
+        awaited. Domain teardown — browser pools, fetch drivers that leak OS
+        handles (semaphores / Playwright children) on abrupt exit — registers
+        here, so the framework worker holds no app/domain teardown logic.
+        """
+        import asyncio
+        import importlib
+
+        try:
+            hooks = config("queue.worker_shutdown_hooks", []) or []
+        except Exception:
+            hooks = []
+        if not hooks:
+            return
+
+        async def _close_all() -> None:
+            for path in hooks:
+                try:
+                    module_path, attr = path.rsplit(".", 1)
+                    fn = getattr(importlib.import_module(module_path), attr)
+                    result = fn()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as exc:
+                    Log.debug(
+                        "[QueueWorkCommand] shutdown hook %s skipped: %s", path, exc
+                    )
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_close_all())
+            else:
+                loop.run_until_complete(_close_all())
+        except RuntimeError:
+            asyncio.run(_close_all())
 
     def _check_memory_usage(self) -> bool:
         """

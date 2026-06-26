@@ -62,7 +62,8 @@ class MigrateCommand(CommandBase):
 
             # Run migrations
             self.info("Running migrations...")
-            migration_manager.migrate("all", output=True)
+            name = self.option("migration") or "all"
+            migration_manager.migrate(name, output=True)
 
             self.success("All migrations completed successfully!")
 

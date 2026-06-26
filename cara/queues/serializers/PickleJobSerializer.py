@@ -26,12 +26,15 @@ class _RestrictedUnpickler(pickle.Unpickler):
     Everything else raises ``pickle.UnpicklingError``.
     """
 
-    _ALLOWED_JOB_PREFIXES = (
-        "app.jobs",
+    # Framework-safe default trust roots. App-specific prefixes — the app's
+    # own job packages and any monorepo layout (e.g. ``packages.<name>``
+    # or a shared ``commons.jobs`` tree) — are supplied by the APP via
+    # ``config/queue.py::pickle_allowed_prefixes`` so the framework's unpickle
+    # trust boundary encodes no app filesystem layout. See ``_allowed_prefixes``.
+    _DEFAULT_JOB_PREFIXES = (
+        "app.jobs",  # Cara-app job convention
         "app.commands",
-        # Framework internals that get serialised as part of
-        # chain / batch dispatch payloads.
-        "cara.queues",
+        "cara.queues",  # framework chain/batch dispatch envelopes
     )
 
     _ALLOWED_BUILTINS = frozenset({
@@ -68,6 +71,32 @@ class _RestrictedUnpickler(pickle.Unpickler):
         ("pendulum.tz.timezone", "FixedTimezone"),
     })
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Resolve the trust-root prefixes once per payload (config is loaded
+        # by deserialize time). Framework defaults + app-configured extras.
+        self._job_prefixes = self._allowed_prefixes()
+
+    @classmethod
+    def _allowed_prefixes(cls) -> tuple[str, ...]:
+        """Framework defaults plus app-configured extra trust-root prefixes.
+
+        The app declares its own job trust roots (its package layout,
+        monorepo-shared job trees) in
+        ``config/queue.py::pickle_allowed_prefixes``; the framework holds
+        only generic defaults, so its RCE trust boundary encodes no app
+        filesystem layout.
+        """
+        try:
+            from cara.configuration import config
+
+            extra = tuple(
+                str(p) for p in (config("queue.pickle_allowed_prefixes", ()) or ())
+            )
+        except Exception:
+            extra = ()
+        return cls._DEFAULT_JOB_PREFIXES + extra
+
     @staticmethod
     def _guarded_getattr(obj: Any, name: Any) -> Any:
         """``getattr`` exposed to the unpickler with dunder access blocked.
@@ -99,7 +128,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
             return self._guarded_getattr
         if (module, name) in self._ALLOWED_VALUE_CLASSES:
             return super().find_class(module, name)
-        if any(module.startswith(prefix) for prefix in self._ALLOWED_JOB_PREFIXES):
+        if any(module.startswith(prefix) for prefix in self._job_prefixes):
             return super().find_class(module, name)
         raise pickle.UnpicklingError(
             f"Restricted unpickler denied: {module}.{name}"

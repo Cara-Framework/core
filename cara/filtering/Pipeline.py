@@ -5,12 +5,12 @@ Laravel-style chaining for the read path:
 ::
 
     result = (
-        FilterPipeline(Product.active(), filters=PRODUCT_FILTERS, sorts=PRODUCT_SORTS)
+        FilterPipeline(Model.active(), filters=EXAMPLE_FILTERS, sorts=EXAMPLE_SORTS)
         .filter_by(payload)
         .sort_by(payload.get("sort_by"))
-        .with_("images", "current_price", "container")
-        .cached("products", ttl=300, when=lambda p: not p.parsed)
-        .paginate(limit=24, offset=0, resource=ProductResource)
+        .with_("images", "price", "parent")
+        .cached("records", ttl=300, when=lambda p: not p.parsed)
+        .paginate(limit=24, offset=0, resource=ExampleResource)
     )
 
 The pipeline is the only place that knows the order of operations
@@ -53,13 +53,13 @@ class FilterPipeline:
         filters: FilterSet | None = None,
         sorts: SortRegistry | None = None,
         ctx: Any = None,
-        product_id_column: str = "id",
+        id_column: str = "id",
     ) -> None:
         self._builder = builder
         self._filters = filters
         self._sorts = sorts
         self._ctx = ctx
-        self._product_id_column = product_id_column
+        self._id_column = id_column
 
         self._payload: dict[str, Any] | None = None
         self._parsed: dict[str, Any] | None = None
@@ -130,16 +130,16 @@ class FilterPipeline:
 
         Accepts either bare relation-name strings::
 
-            pipe.with_("images", "current_price", "container")
+            pipe.with_("images", "price", "parent")
 
         or any iterable (``RelationSet``, list, tuple) — useful for
         canonical presets::
 
-            pipe.with_(PRODUCT_CARD_RELATIONS)
+            pipe.with_(CARD_RELATIONS)
 
         or a mix of both::
 
-            pipe.with_(PRODUCT_CARD_RELATIONS, "details")
+            pipe.with_(CARD_RELATIONS, "details")
 
         Duplicates are dropped while preserving first-seen order so
         composing a base preset with extras never reorders the base.
@@ -174,7 +174,7 @@ class FilterPipeline:
         ::
 
             result = pipe.cached(
-                "products",
+                "records",
                 ttl=300,
                 when=lambda p: p.sort_name in CACHEABLE_SORTS and not p.parsed,
             ).paginate(limit=24, offset=0)
@@ -187,7 +187,7 @@ class FilterPipeline:
         ``FilterSet.cache_key`` and the pipeline never invalidates it.
 
         Args:
-            prefix: Cache-key prefix (``"products"``, ``"deals"``, …).
+            prefix: Cache-key prefix (``"records"``, ``"feeds"``, …).
                 Should be unique per endpoint to prevent collisions
                 between two surfaces that happen to share the same
                 filter shape.
@@ -272,7 +272,7 @@ class FilterPipeline:
 
     def count(self) -> int:
         """Materialise the count of matching rows under WHERE only."""
-        return self._with_filters().count(self._product_id_column)
+        return self._with_filters().count(self._id_column)
 
     def get(self, *, limit: int | None = None, offset: int | None = None) -> list[Any]:
         """Materialise the rows under filter + sort + (optional) paging."""
@@ -317,8 +317,8 @@ class FilterPipeline:
 
         if resource is not None:
             # Route through ``resource.collection(rows)`` so any batch-
-            # preload hooks defined on the resource class (e.g. listing
-            # images, price-lows history) fire exactly once for the
+            # preload hooks defined on the resource class (e.g. related
+            # images, price history) fire exactly once for the
             # whole page instead of N+1 per row. Falls back to the
             # per-row constructor if the resource subclass doesn't
             # provide a ``collection`` factory.
@@ -456,19 +456,19 @@ class _CachedPipeline:
     def get(self, *, limit: int | None = None, offset: int | None = None) -> list[Any]:
         """Cached ``get`` — raw model rows path used by services that
         want to hand the rows to a per-controller serialiser (e.g.
-        ``ProductController.index`` → ``batch_serialize``) instead of
+        ``ExampleController.index`` → ``batch_serialize``) instead of
         going through ``paginate()``'s built-in dict materialiser.
 
-        Without this proxy ``ProductReadService.list_products`` (which
-        deliberately doesn't call ``paginate`` to avoid double-
-        serialising rows through ``ProductResource`` once they reach
-        ``batch_serialize``) would explode with
+        Without this proxy a read service (which deliberately doesn't
+        call ``paginate`` to avoid double-serialising rows through a
+        resource once they reach ``batch_serialize``) would explode
+        with
         ``AttributeError: '_CachedPipeline' object has no attribute 'get'``
         the moment the read path picked up the cached wrapper —
-        which is the steady-state path for every storefront list
-        request that lands on a cacheable sort. Mirrors ``count``
-        above: bypass the cache when the predicate vetoes caching
-        for this pipeline, otherwise round-trip through ``Cache.remember``.
+        which is the steady-state path for every client list request
+        that lands on a cacheable sort. Mirrors ``count`` above:
+        bypass the cache when the predicate vetoes caching for this
+        pipeline, otherwise round-trip through ``Cache.remember``.
         """
         if not self._when(self._pipe):
             return self._pipe.get(limit=limit, offset=offset)
@@ -481,8 +481,8 @@ class _CachedPipeline:
             lambda: self._pipe.get(limit=limit, offset=offset),
         )
 
-    # The following helpers are pass-throughs so ``ProductReadService``
-    # can read pipeline metadata (sort name, parsed filter state, cache
+    # The following helpers are pass-throughs so a read service can
+    # read pipeline metadata (sort name, parsed filter state, cache
     # key) for the response envelope without juggling whether it has a
     # ``FilterPipeline`` or a ``_CachedPipeline`` instance. Without
     # them the service would have to ``isinstance``-fork before every
@@ -507,7 +507,7 @@ def pipeline(
     filters: FilterSet | None = None,
     sorts: SortRegistry | None = None,
     ctx: Any = None,
-    product_id_column: str = "id",
+    id_column: str = "id",
 ) -> FilterPipeline:
     """Sugar constructor — ``pipeline(query, filters=..., sorts=...)``.
 
@@ -520,7 +520,7 @@ def pipeline(
         filters=filters,
         sorts=sorts,
         ctx=ctx,
-        product_id_column=product_id_column,
+        id_column=id_column,
     )
 
 

@@ -15,7 +15,7 @@ compatibility with plain channel names like ``"deals"`` or
 
 Conventions
 -----------
-- ``Channel("deals")``           → ``"deals"`` (public, no auth required)
+- ``Channel("updates")``        → ``"updates"`` (public, no auth required)
 - ``PrivateChannel("user.123")`` → ``"private-user.123"`` (auth required)
 - ``PresenceChannel("room.42")`` → ``"presence-room.42"`` (auth + identity)
 

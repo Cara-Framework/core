@@ -104,7 +104,7 @@ class ViewEngine:
         string that already contained ``&lt;`` / ``&gt;`` / ``&amp;``
         on the assumption that the input was already escaped. That
         was a partial-escape XSS: any string carrying ONE entity
-        (very common in scraped product titles like
+        (very common in user-supplied text like
         ``"Sons &amp; Co"``) would skip escaping for the WHOLE
         string. A title like ``"Sons &amp; <script>...</script>"``
         flowed straight through with the ``<script>`` tag intact.

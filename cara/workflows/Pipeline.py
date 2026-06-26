@@ -65,7 +65,7 @@ class PipelineStep:
         if not self.routing_key and hasattr(step_class, "__name__"):
             class_name = step_class.__name__.lower()
             if "job" in class_name:
-                domain = class_name.replace("job", "").replace("product", "product")
+                domain = class_name.replace("job", "")
                 self.routing_key = f"{domain}.{self.priority}"
 
 
@@ -90,15 +90,15 @@ class Pipeline:
 
         # Job chain
         Pipeline.create(PipelineType.ASYNC_CHAIN)\
-            .add(CollectProductsJob, "trending", priority="high")\
-            .add(EnrichProductJob, priority="high")\
-            .add(ValidateProductJob, priority="high")\
+            .add(CollectJob, "feed", priority="high")\
+            .add(EnrichJob, priority="high")\
+            .add(ValidateJob, priority="high")\
             .dispatch()
 
         # Parallel jobs
         Pipeline.create(PipelineType.ASYNC_PARALLEL)\
-            .add(CollectProductsJob, "trending", priority="high")\
-            .add(CollectProductsJob, "keyword", "iPhone", priority="high")\
+            .add(CollectJob, "feed", priority="high")\
+            .add(CollectJob, "query", "term", priority="high")\
             .dispatch()
     """
 

@@ -101,11 +101,20 @@ class MakesReloadable:
         # Modules to purge for hot reload
         purge_patterns = [
             "app.",  # Application modules
-            "packages.",  # Package modules
             "config.",  # Config modules
             "routes.",  # Route modules
             "database.",  # Database modules
         ]
+
+        # Apps can append project-specific prefixes (e.g. a monorepo's
+        # ``packages.``) via ``config("reload.purge_prefixes")``.
+        try:
+            from cara.configuration import config
+
+            extra = config("reload.purge_prefixes", []) or []
+            purge_patterns = [*purge_patterns, *extra]
+        except Exception:
+            pass
 
         modules_to_remove = []
         for module_name in sys.modules.keys():

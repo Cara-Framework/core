@@ -1,6 +1,6 @@
 """Cara Retry — declarative retry with exponential backoff.
 
-Replaces ad-hoc retry loops scattered across scraping drivers, API clients,
+Replaces ad-hoc retry loops scattered across network drivers, API clients,
 and job handlers. Provides a fluent interface matching the framework style.
 
 Usage::

@@ -88,8 +88,8 @@ class AIClient:
         self.timeout = int(timeout or _cfg("timeout", 60))
         self.max_retries = int(max_retries or _cfg("max_retries", 1))
         self.fallback_model = fallback_model or _cfg("fallback_model", None)
-        self.site_url = site_url or _cfg("openrouter_site_url", "https://cheapa.io")
-        self.site_name = site_name or _cfg("openrouter_site_name", "Cheapa.io")
+        self.site_url = site_url or _cfg("openrouter_site_url", "")
+        self.site_name = site_name or _cfg("openrouter_site_name", "")
 
     # -- public API ------------------------------------------------------- #
 

@@ -138,7 +138,7 @@ class Application(Container):
         Application bypasses — so B raises
         ``MissingContainerBindingException: 'cache' key was not found``.
         Under ``--concurrency=8`` this was the "Facade 'cache' could
-        not resolve 'get'" spray that DLQ'd a batch of CollectProductJobs.
+        not resolve 'get'" spray that DLQ'd a batch of jobs.
 
         Fix: check for the deferred key AND call ``super().make()``
         inside a single critical section. Now B is forced to wait

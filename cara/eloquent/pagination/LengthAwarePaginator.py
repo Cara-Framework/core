@@ -24,7 +24,7 @@ class LengthAwarePaginator(BasePaginator):
         # ``ceil(total / 0)`` raises ``ZeroDivisionError`` and crashes
         # the response. ``max(1, ...)`` also means an empty result set
         # reports "page 1 of 1" instead of the semantically broken
-        # "page 1 of 0" that the storefront pager UI mis-parses.
+        # "page 1 of 0" that a client pager UI mis-parses.
         if per_page and per_page > 0:
             self.last_page = max(1, int(math.ceil(total / per_page)))
         else:

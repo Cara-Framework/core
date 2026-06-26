@@ -155,10 +155,10 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         APScheduler's internal ``add_job`` swallows a conflicting id.
         Pre-fix the only signal of those silent drops was the
         ``Status: N jobs`` banner being lower than the dict count, and
-        operators almost never noticed (RecomputeProductPriceLowsJob
-        sat un-fired for weeks). The post-loop reconciliation logs
-        WARNING for every config entry whose ``id`` didn't land in the
-        registration set, so silent drops surface at boot.
+        operators almost never noticed (a job could sit un-fired for
+        weeks). The post-loop reconciliation logs WARNING for every
+        config entry whose ``id`` didn't land in the registration set,
+        so silent drops surface at boot.
         """
         jobs = config("scheduling.jobs", []) or []
         if not jobs:
@@ -174,7 +174,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
         for job_target in jobs:
             try:
-                # ── Dict-based config (services-style) ──────────────
+                # ── Dict-based config (config-file style) ───────────
                 if isinstance(job_target, dict):
                     expected_dict_ids.append(
                         (
@@ -279,7 +279,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             import inspect
 
             # Instantiate — pass kwargs to __init__ so required params
-            # like DiscoverProductsJob(source=...) are satisfied.
+            # like a scheduled job(source=...) are satisfied.
             try:
                 instance = _cls(**_kw) if _kw else _app.make(_cls)
             except TypeError:
@@ -289,13 +289,13 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
             # Scheduled jobs run on a fixed cadence — the scheduler IS the
             # dedup authority. Opt them out of the 24h idempotency *result
-            # cache*: a no-arg recurring job (e.g. FlushDirtyPricesJob every
-            # 30s) hashes to one stable key, so the result cache would return
+            # cache*: a no-arg recurring job (e.g. one that runs every 30s)
+            # hashes to one stable key, so the result cache would return
             # the first tick's cached result for a full day and the job would
-            # effectively run once per 24h. That silently broke the deferred
-            # price-aggregation flush, so freshly consolidated products never
-            # got a canonical price and stayed ``discovered`` (hidden from the
-            # storefront). Overlap between slow ticks is still guarded by the
+            # effectively run once per 24h. That silently broke deferred
+            # flush-style jobs, so freshly processed records never got their
+            # follow-up work and stayed in their initial state (hidden from
+            # the client). Overlap between slow ticks is still guarded by the
             # idempotency job lock + any WithoutOverlapping middleware.
             try:
                 instance.idempotency_cache_results = False
@@ -341,8 +341,8 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         # because those methods dispatch ``options`` to the driver
         # immediately. Default stays False so existing entries that
         # rely on overlap (or that implement their own internal
-        # ``Cache.add`` fence — see ``FlushDirtyPricesJob``) keep
-        # their current behaviour. ``lock_timeout`` mirrors the
+        # ``Cache.add`` fence) keep their current behaviour.
+        # ``lock_timeout`` mirrors the
         # ``APSchedulerDriver._wrap_without_overlapping`` default of
         # 86400 s (1 day) so a crashed holder can't wedge the slot
         # forever — same TTL the rest of the lock surface uses.

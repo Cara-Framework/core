@@ -110,7 +110,7 @@ class ExecutionContext:
 
         Example:
             >>> with ExecutionContext.sync(debug=True, job_id="collect_123"):
-            ...     await Bus.dispatch(CollectProductJob(asin="B089DR29T6"))
+            ...     await Bus.dispatch(CollectJob(id=123))
             ...     # Job runs immediately with debug logs
         """
         return _ExecutionContextManager(sync=True, debug=debug, job_id=job_id)

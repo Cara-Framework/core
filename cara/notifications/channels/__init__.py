@@ -13,8 +13,8 @@ from .LogChannel import LogChannel
 
 __all__ = [
     "BaseChannel",
-    "MailChannel",
     "DatabaseChannel",
-    "SlackChannel",
     "LogChannel",
+    "MailChannel",
+    "SlackChannel",
 ]

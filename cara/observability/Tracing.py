@@ -18,9 +18,9 @@ Config (read via cara ``config()`` with UPPER_SNAKE env fallback):
 
 Uses the OTLP **HTTP** exporter (port 4318) rather than gRPC: it rides
 on ``requests`` (already a dependency) and avoids the ``grpcio`` native
-wheel, which lags on bleeding-edge Python. 4318 is the OTLP/HTTP
-receiver published by ``infrastructure/monitoring/docker-compose.yml``.
-App processes run natively on the host, so the default is localhost.
+wheel, which lags on bleeding-edge Python. 4318 is the standard OTLP/HTTP
+receiver port published by the monitoring stack. App processes run
+natively on the host, so the default is localhost.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def setup_tracing(
 
     Args:
         service_name: ``service.name`` resource attribute (e.g.
-            ``"cheapa-services"``). Required.
+            ``"example-services"``). Required.
         release: ``service.version`` resource attribute. Defaults to
             ``"dev"`` when omitted.
     """

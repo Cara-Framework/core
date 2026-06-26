@@ -21,7 +21,7 @@ pattern).
 Subscribe / unsubscribe / pong are all carried as JSON objects:
 
     { "action": "subscribe",   "channel": "private-user.42" }
-    { "action": "unsubscribe", "channel": "deals" }
+    { "action": "unsubscribe", "channel": "updates" }
     { "action": "pong" }
 
 Each subscribe goes through ``Broadcasting.authorize_subscription``

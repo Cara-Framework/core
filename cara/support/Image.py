@@ -24,11 +24,10 @@ class ImageProcessor:
 
     # Hard pixel cap — refused at load time so a small file that
     # decodes to ``100_000 × 100_000`` (≈10⁴ MB of RGB) can't OOM
-    # the worker. 25M pixels covers any legitimate avatar / brand
-    # logo / category banner with comfortable headroom (a 5K × 5K
-    # banner is 25M). Pillow's default ``MAX_IMAGE_PIXELS`` is ~89M
-    # but only WARNS — too lax and too quiet for a public-internet
-    # upload surface.
+    # the worker. 25M pixels covers any legitimate avatar / logo /
+    # banner with comfortable headroom (a 5K × 5K banner is 25M).
+    # Pillow's default ``MAX_IMAGE_PIXELS`` is ~89M but only WARNS —
+    # too lax and too quiet for a public-internet upload surface.
     MAX_PIXEL_COUNT = 25_000_000
 
     # Allowlist of decoder formats accepted on load. Restricts the
@@ -36,8 +35,8 @@ class ImageProcessor:
     # crash, the CVE-2023-4863 WebP CVE family, the PCX OOB read)
     # to the four formats real avatar / logo uploads actually use.
     # BMP / TIFF / ICO are NOT in this set — none of those formats
-    # has a legitimate use case in a storefront upload field, and
-    # each has CVE history.
+    # has a legitimate use case in a client upload field, and each
+    # has CVE history.
     ALLOWED_FORMATS = frozenset({"JPEG", "PNG", "GIF", "WEBP"})
 
     def __init__(self, image: PILImage.Image):

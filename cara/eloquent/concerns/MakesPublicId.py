@@ -21,10 +21,10 @@ class MakesPublicId:
         ``cara/eloquent/models/Model.py``). The sibling mixins satisfy this
         contract — ``MakesSoftDeletes.boot_MakesSoftDeletes`` registers a
         global scope, etc. Without a matching ``boot_MakesPublicId`` here,
-        booting ANY model that mixes this in (Product, Listing,
-        ProductContainer, …) raises ``AttributeError: class model 'X' has
+        booting ANY model that mixes this in raises
+        ``AttributeError: class model 'X' has
         no attribute boot_MakesPublicId`` on the first query — which
-        surfaced as 500s across every Product-eager-loading endpoint
+        surfaced as 500s across every model-eager-loading endpoint
         (e.g. ``/api/wishlist``).
 
         Public-id assignment is a save-time concern handled per-model

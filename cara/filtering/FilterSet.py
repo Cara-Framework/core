@@ -181,7 +181,7 @@ class FilterSet:
 
         Two filter parses that differ only in payload-key insertion
         order produce identical fragments — important so a cache
-        hit doesn't depend on which order the storefront serialised
+        hit doesn't depend on which order the client serialised
         its query string.
         """
         parts = [f.cache_key(parsed[f.name]) for f in self._filters if f.name in parsed]
@@ -200,7 +200,7 @@ class FilterSet:
 
         Round-trip contract: ``self.parse(self.encode(parsed))``
         produces a parsed dict whose ``cache_key`` is identical to
-        ``parsed``'s. This is the property that lets the storefront
+        ``parsed``'s. This is the property that lets the frontend
         and api agree on filter identity even when state moves
         through URLs (shared links, bookmarks, deep-linked wizard
         steps).

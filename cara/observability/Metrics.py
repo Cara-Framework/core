@@ -1,26 +1,33 @@
-"""Shared Prometheus metrics infrastructure for cheapa.io apps.
+"""Shared Prometheus metrics infrastructure for Cara apps.
 
 Provides a process-local registry, histogram bucket presets, label helpers,
-safe increment/observe wrappers, and :class:`MetricsBase` with metrics common
-to both the API and services worker. Each app extends ``MetricsBase`` in its
-own ``app/support/Metrics.py`` with app-specific counters/gauges/histograms.
+safe increment/observe wrappers, and :class:`MetricsBase` carrying the metrics
+the *framework itself* emits (HTTP, queue/worker, event listeners, CLI
+commands, scheduled tasks, cache, health probes). Each app extends
+``MetricsBase`` in its own ``app/support/Metrics.py`` with app-specific
+domain counters/gauges/histograms.
+
+Metric namespace
+----------------
+Framework metric names are prefixed with a configurable namespace so the
+framework carries no consumer branding. Set ``CARA_METRICS_NAMESPACE`` in the
+app environment; it defaults to ``app`` when unset. App subclasses are free
+to name their own domain metrics with any literal prefix.
 
 Cardinality budget (keep low to protect Prometheus scrape cost):
 - ``route``: controller@action form (bounded by codebase — dozens)
 - ``status_class``: "2xx"/"3xx"/"4xx"/"5xx"/"error" — always 5 values
-- ``queue``: literal queue name — ~30 queues project-wide
+- ``queue``: literal queue name — dozens project-wide
 - ``job``: class name — dozens
-- ``driver``: "scrapedo_fetch"/"scrapedo_amazon_pdp"/…
-- ``geo``: 2-letter country — single digits in prod
-- ``provider``: "ollama"/"openrouter"/"openai" — 3
-- ``model``: literal model string — single digits
 - ``task``: task-profile name — single digits
-- ``finish_reason``: "stop"/"length"/"error"/… — ~5
+- ``listener``: listener class name — dozens
+- ``command``: CLI command name — dozens
 - ``event``: event class name — dozens
 """
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from typing import Any
@@ -44,6 +51,28 @@ from cara.configuration import config
 # HTTP server (see ``start_http_server`` below) can use the exact same
 # registry the workload code writes into.
 REGISTRY: CollectorRegistry = CollectorRegistry(auto_describe=True)
+
+
+def _metrics_namespace() -> str:
+    """Resolve the framework metric-name prefix.
+
+    Read from the ``CARA_METRICS_NAMESPACE`` env var (always available at
+    import time, before config files load), falling back to ``app``. The
+    framework deliberately carries no consumer-specific default — apps
+    set ``CARA_METRICS_NAMESPACE`` in their ``.env``.
+    """
+    raw = os.environ.get("CARA_METRICS_NAMESPACE") or "app"
+    cleaned = raw.strip().strip("_")
+    # Prometheus names must match [a-zA-Z_][a-zA-Z0-9_]* — keep it sane.
+    return cleaned if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", cleaned) else "app"
+
+
+_NS = _metrics_namespace()
+
+
+def metric_name(suffix: str) -> str:
+    """Build a namespaced framework metric name (``{namespace}_{suffix}``)."""
+    return f"{_NS}_{suffix}"
 
 
 def _existing_collector(
@@ -156,7 +185,7 @@ def histogram_buckets_short() -> tuple:
 
 
 def histogram_buckets_long() -> tuple:
-    """Latency buckets tuned for multi-second jobs (scrape, AI, queue)."""
+    """Latency buckets tuned for multi-second jobs (background work, queue)."""
     return (
         0.1,
         0.25,
@@ -181,9 +210,9 @@ _UUID_RE = re.compile(
 def normalize_metric_path(path: str) -> str:
     """Replace dynamic URL segments with placeholders to bound label cardinality.
 
-    ``/api/products/123`` → ``/api/products/{id}``
-    ``/api/products/01HABC...`` → ``/api/products/{ulid}``
-    ``/api/products/xxxxxxxx-xxxx-…`` → ``/api/products/{uuid}``
+    ``/api/items/123`` → ``/api/items/{id}``
+    ``/api/items/01HABC...`` → ``/api/items/{ulid}``
+    ``/api/items/xxxxxxxx-xxxx-…`` → ``/api/items/{uuid}``
     """
     segments = path.split("/")
     out: list[str] = []
@@ -202,12 +231,16 @@ def normalize_metric_path(path: str) -> str:
 
 
 class MetricsBase:
-    """Namespace holder for shared counters/histograms/gauges.
+    """Namespace holder for the metrics the framework itself emits.
 
     Deliberately NOT a dataclass or Pydantic model — these are class-level
     singletons and should be accessed by attribute lookup only. App-specific
-    metrics live on subclasses in ``api/app/support/Metrics.py`` and
-    ``services/app/support/Metrics.py``.
+    DOMAIN metrics live on subclasses in each consuming app's
+    ``app/support/Metrics.py``.
+
+    Everything defined here is a *framework mechanism* metric (HTTP, queue,
+    events, commands, scheduler, cache, health) emitted by Cara core, so it
+    is owned by the framework and shared by every app via inheritance.
     """
 
     @staticmethod
@@ -230,7 +263,7 @@ class MetricsBase:
 
     # ─── Service-level info (static label) ──────────────────────────────
     build_info = Gauge(
-        "cheapa_build_info",
+        metric_name("build_info"),
         "Static build/version info. Always 1 while the process is alive.",
         labelnames=("service", "role"),
         registry=REGISTRY,
@@ -238,150 +271,125 @@ class MetricsBase:
 
     # ─── HTTP API ───────────────────────────────────────────────────────
     http_requests_total = Counter(
-        "cheapa_http_requests_total",
+        metric_name("http_requests_total"),
         "Total HTTP requests served by the API.",
         labelnames=("method", "route", "status_class"),
         registry=REGISTRY,
     )
     http_request_duration_seconds = Histogram(
-        "cheapa_http_request_duration_seconds",
+        metric_name("http_request_duration_seconds"),
         "HTTP request duration in seconds.",
         labelnames=("method", "route"),
         buckets=histogram_buckets_short(),
         registry=REGISTRY,
     )
     http_requests_in_flight = Gauge(
-        "cheapa_http_requests_in_flight",
+        metric_name("http_requests_in_flight"),
         "HTTP requests currently being handled.",
         registry=REGISTRY,
     )
 
     # ─── Queue worker ───────────────────────────────────────────────────
     queue_dispatches_total = Counter(
-        "cheapa_queue_dispatches_total",
+        metric_name("queue_dispatches_total"),
         "Jobs dispatched onto the queue (counted at Bus.dispatch call-site).",
         labelnames=("queue", "job"),
         registry=REGISTRY,
     )
     queue_jobs_consumed_total = Counter(
-        "cheapa_queue_jobs_consumed_total",
+        metric_name("queue_jobs_consumed_total"),
         "Jobs consumed by workers, tagged by outcome.",
         labelnames=("queue", "job", "outcome"),  # success|failed|timeout|orphan
         registry=REGISTRY,
     )
     queue_job_duration_seconds = Histogram(
-        "cheapa_queue_job_duration_seconds",
+        metric_name("queue_job_duration_seconds"),
         "Wall-clock time a worker spent executing a job.",
         labelnames=("queue", "job"),
         buckets=histogram_buckets_long(),
         registry=REGISTRY,
     )
     queue_jobs_in_flight = Gauge(
-        "cheapa_queue_jobs_in_flight",
+        metric_name("queue_jobs_in_flight"),
         "Jobs currently being executed by this worker process.",
         labelnames=("queue", "job"),
         registry=REGISTRY,
     )
-
-    # ─── Scrape drivers ─────────────────────────────────────────────────
-    scrape_requests_total = Counter(
-        "cheapa_scrape_requests_total",
-        "Scrape requests issued, broken down by driver + outcome class.",
-        labelnames=("driver", "geo", "status_class", "render", "super"),
-        registry=REGISTRY,
-    )
-    scrape_request_duration_seconds = Histogram(
-        "cheapa_scrape_request_duration_seconds",
-        "End-to-end scrape request duration (client-observed).",
-        labelnames=("driver", "geo"),
+    queue_wait_seconds = Histogram(
+        metric_name("queue_wait_seconds"),
+        "Time a message sat in the queue before being picked up.",
+        labelnames=("queue", "job"),
         buckets=histogram_buckets_long(),
         registry=REGISTRY,
     )
-    scrape_cost_credits_total = Counter(
-        "cheapa_scrape_cost_credits_total",
-        "Sum of scrape.do-request-cost header values, in credits.",
-        labelnames=("driver", "geo", "render", "super"),
+    queue_jobs_dead_lettered_total = Counter(
+        metric_name("queue_jobs_dead_lettered_total"),
+        "Jobs sent to the dead-letter queue after exhausting max_attempts.",
+        labelnames=("job",),
         registry=REGISTRY,
     )
-    scrape_remaining_credits = Gauge(
-        "cheapa_scrape_remaining_credits",
-        "Most recent scrape.do-remaining-credits reading per driver.",
-        labelnames=("driver",),
-        registry=REGISTRY,
-    )
-    scrape_bytes_total = Counter(
-        "cheapa_scrape_bytes_total",
-        "Total bytes pulled through scrape drivers.",
-        labelnames=("driver", "geo"),
+    idempotency_total = Counter(
+        metric_name("idempotency_total"),
+        "Idempotency-key / unique-job lookup outcomes across dispatch paths.",
+        labelnames=("scope", "outcome"),
         registry=REGISTRY,
     )
 
-    # ─── AI client ──────────────────────────────────────────────────────
-    ai_requests_total = Counter(
-        "cheapa_ai_requests_total",
-        "AI chat completions, broken down by provider/model/task/finish_reason.",
-        labelnames=("provider", "model", "task", "finish_reason"),
+    # ─── Event listeners ────────────────────────────────────────────────
+    listener_invocations_total = Counter(
+        metric_name("listener_invocations_total"),
+        "Event-listener fires by listener class + outcome.",
+        labelnames=("listener", "outcome"),
         registry=REGISTRY,
     )
-    ai_request_duration_seconds = Histogram(
-        "cheapa_ai_request_duration_seconds",
-        "AI request wall-clock duration.",
-        labelnames=("provider", "model", "task"),
-        buckets=histogram_buckets_long(),
-        registry=REGISTRY,
-    )
-    ai_tokens_total = Counter(
-        "cheapa_ai_tokens_total",
-        "AI token usage, by direction (in/out).",
-        labelnames=("provider", "model", "task", "direction"),
-        registry=REGISTRY,
-    )
-    ai_errors_total = Counter(
-        "cheapa_ai_errors_total",
-        "AI call failures grouped by provider/model/task and error kind.",
-        labelnames=("provider", "model", "task", "kind"),
-        registry=REGISTRY,
-    )
-
-    # ─── Pipeline events ────────────────────────────────────────────────
-    pipeline_events_total = Counter(
-        "cheapa_pipeline_events_total",
-        "Product lifecycle events fired, by event class.",
-        labelnames=("marketplace", "event"),
-        registry=REGISTRY,
-    )
-    pipeline_stage_duration_seconds = Histogram(
-        "cheapa_pipeline_stage_duration_seconds",
-        "Wall-clock time between consecutive pipeline stages for a product.",
-        labelnames=("marketplace", "from_stage", "to_stage"),
+    listener_duration_seconds = Histogram(
+        metric_name("listener_duration_seconds"),
+        "Listener handle() wall-clock duration.",
+        labelnames=("listener",),
         buckets=histogram_buckets_long(),
         registry=REGISTRY,
     )
 
-    # ─── Browser pool ───────────────────────────────────────────────────
-    browser_pool_size = Gauge(
-        "cheapa_browser_pool_size",
-        "Browser pool occupancy by state (idle/busy/total).",
-        labelnames=("state",),
+    # ─── CLI commands ───────────────────────────────────────────────────
+    command_invocations_total = Counter(
+        metric_name("command_invocations_total"),
+        "CLI commands invoked, by name + outcome.",
+        labelnames=("command", "outcome"),
         registry=REGISTRY,
     )
-    browser_sessions_total = Counter(
-        "cheapa_browser_sessions_total",
-        "Browser acquire/release/restart events.",
-        labelnames=("outcome",),
+    command_duration_seconds = Histogram(
+        metric_name("command_duration_seconds"),
+        "CLI command wall-clock duration.",
+        labelnames=("command",),
+        buckets=histogram_buckets_long(),
+        registry=REGISTRY,
+    )
+
+    # ─── Scheduled tasks ────────────────────────────────────────────────
+    scheduled_tasks_total = Counter(
+        metric_name("scheduled_tasks_total"),
+        "Scheduled task fires grouped by task id and outcome.",
+        labelnames=("task", "outcome"),
+        registry=REGISTRY,
+    )
+    scheduled_task_duration_seconds = Histogram(
+        metric_name("scheduled_task_duration_seconds"),
+        "Scheduled task wall-clock duration.",
+        labelnames=("task",),
+        buckets=histogram_buckets_long(),
         registry=REGISTRY,
     )
 
     # ─── Health probes ───────────────────────────────────────────────────
     health_probe_duration_seconds = Histogram(
-        "cheapa_health_probe_duration_seconds",
+        metric_name("health_probe_duration_seconds"),
         "Wall-clock duration of each dependency health probe.",
         labelnames=("dependency", "status"),
         buckets=histogram_buckets_short(),
         registry=REGISTRY,
     )
     health_probe_outcomes_total = Counter(
-        "cheapa_health_probe_outcomes_total",
+        metric_name("health_probe_outcomes_total"),
         "Health probe outcomes per dependency and status.",
         labelnames=("dependency", "status"),
         registry=REGISTRY,
@@ -389,7 +397,7 @@ class MetricsBase:
 
     # ─── Cache ─────────────────────────────────────────────────────────
     cache_operations_total = Counter(
-        "cheapa_cache_operations_total",
+        metric_name("cache_operations_total"),
         "Cara Cache facade operations — rolled up by scope + outcome.",
         labelnames=("scope", "operation", "outcome"),
         registry=REGISTRY,
@@ -398,7 +406,7 @@ class MetricsBase:
 
 def init_build_info(metrics_cls: type = MetricsBase) -> None:
     """Set the static build-info gauge once at import time."""
-    service = config("metrics.service", "cheapa-services")
+    service = config("metrics.service", _NS)
     role = config("metrics.role", "unknown")
     metrics_cls.build_info.labels(service=service, role=role).set(1)
 

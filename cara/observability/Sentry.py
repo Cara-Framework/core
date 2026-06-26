@@ -174,7 +174,7 @@ def set_request_user(user_id: Any, email: str | None = None) -> None:
 
 
 def set_request_tag(key: str, value: Any) -> None:
-    """Attach a tag (route, marketplace, request_id, …) to the scope.
+    """Attach a tag (route, tenant, request_id, …) to the scope.
 
     Tags are searchable in the Sentry UI. Skip silently when the SDK
     isn't installed so this stays a zero-cost helper in dev.

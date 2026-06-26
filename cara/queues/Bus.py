@@ -94,19 +94,19 @@ class Bus:
 
                     Log.debug("UniqueJob skipped (lock held): %s", uid)
                     try:
-                        from app.support.Metrics import Metrics as _M
+                        from cara.observability.Metrics import MetricsBase as _M
 
                         _M.idempotency_total.labels(
                             scope="unique_job", outcome="collision"
                         ).inc()
-                    except ImportError:
+                    except Exception:
                         pass
                     return None
                 try:
-                    from app.support.Metrics import Metrics as _M
+                    from cara.observability.Metrics import MetricsBase as _M
 
                     _M.idempotency_total.labels(scope="unique_job", outcome="fresh").inc()
-                except ImportError:
+                except Exception:
                     pass
 
             # Dispatch to queue. Wrap in try/except so a failed
@@ -151,10 +151,10 @@ class Bus:
 
             # Prometheus dispatch counter — bounded by the (queue, job)
             # label pair; "unknown" covers jobs that don't carry an
-            # explicit queue attribute. Safe to no-op if Metrics
-            # isn't available (e.g. cara imported standalone in tests).
+            # explicit queue attribute. Guarded so a metrics hiccup never
+            # breaks dispatch.
             try:
-                from app.support.Metrics import Metrics as _M
+                from cara.observability.Metrics import MetricsBase as _M
 
                 _queue_lbl = (
                     queue or routing_key or getattr(job, "queue", None) or "unknown"
@@ -163,7 +163,7 @@ class Bus:
                     queue=str(_queue_lbl),
                     job=job.__class__.__name__,
                 ).inc()
-            except ImportError:
+            except Exception:
                 pass
             return None
 
@@ -264,7 +264,7 @@ class Bus:
             with fresh_dispatch_scope():
                 result = await run_through_middleware_async(job, job_handler)
 
-            # ``None`` is a legitimate successful return: every cheapa pipeline
+            # ``None`` is a legitimate successful return: every pipeline
             # stage routes its work through wrap_with_idempotency(_do_work) and
             # _do_work returns None on success, so ``result is None`` is the
             # NORMAL success case — not a skip. Recording completion only for a

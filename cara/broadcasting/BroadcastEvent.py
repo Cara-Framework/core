@@ -2,8 +2,8 @@
 BroadcastEvent — convenience base class for broadcasting events.
 
 Subclass this when you want to broadcast a payload without writing
-a full ``ShouldBroadcast`` boilerplate. Most cheapa events extend
-this directly.
+a full ``ShouldBroadcast`` boilerplate. Most broadcastable events
+extend this directly.
 
 Channel arguments accept strings *and* ``Channel`` instances (and
 lists of either). Wire-form normalization happens at dispatch time
@@ -28,13 +28,13 @@ class BroadcastEvent(ShouldBroadcast):
     payload, optionally ``broadcast_when`` to gate firing, and pass
     channels + event name through ``__init__``::
 
-        class PriceUpdated(BroadcastEvent):
-            def __init__(self, product_id: int, price: float):
+        class ThingUpdated(BroadcastEvent):
+            def __init__(self, record_id: int, value: float):
                 super().__init__(
-                    channels=[f"product.{product_id}"],
-                    event_name="price.updated",
+                    channels=[f"record.{record_id}"],
+                    event_name="record.updated",
                 )
-                self._payload = {"product_id": product_id, "price": price}
+                self._payload = {"record_id": record_id, "value": value}
 
             def broadcast_with(self) -> dict:
                 return self._payload

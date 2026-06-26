@@ -31,7 +31,7 @@ _logger = logging.getLogger("cara.scheduling")
 def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
     """Wrap a scheduled callback with Prometheus counter + histogram."""
     try:
-        from app.support.Metrics import Metrics as _M
+        from cara.observability.Metrics import MetricsBase as _M
     except ImportError:
         _M = None  # type: ignore[assignment]
 

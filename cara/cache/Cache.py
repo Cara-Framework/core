@@ -483,7 +483,7 @@ class Cache:
         Delete every key starting with ``prefix``.
 
         Convenience wrapper over ``forget_pattern`` — most callers only
-        ever want a prefix sweep ("category:facets:") and don't need to
+        ever want a prefix sweep ("reports:daily:") and don't need to
         compose glob patterns themselves. Appends ``*`` so the driver
         sees a valid glob.
         """

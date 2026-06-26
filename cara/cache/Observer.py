@@ -31,11 +31,23 @@ CacheObserver = Callable[[str, str, str, int | None], None]
 _OBSERVER: CacheObserver | None = None
 
 
-_KNOWN_SCOPES = frozenset({
-    "product", "products", "category", "search", "trending",
-    "brand", "home", "deals", "sitemap", "admin", "analytics",
-    "experiment", "lock", "stampede", "idempotency", "health", "budget",
+# Framework-internal cache-key scopes only (Cara cache facade + queue).
+# Apps register their own DOMAIN scopes at boot via register_cache_scopes()
+# — the same "framework ships the mechanism, app supplies the specifics"
+# pattern as set_cache_observer below, so no project vocabulary lives here.
+_KNOWN_SCOPES: frozenset[str] = frozenset({
+    "lock", "stampede", "idempotency", "health",
 })
+
+
+def register_cache_scopes(*scopes: str) -> None:
+    """Add app-specific cache-key scopes for the metrics ``scope`` label.
+
+    Idempotent and additive; call once per process at boot (typically
+    alongside :func:`set_cache_observer`).
+    """
+    global _KNOWN_SCOPES
+    _KNOWN_SCOPES = _KNOWN_SCOPES | frozenset(s for s in scopes if s)
 
 
 def scope_for_cache_key(key: str) -> str:

@@ -162,8 +162,9 @@ class Event:
         if cls._app is not None:
             return cls._app
         try:
-            from bootstrap import application
+            import builtins
 
+            application = builtins.app()
             cls._app = application
             return application
         except (ImportError, RuntimeError, AttributeError):
@@ -485,7 +486,7 @@ class Event:
             import time as _t
 
             try:
-                from app.support.Metrics import Metrics as _M
+                from cara.observability.Metrics import MetricsBase as _M
             except (ImportError, RuntimeError):
                 _M = None  # type: ignore[assignment]
 

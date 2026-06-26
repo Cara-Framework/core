@@ -63,9 +63,9 @@ class JobTracker:
 
         Example (ApplicationProvider):
             from cara.queues.tracking.JobTracker import JobTracker
-            from app.models import Job
+            from app.models import JobModel
 
-            tracker = JobTracker(job_model=Job)
+            tracker = JobTracker(job_model=JobModel)
             self.application.bind("JobTracker", tracker)
         """
         self.job_model = job_model

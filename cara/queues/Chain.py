@@ -7,7 +7,7 @@ dispatched and the catch callback runs.
 The runner persists its progress (``cara:chain:<id>``) so that when the
 queue redelivers the runner message after a worker crash mid-chain, the
 already-completed steps are skipped rather than re-run. Without this,
-non-idempotent steps (e.g. scrape → validate → consolidate) could fire
+non-idempotent steps (e.g. fetch → validate → persist) could fire
 their side-effects twice for the same input.
 
 Usage:

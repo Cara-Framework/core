@@ -187,9 +187,9 @@ class ConnectionResolver:
         overwrote the registry entry, so the inner commit popped the
         connection and the OUTER commit raised "No active transaction found
         for connection: {name}". This bit every nested transaction — e.g.
-        ``MatchListingJob``'s refresh path on a re-scrape, which wraps a
+        a job's refresh path on a retry, which wraps a
         persister that opens its own ``db.transaction()`` — and made
-        ``collect:products --sync`` fail with ``match_failed`` for any product
+        a sync command fail with ``match_failed`` for any record
         that already existed.
 
         The connection instance is stored in the per-context registry so

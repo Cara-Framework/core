@@ -14,11 +14,11 @@ Why a framework instead of a per-repo ``if sort_by == "...":`` ladder:
 * Adding a sort = one file. The HTTP layer's ``in:...`` validation
   rule, the repo's ORDER BY clause, the wizard's option list, and
   the cache key all stay in lockstep.
-* Storefront wizards / dashboards can introspect the registry and
+* Frontend wizards / dashboards can introspect the registry and
   render a sort dropdown without hand-listing options.
 * The same registry can be reused from any list endpoint
-  (products, deals, sponsored, search results) — adding a new
-  sort dimension propagates automatically.
+  (records, feeds, search results) — adding a new sort dimension
+  propagates automatically.
 """
 
 from __future__ import annotations
@@ -57,8 +57,8 @@ class Sorter(ABC):
 
         The caller has already configured the SELECT, WHERE, GROUP BY
         etc.; the sorter only adds ordering. Implementations may
-        also adjust the SELECT list (e.g. trending sort joins
-        outbound_click and selects ``COUNT(...) AS click_count``)
+        also adjust the SELECT list (e.g. a popularity sort joins a
+        related table and selects ``COUNT(...) AS hit_count``)
         — encapsulating that here keeps the repo body sort-agnostic.
         """
 
@@ -98,9 +98,8 @@ class SortRegistry:
                 set, overrides whichever sorter has ``is_default = True``
                 at the class level — useful when the same Sorter
                 class is reused across registries that disagree on
-                the default (``RecentSorter`` is the catalogue
-                default but the deal feed wants ``BestDealSorter``
-                first).
+                the default (``RecentSorter`` is the default for one
+                registry but another wants ``ExampleSorter`` first).
         """
         self._sorters: list[Sorter] = list(sorters)
 
@@ -166,7 +165,7 @@ class SortRegistry:
 
         Unknown names also fall back to the default rather than
         raising — keeping the listing endpoint usable when the
-        storefront sends a stale sort value during a deploy.
+        client sends a stale sort value during a deploy.
         """
         if not name:
             return self._default

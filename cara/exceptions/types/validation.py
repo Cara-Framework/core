@@ -53,6 +53,21 @@ class ValidationException(CaraException):
         if status_code:
             self.status_code = status_code
 
+    @classmethod
+    def generic(cls, message: str) -> ValidationException:
+        """Create a validation error on the generic ``_`` field.
+
+        Service-layer convenience constructor: raise a single-message 422
+        without hand-building the ``errors`` dict. Emits the canonical
+        ``{error, type: validation_error, errors: {_: [msg]}, meta}`` envelope.
+        """
+        return cls(message=message, errors={"_": [message]})
+
+    @classmethod
+    def field(cls, field_name: str, message: str) -> ValidationException:
+        """Create a validation error scoped to a single ``field_name``."""
+        return cls(message=message, errors={field_name: [message]})
+
     def _analyze_validation_content(self) -> None:
         """Analyze validation_errors and extract meaningful content."""
         if self.validation_errors is None:

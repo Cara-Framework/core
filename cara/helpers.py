@@ -23,7 +23,9 @@ def route(name: str, params: dict[str, Any] | None = None) -> str:
     Resolves the application router through the container and delegates to
     ``Router.url()``. Raises ``RouteNotFoundException`` if the name is unknown.
     """
-    from bootstrap import application
+    import builtins
+
+    application = builtins.app()
 
     router = application.make("router")
     return router.url(name, params)
@@ -130,7 +132,7 @@ def tap(value: T, callback: Callable[[T], Any] | None = None) -> T:
     Mirrors Laravel's global ``tap()`` — useful for fluent chains
     that need to peek / mutate without breaking the chain::
 
-        product = tap(repo.find(id), lambda p: p.touch())
+        record = tap(repo.find(id), lambda p: p.touch())
 
     With no callback, returns the value unchanged (rare; use the
     one-arg form to keep grep-ability).
@@ -369,7 +371,7 @@ def throw_if(condition: Any, exception: Any, *args: Any, **kwargs: Any) -> Any:
     Returns the condition unchanged when not truthy so call sites
     chain naturally::
 
-        product = throw_if(repo.find(id) is None, NotFoundError("..."))
+        record = throw_if(repo.find(id) is None, NotFoundError("..."))
     """
     if condition:
         if isinstance(exception, type):
@@ -422,7 +424,9 @@ def app(name: str | None = None) -> Any:
     bootstrap ``application``; with ``name``, returns
     ``application.make(name)``.
     """
-    from bootstrap import application
+    import builtins
+
+    application = builtins.app()
 
     if name is None:
         return application
@@ -467,7 +471,9 @@ def auth(guard: str | None = None) -> Any:
     the auth manager when no guard is given; otherwise returns the
     named guard.
     """
-    from bootstrap import application
+    import builtins
+
+    application = builtins.app()
 
     auth_manager = application.make("auth")
     if guard is None:

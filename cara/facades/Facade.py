@@ -38,9 +38,11 @@ class Facade(type):
             AttributeError: If service cannot be resolved or attribute doesn't exist
         """
         try:
-            from bootstrap import application
-        except (ImportError, ModuleNotFoundError, TypeError):
-            # Handle bootstrap unavailability with targeted fallbacks
+            import builtins
+
+            application = builtins.app()
+        except (ImportError, ModuleNotFoundError, TypeError, AttributeError):
+            # Handle application-not-booted with targeted fallbacks
             # (e.g. running stress tests outside the full Cara framework,
             # or Python version mismatch causing TypeError on 3.10+ syntax)
             if cls.key == "logger":
@@ -85,7 +87,7 @@ class Facade(type):
             # No fallback available - raise clear error
             raise CaraException(
                 f"Facade '{cls.key}' is unavailable: application container not bootstrapped. "
-                f"Ensure bootstrap.py is properly imported and the application is initialized."
+                f"Ensure the application is initialized (SupportProvider registers it)."
             )
 
         # Handle IPython introspection methods

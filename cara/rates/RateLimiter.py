@@ -128,7 +128,7 @@ class RateLimiter(RateLimit):
         which means the rate limiter silently allows roughly ``N x``
         the configured budget when callers slam the same key in
         parallel — exactly when rate limiting matters most (abuse,
-        scraping, account-creation bots).
+        automated clients, account-creation bots).
 
         ``ThrottleRequests`` (the framework's HTTP middleware) was
         already migrated to ``Cache.increment`` (atomic Redis

@@ -1,9 +1,8 @@
 """Direct-file module loader for tests.
 
-The services package's ``__init__.py`` chains imports through
-``packages.amazon.*`` which transitively triggers ``bootstrap.py``,
-which boots the entire framework — too heavy and brittle for unit
-tests of a single service.
+An app package's ``__init__.py`` often chains imports that transitively
+boot the entire framework — too heavy and brittle for unit tests of a
+single module.
 
 :func:`load_service` and :func:`load_contract` use
 ``importlib.util.spec_from_file_location`` to load a *single* module
@@ -22,10 +21,10 @@ from pathlib import Path
 from typing import Any
 
 
-def _find_services_root() -> Path:
-    """Locate the services project root.
+def _find_project_root() -> Path:
+    """Locate the app project root (the dir with ``pytest.ini`` + ``app/``).
 
-    ``cara`` is a symlink (``services/cara -> ../commons/cara/cara``)
+    ``cara`` is typically a symlink (``<app>/cara -> ../commons/cara/cara``)
     so ``Path(__file__).resolve()`` lands inside ``commons/`` and we'd
     look there instead. Walk up from the unresolved path until we hit
     a directory containing both ``pytest.ini`` and ``app``.
@@ -37,12 +36,23 @@ def _find_services_root() -> Path:
     from cara.exceptions import CaraException
 
     raise CaraException(
-        "Could not locate services root from "
+        "Could not locate the app project root from "
         f"{Path(__file__)!s}; expected pytest.ini + app/ on an ancestor."
     )
 
 
-_SERVICES_ROOT = _find_services_root()
+# Resolved lazily on first use so importing this module outside a project
+# tree (e.g. the framework's own standalone import) never fails — only the
+# file loaders below actually need the root.
+_PROJECT_ROOT: Path | None = None
+
+
+def _project_root() -> Path:
+    """Return the cached app project root, resolving it on first call."""
+    global _PROJECT_ROOT
+    if _PROJECT_ROOT is None:
+        _PROJECT_ROOT = _find_project_root()
+    return _PROJECT_ROOT
 
 
 def _load_file(dotted: str, file_path: Path) -> Any:
@@ -71,7 +81,7 @@ def load_service(name: str) -> type[Any]:
         PriceValidationService = load_service("PriceValidationService")
     """
     dotted = f"app.services.{name}"
-    path = _SERVICES_ROOT / "app" / "services" / f"{name}.py"
+    path = _project_root() / "app" / "services" / f"{name}.py"
     if not path.exists():
         raise FileNotFoundError(f"No service file at {path}")
     module = _load_file(dotted, path)
@@ -83,7 +93,7 @@ def load_service(name: str) -> type[Any]:
 def load_contract(name: str) -> type[Any]:
     """Load ``app.contracts.<name>`` and return the class of the same name."""
     dotted = f"app.contracts.{name}"
-    path = _SERVICES_ROOT / "app" / "contracts" / f"{name}.py"
+    path = _project_root() / "app" / "contracts" / f"{name}.py"
     if not path.exists():
         raise FileNotFoundError(f"No contract file at {path}")
     module = _load_file(dotted, path)
@@ -97,7 +107,7 @@ def stub_modules(*dotted_names: str) -> None:
 
     Useful when a service does ``from heavy.package import X`` and the
     package's ``__init__.py`` chains imports we don't want to execute
-    (e.g. ``app.support`` triggers config/Currency bootstrap).
+    (e.g. importing ``app.support`` triggers a heavy config bootstrap).
 
     Prefer :func:`stub_modules_scoped` in tests — that one cleans up
     after itself so test order doesn't matter.
@@ -125,7 +135,7 @@ def stub_modules_scoped(**stubs: Any) -> Iterator[dict]:
     Example::
 
         my_support = types.ModuleType("app.support")
-        my_support.SeasonalCalendar = FakeCalendar
+        my_support.SomeHelper = FakeHelper
         with stub_modules_scoped(**{"app.support": my_support}):
             mod = load_module("app.services.MyService")
             ...
@@ -155,7 +165,7 @@ def load_module(dotted: str) -> Any:
     Pass ``"app.support.SeasonalCalendar"`` to load that exact file.
     """
     rel_path = dotted.replace(".", "/") + ".py"
-    path = _SERVICES_ROOT / rel_path
+    path = _project_root() / rel_path
     if not path.exists():
         raise FileNotFoundError(f"No module file at {path}")
     return _load_file(dotted, path)

@@ -115,7 +115,7 @@ class QueueMonitor:
         # ROOT-CAUSE: the previous eviction sorted by dict KEY (which is
         # ``f"{class_name}_{ms_ts}"``), so alphabetisation buckets by
         # class name FIRST and only orders by timestamp WITHIN a class.
-        # A high-volume A-named class (``AggregatePricesJob``, 10/s) kept
+        # A high-volume A-named class (e.g. ``AggregateJob``, 10/s) kept
         # displacing rare Z-named rows (``WishlistPriceDropSweepJob``,
         # 1/min) from the visible history regardless of actual age —
         # the rare jobs effectively vanished from monitoring. Sorting by

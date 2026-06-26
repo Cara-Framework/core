@@ -1,16 +1,16 @@
 """``FilteredFormRequest`` — Cara FormRequest that knows about FilterSets.
 
-The handwritten ``ProductIndexRequest`` and friends used to look like:
+The handwritten ``ExampleIndexRequest`` and friends used to look like:
 
 ::
 
-    class ProductIndexRequest(FormRequest):
+    class ExampleIndexRequest(FormRequest):
         def rules(self) -> dict:
             return {
-                "sort_by": PRODUCT_SORTS.validation_rule(),
+                "sort_by": EXAMPLE_SORTS.validation_rule(),
                 "limit": "nullable|integer|between:1,100",
                 "offset": "nullable|integer|min:0",
-                **PRODUCT_FILTERS.validation_rules(),
+                **EXAMPLE_FILTERS.validation_rules(),
             }
 
 — same boilerplate on every list endpoint. ``FilteredFormRequest``
@@ -18,28 +18,28 @@ collapses that into class-level configuration:
 
 ::
 
-    class ProductIndexRequest(FilteredFormRequest):
-        filter_set = PRODUCT_FILTERS
-        sort_registry = PRODUCT_SORTS
-        relations = ("images", "current_price", "container", "details", "videos")
+    class ExampleIndexRequest(FilteredFormRequest):
+        filter_set = EXAMPLE_FILTERS
+        sort_registry = EXAMPLE_SORTS
+        relations = ("images", "price", "parent", "details", "videos")
         # ``extra_rules`` defaults to ``PAGING_RULES`` — opt out
         # by setting ``extra_rules = {}`` if your endpoint uses
         # cursor pagination instead.
 
-Category- or brand-scoped endpoints layer on dynamic forced state:
+Parent-scoped endpoints layer on dynamic forced state:
 
 ::
 
-    class CategoryProductsRequest(FilteredFormRequest):
-        filter_set = PRODUCT_FILTERS
-        sort_registry = PRODUCT_SORTS
+    class ScopedExampleRequest(FilteredFormRequest):
+        filter_set = EXAMPLE_FILTERS
+        sort_registry = EXAMPLE_SORTS
         default_sort = "trending"  # used when caller omits sort_by
 
         async def merge_filters(self, request, validated):
             # Inject the route param so the pipeline always scopes
-            # to the current category subtree, regardless of what
+            # to the current parent subtree, regardless of what
             # the user typed in the URL.
-            return {"category_id": int(request.param("category_id"))}
+            return {"parent_id": int(request.param("parent_id"))}
 
 That's the entire endpoint contract. The base class:
 
@@ -93,8 +93,8 @@ Relations = Union[RelationSet, Iterable[str]]
 PAGING_RULES: Mapping[str, str] = {
     "limit": "nullable|integer|between:1,100",
     "offset": "nullable|integer|between:0,100000",
-    # ``page`` / ``per_page`` are the storefront-facing names for
-    # offset-style paging — every storefront endpoint accepts them
+    # ``page`` / ``per_page`` are the client-facing names for
+    # offset-style paging — every client endpoint accepts them
     # alongside ``limit`` / ``offset``. Without explicit rules here
     # the framework would silently clamp garbage (``page=0``,
     # ``page=-1``, ``page=abc``, ``per_page=10000``, ``per_page=-5``)
@@ -117,7 +117,7 @@ class FilteredFormRequest(FormRequest):
 
     Class attributes:
         filter_set: The canonical ``FilterSet`` for this endpoint
-            (e.g. ``PRODUCT_FILTERS``). Required.
+            (e.g. ``EXAMPLE_FILTERS``). Required.
         sort_registry: Optional ``SortRegistry`` — when present the
             base class auto-adds the ``sort_by`` rule and threads
             the resolved name through the pipeline.
@@ -129,16 +129,16 @@ class FilteredFormRequest(FormRequest):
             ``FACET_CONTEXT`` instance.
         relations: Eager-load tuple applied to every pipeline built
             via ``request.pipeline(builder)``. Saves the controller
-            from repeating the same ``("images", "current_price",
+            from repeating the same ``("images", "price",
             ...)`` tuple at every call site.
         default_filters: Payload values applied with ``setdefault`` —
             user input always wins, but missing keys fall through
-            to these defaults. Used for things like a category page
+            to these defaults. Used for things like a list page
             wanting ``in_stock=true`` until the user explicitly
             unticks it.
         forced_filters: Payload values that *override* user input.
-            Used for endpoint-level scope locks (deal feed forces
-            ``on_sale=true``; admin product browser forces
+            Used for endpoint-level scope locks (a feed forces
+            ``featured=true``; an admin browser forces
             ``status=any``). Static dict — see ``merge_filters`` for
             dynamic injection.
         default_sort: Sort name applied when the user omits
@@ -157,7 +157,7 @@ class FilteredFormRequest(FormRequest):
     default_sort: ClassVar[str] = ""
 
     # Payload key that carries the sort name. Defaults to
-    # ``"sort_by"`` (storefront convention) but admin / legacy
+    # ``"sort_by"`` (client convention) but admin / legacy
     # surfaces sometimes ship ``"sort"``. Override at the class
     # level — the validation rule, the parsed lookup, and the
     # ``request.sort_name`` exposure all flow from this single
@@ -278,7 +278,7 @@ class FilteredFormRequest(FormRequest):
             validated["_sort_name"] = sort_name
 
         # Bind a pipeline factory so controllers can do
-        # ``request.pipeline(Product.active()).paginate(...)``
+        # ``request.pipeline(Model.active()).paginate(...)``
         # without re-plumbing the filter set / sort registry / eager.
         try:
             request.pipeline = self._pipeline_factory(parsed, sort_name)

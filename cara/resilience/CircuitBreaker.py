@@ -4,7 +4,7 @@ Standard three-state breaker — CLOSED → OPEN → HALF_OPEN — that
 short-circuits calls when an upstream is failing so a transient
 outage doesn't cascade into a thundering-herd retry storm. Generic,
 domain-free; apps wire their own thresholds + recovery timeouts per
-upstream (one breaker per Amazon API, eBay search, Stripe charge,
+upstream (one breaker per remote API, search backend, payment gateway,
 …).
 
 Usage:

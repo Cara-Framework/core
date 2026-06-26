@@ -199,11 +199,11 @@ class MakesIdempotentBase:
         identity is "what entity does this touch" rather than "what
         bag of optional kwargs was it dispatched with":
 
-            class ConsolidateProductJob(BaseJob):
-                idempotency_params = ("listing_id",)
+            class ConsolidateJob(BaseJob):
+                idempotency_params = ("record_id",)
 
-        Without the whitelist, ``ConsolidateProductJob(listing_id=42)``
-        and ``ConsolidateProductJob(listing_id=42, standardized_data={...})``
+        Without the whitelist, ``ConsolidateJob(record_id=42)``
+        and ``ConsolidateJob(record_id=42, extra_data={...})``
         produce different keys, both acquire different locks, and both
         write to the same product row concurrently — the exact race
         the lock exists to prevent.

@@ -25,7 +25,7 @@ threads.
 Note on ``ctx``: this base class declares ``ctx`` as ``Any`` rather
 than tying the framework to a specific shape. Apps define their own
 ``FilterContext`` (typically a small dataclass carrying SQL-alias
-expressions like ``product.id`` vs ``p.id``) and concrete filter
+expressions like ``entity.id`` vs ``p.id``) and concrete filter
 subclasses tighten the type hint at the override site.
 """
 
@@ -47,7 +47,6 @@ UI_CONTROL_TOGGLE: str = "toggle"
 UI_CONTROL_RANGE_SLIDER: str = "range_slider"
 UI_CONTROL_CHECKBOX_LIST: str = "checkbox_list"
 UI_CONTROL_RADIO_LIST: str = "radio_list"
-UI_CONTROL_ATTRIBUTE_MATRIX: str = "attribute_matrix"
 UI_CONTROL_HIDDEN: str = "hidden"
 
 
@@ -59,7 +58,6 @@ FILTER_GROUP_BRAND: str = "brand"  # brand selection
 FILTER_GROUP_PRICE: str = "price"  # price / on-sale
 FILTER_GROUP_AVAILABILITY: str = "availability"  # in-stock toggle
 FILTER_GROUP_QUALITY: str = "quality"  # condition, rating
-FILTER_GROUP_MARKETPLACE: str = "marketplace"
 FILTER_GROUP_SPECS: str = "specs"  # attributes
 
 
@@ -161,7 +159,7 @@ class Filter(ABC):
         * scalar filters → str / int / float / bool
         * multi-select  → ``list`` (deduped, sorted by the caller for cache stability)
         * range         → ``dict`` with ``"min"`` / ``"max"`` keys
-        * structured    → ``dict`` (e.g. AttributesFilter's per-attribute selections)
+        * structured    → ``dict`` (e.g. a structured filter's per-field selections)
         """
 
     @abstractmethod
@@ -175,7 +173,7 @@ class Filter(ABC):
 
         ``ctx`` is an opaque, app-defined SQL-alias context
         (typically a frozen dataclass carrying expressions like
-        ``product.id`` vs ``p.id``). Concrete subclasses tighten
+        ``entity.id`` vs ``p.id``). Concrete subclasses tighten
         the type hint at the override site.
         """
 
@@ -196,8 +194,7 @@ class Filter(ABC):
         Returns ``{payload_key: string}`` mapping — typically
         ``{self.name: <serialised value>}``. Range filters override
         to emit two keys (``price_min`` + ``price_max``); structured
-        filters (AttributesFilter) override to emit JSON-encoded
-        strings.
+        filters override to emit JSON-encoded strings.
 
         Round-trip contract: ``parse(encode_value(value))`` MUST
         produce a value that ``cache_key`` agrees is identical.
@@ -254,17 +251,16 @@ class Filter(ABC):
             return f"{{{';'.join(parts)}}}"
         return str(value).strip()
 
-    # Hard cap on multi-select payload length (brand_slugs, conditions,
-    # marketplaces, …). The storefront UIs that drive these filters
-    # advertise on the order of 5-50 options at most; values
-    # significantly above that come either from a malicious / scripted
-    # client or from a degenerate URL builder. A cap of 256 entries
-    # leaves comfortable headroom for legitimate use while preventing
-    # the soft-DOS path of a 10k-element ``ANY(%s)`` array — measured
-    # at ~390ms per request pre-cap, which is enough to chew workers
-    # under modest concurrency.
+    # Hard cap on multi-select payload length. The client UIs that
+    # drive these filters advertise on the order of 5-50 options at
+    # most; values significantly above that come either from a
+    # malicious / scripted client or from a degenerate URL builder.
+    # A cap of 256 entries leaves comfortable headroom for legitimate
+    # use while preventing the soft-DOS path of a 10k-element
+    # ``ANY(%s)`` array — measured at ~390ms per request pre-cap,
+    # which is enough to chew workers under modest concurrency.
     #
-    # ROOT-CAUSE NOTE (frontend_stress_log scenario 2, cycle 1).
+    # ROOT-CAUSE NOTE (stress-test scenario 2, cycle 1).
     _CSV_LIST_HARD_CAP = 256
 
     @staticmethod
@@ -273,7 +269,7 @@ class Filter(ABC):
 
         Centralises the pattern that used to exist as ``_csv_or_json``
         in three different services. Sorted output guarantees cache-
-        key stability regardless of how the storefront serialised
+        key stability regardless of how the client serialised
         the array.
 
         Output is hard-capped at ``_CSV_LIST_HARD_CAP`` entries to
@@ -313,7 +309,7 @@ class Filter(ABC):
 
     @staticmethod
     def _truthy(raw: Any) -> bool:
-        """Accept the storefront's truthy variants ("true", "1", True)."""
+        """Accept the client's truthy variants ("true", "1", True)."""
         if isinstance(raw, bool):
             return raw
         if isinstance(raw, (int, float)):
@@ -333,8 +329,8 @@ class Filter(ABC):
         """Parse a numeric filter value, returning None when inactive.
 
         Consolidates the try/except + bounds-check pattern that was
-        copy-pasted across RatingFilter, MinSavingsFilter,
-        PriceRangeFilter, MinDiscountFilter, and SearchRepository.
+        copy-pasted across several numeric filter subclasses and a
+        search repository.
 
         Defense-in-depth: ``Infinity`` / ``-Infinity`` / ``NaN`` are
         rejected even when the HTTP-layer ``numeric`` rule is also
@@ -360,9 +356,9 @@ class Filter(ABC):
         except (TypeError, ValueError):
             return None
         # ``math.isfinite`` rejects ``inf``, ``-inf``, and ``NaN``.
-        # ROOT-CAUSE NOTE (frontend_stress_log scenario 2, cycle 1):
+        # ROOT-CAUSE NOTE (stress-test scenario 2, cycle 1):
         # leaving these in let ``?price_max=Infinity`` bypass any
-        # upper bound and silently match the entire catalog.
+        # upper bound and silently match the entire dataset.
         if not math.isfinite(value):
             return None
         if min_val is not None and value < min_val:
@@ -395,13 +391,11 @@ class Filter(ABC):
 __all__ = [
     "FILTER_GROUP_AVAILABILITY",
     "FILTER_GROUP_BRAND",
-    "FILTER_GROUP_MARKETPLACE",
     "FILTER_GROUP_PRICE",
     "FILTER_GROUP_QUALITY",
     "FILTER_GROUP_SCOPE",
     "FILTER_GROUP_SPECS",
     "Filter",
-    "UI_CONTROL_ATTRIBUTE_MATRIX",
     "UI_CONTROL_CHECKBOX_LIST",
     "UI_CONTROL_HIDDEN",
     "UI_CONTROL_NUMERIC_INPUT",

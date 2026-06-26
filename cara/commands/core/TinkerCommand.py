@@ -83,7 +83,7 @@ class TinkerCommand(CommandBase):
             self._include_modules(include.split(","), shell)
 
         # Configure shell options
-        use_ipython = not self.option("no-ipython")
+        use_ipython = not self.option("no_ipython")
 
         self.info("🚀 Starting interactive shell...")
         if use_ipython:
@@ -347,7 +347,15 @@ class TinkerCommand(CommandBase):
         def model_stats():
             """Show statistics for all models."""
             try:
-                models = ["User", "Product", "Job"]
+                from cara.eloquent import Model
+
+                models = [
+                    name
+                    for name, obj in getattr(shell, "namespace", {}).items()
+                    if isinstance(obj, type)
+                    and issubclass(obj, Model)
+                    and obj is not Model
+                ]
                 stats = {}
 
                 table = Table(title="📊 Model Statistics")

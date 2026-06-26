@@ -29,7 +29,7 @@ class MailMessage:
         """Set sender address, with an optional display name.
 
         ``MailChannel`` (and Laravel-style callers) pass a name alongside
-        the address — ``message.from_(addr, "Cheapa")``. The previous
+        the address — ``message.from_(addr, "Example")``. The previous
         one-arg signature raised ``TypeError`` on every such call, which
         ``MailChannel.send`` swallowed into a silent ``return False`` so the
         notification never sent. When a name is given, encode an RFC 5322

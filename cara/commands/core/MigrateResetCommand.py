@@ -45,7 +45,7 @@ class MigrateResetCommand(CommandBase):
         if self._should_block_execution():
             return
 
-        if not force and not self._get_user_confirmation():
+        if not force and not self.option("confirm") and not self._get_user_confirmation():
             self.info("❌ Reset operation cancelled by user.")
             return
 
@@ -70,7 +70,7 @@ class MigrateResetCommand(CommandBase):
         downstream event / dispatch never fires — silently stalling the
         pipeline at the stage where the false hit occurs. Clearing these
         on reset keeps DB state and job idempotency consistent. URL-keyed
-        caches (e.g. scrape responses) don't collide and are kept.
+        caches (e.g. upstream responses) don't collide and are kept.
         """
         try:
             from cara.facades import Cache

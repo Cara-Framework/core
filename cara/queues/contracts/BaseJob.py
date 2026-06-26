@@ -62,10 +62,9 @@ class BaseJob(BaseQueueable):
             self.with_tag(tag)
         return self
 
-    # Public contract: four-tier priority. Mirrors the wire format
-    # used by the cheapa pipeline (``stage.priority`` routing keys).
-    # A subclass that wants a different queue layout can override
-    # ``_priority_queue_map``.
+    # Public contract: default four-tier priority→queue mapping.
+    # Override ``_PRIORITY_QUEUE_MAP`` in a subclass for a different
+    # queue layout.
     _PRIORITY_QUEUE_MAP: dict[str, str] = {
         "critical": "jobs-critical",
         "high": "jobs-priority",

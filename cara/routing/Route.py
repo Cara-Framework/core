@@ -262,9 +262,21 @@ class Route:
     ) -> Route:
         name = options.pop("name", None)
         prefix = options.pop("prefix", None)
+        # ``middleware=[...]`` is a first-class factory kwarg (parity with
+        # ``name=`` / ``prefix=``). Without popping + applying it here it
+        # would fall through to ``**options`` and be silently dropped by
+        # ``__init__`` — which is exactly the form the route generator
+        # emits (``Route.get(path, handler, middleware=[...], name=...)``).
+        # That bug meant every generator-produced per-route middleware
+        # (``throttle:ai`` on the AI endpoints, ``auth,admin`` on
+        # ``products.marketplace_data``, ``throttle:health`` on the probes)
+        # vanished at registration, so the routes ran unthrottled /
+        # unguarded. Applying it via ``route.middleware()`` keeps the
+        # group-prepends-before-route ordering intact (RouteGroup.routes).
+        middleware = options.pop("middleware", None)
         if prefix:
             url = cls._join_paths(prefix, url)
-        return cls(
+        route = cls(
             url=url,
             controller=controller,
             request_method=request_method,
@@ -273,6 +285,9 @@ class Route:
             controllers_locations=cls.controllers_locations,
             **options,
         )
+        if middleware:
+            route.middleware(middleware)
+        return route
 
     @classmethod
     def get(cls, url: str, controller: Any, **options) -> Route:
@@ -347,7 +362,7 @@ class Route:
 
         Example::
 
-            Route.api_resource("/products", "ProductController")
+            Route.api_resource("/posts", "PostController")
         """
         actions = ["index", "store", "show", "update", "destroy"]
         if only is not None:

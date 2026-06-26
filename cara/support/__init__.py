@@ -6,9 +6,12 @@ Collection class which offers a fluent, Laravel-style interface for working with
 collections.
 """
 
+from .Auth import optional_user_id, resolve_user
 from .BestEffort import best_effort, best_effort_ctx
+from .Coercion import safe_float, safe_int
 from .Collection import Collection, collect, flatten
 from .Console import HasColoredOutput
+from .MailSafety import DEFAULT_SMTP_PORT, SMTP_TIMEOUT_SECONDS, strip_header_crlf
 from .Currency import currency_symbol, default_currency, format_money
 from .Date import Date
 from .HtmlString import HtmlString
@@ -41,8 +44,10 @@ from .Time import parse_human_time, to_pendulum
 from .Modules import get_classes, modules
 from .Paths import base_path, paths, public_path, storage_path
 
+
 __all__ = [
     "Collection",
+    "DEFAULT_SMTP_PORT",
     "Date",
     "HasColoredOutput",
     "HtmlString",
@@ -57,6 +62,7 @@ __all__ = [
     "ProcessFailedException",
     "ProcessResult",
     "Retry",
+    "SMTP_TIMEOUT_SECONDS",
     "Sleep",
     "SupportProvider",
     "as_filepath",
@@ -79,13 +85,18 @@ __all__ = [
     "mask_token",
     "modularize",
     "modules",
+    "optional_user_id",
     "parse_human_time",
     "paths",
     "public_path",
+    "resolve_user",
     "safe_divide_decimal",
+    "safe_float",
+    "safe_int",
     "sanitize_text",
     "slugify",
     "storage_path",
+    "strip_header_crlf",
     "strip_tags",
     "to_decimal",
     "to_pendulum",

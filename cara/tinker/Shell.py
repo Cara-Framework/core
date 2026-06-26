@@ -278,24 +278,17 @@ class Shell:
         def app(service_name=None):
             """Get application instance or resolve service."""
             try:
-                # Try to get from bootstrap first
-                from bootstrap import application
+                # Resolve via the framework-native accessor — SupportProvider
+                # registers ``builtins.app`` at boot, so no app import needed.
+                import builtins
 
-                if service_name:
-                    return application.make(service_name)
-                return application
-            except ImportError:
-                try:
-                    # Check if app() is already available in builtins (from SupportProvider)
-                    import builtins
-
-                    if hasattr(builtins, "app"):
-                        app_instance = builtins.app()
-                        if service_name:
-                            return app_instance.make(service_name)
-                        return app_instance
-                except Exception as e:
-                    print(f"[tinker] swallowed app() resolution error: {e}")
+                if hasattr(builtins, "app"):
+                    app_instance = builtins.app()
+                    if service_name:
+                        return app_instance.make(service_name)
+                    return app_instance
+            except Exception as e:
+                print(f"[tinker] swallowed app() resolution error: {e}")
                 return None
 
         def config(key, default=None):

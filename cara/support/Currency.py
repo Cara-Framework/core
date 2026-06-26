@@ -1,14 +1,14 @@
 """Currency helpers — symbol-aware amount rendering + default fallback.
 
 Formatting prices as ``"$19.99"`` shows up across notifications, email
-templates, SEO copy, comparison narratives, and any other surface that
-echoes a numeric price back to a user. Hard-coding the ``$`` literal
-broke any time the product was sourced in a non-USD market: a notice
-saying "was $50, now $45" for an EUR product is wrong on its face.
+templates, SEO copy, and any other surface that echoes a numeric price
+back to a user. Hard-coding the ``$`` literal broke any time the amount
+was denominated in a non-USD currency: a notice saying "was $50, now
+$45" for an EUR amount is wrong on its face.
 
 This module wraps the symbol → format pipeline once so:
 
-* ``default_currency()`` resolves the storefront fallback from
+* ``default_currency()`` resolves the app-wide fallback from
   ``config("app.default_currency", "USD")`` and caches the result
   per-process (currency choice is set at boot, doesn't change at
   runtime).
@@ -37,11 +37,11 @@ from decimal import Decimal, InvalidOperation
 
 
 # Cache the default per-process so we don't pay a config lookup on
-# every product card render.
+# every render that formats a price.
 _DEFAULT_CACHE: str | None = None
 
-# Symbol map for the currencies cheapa apps actually serve. Adding a
-# new market = one entry here. Codes not listed render with the ISO
+# Symbol map for the currencies the app actually serves. Adding a new
+# currency = one entry here. Codes not listed render with the ISO
 # code as a prefix (``"PLN 50.00"``) — explicit and unambiguous.
 _CURRENCY_SYMBOLS = {
     "USD": "$",
@@ -76,7 +76,7 @@ _ZERO_DECIMAL_CURRENCIES = frozenset({
 
 
 def default_currency() -> str:
-    """Return the storefront fallback currency (``"USD"`` unless overridden).
+    """Return the app-wide fallback currency (``"USD"`` unless overridden).
 
     Reads ``config("app.default_currency")`` once and caches the result
     for the rest of the process lifetime. Currency choice is set via

@@ -185,7 +185,7 @@ class DatabaseManager:
     def commit_open_transactions(self, connection=None) -> None:
         """Commit every open transaction level on the context-pinned connection.
 
-        Sync pipeline jobs (``craft collect:products --sync``) run inline in
+        Sync pipeline jobs (``craft collect:items --sync``) run inline in
         one asyncio task. When an outer ``with db.transaction()`` stays pinned
         in the ContextVar registry, later ``with db.transaction()`` blocks
         become SAVEPOINTs — releasing them does not persist rows. A rollback

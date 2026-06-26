@@ -208,8 +208,8 @@ class QueryBuilder(ObservesEvents):
         followed by any reuse of the same builder silently carried
         ``LIMIT 1`` into the next query even though all WHERE /
         ORDER BY clauses were wiped.  The most visible symptom was
-        ``Product.primary_listing()``'s buy-box → cheapest fallback:
-        the first ``.first()`` wiped ``_wheres`` but left
+        a two-step "primary → fallback" lookup that reused one
+        builder: the first ``.first()`` wiped ``_wheres`` but left
         ``_limit = 1``, so the second query — which rebuilt its
         WHEREs via a fresh ``_base()`` call — accidentally kept the
         stale limit (harmless in that case but semantically wrong
@@ -337,14 +337,14 @@ class QueryBuilder(ObservesEvents):
         Can be used as a context manager or with a callback.
 
         Example (context manager):
-            with Product.query().transaction() as trx:
-                product = Product.create({...})
-                ProductImage.create({...})
+            with Model.query().transaction() as trx:
+                record = Model.create({...})
+                RelatedModel.create({...})
 
         Example (callback):
-            Product.query().transaction(lambda: [
-                Product.create({...}),
-                ProductImage.create({...}),
+            Model.query().transaction(lambda: [
+                Model.create({...}),
+                RelatedModel.create({...}),
             ])
         """
         if callback is None:
@@ -864,7 +864,7 @@ class QueryBuilder(ObservesEvents):
     #
     # These are thin wrappers around where_raw that build Postgres jsonb operator SQL
     # for the caller. Column names pass through unquoted (mirrors where_raw convention,
-    # since callers often use qualified names like "b.aliases" or "product.metadata").
+    # since callers often use qualified names like "b.aliases" or "t.metadata").
     # Path segments are single-quote escaped to prevent injection.
 
     @staticmethod
@@ -899,11 +899,11 @@ class QueryBuilder(ObservesEvents):
         Filter rows whose jsonb column contains the given value (Postgres @>).
 
         Example:
-            Brand.where_json_contains("aliases", ["Olay"])
-            # -> aliases @> '["Olay"]'::jsonb
+            Model.where_json_contains("aliases", ["foo"])
+            # -> aliases @> '["foo"]'::jsonb
 
-            Product.where_json_contains("metadata", {"active_deal": True})
-            # -> metadata @> '{"active_deal": true}'::jsonb
+            Model.where_json_contains("metadata", {"featured": True})
+            # -> metadata @> '{"featured": true}'::jsonb
         """
         return self.where_raw(f"{column} @> %s::jsonb", [json.dumps(value)])
 
@@ -921,7 +921,7 @@ class QueryBuilder(ObservesEvents):
 
         Arguments:
             column {string} -- The JSON column, e.g. "metadata".
-            path {string|list} -- Dotted string ("active_deal.savings_pct") or a list
+            path {string|list} -- Dotted string ("details.amount") or a list
                 of segments. Each segment is treated as a key name, not an array index.
             operator {string} -- SQL comparison operator ("=", ">=", "!=", "LIKE", ...).
             value -- The value to compare against (bound safely).
@@ -988,8 +988,8 @@ class QueryBuilder(ObservesEvents):
         Filter rows whose jsonb object contains the given top-level key (Postgres ?).
 
         Example:
-            q.where_json_key_exists("metadata", "active_deal")
-            # -> metadata ? %s    (bound: 'active_deal')
+            q.where_json_key_exists("metadata", "featured")
+            # -> metadata ? %s    (bound: 'featured')
 
         ``key`` is bound as a parameter — never interpolated — so user-supplied
         keys cannot escape out of the SQL string literal.
@@ -1738,8 +1738,8 @@ class QueryBuilder(ObservesEvents):
         Adds {relationship}_{column}_sum attribute to each model.
 
         Example:
-            Product.with_sum("prices", "price_min").get()
-            # product.prices_price_min_sum = 150.00
+            Model.with_sum("items", "amount").get()
+            # model.items_amount_sum = 150.00
         """
         self.select(*self._model.get_selects())
         return self._resolve_relation_descriptor(relationship).get_with_sum_query(
@@ -1752,8 +1752,8 @@ class QueryBuilder(ObservesEvents):
         Adds {relationship}_{column}_avg attribute to each model.
 
         Example:
-            Product.with_avg("prices", "price").get()
-            # product.prices_price_avg = 75.50
+            Model.with_avg("items", "amount").get()
+            # model.items_amount_avg = 75.50
         """
         self.select(*self._model.get_selects())
         return self._resolve_relation_descriptor(relationship).get_with_avg_query(
@@ -1766,8 +1766,8 @@ class QueryBuilder(ObservesEvents):
         Adds {relationship}_{column}_min attribute to each model.
 
         Example:
-            Product.with_min("prices", "price").get()
-            # product.prices_price_min = 10.00
+            Model.with_min("items", "amount").get()
+            # model.items_amount_min = 10.00
         """
         self.select(*self._model.get_selects())
         return self._resolve_relation_descriptor(relationship).get_with_min_query(
@@ -1780,8 +1780,8 @@ class QueryBuilder(ObservesEvents):
         Adds {relationship}_{column}_max attribute to each model.
 
         Example:
-            Product.with_max("prices", "price").get()
-            # product.prices_price_max = 200.00
+            Model.with_max("items", "amount").get()
+            # model.items_amount_max = 200.00
         """
         self.select(*self._model.get_selects())
         return self._resolve_relation_descriptor(relationship).get_with_max_query(
@@ -1794,7 +1794,7 @@ class QueryBuilder(ObservesEvents):
         Useful for debugging or side effects without breaking the chain.
 
         Example:
-            Product.active().tap(lambda q: print(q.to_sql())).get()
+            Model.active().tap(lambda q: print(q.to_sql())).get()
         """
         callback(self)
         return self
@@ -1805,7 +1805,7 @@ class QueryBuilder(ObservesEvents):
         Unlike tap(), pipe() returns what the callback returns.
 
         Example:
-            result = Product.active().pipe(lambda q: q.count() > 0)
+            result = Model.active().pipe(lambda q: q.count() > 0)
         """
         return callback(self)
 
@@ -2679,18 +2679,18 @@ class QueryBuilder(ObservesEvents):
                 or self._eager_relation.callback_eagers
             ) and hydrated_model:
                 # Normalize every registered eager spec — raw strings
-                # ("product"), dotted nested strings ("product.current_price",
-                # "product.container.marketplace"), lists/tuples, and dicts
-                # (``{"product": callback_fn}``) — into an ordered map of
+                # ("author"), dotted nested strings ("author.profile",
+                # "author.parent.owner"), lists/tuples, and dicts
+                # (``{"author": callback_fn}``) — into an ordered map of
                 # ``{top_level_relation: [nested_path_strings...]}``. The
                 # nested paths are passed to each relationship's
                 # ``get_related(..., eagers=[...])`` so the chain continues
                 # recursively: BelongsTo/HasMany/HasOne/BelongsToMany all
                 # call ``builder.with_(eagers)`` internally, which rebuilds
                 # the same EagerRelations → QueryBuilder pipeline for the
-                # next level. Laravel parity: eager-load `product.current_price`
-                # loads `product`, then eager-loads `current_price` on that
-                # Product model in a second query.
+                # next level. Laravel parity: eager-load `author.profile`
+                # loads `author`, then eager-loads `profile` on that
+                # related model in a second query.
                 normalized, callbacks = self._normalize_eager_specs(
                     self._eager_relation.get_relations()
                     + self._eager_relation.get_eagers()
@@ -2752,18 +2752,18 @@ class QueryBuilder(ObservesEvents):
 
         Accepted spec shapes::
 
-            "product"  # simple
+            "author"  # simple
 
-            "product.current_price"  # dotted
-            ["product", "product.images"]  # list/tuple
-            {"product": callback_fn}  # callback
-            {"product": ["current_price"]}  # list of nested
-            {"product.current_price": callback_fn}  # dotted+callback
+            "author.profile"  # dotted
+            ["author", "author.posts"]  # list/tuple
+            {"author": callback_fn}  # callback
+            {"author": ["profile"]}  # list of nested
+            {"author.profile": callback_fn}  # dotted+callback
 
         Duplicates are deduped, preserving insertion order. Calling
-        ``with_(["product", "product.images"])`` produces
-        ``{"product": ["images"]}`` so ``product`` is loaded once and
-        the nested ``images`` is chained via ``get_related(eagers=...)``.
+        ``with_(["author", "author.posts"])`` produces
+        ``{"author": ["posts"]}`` so ``author`` is loaded once and
+        the nested ``posts`` is chained via ``get_related(eagers=...)``.
         """
         relations = {}
         callbacks = {}
@@ -3051,7 +3051,7 @@ class QueryBuilder(ObservesEvents):
         call. Uses the qmark path so bindings are isolated from the SQL string.
 
         Example:
-            sql, params = Product.active().where("id", 5).dump_sql()
+            sql, params = Model.active().where("id", 5).dump_sql()
         """
         # to_qmark() has a side effect of resetting the builder; take a copy first
         # so subsequent calls on the original builder still work.
@@ -3069,9 +3069,9 @@ class QueryBuilder(ObservesEvents):
         """Print compiled SQL + bindings to stderr (dev-aid). Returns self for chaining.
 
         Example:
-            rows = Product.active().where("brand", "Olay").debug_sql().get()
-            # stderr: [SQL] SELECT ... FROM "product" WHERE "brand" = %s
-            # stderr: [BIND] ['Olay']
+            rows = Model.active().where("status", "active").debug_sql().get()
+            # stderr: [SQL] SELECT ... FROM "model" WHERE "status" = %s
+            # stderr: [BIND] ['active']
         """
         from cara.facades import Log
 
@@ -3223,10 +3223,10 @@ class QueryBuilder(ObservesEvents):
         Supports two calling conventions::
 
             # Simple boolean — callback receives (builder,)
-            query.when(filters.get("brand"), lambda q: q.where("brand", brand))
+            query.when(filters.get("status"), lambda q: q.where("status", status))
 
             # Value forwarding — callback receives (builder, value)
-            query.when(filters.get("brand"), lambda q, v: q.where("brand", v))
+            query.when(filters.get("status"), lambda q, v: q.where("status", v))
 
         The value-forwarding form avoids the need to close over variables
         or compute a flag + re-read the value separately.
@@ -3480,10 +3480,10 @@ class QueryBuilder(ObservesEvents):
 
         Example:
             def process(chunk):
-                for product in chunk:
-                    product.update({'processed': True})
+                for record in chunk:
+                    record.update({'processed': True})
 
-            Product.active().chunk(200, process)
+            Model.active().chunk(200, process)
         """
         page = 1
         while True:
@@ -3615,7 +3615,7 @@ class QueryBuilder(ObservesEvents):
             Number of affected rows
 
         Example:
-            Product.bulk_update([
+            Model.bulk_update([
                 {"id": 1, "price": 9.99, "status": "active"},
                 {"id": 2, "price": 19.99, "status": "inactive"},
             ], key="id", update_columns=["price", "status"])

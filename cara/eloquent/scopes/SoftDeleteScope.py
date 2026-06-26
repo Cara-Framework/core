@@ -102,12 +102,12 @@ class SoftDeleteScope(BaseScope):
         class-level dict, not a copy. ``remove_global_scope`` mutates that
         inner dict via ``del scopes[scope]``, which PERMANENTLY strips the
         soft-delete scope from the model class. The first ``.delete()`` on
-        a Product would soft-delete correctly, but every subsequent
-        ``.delete()`` on ANY Product instance/builder would fall through
+        a model would soft-delete correctly, but every subsequent
+        ``.delete()`` on ANY instance/builder would fall through
         to a hard DELETE — and with ``ON DELETE CASCADE`` FKs
-        (product_image, listing, etc.) the row and
-        its dependents were obliterated. DB diagnosis: after a dedup run,
-        Product rows 7/8/10/12 were completely missing (not even soft-
+        (child rows, related rows, etc.) the row and
+        its dependents were obliterated. DB diagnosis: after a bulk run,
+        rows 7/8/10/12 were completely missing (not even soft-
         deleted), while stale map references still pointed at winners.
 
         The recursion-protection claim was also incorrect: ``builder.update``

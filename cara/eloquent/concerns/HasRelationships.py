@@ -139,8 +139,8 @@ class HasRelationships:
 
         Laravel parity::
 
-            p = Product.find(1)
-            p.load("current_price", "images", "container.marketplace")
+            p = Model.find(1)
+            p.load("author", "tags", "parent.owner")
 
         Accepts dotted nested relations and list/dict specs (same shapes as
         ``Model.with_()``). Results are merged into ``self._relations`` so
@@ -169,8 +169,8 @@ class HasRelationships:
         """Laravel ``loadMissing``: only loads relationships not already loaded.
 
         Dotted nested specs are inspected segment-by-segment so a partial
-        match (``product.current_price`` when ``product`` is loaded but
-        ``current_price`` is not) still triggers the necessary child load.
+        match (``parent.author`` when ``parent`` is loaded but ``author``
+        is not) still triggers the necessary child load.
         """
         if not relations:
             return self

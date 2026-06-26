@@ -5,15 +5,15 @@ this middleware enforces a hard ceiling on *simultaneous* executions across
 all worker processes. When the ceiling is reached, the job is released
 back to the queue with an exponential backoff delay — no data is dropped.
 
-Use case: scrape.do allows 10 concurrent HTTP requests. Setting
+Use case: an upstream API allows 10 concurrent HTTP requests. Setting
 ``max_concurrent=10`` guarantees we never exceed that across all workers
 regardless of how many workers or threads are running.
 
 Usage:
-    class CollectProductJob(BaseJob):
+    class MyJob(BaseJob):
         def middleware(self):
             return [
-                ConcurrencyLimited(max_concurrent=10, key="scrapedo"),
+                ConcurrencyLimited(max_concurrent=10, key="upstream_api"),
             ]
 """
 
@@ -197,8 +197,9 @@ class ConcurrencyLimited:
     @staticmethod
     def _resolve_cache():
         try:
-            from bootstrap import application
+            import builtins
 
+            application = builtins.app()
             cache_service = application.make("cache")
             if cache_service is None:
                 return None

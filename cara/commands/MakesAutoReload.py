@@ -176,12 +176,12 @@ class MakesAutoReload:
         # Give current operation time to finish gracefully
         time.sleep(0.5)
 
-        # Release scrape executors / browser pools before purging modules —
-        # otherwise auto-reload leaks ThreadPoolExecutor semaphores every
-        # cycle (resource_tracker warnings on Python 3.14).
-        if hasattr(self, "_shutdown_scrape_resources"):
+        # Release pooled worker resources (executors / browser pools) before
+        # purging modules — otherwise auto-reload leaks ThreadPoolExecutor
+        # semaphores every cycle (resource_tracker warnings on Python 3.14).
+        if hasattr(self, "_shutdown_worker_resources"):
             try:
-                self._shutdown_scrape_resources()
+                self._shutdown_worker_resources()
             except Exception:
                 pass
 

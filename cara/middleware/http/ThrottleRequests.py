@@ -35,7 +35,7 @@ class ThrottleRequests(Middleware):
         ``MiddlewareParameterParser`` inspects ``__init__`` annotations
         and uses them to coerce raw route-middleware strings — so
         annotating ``limit: Optional[int]`` made the parser run
-        ``int("catalog")`` for ``throttle:catalog``, raise ``ValueError``,
+        ``int("api")`` for ``throttle:api``, raise ``ValueError``,
         and silently fall back to ``limit=None``. The route then
         behaved as if it had no throttle at all, and the parameterless
         ``ThrottleRequests`` global did the actual rate-limit work
@@ -117,7 +117,7 @@ class ThrottleRequests(Middleware):
             # while the framework's DefaultExceptionHandler emits
             # ``{"error", "type", ...}`` — same caller hitting an error
             # via two different paths saw two different shapes. The
-            # storefront / SDK now branches on ``type`` everywhere.
+            # client / SDK now branches on ``type`` everywhere.
             resp = Response(self.application)
             body = {
                 "error": "Too Many Requests",

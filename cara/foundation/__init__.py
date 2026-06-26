@@ -26,8 +26,9 @@ def resolve(abstract: Any, *args: Any) -> Any:
     Returns:
         The resolved instance.
     """
-    from bootstrap import application
+    import builtins
 
+    application = builtins.app()
     return application.make(abstract, *args)
 
 

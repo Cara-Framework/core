@@ -60,11 +60,11 @@ class IntCast(BaseCast):
 
     Preserves ``None`` as ``None`` — SQL NULL must not silently collapse to
     0, because nullable integer columns that happen to be foreign keys
-    (e.g. ``product_container.brand_id``) would then point at a
+    (e.g. ``child.parent_id``) would then point at a
     non-existent row and trip FK violations downstream. Previously this
     cast returned 0 for any non-numeric input including ``None``, which
-    caused ``ConsolidateProductRecordJob`` to insert ``brand_id=0`` and
-    hit ``fk_product_brand_id`` when the scraped brand failed to resolve.
+    caused a job to insert ``parent_id=0`` and
+    hit ``fk_child_parent_id`` when the referenced row failed to resolve.
     """
 
     def get(self, value):

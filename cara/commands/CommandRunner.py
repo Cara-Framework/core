@@ -74,7 +74,7 @@ class CommandRunner:
         types. The original tuple-membership check ``ann in (str, int, float, bool)``
         therefore failed for every PEP 563 command — every primitive parameter
         ended up in di_params, cli_params came back empty, and Typer rebuilt
-        the CLI from decorator options alone. For ``ai:flush --sync`` that
+        the CLI from decorator options alone. For ``search:reindex --synonyms-only`` that
         meant ``priority`` (declared ``"--priority"`` without ``=default``)
         was registered as a bool flag with default ``False``, so the handle
         body's ``if priority not in VALID_PRIORITIES`` rejected it as
@@ -112,7 +112,7 @@ class CommandRunner:
             if param.name in resolved_hints:
                 ann = resolved_hints[param.name]
             # Optional[T] / Union[T, None] should follow T's classification
-            # so ``marketplace: Optional[str] = None`` lands on the CLI side.
+            # so ``region: Optional[str] = None`` lands on the CLI side.
             try:
                 from typing import Union, get_args, get_origin
 
@@ -155,15 +155,12 @@ class CommandRunner:
         ``{name: help}`` and threw away ``type``, ``default``, and
         ``is_flag``. Anything declared without ``=default`` in the name
         string therefore landed in the legacy "bare flag → bool" branch
-        below, so e.g. ``DeduplicateCommand``'s ``{"name": "--container",
+        below, so e.g. a command declaring ``{"name": "--count",
         "type": int}`` was registered as a Typer bool flag and Click
-        rejected ``--container=170`` with "Option '--container' does not
-        take a value." Same silent damage for ``RefreshProductsCommand``
-        (``--limit/--min-age-hours/--marketplace/--zipcode``),
-        ``WishlistDropSweepCommand`` (``--batch-size/--max-batches/
-        --threshold``), ``PipelineTraceCommand`` (``--listing/--asin/
-        --min-age/--stage/--minutes``), and ``PriceAlertSweepCommand``
-        (``--batch-size/--max-batches/--product``) — every typed,
+        rejected ``--count=170`` with "Option '--count' does not
+        take a value." Same silent damage for any command with typed,
+        value-bearing options (``--limit/--min-age-hours/--batch-size/
+        --threshold/--stage/--minutes``, …) — every typed,
         value-bearing option without an inline default registered as a
         bool flag and rejected the value at the CLI. The fix preserves
         list-format metadata end-to-end and propagates the resolved
@@ -412,31 +409,7 @@ class CommandRunner:
             import time as _t
 
             try:
-                from app.support.Metrics import Metrics as _M
-
-                # Optionally push metrics to a gateway so short-lived CLI
-                # commands show up in Grafana. The autopush helper may not
-                # exist (it's opt-in); that's fine — the important thing
-                # is that _M is set so counters still work for scrape-
-                # based collection.
-                try:
-                    from app.support.Metrics import (
-                        start_pushgateway_autopush as _start_autopush,
-                    )
-
-                    try:
-                        from cara.configuration import config
-
-                        _push_interval = int(config("metrics.pushgateway_interval_s", 15))
-                    except (ImportError, RuntimeError, TypeError, ValueError):
-                        _push_interval = int(
-                            __import__("os").environ.get(
-                                "METRICS_PUSHGATEWAY_INTERVAL_S", "15"
-                            )
-                        )
-                    _start_autopush(interval_seconds=_push_interval)
-                except (ImportError, AttributeError):
-                    pass
+                from cara.observability.Metrics import MetricsBase as _M
             except (ImportError, RuntimeError):
                 _M = None  # type: ignore[assignment]
 

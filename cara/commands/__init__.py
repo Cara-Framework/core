@@ -10,14 +10,14 @@ from .CommandProvider import CommandProvider
 from ._optional import OptionalDependencyError, missing_optional
 
 __all__ = [
-    "MakesAutoReload",
-    "MakesBlockingCommand",
     "Command",
     "CommandBase",
     "CommandLoader",
     "CommandProvider",
     "CommandRegistry",
     "CommandRunner",
+    "MakesAutoReload",
+    "MakesBlockingCommand",
     "MakesReloadable",
     "OptionalDependencyError",
     "missing_optional",

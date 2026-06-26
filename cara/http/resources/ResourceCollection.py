@@ -10,9 +10,9 @@ class ResourceCollection:
 
     Usage::
 
-        return ResourceCollection(products, ProductResource).to_response(response)
+        return ResourceCollection(items, ExampleResource).to_response(response)
         # or via the class method shortcut:
-        return ProductResource.collection(products).to_response(response)
+        return ExampleResource.collection(items).to_response(response)
     """
 
     wrap = "data"

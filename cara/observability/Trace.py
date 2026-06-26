@@ -1,6 +1,6 @@
 """No-op-safe helpers over the OpenTelemetry trace API.
 
-Hot-path code (jobs, queue driver, scrape driver) imports from here so
+Hot-path code (jobs, queue driver, fetch driver) imports from here so
 it never has to guard the optional ``opentelemetry`` import itself.
 When OTel isn't installed OR tracing was never set up, every helper is
 a cheap no-op — a span context manager that yields ``None``, an inject

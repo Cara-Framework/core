@@ -16,7 +16,7 @@ never load-bearing.
 Config (cara ``config()`` with UPPER_SNAKE env fallback):
     wide_events.enabled         "1"/"true" to turn on        (default off)
     wide_events.clickhouse_url  HTTP endpoint                (default http://localhost:8123)
-    wide_events.db / .user / .password                       (default cheapa/cheapa/cheapa)
+    wide_events.db / .user / .password                       (default "default"/"default"/"")
     wide_events.batch_rows      flush at N rows              (default 200)
     wide_events.batch_secs      or after N seconds           (default 5)
 """
@@ -83,9 +83,9 @@ def _ensure_worker() -> None:
 
 def _run() -> None:
     url = _env("wide_events.clickhouse_url", "http://localhost:8123")
-    db = _env("wide_events.db", "cheapa")
-    user = _env("wide_events.user", "cheapa")
-    password = _env("wide_events.password", "cheapa")
+    db = _env("wide_events.db", "default")
+    user = _env("wide_events.user", "default")
+    password = _env("wide_events.password", "")
     insert_sql = f"INSERT INTO {db}.wide_events FORMAT JSONEachRow"
     try:
         flush_rows = int(_env("wide_events.batch_rows", "200") or 200)

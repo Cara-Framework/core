@@ -1,10 +1,10 @@
 """OpenAPI 3.0 spec generator for the Cara router.
 
 Walks the registered route table and emits a minimal but valid
-OpenAPI 3.0.3 JSON document on stdout (or to ``--out=path``). The
-storefront consumes this via ``openapi-typescript`` to produce a
-fully-typed fetch client — when the backend renames a field, the TS
-compiler in ``storefront/`` fails the next build instead of the user
+OpenAPI 3.0.3 JSON document on stdout (or to ``--out=path``). A
+TypeScript frontend can consume this (e.g. via ``openapi-typescript``)
+to produce a fully-typed fetch client — when the backend renames a
+field, the TS compiler fails the next build instead of the user
 discovering it at runtime.
 
 Scope
@@ -71,7 +71,7 @@ _PARAM_RE = re.compile(
     options={
         "--out=?": "Write the spec to this path instead of stdout.",
         "--pretty=?": "Indent the JSON output (default: true). Pass false for one-liner.",
-        "--title=?": "Spec ``info.title``. Defaults to ``Cheapa API``.",
+        "--title=?": "Spec ``info.title``. Defaults to ``API``.",
         "--version=?": "Spec ``info.version``. Defaults to ``0.0.0``.",
     },
 )
@@ -100,7 +100,7 @@ class RouteOpenApiCommand(CommandBase):
         spec: dict[str, Any] = {
             "openapi": "3.0.3",
             "info": {
-                "title": title or "Cheapa API",
+                "title": title or "API",
                 "version": version or "0.0.0",
                 "description": (
                     "Auto-generated from the Cara router. Run "
@@ -145,7 +145,7 @@ class RouteOpenApiCommand(CommandBase):
     def _build_path(cara_url: str) -> tuple[str, list[dict[str, Any]]]:
         """Convert a Cara URL into an OpenAPI path + parameter list.
 
-        ``/products/@id:int`` → ``("/products/{id}",
+        ``/items/@id:int`` → ``("/items/{id}",
         [{"name": "id", "in": "path", "required": True,
           "schema": {"type": "integer", "format": "int64"}}])``
         """
@@ -222,7 +222,7 @@ class RouteOpenApiCommand(CommandBase):
 
 
 def _first_segment(url: str) -> str:
-    """``/api/products/@id`` → ``products`` (used as the OpenAPI tag)."""
+    """``/api/items/@id`` → ``items`` (used as the OpenAPI tag)."""
     parts = [p for p in url.split("/") if p and not p.startswith("@")]
     if not parts:
         return "root"

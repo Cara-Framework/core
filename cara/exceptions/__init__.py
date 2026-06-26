@@ -46,6 +46,7 @@ from .types.application import (
     RouteRegistrationException as AppRouteRegistrationException,
 )
 from .types.authentication import (
+    AccountLockedException,
     ApiKeyInvalidException,
     AuthenticationConfigurationException,
     AuthenticationException,
@@ -189,6 +190,7 @@ from .types.validation import (
 from .types.websocket import WebSocketException
 
 __all__ = [
+    "AccountLockedException",
     "ApiKeyInvalidException",
     "AppException",
     "AppRouteRegistrationException",

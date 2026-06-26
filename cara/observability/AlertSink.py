@@ -17,9 +17,9 @@ Usage::
 
     AlertSink.fire(
         severity="critical",
-        title="Scrape failure rate >40%",
+        title="Error rate >40%",
         body="Last 5 min: 412/700 failed.",
-        dedup_key="scrape_failure_rate",
+        dedup_key="error_rate",
         context={"failure_rate": 0.41},
     )
 """

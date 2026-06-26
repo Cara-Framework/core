@@ -444,8 +444,8 @@ class AMQPDriver(HasColoredOutput, Queue):
         * When ``attempts >= max_attempts`` we DLX immediately so the
           DLQ recovery cron (``CleanDeadLetterJob``) can re-decide
           whether to revive the job manually.
-        * ``do_not_retry`` on the exception (e.g. ``PermanentScrapeError``
-          flagged by upstream scrape jobs) shortcuts straight to DLX —
+        * ``do_not_retry`` on the exception (e.g. a permanent fetch error
+          flagged by upstream jobs) shortcuts straight to DLX —
           no point burning the 1+5+30 seconds on a 404 that won't
           come back. Subclassing ``Exception`` with
           ``do_not_retry = True`` is the opt-in.
@@ -623,12 +623,12 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # Best-effort metric increment so dashboards / Prometheus
                 # alerts can fire when DLQ rate spikes.
                 try:
-                    from app.support.Metrics import Metrics  # type: ignore[attr-defined]
+                    from cara.observability.Metrics import MetricsBase as Metrics
 
                     Metrics.queue_jobs_dead_lettered_total.labels(
                         job=job.__class__.__name__,
                     ).inc()
-                except (ImportError, RuntimeError, AttributeError):
+                except Exception:
                     pass
 
             except Exception:
@@ -720,8 +720,8 @@ class AMQPDriver(HasColoredOutput, Queue):
         # without the TTL arg — the driver then dropped to passive
         # declare and consumers silently failed to register against
         # the queue, so the worker bound to ALL named queues but never
-        # received a single ``ValidateProductJob`` / ``ConsolidateProductJob``
-        # event. Explicit ``message_ttl=N`` in caller opts still wins.
+        # received a single job event. Explicit ``message_ttl=N`` in
+        # caller opts still wins.
         message_ttl = merged_opts.get("message_ttl")
         queue_args: dict[str, object] = {
             "x-dead-letter-exchange": (
@@ -826,7 +826,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # Bounded automatic retry. Pre-fix the consumer nacked
                 # to DLX on first failure, so every transient outage
                 # (network blip, DB pool exhaustion, broker
-                # reconnect, scrape.do 5xx) lost the job permanently.
+                # reconnect, upstream 5xx) lost the job permanently.
                 # The retry decision honours the job's own
                 # ``max_attempts`` knob (default 3), falls back to a
                 # per-class ``retry_backoff`` tuple, and only routes
@@ -1251,9 +1251,8 @@ class AMQPDriver(HasColoredOutput, Queue):
         # on every active declare against a queue that already existed
         # without the TTL arg — passive declare succeeded but consumer
         # binding silently failed, leaving the worker bound to every
-        # named queue while no ``Validate``/``Standardize``/``Consolidate``
-        # ProductJob ever reached it. Explicit ``message_ttl=N`` via
-        # caller opts still wins.
+        # named queue while no job event ever reached it. Explicit
+        # ``message_ttl=N`` via caller opts still wins.
         exchange_name = opts.get("exchange", "")
         message_ttl = opts.get("message_ttl")
 
@@ -1286,10 +1285,10 @@ class AMQPDriver(HasColoredOutput, Queue):
         # this fix). Cache lives on the pika channel; if the channel
         # is closed/recycled, the cache dies with it (correct
         # invalidation for free).
-        declared = getattr(self.channel, "_cheapa_declared_queues", None)
+        declared = getattr(self.channel, "_cara_declared_queues", None)
         if declared is None:
             declared = set()
-            self.channel._cheapa_declared_queues = declared
+            self.channel._cara_declared_queues = declared
 
         if queue_name not in declared:
             try:
@@ -1331,7 +1330,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # already-confirmed so subsequent publishes through
                 # the same channel don't re-declare it.
                 new_cache = {queue_name}
-                self.channel._cheapa_declared_queues = new_cache
+                self.channel._cara_declared_queues = new_cache
 
         # Serialize payload
         serializer = opts.get("serializer", "pickle")

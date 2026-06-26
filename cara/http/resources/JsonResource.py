@@ -22,23 +22,23 @@ class JsonResource:
 
     Usage::
 
-        class ProductResource(JsonResource):
+        class ExampleResource(JsonResource):
             def to_array(self, request) -> dict:
                 return {
                     "id": self.resource.public_id,
                     "title": self.resource.title,
                     "price": self.when(
-                        self.resource.current_price,
-                        lambda: float(self.resource.current_price.price_min),
+                        self.resource.price,
+                        lambda: float(self.resource.price.amount_min),
                     ),
                 }
 
 
         # Single resource
-        return ProductResource(product).to_response(response)
+        return ExampleResource(model).to_response(response)
 
         # Collection
-        return ProductResource.collection(products).to_response(response)
+        return ExampleResource.collection(items).to_response(response)
     """
 
     wrap = "data"
@@ -161,7 +161,7 @@ class JsonResource:
 
         This is the primary method controllers should call::
 
-            return ProductResource(product).to_response(response)
+            return ExampleResource(model).to_response(response)
         """
         payload = self.resolve()
         resp = response.json(payload, self._status, self._headers or None)

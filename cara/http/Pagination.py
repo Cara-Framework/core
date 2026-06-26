@@ -10,7 +10,7 @@ with::
     pg = Pagination.from_validated(validated, default_limit=24)
     # pg.limit, pg.offset, pg.page
 
-ROOT-CAUSE (scenario 3 cycle 1, frontend stress) — defense-in-depth
+ROOT-CAUSE (scenario 3 cycle 1, stress test) — defense-in-depth
 ``max_offset`` cap. Pre-fix, ``from_validated`` clamped ``limit`` to
 ``[1, max_limit]`` and floored ``offset`` at 0, but had no upper
 bound on ``offset``. Every well-known caller already validated offset
@@ -20,7 +20,7 @@ gets ``OFFSET 999_999_999`` which scans everything before the cursor".
 A new endpoint that copies an existing ``Pagination.from_validated``
 call without also adding offset validation is one diff away from a
 silent DB-scan vector. Adding a framework-level ``max_offset`` (default
-``1_000_000``, matching the storefront's ``paging_rules`` default)
+``1_000_000``, matching the app's ``paging_rules`` default)
 closes the gap as a belt-and-braces guard. Existing callers continue
 to validate at the FormRequest layer (loud 422) and now get a quiet
 clamp at the framework layer too. Page is recomputed from the
@@ -42,9 +42,9 @@ class Pagination:
     page: int
 
     MAX_LIMIT: int = 500
-    # Framework-level defense-in-depth cap. Matches
-    # ``app.support.Paging.paging_rules`` default so a Request that
-    # spreads ``paging_rules()`` and a controller that calls
+    # Framework-level defense-in-depth cap. Matches the app's
+    # ``paging_rules`` default so a Request that spreads
+    # ``paging_rules()`` and a controller that calls
     # ``Pagination.from_validated`` agree on the upper bound.
     MAX_OFFSET: int = 1_000_000
 
@@ -131,3 +131,33 @@ class Pagination:
             return int(raw)
         except (TypeError, ValueError):
             return default
+
+
+def paging_rules(
+    *,
+    min_limit: int = 1,
+    max_limit: int = 100,
+    max_offset: int = Pagination.MAX_OFFSET,
+) -> dict[str, str]:
+    """Return the canonical ``limit`` / ``offset`` validation rules.
+
+    The input-side twin of :meth:`Pagination.from_validated` (the
+    consumption-side clamp): a ``FormRequest`` spreads these rules to
+    reject bad paging input with a loud 422, and the controller then
+    clamps the validated values. Co-located so both share one source of
+    the ``max_offset`` bound (``Pagination.MAX_OFFSET``).
+
+    Both keys are ``nullable`` so an absent field passes through to the
+    controller's ``or DEFAULT`` fallback, but a present ``"abc"`` / ``-3``
+    fails validation with a 422.
+
+    Usage::
+
+        class SomeListRequest(FormRequest):
+            def rules(self) -> dict:
+                return {**paging_rules(max_limit=50), "period": "nullable|string"}
+    """
+    return {
+        "limit": f"nullable|integer|between:{min_limit},{max_limit}",
+        "offset": f"nullable|integer|min:0|max:{max_offset}",
+    }

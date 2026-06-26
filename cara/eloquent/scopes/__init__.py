@@ -11,13 +11,13 @@ from .UUIDPrimaryKeyScope import UUIDPrimaryKeyScope
 
 __all__ = [
     "BaseScope",
-    "scope",
-    "SoftDeleteScope",
     "MakesSoftDeletes",
-    "TenantScope",
     "MakesTenantScope",
     "MakesTimestamps",
-    "TimeStampsScope",
     "MakesUUIDPrimaryKey",
+    "SoftDeleteScope",
+    "TenantScope",
+    "TimeStampsScope",
     "UUIDPrimaryKeyScope",
+    "scope",
 ]

@@ -138,7 +138,7 @@ class DefaultExceptionHandler:
     # Machine-readable ``type`` tokens for the generic-error path
     # (exceptions that don't define ``to_dict``). The contract: every
     # error response carries a stable ``type`` string the client can
-    # branch on, so storefront / SDK code doesn't have to substring-
+    # branch on, so client / SDK code doesn't have to substring-
     # match human-readable ``error`` text. Typed framework exceptions
     # (``AuthorizationException`` et al.) keep emitting their own
     # specific ``type`` via their ``to_dict``; this default only
@@ -156,11 +156,11 @@ class DefaultExceptionHandler:
     def format_error(self, exception: Exception, status_code: int) -> dict[str, Any]:
         """Format general errors.
 
-        ROOT-CAUSE (frontend stress scenario 4 / cycle 1): debug-mode
+        ROOT-CAUSE (stress test scenario 4 / cycle 1): debug-mode
         404 / 422 / 401 / 403 responses were shipping ``file`` /
         ``line`` / full Python ``trace`` arrays in the JSON body. A
-        ``GET /api/products/<bad-slug>`` 404 returned an 8.6 KB
-        envelope with ``app/services/ProductDetailService.py:295``
+        ``GET /api/items/<bad-slug>`` 404 returned an 8.6 KB
+        envelope with ``app/services/ExampleService.py:295``
         and the entire framework call stack pasted in. Even with
         ``app.debug=True``, 4xx responses are EXPECTED application
         behaviour (validation failed / not found / forbidden) — the
@@ -171,7 +171,7 @@ class DefaultExceptionHandler:
         doesn't exist" response.
 
         New rule: ``type`` (the exception class name) stays for
-        debug-mode 4xx as a useful tag for the storefront's error UX,
+        debug-mode 4xx as a useful tag for the client's error UX,
         but ``file`` / ``line`` / ``trace`` are reserved for the 5xx
         path. Production behaviour is unchanged.
         """
@@ -187,7 +187,7 @@ class DefaultExceptionHandler:
             response = {"error": str(exception)}
 
         # Always include a machine-readable ``type``. Pre-fix the
-        # generic-error path emitted ``{error: "..."}`` only — storefront
+        # generic-error path emitted ``{error: "..."}`` only — client
         # / SDK code had to substring-match the human message to branch
         # on error class. ``type`` is now part of the response contract
         # everywhere, with 5xx-in-prod collapsed to ``internal_error``
@@ -197,7 +197,7 @@ class DefaultExceptionHandler:
             response["type"] = self._GENERIC_5XX_TYPE
         elif debug:
             # Debug + 5xx OR debug + 4xx: emit the raw class name as the
-            # ``type``. Useful tag for the storefront's error UX during
+            # ``type``. Useful tag for the client's error UX during
             # development; matches the existing debug-mode behaviour.
             response["type"] = exception.__class__.__name__
         else:
@@ -334,7 +334,7 @@ class DefaultExceptionHandler:
     def _security_headers_for_scope(self, scope: dict[str, Any]) -> list:
         """Build defense-in-depth header pairs for an error response.
 
-        ROOT-CAUSE (frontend stress scenario 7 / cycle 1): every error
+        ROOT-CAUSE (stress test scenario 7 / cycle 1): every error
         response (404 route-not-found, 405 method-not-allowed, 422
         validation, 401/403 auth, 5xx) bypassed the
         ``SecurityHeaders`` middleware because the exception path

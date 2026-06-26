@@ -38,12 +38,27 @@ def _register_sqlite_connection():
 
     QueryBuilder.__init__ calls ``DatabaseManager.validate_connection``
     even when we never execute SQL — we only assemble it via
-    ``to_sql()`` / ``to_qmark()``. A throwaway connection is enough."""
+    ``to_sql()`` / ``to_qmark()``. A throwaway connection is enough.
+
+    The DatabaseManager is a process-wide singleton, and
+    ``set_database_config`` REPLACES its whole connection registry +
+    default. Other suites share the same process — notably a fully
+    booted app whose ``app`` connection this would otherwise wipe for
+    the rest of the session. Snapshot the prior config and restore it on
+    teardown so this module's throwaway sqlite registry never leaks."""
     dm = DatabaseManager.get_instance()
+    _saved_config = dm._database_config
+    _saved_default = dm._default_connection
+    _saved_connections = dm._connections
     dm.set_database_config(
         "test_qb", {"test_qb": {"driver": "sqlite", "database": ":memory:"}}
     )
-    yield
+    try:
+        yield
+    finally:
+        dm._database_config = _saved_config
+        dm._default_connection = _saved_default
+        dm._connections = _saved_connections
 
 
 def _qb(table: str = "users") -> QueryBuilder:

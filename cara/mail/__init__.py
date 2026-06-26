@@ -6,8 +6,8 @@ from .MailProvider import MailProvider
 
 __all__ = [
     "Mail",
-    "Mailable",
     "MailMessage",
     "MailPendingSend",
     "MailProvider",
+    "Mailable",
 ]

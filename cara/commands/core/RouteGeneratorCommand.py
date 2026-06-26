@@ -280,7 +280,7 @@ class RouteGeneratorCommand(CommandBase):
             route_groups = self._generate_controller_route_groups(controller_info)
             if route_groups:
                 if route_type == "api":
-                    content_lines.append('    return Route.prefix("/api").routes(')
+                    content_lines.append('    return Route.prefix("/api/v1").routes(')
                     for group in route_groups:
                         content_lines.append(f"        {group}")
                     content_lines.append("    )")
@@ -298,7 +298,7 @@ class RouteGeneratorCommand(CommandBase):
         else:
             # Multiple controllers
             if route_type == "api":
-                content_lines.append('    return Route.prefix("/api").routes(')
+                content_lines.append('    return Route.prefix("/api/v1").routes(')
                 all_groups = []
                 for controller_info in route_data:
                     route_groups = self._generate_controller_route_groups(controller_info)
@@ -881,7 +881,7 @@ class RouteGeneratorCommand(CommandBase):
                 content_lines.append(f"    return {route_groups[0]}")
         else:
             # Multiple controllers - wrap in a common prefix
-            content_lines.append('    return Route.prefix("/api").routes(')
+            content_lines.append('    return Route.prefix("/api/v1").routes(')
 
             # Generate route groups for each controller
             all_groups = []
@@ -932,7 +932,12 @@ class RouteGeneratorCommand(CommandBase):
             if group_parts:
                 group_parts.append(f".middleware([{middleware_str}])")
             else:
-                group_parts.append(f"Route.middleware([{middleware_str}])")
+                # No prefix but group-level middleware: ``Route.middleware``
+                # is an INSTANCE method (chaining helper), not a classmethod,
+                # so ``Route.middleware([...])`` raises TypeError at import.
+                # Emit an empty-prefix ``RouteGroup`` instead — it applies
+                # the middleware and (empty prefix) leaves the URL untouched.
+                group_parts.append(f'Route.prefix("").middleware([{middleware_str}])')
 
         if not group_parts:
             group_parts.append("Route")

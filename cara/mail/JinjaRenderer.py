@@ -55,12 +55,12 @@ def _environment(application) -> jinja2.Environment:
     if env is None:
         env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(list(key)),
-            # HTML mail: autoescape so scraped product titles ("Sons & Co",
-            # "<3 deals") can't inject markup — mirrors the legacy engine's
+            # HTML mail: autoescape so user-supplied text ("Sons & Co",
+            # "<3 promos") can't inject markup — mirrors the legacy engine's
             # always-escape policy.
             autoescape=jinja2.select_autoescape(["html", "htm", "xml"]),
             # Tolerate a missing optional var inside an attribute chain
-            # (``product.image_url`` when ``product`` is absent) instead of
+            # (``record.image_url`` when ``record`` is absent) instead of
             # raising; templates still guard with ``| default`` / ``{% if %}``.
             undefined=jinja2.ChainableUndefined,
         )

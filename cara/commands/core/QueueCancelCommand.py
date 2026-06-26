@@ -28,12 +28,12 @@ class QueueCancelCommand(CommandBase):
 
     def handle(self):
         """Handle job cancellation with various filtering options."""
-        job_id = self.option("job-id")
-        receipt_id = self.option("receipt-id")
-        job_type = self.option("job-type")
+        job_id = self.option("job_id")
+        receipt_id = self.option("receipt_id")
+        job_type = self.option("job_type")
         cancel_all = self.option("all", False)
         force = self.option("force", False)
-        dry_run = self.option("dry-run", False)
+        dry_run = self.option("dry_run", False)
 
         # Validate options
         if not any([job_id, receipt_id, job_type, cancel_all]):

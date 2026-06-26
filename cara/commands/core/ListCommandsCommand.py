@@ -109,7 +109,7 @@ class ListCommandsCommand(CommandBase):
             filtered = self._filter_by_category(filtered, category_filter)
             self.info(f"🏷️  Filtered by category: '{category_filter}'")
 
-        if self.option("no-help"):
+        if self.option("no_help"):
             filtered = self._filter_without_help(filtered)
             self.info("❓ Showing only commands without help text")
 
