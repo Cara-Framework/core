@@ -85,36 +85,49 @@ class SoftDeleteScope(BaseScope):
         Restore soft-deleted records by clearing the deleted_at timestamp.
         Must remove the soft delete scope to allow restoring deleted records.
 
+        ``ignore_mass_assignment=True`` because ``deleted_at`` is framework-
+        managed and intentionally absent from ``__fillable__``; without it the
+        mass-assignment filter strips the column and the restore UPDATE
+        collapses to an empty no-op (the same failure mode documented on
+        ``_soft_delete_query``).
+
         See ``_with_trashed`` for the ``(model, builder)`` signature reason.
         """
         builder.remove_global_scope("_soft_delete", action="select")
-        return builder.update({self.deleted_at_column: None})
+        return builder.update({self.deleted_at_column: None}, ignore_mass_assignment=True)
 
     def _soft_delete_query(self, builder):
         """
-        Convert a DELETE query to a soft delete (UPDATE).
-        Sets deleted_at timestamp instead of deleting the record.
+        Convert a DELETE into a soft delete by mutating the builder in place
+        so ``to_qmark()`` compiles ``UPDATE <table> SET deleted_at = <ts>``
+        against the SAME ``WHERE`` clause instead of emitting a ``DELETE``.
 
-        ROOT CAUSE (2026-04-24): The previous implementation called
-        ``builder.remove_global_scope("_soft_delete_delete", action="delete")``
-        to "prevent infinite recursion". But QueryBuilder.__init__ assigns
-        ``self._global_scopes = model._global_scopes`` — a REFERENCE to the
-        class-level dict, not a copy. ``remove_global_scope`` mutates that
-        inner dict via ``del scopes[scope]``, which PERMANENTLY strips the
-        soft-delete scope from the model class. The first ``.delete()`` on
-        a model would soft-delete correctly, but every subsequent
-        ``.delete()`` on ANY instance/builder would fall through
-        to a hard DELETE — and with ``ON DELETE CASCADE`` FKs
-        (child rows, related rows, etc.) the row and
-        its dependents were obliterated. DB diagnosis: after a bulk run,
-        rows 7/8/10/12 were completely missing (not even soft-
-        deleted), while stale map references still pointed at winners.
+        This scope runs INSIDE ``QueryBuilder.to_qmark()`` (via
+        ``run_scopes()``) while the delete is being compiled, so it MUST be a
+        pure builder mutation — it must not execute a query or reset state.
 
-        The recursion-protection claim was also incorrect: ``builder.update``
-        sets ``_action="update"`` before running scopes, and the soft-delete
-        scope is registered on ``action="delete"``. The inner ``to_qmark()``
-        therefore looks up scopes for "update" and never re-enters this
-        callback. Leaving the scope registered is safe.
+        ROOT CAUSE (2026-06-27): the previous implementation returned
+        ``builder.update({deleted_at: ts})``, which silently degraded every
+        ``.delete()`` to a hard ``DELETE``. Two independent reasons, each
+        fatal on its own:
+
+          1. ``update()`` runs its payload through the model's mass-assignment
+             filter. ``deleted_at`` is framework-managed (like ``created_at`` /
+             ``updated_at``) and deliberately absent from every model's
+             ``__fillable__``, so the filter STRIPPED it. ``update()`` then saw
+             an empty change-set and returned a no-op WITHOUT setting
+             ``_action = "update"`` — leaving the builder on ``"delete"`` so it
+             fell straight through to a hard ``DELETE``. With ``ON DELETE
+             CASCADE`` children (``listing.product_id`` → product) a single
+             ``Product.delete()`` obliterated the product AND its listings.
+          2. ``update()`` SELF-EXECUTES and ``reset()``s the builder, both of
+             which corrupt the surrounding compile when run mid-``to_qmark()``.
+
+        Assigning ``_updates`` + ``set_action("update")`` directly is the
+        correct primitive: it bypasses mass-assignment (this is a framework
+        write, not user input) and leaves the builder in a compile-ready
+        UPDATE state for the outer ``to_qmark()`` to render and execute.
+        Pinned by ``tests/integration/test_soft_delete_contract.py``.
         """
         if hasattr(builder, "_model") and builder._model:
             timestamp = builder._model.get_new_datetime_string()
@@ -123,7 +136,10 @@ class SoftDeleteScope(BaseScope):
 
             timestamp = pendulum.now("UTC").to_datetime_string()
 
-        return builder.update({self.deleted_at_column: timestamp})
+        builder._updates = ()
+        builder.set_updates({self.deleted_at_column: timestamp})
+        builder.set_action("update")
+        return builder
 
     def _force_delete(self, model, builder):
         """
@@ -131,9 +147,7 @@ class SoftDeleteScope(BaseScope):
 
         See ``_with_trashed`` for the ``(model, builder)`` signature reason.
         """
-        # Remove soft delete scope to allow actual deletion
-        builder.remove_global_scope("_soft_delete", action="select")
-        builder.remove_global_scope("_soft_delete_delete", action="delete")
+        self._strip_soft_delete_scopes(builder)
         return builder.delete()
 
     def _force_delete_query(self, model, builder):
@@ -143,6 +157,26 @@ class SoftDeleteScope(BaseScope):
 
         See ``_with_trashed`` for the ``(model, builder)`` signature reason.
         """
-        builder.remove_global_scope("_soft_delete", action="select")
-        builder.remove_global_scope("_soft_delete_delete", action="delete")
+        self._strip_soft_delete_scopes(builder)
         return builder
+
+    @staticmethod
+    def _strip_soft_delete_scopes(builder) -> None:
+        """Drop the soft-delete select + delete scopes from ``builder`` so a
+        force-delete compiles to a real ``DELETE`` — WITHOUT mutating the
+        existing scope dicts in place.
+
+        ``remove_global_scope`` does ``del scopes[name]`` on the live
+        action-dict. We instead rebuild ``_global_scopes`` from fresh dicts:
+        that guarantees we never disturb a dict that could be aliased
+        elsewhere, and it keeps a force-delete from leaving the builder
+        unable to soft-delete on any later reuse. (Each top-level query
+        already gets its own builder, so this is defence in depth — but it
+        permanently retires the shared-dict mutation hazard rather than
+        relying on the per-builder copy in ``QueryBuilder.__init__``.)
+        """
+        drop = {"_soft_delete", "_soft_delete_delete"}
+        builder._global_scopes = {
+            action: {name: fn for name, fn in scopes.items() if name not in drop}
+            for action, scopes in builder._global_scopes.items()
+        }

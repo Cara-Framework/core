@@ -24,18 +24,29 @@ class MigrationFileManager:
 
     def load_migration_class(self, file_path):
         """Load migration class from file"""
+        # Local import to avoid a package-__init__ circular (this module is
+        # imported by ``cara.eloquent.migrations.__init__`` itself).
+        from cara.eloquent.migrations.Migration import Migration
+
         spec = importlib.util.spec_from_file_location("migration", file_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        # Find migration class in module
+        # Find the Migration subclass defined in this module. Identify it by
+        # ``issubclass(Migration)`` — NOT by duck-typing ``hasattr(attr,
+        # "up")``. Migration files do ``from cara.facades import DB`` (Log,
+        # etc.), and a facade is a *class* whose metaclass ``__getattr__``
+        # resolves attributes through the container, so ``hasattr(DB, "up")``
+        # round-trips to ``DatabaseManager`` (which has no ``up``) and logs a
+        # spurious "Facade resolution failed for 'DB'" ERROR — 90+ per migrate
+        # run, drowning real errors. ``issubclass`` only walks the MRO and
+        # never touches the facade's attributes.
         for attr_name in dir(module):
             attr = getattr(module, attr_name)
             if (
                 isinstance(attr, type)
-                and hasattr(attr, "up")
-                and hasattr(attr, "down")
-                and attr_name != "Migration"
+                and issubclass(attr, Migration)
+                and attr is not Migration
             ):
                 return attr
 

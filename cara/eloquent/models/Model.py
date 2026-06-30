@@ -498,6 +498,30 @@ class Model(
 
             self.append_passthrough(list(self.get_builder()._macros.keys()))
 
+            # Persist the global scopes + macros that the ``boot_Makes*`` hooks
+            # wired onto the boot-time builder back onto the model instance.
+            # ``QueryBuilder.__init__`` seeds every NEW builder from
+            # ``model._global_scopes`` / ``model._macros``, so this snapshot is
+            # what guarantees a model whose cached builder is later REBUILT
+            # still carries its soft-delete / timestamp / tenant / uuid scopes.
+            #
+            # Why the cache is lost: ``get_builder`` stashes the builder via
+            # ``self.builder = ...``, but ``Model.__setattr__`` routes any
+            # non-underscore attribute into ``__dirty_attributes__`` — which
+            # ``save()`` / ``create()`` ``.clear()`` and ``get_dirty_attributes()``
+            # ``.pop("builder")``. So the very first ``create()``/``save()``
+            # throws away the scoped builder, and the next ``get_builder()``
+            # would otherwise hand back a SCOPE-LESS builder — making
+            # ``instance.delete()`` hard-delete instead of soft-delete (the bug
+            # pinned by tests/integration/test_soft_delete_contract.py). Seeding
+            # from the model snapshot makes scope wiring survive the cache loss.
+            booted = self.get_builder()
+            self._global_scopes = {
+                action: dict(scopes)
+                for action, scopes in booted._global_scopes.items()
+            }
+            self._macros = dict(booted._macros)
+
     def append_passthrough(self, passthrough) -> Self:
         self.__passthrough__.update(passthrough)
         return self

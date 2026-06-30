@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cara.eloquent.connections.SQLiteConnection import SQLiteConnection
+from cara.eloquent.connections import SQLiteConnection
 
 # Resolve the *module* (not the class re-exported by the package __init__).
 PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")

@@ -152,7 +152,13 @@ class QueryBuilder(ObservesEvents):
         self._group_by = ()
         self._joins = ()
         self._having = ()
-        self._macros = {}
+        # Seed macros from the model so every REBUILT builder carries the
+        # convenience methods (with_trashed / only_trashed / restore /
+        # force_delete, …) registered during the model's boot — the macro
+        # counterpart of the ``_global_scopes`` copy above. The boot-time
+        # builder (model snapshots its macros only AFTER boot wiring finishes)
+        # and model-less builders fall back to empty.
+        self._macros = dict(getattr(model, "_macros", None) or {}) if model else {}
 
         self._aggregates = ()
         # Unions registered via union()/union_all() — list of (builder, all)
@@ -1290,7 +1296,7 @@ class QueryBuilder(ObservesEvents):
         elif hasattr(date, "to_date_string"):
             return date.to_date_string()
         elif hasattr(date, "strftime"):
-            return date.strftime("%m-%d-%Y")
+            return date.strftime("%Y-%m-%d")
 
     def where_date(self, column: str, date: str | datetime) -> Self:
         """

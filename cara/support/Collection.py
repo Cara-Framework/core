@@ -36,7 +36,14 @@ class Collection(Macroable):
         Args:
             items: The items to be collected. Defaults to an empty list if None.
         """
-        self._items = items or []
+        # ``items if items is not None else []`` — NOT ``items or []``. An empty
+        # DICT (or empty list) is falsy, so ``or []`` silently coerced a
+        # dict-backed Collection with no entries — exactly what ``group_by`` /
+        # ``key_by`` / ``map_with_keys`` return for an EMPTY source — into a
+        # ``[]``. ``.all()`` then handed back a list and ``.get(key)`` blew up
+        # with "'list' object has no attribute 'get'". Only ``None`` should
+        # default to ``[]``; an empty dict must stay a dict.
+        self._items = items if items is not None else []
         self.__appends__ = []
 
     def take(self, number: int):
@@ -856,7 +863,7 @@ class Collection(Macroable):
 
         return self.__class__(dict(zip(self._items, values, strict=False)))
 
-    def pluck(self, value, key=None):
+    def pluck(self, value, key=None, keep_nulls=True):
         """
         Retrieves all of the values for a given key.
 
@@ -865,6 +872,12 @@ class Collection(Macroable):
         Args:
             value: The key to pluck (supports dot notation and wildcards).
             key: The key to use as the collection key (also supports dot notation).
+            keep_nulls: When ``False`` (and no ``key`` is given), ``None`` values
+                are dropped from the resulting list. The polymorphic relations
+                (Morph* ``get_related``) rely on this to avoid feeding ``None``
+                ids into a ``where_in`` — without it those eager-loads raised
+                ``TypeError: pluck() got an unexpected keyword argument``.
+                Defaults to ``True`` so every existing caller is unaffected.
 
         Returns:
             A new Collection instance with the plucked values.
@@ -914,6 +927,9 @@ class Collection(Macroable):
                             attributes[item_key] = item_value
                 else:
                     attributes.append(item_value)
+
+        if not key and not keep_nulls:
+            attributes = [v for v in attributes if v is not None]
 
         return Collection(attributes)
 
@@ -2048,6 +2064,520 @@ class Collection(Macroable):
                 raise InvalidArgumentException(f"Item {item} is not of type {types}")
 
         return self
+
+    def key_by(self, key):
+        """
+        Re-keys the collection's items by the given key.
+
+        The key may be a dotted-path string or a callable receiving each item. When
+        two items resolve to the same key, the later item wins (overwrites the earlier).
+
+        Args:
+            key: The key to re-key by (callable or dotted-path string).
+
+        Returns:
+            A new dict-backed Collection instance keyed by the resolved value.
+        """
+        if callable(key):
+            resolver = key
+        else:
+
+            def resolver(item):
+                """Resolve the new key from ``item`` via dotted-path lookup."""
+                return self._data_get(item, key)
+
+        results = {}
+        for item in self:
+            results[resolver(item)] = item
+
+        return self.__class__(results)
+
+    def flat_map(self, callback):
+        """
+        Maps each item using the callback then collapses the result one level.
+
+        Args:
+            callback: The mapping callback applied to each item.
+
+        Returns:
+            A new Collection instance with the mapped-and-collapsed items.
+        """
+        self._check_is_callable(callback)
+        return self.map(callback).collapse()
+
+    def concat(self, items):
+        """
+        Appends the given items onto the end of the collection.
+
+        Unlike ``merge``, this never overwrites by key — values are always appended,
+        and a new Collection is returned (the original is left untouched).
+
+        Args:
+            items: The items to append (an iterable or another Collection).
+
+        Returns:
+            A new Collection instance with the concatenated items.
+        """
+        items = self.__get_items(items)
+
+        if isinstance(items, dict):
+            appended = list(items.values())
+        else:
+            appended = list(items)
+
+        return self.__class__(list(self._items) + appended)
+
+    def when_empty(self, callback, default=None):
+        """
+        Applies the callback when the collection is empty.
+
+        Args:
+            callback: The callback to apply if the collection is empty.
+            default: The callback to apply if the collection is not empty.
+
+        Returns:
+            The result of the chosen callback, or the collection instance.
+        """
+        return self.when(self.is_empty(), callback, default)
+
+    def when_not_empty(self, callback, default=None):
+        """
+        Applies the callback when the collection is not empty.
+
+        Args:
+            callback: The callback to apply if the collection is not empty.
+            default: The callback to apply if the collection is empty.
+
+        Returns:
+            The result of the chosen callback, or the collection instance.
+        """
+        return self.when(self.is_not_empty(), callback, default)
+
+    def has(self, *keys):
+        """
+        Determines whether the collection contains every given key or index.
+
+        Args:
+            *keys: The keys (dict-backed) or indices (list-backed) to check.
+
+        Returns:
+            True if every key/index exists, False otherwise.
+        """
+        for key in keys:
+            if isinstance(self._items, dict):
+                if key not in self._items:
+                    return False
+            else:
+                try:
+                    self._items[key]
+                except (IndexError, KeyError, TypeError):
+                    return False
+
+        return True
+
+    def value(self, key, default=None):
+        """
+        Retrieves the value at the given key from the first item.
+
+        Args:
+            key: The key to resolve (callable or dotted-path string).
+            default: The value to return if the collection is empty.
+
+        Returns:
+            The resolved value from the first item, or the default.
+        """
+        first = self.first()
+        if first is None:
+            return self._value(default)
+
+        return self._data_get(first, key, default)
+
+    @classmethod
+    def make(cls, items=None):
+        """
+        Creates a new Collection instance from the given items.
+
+        Args:
+            items: The items to wrap. Defaults to an empty collection if None.
+
+        Returns:
+            A new Collection instance.
+        """
+        return cls(items)
+
+    @classmethod
+    def wrap(cls, value):
+        """
+        Wraps the given value in a Collection if it is not already one.
+
+        A Collection is returned as-is, a list/tuple/dict is wrapped directly, and any
+        other scalar value is wrapped as a single-item collection.
+
+        Args:
+            value: The value to wrap.
+
+        Returns:
+            A Collection instance.
+        """
+        if isinstance(value, Collection):
+            return value
+
+        if isinstance(value, (list, tuple, dict)):
+            return cls(list(value) if isinstance(value, tuple) else value)
+
+        return cls([value])
+
+    @classmethod
+    def unwrap(cls, value):
+        """
+        Returns the underlying items of a Collection, or the value unchanged.
+
+        Args:
+            value: The value to unwrap.
+
+        Returns:
+            The underlying items if ``value`` is a Collection, otherwise ``value``.
+        """
+        if isinstance(value, Collection):
+            return value.all()
+
+        return value
+
+    def skip_while(self, callback):
+        """
+        Skips items while the callback returns truthy, keeping the rest.
+
+        Args:
+            callback: A callable predicate, or a value to compare each item against.
+
+        Returns:
+            A new Collection instance with the remaining items.
+        """
+        predicate = callback if callable(callback) else lambda item: item == callback
+
+        items = list(self._items)
+        index = 0
+        while index < len(items) and predicate(items[index]):
+            index += 1
+
+        return self.__class__(items[index:])
+
+    def skip_until(self, callback):
+        """
+        Skips items until the callback returns truthy, keeping the rest.
+
+        Args:
+            callback: A callable predicate, or a value to compare each item against.
+
+        Returns:
+            A new Collection instance with the remaining items.
+        """
+        predicate = callback if callable(callback) else lambda item: item == callback
+
+        items = list(self._items)
+        index = 0
+        while index < len(items) and not predicate(items[index]):
+            index += 1
+
+        return self.__class__(items[index:])
+
+    def take_while(self, callback):
+        """
+        Takes items while the callback returns truthy, stopping at the first failure.
+
+        Args:
+            callback: A callable predicate, or a value to compare each item against.
+
+        Returns:
+            A new Collection instance with the leading items that matched.
+        """
+        predicate = callback if callable(callback) else lambda item: item == callback
+
+        taken = []
+        for item in self._items:
+            if not predicate(item):
+                break
+            taken.append(item)
+
+        return self.__class__(taken)
+
+    def take_until(self, callback):
+        """
+        Takes items until the callback returns truthy, stopping at the first match.
+
+        Args:
+            callback: A callable predicate, or a value to compare each item against.
+
+        Returns:
+            A new Collection instance with the leading items before the match.
+        """
+        predicate = callback if callable(callback) else lambda item: item == callback
+
+        taken = []
+        for item in self._items:
+            if predicate(item):
+                break
+            taken.append(item)
+
+        return self.__class__(taken)
+
+    def chunk_while(self, callback):
+        """
+        Chunks the collection into runs while the callback holds for the run.
+
+        The callback receives ``(current_item, current_chunk)`` where ``current_chunk``
+        is the Collection built so far; a falsy result starts a new chunk.
+
+        Args:
+            callback: The callback deciding whether the item joins the current chunk.
+
+        Returns:
+            A new Collection of Collection chunks.
+        """
+        self._check_is_callable(callback)
+
+        chunks = []
+        current = None
+
+        for item in self._items:
+            if current is None:
+                current = [item]
+            elif callback(item, self.__class__(current)):
+                current.append(item)
+            else:
+                chunks.append(self.__class__(current))
+                current = [item]
+
+        if current is not None:
+            chunks.append(self.__class__(current))
+
+        return self.__class__(chunks)
+
+    def split(self, groups: int):
+        """
+        Splits the collection into the given number of roughly-even groups.
+
+        Earlier groups receive the extra items when the count does not divide evenly.
+
+        Args:
+            groups: The number of groups to split into.
+
+        Returns:
+            A new Collection of Collection groups.
+        """
+        return self.split_in(groups)
+
+    def sort_keys(self, desc=False):
+        """
+        Sorts a dict-backed collection by its keys.
+
+        For a list-backed collection this is a no-op copy (keys are positional).
+
+        Args:
+            desc: Whether to sort the keys in descending order.
+
+        Returns:
+            A new Collection instance sorted by key.
+        """
+        if isinstance(self._items, dict):
+            ordered = sorted(self._items.keys(), reverse=desc)
+            return self.__class__({key: self._items[key] for key in ordered})
+
+        return self.__class__(list(self._items))
+
+    def sort_keys_desc(self):
+        """
+        Sorts a dict-backed collection by its keys in descending order.
+
+        Returns:
+            A new Collection instance sorted by key descending.
+        """
+        return self.sort_keys(desc=True)
+
+    def after(self, value, strict=False):
+        """
+        Returns the item that comes after the first match of the given value.
+
+        Args:
+            value: A callable predicate, or a value to match against each item.
+            strict: Whether to use identity comparison for value matching.
+
+        Returns:
+            The following item, or None if there is no match or it is the last item.
+        """
+        items = list(self._items)
+
+        for index, item in enumerate(items):
+            if callable(value):
+                matched = value(item)
+            elif strict:
+                matched = item is value or item == value and type(item) is type(value)
+            else:
+                matched = item == value
+
+            if matched:
+                if index + 1 < len(items):
+                    return items[index + 1]
+                return None
+
+        return None
+
+    def before(self, value, strict=False):
+        """
+        Returns the item that comes before the first match of the given value.
+
+        Args:
+            value: A callable predicate, or a value to match against each item.
+            strict: Whether to use identity comparison for value matching.
+
+        Returns:
+            The preceding item, or None if there is no match or it is the first item.
+        """
+        items = list(self._items)
+
+        for index, item in enumerate(items):
+            if callable(value):
+                matched = value(item)
+            elif strict:
+                matched = item is value or item == value and type(item) is type(value)
+            else:
+                matched = item == value
+
+            if matched:
+                if index - 1 >= 0:
+                    return items[index - 1]
+                return None
+
+        return None
+
+    def contains_one_item(self):
+        """
+        Determines whether the collection holds exactly one item.
+
+        Returns:
+            True if the collection contains exactly one item, False otherwise.
+        """
+        return self.count() == 1
+
+    def replace(self, items):
+        """
+        Overlays the given items onto the collection by key.
+
+        For dict-backed collections, matching keys are overwritten; for list-backed
+        collections, matching positional indices are replaced.
+
+        Args:
+            items: The replacement items (a dict, iterable, or Collection).
+
+        Returns:
+            A new Collection instance with the overlaid items.
+        """
+        items = self.__get_items(items)
+
+        if isinstance(self._items, dict) or isinstance(items, dict):
+            base = dict(self._items) if isinstance(self._items, dict) else dict(enumerate(self._items))
+            overlay = items if isinstance(items, dict) else dict(enumerate(items))
+            base.update(overlay)
+            return self.__class__(base)
+
+        result = list(self._items)
+        for index, value in enumerate(items):
+            if index < len(result):
+                result[index] = value
+            else:
+                result.append(value)
+
+        return self.__class__(result)
+
+    def map_spread(self, callback):
+        """
+        Maps over the collection, spreading each item as positional arguments.
+
+        Each item is expected to be a tuple or list, unpacked into the callback.
+
+        Args:
+            callback: The callback receiving each item's elements as arguments.
+
+        Returns:
+            A new Collection instance with the mapped items.
+        """
+        self._check_is_callable(callback)
+        return self.__class__([callback(*item) for item in self._items])
+
+    def where_instance_of(self, types):
+        """
+        Keeps only the items that are instances of the given type(s).
+
+        Args:
+            types: A type or tuple of types to filter by.
+
+        Returns:
+            A new Collection instance with the matching items.
+        """
+        if not isinstance(types, tuple):
+            types = (types,)
+
+        return self.__class__([item for item in self._items if isinstance(item, types)])
+
+    def cross_join(self, *lists):
+        """
+        Produces the cartesian product of the collection with the given lists.
+
+        Args:
+            *lists: The iterables (or Collections) to cross-join with.
+
+        Returns:
+            A new Collection of lists, one per combination.
+        """
+        sequences = [list(self._items)]
+        for other in lists:
+            sequences.append(list(self.__get_items(other)))
+
+        results = [[]]
+        for sequence in sequences:
+            results = [combo + [item] for combo in results for item in sequence]
+
+        return self.__class__(results)
+
+    @classmethod
+    def range(cls, start, stop):
+        """
+        Creates a Collection of integers from start to stop inclusive.
+
+        Args:
+            start: The first value of the range.
+            stop: The last value of the range (inclusive).
+
+        Returns:
+            A new Collection instance of the integer range.
+        """
+        if start <= stop:
+            return cls(list(range(start, stop + 1)))
+
+        return cls(list(range(start, stop - 1, -1)))
+
+    @classmethod
+    def times(cls, number, callback=None):
+        """
+        Creates a Collection by invoking the callback ``number`` times.
+
+        The callback receives the 1-based iteration index. With no callback the
+        collection holds the integers ``1..number``.
+
+        Args:
+            number: The number of items to create.
+            callback: An optional callback receiving each 1-based index.
+
+        Returns:
+            A new Collection instance.
+        """
+        if number < 1:
+            return cls([])
+
+        if callback is None:
+            return cls(list(range(1, number + 1)))
+
+        return cls([callback(index) for index in range(1, number + 1)])
 
 
 def collect(iterable=None):

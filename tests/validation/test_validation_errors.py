@@ -1,6 +1,6 @@
 import json
 
-from cara.validation.ValidationErrors import ValidationErrors
+from cara.validation import ValidationErrors
 
 
 def _sample_errors():

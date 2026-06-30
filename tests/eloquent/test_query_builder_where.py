@@ -4,9 +4,9 @@ Each test pins behavior that was demonstrably broken before the fixes
 shipped alongside this file. Run with ``pytest tests/eloquent``.
 """
 
-from cara.eloquent.expressions.QueryExpression import QueryExpression
-from cara.eloquent.query.builders.WhereBuilder import WhereBuilder
-from cara.eloquent.query.grammars.SQLiteGrammar import SQLiteGrammar
+from cara.eloquent.expressions import QueryExpression
+from cara.eloquent.query.builders import WhereBuilder
+from cara.eloquent.query.grammars import SQLiteGrammar
 
 
 def _make_grammar(wheres):

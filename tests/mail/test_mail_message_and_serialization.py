@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from email.utils import parseaddr
 
-from cara.mail.Mailable import Mailable
-from cara.mail.MailMessage import MailMessage
+from cara.mail import Mailable
+from cara.mail import MailMessage
 
 
 class TestMailableSerialization:

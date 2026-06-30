@@ -33,7 +33,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cara.eloquent.scopes.SoftDeleteScope import SoftDeleteScope
+from cara.eloquent.scopes import SoftDeleteScope
 
 # ── Signature lock-in ────────────────────────────────────────────────
 
@@ -116,24 +116,35 @@ def test_restore_removes_scope_and_clears_deleted_at():
     scope._restore(None, builder)
 
     builder.remove_global_scope.assert_called_once_with("_soft_delete", action="select")
-    builder.update.assert_called_once_with({"deleted_at": None})
+    # ``ignore_mass_assignment=True`` is REQUIRED: ``deleted_at`` is framework-
+    # managed and absent from ``__fillable__``, so without it the mass-assignment
+    # filter strips the column and the restore UPDATE collapses to a no-op.
+    builder.update.assert_called_once_with(
+        {"deleted_at": None}, ignore_mass_assignment=True
+    )
 
 
 def test_force_delete_strips_both_scopes_and_deletes():
     scope = SoftDeleteScope()
     builder = _mock_builder()
+    # Real dicts so the NON-mutating rebuild can be observed. An unrelated
+    # scope proves only the soft-delete entries are dropped, not the rest.
+    builder._global_scopes = {
+        "select": {"_soft_delete": object(), "_tenant": object()},
+        "delete": {"_soft_delete_delete": object()},
+    }
 
     scope._force_delete(None, builder)
 
-    # Both the select-side scope AND the delete-override must go,
-    # otherwise the override would rewrite our hard DELETE into a
-    # soft UPDATE again.
-    assert builder.remove_global_scope.call_count == 2
-    calls = builder.remove_global_scope.call_args_list
-    assert calls[0].args[0] == "_soft_delete"
-    assert calls[0].kwargs == {"action": "select"}
-    assert calls[1].args[0] == "_soft_delete_delete"
-    assert calls[1].kwargs == {"action": "delete"}
+    # Both the select-side scope AND the delete-override must go, otherwise the
+    # override would rewrite our hard DELETE back into a soft UPDATE. Removal is
+    # non-destructive — _global_scopes is REBUILT, not mutated via
+    # remove_global_scope / del on the live dicts (so a shared/aliased dict can
+    # never be corrupted).
+    assert "_soft_delete" not in builder._global_scopes["select"]
+    assert "_soft_delete_delete" not in builder._global_scopes["delete"]
+    assert "_tenant" in builder._global_scopes["select"]
+    builder.remove_global_scope.assert_not_called()
     builder.delete.assert_called_once_with()
 
 
@@ -143,10 +154,16 @@ def test_force_delete_query_strips_scopes_and_returns_builder():
     ``Listing.force_delete_query().where(...).delete()``."""
     scope = SoftDeleteScope()
     builder = _mock_builder()
+    builder._global_scopes = {
+        "select": {"_soft_delete": object()},
+        "delete": {"_soft_delete_delete": object()},
+    }
 
     returned = scope._force_delete_query(None, builder)
 
-    assert builder.remove_global_scope.call_count == 2
+    assert "_soft_delete" not in builder._global_scopes["select"]
+    assert "_soft_delete_delete" not in builder._global_scopes["delete"]
+    builder.remove_global_scope.assert_not_called()
     builder.delete.assert_not_called()
     assert returned is builder
 
@@ -170,24 +187,31 @@ def test_custom_deleted_at_column_used_in_restore():
 
     scope._restore(None, builder)
 
-    builder.update.assert_called_once_with({"archived_at": None})
+    builder.update.assert_called_once_with(
+        {"archived_at": None}, ignore_mass_assignment=True
+    )
 
 
 # ── _soft_delete_query (the macro that stayed (builder)-only) ────────
 
 
-def test_soft_delete_query_calls_update_with_iso_timestamp():
-    """The non-macro callback that converts ``.delete()`` into a
-    soft delete. Must call ``builder.update`` with the configured
-    column set to an ISO-ish timestamp string."""
+def test_soft_delete_query_sets_update_payload_with_iso_timestamp():
+    """The non-macro callback that converts ``.delete()`` into a soft delete.
+    It must mutate the builder into an UPDATE that stamps the configured column
+    with an ISO-ish timestamp — WITHOUT calling ``builder.update()`` (which
+    would strip the framework-managed ``deleted_at`` via mass-assignment and
+    self-execute mid-compile, leaving the builder on a hard DELETE)."""
     scope = SoftDeleteScope()
     builder = _mock_builder()
     builder._model = None  # bypass model branch → uses pendulum fallback
 
     scope._soft_delete_query(builder)
 
-    builder.update.assert_called_once()
-    payload = builder.update.call_args.args[0]
+    # Pure builder mutation, not an executing update().
+    builder.update.assert_not_called()
+    builder.set_action.assert_called_once_with("update")
+    builder.set_updates.assert_called_once()
+    payload = builder.set_updates.call_args.args[0]
     assert "deleted_at" in payload
     stamp = payload["deleted_at"]
     # ISO-ish: YYYY-MM-DD HH:MM:SS (no Z because to_datetime_string)
@@ -207,7 +231,9 @@ def test_soft_delete_query_uses_model_timestamp_helper_when_available():
     scope._soft_delete_query(builder)
 
     fake_model.get_new_datetime_string.assert_called_once()
-    builder.update.assert_called_once_with({"deleted_at": "2026-05-23 12:00:00"})
+    builder.update.assert_not_called()
+    builder.set_updates.assert_called_once_with({"deleted_at": "2026-05-23 12:00:00"})
+    builder.set_action.assert_called_once_with("update")
 
 
 # ── End-to-end: dispatcher signature compatibility ───────────────────

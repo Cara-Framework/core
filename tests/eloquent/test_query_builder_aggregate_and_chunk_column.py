@@ -71,7 +71,7 @@ class TestSumEmptyResult:
         # The pre-fix docstring claimed "or 0 if no results" — wrong.
         # Pin the real Postgres-on-empty contract: SUM over zero rows
         # is NULL → psycopg → Python None.
-        from cara.eloquent.query.QueryBuilder import QueryBuilder
+        from cara.eloquent.query import QueryBuilder
 
         builder = _StubBuilder(aggregate_return=None)
         # Use ``unbound`` ``sum`` to bypass real connection init.
@@ -87,7 +87,7 @@ class TestSumEmptyResult:
     def test_returns_value_when_aggregate_returns_number(self) -> None:
         # Happy path sanity — the empty-result fix doesn't change
         # the non-empty contract.
-        from cara.eloquent.query.QueryBuilder import QueryBuilder
+        from cara.eloquent.query import QueryBuilder
 
         builder = _StubBuilder(aggregate_return=1234)
         result = QueryBuilder.sum(builder, "amount")  # type: ignore[arg-type]
@@ -97,7 +97,7 @@ class TestSumEmptyResult:
         # Document the canonical pattern the docstring now recommends:
         # ``float(qb.sum("…") or 0)``. Pin so the contract is testable
         # in CI alongside the implementation.
-        from cara.eloquent.query.QueryBuilder import QueryBuilder
+        from cara.eloquent.query import QueryBuilder
 
         builder = _StubBuilder(aggregate_return=None)
         result = QueryBuilder.sum(builder, "amount")  # type: ignore[arg-type]
@@ -109,7 +109,7 @@ class TestSumEmptyResult:
         # ``_run_aggregate("SUM", column)`` — a future refactor
         # that inlines the SQL or short-circuits the call should
         # be a deliberate, conscious change.
-        from cara.eloquent.query.QueryBuilder import QueryBuilder
+        from cara.eloquent.query import QueryBuilder
 
         builder = _StubBuilder(aggregate_return=42)
         QueryBuilder.sum(builder, "price")  # type: ignore[arg-type]
@@ -128,7 +128,7 @@ class TestChunkByIdColumnValidation:
     def setup_method(self) -> None:
         # We never call .get() — validation raises before the cursor
         # starts the first chunk. A bare object suffices as ``self``.
-        from cara.eloquent.query.QueryBuilder import QueryBuilder
+        from cara.eloquent.query import QueryBuilder
 
         self._call = QueryBuilder.chunk_by_id
 

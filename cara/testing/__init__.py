@@ -29,6 +29,7 @@ Quick start
             expect(reason).to_equal("Price is null")
 """
 
+from .DatabaseTransactions import DatabaseTransactions
 from .Expectation import Expectation, ExpectationFailed, expect
 from .TestCase import TestCase
 from . import FacadeSwap as facade_swap
@@ -53,6 +54,7 @@ from .Pest import describe, it
 
 __all__ = [
     "CacheFake",
+    "DatabaseTransactions",
     "EventFake",
     "Expectation",
     "ExpectationFailed",

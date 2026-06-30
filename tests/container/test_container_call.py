@@ -10,7 +10,7 @@ the dependency.
 
 from __future__ import annotations
 
-from cara.container.Container import Container
+from cara.container import Container
 
 
 class _Service:

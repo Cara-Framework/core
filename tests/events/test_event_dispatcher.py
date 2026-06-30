@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cara.events.Event import Event as EventDispatcher
+from cara.events import Event as EventDispatcher
 from cara.events.Event import EventSubscriber
 
 

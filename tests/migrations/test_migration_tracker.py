@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cara.eloquent.migrations.MigrationTracker import MigrationTracker
+from cara.eloquent.migrations import MigrationTracker
 from cara.exceptions import ORMException
 
 

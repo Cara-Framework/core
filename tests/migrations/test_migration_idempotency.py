@@ -31,7 +31,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
-from cara.eloquent.migrations.Migration import Migration
+from cara.eloquent.migrations import Migration
 
 # ── Test plumbing ────────────────────────────────────────────────────
 

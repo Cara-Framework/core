@@ -32,7 +32,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cara.eloquent.migrations.MigrationExecutor import MigrationExecutor
+from cara.eloquent.migrations import MigrationExecutor
 
 
 class _NoOpMigration:

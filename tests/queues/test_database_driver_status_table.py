@@ -16,7 +16,7 @@ import pytest
 
 
 def _make_driver(table="jobs", connection="pgsql"):
-    from cara.queues.drivers.DatabaseDriver import DatabaseDriver
+    from cara.queues.drivers import DatabaseDriver
 
     app = MagicMock()
     opts = {"table": table, "connection": connection}

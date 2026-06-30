@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
-from cara.events.Event import Event as EventDispatcher
+from cara.events import Event as EventDispatcher
 from cara.queues.contracts import ShouldQueue
 
 

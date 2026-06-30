@@ -29,10 +29,10 @@ from cara.exceptions import (
 from cara.exceptions.handlers.DefaultExceptionHandler import (
     DefaultExceptionHandler,
 )
-from cara.routing.Route import Route
-from cara.routing.RouteCompiler import RouteCompiler
-from cara.routing.RouteGroup import RouteGroup
-from cara.routing.Router import Router
+from cara.routing import Route
+from cara.routing import RouteCompiler
+from cara.routing import RouteGroup
+from cara.routing import Router
 
 # ── Helpers ──────────────────────────────────────────────────────────
 

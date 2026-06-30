@@ -16,7 +16,7 @@ import pytest
 
 
 def _make_driver():
-    from cara.queues.drivers.AsyncDriver import AsyncDriver
+    from cara.queues.drivers import AsyncDriver
 
     app = MagicMock()
     app.call = None  # no container-call path

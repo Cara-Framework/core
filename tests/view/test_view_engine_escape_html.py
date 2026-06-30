@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import pytest
 
-from cara.view.ViewEngine import ViewEngine
+from cara.view import ViewEngine
 
 
 @pytest.fixture

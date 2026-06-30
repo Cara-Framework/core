@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cara.middleware.http.HandleCors import HandleCors
+from cara.middleware.http import HandleCors
 
 
 class _FakeResponse:

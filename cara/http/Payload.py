@@ -13,7 +13,15 @@ Generic request-payload utilities every Cara app reuses:
 from __future__ import annotations
 
 from cara.exceptions.types.validation import ValidationException
-from cara.facades import Validation
+
+# Direct submodule import (NOT ``from cara.facades import Validation``): this
+# module is pulled in while ``cara.facades.__init__`` is still mid-load (a
+# circular import via the HTTP stack), and at that point ``cara.facades.Validation``
+# is the half-bound SUBMODULE, not the Facade class — so ``Validation.make`` blew
+# up with ``module 'cara.facades.Validation' has no attribute 'make'`` on every
+# ``validated_query_int`` call (recent-drops + many GET endpoints), spamming
+# tracebacks. Importing the class straight from the submodule is order-independent.
+from cara.facades.Validation import Validation
 from cara.http.request.Request import Request
 
 

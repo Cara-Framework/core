@@ -35,6 +35,17 @@ class EventFake:
     async def emit(self, event: Any, payload: dict | None = None) -> None:
         await self.dispatch(event, payload)
 
+    def fire_sync(self, event: Any, payload: dict | None = None) -> None:
+        # Mirrors the real ``Event.fire_sync`` (commons/cara/cara/events/
+        # Event.py) — a SYNCHRONOUS entry point used by code running
+        # outside an event loop (e.g. service methods invoked via
+        # ExecutionContext.run_in_thread). Sync code does
+        # ``Event.fire_sync(evt)`` with no await; the fake must expose a
+        # plain (non-coroutine) method or those callers crash trying to
+        # await ``None`` / pass a coroutine to a sync caller. Records the
+        # event the same way ``dispatch`` does so assertions are uniform.
+        self.events.append(DispatchedEvent(event=event, payload=payload))
+
     def listen(self, *args: Any, **kwargs: Any) -> None:
         # No-op in tests — listeners aren't invoked under the fake.
         return None

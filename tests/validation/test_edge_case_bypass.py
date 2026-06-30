@@ -4,8 +4,8 @@ Each test pins a specific bypass that was reachable before the fix
 shipped alongside this file.
 """
 
-from cara.validation.rules.InRule import InRule
-from cara.validation.rules.RequiredRule import RequiredRule
+from cara.validation.rules import InRule
+from cara.validation.rules import RequiredRule
 
 # ── RequiredRule: must reject empty collections ─────────────────────
 

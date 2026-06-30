@@ -29,7 +29,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cara.notifications.channels.SlackChannel import SlackChannel
+from cara.notifications.channels import SlackChannel
 
 
 @pytest.fixture

@@ -34,7 +34,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cara.eloquent.connections.PostgresConnection import PostgresConnection
+from cara.eloquent.connections import PostgresConnection
 
 
 def _make_conn() -> PostgresConnection:

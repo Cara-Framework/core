@@ -280,7 +280,7 @@ class RouteGeneratorCommand(CommandBase):
             route_groups = self._generate_controller_route_groups(controller_info)
             if route_groups:
                 if route_type == "api":
-                    content_lines.append('    return Route.prefix("/api/v1").routes(')
+                    content_lines.append('    return Route.prefix("/api").routes(')
                     for group in route_groups:
                         content_lines.append(f"        {group}")
                     content_lines.append("    )")
@@ -298,7 +298,7 @@ class RouteGeneratorCommand(CommandBase):
         else:
             # Multiple controllers
             if route_type == "api":
-                content_lines.append('    return Route.prefix("/api/v1").routes(')
+                content_lines.append('    return Route.prefix("/api").routes(')
                 all_groups = []
                 for controller_info in route_data:
                     route_groups = self._generate_controller_route_groups(controller_info)
@@ -881,7 +881,7 @@ class RouteGeneratorCommand(CommandBase):
                 content_lines.append(f"    return {route_groups[0]}")
         else:
             # Multiple controllers - wrap in a common prefix
-            content_lines.append('    return Route.prefix("/api/v1").routes(')
+            content_lines.append('    return Route.prefix("/api").routes(')
 
             # Generate route groups for each controller
             all_groups = []

@@ -1,6 +1,6 @@
-from cara.validation.Validation import Validation
-from cara.validation.rules.AlphanumRule import AlphanumRule
-from cara.validation.rules.UuidRule import UuidRule
+from cara.validation import Validation
+from cara.validation.rules import AlphanumRule
+from cara.validation.rules import UuidRule
 
 
 def test_alphanum_rule_valid():

@@ -1,4 +1,4 @@
-from cara.validation.MessageFormatter import MessageFormatter
+from cara.validation import MessageFormatter
 
 
 def test_format_message_replaces_attribute():

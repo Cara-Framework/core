@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 from loguru import logger as _loguru_logger
 
-from cara.logging.Logger import Logger
+from cara.logging import Logger
 
 
 class TestInterpolateHelper:

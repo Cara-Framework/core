@@ -53,7 +53,7 @@ from cara.exceptions import BadRequestException
 
 class TestLocationCRLF:
     def setup_method(self):
-        from cara.http.response.HeaderManager import HeaderManager
+        from cara.http.response import HeaderManager
 
         # HeaderManager wraps a list-of-tuples header store; pass a
         # MagicMock with the same surface so we don't drag in the
@@ -102,7 +102,7 @@ class TestUploadedFileNullByte:
     def _file(self):
         # Minimal UploadedFile clone — UploadedFile.__init__ pulls in
         # framework facades we don't need for the null-byte guard.
-        from cara.http.request.UploadedFile import UploadedFile
+        from cara.http.request import UploadedFile
 
         f = UploadedFile.__new__(UploadedFile)
         f.content = b"payload bytes"
@@ -174,7 +174,7 @@ class TestSSEMultilineData:
         # The formatter is a private helper on StreamingResponse.
         # Bypass __init__ — we only need the static-ish formatter
         # (it reads no instance state past ``self``).
-        from cara.http.response.StreamingResponse import StreamingResponse
+        from cara.http.response import StreamingResponse
 
         sr = StreamingResponse.__new__(StreamingResponse)
         return sr._format_sse_event(event)
