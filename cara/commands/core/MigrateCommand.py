@@ -148,3 +148,185 @@ class MigrateCommand(CommandBase):
         self.info("\n" + "=" * 60)
         self.info("No actual changes were made to the database.")
 
+    def _show_sql_preview(self, migration_manager: Migration, pending: list):
+        """Print the SQL each pending migration WOULD run, without touching the DB.
+
+        Each migration is loaded and instantiated in DRY mode: the base
+        ``Migration.__init__`` builds ``self.schema = Schema(dry=True, ...)``
+        so every schema statement the migration's ``up()`` produces is
+        *compiled* and routed through ``SchemaQueryExecutor.execute_query``,
+        which — when ``dry`` is set — STORES the SQL and returns it instead of
+        opening a connection / executing. No DB writes happen.
+
+        ``SchemaQueryExecutor`` only retains the *last* statement in ``_sql``,
+        so we wrap the executor's ``execute_query`` / ``get_query_result`` to
+        record every statement in order, giving a complete per-migration
+        preview (a single CREATE TABLE migration emits the table DDL plus its
+        index/constraint statements).
+        """
+        connection = self.option("connection") or "default"
+        directory = self.option("directory") or paths("migrations")
+        schema = self.option("schema")
+
+        self.info("SQL that would be executed:")
+        self.info("=" * 60)
+
+        for index, file_path in enumerate(pending, 1):
+            migration_name = migration_manager.file_manager.get_migration_name_from_file(
+                file_path
+            )
+            self.info(f"\n{index}. Migration: {migration_name}")
+            self.info("-" * 40)
+
+            statements = self._collect_migration_sql(
+                migration_manager,
+                file_path,
+                connection=connection,
+                directory=directory,
+                schema=schema,
+            )
+
+            if statements:
+                for sql in statements:
+                    # Terminate each statement so the preview reads as a
+                    # runnable script; the dry executor stores them bare.
+                    self.line(f"{sql.rstrip(';')};")
+            else:
+                self.info("-- (no SQL statements compiled for this migration)")
+
+        self.info("\n" + "=" * 60)
+        self.info("No actual changes were made to the database.")
+
+    def _collect_migration_sql(
+        self,
+        migration_manager: Migration,
+        file_path: str,
+        connection: str,
+        directory: str | None,
+        schema: str | None,
+    ) -> list[str]:
+        """Build a single migration in dry mode and collect the SQL it emits.
+
+        Returns the ordered list of SQL statements ``up()`` would execute.
+        Never opens a write connection — the dry executor short-circuits
+        before touching the pool.
+        """
+        statements: list[str] = []
+
+        try:
+            migration_class = migration_manager.file_manager.load_migration_class(
+                file_path
+            )
+            # Instantiate in dry mode: this wires ``self.schema`` to a
+            # ``Schema(dry=True)`` whose executor collects (never runs) SQL.
+            migration_instance = migration_class(
+                connection=connection,
+                dry=True,
+                command_class=self,
+                migration_directory=directory,
+                schema=schema,
+            )
+
+            self._install_sql_recorder(migration_instance.schema, statements)
+            # Some migrations bypass ``self.schema`` and run raw SQL straight
+            # through the ``DB`` facade (``DB.statement(...)``), which has NO
+            # dry-run awareness and would EXECUTE against the live database
+            # during a preview. Guard the facade's mutating methods for the
+            # duration of ``up()`` so they record + skip instead of running.
+            restore_db = self._install_db_facade_guard(statements)
+            try:
+                migration_instance.up()
+            finally:
+                restore_db()
+        except Exception as exc:  # noqa: BLE001 — preview must not abort the loop
+            self.warning(f"   Could not compile SQL for this migration: {exc}")
+
+        return statements
+
+    @staticmethod
+    def _install_db_facade_guard(sink: list[str]):
+        """Patch the bound ``DB`` manager so raw SQL is recorded, not executed.
+
+        Migrations that call ``DB.statement(...)`` / ``DB.select(...)`` resolve
+        to the singleton ``DatabaseManager``. During a dry preview we must NOT
+        touch the database, so we temporarily replace its mutating methods with
+        recorders that append the SQL to ``sink`` and return a benign value.
+        Returns a ``restore()`` callable that puts the originals back — always
+        call it in a ``finally``.
+        """
+        try:
+            from cara.eloquent.DatabaseManager import DatabaseManager
+
+            db = DatabaseManager.get_instance()
+        except Exception:  # noqa: BLE001 — no DB manager → nothing to guard
+            return lambda: None
+
+        guarded = ("statement", "select", "select_one")
+        originals = {name: getattr(db, name, None) for name in guarded}
+
+        def _record(sql) -> None:
+            if isinstance(sql, (list, tuple)):
+                for one in sql:
+                    if one and str(one).strip():
+                        sink.append(str(one).strip())
+            elif sql and str(sql).strip():
+                sink.append(str(sql).strip())
+
+        def _make_recorder(returns):
+            def _recorder(query, bindings=(), connection=None):
+                _record(query)
+                return returns
+            return _recorder
+
+        # statement → bool-ish; select → rows; select_one → row.
+        setattr(db, "statement", _make_recorder(True))
+        setattr(db, "select", _make_recorder([]))
+        setattr(db, "select_one", _make_recorder(None))
+
+        def restore() -> None:
+            for name, original in originals.items():
+                if original is not None:
+                    setattr(db, name, original)
+                else:
+                    # Method was instance-shadowed; drop the shadow so the
+                    # class method shows through again.
+                    try:
+                        delattr(db, name)
+                    except AttributeError:
+                        pass
+
+        return restore
+
+    @staticmethod
+    def _install_sql_recorder(schema, sink: list[str]) -> None:
+        """Wrap a dry Schema's query executor so every statement lands in ``sink``.
+
+        The wrapper delegates to the real (dry) methods — which only store +
+        return the SQL — and appends each statement to ``sink`` in order, so
+        all statements are captured (the executor itself keeps only the last).
+        """
+        executor = schema.query_executor
+        original_execute = executor.execute_query
+        original_get_result = executor.get_query_result
+
+        def _record(sql) -> None:
+            if isinstance(sql, (list, tuple)):
+                for one in sql:
+                    if one and str(one).strip():
+                        sink.append(str(one).strip())
+            elif sql and str(sql).strip():
+                sink.append(str(sql).strip())
+
+        def execute_query(sql, bindings=()):
+            result = original_execute(sql, bindings)
+            _record(sql)
+            return result
+
+        def get_query_result(sql, bindings=()):
+            result = original_get_result(sql, bindings)
+            _record(sql)
+            return result
+
+        executor.execute_query = execute_query
+        executor.get_query_result = get_query_result
+

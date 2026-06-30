@@ -27,6 +27,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from cara.exceptions import InvalidArgumentException
+from cara.http.Cursor import slice_page_with_lookahead
 
 from .FilterSet import FilterSet
 from .Sorter import SortRegistry
@@ -335,6 +336,72 @@ class FilterPipeline:
             "total": total,
             "limit": limit,
             "offset": offset,
+            "sort_by": self._resolved_sort_name(),
+            "filter_state": dict(self._parsed or {}),
+            "cache_key": self.cache_key,
+        }
+
+    def keyset_page(
+        self,
+        *,
+        limit: int,
+        sort_field: str,
+        order_by_sql: str,
+        keyset_where: tuple[str, list[Any]] | None = None,
+        primary_key: str = "id",
+        resource: type | None = None,
+    ) -> dict[str, Any]:
+        """Keyset (cursor) pagination terminal — the deep-scroll-safe twin of
+        :meth:`paginate`. Use for hot infinite-scroll feeds where a growing
+        OFFSET degrades (the DB skips N rows every page) and inserts/deletes
+        during scroll shift rows across page boundaries.
+
+        The CALLER (app layer) supplies the SQL pieces, because the sortable-
+        column allow-list that guards them against injection is domain knowledge
+        that doesn't belong in the framework codec:
+
+        * ``order_by_sql`` — the ``ORDER BY`` clause (e.g. ``"product.id DESC"``),
+          built from a validated sort column.
+        * ``keyset_where`` — optional ``(fragment, params)`` from the app's
+          ``build_keyset_where`` (``None`` for the first page).
+        * ``sort_field`` / ``primary_key`` — the (unqualified) attribute names
+          read off the last visible row to mint the next cursor; they MUST be the
+          columns ``order_by_sql`` sorts by, in the same order.
+
+        Composes filters + eager-loads + the keyset predicate + ``LIMIT n+1``,
+        then slices via :func:`slice_page_with_lookahead`. Runs **no COUNT** —
+        ``has_more`` comes from the lookahead row, so there's no total-count or
+        deep-offset scan. Returns the standard list shape with ``next_cursor`` +
+        ``has_more`` in place of ``total`` + ``offset``.
+        """
+        b = self._with_filters()
+        if self._eager:
+            b = b.with_(self._eager)
+        if keyset_where is not None:
+            fragment, params = keyset_where
+            b = b.where_raw(fragment, list(params))
+        rows = b.order_by_raw(order_by_sql).limit(int(limit) + 1).get()
+
+        visible, next_cursor, has_more = slice_page_with_lookahead(
+            list(rows), int(limit), sort_field=sort_field, primary_key=primary_key
+        )
+
+        # Mirror ``get()``'s contract: with no ``resource`` return RAW model rows
+        # so a controller that serialises the page itself (batch-preload + a
+        # ResourceCollection) isn't double-hydrated. Pass a ``resource`` to have
+        # the terminal serialise (parity with ``paginate``).
+        if resource is not None and hasattr(resource, "collection"):
+            data = resource.collection(visible).to_array()
+        elif resource is not None:
+            data = [resource(r).to_array() for r in visible]
+        else:
+            data = visible
+
+        return {
+            "data": data,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+            "limit": int(limit),
             "sort_by": self._resolved_sort_name(),
             "filter_state": dict(self._parsed or {}),
             "cache_key": self.cache_key,

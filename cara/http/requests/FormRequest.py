@@ -33,6 +33,18 @@ class FormRequest:
         """Override — run after built-in rules. Add errors via validator.errors().add(...)."""
         pass
 
+    def prepare_for_validation(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Override — normalize the RAW input dict BEFORE the rules run
+        (Laravel's ``prepareForValidation``). The returned dict is what
+        ``rules()`` validates and what ``validated()`` is drawn from, so any
+        mutation here is itself re-validated — unlike normalizing by overriding
+        ``validate_request()`` and editing the result, which silently skips
+        re-validation of the mutated shape. Use for input shaping: aliasing
+        (``per_page`` → ``limit``), bool/number → string coercion, trimming,
+        nested-blob flattening. Default: pass the data through unchanged (zero
+        behaviour change for requests that don't override)."""
+        return data
+
     async def validate_request(self, request: Any) -> dict[str, Any]:
         """Main entry point. Returns validated dict.
 
@@ -48,6 +60,10 @@ class FormRequest:
             if hasattr(request, "all") and callable(request.all)
             else {}
         )
+
+        # Laravel parity: normalize the raw payload BEFORE validation so the
+        # mutated shape is what the rules see (and what ``validated()`` returns).
+        data = self.prepare_for_validation(data)
 
         validator = Validation.make(data, self.rules(), self.messages())
         validator.after(self.after)

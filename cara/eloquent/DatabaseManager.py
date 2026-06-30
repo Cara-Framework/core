@@ -182,6 +182,22 @@ class DatabaseManager:
         resolver = self._ensure_resolver()
         return resolver.rollback(connection_name)
 
+    def after_commit(self, callback, connection=None) -> None:
+        """Register a callback to run after the current transaction commits.
+
+        Laravel parity (``DB::afterCommit``): if a transaction is open on
+        the connection, ``callback`` is deferred until that transaction's
+        outermost level actually commits — and is discarded if it rolls
+        back. If NO transaction is open, ``callback`` runs immediately.
+
+        This gives jobs/events a real after-commit seam instead of the
+        per-call-site hand-rolling that used to wrap dispatches in manual
+        ``if not in_transaction`` checks.
+        """
+        connection_name = self._resolve_connection_name(connection)
+        resolver = self._ensure_resolver()
+        return resolver.after_commit(connection_name, callback)
+
     def commit_open_transactions(self, connection=None) -> None:
         """Commit every open transaction level on the context-pinned connection.
 

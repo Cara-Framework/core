@@ -150,6 +150,7 @@ from .types.middleware import (
 from .types.ModelExceptions import (
     DriverNotFoundException,
     InvalidArgumentException,
+    LazyLoadingViolation,
     ModelException,
     ModelNotFoundException,
     MultipleRecordsFoundException,
@@ -238,6 +239,7 @@ __all__ = [
     "InvalidRuleFormatException",
     "InvalidTokenException",
     "KeyNotFoundException",
+    "LazyLoadingViolation",
     "ListenerNotFoundException",
     "LoaderException",
     "LoaderNotFoundException",

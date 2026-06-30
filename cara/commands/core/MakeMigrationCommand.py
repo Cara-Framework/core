@@ -13,7 +13,8 @@ from cara.decorators import command
     name="make:migration",
     help="Auto-generate migrations from models using Laravel 11+ ordering system (no timestamps).",
     options={
-        "--overwrite": "Update existing migration file instead of creating new one",
+        "--overwrite": "Recreate all migrations from scratch (DELETES existing migration files)",
+        "--force": "Skip the hand-edit confirmation prompt when --overwrite clobbers files",
         "--style=blueprint": "Migration style: 'blueprint' (default) or 'sql'",
         "--dry_run": "Show what would be generated without creating files",
     },
@@ -58,6 +59,8 @@ class MakeMigrationCommand(CommandBase):
 
         created_count = 0
         updated_count = 0
+        unchanged_count = 0
+        error_count = 0
 
         for model_info in ordered_models:
             result = self._process_model(model_info)
@@ -65,25 +68,49 @@ class MakeMigrationCommand(CommandBase):
                 created_count += 1
             elif result == "updated":
                 updated_count += 1
+            elif result == "error":
+                error_count += 1
+            else:  # "unchanged"
+                unchanged_count += 1
 
-        # Summary message
-        if self.option("dry_run"):
-            if created_count or updated_count:
-                self.success(
-                    f"Would create {created_count} new migration(s) and {updated_count} updated migration(s)"
-                )
-            else:
-                self.success("All models have migrations")
-        else:
-            if created_count or updated_count:
-                self.success(
-                    f"Created {created_count} new migration(s) and {updated_count} updated migration(s)"
-                )
-            else:
-                self.success("All models have migrations")
+        self._print_summary(
+            created_count,
+            updated_count,
+            unchanged_count,
+            error_count,
+            dry_run=bool(self.option("dry_run")),
+        )
+
+    def _print_summary(
+        self,
+        created: int,
+        updated: int,
+        unchanged: int,
+        error: int,
+        dry_run: bool,
+    ):
+        """Print a single, actionable N created / N updated / N unchanged line."""
+        verb = "Would create" if dry_run else "Created"
+        # Always show the full tally so the run is self-describing (even a
+        # no-op states that every model is already covered).
+        self.success(
+            f"{verb} {created} new, {updated} updated, {unchanged} unchanged"
+        )
+        if error:
+            # Errors were already printed per-model via self.error(); surface
+            # the count so a partially-failed sweep isn't mistaken for success.
+            self.warning(f"{error} model(s) could not be processed (see errors above)")
 
     def _handle_overwrite_mode(self):
-        """Handle --overwrite mode: recreate all migrations from scratch."""
+        """Handle --overwrite mode: recreate all migrations from scratch.
+
+        ``--overwrite`` DELETES every model-owned migration file on disk and
+        regenerates them. Before unlinking anything we surface exactly which
+        files will be destroyed and, if any of them look hand-edited (contain
+        markers the generator never authors), require an interactive confirm
+        (or ``--force``) so a regenerate sweep can't silently wipe handwritten
+        SQL / custom down() logic.
+        """
         self.info("Overwrite mode: Recreating all migrations from scratch...")
 
         # Discover models
@@ -95,10 +122,26 @@ class MakeMigrationCommand(CommandBase):
         # Sort models by dependency order (FK dependencies first)
         ordered_models = self.discoverer.resolve_dependency_order(models)
 
+        # Safety gate: refuse to silently clobber hand-edited migrations.
+        # Returns False (abort) only when the user declines the confirm.
+        if not self._confirm_clobber(ordered_models):
+            self.warning("Aborted: no files were changed.")
+            return
+
         # Clear existing migrations (handles dry_run internally)
         self._clear_existing_migrations(ordered_models)
 
-        # Reset migration counter for fresh numbering
+        # Reset migration counter for fresh numbering.
+        # NOTE: the regenerated filenames are NNNN_01_01_NNNNNN_<name>.py. The
+        # ``01_01`` middle segment is vestigial Laravel date cruft, but every
+        # consumer (MigrationExecutor.run_pending_migrations / get_migration_status,
+        # Migration.get_unran_migrations, the comparator's glob) orders purely by
+        # LEXICOGRAPHIC sort on the whole filename string and never splits those
+        # segments out — so they're load-bearing only as constant padding that
+        # keeps the sort monotonic. Changing the shape is high-risk (the tracker
+        # keys migrations by full filename, so a rename would make already-applied
+        # migrations look pending) for zero functional gain, so it is deliberately
+        # left intact. Do not "simplify" it.
         self.generator.reset_counter()
 
         created_count = 0
@@ -119,20 +162,29 @@ class MakeMigrationCommand(CommandBase):
                 f"Recreated {created_count} migration(s) with dependency-based ordering"
             )
 
-    def _clear_existing_migrations(self, models):
-        """Clear existing migration files for the given models."""
+    def _migrations_dir(self):
+        """Resolve the migrations directory via the paths() helper, or None."""
         from pathlib import Path
 
         from cara.support import paths
 
-        # Use paths() helper instead of hardcoded path construction
         migrations_dir = Path(paths("migrations"))
-        if not migrations_dir.exists():
-            return
+        return migrations_dir if migrations_dir.exists() else None
 
+    def _collect_clobber_targets(self, models):
+        """Return the de-duplicated list of migration files --overwrite deletes.
+
+        Mirrors the glob patterns used by ``_clear_existing_migrations`` so the
+        safety preview and the actual unlink can never drift apart.
+        """
+        migrations_dir = self._migrations_dir()
+        if migrations_dir is None:
+            return []
+
+        targets: list = []
+        seen: set = set()
         for model_info in models:
             table_name = model_info["table"]
-            # Find all migration files for this table
             patterns = [
                 f"*create_{table_name}_table.py",
                 f"*update_{table_name}_table.py",
@@ -146,19 +198,126 @@ class MakeMigrationCommand(CommandBase):
                 # source of truth, so drop the redundant incremental ones too.
                 f"*_to_{table_name}_table.py",
             ]
-
             for pattern in patterns:
-                files = list(migrations_dir.glob(pattern))
-                for file_path in files:
-                    try:
-                        dry_run_option = self.option("dry_run")
-                        if dry_run_option:
-                            self.info(f"Would remove: {file_path.name}")
-                        else:
-                            file_path.unlink()
-                            self.info(f"Removed: {file_path.name}")
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
-                        pass  # Skip files that can't be deleted
+                for file_path in sorted(migrations_dir.glob(pattern)):
+                    if file_path not in seen:
+                        seen.add(file_path)
+                        targets.append(file_path)
+        return targets
+
+    # Comment fragments the generator DOES emit (inline annotations on the
+    # drop/alter lines). Everything else after a ``#`` is a human comment.
+    _GENERATED_COMMENT_MARKERS = ("DESTRUCTIVE", "altered:")
+
+    def _looks_hand_edited(self, file_path) -> bool:
+        """Heuristically detect whether a migration file was hand-edited.
+
+        Conservative: only flags content the generator provably never authors
+        — a code comment (``#``, whole-line OR inline) that isn't one of the
+        generator's own ``# DESTRUCTIVE`` / ``# altered:`` annotations, or
+        control-flow / escape-hatch logic the stub path never writes (``def``
+        other than up/down, ``if``/``for``/``while``/``try``, ``DB.connection``,
+        ``cursor``/``execute``/``raw``). The generator's ``table.*`` lines carry
+        string literals but never a ``#``, so a ``#`` outside the module/method
+        docstrings is a reliable human-edit signal. If the file can't be read,
+        treat it as hand-edited so we err on the side of asking first.
+        """
+        try:
+            text = file_path.read_text(encoding="utf-8")
+        except OSError:
+            return True
+
+        suspicious_tokens = (
+            "if ", "for ", "while ", "try:", "except", "DB.connection",
+            ".cursor(", ".execute(", "raw(", "lambda", "import os",
+        )
+        in_docstring = False
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            # Skip docstring bodies — the generator's stub docstrings are the
+            # only place a ``#`` could legitimately appear inside prose, and a
+            # one-line ``"""..."""`` opens and closes on the same line.
+            triple = line.count('"""')
+            if in_docstring:
+                if triple:
+                    in_docstring = False
+                continue
+            if triple == 1:
+                in_docstring = True
+                continue
+            if triple >= 2:
+                # opens and closes on one line → not inside a docstring after
+                continue
+
+            # Any ``#`` (whole-line or inline) that isn't a generated annotation.
+            if "#" in line:
+                comment = line[line.index("#"):]
+                if not any(m in comment for m in self._GENERATED_COMMENT_MARKERS):
+                    return True
+            # A def for something other than up()/down().
+            if line.startswith("def ") and not (
+                line.startswith("def up(") or line.startswith("def down(")
+            ):
+                return True
+            if any(tok in line for tok in suspicious_tokens):
+                return True
+        return False
+
+    def _confirm_clobber(self, models) -> bool:
+        """Preview + gate the destructive unlink. Returns True to proceed.
+
+        Always prints WHICH files --overwrite will delete. If any look
+        hand-edited, requires an interactive confirm unless ``--force`` (or
+        ``--dry_run``, which never touches disk). Returns False only when the
+        user explicitly declines — the caller then aborts without changes.
+        """
+        targets = self._collect_clobber_targets(models)
+        if not targets:
+            return True
+
+        self.warning(f"--overwrite will DELETE and regenerate {len(targets)} file(s):")
+        edited = []
+        for file_path in targets:
+            hand_edited = self._looks_hand_edited(file_path)
+            marker = "  (hand-edited?)" if hand_edited else ""
+            self.info(f"   • {file_path.name}{marker}")
+            if hand_edited:
+                edited.append(file_path)
+
+        # Dry-run never writes; --force is the documented escape hatch.
+        if self.option("dry_run") or self.option("force"):
+            return True
+
+        if edited:
+            self.warning(
+                f"{len(edited)} file(s) appear hand-edited — overwriting will "
+                f"discard those changes."
+            )
+            return self.confirm(
+                "Overwrite hand-edited migration(s) anyway?", default=False
+            )
+        return True
+
+    def _clear_existing_migrations(self, models):
+        """Delete the model-owned migration files (or preview them on dry-run).
+
+        File selection is delegated to ``_collect_clobber_targets`` so the
+        deleted set is identical to the set previewed by ``_confirm_clobber``.
+        """
+        for file_path in self._collect_clobber_targets(models):
+            if self.option("dry_run"):
+                self.info(f"Would remove: {file_path.name}")
+                continue
+            try:
+                file_path.unlink()
+                self.info(f"Removed: {file_path.name}")
+            except OSError as exc:
+                # Don't swallow: a file we meant to delete but couldn't would
+                # leave a stale CREATE behind that collides with the regenerated
+                # one on the next migrate. Surface it so the operator can act.
+                self.error(f"Could not remove {file_path.name}: {exc}")
 
     def _create_fresh_migration(self, model_info, dependency_order=0):
         """Create a fresh CREATE TABLE migration for a model."""
@@ -219,38 +378,43 @@ class MakeMigrationCommand(CommandBase):
                     for change in diff:
                         self.info(f"   • {change}")
 
+                    # Intent-revealing name from the change set (add_x_to_y /
+                    # drop_x_from_y / rename_x_to_y_on_y / change_x_on_y), not
+                    # a generic update_<table>_table.
+                    from cara.eloquent.migrations.ModelMigrationComparator import (
+                        summarize_change_name,
+                    )
+
+                    name, _ = summarize_change_name(table_name, diff)
+                    content = self.generator.generate_update_migration(
+                        model_info, diff, self.option("style", "blueprint")
+                    )
                     if not self.option("dry_run"):
-                        content = self.generator.generate_update_migration(
-                            model_info, diff, self.option("style", "blueprint")
-                        )
-                        name = f"update_{table_name}_table"
                         filepath = self.generator.create_migration_file(name, content)
                         self.info(f"Created migration: \n{filepath}")
                     else:
-                        content = self.generator.generate_update_migration(
-                            model_info, diff, self.option("style", "blueprint")
+                        self.info(
+                            f"Would create '{name}' (update) for {model_info['name']}:"
                         )
-                        self.info(f"Update migration content for {model_info['name']}:")
                         self.info(content)
                         self.info("=" * 50)
-                    return "created"
+                    return "updated"
                 else:
                     # Table doesn't exist, create table migration
                     self.info(
                         f"Creating migration for {model_info['name']} -> {table_name}"
                     )
+                    name = f"create_{table_name}_table"
+                    content = self.generator.generate_create_migration(
+                        model_info, self.option("style", "blueprint")
+                    )
                     if not self.option("dry_run"):
-                        content = self.generator.generate_create_migration(
-                            model_info, self.option("style", "blueprint")
-                        )
-                        name = f"create_{table_name}_table"
                         filepath = self.generator.create_migration_file(name, content)
                         self.info(f"Created migration: \n{filepath}")
                     else:
-                        content = self.generator.generate_create_migration(
-                            model_info, self.option("style", "blueprint")
+                        self.info(
+                            f"Would create '{name}' for {model_info['name']}:"
                         )
-                        self.info(f"Create migration content for {model_info['name']}:")
                         self.info(content)
                         self.info("=" * 50)
                     return "created"

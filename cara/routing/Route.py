@@ -3,7 +3,6 @@
 Mirrors Laravel-style syntax for HTTP and WebSocket routes with support for:
 - Parameter validation and type conversion
 - Route grouping with prefix/middleware
-- Route model binding
 - Named routes
 """
 
@@ -23,7 +22,7 @@ class Route:
     """Route helper class for creating different types of routes.
 
     Provides a fluent interface for defining HTTP and WebSocket routes
-    with support for parameter validation, middleware, and model binding.
+    with support for parameter validation and middleware.
     """
 
     # Default parameter compiler patterns - Laravel-compatible regex patterns
@@ -67,7 +66,6 @@ class Route:
         self.request_method = [m.lower() for m in request_method]
         self._name = name
         self._middleware: list[str] = []
-        self._model_bindings: dict[str, type[Any]] = {}
         self.compiler = RouteCompiler(self.url, compilers or Route.compilers)
         self.controller = RouteResolver(
             controller,
@@ -97,27 +95,6 @@ class Route:
         """
         self._name = name
         return self
-
-    def model(self, param: str, model_class: type[Any]) -> Route:
-        """Register implicit route model binding.
-
-        Args:
-            param: The route parameter name
-            model_class: The model class to bind to
-
-        Returns:
-            Self for method chaining
-        """
-        self._model_bindings[param] = model_class
-        return self
-
-    def get_model_bindings(self) -> dict[str, type[Any]]:
-        """Get all model bindings for this route.
-
-        Returns:
-            Dictionary of parameter names to model classes
-        """
-        return self._model_bindings
 
     def _normalize_url(self, url: str) -> str:
         """Normalize URL by ensuring leading slash and removing duplicates.
@@ -174,7 +151,7 @@ class Route:
     async def dispatch(self, request: Any, response: Any) -> Response:
         """Dispatch a request to this route's controller.
 
-        Extracts route parameters, applies model bindings, and delegates to controller.
+        Extracts route parameters and delegates to the controller.
 
         Args:
             request: The HTTP request
@@ -185,17 +162,6 @@ class Route:
         """
         # Extract route parameters
         params = self.extract_parameters(request.path)
-
-        # Apply model bindings if registered
-        for param_name, model_class in self._model_bindings.items():
-            if param_name in params:
-                try:
-                    # Resolve model using find() method if available
-                    if hasattr(model_class, "find"):
-                        params[param_name] = model_class.find(params[param_name])
-                except Exception:
-                    # Keep original value if model resolution fails
-                    pass
 
         # Set validated parameters on request for easy access
         self.set_params(params)

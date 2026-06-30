@@ -46,6 +46,19 @@ _ACTIVE_CONNECTIONS: ContextVar[dict[str, object] | None] = ContextVar(
     "cara.eloquent.connection_resolver.active_connections", default=None
 )
 
+# Per-context registry of after-commit callbacks (Laravel's
+# ``DB::afterCommit``). Keyed by connection name and tied to the
+# OUTERMOST open transaction on that connection: callbacks registered
+# at any nesting level accumulate in one list and fire exactly once,
+# right after the real driver-level commit of the outermost transaction
+# succeeds. A rollback of the outermost transaction discards them so a
+# deferred job/event never fires for work that was undone. Like
+# ``_ACTIVE_CONNECTIONS`` this is lazily built so non-transactional
+# contexts pay no allocation.
+_AFTER_COMMIT_CALLBACKS: ContextVar[dict[str, list] | None] = ContextVar(
+    "cara.eloquent.connection_resolver.after_commit_callbacks", default=None
+)
+
 
 def _get_registry() -> dict[str, object]:
     """Return the current context's active-transaction dict, creating it on demand.
@@ -58,6 +71,20 @@ def _get_registry() -> dict[str, object]:
     if registry is None:
         registry = {}
         _ACTIVE_CONNECTIONS.set(registry)
+    return registry
+
+
+def _get_after_commit_registry() -> dict[str, list]:
+    """Return this context's after-commit callback map, creating it on demand.
+
+    Mirrors :func:`_get_registry`'s lazy ContextVar pattern so the
+    after-commit list is isolated per thread / asyncio task and never
+    shared across concurrent jobs.
+    """
+    registry = _AFTER_COMMIT_CALLBACKS.get()
+    if registry is None:
+        registry = {}
+        _AFTER_COMMIT_CALLBACKS.set(registry)
     return registry
 
 
@@ -81,6 +108,10 @@ def reset_registry() -> None:
     transaction) are unaffected — they never cross this boundary.
     """
     _ACTIVE_CONNECTIONS.set({})
+    # Rebind a fresh after-commit map too: a job inheriting a parent's
+    # reference would otherwise fire (or leak) the parent's deferred
+    # callbacks. Each job gets its own isolated after-commit list.
+    _AFTER_COMMIT_CALLBACKS.set({})
 
 
 class ConnectionResolver:
@@ -229,6 +260,42 @@ class ConnectionResolver:
         if getattr(connection, "transaction_level", 0) <= 0:
             self._remove_active_connection(connection_name)
             self._safe_close(connection)
+            # The OUTERMOST transaction is now durably committed at the
+            # driver level — fire deferred after-commit callbacks. Run
+            # them AFTER unpin/close so a callback that opens its own
+            # ``db.transaction()`` (or dispatches a job) starts from a
+            # clean, transaction-free state (Laravel parity).
+            self._run_after_commit_callbacks(connection_name)
+
+    def after_commit(self, connection_name, callback):
+        """Defer ``callback`` until the outermost transaction commits.
+
+        Laravel's ``DB::afterCommit`` semantics:
+
+        * Inside a transaction → append the callback to the outermost
+          transaction's list; it fires once, right after the real commit
+          succeeds, and never if the transaction rolls back.
+        * No transaction open → run the callback IMMEDIATELY (there is
+          nothing to wait for).
+        """
+        if _get_registry().get(connection_name) is None:
+            # No open transaction on this connection in this context.
+            callback()
+            return
+        _get_after_commit_registry().setdefault(connection_name, []).append(callback)
+
+    def _run_after_commit_callbacks(self, connection_name):
+        """Drain and invoke the after-commit callbacks for ``connection_name``.
+
+        Pops the list before running so re-entrant registration (a
+        callback that itself calls ``after_commit`` with no transaction
+        open, which runs immediately) can't double-fire the drained set.
+        """
+        callbacks = _get_after_commit_registry().pop(connection_name, None)
+        if not callbacks:
+            return
+        for callback in callbacks:
+            callback()
 
     def rollback(self, connection_name):
         """Rollback the transaction opened in this context on ``connection_name``."""
@@ -239,6 +306,9 @@ class ConnectionResolver:
         if getattr(connection, "transaction_level", 0) <= 0:
             self._remove_active_connection(connection_name)
             self._safe_close(connection)
+            # Outermost transaction rolled back → DISCARD every deferred
+            # after-commit callback so nothing fires for undone work.
+            _get_after_commit_registry().pop(connection_name, None)
 
     @staticmethod
     def _safe_close(connection) -> None:

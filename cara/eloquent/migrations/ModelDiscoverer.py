@@ -48,6 +48,12 @@ class ModelDiscoverer:
         "increments",
         "big_increments",
         "float",
+        # ``double`` mirrors ``float``/``jsonb`` above — listed so a
+        # ``field.double(...)`` column is captured with type ``'double'``
+        # instead of being silently dropped (the ``jsonb`` footgun noted
+        # in the class docstring). ``uuid`` is already present above and
+        # reports type ``'uuid'`` faithfully.
+        "double",
     }
 
     # Field types that don't take field names
@@ -95,7 +101,12 @@ class ModelDiscoverer:
             return models
 
         try:
-            for item in path.iterdir():
+            # Sort by name so discovery order is deterministic run-to-run.
+            # ``iterdir()`` yields filesystem order, which varies across
+            # machines/runs and leaked into the FK-respecting topological
+            # sort below — producing unstable migration file sequence
+            # numbers for the same set of models.
+            for item in sorted(path.iterdir(), key=lambda p: p.name):
                 # Skip hidden directories, venv, __pycache__, .git, etc.
                 if item.name.startswith(".") or item.name in [
                     "venv",
@@ -127,8 +138,11 @@ class ModelDiscoverer:
                             # Add file path to model info
                             model_info["file"] = str(item)
                             models.append(model_info)
-                    except Exception:
-                        # Skip files that can't be parsed
+                    except Exception as e:
+                        # Skip files that can't be parsed, but make it
+                        # visible: a syntax-broken model silently excluded
+                        # here would just vanish from migration generation.
+                        self._warn_unparseable_model(item, e)
                         continue
         except PermissionError:
             # Skip directories we can't read
@@ -201,11 +215,32 @@ class ModelDiscoverer:
                 model_info = self._parse_model_file(py_file)
                 if model_info:
                     models.append(model_info)
-            except Exception:
-                # Skip files that can't be parsed
+            except Exception as e:
+                # Skip files that can't be parsed, but surface the failure
+                # so a broken model isn't silently dropped from generation.
+                self._warn_unparseable_model(py_file, e)
                 continue
 
         return models
+
+    def _warn_unparseable_model(self, file_path: Path, error: Exception) -> None:
+        """Log (don't swallow) a model file that failed to parse.
+
+        Keeps the ``continue`` so one broken file doesn't abort the whole
+        discovery run, but names the file + exception so a syntax-broken
+        model excluded from migration generation is visible.
+        """
+        try:
+            from cara.facades import Log
+
+            Log.warning(
+                "Skipping unparseable model file %s: %s",
+                file_path,
+                error,
+                category="cara.eloquent.migrations",
+            )
+        except Exception:
+            _logger.warning("Skipping unparseable model file %s: %s", file_path, error)
 
     def resolve_dependency_order(self, models: list[dict]) -> list[dict]:
         """Resolve dependency order for models (FK dependencies first)."""
@@ -240,10 +275,17 @@ class ModelDiscoverer:
                             "on_delete": foreign_key_info.get("on_delete", "RESTRICT"),
                         }
                     )
-                # Fallback to old detection method
-                elif self._is_foreign_key_field(field_name, field_info):
+                # Fallback to old detection method. ``all_table_names`` is
+                # threaded in so a ``*_id`` column is only treated as a FK
+                # when its resolved target is an ACTUAL known table —
+                # otherwise ``public_id`` would invent a phantom FK to a
+                # non-existent ``public`` table (and merged_into_brand_id
+                # would point at the wrong table).
+                elif self._is_foreign_key_field(
+                    field_name, field_info, all_table_names
+                ):
                     referenced_table = self._extract_referenced_table(
-                        field_name, field_info
+                        field_name, field_info, all_table_names
                     )
                     if referenced_table:
                         dependencies.append(referenced_table)
@@ -523,6 +565,20 @@ class ModelDiscoverer:
                             field_name = self._extract_field_name_from_call(field_call)
                             if field_name:
                                 model_info["fields"][field_name] = field_def
+                                # A chained single-column ``.index()`` modifier
+                                # becomes a one-column ``composite_indexes`` entry
+                                # so the (shared) emitter renders
+                                # ``table.index(["<field_name>"])``. Without this
+                                # the index was parsed but never emitted.
+                                if field_def.get("params", {}).get("index"):
+                                    single_col_index = [field_name]
+                                    if (
+                                        single_col_index
+                                        not in model_info["composite_indexes"]
+                                    ):
+                                        model_info["composite_indexes"].append(
+                                            single_col_index
+                                        )
                             else:
                                 # Handle special fields without names (timestamps, soft_deletes)
                                 field_type = field_def.get("type")
@@ -572,11 +628,30 @@ class ModelDiscoverer:
                         params["nullable"] = True
                     elif method_name == "unique":
                         params["unique"] = True
+                    elif method_name == "index":
+                        # Chained single-column ``.index()`` modifier, e.g.
+                        # ``field.string("name", 255).index()``. Distinct from
+                        # the standalone ``field.index([...])`` composite call.
+                        # Without this branch the chained index was silently
+                        # dropped from the generated migration. Captured as a
+                        # param here; the caller turns it into a single-column
+                        # ``composite_indexes`` entry so the emitter renders
+                        # ``table.index(["name"])``.
+                        params["index"] = True
                     elif method_name == "use_current":
                         params["use_current"] = True
                     elif method_name == "default":
-                        if current.args and isinstance(current.args[0], ast.Constant):
-                            params["default"] = current.args[0].value
+                        if current.args:
+                            arg = current.args[0]
+                            if isinstance(arg, ast.Constant):
+                                params["default"] = arg.value
+                            else:
+                                # Expression default (DB.raw("now()"), an enum
+                                # member, a named constant) — keep the source
+                                # verbatim + flag it so the generator emits it
+                                # UNQUOTED instead of silently dropping it.
+                                params["default"] = ast.unparse(arg)
+                                params["default_is_raw"] = True
 
                     # Foreign key methods
                     elif method_name == "foreign":
@@ -657,20 +732,73 @@ class ModelDiscoverer:
                 break
         return None
 
-    def _is_foreign_key_field(self, field_name: str, field_info: dict) -> bool:
-        """Check if field is a foreign key (ends with _id or explicitly marked)."""
-        return field_name.endswith("_id") or field_info.get("params", {}).get(
-            "foreign_key", False
-        )
+    def _is_foreign_key_field(
+        self,
+        field_name: str,
+        field_info: dict,
+        all_table_names: list[str] | None = None,
+    ) -> bool:
+        """Check if field is a foreign key.
 
-    def _extract_referenced_table(self, field_name: str, field_info: dict) -> str | None:
+        A ``*_id`` column is only a foreign key when its ``_id``-stripped
+        target resolves to an ACTUAL known table (so ``public_id`` /
+        ``external_id`` / ``correlation_id`` stay plain columns instead of
+        inventing phantom FKs). The explicit ``params['foreign_key']`` flag
+        is always honoured. When ``all_table_names`` is omitted the legacy
+        suffix-only heuristic is used (no known-table set to gate against).
+        """
+        if field_info.get("params", {}).get("foreign_key", False):
+            return True
+        if not field_name.endswith("_id"):
+            return False
+        if all_table_names is None:
+            return True
+        return self._resolve_id_column_to_table(field_name, all_table_names) is not None
+
+    def _extract_referenced_table(
+        self,
+        field_name: str,
+        field_info: dict,
+        all_table_names: list[str] | None = None,
+    ) -> str | None:
         """Extract referenced table name from foreign key field."""
-        # For fields ending with _id, assume table name is the prefix
+        # For fields ending with _id, resolve the prefix to a real table.
         if field_name.endswith("_id"):
-            return field_name[:-3]  # Remove _id suffix
+            if all_table_names is None:
+                return field_name[:-3]  # legacy: blind strip
+            return self._resolve_id_column_to_table(field_name, all_table_names)
 
         # Check for explicit references parameter
         return field_info.get("params", {}).get("references")
+
+    def _resolve_id_column_to_table(
+        self, field_name: str, all_table_names: list[str]
+    ) -> str | None:
+        """Resolve a ``*_id`` column to a known table name, or ``None``.
+
+        Strips the ``_id`` suffix and matches against the known table set,
+        tolerating the singular/plural alias (``user_id`` → ``users``,
+        ``category_id`` → ``category``). Returns the ACTUAL table name as it
+        appears in ``all_table_names`` so the dependency graph and emitted FK
+        reference the real table. Returns ``None`` when no known table matches
+        (e.g. ``public_id``, ``external_id``, ``merged_into_brand_id`` whose
+        ``merged_into_brand`` prefix is not a table — its real FK comes from
+        an explicit ``field.foreign(...)`` instead).
+        """
+        base = field_name[:-3]  # strip "_id"
+        if not base:
+            return None
+        known = set(all_table_names)
+        # Exact match (singular convention: brand_id -> brand).
+        if base in known:
+            return base
+        # Singular/plural aliases for the few pluralized tables (users).
+        for candidate in (base + "s", base + "es"):
+            if candidate in known:
+                return candidate
+        if base.endswith("s") and base[:-1] in known:
+            return base[:-1]
+        return None
 
     def _topological_sort(
         self, models: list[dict], dependency_graph: dict[str, list[str]]
@@ -698,9 +826,19 @@ class ModelDiscoverer:
                     ready_models.append(model)
 
             if not ready_models:
-                # If no models are ready, there might be a circular dependency
-                # Add the first remaining model to break the cycle
-                ready_models = [remaining[0]]
+                # No model is ready → a circular FK dependency. Break it
+                # deterministically on the lexicographically-lowest table
+                # (was ``remaining[0]``, which depended on discovery order
+                # and produced unstable migration sequences). Surface the
+                # cycle instead of breaking it silently.
+                cycle_model = min(remaining, key=lambda m: m["table"])
+                ready_models = [cycle_model]
+                self._log_cycle_break(cycle_model, remaining, dependency_graph)
+
+            # Sort each ready level by table name so the FK-respecting
+            # order is stable run-to-run (discovery order must not leak
+            # into the emitted migration sequence numbers).
+            ready_models.sort(key=lambda m: m["table"])
 
             # Add ready models to result and mark as processed
             for model in ready_models:
@@ -709,6 +847,45 @@ class ModelDiscoverer:
                 remaining.remove(model)
 
         return result
+
+    def _log_cycle_break(
+        self,
+        cycle_model: dict,
+        remaining: list[dict],
+        dependency_graph: dict[str, list[str]],
+    ) -> None:
+        """Warn that a circular FK dependency forced a non-FK-ordered break.
+
+        Names the table chosen to break on, the unresolved tables still in
+        the cycle, and the offending dependency edges, so a real FK cycle in
+        the model set is visible rather than silently mis-ordered.
+        """
+        unresolved = sorted(m["table"] for m in remaining)
+        edges = sorted(
+            f"{m['table']} -> {dep}"
+            for m in remaining
+            for dep in dependency_graph.get(m["table"], [])
+            if dep in unresolved and dep != m["table"]
+        )
+        try:
+            from cara.facades import Log
+
+            Log.warning(
+                "Circular FK dependency in model discovery; breaking on '%s'. "
+                "Unresolved tables: %s. Cycle edges: %s",
+                cycle_model["table"],
+                ", ".join(unresolved),
+                ", ".join(edges) or "(none detected)",
+                category="cara.eloquent.migrations",
+            )
+        except Exception:
+            _logger.warning(
+                "Circular FK dependency in model discovery; breaking on '%s'. "
+                "Unresolved tables: %s. Cycle edges: %s",
+                cycle_model["table"],
+                ", ".join(unresolved),
+                ", ".join(edges) or "(none detected)",
+            )
 
     def _snake_case(self, camel_str: str) -> str:
         """Convert CamelCase to snake_case."""

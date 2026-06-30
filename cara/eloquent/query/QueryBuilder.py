@@ -2739,6 +2739,15 @@ class QueryBuilder(ObservesEvents):
                         raise
 
             if collection:
+                # Tag every row as collection-hydrated so the strict
+                # lazy-load guard (opt-in, off by default) only fires for
+                # multi-row fetches where N+1 actually bites — never for
+                # single find()/first() loads. No-op unless the guard is on.
+                if hydrated_model:
+                    for _row in hydrated_model:
+                        _mark = getattr(_row, "_mark_from_collection", None)
+                        if callable(_mark):
+                            _mark()
                 return hydrated_model if result else Collection([])
             else:
                 return hydrated_model if result else None

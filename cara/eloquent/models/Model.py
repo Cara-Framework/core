@@ -221,6 +221,15 @@ class Model(
     _booted: bool = False
     _scopes: dict[type, dict[str, Callable]] = {}
 
+    # Strict lazy-load guard (Laravel's ``Model::preventLazyLoading``).
+    # OFF by default — a total no-op for every existing query/test unless
+    # explicitly enabled via ``Model.prevent_lazy_loading()``. When on, an
+    # un-eager-loaded relationship accessed on a COLLECTION-hydrated model
+    # (where N+1 actually bites) raises ``LazyLoadingViolation`` instead of
+    # silently firing a per-row query. Single-instance finds
+    # (``find()``/``first()``) are never flagged.
+    _prevent_lazy_loading: bool = False
+
     builder: QueryBuilder
     """Passthrough delegates to QueryBuilder for query method calls."""
     __passthrough__ = set(
@@ -791,6 +800,53 @@ class Model(
             raise ModelNotFoundException(f"{cls.__name__} with ID {record_id} not found")
 
         return result
+
+    @classmethod
+    def prevent_lazy_loading(cls, prevent: bool = True) -> None:
+        """Enable/disable the strict lazy-load guard process-wide (Laravel parity).
+
+        OFF by default. Turn ON in dev/test bootstrap to convert an
+        accidental N+1 lazy-load (a relationship accessed without a prior
+        ``.with_(...)`` on a collection-hydrated model) into a loud
+        ``LazyLoadingViolation`` instead of a silent extra query. Set on the
+        base ``Model`` so the policy applies to every model uniformly.
+        """
+        Model._prevent_lazy_loading = bool(prevent)
+
+    def _mark_from_collection(self) -> None:
+        """Tag this instance as having come from a multi-row (collection) fetch.
+
+        Set by the query builder for ``get()``/``all()`` results — the rows
+        where N+1 lazy-loading actually matters. ``find()``/``first()``
+        single-instance loads are NOT tagged, so they never trip the guard.
+        """
+        self.__dict__["_from_collection"] = True
+
+    def _guard_against_lazy_load(self, relation: str) -> None:
+        """Raise ``LazyLoadingViolation`` for an accidental lazy-load — IF armed.
+
+        No-op (zero behaviour change) unless ALL hold:
+          * the guard is explicitly enabled, AND
+          * this instance came from a collection fetch (eager was the
+            intended path), AND
+          * the relation is not already loaded (eager-loaded relations are
+            cached in ``_relations`` and never reach here).
+        """
+        if not Model._prevent_lazy_loading:
+            return
+        if not self.__dict__.get("_from_collection", False):
+            # Single-instance find()/first() — lazy-loading one related
+            # record is fine; only collection rows risk N+1.
+            return
+        if relation in self.__dict__.get("_relations", {}):
+            return
+        from cara.exceptions import LazyLoadingViolation
+
+        raise LazyLoadingViolation(
+            f"Attempted to lazy-load relation '{relation}' on "
+            f"{self.__class__.__name__} while strict lazy-loading is enabled. "
+            f"Eager-load it with .with_('{relation}') to avoid an N+1 query."
+        )
 
     def is_loaded(self) -> bool:
         return bool(self.__attributes__)

@@ -1,385 +1,366 @@
-"""
-ModelMigrationComparator: Compare model definitions with migration files.
-Uses migration files as source of truth.
+"""ModelMigrationComparator — structured schema-snapshot differ.
+
+The OLD comparator diffed by column NAME only and emitted English strings
+("Added field: x"), so a column's TYPE / length / nullability / default / unique
+CHANGE was silently lost, a RENAME became drop+add (data loss), and a removed
+column's down() could only ever be re-created as ``table.string`` (lossy
+rollback).
+
+This version parses BOTH sides — the model (from ``model_info``) and the
+existing migration files — into structured ``Column`` snapshots, then emits a
+list of TYPED :class:`FieldDiff` changes:
+
+* ``added``   — a column in the model, absent from the migration.
+* ``removed`` — a column in the migration, absent from the model. Carries the
+                column's REAL parsed definition so ``down()`` can recreate it
+                losslessly (the right type/length/nullable/default), not a bare
+                varchar.
+* ``altered`` — a column on BOTH sides whose type/length/precision/scale/
+                nullable/unique differs. Carries old + new so the generator can
+                ``change_column`` and reverse it.
+* ``renamed`` — exactly one removed + one added column with an identical parsed
+                definition → a rename, NOT a destructive drop+add.
+
+The generator consumes :class:`FieldDiff` objects (``kind`` discriminator); the
+legacy string protocol is gone. ``table_exists_in_migrations`` is preserved.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from cara.support import paths
 
 _logger = logging.getLogger("cara.migrations.comparator")
 
+# Framework-managed columns / helper field-types. The model's ``Schema.build``
+# emits these via ``big_increments()`` / ``timestamps()`` / ``soft_deletes()``,
+# so ModelDiscoverer records pseudo-fields named ``id`` / ``timestamps`` /
+# ``soft_deletes``; the migration parser expands ``timestamps()`` into
+# created_at + updated_at (soft_deletes → deleted_at). Excluding these on BOTH
+# sides keeps the diff to real, operator-defined columns (without it every table
+# looked like it was "missing" id/timestamps and got a spurious drop_column).
+_FRAMEWORK_FIELDS = frozenset(
+    {"id", "created_at", "updated_at", "deleted_at", "timestamps", "soft_deletes"}
+)
+_FRAMEWORK_TYPES = frozenset(
+    {"increments", "big_increments", "timestamps", "soft_deletes"}
+)
+
+# The column attributes a diff is allowed to flag as an ALTER. Deliberately
+# EXCLUDES ``default`` — a default round-trips through the parser too fragilely
+# (bool True vs "True", DB.raw expressions, enum members), and a false-positive
+# ALTER on every table is worse than missing a default tweak. Type/length/
+# precision/scale/nullable/unique parse reliably from the canonical line.
+_COMPARED_ATTRS = ("type", "length", "precision", "scale", "nullable", "unique")
+
+
+@dataclass
+class Column:
+    """A parsed column definition — the same shape for model + migration sides."""
+
+    name: str
+    type: str = "string"
+    length: int | None = None
+    precision: int | None = None
+    scale: int | None = None
+    nullable: bool = False
+    unique: bool = False
+    index: bool = False
+    default: Any = None
+    has_default: bool = False
+    # The verbatim ``table.<...>`` source line (migration side) so ``down()`` can
+    # recreate a removed column losslessly. Empty for model-derived columns
+    # (the generator renders those from the structured attrs).
+    raw_line: str = ""
+
+    def signature(self) -> tuple:
+        """Identity used for ALTER + RENAME detection (the reliably-parsed
+        attrs only — see ``_COMPARED_ATTRS``)."""
+        return tuple(getattr(self, a) for a in _COMPARED_ATTRS)
+
+
+@dataclass
+class FieldDiff:
+    """One typed schema change. ``kind`` is the discriminator the generator
+    branches on."""
+
+    kind: str  # "added" | "removed" | "altered" | "renamed"
+    name: str
+    column: Column | None = None  # added / removed / altered(new) / renamed(new)
+    old: Column | None = None  # altered(previous) / renamed(previous)
+    old_name: str | None = None  # renamed: the previous column name
+    changed_attrs: list[str] = field(default_factory=list)  # altered: which attrs
+
+    @property
+    def is_destructive(self) -> bool:
+        """A removed column drops data; the generator marks/guards these."""
+        return self.kind == "removed"
+
+    def __str__(self) -> str:  # human-readable line for the command's diff print
+        if self.kind == "added":
+            return f"+ add column {self.name} ({self.column.type})"
+        if self.kind == "removed":
+            return f"- DROP column {self.name} (DESTRUCTIVE)"
+        if self.kind == "altered":
+            return f"~ alter column {self.name}: {', '.join(self.changed_attrs)}"
+        if self.kind == "renamed":
+            return f"> rename column {self.old_name} -> {self.name}"
+        return f"{self.kind} {self.name}"
+
+
+def summarize_change_name(table: str, diffs: list[FieldDiff]) -> tuple[str, str]:
+    """Derive an INTENT-revealing migration file name + class name from the
+    change set (Laravel/Django convention) instead of a generic
+    ``update_<table>_table``:
+
+      * one added column     → add_<col>_to_<table>_table / Add<Col>To<Table>
+      * one dropped column    → drop_<col>_from_<table>_table / Drop<Col>From<Table>
+      * one renamed column    → rename_<old>_to_<new>_on_<table>_table
+      * one altered column    → change_<col>_on_<table>_table
+      * mixed / many          → update_<table>_table (the generic fallback)
+    """
+
+    def camel(s: str) -> str:
+        return "".join(p.capitalize() for p in s.split("_"))
+
+    tbl = camel(table)
+    if len(diffs) == 1:
+        d = diffs[0]
+        if d.kind == "added":
+            return f"add_{d.name}_to_{table}_table", f"Add{camel(d.name)}To{tbl}"
+        if d.kind == "removed":
+            return f"drop_{d.name}_from_{table}_table", f"Drop{camel(d.name)}From{tbl}"
+        if d.kind == "renamed":
+            return (
+                f"rename_{d.old_name}_to_{d.name}_on_{table}_table",
+                f"Rename{camel(d.old_name)}To{camel(d.name)}On{tbl}",
+            )
+        if d.kind == "altered":
+            return f"change_{d.name}_on_{table}_table", f"Change{camel(d.name)}On{tbl}"
+    # A pure batch of adds reads well as add_columns_to_<table>.
+    if diffs and all(d.kind == "added" for d in diffs):
+        return f"add_columns_to_{table}_table", f"AddColumnsTo{tbl}"
+    return f"update_{table}_table", f"Update{tbl}Table"
+
 
 class ModelMigrationComparator:
-    """Compare model definitions with migration files as source of truth."""
+    """Diff a model's declared schema against its existing migration files."""
 
     def __init__(self):
         self.migrations_dir = Path(paths("migrations"))
 
-    def compare_model_with_migrations(self, model_info: dict) -> list[str]:
-        """Compare model definition with migration files to find differences."""
+    # ── Public API ──────────────────────────────────────────────────────
+
+    def compare_model_with_migrations(self, model_info: dict) -> list[FieldDiff]:
+        """Return the TYPED schema changes between the model and its migrations.
+
+        Empty list ⇒ no change. When the table does not yet exist in any
+        migration, every model column is an ``added`` diff (the caller emits a
+        CREATE migration, not an ALTER — it keys on table existence separately).
+        """
         table_name = model_info["table"]
+        model_cols = self._model_columns(model_info)
+        migration_cols, table_exists = self._migration_columns(table_name)
 
-        # Parse migration files to get current schema state
-        migration_schema = self._parse_migration_schema(table_name)
+        if not table_exists:
+            return [FieldDiff("added", name, column=c) for name, c in model_cols.items()]
 
-        if not migration_schema["table_exists"]:
-            # Table doesn't exist in migrations, all fields are new
-            differences = []
-            for field_name, field_info in model_info["fields"].items():
-                field_method = field_info.get("type", "string")
-                differences.append(f"Added field: {field_name} ({field_method})")
-            return differences
-
-        # Compare model fields with migration fields
-        differences = []
-        migration_fields = migration_schema["fields"]
-        field_definitions = migration_schema["field_definitions"]
-
-        # Framework-managed columns. The model's Schema.build emits these via
-        # the ``big_increments()`` / ``increments()`` / ``timestamps()`` /
-        # ``soft_deletes()`` helpers, so ModelDiscoverer records pseudo-fields
-        # named ``id`` / ``timestamps`` / ``soft_deletes``. The migration
-        # parser, however, SKIPS the auto ``id`` and expands ``timestamps()``
-        # into ``created_at`` + ``updated_at`` (``soft_deletes`` → ``deleted_at``).
-        # Diffing the two representations directly made EVERY existing table
-        # look like it was "missing" ``id`` and ``timestamps`` and generated a
-        # spurious ``drop_column("id")`` / ``drop_column("timestamps")``
-        # migration. Excluding the managed names + helper types on BOTH sides
-        # keeps the diff to real, operator-defined columns only.
-        framework_fields = {
-            "id",
-            "created_at",
-            "updated_at",
-            "deleted_at",
-            "timestamps",
-            "soft_deletes",
-        }
-        framework_types = {
-            "increments",
-            "big_increments",
-            "timestamps",
-            "soft_deletes",
-        }
-
-        # Check for new fields in model
-        for field_name, field_info in model_info["fields"].items():
-            field_method = field_info.get("type", "string")
-            if field_name in framework_fields or field_method in framework_types:
-                continue
-            if field_name not in migration_fields:
-                differences.append(f"Added field: {field_name} ({field_method})")
-
-        # Check for removed fields (fields in migration but not in model)
-        for field_name in migration_fields:
-            if (
-                field_name not in model_info["fields"]
-                and field_name not in framework_fields
-            ):
-                field_def = field_definitions.get(
-                    field_name, f'table.string("{field_name}")'
-                )
-                differences.append(f"Removed field: {field_name} -> {field_def}")
-
-        return differences
+        return self._diff(model_cols, migration_cols)
 
     def table_exists_in_migrations(self, table_name: str) -> bool:
-        """Check if table exists in migration files."""
-        migration_schema = self._parse_migration_schema(table_name)
-        return migration_schema["table_exists"]
+        _, exists = self._migration_columns(table_name)
+        return exists
 
-    def _parse_migration_schema(self, table_name: str) -> dict:
-        """Parse migration files to extract current schema state for a table."""
-        schema = {
-            "table_exists": False,
-            "fields": set(),
-            "field_definitions": {},  # Store field definitions for DOWN migrations
-        }
+    # ── The diff ────────────────────────────────────────────────────────
 
-        if not self.migrations_dir.exists():
-            return schema
+    def _diff(
+        self, model_cols: dict[str, Column], migration_cols: dict[str, Column]
+    ) -> list[FieldDiff]:
+        added_names = [n for n in model_cols if n not in migration_cols]
+        removed_names = [n for n in migration_cols if n not in model_cols]
 
-        # Get all migration files for this table
-        migration_files = self._get_table_migration_files(table_name)
+        diffs: list[FieldDiff] = []
 
-        # Process migrations chronologically
-        for migration_file in sorted(migration_files):
-            self._process_migration_file(migration_file, table_name, schema)
-
-        return schema
-
-    def _get_table_migration_files(self, table_name: str) -> list[Path]:
-        """Get all migration files related to a specific table."""
-        migration_files = []
-
-        # Look for both create and update migrations
-        patterns = [f"*create_{table_name}_table.py", f"*update_{table_name}_table.py"]
-
-        for pattern in patterns:
-            files = list(self.migrations_dir.glob(pattern))
-            migration_files.extend(files)
-
-        return migration_files
-
-    def _process_migration_file(
-        self, migration_file: Path, table_name: str, schema: dict
-    ):
-        """Process a single migration file to update schema state."""
-        try:
-            content = migration_file.read_text()
-
-            # Check if this is a create migration
-            if f"create_{table_name}_table" in migration_file.name:
-                self._process_create_migration(content, schema)
-
-            # Check if this is an update migration
-            elif f"update_{table_name}_table" in migration_file.name:
-                self._process_update_migration(content, schema)
-
-        except Exception:
-            _logger.warning(
-                "unreadable migration file: %s", migration_file, exc_info=True
+        # RENAME heuristic: exactly one added + one removed whose parsed
+        # definitions are identical (same type/length/nullable/unique/…) is far
+        # more likely a rename than an unrelated drop+add — emit a lossless
+        # RENAME instead of a destructive drop + a fresh add.
+        if (
+            len(added_names) == 1
+            and len(removed_names) == 1
+            and model_cols[added_names[0]].signature()
+            == migration_cols[removed_names[0]].signature()
+        ):
+            old = migration_cols[removed_names[0]]
+            new = model_cols[added_names[0]]
+            diffs.append(
+                FieldDiff("renamed", new.name, column=new, old=old, old_name=old.name)
             )
+            added_names, removed_names = [], []
 
-    def _process_create_migration(self, content: str, schema: dict):
-        """Process CREATE TABLE migration to extract initial fields."""
-        schema["table_exists"] = True
+        for name in added_names:
+            diffs.append(FieldDiff("added", name, column=model_cols[name]))
 
-        # Check if this is a SQL-style migration (contains CREATE TABLE in query)
-        if "CREATE TABLE" in content and "self.schema.new_connection().query(" in content:
-            self._parse_sql_create_table(content, schema)
-        else:
-            # Blueprint-style migration
-            self._parse_blueprint_create_table(content, schema)
+        # Removed carries the migration's REAL definition for a lossless down().
+        for name in removed_names:
+            diffs.append(FieldDiff("removed", name, column=migration_cols[name]))
 
-    def _parse_sql_create_table(self, content: str, schema: dict):
-        """Parse SQL CREATE TABLE statement to extract fields."""
-        # Try multiple patterns for extracting SQL
-        patterns = [
-            # Triple quotes pattern
-            r'self\.schema\.new_connection\(\)\.query\s*\(\s*"""(.*?)"""\s*\)',
-            # Triple quotes with different whitespace
-            r'query\s*\(\s*"""(.*?)"""\s*\)',
-            # Single quotes
-            r"self\.schema\.new_connection\(\)\.query\s*\(\s*\'\'\'(.*?)\'\'\'\s*\)",
-        ]
-
-        sql_content = None
-        for i, pattern in enumerate(patterns):
-            sql_match = re.search(pattern, content, re.DOTALL)
-            if sql_match:
-                sql_content = sql_match.group(1).strip()
-                break
-
-        if not sql_content:
-            return
-
-        # Extract table creation part: CREATE TABLE "table_name" (...)
-        # Use a more robust pattern that handles multi-line SQL properly
-        create_table_pattern = r'CREATE TABLE\s+["\']?(\w+)["\']?\s*\((.*)\)\s*;?'
-        create_match = re.search(
-            create_table_pattern, sql_content, re.DOTALL | re.IGNORECASE
-        )
-
-        if not create_match:
-            return
-
-        create_match.group(1)
-        columns_part = create_match.group(2).strip()
-
-        # Parse each line for column definitions
-        lines = columns_part.split("\n")
-
-        for i, line in enumerate(lines):
-            line = line.strip()
-
-            if line and not line.startswith(")"):
-                # Remove trailing comma
-                line = line.rstrip(",")
-
-                # Extract column name (first quoted part)
-                col_name_match = re.match(r'["\'](\w+)["\']', line)
-                if col_name_match:
-                    field_name = col_name_match.group(1)
-
-                    # Skip auto-generated fields
-                    if field_name not in ["id", "created_at", "updated_at"]:
-                        schema["fields"].add(field_name)
-                        # Store field definition for down migrations
-                        schema["field_definitions"][field_name] = (
-                            f'table.string("{field_name}")'
+        # ALTER: same name on both sides, but a compared attribute differs.
+        for name in model_cols:
+            if name in migration_cols:
+                new, old = model_cols[name], migration_cols[name]
+                changed = [
+                    a for a in _COMPARED_ATTRS if getattr(new, a) != getattr(old, a)
+                ]
+                if changed:
+                    diffs.append(
+                        FieldDiff(
+                            "altered", name, column=new, old=old, changed_attrs=changed
                         )
-
-    def _parse_blueprint_create_table(self, content: str, schema: dict):
-        """Parse Blueprint-style CREATE TABLE migration."""
-        # Extract fields from table.* calls with full definitions
-        field_patterns = [
-            r'table\.(\w+)\(["\'](\w+)["\'][^)]*\)',  # table.string("name", 255).nullable()
-        ]
-
-        for pattern in field_patterns:
-            matches = re.findall(pattern, content)
-            for method, field_name in matches:
-                # Skip built-in fields
-                if field_name not in ["id"]:
-                    schema["fields"].add(field_name)
-                    # Store full field definition for DOWN migrations
-                    full_line = self._extract_full_field_line(content, field_name)
-                    if full_line:
-                        schema["field_definitions"][field_name] = full_line
-
-        # Handle timestamps() call
-        if "table.timestamps()" in content:
-            schema["fields"].add("created_at")
-            schema["fields"].add("updated_at")
-            schema["field_definitions"]["created_at"] = 'table.timestamp("created_at")'
-            schema["field_definitions"]["updated_at"] = 'table.timestamp("updated_at")'
-
-    def _process_update_migration(self, content: str, schema: dict):
-        """Process ALTER TABLE migration to update field list."""
-        # Check if this is a SQL-style migration
-        if "ALTER TABLE" in content and "self.schema.new_connection().query(" in content:
-            self._parse_sql_update_migration(content, schema)
-        else:
-            # Blueprint-style migration
-            self._parse_blueprint_update_migration(content, schema)
-
-    def _parse_sql_update_migration(self, content: str, schema: dict):
-        """Parse SQL ALTER TABLE statements to update schema."""
-        # Extract up() method content
-        up_section = self._extract_up_method(content)
-        if not up_section:
-            return
-
-        # Extract SQL query from up() method - handle triple quotes
-        patterns = [
-            r'self\.schema\.new_connection\(\)\.query\s*\(\s*"""(.*?)"""\s*\)',
-            r"self\.schema\.new_connection\(\)\.query\s*\(\s*'''(.*?)'''\s*\)",
-            r'self\.schema\.new_connection\(\)\.query\s*\(\s*"([^"]*?)"\s*\)',
-            r"self\.schema\.new_connection\(\)\.query\s*\(\s*'([^']*?)'\s*\)",
-        ]
-
-        sql_content = None
-        for pattern in patterns:
-            sql_match = re.search(pattern, up_section, re.DOTALL)
-            if sql_match:
-                sql_content = sql_match.group(1).strip()
-                break
-
-        if not sql_content:
-            return
-
-        # Parse ADD COLUMN statements line by line
-        lines = sql_content.split("\n")
-        for line in lines:
-            line = line.strip()
-
-            # ADD COLUMN pattern
-            add_match = re.search(
-                r'ALTER TABLE\s+["\']?\w+["\']?\s+ADD COLUMN\s+["\'](\w+)["\']',
-                line,
-                re.IGNORECASE,
-            )
-            if add_match:
-                field_name = add_match.group(1)
-                if field_name not in ["id", "created_at", "updated_at"]:
-                    schema["fields"].add(field_name)
-                    schema["field_definitions"][field_name] = (
-                        f'table.string("{field_name}")'
                     )
+        return diffs
 
-            # DROP COLUMN pattern
-            drop_match = re.search(
-                r'ALTER TABLE\s+["\']?\w+["\']?\s+DROP COLUMN\s+["\'](\w+)["\']',
-                line,
-                re.IGNORECASE,
+    # ── Model side ──────────────────────────────────────────────────────
+
+    def _model_columns(self, model_info: dict) -> dict[str, Column]:
+        cols: dict[str, Column] = {}
+        for name, info in model_info.get("fields", {}).items():
+            ftype = info.get("type", "string")
+            if name in _FRAMEWORK_FIELDS or ftype in _FRAMEWORK_TYPES:
+                continue
+            params = info.get("params", {}) or {}
+            cols[name] = Column(
+                name=name,
+                type=ftype,
+                length=params.get("length"),
+                precision=params.get("precision"),
+                scale=params.get("scale"),
+                nullable=bool(params.get("nullable", False)),
+                unique=bool(params.get("unique", False)),
+                index=bool(params.get("index", False)),
+                default=params.get("default"),
+                has_default="default" in params,
             )
-            if drop_match:
-                field_name = drop_match.group(1)
-                schema["fields"].discard(field_name)
-                schema["field_definitions"].pop(field_name, None)
+        return cols
 
-    def _parse_blueprint_update_migration(self, content: str, schema: dict):
-        """Parse Blueprint-style ALTER TABLE migration."""
-        # Extract added fields from table.* calls in up() method
-        up_section = self._extract_up_method(content)
-        if not up_section:
-            return
+    # ── Migration side ──────────────────────────────────────────────────
 
-        # Extract added fields
-        field_patterns = [
-            r'table\.(\w+)\(["\'](\w+)["\']',  # table.string("name")
-            r'table\.(\w+)\(["\'](\w+)["\'],',  # table.string("name", 255)
-        ]
+    def _migration_columns(self, table_name: str) -> tuple[dict[str, Column], bool]:
+        cols: dict[str, Column] = {}
+        exists = False
+        if not self.migrations_dir.exists():
+            return cols, exists
 
-        for pattern in field_patterns:
-            matches = re.findall(pattern, up_section)
-            for method, field_name in matches:
-                schema["fields"].add(field_name)
-                # Store the field definition for this added field
-                full_line = self._extract_full_field_line(up_section, field_name)
-                if full_line:
-                    schema["field_definitions"][field_name] = full_line
+        patterns = [f"*create_{table_name}_table.py", f"*update_{table_name}_table.py"]
+        files: list[Path] = []
+        for pat in patterns:
+            files.extend(self.migrations_dir.glob(pat))
 
-        # Extract dropped fields from up() method
-        drop_patterns = [
-            r'table\.drop_column\(["\'](\w+)["\']',  # table.drop_column("name")
-        ]
+        # Chronological order: the consolidated CREATE first, then ALTERs.
+        for mf in sorted(files, key=lambda p: p.name):
+            try:
+                content = mf.read_text()
+            except OSError:
+                _logger.warning("unreadable migration file: %s", mf)
+                continue
+            if f"create_{table_name}_table" in mf.name:
+                exists = True
+                self._apply_create(content, cols)
+            elif f"update_{table_name}_table" in mf.name:
+                self._apply_update(content, cols)
+        return cols, exists
 
-        for pattern in drop_patterns:
-            matches = re.findall(pattern, up_section)
-            for field_name in matches:
-                # Remove dropped fields from schema
-                schema["fields"].discard(field_name)
+    def _apply_create(self, content: str, cols: dict[str, Column]) -> None:
+        for line in self._blueprint_column_lines(self._method_body(content, "up")):
+            col = self._parse_column_line(line)
+            if col and col.name not in _FRAMEWORK_FIELDS:
+                cols[col.name] = col
+        if "table.timestamps()" in content:
+            cols.setdefault("created_at", Column("created_at", "timestamp"))
+            cols.setdefault("updated_at", Column("updated_at", "timestamp"))
 
-        # Extract dropped fields from down() method
-        down_section = self._extract_down_method(content)
-        if down_section:
-            drop_patterns = [
-                r'table\.drop_column\(["\'](\w+)["\']',  # table.drop_column("name")
-            ]
+    def _apply_update(self, content: str, cols: dict[str, Column]) -> None:
+        up = self._method_body(content, "up")
+        # Adds (and the modern ``change_column`` / ``rename_column`` ALTERs).
+        for line in self._blueprint_column_lines(up):
+            col = self._parse_column_line(line)
+            if col and col.name not in _FRAMEWORK_FIELDS:
+                cols[col.name] = col
+        for old, new in re.findall(
+            r'table\.rename_column\(\s*["\'](\w+)["\']\s*,\s*["\'](\w+)["\']', up
+        ):
+            if old in cols:
+                renamed = cols.pop(old)
+                renamed.name = new
+                cols[new] = renamed
+        for dropped in re.findall(r'table\.drop_column\(\s*["\'](\w+)["\']', up):
+            cols.pop(dropped, None)
 
-            for pattern in drop_patterns:
-                matches = re.findall(pattern, down_section)
-                for field_name in matches:
-                    # These are fields that would be dropped in rollback,
-                    # meaning they are added in this migration
-                    schema["fields"].add(field_name)
+    # ── Line parsing ────────────────────────────────────────────────────
 
-    def _extract_up_method(self, content: str) -> str:
-        """Extract the up() method content from migration."""
-        # Simple regex to extract up method content
-        pattern = r"def up\(self\):(.*?)def down\(self\):"
-        match = re.search(pattern, content, re.DOTALL)
-        return match.group(1) if match else ""
+    @staticmethod
+    def _method_body(content: str, which: str) -> str:
+        if which == "up":
+            m = re.search(r"def up\(self\):(.*?)(?:\n    def down\(self\):|$)", content, re.DOTALL)
+        else:
+            m = re.search(r"def down\(self\):(.*?)$", content, re.DOTALL)
+        return m.group(1) if m else ""
 
-    def _extract_down_method(self, content: str) -> str:
-        """Extract the down() method content from migration."""
-        # Simple regex to extract down method content
-        pattern = r"def down\(self\):(.*?)$"
-        match = re.search(pattern, content, re.DOTALL)
-        return match.group(1) if match else ""
-
-    def _extract_full_field_line(self, content: str, field_name: str) -> str:
-        """Extract the full field line from the migration file."""
-        # Look for lines containing table.method("field_name"...)
-        lines = content.split("\n")
-        for line in lines:
-            if (
-                f'"{field_name}"' in line
-                and "table." in line
-                and "drop_column" not in line
+    @staticmethod
+    def _blueprint_column_lines(body: str) -> list[str]:
+        """The ``table.<type>("name", ...)...`` column lines — NOT drop_column /
+        rename_column / index / unique / foreign (those are handled separately)."""
+        out = []
+        for raw in body.split("\n"):
+            line = raw.strip()
+            if not line.startswith("table."):
+                continue
+            method = re.match(r"table\.(\w+)\(", line)
+            if not method:
+                continue
+            if method.group(1) in (
+                "drop_column",
+                "rename_column",
+                "index",
+                "unique",
+                "foreign",
+                "drop_index",
+                "drop_unique",
+                "drop_foreign",
             ):
-                # Extract just the table.* part, clean up whitespace
-                stripped = line.strip()
-                if stripped.startswith("table."):
-                    return stripped
-                # If line has indentation, extract the table.* part
-                table_part = re.search(r"table\.\w+\([^)]*\)(?:\.\w+\([^)]*\))*", line)
-                if table_part:
-                    return table_part.group(0)
-        return ""
+                continue
+            out.append(line)
+        return out
+
+    @staticmethod
+    def _parse_column_line(line: str) -> Column | None:
+        """Parse ``table.string("x", 50).nullable().default("y").unique()`` into a
+        structured :class:`Column` (keeps the verbatim line for lossless down)."""
+        head = re.match(r'table\.(\w+)\(\s*["\'](\w+)["\']\s*(.*)', line)
+        if not head:
+            return None
+        method, name, rest = head.group(1), head.group(2), head.group(3)
+        col = Column(name=name, type=method, raw_line=line)
+
+        # Positional size args before the first ``)`` of the type call.
+        size_args = re.match(r",?\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)", rest)
+        if size_args:
+            a, b = size_args.group(1), size_args.group(2)
+            if method in ("decimal", "double", "float") and b is not None:
+                col.precision, col.scale = int(a), int(b)
+            else:
+                col.length = int(a)
+
+        col.nullable = ".nullable()" in line
+        col.unique = ".unique()" in line
+        col.index = ".index(" in line or ".index()" in line
+        dflt = re.search(r"\.default\(([^)]*)\)", line)
+        if dflt:
+            col.has_default = True
+            col.default = dflt.group(1).strip()
+        return col

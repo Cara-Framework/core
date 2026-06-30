@@ -73,6 +73,12 @@ class BelongsToMany(BaseRelationship):
             if relations is not None and attr_name in relations:
                 return relations[attr_name]
 
+        # Strict lazy-load guard (opt-in, off by default): raise if this
+        # un-eager-loaded relation is accessed on a collection-hydrated model.
+        guard = getattr(instance, "_guard_against_lazy_load", None)
+        if attr_name and callable(guard):
+            guard(attr_name)
+
         # Lazy load: apply_query already executes .get() and returns Collection
         result = self.apply_query(self.get_builder(), instance)
 

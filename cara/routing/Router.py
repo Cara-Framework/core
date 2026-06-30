@@ -2,12 +2,10 @@
 Core Router class for HTTP and WebSocket traffic.
 
 Implements Laravel-style route lookup, including OPTIONS preflight for HTTP and WS dispatch.
-Supports route model binding for automatic model resolution.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from cara.exceptions import (
@@ -43,7 +41,6 @@ class Router:
         self.application = application
         self.routes: list[Route] = flatten(routes)
         self.controller_locations = module_location
-        self._model_bindings: dict[str, Callable[[Any], Any]] = {}
 
         # Bucket routes by method for efficient lookup. ``setdefault``
         # (vs the previous ``if key in self.routes_by_method`` guard)
@@ -115,52 +112,6 @@ class Router:
 
             url = f"{url}?{_up.urlencode(extras, doseq=True)}"
         return url
-
-    def model(
-        self,
-        name: str,
-        model_class: type[Any],
-        key: str = "id",
-    ) -> Router:
-        """Register implicit route model binding.
-
-        Args:
-            name: The parameter name to bind
-            model_class: The model class to resolve to
-            key: The key to query by (default: 'id')
-        """
-
-        def resolver(value: Any) -> Any:
-            # Use the model's find method if available
-            if hasattr(model_class, "find"):
-                return model_class.find(value)
-            # Fallback to querying by the specified key
-            return model_class.where(key, value).first()
-
-        self._model_bindings[name] = resolver
-        return self
-
-    def resolve_model_bindings(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Resolve model bindings for extracted route parameters.
-
-        Args:
-            params: Extracted route parameters
-
-        Returns:
-            Parameters with models resolved
-        """
-        resolved = {}
-        for key, value in params.items():
-            if key in self._model_bindings:
-                resolver = self._model_bindings[key]
-                try:
-                    resolved[key] = resolver(value)
-                except Exception:
-                    # If resolution fails, keep original value
-                    resolved[key] = value
-            else:
-                resolved[key] = value
-        return resolved
 
     def find(self, path: str, request_method: str) -> Route:
         """Find a matching route by path and method.

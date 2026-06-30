@@ -7,10 +7,29 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pendulum
-
 from cara.exceptions import InvalidArgumentException
 from cara.support import paths
+
+from .ModelMigrationComparator import FieldDiff, summarize_change_name
+
+# Cara field-type -> Postgres type for the rename API (table.rename needs the
+# column's SQL type since RENAME COLUMN goes through the same path as retype).
+_RENAME_SQL_TYPE = {
+    "string": "varchar", "char": "varchar", "text": "text",
+    "integer": "integer", "tiny_integer": "smallint", "small_integer": "smallint",
+    "medium_integer": "integer", "big_integer": "bigint",
+    "unsigned_integer": "integer", "unsigned_big_integer": "bigint",
+    "boolean": "boolean", "decimal": "numeric", "float": "double precision",
+    "double": "double precision", "jsonb": "jsonb", "json": "json",
+    "timestamp": "timestamp", "datetime": "timestamp", "date": "date",
+    "time": "time", "uuid": "uuid", "binary": "bytea",
+}
+
+
+def _as_change(line: str) -> str:
+    """Append ``.change()`` to a column line so the blueprint ALTERs it in place."""
+    line = line.rstrip()
+    return line if line.endswith(".change()") else line + ".change()"
 
 
 class MigrationGenerator:
@@ -74,13 +93,15 @@ class MigrationGenerator:
             return self._generate_blueprint_create_migration(model_info)
 
     def generate_update_migration(
-        self, model_info: dict, diff: list[str], style: str = "blueprint"
+        self, model_info: dict, diff: list[FieldDiff], style: str = "blueprint"
     ) -> str:
-        """Generate ALTER TABLE migration content."""
-        if style == "sql":
-            return self._generate_sql_update_migration(model_info, diff)
-        else:
-            return self._generate_blueprint_update_migration(model_info, diff)
+        """Generate an ALTER migration from typed :class:`FieldDiff` changes.
+
+        Updates always use the blueprint path — the structured differ targets
+        the blueprint Schema builder, and ``--style=sql`` is a CREATE-only
+        option (no SQL-style ALTER migrations exist in the consolidated set).
+        """
+        return self._generate_blueprint_update_migration(model_info, diff)
 
     def create_migration_file(self, name: str, content: str, dependency_order: int = 0):
         """Create migration file with Laravel 11+ ordering system (no timestamps).
@@ -203,61 +224,93 @@ class MigrationGenerator:
         return result
 
     def _generate_blueprint_update_migration(
-        self, model_info: dict, diff: list[str]
+        self, model_info: dict, diffs: list[FieldDiff]
     ) -> str:
-        """Generate blueprint-style ALTER TABLE migration."""
-        stub_path = self._get_update_stub_path()
-        stub_content = stub_path.read_text()
+        """Generate a blueprint ALTER migration from typed :class:`FieldDiff`s.
+
+        Emits faithful, REVERSIBLE up()/down() per change kind:
+          * added   → the column line in up(); drop_column in down().
+          * removed → drop_column (marked DESTRUCTIVE) in up(); the column's REAL
+                      parsed definition re-added in down() — a lossless rollback,
+                      not a varchar stand-in.
+          * altered → the new shape with .change() in up(); the OLD shape with
+                      .change() in down().
+          * renamed → table.rename(old, new, ...) in up(); the reverse in down()
+                      — NO drop+add, so the column's data survives.
+        """
+        stub_content = self._get_update_stub_path().read_text()
         table_name = model_info["table"]
-        class_name = f"Update{model_info['name']}Table"
+        _, class_name = summarize_change_name(table_name, diffs)
 
-        # Extract only the changed fields
-        changed_fields = []
-        drop_fields = []
-        foreign_keys = []
+        up_lines: list[str] = []
+        down_lines: list[str] = []
 
-        for diff_line in diff:
-            if "Added field:" in diff_line:
-                field_name = diff_line.replace("Added field: ", "").split(" (")[0]
-                if field_name in model_info["fields"]:
-                    field_info = model_info["fields"][field_name]
+        for d in diffs:
+            if d.kind == "added":
+                fi = model_info["fields"].get(d.name, {})
+                if fi.get("type") == "foreign_key":
+                    fk = self._generate_foreign_key_line(fi)
+                    if fk:
+                        up_lines.append(f"            {fk}")
+                else:
+                    line = self._generate_field_line(d.name, fi)
+                    if line:
+                        up_lines.append(f"            {line}")
+                down_lines.append(f'            table.drop_column("{d.name}")')
 
-                    # Handle foreign key fields separately
-                    if field_info.get("type") == "foreign_key":
-                        fk_line = self._generate_foreign_key_line(field_info)
-                        if fk_line:
-                            foreign_keys.append(f"            {fk_line}")
-                    else:
-                        field_line = self._generate_field_line(field_name, field_info)
-                        if field_line:  # Only add non-empty field lines
-                            changed_fields.append(f"            {field_line}")
-
-                    drop_fields.append(f'            table.drop_column("{field_name}")')
-            elif "Removed field:" in diff_line:
-                # Parse: "Removed field: field_name -> table.string("field_name")"
-                parts = diff_line.replace("Removed field: ", "").split(" -> ")
-                field_name = parts[0]
-                field_definition = (
-                    parts[1] if len(parts) > 1 else f'table.string("{field_name}")'
+            elif d.kind == "removed":
+                up_lines.append(
+                    f'            table.drop_column("{d.name}")'
+                    "  # DESTRUCTIVE: drops data — review before applying"
                 )
-                # For removed fields, we drop in up() and add back in down()
-                changed_fields.append(f'            table.drop_column("{field_name}")')
-                drop_fields.append(f"            {field_definition}")
+                recreate = (
+                    d.column.raw_line
+                    if d.column and d.column.raw_line
+                    else f'table.string("{d.name}")'
+                )
+                down_lines.append(f"            {recreate}")
 
-        # Combine fields and foreign keys
-        all_fields = changed_fields + foreign_keys
+            elif d.kind == "altered":
+                fi = model_info["fields"].get(d.name, {})
+                new_line = self._generate_field_line(d.name, fi)
+                up_lines.append(
+                    f"            {_as_change(new_line)}"
+                    f"  # altered: {', '.join(d.changed_attrs)}"
+                )
+                old_line = (
+                    d.old.raw_line
+                    if d.old and d.old.raw_line
+                    else f'table.string("{d.name}")'
+                )
+                down_lines.append(f"            {_as_change(old_line)}")
+
+            elif d.kind == "renamed":
+                col = d.column
+                sql_type = _RENAME_SQL_TYPE.get(col.type if col else "string", "varchar")
+                length_arg = f", {col.length}" if (col and col.length) else ""
+                up_lines.append(
+                    f'            table.rename("{d.old_name}", "{d.name}", '
+                    f'"{sql_type}"{length_arg})'
+                )
+                down_lines.append(
+                    f'            table.rename("{d.name}", "{d.old_name}", '
+                    f'"{sql_type}"{length_arg})'
+                )
+
+        if not up_lines:
+            up_lines.append("            pass")
+        if not down_lines:
+            down_lines.append("            pass")
 
         replacements = {
             "{{ class }}": class_name,
             "{{ table }}": table_name,
-            "{{ fields }}": "\n".join(all_fields),
-            "{{ drop_fields }}": "\n".join(drop_fields),
+            "{{ fields }}": "\n".join(up_lines),
+            "{{ drop_fields }}": "\n".join(down_lines),
         }
-
         result = stub_content
         for placeholder, replacement in replacements.items():
             result = result.replace(placeholder, replacement)
-
         return result
 
     def _prettify_sql(self, sql: str) -> str:
@@ -489,6 +542,10 @@ class {class_name}(Migration):
             column = table.float(field_name)
         elif field_type == "binary":
             column = table.binary(field_name)
+        elif field_type == "uuid":
+            column = table.uuid(field_name)
+        elif field_type == "double":
+            column = table.double(field_name)
         elif field_type == "char":
             length = params.get("length", 255)
             column = table.char(field_name, length)
@@ -558,10 +615,10 @@ class {class_name}(Migration):
 
         # Build method call based on field type
         if field_method == "decimal":
-            length = params.get("precision", 10)
-            precision = params.get("scale", 2)
+            precision = params.get("precision", 10)
+            scale = params.get("scale", 2)
             blueprint_call = (
-                f'table.{field_method}("{field_name}", {length}, {precision})'
+                f'table.{field_method}("{field_name}", {precision}, {scale})'
             )
         elif field_method in ("string", "char"):
             length = params.get("length", 255)
@@ -603,10 +660,16 @@ class {class_name}(Migration):
 
         if "default" in params:
             default_val = params["default"]
-            if isinstance(default_val, str):
-                blueprint_call += f'.default("{default_val}")'
+            if params.get("default_is_raw"):
+                # Expression default (DB.raw("now()"), an enum member, a named
+                # constant) — emit verbatim, NEVER quoted.
+                blueprint_call += f".default({default_val})"
             elif isinstance(default_val, bool):
-                blueprint_call += f".default({str(default_val)})"
+                blueprint_call += f".default({default_val})"
+            elif isinstance(default_val, str):
+                # ``repr`` escapes embedded quotes/newlines, so a default like
+                # ``27"`` can't emit a SyntaxError into the generated migration.
+                blueprint_call += f".default({default_val!r})"
             else:
                 blueprint_call += f".default({default_val})"
 
@@ -791,8 +854,3 @@ class {class_name}(Migration):
         )
 
         return migration_content
-
-    def _generate_migration_filename(self, name: str) -> str:
-        """Generate timestamped migration filename."""
-        timestamp = pendulum.now("UTC").format("YYYY_MM_DD_HHmmss")
-        return f"{timestamp}_{name}.py"
