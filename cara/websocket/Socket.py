@@ -71,7 +71,25 @@ class Socket:
         self._error: str | None = None
         self._close_code: int | None = None
 
+        # Serializes every write to this connection's ASGI ``send`` channel.
+        # ASGI ``websocket.send`` is NOT safe under concurrent calls, yet a
+        # connection's own controller reply, a channel/user broadcast fan-out,
+        # the heartbeat ping, and ``close()`` are all coroutines on the SAME
+        # event loop that can target ONE socket at once. Without this lock two
+        # of them suspended at ``send`` interleave into 'Unexpected ASGI
+        # message' errors / dropped frames — precisely under load. All writers
+        # go through ``_guarded_send`` / hold this lock. (Correct primitive
+        # here: WS handling is single-loop, so an asyncio.Lock — not a thread
+        # lock — is what serialises the coroutines.)
+        self._send_lock = asyncio.Lock()
+
         self._subscribed_channels: set[str] = set()
+        # channel → the presence member identity (the dict the auth callback
+        # returned) for presence channels this socket joined. Remembered so we
+        # can emit the matching ``presence.left`` on unsubscribe/disconnect —
+        # without it a dropped member lingers in every other client's roster
+        # forever (only ``presence.joined`` was ever broadcast).
+        self._presence_members: dict[str, Any] = {}
         self._connection_registered: bool = False
 
         # Cached broadcast driver reference. Resolved lazily on first
@@ -178,23 +196,40 @@ class Socket:
         if subprotocol is not None:
             msg["subprotocol"] = subprotocol
         try:
-            await self._send(msg)
+            await self._guarded_send(msg)
             self._ws_connected = True
         except Exception as e:
             raise WebSocketException(f"Failed to accept WebSocket: {e}", 4002) from e
 
+    async def _guarded_send(self, message: dict[str, Any]) -> None:
+        """Send a raw ASGI message under the per-socket send lock.
+
+        The single choke point for every write to this connection so concurrent
+        writers (controller reply + broadcast + heartbeat + close) can never
+        interleave frames on the ASGI send channel. Not reentrant — no caller
+        holds the lock while calling another guarded write.
+        """
+        async with self._send_lock:
+            await self._send(message)
+
     async def send_text(self, data: str) -> None:
         if not self._ws_connected:
             raise WebSocketException("WebSocket not accepted", 4003)
-        if self._closed:
-            # Client already gone — silently discard. Subsequent reads
-            # in the controller loop will see ``is_connected`` False
-            # and exit cleanly.
-            return
-        try:
-            await self._send({"type": "websocket.send", "text": data})
-        except Exception:
-            self._closed = True
+        # The closed-check, the send, and the on-failure closed-set all happen
+        # INSIDE the lock: otherwise two senders both pass the ``if closed``
+        # fast-path and both write, or a disconnect flips ``_closed`` in the gap
+        # between our check and our send. Holding the lock makes the
+        # "silently discard once closed" guarantee actually race-safe.
+        async with self._send_lock:
+            if self._closed:
+                # Client already gone — silently discard. Subsequent reads
+                # in the controller loop will see ``is_connected`` False
+                # and exit cleanly.
+                return
+            try:
+                await self._send({"type": "websocket.send", "text": data})
+            except Exception:
+                self._closed = True
 
     async def send_json(self, obj: Any) -> None:
         try:
@@ -204,17 +239,18 @@ class Socket:
         await self.send_text(payload)
 
     async def close(self, code: int = 1000, reason: str = "") -> None:
-        if self._closed:
-            return
-        msg: dict[str, Any] = {"type": "websocket.close", "code": code}
-        if reason:
-            msg["reason"] = reason
-        try:
-            await self._send(msg)
-        finally:
-            self._closed = True
-            self._close_code = code
-            self._error = reason or None
+        async with self._send_lock:
+            if self._closed:
+                return
+            msg: dict[str, Any] = {"type": "websocket.close", "code": code}
+            if reason:
+                msg["reason"] = reason
+            try:
+                await self._send(msg)
+            finally:
+                self._closed = True
+                self._close_code = code
+                self._error = reason or None
 
     async def receive_message(self) -> dict[str, Any] | None:
         """Read the next ASGI message.
@@ -272,7 +308,7 @@ class Socket:
             self._close_code = message.get("code", 1000)
             return None
         if msg_type == "websocket.ping":
-            await self._send({"type": "websocket.pong"})
+            await self._guarded_send({"type": "websocket.pong"})
             return {"type": "ping"}
         if msg_type == "websocket.connect":
             return {"type": "connect"}
@@ -372,8 +408,11 @@ class Socket:
         if success:
             self._subscribed_channels.add(channel)
             # If auth returned a presence dict, broadcast it on the
-            # presence channel so existing members see who joined.
+            # presence channel so existing members see who joined — and
+            # REMEMBER the identity so we can emit the matching
+            # ``presence.left`` when this socket leaves / drops.
             if isinstance(allowed, dict):
+                self._presence_members[channel] = allowed
                 try:
                     await Broadcast.broadcast(
                         channel, "presence.joined", {"user": allowed}
@@ -382,10 +421,26 @@ class Socket:
                     Log.debug("Presence join broadcast failed on %s: %s", channel, e, category='cara.websocket')
         return success
 
+    async def _broadcast_presence_left(self, channel: str) -> None:
+        """Emit ``presence.left`` to the remaining members of a presence
+        channel this socket had joined. No-op for non-presence channels (those
+        never recorded a member identity). Idempotent — pops the identity so a
+        second call (unsubscribe then cleanup) can't double-fire."""
+        member = self._presence_members.pop(channel, None)
+        if member is None:
+            return
+        try:
+            await Broadcast.broadcast(channel, "presence.left", {"user": member})
+        except Exception as e:
+            Log.debug("Presence leave broadcast failed on %s: %s", channel, e, category='cara.websocket')
+
     async def unsubscribe_channel(self, channel: str) -> bool:
         success = await Broadcast.unsubscribe(self._connection_id, channel)
         if success:
             self._subscribed_channels.discard(channel)
+            # After we've left, tell the remaining members (we no longer
+            # receive our own leave).
+            await self._broadcast_presence_left(channel)
         return success
 
     async def handle_subscription_request(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -433,9 +488,13 @@ class Socket:
             for channel in list(self._subscribed_channels):
                 try:
                     await Broadcast.unsubscribe(self._connection_id, channel)
+                    # Tell remaining presence-channel members we left (ghost-
+                    # roster fix) — best-effort, never block the tear-down.
+                    await self._broadcast_presence_left(channel)
                 except Exception as e:
                     Log.debug("unsubscribe(%s) during cleanup raised: %s", channel, e, category='cara.websocket')
             self._subscribed_channels.clear()
+            self._presence_members.clear()
 
             if self._connection_registered:
                 try:
@@ -471,8 +530,9 @@ class Socket:
     async def send(self, message: dict[str, Any]) -> None:
         """Direct ASGI send. Use ``send_text`` / ``send_json`` /
         ``close`` instead — kept to avoid breaking custom middleware
-        that expects the raw send."""
-        await self._send(message)
+        that expects the raw send. Still serialized through the per-socket
+        send lock so a direct caller can't interleave with a broadcast."""
+        await self._guarded_send(message)
 
     @property
     def receive(self) -> Any:

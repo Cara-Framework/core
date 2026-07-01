@@ -93,6 +93,24 @@ class ConnectionManager:
         self._heartbeat_tasks: dict[str, asyncio.Task] = {}
         self._cleanup_task: asyncio.Task | None = None
 
+        # Serializes ``add_connection`` so the cap-check → evict → add span
+        # (which straddles awaits: the evicted-tab notice + remove_connection)
+        # can't race a concurrent connect for the SAME user into exceeding the
+        # per-user / global cap. ``remove_connection`` stays lock-free
+        # (idempotent) and is CALLED inside this lock, so it must not re-acquire
+        # it. Connection setup is infrequent relative to messages, so
+        # serialising it is cheap.
+        self._registry_lock = asyncio.Lock()
+
+        # Per-recipient send timeout for broadcast fan-out. A client whose TCP
+        # send window is full would otherwise stall its ``send_json`` (and thus
+        # the whole ``gather`` fan-out, and — on the Redis driver — the cross-pod
+        # publish gated behind it) indefinitely. A send that overruns this bound
+        # is treated as a dead connection and reaped.
+        self._broadcast_send_timeout: float = float(
+            ws_cfg.get("broadcast_send_timeout", 5.0)
+        )
+
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
@@ -109,7 +127,24 @@ class ConnectionManager:
         cap is exceeded. When the per-user cap is exceeded the OLDEST
         connection for that user is dropped, mirroring Laravel
         Echo's "kick the previous tab" behaviour.
+
+        Serialized under ``_registry_lock``: the cap-check → evict → add span
+        straddles awaits, so without the lock two concurrent connects for the
+        same user both read ``len == cap``, both evict the same oldest tab, and
+        both add — silently exceeding the cap.
         """
+        async with self._registry_lock:
+            await self._add_connection_locked(
+                connection_id, websocket, user_id, metadata
+            )
+
+    async def _add_connection_locked(
+        self,
+        connection_id: str,
+        websocket: Any,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         if connection_id in self.connections:
             # Idempotency: a re-add with the same id replaces the old
             # connection. Mirrors how a browser tab reload arrives at
@@ -386,9 +421,20 @@ class ConnectionManager:
 
         # ``return_exceptions=True`` so a single dead client never
         # tears down the whole fan-out — we collect failures and
-        # remove them after.
+        # remove them after. Each send is bounded by
+        # ``_broadcast_send_timeout``: a client whose TCP send window is full
+        # would otherwise stall its ``send_json`` indefinitely, and ``gather``
+        # would not resolve until it did — holding the broadcast caller (and,
+        # on the Redis driver, the cross-pod publish gated behind it) hostage to
+        # the single slowest socket. A timed-out send is collected as a failure
+        # and the connection is reaped below, same as any other dead client.
         results = await asyncio.gather(
-            *(ws.send_json(message) for _, ws in targets),
+            *(
+                asyncio.wait_for(
+                    ws.send_json(message), timeout=self._broadcast_send_timeout
+                )
+                for _, ws in targets
+            ),
             return_exceptions=True,
         )
 
