@@ -88,43 +88,55 @@ def _wrap_without_overlapping(
     On contention the run is *skipped*, not queued — matching Laravel's
     ``withoutOverlapping`` semantics. The lock TTL caps tail damage if the
     holder crashes before releasing.
+
+    OWNER-FENCED: each fire acquires with a UNIQUE ``{pid}:{uuid}`` owner token
+    (``add``, atomic SET-NX) and releases with ``forget_if(key, owner)`` (atomic
+    compare-and-delete). The previous ``add("1")`` + bare ``forget(key)`` had no
+    owner fence, so a run that overran ``lock_timeout`` (the TTL then lapsed and
+    a peer/pod re-acquired) would delete the PEER's freshly-acquired lock on its
+    ``finally`` — letting a third fire start while two were already running. The
+    token makes release delete ONLY our own still-held lock.
     """
+    import os
+    import uuid as _uuid
+
     from cara.facades import Cache as _Cache
 
     lock_key = f"scheduler:lock:{identifier}"
 
+    def _new_owner() -> str:
+        return f"{os.getpid()}:{_uuid.uuid4().hex}"
+
+    def _release(owner: str) -> None:
+        try:
+            _Cache.forget_if(lock_key, owner)
+        except Exception:
+            _logger.debug("lock release failed for %s", identifier, exc_info=True)
+
     if inspect.iscoroutinefunction(callback):
 
         async def _async_locked(*a, **kw):
-            if not _Cache.add(lock_key, "1", lock_timeout):
+            owner = _new_owner()
+            if not _Cache.add(lock_key, owner, lock_timeout):
                 Log.info("Scheduled job '%s' skipped — previous run still in flight.", identifier, category='scheduler')
                 return None
             try:
                 return await callback(*a, **kw)
             finally:
-                try:
-                    _Cache.forget(lock_key)
-                except Exception:
-                    _logger.debug(
-                        "lock release failed for %s", identifier, exc_info=True
-                    )
+                _release(owner)
 
         _async_locked.__name__ = getattr(callback, "__name__", f"locked_{identifier}")
         return _async_locked
 
     def _sync_locked(*a, **kw):
-        if not _Cache.add(lock_key, "1", lock_timeout):
+        owner = _new_owner()
+        if not _Cache.add(lock_key, owner, lock_timeout):
             Log.info("Scheduled job '%s' skipped — previous run still in flight.", identifier, category='scheduler')
             return None
         try:
             return callback(*a, **kw)
         finally:
-            try:
-                _Cache.forget(lock_key)
-            except Exception:
-                _logger.debug(
-                    "lock release failed for %s", identifier, exc_info=True
-                )
+            _release(owner)
 
     _sync_locked.__name__ = getattr(callback, "__name__", f"locked_{identifier}")
     return _sync_locked

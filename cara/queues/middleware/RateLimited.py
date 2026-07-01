@@ -145,17 +145,28 @@ class WithoutOverlapping:
 
         cache = self._resolve_cache()
         if cache is not None:
-            acquired = self._try_acquire_redis(cache, redis_key)
-            if not acquired:
+            # Owner-fenced distributed lock: acquire with a UNIQUE per-run
+            # ``{pid}:{uuid}`` owner token (atomic SET-NX) and release with
+            # ``forget_if(key, owner)`` (atomic compare-and-delete). The old
+            # ``add("1")`` + bare ``forget(key)`` had NO owner fence, so a job
+            # that overran its TTL (the lock then lapsed and a peer re-acquired)
+            # would delete the peer's freshly-acquired lock on ``finally`` —
+            # letting a second copy run concurrently (double-fire on the
+            # user-facing sweeps this guards). The TTL is also sized ABOVE the
+            # job's own ``timeout`` so the lock can't lapse mid-run in the first
+            # place (see ``_effective_ttl``).
+            owner = self._new_owner()
+            ttl = self._effective_ttl(job)
+            if not self._try_acquire(cache, redis_key, owner, ttl):
                 self._log_skip(lock_key)
                 return None
             try:
                 return await _call_next(next_fn, job)
             finally:
                 try:
-                    cache.forget(redis_key)
+                    cache.forget_if(redis_key, owner)
                 except (OSError, ConnectionError, TimeoutError, RuntimeError):
-                    # TTL on the key still bounds the lock if forget fails.
+                    # TTL on the key still bounds the lock if release fails.
                     pass
             return None  # unreachable, satisfies type-checkers
 
@@ -204,19 +215,41 @@ class WithoutOverlapping:
         except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
             return None
 
-    def _try_acquire_redis(self, cache, redis_key: str) -> bool:
-        """Atomic-ish acquire: read, set if missing. Cara's Cache facade
-        doesn't expose SET-NX directly across all drivers, so we use
-        ``add`` when present (Redis driver implements it as SET-NX) and
-        fall back to ``has`` + ``put`` for drivers that don't.
-        ``add`` is the load-bearing path on Redis."""
-        # Preferred: native add → atomic SET-NX with TTL on Redis driver.
+    # Buffer added to the job's per-attempt ``timeout`` when sizing the lock
+    # TTL, mirroring the idempotency base lock (max(JOB_LOCK_TTL, timeout+300)).
+    _TTL_BUFFER_S = 300
+
+    @staticmethod
+    def _new_owner() -> str:
+        """Unique per-run lock owner token (matches CacheLock's scheme)."""
+        import os
+        import uuid
+
+        return f"{os.getpid()}:{uuid.uuid4().hex}"
+
+    def _effective_ttl(self, job) -> int:
+        """Lock TTL that outlasts the job so the guard never lapses mid-run.
+
+        ``expire_after`` is the caller's floor; the job's own per-attempt
+        ``timeout`` (its hard-kill window) is the real upper bound on runtime,
+        so the lock must live at least ``timeout + buffer``. Pre-fix
+        ``expire_after`` alone (e.g. 900s on a heavy sweep that can run longer)
+        let the lock TTL-expire mid-run so a second copy fired."""
+        job_timeout = int(getattr(job, "timeout", 0) or 0)
+        return max(int(self.expire_after), job_timeout + self._TTL_BUFFER_S)
+
+    def _try_acquire(self, cache, redis_key: str, owner: str, ttl: int) -> bool:
+        """Atomic owner-fenced acquire via ``add`` (SET-NX) storing OUR owner
+        token so ``forget_if`` can later release only our own lock. Falls back
+        to ``has`` + ``put`` only for drivers without ``add`` (a narrow TOCTOU
+        acceptable for those non-Redis fakes). A cache/Redis blip is treated as
+        'held' (skip), matching the prior best-effort behaviour."""
         add = getattr(cache, "add", None)
         if callable(add):
             try:
-                return bool(add(redis_key, "1", self.expire_after))
+                return bool(add(redis_key, owner, ttl))
             except (OSError, ConnectionError, TimeoutError, RuntimeError):
-                pass
+                return False
 
         # Fallback path — has + put. Subject to a TOCTOU window between
         # check and write; acceptable degradation when running on a
@@ -224,7 +257,7 @@ class WithoutOverlapping:
         try:
             if cache.has(redis_key):
                 return False
-            cache.put(redis_key, "1", self.expire_after)
+            cache.put(redis_key, owner, ttl)
             return True
         except (OSError, ConnectionError, TimeoutError, RuntimeError):
             return False

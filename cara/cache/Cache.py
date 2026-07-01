@@ -292,6 +292,23 @@ class Cache:
         """
         return self.driver(driver_name).forget(key)
 
+    def forget_if(
+        self, key: str, expected_value: Any, driver_name: str | None = None
+    ) -> bool:
+        """Atomically delete ``key`` only if its stored value equals
+        ``expected_value`` (compare-and-delete).
+
+        This is the owner-fenced release primitive for distributed locks: the
+        ownership check and the delete happen as ONE step (Redis Lua / an
+        equivalent CAS in every driver), so a lock whose TTL lapsed and was
+        re-acquired by another owner can't be deleted by the previous holder.
+        Exposed on the facade so callers that hand-roll an ``add``-based lock
+        (scheduler overlap guard, WithoutOverlapping middleware) can release it
+        safely without constructing a full :class:`CacheLock`. Returns True when
+        this owner still held the key and it was deleted.
+        """
+        return self.driver(driver_name).forget_if(key, expected_value)
+
     def flush(self, driver_name: str | None = None) -> None:
         """Flush (clear) all entries from the given driver."""
         self.driver(driver_name).flush()
