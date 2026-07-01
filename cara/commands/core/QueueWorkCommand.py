@@ -310,12 +310,13 @@ class JobProcessor:
         with ``attempts = attempts_done + 1`` so the next failure can
         decide budget correctly.
         """
-        try:
-            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-        except Exception as ack_err:
-            Log.error("Failed to ACK before retry republish: %s", ack_err, exc_info=True)
-            # Fall through — pika may have already auto-rejected.
-
+        # ACK ordering is load-bearing: we publish the retry FIRST and ACK the
+        # original only AFTER it is safely on the broker (below). The old order
+        # (ack here, then republish) LOST the job outright if the process died
+        # in the gap between the ack and the republish. Publishing first makes a
+        # crash-before-ack merely REDELIVER the original as a duplicate,
+        # idempotent retry — never a lost job (at-least-once, the correct choice
+        # for a retry path).
         attempts_done = int(
             msg.get("attempts", 0) if msg.get("attempts", 0) is not None else 0
         )
@@ -384,6 +385,18 @@ class JobProcessor:
                 delay_seconds,
                 type(exc).__name__,
             )
+            # Retry is safely on the broker — ACK the original now. A crash
+            # before this ack redelivers the original as a duplicate,
+            # idempotent retry, not a lost job.
+            try:
+                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            except Exception as ack_err:
+                Log.error(
+                    "Failed to ACK after retry republish for %s; the original "
+                    "will redeliver as a duplicate (idempotent) retry: %s",
+                    instance.__class__.__name__,
+                    ack_err,
+                )
         except Exception as republish_err:
             Log.error(
                 "Retry republish failed for %s: %s. "
@@ -438,6 +451,18 @@ class JobProcessor:
                     dlx_err,
                     msg,
                     exc_info=True,
+                )
+            # The retry never reached the broker; the payload is now in the DLX
+            # (or logged above for manual recovery). ACK the original so it does
+            # not poison-loop under prefetch=1. This ack is the ONLY one on the
+            # publish-failure path — the payload's durable home is the DLX now.
+            try:
+                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            except Exception as ack_err:
+                Log.error(
+                    "Failed to ACK after DLX fallback for %s: %s",
+                    instance.__class__.__name__,
+                    ack_err,
                 )
 
     @staticmethod
@@ -823,26 +848,6 @@ class JobProcessor:
             if tracker and db_job_id:
                 tracker.update_job_status(db_job_id, "completed")
 
-            # Release UniqueJob lock if applicable. The release MUST
-            # not be allowed to raise through to the outer handler —
-            # the work is already done, and skipping basic_ack here
-            # causes the broker to redeliver a completed message
-            # under prefetch=1, double-executing every side-effecting
-            # handler the next time the cache backing the lock blips.
-            # The lock TTL (``unique_for``, default 1h) is the safety
-            # net for any release we couldn't write — better a delayed
-            # re-dispatch than a duplicated side effect.
-            if isinstance(instance, UniqueJob):
-                try:
-                    UniqueJob.release_unique_lock(instance.unique_id())
-                except Exception as release_err:
-                    Log.warning(
-                        "UniqueJob lock release failed for %s: %s. "
-                        "Lock will expire on its TTL — proceeding to ACK.",
-                        instance.__class__.__name__,
-                        release_err,
-                    )
-
             # Batch completion hook — decrement the pending counter so
             # Batch.then() fires when all jobs finish. Without this,
             # batch-dispatched jobs processed through the production
@@ -856,8 +861,28 @@ class JobProcessor:
             except (ImportError, OSError, ConnectionError, RuntimeError):
                 pass
 
-            # Acknowledge message
+            # Acknowledge FIRST, then release the UniqueJob lock. Ordering is
+            # load-bearing for at-most-once side effects: releasing the lock
+            # BEFORE the ack and then crashing in the gap would let the broker
+            # redeliver the (unacked) completed message — and with the lock
+            # already gone, nothing dedups the re-run, so every side-effecting
+            # handler double-fires. Acking first means a crash before release
+            # just leaves the lock to expire on its TTL (``unique_for``,
+            # default 1h) — a delayed re-dispatch, never a double-run. The
+            # release is best-effort and must never raise past the ack.
             channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+
+            if isinstance(instance, UniqueJob):
+                try:
+                    UniqueJob.release_unique_lock(instance.unique_id())
+                except Exception as release_err:
+                    Log.warning(
+                        "UniqueJob lock release failed for %s: %s. "
+                        "Lock will expire on its TTL.",
+                        instance.__class__.__name__,
+                        release_err,
+                    )
+
             _mx_record("success")
             return "success"
 
@@ -1561,19 +1586,57 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     break
                 time.sleep(1)
         finally:
-            # Ask all threads to stop and let them drain gracefully.
+            # Ask all threads to stop and let them DRAIN their in-flight job.
+            # A consumer thread only re-checks ``shutdown_requested`` at the top
+            # of its loop, so a job already running (a scrape takes 30-120s; a
+            # job's ``timeout`` can be minutes) finishes first. Give the whole
+            # pool ONE generous DEADLINE (not a flat 10s PER thread) so a long
+            # in-flight job isn't abandoned mid-transaction on process exit — an
+            # abandoned daemon thread drops its pinned DB connection with no
+            # commit/rollback, and although the unacked message safely
+            # redelivers (jobs are idempotent), a clean drain avoids the churn.
+            # Bounded so a genuinely-wedged poison thread can't hold a deploy
+            # forever; whatever is still alive at the deadline is logged and
+            # left to the broker's redelivery.
             self.shutdown_requested = True
+            drain_budget = self._shutdown_drain_seconds()
+            deadline = time.monotonic() + drain_budget
             for t in threads:
+                remaining = max(0.0, deadline - time.monotonic())
                 try:
-                    t.join(timeout=10)
+                    t.join(timeout=remaining)
                 except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
+            still_alive = [t for t in threads if t.is_alive()]
+            if still_alive:
+                Log.warning(
+                    "Worker shutdown: %s consumer thread(s) did not drain within "
+                    "%ss — their in-flight jobs were interrupted and will "
+                    "redeliver.",
+                    len(still_alive),
+                    drain_budget,
+                )
             for mgr in managers:
                 try:
                     mgr.close()
                 except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
             self._shutdown_worker_resources()
+
+    @staticmethod
+    def _shutdown_drain_seconds() -> float:
+        """Graceful-shutdown drain budget (seconds) for in-flight jobs.
+
+        Configurable via ``queue.shutdown_drain_seconds``. Defaults GENEROUS
+        (120s) so a normal scrape/enrich/consolidation job finishes cleanly on
+        SIGTERM instead of being killed mid-transaction at the old flat 10s cap,
+        while still bounding how long a wedged poison-thread can delay a deploy.
+        Operators can raise it (long batch jobs) or lower it (fast-only workers).
+        """
+        try:
+            return max(0.0, float(config("queue.shutdown_drain_seconds", 120.0)))
+        except (TypeError, ValueError):
+            return 120.0
 
     @staticmethod
     def _run_worker_startup_hooks() -> None:
