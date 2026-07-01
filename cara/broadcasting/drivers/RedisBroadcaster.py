@@ -151,8 +151,20 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             return self._redis_clients[loop_id]
 
         if loop_id not in self._redis_pools:
+            # Bounded socket timeouts: without them ``publish`` / ``ping`` block
+            # on the OS TCP timeout (minutes) when Redis black-holes (dropped
+            # node, network partition) rather than refusing. The broadcast is
+            # try/except'd so it won't crash the trigger, but the request/job is
+            # AWAITED against the hang → it stalls for the full TCP timeout. The
+            # sibling Redis drivers (cache/queue) already set these; the
+            # broadcaster was the one that was missed.
             self._redis_pools[loop_id] = self._redis_async.ConnectionPool.from_url(
-                self._redis_url, decode_responses=True, max_connections=10
+                self._redis_url,
+                decode_responses=True,
+                max_connections=10,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                health_check_interval=30,
             )
         client = self._redis_async.Redis(connection_pool=self._redis_pools[loop_id])
         await client.ping()

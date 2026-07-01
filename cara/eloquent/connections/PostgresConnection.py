@@ -196,7 +196,19 @@ class PostgresConnection(BaseConnection):
                         conn = psycopg2.connect(**self._connect_kwargs())
                         conn.autocommit = True
                         CONNECTION_POOL.append(conn)
-                    except (OSError, RuntimeError, AttributeError):
+                    except Exception as warm_err:
+                        # A cold DB at boot leaves the pool with 0 pre-warmed
+                        # connections (lazy connect recovers later, so no hang/
+                        # leak) — but log it, or a boot-against-a-dead-DB is
+                        # completely invisible.
+                        import logging
+
+                        logging.getLogger("cara.database.pool").warning(
+                            "Pool warm-up connect failed (%s pre-warmed); "
+                            "falling back to lazy connect: %s",
+                            len(CONNECTION_POOL),
+                            warm_err,
+                        )
                         break
             _pool_initialized = True
 
@@ -291,10 +303,23 @@ class PostgresConnection(BaseConnection):
                 return psycopg2.connect(**self._connect_kwargs())
             except psycopg2.OperationalError as e:
                 last_err = e
-                if (
-                    "too many clients" in str(e)
-                    and attempt < self._MAX_CONNECT_RETRIES - 1
-                ):
+                msg = str(e).lower()
+                # Retry the transient, self-clearing outages with backoff:
+                #  - "too many clients": a momentary pool spike.
+                #  - SQLSTATE 57P03 / "starting up" / "in recovery": the node is
+                #    up but not yet accepting queries during a primary FAILOVER
+                #    or restart (typically 1-3s). Pre-fix every OperationalError
+                #    except "too many clients" raised on the FIRST attempt, so a
+                #    failover 503'd every request instead of riding out the
+                #    short window.
+                retriable = (
+                    "too many clients" in msg
+                    or "starting up" in msg
+                    or "in recovery" in msg
+                    or "cannot connect now" in msg
+                    or getattr(e, "pgcode", None) == "57P03"
+                )
+                if retriable and attempt < self._MAX_CONNECT_RETRIES - 1:
                     wait = self._RETRY_BACKOFF_BASE * (2**attempt)
                     time.sleep(wait)
                     continue

@@ -275,22 +275,21 @@ class TestMakeConnectionSetupFailureReleasesSlot:
 
         _install_fake_psycopg2(monkeypatch, _mock_pg_connection)
 
-        # ``foreign_keys=True`` forces ``enable_disable_foreign_keys``
-        # to issue ``self._connection.execute(...)``; pin the connection
-        # to raise on that call.
+        # ``foreign_keys=True`` forces ``enable_disable_foreign_keys`` to issue
+        # ``self._connection.cursor().execute(...)`` — a DBAPI connection has no
+        # ``.execute()``, so the setup goes through a CURSOR. Pin the cursor to
+        # raise on that call.
         pc = _make_pc(full_details={"foreign_keys": True})
 
-        def _raising_execute(_sql):
-            raise RuntimeError("server-side socket closed mid-setup")
-
-        # Monkeypatch the connection that the fake psycopg2 will return.
-        # The fake_psycopg2 calls _mock_pg_connection() each time; patch
-        # that to inject a raising execute on the returned mock.
+        # The fake psycopg2 calls _mock_pg_connection() each time; patch it so
+        # the returned connection's cursor raises on execute.
         original = _mock_pg_connection
 
         def _broken_mock_pg_connection(**_kw):
             conn = original()
-            conn.execute = _raising_execute  # type: ignore[method-assign]
+            conn.cursor.return_value.execute.side_effect = RuntimeError(
+                "server-side socket closed mid-setup"
+            )
             return conn
 
         _install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)
@@ -353,11 +352,9 @@ class TestMakeConnectionSetupFailureReleasesSlot:
 
         def _broken_mock_pg_connection(**_kw):
             conn = _mock_pg_connection()
-
-            def _raising_execute(_sql):
-                raise RuntimeError("repeat failure")
-
-            conn.execute = _raising_execute  # type: ignore[method-assign]
+            conn.cursor.return_value.execute.side_effect = RuntimeError(
+                "repeat failure"
+            )
             return conn
 
         _install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)

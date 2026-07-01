@@ -169,9 +169,21 @@ class BaseConnection:
 
     def enable_disable_foreign_keys(self):
         foreign_keys = self.full_details.get("foreign_keys")
+        if foreign_keys is None:
+            return
         platform = self.get_default_platform()()
-
-        if foreign_keys:
-            self._connection.execute(platform.enable_foreign_key_constraints())
-        elif foreign_keys is not None:
-            self._connection.execute(platform.disable_foreign_key_constraints())
+        sql = (
+            platform.enable_foreign_key_constraints()
+            if foreign_keys
+            else platform.disable_foreign_key_constraints()
+        )
+        # DBAPI CONNECTIONS (psycopg2, mysql) have no ``.execute()`` — that is a
+        # CURSOR method. The old ``self._connection.execute(...)`` only happened
+        # to work for sqlite3 and would raise ``AttributeError`` on Postgres/
+        # MySQL the moment any config set ``foreign_keys`` (dormant only because
+        # none does today). Route through a cursor, which every driver exposes.
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute(sql)
+        finally:
+            cursor.close()

@@ -287,9 +287,13 @@ class RedisCacheDriver(Cache):
         is interpreted as "another worker won the slot", so a
         silently-unserialisable payload would skip the work entirely.
 
-        Same reasoning applies when Redis itself is unreachable — return
-        ``False`` so callers can distinguish a lost flight-claim from a
-        successful acquire.
+        When Redis itself is unreachable this method RAISES (it does NOT
+        return False). That is the correct fail-CLOSED posture for the
+        lock/flight-claim use case: the exception propagates through
+        ``CacheLock.acquire`` so a caller that couldn't reach Redis does not
+        falsely believe it acquired the slot. (Earlier docs claimed a False
+        return here — the raising behaviour is intentional; don't "fix" it to
+        return False without auditing every lock call site.)
         """
         redis_key = f"{self._prefix}{key}"
         if isinstance(value, str):
