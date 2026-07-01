@@ -23,10 +23,14 @@ _ORDER_BY_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9
 from cara.eloquent.expressions import (
     AggregateExpression,
     BetweenExpression,
+    F,
     FromTable,
+    Greatest,
     GroupByExpression,
     HavingExpression,
     JoinClause,
+    Least,
+    Operation,
     OrderByExpression,
     QueryExpression,
     SelectExpression,
@@ -34,6 +38,18 @@ from cara.eloquent.expressions import (
     SubSelectExpression,
     UpdateQueryExpression,
 )
+
+
+def _is_column_expression(value) -> bool:
+    """True if ``value`` is a column-reference expression node
+    (``F`` / ``Operation`` / ``Greatest`` / ``Least``).
+
+    These render to quoted SQL identifiers — never bound values — so the
+    update/where compilers branch on them to skip casting, change-detection,
+    and parameter binding. Mirrors ``BaseGrammar.is_column_expression``; kept
+    here too so QueryBuilder need not reach into the grammar for the check.
+    """
+    return isinstance(value, (F, Operation, Greatest, Least))
 from cara.exceptions import (
     Http404Exception,
     InvalidArgumentException,
@@ -115,6 +131,7 @@ class QueryBuilder(ObservesEvents):
         self._connection_driver = connection_driver
         self._scopes = scopes or {}
         self.lock = False
+        self._lock_modifier = {"skip_locked": False, "nowait": False, "of": []}
         self._schema = schema
         self._eager_relation = EagerRelations()
         if model:
@@ -197,11 +214,59 @@ class QueryBuilder(ObservesEvents):
     def shared_lock(self):
         return self.make_lock("share")
 
-    def lock_for_update(self):
-        return self.make_lock("update")
+    def lock_for_update(
+        self,
+        skip_locked: bool = False,
+        nowait: bool = False,
+        of=None,
+    ) -> Self:
+        """Acquire a ``FOR UPDATE`` row lock, optionally with modifiers.
 
-    def make_lock(self, lock) -> Self:
+        Keyword Arguments:
+            skip_locked -- emit ``FOR UPDATE SKIP LOCKED`` (rows currently
+                locked by another transaction are skipped instead of waited
+                on). Postgres / MySQL 8+.
+            nowait -- emit ``FOR UPDATE NOWAIT`` (fail immediately instead of
+                blocking if a row is already locked). Mutually exclusive with
+                ``skip_locked``.
+            of -- a table name or list of table names for ``FOR UPDATE OF
+                <table>`` — restricts the lock to rows from those tables in a
+                joined query (Postgres). Names are quoted as identifiers.
+
+        Example::
+
+            Job.where("status", "queued").lock_for_update(skip_locked=True).first()
+            # ... FOR UPDATE SKIP LOCKED
+        """
+        if skip_locked and nowait:
+            raise InvalidArgumentException(
+                "lock_for_update: skip_locked and nowait are mutually exclusive."
+            )
+        return self.make_lock(
+            "update", skip_locked=skip_locked, nowait=nowait, of=of
+        )
+
+    def make_lock(
+        self,
+        lock,
+        skip_locked: bool = False,
+        nowait: bool = False,
+        of=None,
+    ) -> Self:
         self.lock = lock
+        # Modifiers ride alongside the base lock key so the existing
+        # share/update map stays untouched; the grammar appends them.
+        if of is None:
+            of_tables = []
+        elif isinstance(of, str):
+            of_tables = [of]
+        else:
+            of_tables = list(of)
+        self._lock_modifier = {
+            "skip_locked": skip_locked,
+            "nowait": nowait,
+            "of": of_tables,
+        }
         return self
 
     def reset(self) -> Self:
@@ -544,6 +609,153 @@ class QueryBuilder(ObservesEvents):
         self._columns += (SelectExpression(query, raw=True),)
         return self
 
+    # ── identifier-quoting helper for builder-time SQL fragments ─────────
+    # ``select_window`` / ``select_greatest`` / ``select_least`` assemble
+    # their SQL at call time (not via the column pipeline), so they need the
+    # grammar's identifier quoting. ``self.grammar`` is the grammar CLASS;
+    # a bare instance is enough to reach ``_table_column_string`` /
+    # ``compile_expression`` without touching connection state.
+
+    def _rendering_grammar(self):
+        """Return a transient grammar instance for quoting identifiers.
+
+        Seeded with this builder's table + connection details so qualified
+        column references resolve to the RIGHT table (not the grammar's
+        ``"users"`` default) and the dialect's quote chars / prefix apply.
+        """
+        return self.grammar(
+            table=self._table,
+            connection_details=self._connection_details,
+        )
+
+    def _quote_window_identifier(self, column: str) -> str:
+        """Quote a window PARTITION BY / ORDER BY identifier safely.
+
+        Reuses the SAME ``order_by`` injection guard as the rest of the
+        builder: only ``name`` / ``table.column`` identifiers are allowed.
+        Anything fancier (functions, expressions) is rejected — callers
+        wanting raw SQL there should build it with ``select_raw``.
+        """
+        col = column.strip()
+        if not _ORDER_BY_COLUMN_RE.match(col):
+            raise InvalidArgumentException(
+                f"Invalid window identifier {column!r}. "
+                f"Expected ``name`` or ``table.column``; use ``select_raw`` "
+                f"for arbitrary expressions."
+            )
+        return self._rendering_grammar()._table_column_string(col, separator="")
+
+    def select_window(
+        self,
+        expression: str,
+        *,
+        partition_by=None,
+        order_by=None,
+        alias: str = "rn",
+    ) -> Self:
+        """Add a window-function column:
+        ``expression OVER (PARTITION BY ... ORDER BY ...) AS alias``.
+
+        Arguments:
+            expression -- the window function call, e.g. ``"ROW_NUMBER()"``,
+                ``"RANK()"``, ``"LAG(price)"``. Passed through verbatim
+                (caller owns its correctness — it is a function call, not a
+                request-supplied value).
+
+        Keyword Arguments:
+            partition_by -- a column name or list of column names for the
+                ``PARTITION BY`` clause. Each is quoted as an identifier.
+            order_by -- a column name, a list of column names, or a list of
+                ``(column, direction)`` pairs for the ``ORDER BY`` clause.
+                Direction must be ASC/DESC; columns are quoted as identifiers.
+            alias -- the output column alias (default ``"rn"``).
+
+        Example::
+
+            Listing.select("*").select_window(
+                "ROW_NUMBER()",
+                partition_by=["product_id"],
+                order_by=[("price_low", "asc")],
+                alias="rn",
+            )
+            # SELECT *, ROW_NUMBER() OVER (
+            #     PARTITION BY "product_id" ORDER BY "price_low" ASC
+            # ) AS "rn" FROM ...
+        """
+        clauses = []
+
+        if partition_by:
+            cols = [partition_by] if isinstance(partition_by, str) else list(partition_by)
+            quoted = ", ".join(self._quote_window_identifier(c) for c in cols)
+            clauses.append(f"PARTITION BY {quoted}")
+
+        if order_by:
+            order_specs = [order_by] if isinstance(order_by, str) else list(order_by)
+            rendered = []
+            for spec in order_specs:
+                if isinstance(spec, (list, tuple)):
+                    col, direction = spec[0], (spec[1] if len(spec) > 1 else "ASC")
+                else:
+                    col, direction = spec, "ASC"
+                dir_str = (direction or "ASC").upper()
+                if dir_str not in ("ASC", "DESC"):
+                    raise InvalidArgumentException(
+                        f"Invalid window order direction {direction!r}; expected ASC or DESC"
+                    )
+                rendered.append(f"{self._quote_window_identifier(col)} {dir_str}")
+            clauses.append("ORDER BY " + ", ".join(rendered))
+
+        over = f" {' '.join(clauses)} " if clauses else ""
+        quoted_alias = self._rendering_grammar().column_string().format(
+            column=alias, separator=""
+        )
+        self._columns += (
+            SelectExpression(
+                f"{expression} OVER ({over.strip()}) AS {quoted_alias}", raw=True
+            ),
+        )
+        return self
+
+    def select_greatest(self, *columns, alias: str | None = None) -> Self:
+        """Add a ``GREATEST(...)`` SELECT column (mirrors ``select_if_null``).
+
+        Each argument may be a column name (string — quoted as an
+        identifier), an ``F`` reference, or a literal expression node.
+
+        Example::
+
+            q.select_greatest("price_low", "floor_price", alias="effective_low")
+            # SELECT GREATEST("price_low", "floor_price") AS "effective_low"
+        """
+        return self._select_function_expression(Greatest, columns, alias)
+
+    def select_least(self, *columns, alias: str | None = None) -> Self:
+        """Add a ``LEAST(...)`` SELECT column (mirrors ``select_if_null``).
+
+        Example::
+
+            q.select_least("price_high", "ceiling_price", alias="effective_high")
+            # SELECT LEAST("price_high", "ceiling_price") AS "effective_high"
+        """
+        return self._select_function_expression(Least, columns, alias)
+
+    def _select_function_expression(self, func_cls, columns, alias) -> Self:
+        """Shared body for ``select_greatest`` / ``select_least``.
+
+        Coerces bare string column names to ``F`` references (so they are
+        quoted as identifiers, NOT escaped as string literals) and renders
+        the function via the grammar's expression compiler.
+        """
+        args = [c if _is_column_expression(c) else F(c) for c in columns]
+        sql = self._rendering_grammar().compile_expression(func_cls(*args))
+        if alias:
+            quoted_alias = self._rendering_grammar().column_string().format(
+                column=alias, separator=""
+            )
+            sql += f" AS {quoted_alias}"
+        self._columns += (SelectExpression(sql, raw=True),)
+        return self
+
     def get_processor(self):
         return self.connection_class.get_default_post_processor()()
 
@@ -735,7 +947,22 @@ class QueryBuilder(ObservesEvents):
         """
         operator, value = self._extract_operator_value(*args)
 
-        if inspect.isfunction(column):
+        if _is_column_expression(column) or _is_column_expression(value):
+            # ``where(F("a"), ">", F("b"))`` (or a literal on either side):
+            # both sides are rendered by the grammar's expression compiler so
+            # column references stay quoted identifiers and literals are
+            # escaped as values — never a bound %s for the expression side.
+            self._wheres += (
+                (
+                    QueryExpression(
+                        column,
+                        operator,
+                        value,
+                        "expression",
+                    )
+                ),
+            )
+        elif inspect.isfunction(column):
             builder = column(self.new())
             self._wheres += (
                 (
@@ -1014,7 +1241,21 @@ class QueryBuilder(ObservesEvents):
             [type] -- [description]
         """
         operator, value = self._extract_operator_value(*args)
-        if inspect.isfunction(column):
+        if _is_column_expression(column) or _is_column_expression(value):
+            # OR-joined column-reference comparison — see ``where`` for the
+            # expression-rendering rationale.
+            self._wheres += (
+                (
+                    QueryExpression(
+                        column,
+                        operator,
+                        value,
+                        "expression",
+                        keyword="or",
+                    )
+                ),
+            )
+        elif inspect.isfunction(column):
             builder = column(self.new())
             self._wheres += (
                 (
@@ -2121,6 +2362,12 @@ class QueryBuilder(ObservesEvents):
                     for attr, value in updates.items()
                     if (
                         value is None
+                        # Column-reference expressions (F / arithmetic /
+                        # GREATEST / LEAST) are computed server-side from the
+                        # CURRENT row, so there is no Python value to compare
+                        # against ``__original_attributes__`` — never drop
+                        # them via change-detection.
+                        or _is_column_expression(value)
                         or model.__casts__.get(attr) in _mutable_casts
                         or model.__original_attributes__.get(attr, None) != value
                     )
@@ -2144,7 +2391,11 @@ class QueryBuilder(ObservesEvents):
                 # still need casting (e.g. json.dumps({}) → "{}").
                 # Using truthiness would skip the cast for these values,
                 # causing psycopg2 "can't adapt type 'dict'" errors.
-                if cast:
+                #
+                # Column-reference expressions are NOT data: the grammar
+                # renders them as quoted SQL, so casting (json.dumps etc.)
+                # would corrupt them. Leave them untouched.
+                if cast and not _is_column_expression(value):
                     if value is not None:
                         updates[key] = model.cast_value(key, value)
                     else:
@@ -2172,13 +2423,24 @@ class QueryBuilder(ObservesEvents):
                 "or build the update on a loaded model instance."
             )
 
-        additional.update(updates)
+        # Column-reference expressions are computed by the database from the
+        # CURRENT row — there is no concrete Python value to write back onto
+        # the model. Strip them from the dict used to refresh in-memory state
+        # so the model never carries a stale ``F`` object as an attribute.
+        # (The SQL itself still updates the column server-side.)
+        materialized = {
+            key: value
+            for key, value in updates.items()
+            if not _is_column_expression(value)
+        }
+
+        additional.update(materialized)
 
         self.new_connection().query(self.to_qmark(), self._bindings)
         if model:
-            model.fill(updates)
+            model.fill(materialized)
             self.observe_events(model, "updated")
-            model.fill_original(updates)
+            model.fill_original(materialized)
             return model
         return additional
 
@@ -3023,6 +3285,13 @@ class QueryBuilder(ObservesEvents):
             lock=self.lock,
             joins=self._joins,
             having=self._having,
+        )
+
+        # Carry row-lock modifiers (SKIP LOCKED / NOWAIT / OF) separately so
+        # the base share/update lock map stays untouched; process_locks reads
+        # them off the instance.
+        grammar_instance._lock_modifier = getattr(
+            self, "_lock_modifier", {"skip_locked": False, "nowait": False, "of": []}
         )
 
         # Pass upsert data to grammar if it's an upsert action

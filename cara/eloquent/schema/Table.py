@@ -91,13 +91,17 @@ class Table:
         self.added_columns.update({name: column})
         return column
 
-    def add_constraint(self, name, constraint_type, columns=None):
+    def add_constraint(
+        self, name, constraint_type, columns=None, expression=None, where=None
+    ):
         self.added_constraints.update(
             {
                 name: Constraint(
                     name,
                     constraint_type,
                     columns=columns or [],
+                    expression=expression,
+                    where=where,
                 )
             }
         )
@@ -109,13 +113,25 @@ class Table:
         foreign_column=None,
         name=None,
     ):
+        # ``column`` is a single column name (scalar FK) or a list of column
+        # names (composite FK). ``added_foreign_keys`` is keyed by column, so a
+        # list column needs a hashable key — use a tuple. The scalar ``str``
+        # key is unchanged, keeping the SQLite ``column.name in
+        # added_foreign_keys`` membership test (per-column REFERENCES on
+        # ADD COLUMN) byte-identical for single-column FKs.
+        if isinstance(column, list):
+            key = tuple(column)
+            default_name = f"{self.name}_{'_'.join(column)}_foreign"
+        else:
+            key = column
+            default_name = f"{self.name}_{column}_foreign"
         foreign_key = ForeignKeyConstraint(
             column,
             table,
             foreign_column,
-            name=name or f"{self.name}_{column}_foreign",
+            name=name or default_name,
         )
-        self.added_foreign_keys.update({column: foreign_key})
+        self.added_foreign_keys.update({key: foreign_key})
 
         return foreign_key
 

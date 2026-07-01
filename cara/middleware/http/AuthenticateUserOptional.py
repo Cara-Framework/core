@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from cara.context import ExecutionContext
 from cara.facades import Log
 from cara.http import Request, Response
 
@@ -48,7 +49,9 @@ class AuthenticateUserOptional(AuthenticateUser):
         for guard_name in self._resolve_guards(auth_manager):
             try:
                 guard = auth_manager.guard(guard_name)
-                user = guard.user()
+                # Offload the sync ``guard.user()`` (a ``User.find()`` SELECT)
+                # off the event loop — same rationale as AuthenticateUser.
+                user = await ExecutionContext.run_in_thread(guard.user)
                 if user:
                     successful_guard = guard_name
                     break

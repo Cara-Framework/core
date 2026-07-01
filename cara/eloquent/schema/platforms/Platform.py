@@ -90,6 +90,18 @@ class Platform:
             return ""
         return "({length})"
 
+    def wrap_columns(self, columns):
+        """Wrap one or many columns for a FOREIGN KEY (...) clause.
+
+        A scalar ``str`` wraps to a single quoted identifier (``"col"``) —
+        byte-identical to ``wrap_column`` — so single-column FKs are
+        unchanged. A ``list`` wraps each member and joins with ``", "`` so a
+        composite FK renders ``"a", "b"``.
+        """
+        if isinstance(columns, list):
+            return ", ".join(self.wrap_column(c) for c in columns)
+        return self.wrap_column(columns)
+
     def foreign_key_constraintize(self, table, foreign_keys):
         sql = []
         for name, foreign_key in foreign_keys.items():
@@ -100,11 +112,11 @@ class Platform:
                 cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key.update_action.lower())}"
             sql.append(
                 self.get_foreign_key_constraint_string().format(
-                    column=self.wrap_column(foreign_key.column),
+                    column=self.wrap_columns(foreign_key.column),
                     constraint_name=foreign_key.constraint_name,
                     table=self.wrap_table(table),
                     foreign_table=self.wrap_table(foreign_key.foreign_table),
-                    foreign_column=self.wrap_column(foreign_key.foreign_column),
+                    foreign_column=self.wrap_columns(foreign_key.foreign_column),
                     cascade=cascade,
                 )
             )

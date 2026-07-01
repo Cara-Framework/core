@@ -185,6 +185,16 @@ class MigrationGenerator:
         # (col_a, col_b)`` upserts in seed scripts fail with ``no
         # unique or exclusion constraint matching the ON CONFLICT
         # specification``).
+        # Multi-column foreign keys declared as
+        # ``field.foreign(["a", "b"]).references(["x", "y"]).on("t")``. They
+        # have no per-column ``fields`` entry (the local side is a list), so
+        # they are emitted from their own collection here — joining the scalar
+        # FK lines above.
+        for composite_fk in model_info.get("composite_foreign_keys", []):
+            fk_line = self._generate_foreign_key_line(composite_fk)
+            if fk_line:
+                foreign_keys.append(f"            {fk_line}")
+
         composite_lines = []
         for cols in model_info.get("composite_uniques", []):
             cols_str = ", ".join(f'"{c}"' for c in cols)
@@ -683,18 +693,47 @@ class {class_name}(Migration):
         return blueprint_call
 
     def _generate_foreign_key_line(self, foreign_key_info: dict) -> str:
-        """Generate foreign key constraint line from foreign key info."""
-        field = foreign_key_info.get("field")
+        """Generate foreign key constraint line from foreign key info.
+
+        Scalar (``field``/``references`` are strings):
+            ``table.foreign("a").references("x").on("t")``
+        Composite (``columns``/``references`` are lists):
+            ``table.foreign(["a", "b"]).references(["x", "y"]).on("t")``
+
+        Composite entries come from ``model_info["composite_foreign_keys"]`` and
+        carry their local columns under ``columns`` (the scalar shape uses
+        ``field``); both forms share ``on``/``on_delete``/``on_update``.
+        """
+        columns = foreign_key_info.get("columns")
         references = foreign_key_info.get("references")
         on_table = foreign_key_info.get("on")
         on_delete = foreign_key_info.get("on_delete")
         on_update = foreign_key_info.get("on_update")
 
-        if not field or not references or not on_table:
-            return ""
-
-        # Build foreign key constraint: table.foreign("field").references("column").on("table")
-        fk_line = f'table.foreign("{field}").references("{references}").on("{on_table}")'
+        if columns is not None:
+            # Composite FK — both sides are column lists of matching length.
+            if (
+                not isinstance(columns, list)
+                or not isinstance(references, list)
+                or not on_table
+                or len(columns) != len(references)
+            ):
+                return ""
+            cols_str = ", ".join(f'"{c}"' for c in columns)
+            refs_str = ", ".join(f'"{c}"' for c in references)
+            fk_line = (
+                f"table.foreign([{cols_str}])"
+                f".references([{refs_str}]).on(\"{on_table}\")"
+            )
+        else:
+            # Scalar FK — unchanged.
+            field = foreign_key_info.get("field")
+            if not field or not references or not on_table:
+                return ""
+            # Build foreign key constraint: table.foreign("field").references("column").on("table")
+            fk_line = (
+                f'table.foreign("{field}").references("{references}").on("{on_table}")'
+            )
 
         # Add ON DELETE clause if specified
         if on_delete:

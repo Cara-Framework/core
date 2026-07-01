@@ -13,16 +13,24 @@ from .GroupByExpression import GroupByExpression
 from .AggregateExpression import AggregateExpression
 from .OnClause import OnClause
 from .OnValueClause import OnValueClause
+from .F import F
+from .Greatest import Greatest
+from .Least import Least
+from .Operation import Operation
 
 __all__ = [
     "AggregateExpression",
     "BetweenExpression",
+    "F",
     "FromTable",
+    "Greatest",
     "GroupByExpression",
     "HavingExpression",
     "JoinClause",
+    "Least",
     "OnClause",
     "OnValueClause",
+    "Operation",
     "OrderByExpression",
     "QueryExpression",
     "Raw",

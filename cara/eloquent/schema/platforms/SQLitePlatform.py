@@ -99,6 +99,9 @@ class SQLitePlatform(Platform):
                     f"CREATE INDEX {index.name} ON {self.wrap_table(table.name)}({','.join(index.column)})"
                 )
 
+        for constraint in self.partial_unique_constraints(table):
+            sql.append(self.partial_unique_index_sql(table, constraint))
+
         return sql
 
     def columnize(self, columns):
@@ -284,8 +287,18 @@ class SQLitePlatform(Platform):
                 constraint,
             ) in diff.added_constraints.items():
                 if constraint.constraint_type == "unique":
+                    cols = ",".join(
+                        constraint.columns
+                        if isinstance(constraint.columns, list)
+                        else [constraint.columns]
+                    )
+                    where = f" WHERE {constraint.where}" if constraint.where else ""
                     sql.append(
-                        f"CREATE UNIQUE INDEX {constraint.name} ON {self.wrap_table(diff.name)}({','.join(constraint.columns if isinstance(constraint.columns, list) else [constraint.columns])})"
+                        f"CREATE UNIQUE INDEX {constraint.name} ON {self.wrap_table(diff.name)}({cols}){where}"
+                    )
+                elif constraint.constraint_type == "check":
+                    sql.append(
+                        f"ALTER TABLE {self.wrap_table(diff.name)} ADD CONSTRAINT {constraint.name} CHECK ({constraint.expression})"
                     )
                 elif constraint.constraint_type == "primary_key":
                     sql.append(
@@ -320,6 +333,9 @@ class SQLitePlatform(Platform):
     def get_unique_constraint_string(self):
         return "UNIQUE({columns})"
 
+    def get_check_constraint_string(self):
+        return "CONSTRAINT {constraint_name} CHECK ({expression})"
+
     def get_foreign_key_constraint_string(self):
         return "CONSTRAINT {constraint_name} FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column}){cascade}"
 
@@ -329,6 +345,10 @@ class SQLitePlatform(Platform):
     def constraintize(self, constraints):
         sql = []
         for name, constraint in constraints.items():
+            # Partial / conditional UNIQUE is emitted as a standalone
+            # CREATE UNIQUE INDEX ... WHERE after the table body, not inline.
+            if constraint.constraint_type == "unique" and constraint.where:
+                continue
             sql.append(
                 getattr(
                     self,
@@ -336,9 +356,24 @@ class SQLitePlatform(Platform):
                 )().format(
                     columns=", ".join(constraint.columns),
                     constraint_name=constraint.name,
+                    expression=constraint.expression,
                 )
             )
         return sql
+
+    def partial_unique_index_sql(self, table, constraint):
+        return (
+            f"CREATE UNIQUE INDEX {constraint.name} "
+            f"ON {self.wrap_table(table.name)} ({','.join(constraint.columns)}) "
+            f"WHERE {constraint.where}"
+        )
+
+    def partial_unique_constraints(self, table):
+        return [
+            c
+            for c in table.get_added_constraints().values()
+            if c.constraint_type == "unique" and c.where
+        ]
 
     def foreign_key_constraintize(self, table, foreign_keys):
         sql = []
@@ -350,11 +385,11 @@ class SQLitePlatform(Platform):
                 cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key.update_action.lower())}"
             sql.append(
                 self.get_foreign_key_constraint_string().format(
-                    column=self.wrap_column(foreign_key.column),
+                    column=self.wrap_columns(foreign_key.column),
                     constraint_name=foreign_key.constraint_name,
                     table=self.wrap_table(table),
                     foreign_table=self.wrap_table(foreign_key.foreign_table),
-                    foreign_column=self.wrap_column(foreign_key.foreign_column),
+                    foreign_column=self.wrap_columns(foreign_key.foreign_column),
                     cascade=cascade,
                 )
             )

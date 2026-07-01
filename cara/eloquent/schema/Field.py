@@ -105,6 +105,8 @@ class FieldMeta(type):
                 "comment",
                 "after",
                 "unique",
+                "partial_unique",
+                "check",
                 "index",
                 "fulltext",
                 "primary",

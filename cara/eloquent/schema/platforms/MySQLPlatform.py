@@ -160,6 +160,9 @@ class MySQLPlatform(Platform):
                     )
                 )
 
+        for constraint in self.partial_unique_constraints(table):
+            sql.append(self.partial_unique_index_sql(table, constraint))
+
         return sql
 
     def compile_alter_sql(self, table):
@@ -333,8 +336,15 @@ class MySQLPlatform(Platform):
                 constraint,
             ) in table.added_constraints.items():
                 if constraint.constraint_type == "unique":
+                    if constraint.where:
+                        sql.append(self.partial_unique_index_sql(table, constraint))
+                    else:
+                        sql.append(
+                            f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT UNIQUE INDEX {constraint.name}({','.join(constraint.columns)})"
+                        )
+                elif constraint.constraint_type == "check":
                     sql.append(
-                        f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT UNIQUE INDEX {constraint.name}({','.join(constraint.columns)})"
+                        f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT {constraint.name} CHECK ({constraint.expression})"
                     )
                 elif constraint.constraint_type == "fulltext":
                     sql.append(
@@ -381,6 +391,10 @@ class MySQLPlatform(Platform):
     def constraintize(self, constraints, table):
         sql = []
         for name, constraint in constraints.items():
+            # Partial / conditional UNIQUE is emitted as a standalone
+            # CREATE UNIQUE INDEX ... WHERE after the table body, not inline.
+            if constraint.constraint_type == "unique" and constraint.where:
+                continue
             sql.append(
                 getattr(
                     self,
@@ -390,10 +404,25 @@ class MySQLPlatform(Platform):
                     name_columns="_".join(constraint.columns),
                     table=table.name,
                     constraint_name=constraint.name,
+                    expression=constraint.expression,
                 )
             )
 
         return sql
+
+    def partial_unique_index_sql(self, table, constraint):
+        return (
+            f"CREATE UNIQUE INDEX {constraint.name} "
+            f"ON {self.wrap_table(table.name)} ({','.join(constraint.columns)}) "
+            f"WHERE {constraint.where}"
+        )
+
+    def partial_unique_constraints(self, table):
+        return [
+            c
+            for c in table.get_added_constraints().values()
+            if c.constraint_type == "unique" and c.where
+        ]
 
     def get_table_string(self):
         return "`{table}`"
@@ -418,6 +447,9 @@ class MySQLPlatform(Platform):
 
     def get_unique_constraint_string(self):
         return "CONSTRAINT {constraint_name} UNIQUE ({columns})"
+
+    def get_check_constraint_string(self):
+        return "CONSTRAINT {constraint_name} CHECK ({expression})"
 
     def compile_table_exists(self, table, database=None, schema=None):
         table = self._validate_identifier(table, "table name")

@@ -16,6 +16,7 @@ from .Metrics import (
     init_build_info,
     normalize_metric_path,
     render,
+    sample_db_pool_metrics,
     start_http_server,
     status_class,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "init_build_info",
     "normalize_metric_path",
     "render",
+    "sample_db_pool_metrics",
     "set_request_tag",
     "set_request_user",
     "setup_sentry",

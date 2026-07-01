@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from cara.authentication import Authentication
+from cara.context import ExecutionContext
 from cara.facades import Log
 from cara.http import Request, Response
 from .ShouldAuthenticate import ShouldAuthenticate
@@ -98,7 +99,14 @@ class AuthenticateUser(ShouldAuthenticate):
         for guard_name in self._resolve_guards(auth_manager):
             try:
                 guard = auth_manager.guard(guard_name)
-                user = guard.user()
+                # ``guard.user()`` resolves the JWT subject to a row via a
+                # SYNC ``User.find()`` (psycopg2). This middleware's ``handle``
+                # is async + runs on the event loop, so calling it inline would
+                # block the loop for the duration of that SELECT on every
+                # authenticated request. Offload to the connection-safe thread
+                # pool so the loop stays free (a genuine await-yield, unlike a
+                # sync-caller offload which can't help).
+                user = await ExecutionContext.run_in_thread(guard.user)
                 if user:
                     successful_guard = guard_name
                     break

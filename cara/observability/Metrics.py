@@ -403,6 +403,134 @@ class MetricsBase:
         registry=REGISTRY,
     )
 
+    # ─── Database connection pool ───────────────────────────────────────
+    # Saturation signal for the ORM connection pool (see
+    # ``cara.eloquent.connections.PostgresConnection``). ``in_use`` vs
+    # ``max`` is the headline ratio — when it pins at 1.0, callers start
+    # blocking on ``_pool_semaphore.acquire`` and eventually 503 with
+    # ``DatabaseUnavailableException``. ``idle`` is the count of warm
+    # connections parked in the reuse list (checked out → checked back
+    # in). Populated by :func:`sample_db_pool_metrics`, which is wired
+    # into the existing Prometheus scrape path (see ``render``).
+    db_pool_connections_in_use = Gauge(
+        metric_name("db_pool_connections_in_use"),
+        "DB connections currently checked out of the pool (max - free slots).",
+        registry=REGISTRY,
+    )
+    db_pool_connections_idle = Gauge(
+        metric_name("db_pool_connections_idle"),
+        "Warm DB connections parked in the pool's reuse list, ready to hand out.",
+        registry=REGISTRY,
+    )
+    db_pool_connections_max = Gauge(
+        metric_name("db_pool_connections_max"),
+        "Configured maximum size of the DB connection pool (total slots).",
+        registry=REGISTRY,
+    )
+
+
+def _read_db_pool_stats() -> dict[str, int] | None:
+    """Read the ORM connection pool's in-use / idle / max counts.
+
+    Returns ``None`` when the pool has not been initialised yet (e.g.
+    no query has run, or pooling is disabled) so the caller can skip the
+    sample rather than emit misleading zeros. Never raises — a metrics
+    probe must not be able to take down the scrape path or the request
+    that triggered it.
+
+    The numbers are read straight off the Postgres pool's module-level
+    state (``_pool_semaphore`` free-slot count + the ``CONNECTION_POOL``
+    reuse list). The configured ceiling comes from the database config;
+    when that lookup fails we fall back to ``in_use + free`` (the live
+    slot total), which equals the real maximum whenever the semaphore is
+    intact.
+    """
+    try:
+        # Import the *module*, not the re-exported class. The submodule
+        # and the class share the name ``PostgresConnection``, so the
+        # package attribute resolves to the class (the package __init__
+        # re-exports it) — ``importlib.import_module`` is the reliable
+        # way to reach the module object whose scope holds the pool
+        # state (``_pool_semaphore``, ``CONNECTION_POOL``,
+        # ``_pool_initialized``).
+        import importlib
+
+        _pg = importlib.import_module(
+            "cara.eloquent.connections.PostgresConnection"
+        )
+    except Exception:
+        return None
+
+    try:
+        if not getattr(_pg, "_pool_initialized", False):
+            return None
+        semaphore = getattr(_pg, "_pool_semaphore", None)
+        if semaphore is None:
+            return None
+
+        # ``threading.Semaphore`` keeps the current free-slot count in
+        # ``_value``. Reading it is racy by a connection or two, which is
+        # fine for a gauge — we only need the saturation trend, not an
+        # exact ledger.
+        free = int(getattr(semaphore, "_value", 0) or 0)
+        idle = len(getattr(_pg, "CONNECTION_POOL", []) or [])
+
+        total = _configured_db_pool_max()
+        if total is None or total < free:
+            # Fall back to the live slot count when config is unavailable
+            # or smaller than what the semaphore reports (stale config).
+            total = free + max(0, idle)  # best-effort lower bound
+            # The semaphore's free count alone can't tell us how many are
+            # checked out without the max; if we still have nothing better
+            # than free, treat free as the total (in_use = 0).
+            total = max(total, free)
+
+        in_use = max(0, total - free)
+        return {"in_use": in_use, "idle": idle, "max": total}
+    except Exception:
+        return None
+
+
+def _configured_db_pool_max() -> int | None:
+    """Best-effort read of the configured pool ceiling from db config.
+
+    ``database.drivers.<default>.connection_pooling_max_size``. Returns
+    ``None`` when config isn't loaded or the key is absent.
+    """
+    try:
+        default = config("database.default", None)
+        drivers = config("database.drivers", {}) or {}
+        if not isinstance(drivers, dict):
+            return None
+        details = drivers.get(default) if default is not None else None
+        if not isinstance(details, dict):
+            # Single-driver configs sometimes inline the details.
+            details = drivers
+        raw = details.get("connection_pooling_max_size")
+        return int(raw) if raw is not None else None
+    except Exception:
+        return None
+
+
+def sample_db_pool_metrics(metrics_cls: type = MetricsBase) -> None:
+    """Refresh the DB-pool gauges from the live pool state.
+
+    Idempotent and exception-safe. Call it just before serialising the
+    Prometheus payload (it is invoked from :func:`render`) so the gauges
+    reflect the pool at scrape time rather than whenever the last query
+    happened to run. A no-op when the pool is uninitialised.
+    """
+    stats = _read_db_pool_stats()
+    if stats is None:
+        return
+    try:
+        metrics_cls.db_pool_connections_in_use.set(stats["in_use"])
+        metrics_cls.db_pool_connections_idle.set(stats["idle"])
+        metrics_cls.db_pool_connections_max.set(stats["max"])
+    except Exception:
+        # Gauge writes must never break the scrape.
+        return
+
 
 def init_build_info(metrics_cls: type = MetricsBase) -> None:
     """Set the static build-info gauge once at import time."""
@@ -434,7 +562,13 @@ def bool_label(flag: object) -> str:
 
 
 def render() -> tuple[bytes, str]:
-    """Produce the Prometheus text payload + content-type."""
+    """Produce the Prometheus text payload + content-type.
+
+    Refreshes pull-style gauges (the DB connection-pool saturation
+    sample) immediately before serialising so the scrape reflects the
+    live pool rather than the last query's snapshot.
+    """
+    sample_db_pool_metrics()
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
 
 

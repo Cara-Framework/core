@@ -299,11 +299,42 @@ class Blueprint:
 
     # === Constraints - Delegation to ConstraintManager ===
 
-    def unique(self, column=None, name=None) -> Self:
-        """Add unique constraint - delegates to ConstraintManager"""
+    def unique(self, column=None, name=None, where: str | None = None) -> Self:
+        """Add unique constraint - delegates to ConstraintManager.
+
+        Pass ``where`` to make it a partial / conditional UNIQUE — the
+        platform emits ``CREATE UNIQUE INDEX <name> ON <table> (...) WHERE
+        <where>`` (Postgres partial unique index, e.g. the "unique only among
+        non-deleted rows" pattern, ``where="deleted_at IS NULL"``). Omitting
+        ``where`` keeps the plain UNIQUE constraint behaviour unchanged.
+        """
         columns = column or (self._last_column.name if self._last_column else None)
         if columns:
-            self.constraint_manager.add_unique_constraint(columns, name)
+            self.constraint_manager.add_unique_constraint(columns, name, where=where)
+        return self
+
+    def partial_unique(self, column=None, where: str | None = None, name=None) -> Self:
+        """Conditional UNIQUE convenience — ``unique(..., where=...)``.
+
+        Reads more intentfully at the call site for the common "unique only
+        among active / non-deleted rows" case::
+
+            table.partial_unique(["marketplace_id", "external_id"],
+                                  where="deleted_at IS NULL")
+        """
+        return self.unique(column, name=name, where=where)
+
+    def check(self, expression: str, name: str | None = None) -> Self:
+        """Add a CHECK constraint as a first-class Blueprint verb.
+
+        Emits ``CONSTRAINT <name> CHECK (<expression>)`` inside CREATE TABLE
+        and ``ALTER TABLE ... ADD CONSTRAINT <name> CHECK (<expression>)`` on
+        an existing table. ``name`` auto-derives as
+        ``<table>_<slug-of-expression>_check`` when omitted::
+
+            table.check("current_price IS NULL OR current_price >= 0")
+        """
+        self.constraint_manager.add_check_constraint(expression, name)
         return self
 
     def index(self, column=None, name=None) -> Self:

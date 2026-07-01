@@ -63,6 +63,7 @@ class BaseGrammar:
         self._joins = joins
         self._having = having
         self.lock = lock
+        self._lock_modifier = {"skip_locked": False, "nowait": False, "of": []}
         self._connection_details = connection_details or {}
         self._column = None
 
@@ -342,7 +343,18 @@ class BaseGrammar:
             value = update.value
             if isinstance(column, dict):
                 for key, value in column.items():
-                    if hasattr(value, "expression"):
+                    if self.is_column_expression(value):
+                        # F / arithmetic / GREATEST / LEAST: the value is a
+                        # column-reference expression, NOT a bound param.
+                        # Render it with identifiers quoted by the grammar so
+                        # e.g. ``"click_count" = "click_count" + 1`` emits no
+                        # %s placeholder (qmark path adds no binding either).
+                        sql += self.column_value_string().format(
+                            column=self._table_column_string(key),
+                            value=self.compile_expression(value),
+                            separator=", ",
+                        )
+                    elif hasattr(value, "expression"):
                         sql += self.column_value_string().format(
                             column=self._table_column_string(key),
                             value=value.expression,
@@ -568,7 +580,36 @@ class BaseGrammar:
         return self.offset_string().format(offset=self._offset, limit=self._limit or 1)
 
     def process_locks(self):
-        return self.locks.get(self.lock, "")
+        base = self.locks.get(self.lock, "")
+        if not base:
+            return base
+        return base + self._lock_modifier_sql(base)
+
+    def _lock_modifier_sql(self, base_lock: str) -> str:
+        """Render SKIP LOCKED / NOWAIT / OF modifiers for a row lock.
+
+        Only applies to ``FOR UPDATE`` / ``FOR SHARE`` style locks (the
+        Postgres / MySQL family). Grammars whose base lock string is empty
+        (SQLite) or not a ``FOR ...`` clause (MSSQL hints) return nothing, so
+        the modifiers degrade to a plain lock there rather than emitting
+        invalid SQL. Subclasses may override for dialect-specific syntax.
+        """
+        modifier = getattr(
+            self, "_lock_modifier", {"skip_locked": False, "nowait": False, "of": []}
+        )
+        if not base_lock.upper().startswith("FOR "):
+            return ""
+
+        sql = ""
+        of_tables = modifier.get("of") or []
+        if of_tables:
+            quoted = ", ".join(self.table_string().format(table=t) for t in of_tables)
+            sql += f" OF {quoted}"
+        if modifier.get("skip_locked"):
+            sql += " SKIP LOCKED"
+        elif modifier.get("nowait"):
+            sql += " NOWAIT"
+        return sql
 
     def process_having(self, qmark=False):
         """
@@ -658,6 +699,30 @@ class BaseGrammar:
 
                 loop_count += 1
 
+                continue
+
+            if value_type == "expression":
+                # ``where(F("a"), op, F("b"))`` — render BOTH sides through
+                # the expression compiler so column references are quoted
+                # identifiers and any literal operand is escaped as a value.
+                # No %s binding is emitted for either side.
+                left = (
+                    self.compile_expression(column)
+                    if self.is_column_expression(column)
+                    else self._table_column_string(column)
+                )
+                right = (
+                    self.compile_expression(value)
+                    if self.is_column_expression(value)
+                    else self._compile_value(value).strip()
+                )
+                sql += self.where_string().format(
+                    keyword=keyword,
+                    column=left,
+                    equality=equality.upper(),
+                    value=right,
+                )
+                loop_count += 1
                 continue
 
             """The column is an easy compile
@@ -1018,6 +1083,75 @@ class BaseGrammar:
             self
         """
         return self.value_string().format(value=value, separator=separator)
+
+    # ── column-reference expressions (F / arithmetic / GREATEST / LEAST) ──
+
+    @staticmethod
+    def is_column_expression(value) -> bool:
+        """True if ``value`` is one of the column-reference expression nodes
+        (``F`` / ``Operation`` / ``Greatest`` / ``Least``).
+
+        These render to *unparameterised* SQL with identifiers quoted by the
+        grammar — never as a bound value — so callers and the update/where
+        compilers can branch on them. Kept as a single predicate so the
+        membership set lives in one place.
+        """
+        from cara.eloquent.expressions import F, Greatest, Least, Operation
+
+        return isinstance(value, (F, Operation, Greatest, Least))
+
+    def compile_expression(self, expr) -> str:
+        """Render a column-reference expression tree to a SQL fragment.
+
+        Walks ``F`` / ``Operation`` / ``Greatest`` / ``Least`` nodes,
+        quoting every column reference as an identifier (via
+        ``_table_column_string`` so ``table.col`` qualification and the
+        grammar's quote chars are honoured) and escaping any non-expression
+        operand as a literal value (via ``value_string`` — the same escape
+        path the rest of the grammar uses). Nested ``Operation`` nodes are
+        wrapped in parentheses so SQL precedence is explicit.
+
+        This is the single rendering seam shared by F-style updates,
+        ``where(F(...), op, F(...))`` filters, and the GREATEST/LEAST
+        SELECT helpers — none of them bind expression operands as ``%s``.
+        """
+        from cara.eloquent.expressions import F, Greatest, Least, Operation
+
+        if isinstance(expr, F):
+            return self._table_column_string(expr.column, separator="")
+
+        if isinstance(expr, Operation):
+            left = self._compile_expression_operand(expr.left)
+            right = self._compile_expression_operand(expr.right)
+            return f"{left} {expr.operator} {right}"
+
+        if isinstance(expr, (Greatest, Least)):
+            rendered = ", ".join(
+                self._compile_expression_operand(arg) for arg in expr.arguments
+            )
+            return f"{expr.function}({rendered})"
+
+        # A bare literal handed straight to compile_expression — escape it
+        # as a value so the fragment is still well-formed.
+        return self._compile_value(expr).strip()
+
+    def _compile_expression_operand(self, operand) -> str:
+        """Render a single operand of an expression tree.
+
+        Column-reference nodes recurse through ``compile_expression``;
+        nested ``Operation`` trees additionally get parenthesised so the
+        emitted SQL reflects the Python composition order. Anything else is
+        a Python literal and is escaped as a value.
+        """
+        from cara.eloquent.expressions import Operation
+
+        if self.is_column_expression(operand):
+            rendered = self.compile_expression(operand)
+            if isinstance(operand, Operation):
+                return f"({rendered})"
+            return rendered
+
+        return self._compile_value(operand).strip()
 
     def drop_table(self, table) -> Self:
         """

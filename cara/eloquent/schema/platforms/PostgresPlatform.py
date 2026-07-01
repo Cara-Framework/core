@@ -123,6 +123,11 @@ class PostgresPlatform(Platform):
                     f"CREATE INDEX {index.name} ON {self.wrap_table(table.name)}({quoted_cols})"
                 )
 
+        # Partial / conditional UNIQUE — a separate CREATE UNIQUE INDEX since a
+        # table-level UNIQUE constraint cannot carry a WHERE predicate.
+        for constraint in self.partial_unique_constraints(table):
+            sql.append(self.partial_unique_index_sql(table, constraint))
+
         for (
             name,
             column,
@@ -354,13 +359,16 @@ class PostgresPlatform(Platform):
                 sql.append(
                     f"ALTER TABLE {self.wrap_table(table.name)} ADD "
                     + self.get_foreign_key_constraint_string().format(
-                        column=self.wrap_column(column),
+                        # Render from the constraint's own ``column`` (a str for
+                        # scalar FKs, a list for composite) rather than the dict
+                        # key, which is a tuple in the composite case.
+                        column=self.wrap_columns(foreign_key_constraint.column),
                         constraint_name=foreign_key_constraint.constraint_name,
                         table=self.wrap_table(table.name),
                         foreign_table=self.wrap_table(
                             foreign_key_constraint.foreign_table
                         ),
-                        foreign_column=self.wrap_column(
+                        foreign_column=self.wrap_columns(
                             foreign_key_constraint.foreign_column
                         ),
                         cascade=cascade,
@@ -403,8 +411,17 @@ class PostgresPlatform(Platform):
                 constraint,
             ) in table.added_constraints.items():
                 if constraint.constraint_type == "unique":
+                    # A ``where`` predicate makes this a partial unique INDEX,
+                    # not a table constraint — emit CREATE UNIQUE INDEX instead.
+                    if constraint.where:
+                        sql.append(self.partial_unique_index_sql(table, constraint))
+                    else:
+                        sql.append(
+                            f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT {constraint.name} UNIQUE({','.join(constraint.columns)})"
+                        )
+                elif constraint.constraint_type == "check":
                     sql.append(
-                        f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT {constraint.name} UNIQUE({','.join(constraint.columns)})"
+                        f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT {constraint.name} CHECK ({constraint.expression})"
                     )
                 elif constraint.constraint_type == "primary_key":
                     sql.append(
@@ -453,6 +470,12 @@ class PostgresPlatform(Platform):
     def constraintize(self, constraints, table):
         sql = []
         for name, constraint in constraints.items():
+            # A UNIQUE carrying a partial-index ``where`` predicate cannot be a
+            # table-level constraint — it is emitted as a standalone
+            # ``CREATE UNIQUE INDEX ... WHERE`` after the CREATE TABLE body
+            # (see ``partial_unique_index_sql``). Skip it here.
+            if constraint.constraint_type == "unique" and constraint.where:
+                continue
             sql.append(
                 getattr(
                     self,
@@ -461,10 +484,32 @@ class PostgresPlatform(Platform):
                     columns=", ".join(constraint.columns),
                     name_columns="_".join(constraint.columns),
                     constraint_name=constraint.name,
+                    expression=constraint.expression,
                     table=table.name,
                 )
             )
         return sql
+
+    def partial_unique_index_sql(self, table, constraint):
+        """Compile a partial unique index (``CREATE UNIQUE INDEX ... WHERE``).
+
+        Columns are double-quoted so Postgres reserved keywords don't break the
+        statement, mirroring the plain ``CREATE INDEX`` emission above.
+        """
+        quoted_cols = ", ".join(f'"{c}"' for c in constraint.columns)
+        return (
+            f"CREATE UNIQUE INDEX {constraint.name} "
+            f"ON {self.wrap_table(table.name)} ({quoted_cols}) "
+            f"WHERE {constraint.where}"
+        )
+
+    def partial_unique_constraints(self, table):
+        """The ``where``-bearing UNIQUE constraints queued on ``table``."""
+        return [
+            c
+            for c in table.get_added_constraints().values()
+            if c.constraint_type == "unique" and c.where
+        ]
 
     def create_format(self):
         return "CREATE TABLE {table} ({columns}{constraints}{foreign_keys})"
@@ -480,6 +525,9 @@ class PostgresPlatform(Platform):
 
     def get_unique_constraint_string(self):
         return "CONSTRAINT {constraint_name} UNIQUE ({columns})"
+
+    def get_check_constraint_string(self):
+        return "CONSTRAINT {constraint_name} CHECK ({expression})"
 
     def get_table_string(self):
         return '"{table}"'
