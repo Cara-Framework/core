@@ -30,6 +30,34 @@ import psycopg2
 # propagate up rather than being swallowed by a "duplicate" handler.
 _PG_UNIQUE_VIOLATION = "23505"
 
+# Cap the ``__cause__``/``__context__`` walk so a pathological cyclic
+# chain can never spin. Real driver→ORM wrapping is one or two links deep.
+_MAX_CAUSE_DEPTH = 8
+
+
+def _find_integrity_error(exc: BaseException | None) -> psycopg2.IntegrityError | None:
+    """Return the first ``psycopg2.IntegrityError`` in the exception's cause chain.
+
+    The ORM wraps every driver error in a ``QueryException(str(e)) from e``
+    (see ``PostgresConnection.query``), so the ``psycopg2.IntegrityError`` a
+    unique-violation race raises is NOT the top-level exception — it hangs off
+    ``__cause__``. Checking only ``exc`` therefore misclassified every
+    ORM-raised duplicate as "not a unique violation", silently defeating the
+    SAVEPOINT/re-select race guards that call this helper. Walk the
+    ``__cause__`` (explicit ``raise … from``) then ``__context__`` (implicit
+    re-raise) chain so both the raw-driver and wrapped forms are recognised.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    depth = 0
+    while cur is not None and depth < _MAX_CAUSE_DEPTH and id(cur) not in seen:
+        if isinstance(cur, psycopg2.IntegrityError):
+            return cur
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
+        depth += 1
+    return None
+
 
 def is_unique_violation(
     exc: Exception,
@@ -40,9 +68,11 @@ def is_unique_violation(
     """Return True if ``exc`` is a Postgres unique-constraint violation.
 
     Args:
-        exc: The raised exception. Anything that isn't a
-            ``psycopg2.IntegrityError`` returns False — including
-            other 23xxx integrity errors (FK, check) which should
+        exc: The raised exception. The check unwraps the ``__cause__`` /
+            ``__context__`` chain, so a ``psycopg2.IntegrityError`` wrapped in
+            the ORM's ``QueryException`` is recognised too. Anything whose
+            chain holds no ``psycopg2.IntegrityError`` returns False —
+            including other 23xxx integrity errors (FK, check) which should
             propagate.
         constraint: When given, additionally require the violation's
             ``diag.constraint_name`` to contain this substring (case-
@@ -61,16 +91,17 @@ def is_unique_violation(
     is sufficient — handy when the constraint name varies by
     migration but the column is stable.
     """
-    if not isinstance(exc, psycopg2.IntegrityError):
+    integrity_exc = _find_integrity_error(exc)
+    if integrity_exc is None:
         return False
-    if getattr(exc, "pgcode", None) != _PG_UNIQUE_VIOLATION:
+    if getattr(integrity_exc, "pgcode", None) != _PG_UNIQUE_VIOLATION:
         return False
 
     # Bare unique-violation check — caller doesn't care which.
     if constraint is None and column is None:
         return True
 
-    diag = getattr(exc, "diag", None)
+    diag = getattr(integrity_exc, "diag", None)
     detail = (getattr(diag, "message_detail", "") or "").lower()
     constraint_name = (getattr(diag, "constraint_name", "") or "").lower()
 
