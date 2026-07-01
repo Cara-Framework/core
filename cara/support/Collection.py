@@ -1767,15 +1767,28 @@ class Collection(Macroable):
         Returns:
             The result of the comparison.
         """
+        # Match Laravel's Collection::operatorForWhere vocabulary (and this
+        # framework's own QueryBuilder, which accepts "=" / "<>"): a caller who
+        # learned "=" works on the DB builder must not hit a bare KeyError when
+        # using the same operator on an in-memory Collection.
         operators = {
+            "=": operator.eq,
+            "==": operator.eq,
+            "===": operator.eq,
             "<": operator.lt,
             "<=": operator.le,
-            "==": operator.eq,
             "!=": operator.ne,
+            "<>": operator.ne,
+            "!==": operator.ne,
             ">": operator.gt,
             ">=": operator.ge,
         }
-        return operators[op](a, b)
+        try:
+            return operators[op](a, b)
+        except KeyError as exc:
+            raise InvalidArgumentException(
+                f"Unsupported Collection.where operator: {op!r}"
+            ) from exc
 
     def __iter__(self):
         """
