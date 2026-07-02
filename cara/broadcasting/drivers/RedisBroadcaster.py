@@ -443,6 +443,20 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             except asyncio.CancelledError:
                 Log.debug("Redis listener cancelled", category="cara.broadcasting")
                 break
+            except (self._redis_async.TimeoutError, TimeoutError):
+                # A pub/sub subscriber legitimately BLOCKS waiting for the next
+                # message. The broadcaster pool sets ``socket_timeout`` (line
+                # ~166) to keep the PUBLISH path fail-fast, so an IDLE
+                # ``listen()`` read raises a read-timeout every few seconds —
+                # that is EXPECTED, not a crash. Re-establish the listen quietly.
+                # DON'T log a traceback / bump ``attempt`` / back off here: on an
+                # idle node this fires continuously, and formatting the nested
+                # traceback + sleeping on every tick floods the log (MBs) and
+                # starves concurrent HTTP handlers on the shared event loop —
+                # the "every API response is slow" symptom. Reconnect cadence is
+                # unchanged (the ``finally`` still recycles the pubsub); we only
+                # drop the cost that made an idle timeout look like an outage.
+                continue
             except Exception as e:
                 attempt += 1
                 backoff = min(60, 2 ** min(attempt - 1, 6))
