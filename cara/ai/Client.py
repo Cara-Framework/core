@@ -86,7 +86,12 @@ class AIClient:
             self.api_key = api_key or _cfg("openai_api_key", "")
 
         self.timeout = int(timeout or _cfg("timeout", 60))
-        self.max_retries = int(max_retries or _cfg("max_retries", 1))
+        # ``is None`` — not ``or`` — so an explicit ``max_retries=0``
+        # (fail-fast, no retry) is honoured instead of silently
+        # falling back to the config default.
+        self.max_retries = int(
+            _cfg("max_retries", 1) if max_retries is None else max_retries
+        )
         self.fallback_model = fallback_model or _cfg("fallback_model", None)
         self.site_url = site_url or _cfg("openrouter_site_url", "")
         self.site_name = site_name or _cfg("openrouter_site_name", "")
@@ -102,14 +107,24 @@ class AIClient:
         top_p: float | None = None,
         model: str | None = None,
         system: str | None = None,
+        response_format: dict[str, Any] | None = None,
+        json_mode: bool | None = None,
     ) -> AIResponse:
-        """Chat completion. ``prompt`` is a string or a messages array."""
+        """Chat completion. ``prompt`` is a string or a messages array.
+
+        ``json_mode=True`` is sugar for ``response_format={"type":
+        "json_object"}`` (OpenAI-compatible providers; mapped to
+        ``format: "json"`` on Ollama). An explicit ``response_format``
+        wins over ``json_mode``.
+        """
         if temperature is None:
             temperature = float(config("ai.default_temperature", 0.3))
         if max_tokens is None:
             max_tokens = int(config("ai.default_max_tokens", 1000))
         if top_p is None:
             top_p = float(config("ai.default_top_p", 0.9))
+        if response_format is None and json_mode:
+            response_format = {"type": "json_object"}
 
         if isinstance(prompt, str):
             messages: list[dict[str, str]] = []
@@ -119,10 +134,7 @@ class AIClient:
         else:
             messages = list(prompt)
 
-        use_model = model or self.model
-        models_to_try = [use_model]
-        if self.fallback_model and self.fallback_model != use_model:
-            models_to_try.append(self.fallback_model)
+        models_to_try = self._models_to_try(model or self.model)
 
         last_error: Exception | None = None
         for attempt_model in models_to_try:
@@ -130,7 +142,12 @@ class AIClient:
                 try:
                     start = time.time()
                     content, usage = self._dispatch(
-                        attempt_model, messages, temperature, max_tokens, top_p
+                        attempt_model,
+                        messages,
+                        temperature,
+                        max_tokens,
+                        top_p,
+                        response_format=response_format,
                     )
                     dur = int((time.time() - start) * 1000)
                     _log(
@@ -138,20 +155,24 @@ class AIClient:
                         f"AI [{self.provider.value}/{attempt_model}] {dur}ms "
                         f"in={len(str(messages))}ch out={len(content)}ch",
                     )
-                    return AIResponse(
+                    response = AIResponse(
                         content=content,
                         model=attempt_model,
                         provider=self.provider,
                         tokens_in=(usage or {}).get("prompt_tokens"),
                         tokens_out=(usage or {}).get("completion_tokens"),
                         duration_ms=dur,
+                        finish_reason=(usage or {}).get("finish_reason"),
                     )
-                except requests.exceptions.Timeout:
+                    self._on_attempt_success(attempt_model, response)
+                    return response
+                except requests.exceptions.Timeout as e:
                     last_error = Exception(f"AI timeout ({self.timeout}s)")
                     _log(
                         "warning",
                         f"AI timeout [{self.provider.value}/{attempt_model}] retry={retry}",
                     )
+                    self._on_attempt_error(attempt_model, e, None, retry)
                 except requests.exceptions.HTTPError as e:
                     status = getattr(e.response, "status_code", "?")
                     body = (getattr(e.response, "text", "") or "")[:200]
@@ -160,6 +181,7 @@ class AIClient:
                         "error",
                         f"AI HTTP {status} [{self.provider.value}/{attempt_model}]: {body}",
                     )
+                    self._on_attempt_error(attempt_model, e, status, retry)
                     if status in (400, 401, 403, 404):
                         break
                     if status == 429:
@@ -173,7 +195,7 @@ class AIClient:
                         except (TypeError, ValueError):
                             wait_s = 0.0
                         if wait_s <= 0:
-                            wait_s = min(2**retry, 30)
+                            wait_s = self._backoff_seconds(retry, status=429)
                         _log(
                             "warning",
                             f"AI 429 [{self.provider.value}/{attempt_model}] "
@@ -183,6 +205,7 @@ class AIClient:
                 except Exception as e:  # noqa: BLE001 — record and retry/fallback
                     last_error = e
                     _log("error", f"AI fail [{self.provider.value}/{attempt_model}]: {e}")
+                    self._on_attempt_error(attempt_model, e, None, retry)
             if attempt_model != models_to_try[-1]:
                 _log("warning", f"AI falling back to {models_to_try[-1]}")
 
@@ -197,6 +220,8 @@ class AIClient:
         max_tokens: int | None = None,
         model: str | None = None,
         system: str | None = None,
+        response_format: dict[str, Any] | None = None,
+        json_mode: bool | None = None,
     ) -> Any:
         """Chat + parse the response as JSON. Returns ``fallback`` on error."""
         if temperature is None:
@@ -211,6 +236,8 @@ class AIClient:
                 max_tokens=max_tokens,
                 model=model,
                 system=system,
+                response_format=response_format,
+                json_mode=json_mode,
             )
             return self.parse_json(resp.content, fallback=fallback)
         except Exception as e:  # noqa: BLE001 — fall back when the caller allows
@@ -228,6 +255,8 @@ class AIClient:
         top_p: float | None = None,
         model: str | None = None,
         system: str | None = None,
+        response_format: dict[str, Any] | None = None,
+        json_mode: bool | None = None,
     ) -> AIResponse:
         """Async wrapper that runs the sync chat call off the event loop."""
         return await ExecutionContext.run_in_thread(
@@ -238,6 +267,8 @@ class AIClient:
             top_p=top_p,
             model=model,
             system=system,
+            response_format=response_format,
+            json_mode=json_mode,
         )
 
     async def ajson(
@@ -249,6 +280,8 @@ class AIClient:
         max_tokens: int | None = None,
         model: str | None = None,
         system: str | None = None,
+        response_format: dict[str, Any] | None = None,
+        json_mode: bool | None = None,
     ) -> Any:
         """Async wrapper that runs the sync json call off the event loop."""
         return await ExecutionContext.run_in_thread(
@@ -259,6 +292,8 @@ class AIClient:
             max_tokens=max_tokens,
             model=model,
             system=system,
+            response_format=response_format,
+            json_mode=json_mode,
         )
 
     @staticmethod
@@ -275,6 +310,34 @@ class AIClient:
             "has_api_key": bool(self.api_key),
         }
 
+    # -- retry-loop seams (override points for app policy layers) ---------- #
+
+    def _models_to_try(self, requested: str) -> list[str]:
+        """The ordered model chain one ``chat`` call walks. Override to
+        inject an app-level fallback chain."""
+        models = [requested]
+        if self.fallback_model and self.fallback_model != requested:
+            models.append(self.fallback_model)
+        return models
+
+    def _on_attempt_success(self, model: str, response: AIResponse) -> None:
+        """Observation hook — called once per successful attempt, before the
+        response is returned. Default: no-op. Override for metrics/audit;
+        must never raise into the caller (wrap your own errors)."""
+
+    def _on_attempt_error(
+        self, model: str, error: Exception, status: int | None, retry: int
+    ) -> None:
+        """Observation hook — called once per failed attempt (``status`` is
+        the HTTP status when the failure was an HTTPError, else ``None``).
+        Default: no-op. Override for metrics / breakers / cooldowns; must
+        never raise into the caller."""
+
+    def _backoff_seconds(self, retry: int, *, status: int | None = None) -> float:
+        """Wait before the next retry when the provider gave no explicit
+        ``Retry-After``. Default: capped exponential."""
+        return float(min(2**retry, 30))
+
     # -- provider dispatch ------------------------------------------------ #
 
     def _dispatch(
@@ -284,11 +347,16 @@ class AIClient:
         temperature: float,
         max_tokens: int,
         top_p: float,
+        response_format: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         if self.provider == AIProvider.OLLAMA:
-            return self._call_ollama(model, messages, temperature, max_tokens, top_p)
+            return self._call_ollama(
+                model, messages, temperature, max_tokens, top_p,
+                response_format=response_format,
+            )
         return self._call_openai_compatible(
-            model, messages, temperature, max_tokens, top_p
+            model, messages, temperature, max_tokens, top_p,
+            response_format=response_format,
         )
 
     def _call_openai_compatible(
@@ -298,6 +366,7 @@ class AIClient:
         temperature: float,
         max_tokens: int,
         top_p: float,
+        response_format: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
@@ -306,13 +375,15 @@ class AIClient:
             headers["HTTP-Referer"] = self.site_url
             headers["X-Title"] = self.site_name
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "top_p": top_p,
             "max_tokens": max_tokens,
         }
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         resp = requests.post(
             self.base_url, json=payload, headers=headers, timeout=self.timeout
@@ -326,7 +397,12 @@ class AIClient:
                 f"(model={data.get('model')!r}, error={data.get('error')!r})"
             )
         content = (choices[0].get("message") or {}).get("content", "").strip()
-        usage = data.get("usage") or {}
+        usage = dict(data.get("usage") or {})
+        finish_reason = choices[0].get("finish_reason")
+        if finish_reason:
+            # Ride along in the usage dict so the transport contract stays a
+            # 2-tuple; ``chat()`` lifts it onto ``AIResponse.finish_reason``.
+            usage["finish_reason"] = finish_reason
         return content, usage
 
     def _call_ollama(
@@ -336,9 +412,10 @@ class AIClient:
         temperature: float,
         max_tokens: int,
         top_p: float,
+        response_format: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         url = f"{self.base_url.rstrip('/')}/api/chat"
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": False,
@@ -348,12 +425,29 @@ class AIClient:
                 "num_predict": max_tokens,
             },
         }
+        # Ollama speaks ``format: "json"`` instead of the OpenAI-style
+        # ``response_format`` object.
+        if response_format and response_format.get("type") == "json_object":
+            payload["format"] = "json"
+
         resp = requests.post(url, json=payload, timeout=self.timeout)
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise AIResponseError(
+                f"Ollama response is not valid JSON: {resp.text[:200]}"
+            ) from e
+        if "error" in data:
+            raise AIResponseError(f"Ollama error: {data['error']}")
         content = (data.get("message") or {}).get("content", "").strip()
-        usage = {
+        usage: dict[str, Any] = {
             "prompt_tokens": data.get("prompt_eval_count"),
             "completion_tokens": data.get("eval_count"),
         }
+        done_reason = data.get("done_reason") or (
+            "length" if data.get("truncated") else None
+        )
+        if done_reason:
+            usage["finish_reason"] = done_reason
         return content, usage
