@@ -130,12 +130,23 @@ class AMQPDriver(HasColoredOutput, Queue):
         job_ids = []
 
         for job in jobs:
+            # Per-job queue resolution: PendingDispatch stamps the target
+            # queue on the JOB INSTANCE (``job.queue``), but publish reads
+            # the queue from OPTIONS — without this bridge every direct
+            # dispatch silently landed on "default" regardless of the
+            # job's declared queue.
+            job_opts = dict(merged_opts)
+            if not job_opts.get("queue"):
+                job_queue = getattr(job, "queue", None)
+                if job_queue:
+                    job_opts["queue"] = job_queue
+
             # Generate unique job ID for tracking
             job_id = str(uuid.uuid4())
             job_ids.append(job_id)
 
             # Create job record in database via JobTracker
-            db_job_id = self._create_job_record(job, job_id, merged_opts)
+            db_job_id = self._create_job_record(job, job_id, job_opts)
 
             # Prepare payload. ``attempts`` is the retry counter that
             # the consume() failure path increments and republishes;
@@ -162,7 +173,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             payload["_otel"] = _Trace.inject({})
 
             try:
-                self._connect_and_publish(payload, merged_opts)
+                self._connect_and_publish(payload, job_opts)
             except (
                 pika.exceptions.AMQPConnectionError,
                 pika.exceptions.StreamLostError,
@@ -176,7 +187,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # timeout, restart, etc.). _connect_and_publish will
                 # _discard_thread_connection on failure, so the retry
                 # opens a fresh TCP socket.
-                self._connect_and_publish(payload, merged_opts)
+                self._connect_and_publish(payload, job_opts)
 
         return job_ids[0] if len(job_ids) == 1 else job_ids
 

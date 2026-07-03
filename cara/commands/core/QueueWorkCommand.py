@@ -1503,7 +1503,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
                     # Sleep if no jobs found
                     if not outcome:
-                        time.sleep(config["timeout"])
+                        time.sleep(config.get("poll", 5))
 
             finally:
                 connection_manager.close()
@@ -1557,7 +1557,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     if not outcome:
                         # Stagger sleeps a tiny bit so N threads don't wake
                         # up in lockstep and hammer the broker simultaneously.
-                        jittered = config["timeout"] * (1.0 + (slot_idx % 4) * 0.1)
+                        jittered = config.get("poll", 5) * (1.0 + (slot_idx % 4) * 0.1)
                         time.sleep(jittered)
             finally:
                 mgr.close()
