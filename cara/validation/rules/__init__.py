@@ -21,6 +21,7 @@ from .DateFormatRule import DateFormatRule
 from .DateRule import DateRule
 from .DigitsBetweenRule import DigitsBetweenRule
 from .DigitsRule import DigitsRule
+from .DictRule import DictRule
 from .DifferentRule import DifferentRule
 from .DistinctRule import DistinctRule
 from .EmailRule import EmailRule
@@ -81,6 +82,7 @@ __all__ = [
     "ConfirmedRule",
     "DateFormatRule",
     "DateRule",
+    "DictRule",
     "DifferentRule",
     "DigitsBetweenRule",
     "DigitsRule",
