@@ -112,7 +112,11 @@ class BroadcastingProvider(DeferredProvider):
         else:
             driver_config = {}
 
-        ws_cfg = config("broadcasting.WEBSOCKET")
+        # Configuration.load lower-cases module attribute names, so the
+        # WEBSOCKET dict in config/broadcasting.py materialises under
+        # "broadcasting.websocket" — the uppercase path never resolves
+        # (same footgun as rate.trusted_ips in ThrottleRequests).
+        ws_cfg = config("broadcasting.websocket")
         if ws_cfg:
             driver_config["websocket"] = ws_cfg
 
@@ -126,7 +130,8 @@ class BroadcastingProvider(DeferredProvider):
         if not settings:
             return
         driver_config = dict(settings) if isinstance(settings, dict) else {}
-        ws_cfg = config("broadcasting.WEBSOCKET")
+        # Lowercase path — see comment in _add_redis_driver.
+        ws_cfg = config("broadcasting.websocket")
         if ws_cfg:
             driver_config["websocket"] = ws_cfg
         manager.add_driver(

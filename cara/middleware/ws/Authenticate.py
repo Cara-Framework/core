@@ -92,22 +92,17 @@ class Authenticate(Middleware):
         return ""
 
     def _origin_is_allowed(self, socket: Socket) -> bool:
-        """Origin check — opt-in via ``broadcasting.allowed_origins`` /
-        ``websocket.allowed_origins``. An empty / missing list means no
-        check is performed (legacy permissive default). When a list is
-        configured, an exact-match comparison is performed against the
+        """Origin check — opt-in via ``broadcasting.websocket.allowed_origins``
+        (lowercase: Configuration.load lower-cases module attribute names, so
+        the WEBSOCKET dict materialises under that path). An empty / missing
+        list means no check is performed (legacy permissive default). When a
+        list is configured, an exact-match comparison is performed against the
         Origin header; missing Origin (non-browser client) is allowed
         because curl/Postman/etc. don't send it and there's no clean
         way to distinguish a malicious browser from a server-side client
         without UA fingerprinting."""
         try:
-            allowed = (
-                config(
-                    "broadcasting.WEBSOCKET.allowed_origins",
-                    config("websocket.allowed_origins", None),
-                )
-                or []
-            )
+            allowed = config("broadcasting.websocket.allowed_origins", None) or []
         except Exception:
             allowed = []
         if not allowed:

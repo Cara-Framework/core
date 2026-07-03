@@ -380,7 +380,8 @@ class ServeCommand(CommandBase):
         )
 
         # Features
-        ws_enabled = bool(config("broadcasting.WEBSOCKET.enabled", True))
+        # Lowercase path — Configuration.load lower-cases module attribute names.
+        ws_enabled = bool(config("broadcasting.websocket.enabled", True))
         self.console.print(
             f"[#e5c07b]│[/#e5c07b] [white]WebSocket:[/white] [{'#30e047' if ws_enabled else '#E21102'}]{'✓' if ws_enabled else '×'}[/{'#30e047' if ws_enabled else '#E21102'}]"
         )

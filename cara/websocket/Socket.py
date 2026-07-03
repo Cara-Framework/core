@@ -521,7 +521,10 @@ class Socket:
         try:
             from cara.facades import Config
 
-            ws_cfg = Config.get("broadcasting", {}).get("WEBSOCKET", {})
+            # Configuration.load lower-cases module attribute names, so the
+            # WEBSOCKET dict lives under "broadcasting.websocket" — the old
+            # uppercase lookup always missed and pinned the hardcoded 25.
+            ws_cfg = Config.get("broadcasting.websocket", {}) or {}
             return int(ws_cfg.get("max_subscriptions_per_connection", 25))
         except Exception:
             return 25
