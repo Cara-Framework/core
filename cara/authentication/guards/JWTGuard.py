@@ -109,6 +109,11 @@ class JWTGuard(Guard):
         # cached identity through this singleton guard instance.
 
     @property
+    def last_payload(self) -> dict:
+        """Verified claims of the most recently resolved access token."""
+        return dict(getattr(self, "_last_payload", None) or {})
+
+    @property
     def _user(self) -> Any | None:
         return _REQUEST_USER.get()
 
@@ -235,6 +240,7 @@ class JWTGuard(Guard):
         """Decode a refresh token and return the associated user (or None)."""
         try:
             payload = self._decode_token(token, verify_exp=False)
+            self._last_payload = dict(payload)
             user_id = payload.get("sub")
             if not user_id:
                 return None
@@ -472,6 +478,9 @@ class JWTGuard(Guard):
                 return None
 
             user = self._resolve_user_by_id(user_id, payload)
+            # Expose the verified claims to the middleware layer
+            # (request.jwt_claims) — e.g. the impersonation ``imp`` marker.
+            self._last_payload = dict(payload)
             return user
         except _AUTH_FAILURES:
             _logger.debug("JWT user resolution from token failed", exc_info=True)
@@ -674,22 +683,31 @@ class JWTGuard(Guard):
         user: Authenticatable,
         ttl: int,
         token_type: str = TOKEN_TYPE_ACCESS,
+        extra_claims: dict | None = None,
     ) -> str:
         """Generate JWT token for user with custom TTL and type.
 
         The `token_type` becomes the `typ` claim — used by refresh() and
         validate_refresh_token() to ensure access tokens can't be swapped
         in for refresh tokens or vice versa.
+
+        ``extra_claims`` are merged into the payload LAST-BUT-PROTECTED:
+        reserved claims (sub/iat/exp/typ) always win, so a caller can add
+        markers (e.g. an impersonation ``imp`` claim) but can never forge
+        identity or lifetime.
         """
         now = int(time.time())
 
         # Use user's custom payload if available
         if hasattr(user, "to_jwt_payload") and callable(user.to_jwt_payload):
             payload = user.to_jwt_payload()
+            if extra_claims:
+                payload.update(extra_claims)
             payload.update({"iat": now, "exp": now + ttl, "typ": token_type})
         else:
             # Default payload
             payload = {
+                **(extra_claims or {}),
                 "sub": str(
                     user.get_auth_id()
                     if hasattr(user, "get_auth_id")
@@ -702,13 +720,21 @@ class JWTGuard(Guard):
 
         return jwt.encode(payload, self.secret, algorithm=self.algorithm)
 
-    def generate_access_token(self, user: Authenticatable) -> str:
+    def generate_access_token(
+        self, user: Authenticatable, extra_claims: dict | None = None
+    ) -> str:
         """Generate access token with configured TTL."""
-        return self.generate_token_with_ttl(user, self.ttl, TOKEN_TYPE_ACCESS)
+        return self.generate_token_with_ttl(
+            user, self.ttl, TOKEN_TYPE_ACCESS, extra_claims=extra_claims
+        )
 
-    def generate_refresh_token(self, user: Authenticatable) -> str:
+    def generate_refresh_token(
+        self, user: Authenticatable, extra_claims: dict | None = None
+    ) -> str:
         """Generate refresh token with configured refresh TTL."""
-        return self.generate_token_with_ttl(user, self.refresh_ttl, TOKEN_TYPE_REFRESH)
+        return self.generate_token_with_ttl(
+            user, self.refresh_ttl, TOKEN_TYPE_REFRESH, extra_claims=extra_claims
+        )
 
     def _generate_token(self, user: Authenticatable) -> str:
         """Generate JWT access token for user."""
