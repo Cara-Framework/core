@@ -25,7 +25,7 @@ from .DateTime import DateCast, DateTimeCast, TimestampCast, TimeCast
 from .primitives import BoolCast, DecimalCast, FloatCast, IntCast, JsonCast
 
 # Import security casts
-from .Security import EncryptedCast, HashCast, TokenCast
+from .Security import EncryptedCast, EncryptedJsonCast, HashCast, TokenCast
 
 # Import validation casts
 from .Validation import EmailCast, PhoneCast, SlugCast, URLCast, UUIDCast
@@ -72,6 +72,7 @@ class EnhancedCastRegistry(CastRegistry):
         # Security casts
         self.register("hash", HashCast)
         self.register("encrypted", EncryptedCast)
+        self.register("encrypted_json", EncryptedJsonCast)
         self.register("token", TokenCast)
 
     def cast_value(self, cast_definition: str, value, operation: str = "get"):

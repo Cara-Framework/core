@@ -42,7 +42,7 @@ _logger = logging.getLogger("cara.eloquent.models")
 from ..casts.Collections import ArrayCast, CollectionCast
 from ..casts.DateTime import DateCast, DateTimeCast, TimestampCast
 from ..casts.primitives import BoolCast, DecimalCast, FloatCast, IntCast, JsonCast
-from ..casts.Security import EncryptedCast, HashCast
+from ..casts.Security import EncryptedCast, EncryptedJsonCast, HashCast
 from ..casts.Validation import EmailCast, URLCast, UUIDCast
 
 # Import concerns for clean architecture
@@ -367,6 +367,7 @@ class Model(
         "timestamp": TimestampCast,
         "array": ArrayCast,
         "encrypted": EncryptedCast,
+        "encrypted_json": EncryptedJsonCast,
         "uuid": UUIDCast,
         "url": URLCast,
         "email": EmailCast,
