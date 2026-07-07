@@ -17,6 +17,15 @@ from cara.exceptions import InvalidArgumentException
 from cara.facades import Log
 
 
+class StepFailed(Exception):
+    """A pipeline step signalled failure via a non-zero exit code.
+
+    Raised internally so a step whose ``handle()`` RETURNS a non-zero
+    craft exit code flows into the same failure path as one that raised —
+    it must not be counted as a completed step.
+    """
+
+
 class PipelineType(Enum):
     """Pipeline execution types."""
 
@@ -227,6 +236,18 @@ class Pipeline:
                         result = await self._safe_call(target, **step.kwargs)
                 else:
                     result = await self._safe_call(instance, **step.kwargs)
+
+                # Craft commands signal failure by RETURNING a non-zero exit
+                # code (the Typer/CLI convention used throughout), not by
+                # raising. A step whose handle() returns e.g. 1 has FAILED —
+                # counting it as success let a silently-failed seed report
+                # "N/N completed" and mask the failure. Treat a non-zero int
+                # result as a failed step. (Non-int results — dicts, domain
+                # objects, None — are not exit codes and stay successful.)
+                if isinstance(result, int) and result != 0:
+                    raise StepFailed(
+                        f"{step.step_class.__name__} returned exit code {result}"
+                    )
 
                 # Store result
                 step_result = {
