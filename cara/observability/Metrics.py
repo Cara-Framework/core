@@ -206,12 +206,23 @@ _UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 
+# Prefixed public-id: a short uppercase type prefix immediately followed by a
+# Crockford-base32 ULID (e.g. ``CHN01KX…``, ``ORD01H…``, ``STK01J…``). This is
+# the dominant dynamic segment in ``MakesPublicId``-based apps, and — unlike a
+# bare ULID — it is neither all-digit, a UUID, nor exactly 26 alnum chars, so
+# the heuristics below miss it. Without this rule EVERY channel/order/case id
+# spawns its own ``route`` label time-series and the HTTP metrics explode.
+# Bound (2–6 prefix letters, ≥20 Crockford chars) mirrors the fold the
+# usage-analytics SQL already applies to the same ``http_request_log`` paths.
+_PREFIXED_ID_RE = re.compile(r"[A-Z]{2,6}[0-9A-HJKMNP-TV-Z]{20,}")
+
 
 def normalize_metric_path(path: str) -> str:
     """Replace dynamic URL segments with placeholders to bound label cardinality.
 
     ``/api/items/123`` → ``/api/items/{id}``
     ``/api/items/01HABC...`` → ``/api/items/{ulid}``
+    ``/api/items/CHN01HABC...`` → ``/api/items/{id}`` (prefixed public-id)
     ``/api/items/xxxxxxxx-xxxx-…`` → ``/api/items/{uuid}``
     """
     segments = path.split("/")
@@ -225,6 +236,8 @@ def normalize_metric_path(path: str) -> str:
             out.append("{uuid}")
         elif len(seg) == 26 and seg.isalnum():
             out.append("{ulid}")
+        elif _PREFIXED_ID_RE.fullmatch(seg):
+            out.append("{id}")
         else:
             out.append(seg)
     return "/".join(out)
