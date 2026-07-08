@@ -124,15 +124,22 @@ class MySQLPlatform(Platform):
             table_create_format.format(
                 table=self.get_table_string().format(table=table.name),
                 columns=", ".join(self.columnize(table.get_added_columns())).strip(),
+                # Join FIRST, prefix only when non-empty: a table whose only
+                # constraints are where-carrying partial uniques (emitted as
+                # standalone CREATE UNIQUE INDEX statements, skipped by
+                # constraintize) must not leave a dangling ", " in the body —
+                # that compiled to ``..., , CONSTRAINT fk...`` and failed with
+                # a Postgres syntax error on CREATE TABLE.
                 constraints=(
-                    ", "
-                    + ", ".join(
-                        self.constraintize(
-                            table.get_added_constraints(),
-                            table,
+                    ", " + joined
+                    if (
+                        joined := ", ".join(
+                            self.constraintize(
+                                table.get_added_constraints(),
+                                table,
+                            )
                         )
                     )
-                    if table.get_added_constraints()
                     else ""
                 ),
                 foreign_keys=(

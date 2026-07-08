@@ -124,6 +124,10 @@ class AuthenticateUser(ShouldAuthenticate):
 
         request.set_user(user)
         request._route_auth_guard = successful_guard
+        # Verified token claims for app-layer markers (impersonation etc.).
+        # ``guard`` still holds the winning guard INSTANCE from the loop
+        # (``successful_guard`` is only its name).
+        request.jwt_claims = getattr(guard, "last_payload", None) or {}
 
         # Attach the resolved identity to Sentry's request-scoped scope
         # so any downstream error arrives with user_id + masked email.

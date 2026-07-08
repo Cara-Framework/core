@@ -181,8 +181,17 @@ class ModelMigrationComparator:
     def _diff(
         self, model_cols: dict[str, Column], migration_cols: dict[str, Column]
     ) -> list[FieldDiff]:
-        added_names = [n for n in model_cols if n not in migration_cols]
-        removed_names = [n for n in migration_cols if n not in model_cols]
+        # Framework columns (id/created_at/updated_at/deleted_at) are excluded
+        # on BOTH sides: the model side records them as pseudo-fields
+        # (timestamps/soft_deletes) while the migration parser expands
+        # timestamps() → created_at+updated_at, so without this filter every
+        # timestamped table shows a spurious created_at/updated_at drop.
+        added_names = [
+            n for n in model_cols if n not in migration_cols and n not in _FRAMEWORK_FIELDS
+        ]
+        removed_names = [
+            n for n in migration_cols if n not in model_cols and n not in _FRAMEWORK_FIELDS
+        ]
 
         diffs: list[FieldDiff] = []
 

@@ -49,16 +49,34 @@ class MakesIdempotentBase:
 
     Features:
         * SHA-256 idempotency key derived from class name + job parameters
-        * Result cache (``IDEMPOTENCY_CACHE_TTL`` seconds) for de-dup of
-          completed runs
+        * Result cache for de-dup of completed runs —
+          ``IDEMPOTENCY_CACHE_TTL`` for payload-bearing results,
+          ``IDEMPOTENCY_NONE_TTL`` for bare-``None`` completions (a
+          None is indistinguishable from a claim-miss no-op)
         * Distributed lock (``JOB_LOCK_TTL`` seconds) — concurrent
           duplicate dispatches converge on a single execution
         * Hooks for app-defined lifecycle gating + per-source cooldowns
         * Optional metric emission via subclass hooks
     """
 
-    #: Cache TTL for result cache (24 hours).
+    #: Cache TTL for result cache (24 hours) — jobs that RETURN a value.
     IDEMPOTENCY_CACHE_TTL = 24 * 60 * 60
+
+    #: Cache TTL for a ``None`` result (5 minutes). A bare-None
+    #: completion is AMBIGUOUS: fire-and-forget jobs return None on a
+    #: true success, but state-machine jobs (outbox pushes with a CAS
+    #: claim) ALSO return None when the run was a no-op because another
+    #: actor owned the entity — a claim-miss. Caching that None for the
+    #: full 24h window poisoned every later re-dispatch of the same
+    #: identity (a re-queued sync task "completed" in 1ms without
+    #: touching the marketplace). A None result therefore only dedupes
+    #: the realistic duplicate-dispatch horizon — double scheduler
+    #: ticks, racing envelopes, AMQP redelivery, the
+    #: ``wait_for_completion`` window — while a re-dispatch driven by a
+    #: real state change (sweep re-queues, operator retries) lands
+    #: after expiry and RUNS. Results that carry a payload keep the
+    #: full window: a value proves the work happened.
+    IDEMPOTENCY_NONE_TTL = 5 * 60
 
     #: Lock TTL for active jobs (30 minutes).
     JOB_LOCK_TTL = 30 * 60
@@ -70,7 +88,8 @@ class MakesIdempotentBase:
     #: of a None-returning job (every fire-and-forget pipeline step)
     #: re-executed the work it was supposed to skip. Stored as a
     #: stable string literal so JSON / pickle Cache drivers
-    #: round-trip it identically.
+    #: round-trip it identically. Lives for ``IDEMPOTENCY_NONE_TTL``
+    #: only — see that knob for why a None must not poison 24h.
     _NONE_SENTINEL = "__cara_idempotent_none__"
 
     #: Keep idempotency semantics identical between queue workers and
@@ -267,10 +286,21 @@ class MakesIdempotentBase:
     def cache_result(self, result: Any) -> None:
         """Cache a job's terminal result, encoding ``None`` to the
         sentinel so the next dispatch doesn't mistake "cached None"
-        for "never ran"."""
+        for "never ran".
+
+        TTL is result-shaped: a real payload proves the work happened
+        and dedupes for ``IDEMPOTENCY_CACHE_TTL``; a bare ``None`` is
+        indistinguishable from a claim-miss no-op and only holds for
+        ``IDEMPOTENCY_NONE_TTL`` (see the knob's doc for the poisoning
+        story this prevents)."""
         cache_key = f"job_result:{self._idempotency_key}"
         stored = self._NONE_SENTINEL if result is None else result
-        Cache.put(cache_key, stored, self.IDEMPOTENCY_CACHE_TTL)
+        ttl = (
+            self.IDEMPOTENCY_NONE_TTL
+            if result is None
+            else self.IDEMPOTENCY_CACHE_TTL
+        )
+        Cache.put(cache_key, stored, ttl)
 
     def is_job_locked(self) -> bool:
         lock_key = f"job_lock:{self._idempotency_key}"

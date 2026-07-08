@@ -14,8 +14,10 @@ which collapses numeric/UUID/ULID segments into placeholders so
 
 Exception semantics: downstream exceptions are already logged by
 ``LogHttpRequests`` and the framework exception handler — this middleware
-only counts the 500 and re-raises, never logs a third copy. Metric-emission
-failures degrade to a WARNING; they never fail the request.
+counts the request under the exception's own ``status_code`` (so a raised
+404/422 lands in its true class, a status-less crash in 5xx) and re-raises,
+never logging a third copy. Metric-emission failures degrade to a WARNING;
+they never fail the request.
 """
 
 from __future__ import annotations
@@ -67,8 +69,14 @@ class RecordPrometheusMetrics(Middleware):
                     exc_info=True,
                 )
             return response
-        except Exception:
-            status_code = 500
+        except Exception as exc:
+            # The conductor renders this exception into an HTTP response
+            # outside the pipeline using ``exc.status_code`` (EntityNotFound
+            # →404, validation→422, …). Mirror that here so a 404 counts as
+            # 4xx instead of being smeared into the 5xx series; a bare
+            # exception with no ``status_code`` still degrades to 500, so
+            # genuine crashes keep counting as 5xx.
+            status_code = int(getattr(exc, "status_code", 500) or 500)
             raise
         finally:
             duration = time.time() - start

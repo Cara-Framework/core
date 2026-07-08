@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import signal
 import subprocess
 import sys
 import time
@@ -238,8 +239,38 @@ class ServeCommand(CommandBase):
 
         # Start server process
         process: subprocess.Popen | None = None
+        # A plain ``kill <craft-pid>`` (SIGTERM — what supervisors and
+        # operators send) used to take the parent down WITHOUT running any
+        # of the teardown below: Python's default SIGTERM disposition
+        # exits immediately, no ``finally``, so the uvicorn child survived
+        # as an orphan still bound to the port (SO_REUSEPORT even lets the
+        # next serve bind alongside it — split traffic, phantom workers).
+        # Route SIGTERM/SIGHUP into the same KeyboardInterrupt path Ctrl+C
+        # takes so every shutdown signal tears the server TREE down.
+        previous_handlers: dict[int, object] = {}
+
+        def _raise_shutdown(signum, frame):  # pragma: no cover — signal glue
+            raise KeyboardInterrupt
+
+        for shutdown_signal in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+            if shutdown_signal is None:
+                continue
+            try:
+                previous_handlers[shutdown_signal] = signal.signal(
+                    shutdown_signal, _raise_shutdown
+                )
+            except (ValueError, OSError):
+                # Not the main thread / unsupported platform — the
+                # finally-teardown still covers the exception paths.
+                pass
+
         try:
-            # Capture subprocess output so we can colorize it
+            # Capture subprocess output so we can colorize it.
+            # ``start_new_session`` puts uvicorn in ITS OWN process group
+            # (pgid == child pid) so teardown can ``killpg`` the whole
+            # server tree — uvicorn's --reload watcher and --workers
+            # children live in that group and would otherwise survive a
+            # parent-only terminate() as port-holding orphans.
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -247,6 +278,7 @@ class ServeCommand(CommandBase):
                 text=True,
                 bufsize=1,  # Line buffered
                 universal_newlines=True,
+                start_new_session=True,
             )
 
             # Monitor process with output capture for colorization
@@ -259,6 +291,11 @@ class ServeCommand(CommandBase):
         except Exception as e:
             self.error(f"× Failed to start server: {e}")
         finally:
+            for shutdown_signal, handler in previous_handlers.items():
+                try:
+                    signal.signal(shutdown_signal, handler)
+                except (ValueError, OSError, TypeError):
+                    pass
             # The monitor only handles KeyboardInterrupt explicitly.
             # Any other exception leaving the monitor (or any failure
             # surfaced in the except blocks above) used to leave the
@@ -267,12 +304,7 @@ class ServeCommand(CommandBase):
             # next ``serve``. Force teardown on the way out.
             if process is not None:
                 try:
-                    if process.poll() is None:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
+                    self._terminate_server_tree(process)
                 except (OSError, RuntimeError, AttributeError, ConnectionError):
                     pass
                 if process.stdout is not None:
@@ -280,6 +312,51 @@ class ServeCommand(CommandBase):
                         process.stdout.close()
                     except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
+
+    @staticmethod
+    def _terminate_server_tree(process: subprocess.Popen) -> bool:
+        """Stop the server child AND every process in its group.
+
+        The child was started with ``start_new_session=True``, so its pid
+        is its process-group id — ``killpg`` reaches uvicorn plus any
+        reload-watcher / worker children it spawned. Escalation ladder:
+        SIGTERM the group, wait 5s, SIGKILL the group. Returns True when
+        the tree went down on SIGTERM (a graceful stop), False when it
+        needed SIGKILL. A group that is already gone is a graceful stop.
+        """
+        if process.poll() is not None:
+            # Parent already exited — still sweep the group in case a
+            # grandchild outlived it (the exact orphan this fixes).
+            ServeCommand._signal_server_group(process.pid, signal.SIGTERM)
+            return True
+
+        ServeCommand._signal_server_group(
+            process.pid, signal.SIGTERM, fallback=process.terminate
+        )
+        try:
+            process.wait(timeout=5)
+            return True
+        except subprocess.TimeoutExpired:
+            ServeCommand._signal_server_group(
+                process.pid, signal.SIGKILL, fallback=process.kill
+            )
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:  # pragma: no cover — kernel-level stall
+                pass
+            return False
+
+    @staticmethod
+    def _signal_server_group(pgid: int, signum: int, fallback=None) -> None:
+        """Best-effort signal to the server's process group."""
+        try:
+            os.killpg(pgid, signum)
+        except (ProcessLookupError, PermissionError, OSError):
+            if fallback is not None:
+                try:
+                    fallback()
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
 
     def _show_routes_compact(self) -> None:
         """Show registered routes in compact format."""
@@ -428,18 +505,17 @@ class ServeCommand(CommandBase):
                 "[#e5c07b]│[/#e5c07b] [dim]Gracefully stopping server...[/dim]"
             )
 
-            # Graceful shutdown
-            process.terminate()
-            try:
-                process.wait(timeout=5)
+            # Graceful shutdown of the whole server TREE (uvicorn + its
+            # reload/worker children) — a parent-only terminate() left
+            # grandchildren orphaned on the port.
+            if self._terminate_server_tree(process):
                 self.console.print(
                     "[#e5c07b]│[/#e5c07b] [#30e047]✓ Server stopped gracefully[/#30e047]"
                 )
-            except subprocess.TimeoutExpired:
+            else:
                 self.console.print(
-                    "[#e5c07b]│[/#e5c07b] [#E21102]⚠ Force killing server process...[/#E21102]"
+                    "[#e5c07b]│[/#e5c07b] [#E21102]⚠ Force killed server process group[/#E21102]"
                 )
-                process.kill()
 
             runtime = time.time() - start_time
             self.console.print(

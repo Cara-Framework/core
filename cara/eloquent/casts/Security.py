@@ -107,6 +107,44 @@ class EncryptedCast(BaseCast):
         return self._cipher().encrypt(str(value))
 
 
+class EncryptedJsonCast(EncryptedCast):
+    """Encrypted-at-rest JSON for jsonb columns (credentials, secrets).
+
+    The ciphertext rides a self-describing envelope ``{"$enc": token}``
+    so the column stays valid jsonb. The reader is tolerant on purpose:
+    a legacy plaintext dict (pre-encryption rows) is returned as-is and
+    becomes encrypted on its next save — migration by attrition, no
+    downtime re-encrypt pass required.
+    """
+
+    ENVELOPE_KEY = "$enc"
+
+    def get(self, value: Any) -> Any:
+        import json
+
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (ValueError, TypeError):
+                return None
+        if isinstance(value, dict) and self.ENVELOPE_KEY in value:
+            try:
+                return json.loads(self._cipher().decrypt(value[self.ENVELOPE_KEY]))
+            except Exception:
+                return None  # wrong APP_KEY / corrupt token — never leak the envelope
+        return value  # legacy plaintext row
+
+    def set(self, value: Any) -> str | None:
+        import json
+
+        if value is None:
+            return None
+        token = self._cipher().encrypt(json.dumps(value))
+        return json.dumps({self.ENVELOPE_KEY: token})
+
+
 class TokenCast(BaseCast):
     """Cast for generating and validating tokens."""
 
