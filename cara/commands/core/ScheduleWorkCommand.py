@@ -318,14 +318,57 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                     except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
 
-            result = handle_method(**handle_kwargs)
-            # Support async handle() methods
-            if inspect.isawaitable(result):
-                loop = asyncio.new_event_loop()
+            # OPT-IN scheduler-tick observability (default OFF). The scheduler
+            # runs jobs INLINE via handle() — bypassing Bus/driver — so a
+            # scheduled tick normally leaves NO ``job`` row (only the child
+            # jobs it dispatches get tracked). That invisibility is by design,
+            # but it makes "did my scheduled sweep actually run?" un-queryable.
+            # Flip ``SCHEDULER_TRACK_TICKS=true`` to record one row per fire
+            # (pending → processing → completed/failed) so scheduled runs sit
+            # alongside dispatched jobs. Kept OFF by default because high-
+            # cadence timers (e.g. 30s flushes) would otherwise write thousands
+            # of tick rows/day into the very table retention is bounding.
+            # Tracking is fully guarded — a tracker failure NEVER affects the
+            # actual job run.
+            tracker = None
+            db_job_id = None
+            if config("scheduling.track_ticks", False):
                 try:
-                    loop.run_until_complete(result)
-                finally:
-                    loop.close()
+                    if _app is not None and _app.has("JobTracker"):
+                        tracker = _app.make("JobTracker")
+                        db_job_id = tracker.create_sync_job_record(
+                            job_name=_cls.__name__,
+                            job_class=f"{_cls.__module__}.{_cls.__name__}",
+                            queue="scheduler",
+                            metadata={"scheduled_tick": True, "schedule_id": job_id},
+                        )
+                        if db_job_id is not None:
+                            tracker.update_job_status(db_job_id, "processing")
+                except Exception:  # noqa: BLE001 — tracking never breaks the run
+                    tracker = None
+                    db_job_id = None
+
+            def _finish_tick(status: str, _t=tracker, _id=db_job_id) -> None:
+                if _t is not None and _id is not None:
+                    try:
+                        _t.update_job_status(_id, status)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            try:
+                result = handle_method(**handle_kwargs)
+                # Support async handle() methods
+                if inspect.isawaitable(result):
+                    loop = asyncio.new_event_loop()
+                    try:
+                        loop.run_until_complete(result)
+                    finally:
+                        loop.close()
+            except BaseException:
+                _finish_tick("failed")
+                raise
+            else:
+                _finish_tick("completed")
 
         builder = Schedule.call(_make_and_run)
         builder.identifier = job_id
