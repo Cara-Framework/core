@@ -14,17 +14,6 @@ from cara.facades import Log
 
 
 @dataclass
-class QueueBinding:
-    """Queue binding configuration."""
-
-    queue_name: str
-    routing_pattern: str
-    domain: str
-    subtype: str
-    priority: str
-
-
-@dataclass
 class RoutingKey:
     """Parsed routing key components."""
 
@@ -118,7 +107,6 @@ class TopicExchange:
             return
 
         self.exchange_name = exchange_name
-        self.bindings: dict[str, QueueBinding] = {}
         self.queue_bindings: dict[str, list[str]] = {}
         self._queue_patterns: dict[str, list[str]] = {}
         self._logged_bindings = set()
@@ -360,24 +348,50 @@ class TopicExchange:
         # Fallback to first available queue
         return matching_queues[0]
 
+    @staticmethod
+    def _pattern_segments(pattern: str) -> tuple[str, str, str]:
+        """Split a ``domain.subtype.priority`` routing pattern.
+
+        Missing trailing segments (``orders.#``) come back as ``"#"`` so
+        callers can treat them as match-anything.
+        """
+        parts = pattern.split(".")
+        parts += ["#"] * (3 - len(parts))
+        return parts[0], parts[1], parts[2]
+
     def get_queue_info(self) -> dict[str, dict]:
-        """Get information about all bound queues."""
+        """Get information about all bound queues.
+
+        Derived from ``queue_bindings`` — the single source of truth
+        ``bind_queue`` maintains. (An earlier ``bindings`` dict existed
+        for this but was never populated, so introspection always came
+        back empty.)
+        """
         queue_info = {}
 
-        for queue_name, binding in self.bindings.items():
+        for queue_name, patterns in self.queue_bindings.items():
+            domain, _subtype, priority = self._pattern_segments(patterns[0])
             queue_info[queue_name] = {
-                "routing_pattern": binding.routing_pattern,
-                "domain": binding.domain,
-                "priority": binding.priority,
+                "routing_pattern": patterns[0],
+                "routing_patterns": list(patterns),
+                "domain": domain,
+                "priority": priority,
                 "exchange": self.exchange_name,
             }
 
         return queue_info
 
     def list_queues_for_domain(self, domain: str) -> list[str]:
-        """Get all queues for a specific domain."""
-        return [
-            queue_name
-            for queue_name, binding in self.bindings.items()
-            if binding.domain == domain
-        ]
+        """Get all queues serving a specific domain.
+
+        A queue counts as serving the domain when any of its patterns
+        names that domain outright or wildcards it (``*``/``#``).
+        """
+        matches = []
+        for queue_name, patterns in self.queue_bindings.items():
+            for pattern in patterns:
+                pattern_domain = self._pattern_segments(pattern)[0]
+                if pattern_domain in (domain, "*", "#"):
+                    matches.append(queue_name)
+                    break
+        return matches

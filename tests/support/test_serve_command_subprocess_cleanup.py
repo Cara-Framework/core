@@ -48,7 +48,21 @@ def _make_fake_popen(still_running: bool = True) -> MagicMock:
     process = MagicMock(spec=subprocess.Popen)
     process.poll.return_value = None if still_running else 0
     process.stdout = MagicMock(name="stdout")
+    # ``spec=Popen`` doesn't expose instance-only attributes like ``pid``;
+    # teardown signals the process GROUP via ``os.killpg(process.pid, …)``,
+    # so the fake needs a concrete pid.
+    process.pid = 4242
     return process
+
+
+def _patch_killpg_unavailable():
+    """Make group-signalling fail so teardown exercises the per-process
+    fallback ladder (``terminate()`` → ``kill()``) deterministically —
+    and never signals a real process group from the test suite."""
+    return patch(
+        "cara.commands.core.ServeCommand.os.killpg",
+        side_effect=ProcessLookupError,
+    )
 
 
 def test_start_server_terminates_process_when_monitor_raises():
@@ -70,6 +84,7 @@ def test_start_server_terminates_process_when_monitor_raises():
             side_effect=RuntimeError("colorize blew up on bad utf-8"),
         ),
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
+        _patch_killpg_unavailable(),
     ):
         cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
@@ -102,6 +117,7 @@ def test_start_server_kills_process_when_terminate_times_out():
             side_effect=RuntimeError("boom"),
         ),
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
+        _patch_killpg_unavailable(),
     ):
         cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
@@ -129,6 +145,7 @@ def test_start_server_closes_stdout_pipe_when_monitor_raises():
         ),
         patch.object(cmd, "_monitor_server_process", side_effect=RuntimeError("boom")),
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
+        _patch_killpg_unavailable(),
     ):
         cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
@@ -152,6 +169,7 @@ def test_start_server_does_not_terminate_already_exited_process():
         ),
         patch.object(cmd, "_monitor_server_process", return_value=None),
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
+        _patch_killpg_unavailable(),
     ):
         cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 

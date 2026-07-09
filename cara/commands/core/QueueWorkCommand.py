@@ -741,8 +741,11 @@ class JobProcessor:
             else:
                 wait_secs = None
 
-            # Metric labels — now that we have a resolved job instance.
-            _mx_queue = _queue_label(msg)
+            # Metric labels — now that we have a resolved job instance. Pass
+            # the polled queue through: it is _queue_label's priority-1
+            # source, and dropping it here (unlike the orphan paths above)
+            # made every successfully consumed job read queue="unknown".
+            _mx_queue = _queue_label(msg, instance, queue_name=queue_name)
             _mx_job = _job_label(instance, msg)
             if _M is not None:
                 try:

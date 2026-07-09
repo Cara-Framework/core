@@ -371,11 +371,37 @@ class Route:
             segments.extend(filter(None, path.split("/")))
         return "/" + "/".join(segments)
 
+    @staticmethod
+    def _group_marker(
+        prefix: str | None,
+        name_prefix: str | None,
+        middleware: str | list[str] | None,
+    ) -> tuple:
+        """Canonical identity of one group application, recorded per route.
+
+        Grouping mutates the Route object in place, so re-running the same
+        group over the same objects (hot reload, repeated discovery, tests
+        re-importing module-level routes) used to stack the prefix, the
+        name prefix AND the middleware a second time. Each application is
+        recorded on the route; an identical re-application is a no-op.
+        Nested groups with different prefixes/middleware still stack —
+        their markers differ. (Deliberate trade-off: two *identical*
+        nested groups collapse to one; ``/a/a`` via two same-config
+        groups needs an explicit combined prefix.)
+        """
+        if isinstance(middleware, list):
+            middleware_key: tuple = tuple(middleware)
+        elif middleware:
+            middleware_key = (middleware,)
+        else:
+            middleware_key = ()
+        return (prefix or "", name_prefix or "", middleware_key)
+
     @classmethod
     def group(cls, *routes: Route, **options) -> list[Route]:
         """Group multiple routes under a shared prefix and/or middleware.
 
-        Two correctness fixes vs. the previous implementation:
+        Correctness properties:
 
         1. Group middleware is **prepended**, not appended. Laravel
            runs group middleware first (outer-to-inner). The previous
@@ -386,32 +412,29 @@ class Route:
            letting unauthenticated traffic hit the auth guard before
            getting throttled.
 
-        2. The prefix and name mutations write into the existing
-           Route object. That makes group registration order-sensitive
-           and non-idempotent — re-running route discovery (hot
-           reload, tests) double-prefixes. We don't reassign URLs in
-           place anymore on routes that have already been grouped:
-           the URL is recompiled idempotently regardless of whether
-           it already starts with the prefix.
+        2. Idempotent re-application via a per-route ledger (see
+           ``_group_marker``): re-running the same group over the same
+           Route objects no longer double-prefixes the URL/name or
+           duplicates group middleware.
         """
         inner: list[Route] = []
         prefix = options.get("prefix")
         name_prefix = options.get("name")
         group_middleware = options.get("middleware")
+        marker = cls._group_marker(prefix, name_prefix, group_middleware)
 
         for route in flatten(routes):
+            applied = route.__dict__.setdefault("_applied_groups", set())
+            if marker in applied:
+                inner.append(route)
+                continue
+            applied.add(marker)
+
             if prefix:
-                joined = cls._join_paths(prefix, route.url)
-                # Idempotent: if the URL already starts with the
-                # prefix segment(s), don't double-apply.
-                if route.url != joined:
-                    route.url = joined
-                    route.compiler.compile_route(route.url)
+                route.url = cls._join_paths(prefix, route.url)
+                route.compiler.compile_route(route.url)
             if name_prefix:
-                # Idempotent: skip if the name already carries the prefix.
-                current = route._name or ""
-                if not current.startswith(name_prefix):
-                    route._name = name_prefix + current
+                route._name = name_prefix + (route._name or "")
             if group_middleware:
                 # Prepend so group middleware runs first.
                 route.prepend_middleware(group_middleware)

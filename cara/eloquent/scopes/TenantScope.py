@@ -25,10 +25,19 @@ class TenantScope(BaseScope):
             "_tenant_injector", self._inject_tenant_id, action="insert"
         )
 
+        # bulk_create runs its own scope action (same registration split
+        # UUIDPrimaryKeyScope / TimeStampsScope use) — without it, bulk
+        # inserts silently skipped tenant injection and produced rows
+        # invisible to every scoped query.
+        builder.set_global_scope(
+            "_tenant_injector_bulk", self._inject_tenant_id_bulk, action="bulk_create"
+        )
+
     def on_remove(self, builder):
         """Remove tenant scoping."""
         builder.remove_global_scope("_tenant_filter", action="select")
         builder.remove_global_scope("_tenant_injector", action="insert")
+        builder.remove_global_scope("_tenant_injector_bulk", action="bulk_create")
 
     def _apply_tenant_filter(self, builder):
         """Apply tenant filtering based on current request context.
@@ -76,6 +85,33 @@ class TenantScope(BaseScope):
             )
             raise RuntimeError(
                 "Cannot insert without tenant_id: tenant resolution failed"
+            )
+
+    def _inject_tenant_id_bulk(self, builder):
+        """Bulk-insert variant of :meth:`_inject_tenant_id`.
+
+        ``_creates`` is a list of canonicalized rows here. Same semantics:
+        explicitly provided tenant_id values are respected, absent/None
+        ones are stamped from the active tenant context; a tenant
+        resolution failure fails CLOSED.
+        """
+        try:
+            tenant_id = self._get_current_tenant_id()
+
+            if tenant_id is not None:
+                for row in builder._creates:
+                    if row.get(self.tenant_column) is None:
+                        row[self.tenant_column] = tenant_id
+
+            return builder
+
+        except Exception:
+            _logger.error(
+                "Tenant ID injection failed — aborting bulk insert to prevent orphan rows",
+                exc_info=True,
+            )
+            raise RuntimeError(
+                "Cannot bulk-insert without tenant_id: tenant resolution failed"
             )
 
     def _get_current_tenant_id(self):
