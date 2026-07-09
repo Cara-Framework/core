@@ -199,12 +199,12 @@ from cara.orm import Model
 class {class_name}(Model):
     """
     {class_name} Eloquent model.
-    
+
     This model represents the '{table_name}' table in the database.
     """
-    
+
     __table__ = '{table_name}'{fillable_code}
-    
+
     # Add your model methods here
     pass
 '''

@@ -49,6 +49,14 @@ class SQLiteGrammar(BaseGrammar):
     def bulk_insert_format(self):
         return "INSERT INTO {table} ({columns}) VALUES {values}"
 
+    def upsert_format(self):
+        # SQLite ≥ 3.24 shares Postgres' ON CONFLICT syntax (no RETURNING
+        # here — the affected count comes back via cursor.rowcount).
+        return "INSERT INTO {table} ({columns}) VALUES {values} ON CONFLICT ({conflict_columns}) DO UPDATE SET {update_columns}"
+
+    def upsert_do_nothing_format(self):
+        return "INSERT INTO {table} ({columns}) VALUES {values} ON CONFLICT ({conflict_columns}) DO NOTHING"
+
     def delete_format(self):
         return "DELETE FROM {table} {wheres}"
 

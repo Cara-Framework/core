@@ -68,6 +68,38 @@ class MySQLGrammar(BaseGrammar):
     def bulk_insert_format(self):
         return "INSERT INTO {table} ({columns}) VALUES {values}"
 
+    def _compile_upsert(self, qmark=False):
+        """MySQL upsert — ``ON DUPLICATE KEY UPDATE col = VALUES(col)``.
+
+        MySQL has no conflict-target clause: the dupe check runs against
+        EVERY unique key on the table, so ``unique_by`` is advisory here
+        (Laravel behaves identically on MySQL). ``update=[]`` compiles
+        ``INSERT IGNORE`` (insert-if-missing).
+        """
+        all_values = [list(record.values()) for record in self._upsert_values]
+        columns = list(self._upsert_values[0].keys()) if self._upsert_values else []
+
+        table = self.process_table(self.table)
+        column_list = self.columnize_bulk_columns(columns)
+        values = self.columnize_bulk_values(all_values, qmark=qmark)
+
+        if self._upsert_update:
+            quoted_updates = (
+                self.column_string().format(column=col, separator="")
+                for col in self._upsert_update
+            )
+            update_columns = ", ".join(
+                f"{col} = VALUES({col})" for col in quoted_updates
+            )
+            self._sql = (
+                f"INSERT INTO {table} ({column_list}) VALUES {values} "
+                f"ON DUPLICATE KEY UPDATE {update_columns}"
+            )
+        else:
+            self._sql = f"INSERT IGNORE INTO {table} ({column_list}) VALUES {values}"
+
+        return self
+
     def delete_format(self):
         return "DELETE FROM {table} {wheres}"
 

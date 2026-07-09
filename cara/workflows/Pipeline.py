@@ -204,11 +204,13 @@ class Pipeline:
     async def _execute_sync(self) -> dict[str, Any]:
         """Execute pipeline synchronously (for commands)."""
         successful_steps = 0
+        skipped_steps = 0
         total_steps = len(self.steps)
 
         for i, step in enumerate(self.steps, 1):
             # Check condition
             if step.condition and not step.condition(self.context):
+                skipped_steps += 1
                 Log.info("⏭️ Skipping step %s: %s (condition not met)", i, step.step_class.__name__, category='cara.pipeline')
                 continue
 
@@ -280,12 +282,18 @@ class Pipeline:
 
                 Log.error("❌ Step failed: %s - %s", step.step_class.__name__, str(e), category='cara.pipeline')
 
-        success_rate = successful_steps / total_steps if total_steps > 0 else 0
+        # Condition-skipped steps are not failures — a healthy run with a
+        # legitimately-skipped optional step must still report success.
+        attempted_steps = total_steps - skipped_steps
+        success_rate = (
+            successful_steps / attempted_steps if attempted_steps > 0 else 1.0
+        )
 
         result = {
-            "success": successful_steps == total_steps,
+            "success": successful_steps == attempted_steps,
             "success_rate": success_rate,
             "successful_steps": successful_steps,
+            "skipped_steps": skipped_steps,
             "total_steps": total_steps,
             "results": self.results,
             "context": self.context,
@@ -293,142 +301,78 @@ class Pipeline:
             "pipeline_type": self.pipeline_type.value,
         }
 
-        Log.info("🏁 Pipeline completed: %s Success: %s/%s", self.name, successful_steps, total_steps, category='cara.pipeline')
+        Log.info("🏁 Pipeline completed: %s Success: %s/%s (%s skipped)", self.name, successful_steps, attempted_steps, skipped_steps, category='cara.pipeline')
         return result
 
     async def _execute_async_chain(self) -> dict[str, Any]:
-        """Execute pipeline as async chain (sequential job execution)."""
+        """Execute pipeline as async chain (sequential job execution).
+
+        Delegates to :meth:`_dispatch_chain` — the previous implementation
+        pushed every step to the queue immediately in a loop, which is
+        parallel execution wearing a chain label: step N+1 could run before
+        (or during) step N.
+        """
         if not self.steps:
             return {"success": False, "error": "No steps to execute"}
 
-        Log.info("🔗 Executing async chain: %s steps", len(self.steps), category='cara.pipeline')
+        # Dispatch-time conditions still apply — steps whose condition
+        # rejects the current context are excluded from the chain.
+        runnable = [
+            step
+            for step in self.steps
+            if not (step.condition and not step.condition(self.context))
+        ]
+        skipped = len(self.steps) - len(runnable)
 
-        successful_steps = 0
-        total_steps = len(self.steps)
+        Log.info("🔗 Executing async chain: %s steps (%s skipped)", len(runnable), skipped, category='cara.pipeline')
 
-        for i, step in enumerate(self.steps, 1):
-            # Check condition
-            if step.condition and not step.condition(self.context):
-                Log.info("⏭️ Skipping step %s: %s (condition not met)", i, step.step_class.__name__, category='cara.pipeline')
-                continue
-
-            Log.info("🔄 Dispatching step %s/%s: %s", i, total_steps, step.step_class.__name__, category='cara.pipeline')
-
-            try:
-                # Check if it's a job class with dispatch method
-                if hasattr(step.step_class, "dispatch"):
-                    job_dispatch = step.step_class.dispatch(*step.args, **step.kwargs)
-
-                    if step.routing_key:
-                        job_id = job_dispatch.with_routing_key(step.routing_key)
-                    else:
-                        job_id = job_dispatch
-
-                    # Store result
-                    step_result = {
-                        "step": step.step_class.__name__,
-                        "success": True,
-                        "job_id": job_id,
-                        "routing_key": step.routing_key,
-                        "priority": step.priority,
-                        "index": i,
-                    }
-                    self.results.append(step_result)
-                    successful_steps += 1
-
-                    # Call success callback
-                    if step.on_success:
-                        step.on_success(step_result, self.context)
-
-                    Log.info("✅ Step dispatched: %s [%s]", step.step_class.__name__, job_id, category='cara.pipeline')
-                else:
-                    raise InvalidArgumentException(
-                        f"Step {step.step_class.__name__} is not a dispatchable job"
-                    )
-
-            except Exception as e:
-                step_result = {
-                    "step": step.step_class.__name__,
-                    "success": False,
-                    "error": str(e),
-                    "index": i,
-                }
-                self.results.append(step_result)
-
-                # Call failure callback
-                if step.on_failure:
-                    step.on_failure(step_result, self.context)
-
-                Log.error("❌ Step dispatch failed: %s - %s", step.step_class.__name__, str(e), category='cara.pipeline')
-
-        success_rate = successful_steps / total_steps if total_steps > 0 else 0
-
-        result = {
-            "success": successful_steps == total_steps,
-            "success_rate": success_rate,
-            "successful_steps": successful_steps,
-            "total_steps": total_steps,
-            "results": self.results,
-            "context": self.context,
-            "pipeline_name": self.name,
-            "pipeline_type": self.pipeline_type.value,
-        }
-
-        Log.info("🏁 Async chain completed: %s Success: %s/%s", self.name, successful_steps, total_steps, category='cara.pipeline')
+        result = self._dispatch_chain(runnable)
+        result.update(
+            {
+                "skipped_steps": skipped,
+                "context": self.context,
+                "pipeline_type": self.pipeline_type.value,
+            }
+        )
         return result
 
     async def _execute_async_parallel(self) -> dict[str, Any]:
         """Execute pipeline as async parallel (parallel job execution)."""
         return self._dispatch_parallel()
 
-    def _dispatch_chain(self) -> dict[str, Any]:
-        """Dispatch job chain with Laravel-style ``.chain([...])`` continuation.
+    def _dispatch_chain(self, steps: list[PipelineStep] | None = None) -> dict[str, Any]:
+        """Dispatch the steps as a real sequential chain.
 
-        We dispatch the first step normally and attach the remaining steps as
-        a continuation list on the returned ``PendingDispatch`` so the worker
-        will dispatch step ``N+1`` when step ``N`` completes. Falls back to a
-        single-job dispatch when the underlying job class does not expose a
-        ``chain`` method (older drivers).
+        Uses ``cara.queues.Chain`` (ChainRunnerJob) — the framework's actual
+        chain mechanism. The previous implementation attached follow-ups via
+        ``pending.chain(...)``, a method PendingDispatch never had, so every
+        step after the first was silently dropped.
         """
-        if not self.steps:
+        steps = self.steps if steps is None else steps
+        if not steps:
             return {"success": False, "error": "No steps to dispatch"}
 
-        first_step, *remaining_steps = self.steps
-
         try:
-            if not hasattr(first_step.step_class, "dispatch"):
-                raise InvalidArgumentException(
-                    f"Step {first_step.step_class.__name__} is not a dispatchable job"
-                )
+            jobs = []
+            for step in steps:
+                if not hasattr(step.step_class, "dispatch"):
+                    raise InvalidArgumentException(
+                        f"Step {step.step_class.__name__} is not a dispatchable job"
+                    )
+                jobs.append(step.step_class(*step.args, **step.kwargs))
 
-            pending = first_step.step_class.dispatch(
-                *first_step.args, **first_step.kwargs
-            )
+            from cara.queues.Chain import Chain
 
-            if first_step.routing_key and hasattr(pending, "with_routing_key"):
-                pending = pending.with_routing_key(first_step.routing_key)
+            Chain(jobs).dispatch()
 
-            # Attach the rest of the chain if the dispatcher supports it.
-            if remaining_steps and hasattr(pending, "chain"):
-                chained = [
-                    step.step_class.dispatch_sync_payload(*step.args, **step.kwargs)
-                    if hasattr(step.step_class, "dispatch_sync_payload")
-                    else (step.step_class, step.args, step.kwargs, step.routing_key)
-                    for step in remaining_steps
-                ]
-                pending = pending.chain(chained)
-
-            job_id = getattr(pending, "job_id", pending)
-
-            Log.info("Chain started: %s (%s follow-ups) [%s]", first_step.step_class.__name__, len(remaining_steps), job_id, category='cara.pipeline')
+            Log.info("Chain started: %s (%s follow-ups)", steps[0].step_class.__name__, len(steps) - 1, category='cara.pipeline')
 
             return {
                 "success": True,
                 "chain_started": True,
-                "first_job_id": job_id,
                 "pipeline_name": self.name,
-                "total_steps": len(self.steps),
-                "chained_steps": len(remaining_steps),
+                "total_steps": len(steps),
+                "chained_steps": len(steps) - 1,
             }
 
         except Exception as e:

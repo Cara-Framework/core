@@ -111,31 +111,35 @@ class QueryStringParser:
 
         current = result
 
-        # Navigate through all parts except the last
-        for i, part in enumerate(parts[:-1]):
-            next_part = parts[i + 1] if i + 1 < len(parts) else None
-
+        # Navigate through all parts except the last. Every step guards
+        # against a TYPE CONFLICT with an earlier key: a crafted query
+        # like ``?a=1&a[b]=2`` used to descend into the string "1" and
+        # blow up with an unhandled TypeError on assignment — a 500 on
+        # any endpoint. Conflicting structure is replaced (last key
+        # wins, PHP/Laravel semantics), never assigned into.
+        for part in parts[:-1]:
             if part.is_array_key:
                 # Current part is an array
-                if part.name not in current:
+                if not isinstance(current.get(part.name), list):
                     current[part.name] = []
 
                 # Ensure we have enough array elements
                 while len(current[part.name]) <= part.index:
                     current[part.name].append({})
 
-                current = current[part.name][part.index]
+                node = current[part.name][part.index]
+                if not isinstance(node, dict):
+                    node = {}
+                    current[part.name][part.index] = node
+                current = node
 
             else:
                 # Current part is an object key
-                if part.name not in current:
-                    # Determine what type to create based on next part
-                    if next_part and next_part.is_array_key:
-                        current[part.name] = []
-                    else:
-                        current[part.name] = {}
-
-                current = current[part.name]
+                node = current.get(part.name)
+                if not isinstance(node, dict):
+                    node = {}
+                    current[part.name] = node
+                current = node
 
         # Set the final value
         last_part = parts[-1]
@@ -143,7 +147,7 @@ class QueryStringParser:
 
         if last_part.is_array_key or is_array:
             # Final part is an array
-            if last_part.name not in current:
+            if not isinstance(current.get(last_part.name), list):
                 current[last_part.name] = []
 
             if is_array:
@@ -180,19 +184,27 @@ class QueryStringParser:
         """
         parts = []
 
-        # Handle array notation at the end (key[])
+        # Trailing array notation (key[]): strip it and parse the base
+        # normally — treating the whole base as ONE part swallowed any
+        # nesting (``filters[brand][]`` stayed a literal 'filters[brand]'
+        # top-level key). The trailing [] itself is applied by
+        # _set_nested_value via ``key.endswith("[]")``.
         if key.endswith("[]"):
             key = key[:-2]
-            parts.append(KeyPart(key, is_array_key=True, index=0))
-            return parts
+            if not key:
+                return parts
 
-        # Use regex to find all key parts
-        pattern = r"([^\[\]]+)(?:\[([^\[\]]*)\])?"
-        matches = re.findall(pattern, key)
-
-        for match in matches:
-            name, index_str = match
-            if index_str.isdigit() and int(index_str) <= _MAX_ARRAY_INDEX:
+        # finditer (not findall): findall collapses "no bracket group" to
+        # the same "" as literal empty brackets, which misparsed a bare
+        # trailing segment like ``users[0][name]`` into an ARRAY part —
+        # values landed wrapped in a stray list ({'name': ['John']}).
+        for match in re.finditer(r"([^\[\]]+)(?:\[([^\[\]]*)\])?", key):
+            name = match.group(1)
+            index_str = match.group(2)
+            if index_str is None:
+                # No brackets (regular key)
+                parts.append(KeyPart(name, is_array_key=False))
+            elif index_str.isdigit() and int(index_str) <= _MAX_ARRAY_INDEX:
                 # Numeric index
                 parts.append(KeyPart(name, is_array_key=True, index=int(index_str)))
             elif index_str.isdigit():
@@ -206,13 +218,10 @@ class QueryStringParser:
             elif index_str == "":
                 # Empty brackets (array notation)
                 parts.append(KeyPart(name, is_array_key=True, index=0))
-            elif index_str:
+            else:
                 # Non-numeric index (treat as nested object key)
                 parts.append(KeyPart(name, is_array_key=False))
                 parts.append(KeyPart(index_str, is_array_key=False))
-            else:
-                # No brackets (regular key)
-                parts.append(KeyPart(name, is_array_key=False))
 
         return parts
 

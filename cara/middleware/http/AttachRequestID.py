@@ -7,6 +7,7 @@ traceability.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -29,10 +30,8 @@ class AttachRequestID(Middleware):
         except (AttributeError, TypeError):
             pass
 
-        try:
+        with contextlib.suppress(AttributeError, TypeError):
             ExecutionContext.set_correlation_id(request.request_id)
-        except (AttributeError, TypeError):
-            pass
 
         try:
             from cara.observability.Sentry import set_request_tag

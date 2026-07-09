@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
 from cara.support import paths
@@ -279,9 +281,9 @@ class MigrateCommand(CommandBase):
             return _recorder
 
         # statement → bool-ish; select → rows; select_one → row.
-        setattr(db, "statement", _make_recorder(True))
-        setattr(db, "select", _make_recorder([]))
-        setattr(db, "select_one", _make_recorder(None))
+        db.statement = _make_recorder(True)
+        db.select = _make_recorder([])
+        db.select_one = _make_recorder(None)
 
         def restore() -> None:
             for name, original in originals.items():
@@ -290,10 +292,8 @@ class MigrateCommand(CommandBase):
                 else:
                     # Method was instance-shadowed; drop the shadow so the
                     # class method shows through again.
-                    try:
+                    with contextlib.suppress(AttributeError):
                         delattr(db, name)
-                    except AttributeError:
-                        pass
 
         return restore
 

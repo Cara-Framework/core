@@ -16,15 +16,13 @@ class FilledRule(BaseRule):
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         data = params.get("_data", {})
-        if field not in data:
+        if not self.field_present(data, field):
             return True
         if value is None:
             return False
         if isinstance(value, str) and value.strip() == "":
             return False
-        if isinstance(value, (list, dict)) and len(value) == 0:
-            return False
-        return True
+        return not (isinstance(value, (list, dict)) and len(value) == 0)
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' must not be empty when present."

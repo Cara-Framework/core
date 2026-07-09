@@ -382,19 +382,34 @@ class RedisCacheDriver(Cache):
                 if new_val == amount or self._client.ttl(redis_key) == -1:
                     self._client.expire(redis_key, ttl)
             return new_val
-        except Exception:
-            # Key likely holds non-integer data — nuke and reinitialise.
-            try:
-                pipe = self._client.pipeline(transaction=True)
-                pipe.delete(redis_key)
-                if ttl and ttl > 0:
-                    pipe.set(redis_key, str(amount), ex=ttl)
-                else:
-                    pipe.set(redis_key, str(amount))
-                pipe.execute()
-                return amount
-            except Exception as fallback_error:
-                Log.warning("[RedisCacheDriver] increment fallback failed for '%s': %s", key, fallback_error, category='cache')
+        except Exception as exc:
+            import redis
+
+            if not isinstance(exc, redis.exceptions.ResponseError):
+                # Infra failure (connection refused, timeout, auth) —
+                # PROPAGATE. Swallowing it returned ``amount``, which
+                # silently reset every counter to 1 while Redis was
+                # down: rate limiting, brute-force lockouts and
+                # fail-closed budget caps all read "fresh counter",
+                # and the rate-store's fallback modes (closed/memory/
+                # open) never engaged because they key off this raise.
+                raise
+            # WRONGTYPE — the key holds non-integer data (e.g. a pickled
+            # cache entry collided with a counter key). Nuke and
+            # reinitialise; a failure here is an infra failure again and
+            # propagates.
+            Log.warning(
+                "[RedisCacheDriver] increment WRONGTYPE recovery for '%s'",
+                key,
+                category="cache",
+            )
+            pipe = self._client.pipeline(transaction=True)
+            pipe.delete(redis_key)
+            if ttl and ttl > 0:
+                pipe.set(redis_key, str(amount), ex=ttl)
+            else:
+                pipe.set(redis_key, str(amount))
+            pipe.execute()
             return amount
 
     def forget_if(self, key: str, expected_value: Any) -> bool:

@@ -8,7 +8,6 @@ operations to the appropriate driver instance.
 from __future__ import annotations
 
 from cara.exceptions import DriverNotRegisteredException
-from cara.storage.contracts import Storage
 
 
 class Storage:

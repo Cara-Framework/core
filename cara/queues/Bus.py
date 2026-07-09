@@ -7,6 +7,7 @@ based on execution context. Inspired by Laravel's Bus facade.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -123,9 +124,8 @@ class Bus:
                     dispatch_call.with_routing_key(routing_key)
                 if queue:
                     dispatch_call.on_queue(queue)
-                if delay:
-                    if hasattr(dispatch_call, "delay"):
-                        dispatch_call.delay(delay)
+                if delay and hasattr(dispatch_call, "delay"):
+                    dispatch_call.delay(delay)
                 # Trigger dispatch synchronously so failures (broker
                 # down, AMQP unroutable, exchange RoutingKey parse
                 # error, no-binding fail-loud, Redis ConnectionError)
@@ -143,10 +143,8 @@ class Bus:
                 # Dispatch failed before the job was queued — release
                 # the unique lock so the caller can retry.
                 if isinstance(job, UniqueJob):
-                    try:
+                    with contextlib.suppress(ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
                         UniqueJob.release_unique_lock(job.unique_id())
-                    except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
-                        pass
                 raise
 
             # Prometheus dispatch counter — bounded by the (queue, job)

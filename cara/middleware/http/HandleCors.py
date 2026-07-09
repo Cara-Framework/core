@@ -185,10 +185,7 @@ class HandleCors(Middleware):
         import fnmatch
 
         request_path = request.path.lstrip("/")
-        for pattern in paths:
-            if fnmatch.fnmatch(request_path, pattern):
-                return True
-        return False
+        return any(fnmatch.fnmatch(request_path, pattern) for pattern in paths)
 
     def _is_origin_allowed(self, origin: str) -> bool:
         """Check if origin is allowed (any rule)."""

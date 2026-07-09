@@ -334,11 +334,10 @@ class ModelDiscoverer:
         tree = ast.parse(content)
 
         for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                if self._is_model_class(node):
-                    return self._extract_model_structure(
-                        node, file_path.stem, str(file_path)
-                    )
+            if isinstance(node, ast.ClassDef) and self._is_model_class(node):
+                return self._extract_model_structure(
+                    node, file_path.stem, str(file_path)
+                )
 
         return None
 
@@ -513,9 +512,8 @@ class ModelDiscoverer:
                             params["precision"] = arg.value
                         elif i == 1:
                             params["scale"] = arg.value
-                    elif field_type == "string":
-                        if i == 0:
-                            params["length"] = arg.value
+                    elif field_type == "string" and i == 0:
+                        params["length"] = arg.value
 
             # Extract keyword arguments
             for keyword in call_node.keywords:
@@ -541,17 +539,16 @@ class ModelDiscoverer:
                 if isinstance(stmt.value, ast.Dict):
                     self._parse_raw_sql_fields(stmt.value, model_info)
                 # Check if it's Schema.build(lambda field: (...))
-                elif isinstance(stmt.value, ast.Call):
-                    if (
-                        isinstance(stmt.value.func, ast.Attribute)
-                        and isinstance(stmt.value.func.value, ast.Name)
-                        and stmt.value.func.value.id == "Schema"
-                        and stmt.value.func.attr == "build"
-                    ):
-                        # Extract lambda argument
-                        if stmt.value.args and isinstance(stmt.value.args[0], ast.Lambda):
-                            lambda_node = stmt.value.args[0]
-                            self._parse_lambda_fields(lambda_node, model_info)
+                elif isinstance(stmt.value, ast.Call) and (
+                    isinstance(stmt.value.func, ast.Attribute)
+                    and isinstance(stmt.value.func.value, ast.Name)
+                    and stmt.value.func.value.id == "Schema"
+                    and stmt.value.func.attr == "build"
+                ):
+                    # Extract lambda argument
+                    if stmt.value.args and isinstance(stmt.value.args[0], ast.Lambda):
+                        lambda_node = stmt.value.args[0]
+                        self._parse_lambda_fields(lambda_node, model_info)
 
     def _parse_lambda_fields(self, lambda_node: ast.Lambda, model_info: dict):
         """Parse lambda field: (...) body to extract field definitions."""

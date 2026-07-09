@@ -7,6 +7,7 @@ similar to uvicorn's auto-reload but for all blocking operations.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import os
 import sys
@@ -180,10 +181,8 @@ class MakesAutoReload:
         # purging modules — otherwise auto-reload leaks ThreadPoolExecutor
         # semaphores every cycle (resource_tracker warnings on Python 3.14).
         if hasattr(self, "_shutdown_worker_resources"):
-            try:
+            with contextlib.suppress(Exception):
                 self._shutdown_worker_resources()
-            except Exception:
-                pass
 
         # Purge modules and restart
         self._purge_modules_for_reload()
@@ -212,10 +211,8 @@ class MakesAutoReload:
 
         # Remove modules
         for module_name in modules_to_remove:
-            try:
+            with contextlib.suppress(KeyError):
                 del sys.modules[module_name]
-            except KeyError:
-                pass
 
         if modules_to_remove:
             self.info(f"🔄 Purged {len(modules_to_remove)} modules for hot reload")

@@ -15,7 +15,7 @@ survives the delayed-retry republish path.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any
 
 try:
@@ -109,10 +109,8 @@ def set_attributes(**attrs: Any) -> None:
     for key, value in attrs.items():
         if value is None:
             continue
-        try:
+        with suppress(OSError, RuntimeError, AttributeError, ConnectionError):
             s.set_attribute(key, value)
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
-            pass
 
 
 def record_exception(exc: BaseException) -> None:

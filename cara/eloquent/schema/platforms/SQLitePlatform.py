@@ -94,7 +94,7 @@ class SQLitePlatform(Platform):
         )
 
         if table.added_indexes:
-            for name, index in table.added_indexes.items():
+            for _name, index in table.added_indexes.items():
                 sql.append(
                     f"CREATE INDEX {index.name} ON {self.wrap_table(table.name)}({','.join(index.column)})"
                 )
@@ -106,7 +106,7 @@ class SQLitePlatform(Platform):
 
     def columnize(self, columns):
         sql = []
-        for name, column in columns.items():
+        for _name, column in columns.items():
             if column.length:
                 length = self.create_column_length(column.column_type).format(
                     length=column.length
@@ -344,7 +344,7 @@ class SQLitePlatform(Platform):
 
     def constraintize(self, constraints):
         sql = []
-        for name, constraint in constraints.items():
+        for _name, constraint in constraints.items():
             # Partial / conditional UNIQUE is emitted as a standalone
             # CREATE UNIQUE INDEX ... WHERE after the table body, not inline.
             if constraint.constraint_type == "unique" and constraint.where:
@@ -377,7 +377,7 @@ class SQLitePlatform(Platform):
 
     def foreign_key_constraintize(self, table, foreign_keys):
         sql = []
-        for name, foreign_key in foreign_keys.items():
+        for _name, foreign_key in foreign_keys.items():
             cascade = ""
             if foreign_key.delete_action:
                 cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key.delete_action.lower())}"
@@ -397,7 +397,7 @@ class SQLitePlatform(Platform):
 
     def columnize_names(self, columns):
         names = []
-        for name, column in columns.items():
+        for _name, column in columns.items():
             names.append(self.wrap_column(column.name))
 
         return names

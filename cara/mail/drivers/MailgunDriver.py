@@ -55,7 +55,6 @@ class MailgunDriver(Mail):
         Returns:
             True if email sent successfully, False otherwise
         """
-        files = []
         try:
             # Prepare data
             data = self._prepare_data(mailable_data)
@@ -82,18 +81,6 @@ class MailgunDriver(Mail):
         except Exception as e:
             self._log_error(f"Mailgun send failed: {e}", exc_info=True)
             return False
-        finally:
-            # Always close file handles — even if requests.post() throws.
-            # files is [("attachment", (name, handle)), ...] so the
-            # handle lives at file_tuple[1][1].
-            for file_tuple in files:
-                try:
-                    inner = file_tuple[1]  # (name, handle)
-                    handle = inner[1] if isinstance(inner, (tuple, list)) else inner
-                    if hasattr(handle, "close"):
-                        handle.close()
-                except (OSError, RuntimeError, AttributeError, ConnectionError):
-                    pass
 
     def _prepare_data(self, mailable_data: dict[str, Any]) -> dict[str, Any]:
         """
@@ -191,8 +178,10 @@ class MailgunDriver(Mail):
 
             if file_path and os.path.exists(file_path):
                 try:
-                    file_handle = open(file_path, "rb")
-                    files.append(("attachment", (file_name, file_handle)))
+                    # Read the bytes up front instead of handing requests an
+                    # open handle — nothing to close on the error paths.
+                    with open(file_path, "rb") as file_handle:
+                        files.append(("attachment", (file_name, file_handle.read())))
                 except Exception as e:
                     self._log_error(f"Mailgun attachment failed for {file_path}: {e}")
 

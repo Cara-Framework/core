@@ -13,8 +13,9 @@ from cara.authentication import Authentication
 from cara.context import ExecutionContext
 from cara.facades import Log
 from cara.http import Request, Response
-from .ShouldAuthenticate import ShouldAuthenticate
 from cara.observability import set_request_tag, set_request_user
+
+from .ShouldAuthenticate import ShouldAuthenticate
 
 
 class AuthenticateUser(ShouldAuthenticate):
@@ -96,6 +97,8 @@ class AuthenticateUser(ShouldAuthenticate):
         successful_guard: str | None = None
         last_error: Exception | None = None
 
+        guard_state: tuple[Any, Any] = (None, None)
+
         for guard_name in self._resolve_guards(auth_manager):
             try:
                 guard = auth_manager.guard(guard_name)
@@ -106,7 +109,22 @@ class AuthenticateUser(ShouldAuthenticate):
                 # authenticated request. Offload to the connection-safe thread
                 # pool so the loop stays free (a genuine await-yield, unlike a
                 # sync-caller offload which can't help).
-                user = await ExecutionContext.run_in_thread(guard.user)
+                #
+                # run_in_thread executes in a COPY of the current context —
+                # the guard's ContextVar writes (user/token/claims) die with
+                # the thread. Capture them inside the thread and re-bind on
+                # the request task below, otherwise ``guard.logout()`` can't
+                # find the token to blacklist and ``last_payload`` reads
+                # empty for the rest of the request.
+                def _resolve(g=guard):
+                    resolved = g.user()
+                    return (
+                        resolved,
+                        getattr(g, "_token", None),
+                        getattr(g, "_last_payload", None),
+                    )
+
+                user, *guard_state = await ExecutionContext.run_in_thread(_resolve)
                 if user:
                     successful_guard = guard_name
                     break
@@ -121,6 +139,15 @@ class AuthenticateUser(ShouldAuthenticate):
 
         if not user:
             return self.authentication_failed(request, last_error)
+
+        # Re-bind the winning guard's state on THIS task's context.
+        token, claims = guard_state
+        if hasattr(guard, "_user"):
+            guard._user = user
+        if token is not None and hasattr(guard, "_token"):
+            guard._token = token
+        if claims is not None and hasattr(guard, "_last_payload"):
+            guard._last_payload = claims
 
         request.set_user(user)
         request._route_auth_guard = successful_guard

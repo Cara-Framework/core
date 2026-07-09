@@ -17,8 +17,6 @@ class EagerRelations:
         self.relations = []
         self.eagers = []  # 🔧 For compatibility
         self.nested_eagers = {}  # 🔧 For nested eager loading
-        self.eager_constraints = {}  # 🔧 For eager loading constraints
-        self.eager_counts = []  # 🔧 For counting eager loads
         self.callback_eagers = {}  # 🔧 For callback-based eager loading
 
     def register(self, *relations) -> Self:
@@ -57,16 +55,6 @@ class EagerRelations:
 
         return self
 
-    def with_count(self, relation: str) -> Self:
-        """Add a relation to count."""
-        self.eager_counts.append(relation)
-        return self
-
-    def with_constraint(self, relation: str, constraint) -> Self:
-        """Add constraint to eager loading."""
-        self.eager_constraints[relation] = constraint
-        return self
-
     def with_callback(self, relation: str, callback) -> Self:
         """Add callback for eager loading."""
         self.callback_eagers[relation] = callback
@@ -79,41 +67,3 @@ class EagerRelations:
     def get_eagers(self):
         """Get eager relations (alias for compatibility)."""
         return self.eagers.copy()
-
-    def get_nested_eagers(self):
-        """Get nested eager relations."""
-        return self.nested_eagers.copy()
-
-    def get_eager_counts(self):
-        """Get relations to count."""
-        return self.eager_counts.copy()
-
-    def get_constraints(self):
-        """Get eager loading constraints."""
-        return self.eager_constraints.copy()
-
-    def has_relations(self):
-        """Check if there are relations to load."""
-        return len(self.relations) > 0
-
-    def has_eagers(self):
-        """Check if there are eager relations (alias for compatibility)."""
-        return len(self.eagers) > 0
-
-    def has_nested_eagers(self):
-        """Check if there are nested eager relations."""
-        return len(self.nested_eagers) > 0
-
-    def has_counts(self):
-        """Check if there are relations to count."""
-        return len(self.eager_counts) > 0
-
-    def reset(self) -> Self:
-        """Reset all relations."""
-        self.relations = []
-        self.eagers = []
-        self.nested_eagers = {}
-        self.eager_constraints = {}
-        self.eager_counts = []
-        self.callback_eagers = {}
-        return self

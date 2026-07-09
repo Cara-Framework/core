@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pendulum
@@ -123,7 +123,7 @@ class QueueMonitor:
         if len(self.job_stats) > 1000:
             oldest_first = sorted(
                 self.job_stats.items(),
-                key=lambda kv: kv[1].get("started_at") or datetime.min.replace(tzinfo=timezone.utc),
+                key=lambda kv: kv[1].get("started_at") or datetime.min.replace(tzinfo=UTC),
             )
             for old_job_id, _ in oldest_first[:100]:
                 del self.job_stats[old_job_id]
@@ -368,7 +368,7 @@ class QueueMonitor:
         cutoff_time = pendulum.now("UTC").subtract(minutes=window_minutes)
 
         throughput = {}
-        for job_id, job_stat in self.job_stats.items():
+        for _job_id, job_stat in self.job_stats.items():
             started = job_stat.get("started_at")
             if not started or started < cutoff_time:
                 continue

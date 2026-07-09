@@ -296,10 +296,7 @@ class DefaultExceptionHandler:
                 return True
             import re as _re
 
-            for pat in allowed_origins_patterns or []:
-                if _re.match(pat, o):
-                    return True
-            return False
+            return any(_re.match(pat, o) for pat in allowed_origins_patterns or [])
 
         headers: list = []
 
@@ -502,9 +499,7 @@ class DefaultExceptionHandler:
         ):
             return True
         forwarded = raw_headers.get("forwarded")
-        if isinstance(forwarded, str) and "proto=https" in forwarded.lower():
-            return True
-        return False
+        return bool(isinstance(forwarded, str) and "proto=https" in forwarded.lower())
 
     def _request_id_header_for(self, request: Any, scope: dict[str, Any]) -> list:
         """Return the X-Request-ID header pair for the error response.

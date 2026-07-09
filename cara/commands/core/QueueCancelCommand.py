@@ -88,10 +88,9 @@ class QueueCancelCommand(CommandBase):
                 self.info(f"🔍 Job {job_id} not found in active jobs")
                 return 0
 
-        if not force:
-            if not self._confirm_action(f"Cancel job {job_id}?"):
-                self.info("❌ Cancelled by user")
-                return 0
+        if not force and not self._confirm_action(f"Cancel job {job_id}?"):
+            self.info("❌ Cancelled by user")
+            return 0
 
         success = Queue.cancel_job(job_id)
         if success:
@@ -125,12 +124,11 @@ class QueueCancelCommand(CommandBase):
                 self.info(f"   - {job_id} ({job_type})")
             return len(matching_jobs)
 
-        if not force:
-            if not self._confirm_action(
-                f"Cancel {len(matching_jobs)} job(s) for receipt {receipt_id}?"
-            ):
-                self.info("❌ Cancelled by user")
-                return 0
+        if not force and not self._confirm_action(
+            f"Cancel {len(matching_jobs)} job(s) for receipt {receipt_id}?"
+        ):
+            self.info("❌ Cancelled by user")
+            return 0
 
         def should_cancel(context: dict) -> bool:
             return context.get("receipt_id") == receipt_id
@@ -163,12 +161,11 @@ class QueueCancelCommand(CommandBase):
                 self.info(f"   - {job_id} (receipt: {receipt_id})")
             return len(matching_jobs)
 
-        if not force:
-            if not self._confirm_action(
-                f"Cancel {len(matching_jobs)} job(s) of type {job_type}?"
-            ):
-                self.info("❌ Cancelled by user")
-                return 0
+        if not force and not self._confirm_action(
+            f"Cancel {len(matching_jobs)} job(s) of type {job_type}?"
+        ):
+            self.info("❌ Cancelled by user")
+            return 0
 
         def should_cancel(context: dict) -> bool:
             return context.get("job_type") == job_type

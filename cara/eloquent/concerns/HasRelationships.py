@@ -188,7 +188,7 @@ class HasRelationships:
                 for item in spec:
                     _expand(item)
             elif isinstance(spec, dict):
-                for key in spec.keys():
+                for key in spec:
                     if isinstance(key, str):
                         flat.append(key)
 
@@ -283,7 +283,7 @@ class HasRelationships:
 
         # Remove any relationship data
         if hasattr(self, "_relations"):
-            for relation_name in self._relations.keys():
+            for relation_name in self._relations:
                 data.pop(relation_name, None)
 
         return data
@@ -317,7 +317,7 @@ class HasRelationships:
 
         for attr_name in dir(self.__class__):
             attr = getattr(self.__class__, attr_name)
-            if hasattr(attr, "__call__") and hasattr(attr, "get_related"):
+            if callable(attr) and hasattr(attr, "get_related"):
                 relationships.append(attr_name)
 
         return relationships

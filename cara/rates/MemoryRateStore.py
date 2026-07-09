@@ -40,6 +40,7 @@ would produce 180,000 identical lines.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 
@@ -280,10 +281,8 @@ def attempt_with_fallback(
     except Exception as exc:
         mode = resolve_fallback_mode()
         if _health_state.record_failure(exc):
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 Log.warning("Rate-limit cache backend unhealthy (%s: %s); fallback_mode=%s", exc.__class__.__name__, exc, mode, category='rate.fallback')
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
 
         if mode == "memory":
             count = _memory_store.increment(cache_key, window_seconds)
@@ -309,14 +308,12 @@ def attempt_with_fallback(
     # count. Skipping the clear leaves a stale higher-of-the-two
     # bucket on the next outage cycle.
     if _health_state.record_success():
-        try:
+        with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
             Log.warning(
                 "Rate-limit cache backend recovered; switching back to "
                 "globally-coordinated counting",
                 category="rate.fallback",
             )
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
-            pass
         _memory_store.clear()
 
     allowed = count <= max_attempts

@@ -31,6 +31,10 @@ from cara.facades import Cache
 # header (cross-request identity leak under concurrency).
 _REQUEST_USER: ContextVar[Any] = ContextVar("jwt_guard_user", default=None)
 _REQUEST_TOKEN: ContextVar[Any] = ContextVar("jwt_guard_token", default=None)
+# Verified claims of the most recently resolved token. Same leak class as
+# _user/_token above — as a plain instance attribute on the singleton
+# guard, request B could read request A's claims mid-await.
+_REQUEST_PAYLOAD: ContextVar[Any] = ContextVar("jwt_guard_payload", default=None)
 
 _logger = logging.getLogger("cara.auth.jwt")
 
@@ -111,7 +115,15 @@ class JWTGuard(Guard):
     @property
     def last_payload(self) -> dict:
         """Verified claims of the most recently resolved access token."""
-        return dict(getattr(self, "_last_payload", None) or {})
+        return dict(self._last_payload or {})
+
+    @property
+    def _last_payload(self) -> Any | None:
+        return _REQUEST_PAYLOAD.get()
+
+    @_last_payload.setter
+    def _last_payload(self, value: Any | None) -> None:
+        _REQUEST_PAYLOAD.set(value)
 
     @property
     def _user(self) -> Any | None:
@@ -215,11 +227,18 @@ class JWTGuard(Guard):
 
     def logout(self) -> None:
         """Log the user out and blacklist current token."""
-        if self.blacklist_enabled and self._token:
-            self._blacklist_token(self._token)
+        # ``_token`` lives in a ContextVar — when authentication ran in a
+        # run_in_thread copy of the context (AuthenticateUser middleware),
+        # the write never reached this task. Fall back to re-extracting
+        # from the request so logout still blacklists the token instead
+        # of silently leaving it valid until expiry.
+        token = self._token or self._extract_token()
+        if self.blacklist_enabled and token:
+            self._blacklist_token(token)
 
         self._user = None
         self._token = None
+        self._last_payload = None
 
     def validate_token(self, token: str) -> bool:
         """Validate a JWT token without setting session state."""

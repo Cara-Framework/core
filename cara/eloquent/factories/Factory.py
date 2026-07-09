@@ -35,7 +35,7 @@ class Factory:
             return model
         elif isinstance(dictionary, list):
             results = []
-            for index in range(0, len(dictionary)):
+            for _index in range(0, len(dictionary)):
                 called = self._factories[self.model][name](self.faker)
                 called.update(dictionary)
                 results.append(called)
@@ -46,7 +46,7 @@ class Factory:
 
         else:
             results = []
-            for index in range(0, self.number):
+            for _index in range(0, self.number):
                 called = self._factories[self.model][name](self.faker)
                 called.update(dictionary)
                 results.append(called)
@@ -67,7 +67,7 @@ class Factory:
             return model
         elif isinstance(dictionary, list):
             results = []
-            for index in range(0, len(dictionary)):
+            for _index in range(0, len(dictionary)):
                 called = self._factories[self.model][name](self.faker)
                 called.update(dictionary)
                 results.append(called)
@@ -78,7 +78,7 @@ class Factory:
             return models
         else:
             full_collection = []
-            for index in range(0, self.number):
+            for _index in range(0, self.number):
                 called = self._factories[self.model][name](self.faker)
                 called.update(dictionary)
                 full_collection.append(called)
@@ -105,5 +105,5 @@ class Factory:
         if self.model not in self._after_creates:
             return model
 
-        for name, callback in self._after_creates[self.model].items():
+        for _name, callback in self._after_creates[self.model].items():
             callback(model, self.faker)

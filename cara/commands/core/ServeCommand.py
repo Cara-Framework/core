@@ -6,6 +6,7 @@ This module provides a CLI command to start the development server with enhanced
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import platform
@@ -292,10 +293,8 @@ class ServeCommand(CommandBase):
             self.error(f"× Failed to start server: {e}")
         finally:
             for shutdown_signal, handler in previous_handlers.items():
-                try:
+                with contextlib.suppress(ValueError, OSError, TypeError):
                     signal.signal(shutdown_signal, handler)
-                except (ValueError, OSError, TypeError):
-                    pass
             # The monitor only handles KeyboardInterrupt explicitly.
             # Any other exception leaving the monitor (or any failure
             # surfaced in the except blocks above) used to leave the
@@ -303,15 +302,11 @@ class ServeCommand(CommandBase):
             # process pinned to the configured port, blocking the
             # next ``serve``. Force teardown on the way out.
             if process is not None:
-                try:
+                with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                     self._terminate_server_tree(process)
-                except (OSError, RuntimeError, AttributeError, ConnectionError):
-                    pass
                 if process.stdout is not None:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                         process.stdout.close()
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
-                        pass
 
     @staticmethod
     def _terminate_server_tree(process: subprocess.Popen) -> bool:
@@ -353,10 +348,8 @@ class ServeCommand(CommandBase):
             os.killpg(pgid, signum)
         except (ProcessLookupError, PermissionError, OSError):
             if fallback is not None:
-                try:
+                with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
                     fallback()
-                except (ProcessLookupError, PermissionError, OSError):
-                    pass
 
     def _show_routes_compact(self) -> None:
         """Show registered routes in compact format."""

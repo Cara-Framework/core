@@ -23,6 +23,7 @@ Config (cara ``config()`` with UPPER_SNAKE env fallback):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
@@ -101,10 +102,8 @@ def _run() -> None:
     buf: list[dict] = []
     last = time.monotonic()
     while True:
-        try:
+        with contextlib.suppress(queue.Empty):
             buf.append(_QUEUE.get(timeout=max(0.1, flush_secs)))
-        except queue.Empty:
-            pass
         due = len(buf) >= flush_rows or (time.monotonic() - last) >= flush_secs
         if buf and due:
             batch, buf = buf, []

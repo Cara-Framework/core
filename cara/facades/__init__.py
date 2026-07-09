@@ -7,6 +7,7 @@ from .DB import DB
 from .Event import Event
 from .Facade import Facade
 from .AI import AI
+from .Feature import Feature
 from .Gate import Gate
 from .Hash import Hash
 from .Http import Http
@@ -42,6 +43,7 @@ __all__ = [
     "DB",
     "Event",
     "Facade",
+    "Feature",
     "Gate",
     "Hash",
     "Http",

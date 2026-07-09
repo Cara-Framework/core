@@ -305,6 +305,16 @@ class QueryBuilder(ObservesEvents):
         self._distinct = False
         self._columns = ()
 
+        # Same contract, second pass (2026-07 framework audit): these
+        # four also leaked across reuses — a lock_for_update().first()
+        # left every later query compiling FOR UPDATE, a union() query
+        # re-appended its stale UNION, and _creates poisoned the next
+        # SELECT's column list.
+        self._creates = {}
+        self._unions = []
+        self.lock = False
+        self._lock_modifier = {"skip_locked": False, "nowait": False, "of": []}
+
         return self
 
     def get_connection_information(self):
@@ -597,6 +607,12 @@ class QueryBuilder(ObservesEvents):
         if bindings is None:
             bindings = []
         result = self.new_connection().query(query, bindings)
+        # Non-result statements (UPDATE/DELETE/INSERT without RETURNING)
+        # come back as the affected row count — hand it through as-is.
+        # prepare_result would try to hydrate the int into a model on
+        # model-bound builders.
+        if isinstance(result, int):
+            return result
         return self.prepare_result(result)
 
     def select_raw(self, query) -> Self:
@@ -801,9 +817,12 @@ class QueryBuilder(ObservesEvents):
             model = model.hydrate(self._creates)
         if not self.dry:
             connection = self.new_connection()
+            # to_qmark() resets the builder (including _creates); keep the
+            # payload for the no-RETURNING fallback.
+            creates = self._creates
             query_result = connection.query(self.to_qmark(), self._bindings, results=1)
 
-            processed_results = query_result or self._creates
+            processed_results = query_result or creates
         else:
             processed_results = self._creates
 
@@ -858,6 +877,10 @@ class QueryBuilder(ObservesEvents):
         if not self.dry:
             connection = self.new_connection()
 
+            # to_qmark() resets the builder (including _creates) once the
+            # grammar has been compiled — snapshot the payload first so the
+            # no-RETURNING fallback below still has the inserted values.
+            creates = self._creates
             query_result = connection.query(self.to_qmark(), self._bindings, results=1)
 
             if model:
@@ -865,7 +888,7 @@ class QueryBuilder(ObservesEvents):
 
             processed_results = self.get_processor().process_insert_get_id(
                 self,
-                query_result or self._creates,
+                query_result or creates,
                 id_key,
             )
         else:
@@ -899,7 +922,10 @@ class QueryBuilder(ObservesEvents):
         if self._model:
             model = self._model
 
-        if column and value:
+        # ``value is not None`` — a falsy filter value (0, False, "") is a
+        # legitimate predicate; truthiness silently dropped it and the
+        # no-WHERE safety net below turned the call into a QueryException.
+        if column and value is not None:
             if isinstance(value, (list, tuple)):
                 self.where_in(column, value)
             else:
@@ -1274,6 +1300,7 @@ class QueryBuilder(ObservesEvents):
                         column,
                         operator,
                         SubSelectExpression(value),
+                        keyword="or",
                     )
                 ),
             )
@@ -2436,13 +2463,17 @@ class QueryBuilder(ObservesEvents):
 
         additional.update(materialized)
 
-        self.new_connection().query(self.to_qmark(), self._bindings)
+        result = self.new_connection().query(self.to_qmark(), self._bindings)
         if model:
             model.fill(materialized)
             self.observe_events(model, "updated")
             model.fill_original(materialized)
             return model
-        return additional
+        # Laravel parity: a non-model (table-level) update returns the
+        # affected row count. The DatabaseDriver CAS claim depends on it —
+        # the old ``additional`` dict return was always truthy, so a losing
+        # CAS (0 rows matched) still claimed the job.
+        return result
 
     def force_update(self, updates: dict, dry=False):
         return self.update(updates, dry=dry, force=True)
@@ -3104,13 +3135,25 @@ class QueryBuilder(ObservesEvents):
         Returns:
             self
         """
-        if related_result and isinstance(hydrated_model, Collection):
+        if isinstance(hydrated_model, Collection) and isinstance(
+            related_result, Collection
+        ):
+            # Empty results still route through register_related so each
+            # relationship applies its own empty default (Collection() for
+            # to-many, None for to-one). Short-circuiting to None here gave
+            # parents of a zero-row eager load ``None`` where the lazy path
+            # (and any non-empty eager load) yields an empty Collection.
+            map_related = (
+                self._map_related(related_result, related)
+                if related_result
+                else related_result
+            )
+            for model in hydrated_model:
+                related.register_related(relation_key, model, map_related)
+        elif related_result and isinstance(hydrated_model, Collection):
             map_related = self._map_related(related_result, related)
             for model in hydrated_model:
-                if isinstance(related_result, Collection):
-                    related.register_related(relation_key, model, map_related)
-                else:
-                    model.add_relation({relation_key: map_related or None})
+                model.add_relation({relation_key: map_related or None})
         else:
             hydrated_model.add_relation({relation_key: related_result or None})
         return self
@@ -3340,8 +3383,12 @@ class QueryBuilder(ObservesEvents):
         # to_qmark() has a side effect of resetting the builder; take a copy first
         # so subsequent calls on the original builder still work.
         cloned = deepcopy(self)
-        grammar = cloned.get_grammar()
+        # Scopes must run BEFORE get_grammar() — the grammar snapshots
+        # _wheres/_updates at construction, so the real execution paths
+        # (to_sql/to_qmark) order it this way too. Reversed, the debug
+        # output would omit soft-delete/tenant scope clauses.
         cloned.run_scopes()
+        grammar = cloned.get_grammar()
         sql = grammar.compile(cloned._action, qmark=True).to_sql()
         bindings = list(grammar._bindings)
         if pretty:
@@ -3377,7 +3424,7 @@ class QueryBuilder(ObservesEvents):
         # scopes registered mid-iteration will apply on the next query,
         # which matches Laravel's semantics.
         scopes = list(self._global_scopes.get(self._action, {}).items())
-        for name, scope in scopes:
+        for _name, scope in scopes:
             scope(self)
 
         return self
@@ -3482,8 +3529,7 @@ class QueryBuilder(ObservesEvents):
 
         if operator not in operators:
             raise InvalidArgumentException(
-                "Invalid comparison operator. The operator can be %s"
-                % ", ".join(operators)
+                "Invalid comparison operator. The operator can be {}".format(", ".join(operators))
             )
 
         return operator, value
@@ -3823,7 +3869,7 @@ class QueryBuilder(ObservesEvents):
             model = self._model
 
         # Process and validate input data
-        self._upsert_values = []
+        processed: list[dict[str, Any]] = []
         for record in values:
             if model:
                 # Apply mass assignment protection
@@ -3831,9 +3877,39 @@ class QueryBuilder(ObservesEvents):
                 # Apply casts if requested
                 if cast:
                     record = model.cast_values(record)
+            processed.append(dict(record))
 
-            # Sort the dict by key for consistent column order
-            self._upsert_values.append(dict(sorted(record.items())))
+        # Stamp timestamps BEFORE the uniform-keys check so a mix of
+        # explicitly-timestamped and bare rows still ends up uniform.
+        # ``update=[]`` is the explicit insert-if-missing (DO NOTHING)
+        # form — no update list to extend there.
+        stamp_timestamps = bool(
+            model and getattr(model, "__timestamps__", False)
+        )
+        if stamp_timestamps:
+            timestamp_value = model.get_new_date().to_datetime_string()
+            for record in processed:
+                if record.get(model.date_created_at) is None:
+                    record[model.date_created_at] = timestamp_value
+                if record.get(model.date_updated_at) is None:
+                    record[model.date_updated_at] = timestamp_value
+
+        # Every row must cover the same columns. Silently taking row 0's
+        # keys (the old behavior) misaligned values under the wrong
+        # columns for heterogeneous rows — and filling gaps with NULL
+        # would silently overwrite existing data through the
+        # ``EXCLUDED.col`` update. Fail loudly instead.
+        if processed:
+            expected = set(processed[0])
+            for i, record in enumerate(processed[1:], start=1):
+                if set(record) != expected:
+                    raise QueryException(
+                        "upsert() rows must share the same columns: row 0 has "
+                        f"{sorted(expected)}, row {i} has {sorted(record)}."
+                    )
+
+        # Sorted keys → deterministic column order across rows and runs.
+        self._upsert_values = [dict(sorted(record.items())) for record in processed]
 
         # Store upsert configuration
         self._upsert_unique_by = unique_by
@@ -3848,37 +3924,30 @@ class QueryBuilder(ObservesEvents):
                 if model and hasattr(model, "date_created_at"):
                     exclude_columns.add(model.date_created_at)
 
-                self._upsert_update = list(all_columns - exclude_columns)
+                self._upsert_update = sorted(all_columns - exclude_columns)
             else:
                 self._upsert_update = []
         else:
-            self._upsert_update = update
-
-        # Add timestamps if model supports them
-        if model and hasattr(model, "__timestamps__") and model.__timestamps__:
-            timestamp_value = model.get_new_date().to_datetime_string()
-
-            # Add created_at and updated_at to all records
-            for record in self._upsert_values:
-                if model.date_created_at not in record:
-                    record[model.date_created_at] = timestamp_value
-                if model.date_updated_at not in record:
-                    record[model.date_updated_at] = timestamp_value
-
-            # Ensure updated_at is in the update list
-            if model.date_updated_at not in self._upsert_update:
+            self._upsert_update = list(update)
+            # Laravel parity: updated_at rides along on conflict updates
+            # (but an explicit empty list means DO NOTHING — leave it).
+            if (
+                stamp_timestamps
+                and self._upsert_update
+                and model.date_updated_at not in self._upsert_update
+            ):
                 self._upsert_update.append(model.date_updated_at)
 
         if not self.dry:
             connection = self.new_connection()
-            query_result = connection.query(self.to_qmark(), self._bindings, results=1)
+            query_result = connection.query(self.to_qmark(), self._bindings)
 
-            # PostgreSQL returns number of affected rows
-            return (
-                query_result
-                if isinstance(query_result, int)
-                else len(self._upsert_values)
-            )
+            # Affected row count: grammars with RETURNING hand back the
+            # touched rows (len == inserted + updated); grammars without
+            # surface cursor.rowcount as an int.
+            if isinstance(query_result, int):
+                return query_result
+            return len(query_result or [])
 
         return len(self._upsert_values)
 
@@ -3909,7 +3978,7 @@ class QueryBuilder(ObservesEvents):
 
         # Determine columns to update
         if update_columns is None:
-            update_columns = [k for k in records[0].keys() if k != key]
+            update_columns = [k for k in records[0] if k != key]
 
         if not update_columns:
             return 0
@@ -4126,8 +4195,7 @@ class QueryBuilder(ObservesEvents):
             results = builder.limit(chunk_size).offset(offset).get()
             if not results or (hasattr(results, "is_empty") and results.is_empty()):
                 break
-            for record in results:
-                yield record
+            yield from results
             count = len(results) if hasattr(results, "__len__") else results.count()
             if count < chunk_size:
                 break

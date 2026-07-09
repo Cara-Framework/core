@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -32,10 +33,8 @@ class Authenticate(Middleware):
         # behaviour) until ops opts in.
         if not self._origin_is_allowed(socket):
             Log.warning("WebSocket origin rejected: %s", self._read_origin(socket), category='cara.websocket')
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 await socket.send({"type": "websocket.close", "code": 4003})
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
             raise WebSocketException("Origin not allowed", 4003)
 
         try:

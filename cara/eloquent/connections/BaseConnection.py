@@ -17,6 +17,10 @@ class BaseConnection:
     _connection = None
     _cursor = None
     _dry = False
+    # What to hand the driver when a statement has no bindings. psycopg2
+    # wants None (skips placeholder parsing — literal `%` stays intact);
+    # sqlite3 rejects None outright and needs an empty tuple.
+    _empty_bindings = None
     # Bumped from 500ms — at 500ms a cold-connection first call against
     # a freshly-restored Postgres (FK validation hitting cold pages,
     # session settings, statement parsing on a fresh prepared-statement
@@ -81,8 +85,10 @@ class BaseConnection:
         # placeholders when an (even empty) bindings sequence is passed.
         # Statements with literal `%` (e.g. PL/pgSQL `FORMAT '%I'`, `TO_CHAR(..., 'MM')`)
         # then blow up with IndexError. Pass None when we have no bindings so
-        # the driver skips parameter parsing entirely.
-        self._cursor.execute(query, bindings if bindings else None)
+        # the driver skips parameter parsing entirely — EXCEPT for drivers
+        # (sqlite3) that reject explicit None parameters; those set
+        # ``_empty_bindings`` to ``()`` (see SQLiteConnection).
+        self._cursor.execute(query, bindings if bindings else self._empty_bindings)
         elapsed_ms = (timer() - start) * 1000  # Convert to ms
         elapsed_formatted = f"{elapsed_ms / 1000:.2f}"
 

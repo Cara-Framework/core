@@ -97,11 +97,30 @@ class PendingRequest:
         full_url = f"{self._base_url}/{url.lstrip('/')}" if self._base_url else url
         last_exc: Exception | None = None
 
+        from . import HttpFake
+
         for attempt in range(self._retries + 1):
-            if attempt > 0:
+            if attempt > 0 and HttpFake.current() is None:
+                # Real transport only — faked retries stay instant so a
+                # test exercising the retry ladder doesn't sleep.
                 delay = self._backoff_base ** attempt
                 delay *= 1.0 + random.uniform(-self._backoff_jitter, self._backoff_jitter)
                 await asyncio.sleep(delay)
+
+            fake = HttpFake.current()
+            if fake is not None:
+                response = fake.resolve(method, full_url, kwargs)
+                if (
+                    response.status_code in self._retry_on_status
+                    and attempt < self._retries
+                ):
+                    last_exc = httpx.HTTPStatusError(
+                        f"{response.status_code}",
+                        request=response.request,
+                        response=response,
+                    )
+                    continue
+                return response
 
             try:
                 async with httpx.AsyncClient(
@@ -151,8 +170,12 @@ class HttpFacade:
         return PendingRequest().timeout(seconds)
 
     @staticmethod
-    def retry(times: int, *, backoff: float = 2.0) -> PendingRequest:
-        return PendingRequest().retry(times, backoff=backoff)
+    def retry(times: int, *, backoff: float = 2.0, jitter: float = 0.15) -> PendingRequest:
+        return PendingRequest().retry(times, backoff=backoff, jitter=jitter)
+
+    @staticmethod
+    def retry_on(*status_codes: int) -> PendingRequest:
+        return PendingRequest().retry_on(*status_codes)
 
     @staticmethod
     def with_headers(headers: dict[str, str]) -> PendingRequest:
@@ -179,5 +202,87 @@ class HttpFacade:
         return await PendingRequest().put(url, **kwargs)
 
     @staticmethod
+    async def patch(url: str, **kwargs: Any) -> httpx.Response:
+        return await PendingRequest().patch(url, **kwargs)
+
+    @staticmethod
     async def delete(url: str, **kwargs: Any) -> httpx.Response:
         return await PendingRequest().delete(url, **kwargs)
+
+    # ── test-time faking (Laravel Http::fake parity) ──────────────────
+
+    @staticmethod
+    def fake(stubs: dict[str, Any] | None = None):
+        """Route every request through an in-memory fake.
+
+        ``stubs`` maps URL globs to responses (dict → JSON 200, int →
+        bare status, str → text body, list → per-call sequence,
+        ``Http.response(...)`` for full control). No stubs = everything
+        200. Unmatched requests RAISE — a test that reaches the real
+        network is a bug. Usable as a context manager for auto-restore.
+        """
+        from . import HttpFake
+
+        return HttpFake.activate(stubs)
+
+    @staticmethod
+    def restore() -> None:
+        """Drop the active fake — subsequent requests hit the network."""
+        from . import HttpFake
+
+        HttpFake.deactivate()
+
+    @staticmethod
+    def response(
+        json: Any = None,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+        body: str | bytes | None = None,
+    ) -> httpx.Response:
+        """Build a stub response for ``fake()`` maps (or direct returns)."""
+        from . import HttpFake
+
+        return HttpFake.make_response(json=json, status=status, headers=headers, body=body)
+
+    @staticmethod
+    def recorded() -> list[dict[str, Any]]:
+        """Requests captured by the active fake, in send order."""
+        from . import HttpFake
+
+        state = HttpFake.current()
+        return list(state.recorded) if state else []
+
+    @staticmethod
+    def assert_sent(matcher) -> None:
+        """Assert at least one faked request satisfies ``matcher``.
+
+        ``matcher`` is a URL glob string or a callable receiving the
+        recorded request dict (``{"method", "url", ...send kwargs}``).
+        """
+        import fnmatch
+
+        recorded = HttpFacade.recorded()
+        if callable(matcher):
+            if any(matcher(request) for request in recorded):
+                return
+        else:
+            if any(
+                fnmatch.fnmatch(request["url"], matcher)
+                or fnmatch.fnmatch(request["url"].split("://", 1)[-1], matcher)
+                for request in recorded
+            ):
+                return
+        raise AssertionError(
+            f"No recorded HTTP request matched {matcher!r}. "
+            f"Recorded: {[(r['method'], r['url']) for r in recorded]}"
+        )
+
+    @staticmethod
+    def assert_nothing_sent() -> None:
+        """Assert the active fake recorded zero requests."""
+        recorded = HttpFacade.recorded()
+        if recorded:
+            raise AssertionError(
+                "Expected no HTTP requests, but recorded: "
+                f"{[(r['method'], r['url']) for r in recorded]}"
+            )

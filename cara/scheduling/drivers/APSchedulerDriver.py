@@ -306,6 +306,27 @@ class APSchedulerDriver(Scheduling):
         self.scheduler.start()
         Log.info("APScheduler started with %s jobs (background mode).", job_count)
 
+    def run_all(self) -> int:
+        """Execute every registered job's callback immediately, once.
+
+        Powers ``schedule:work --once`` — runs the callbacks inline
+        instead of starting the background cron engine (which would
+        never fire before the command exits).
+        """
+        executed = 0
+        for identifier, callback, _trigger, _job_opts in list(self._job_registry):
+            try:
+                callback()
+                executed += 1
+            except Exception as e:
+                Log.error(
+                    "Job '%s' failed during run-once: %s",
+                    identifier,
+                    e,
+                    exc_info=True,
+                )
+        return executed
+
     def shutdown(self, wait: bool = True) -> None:
         try:
             if self.scheduler.running:

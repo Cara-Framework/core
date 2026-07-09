@@ -11,7 +11,7 @@ import asyncio
 from typing import Any
 
 from cara.exceptions import DriverNotRegisteredException, QueueException
-from cara.queues.contracts import Queue, ShouldQueue
+from cara.queues.contracts import ShouldQueue
 
 
 class Queue:

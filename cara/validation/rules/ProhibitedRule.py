@@ -15,13 +15,11 @@ class ProhibitedRule(BaseRule):
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         data = params.get("_data", {})
-        if field not in data:
+        if not self.field_present(data, field):
             return True
         if value is None:
             return True
-        if isinstance(value, str) and value.strip() == "":
-            return True
-        return False
+        return bool(isinstance(value, str) and value.strip() == "")
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         return f"'{field}' is prohibited."

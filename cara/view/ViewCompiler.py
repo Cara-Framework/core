@@ -311,7 +311,7 @@ class ViewCompiler:
                 # Regular content (may contain raw echo placeholders)
                 if part:
                     # Restore raw echo expressions
-                    for j, (original, placeholder) in enumerate(raw_replacements):
+                    for _j, (original, placeholder) in enumerate(raw_replacements):
                         if placeholder in part:
                             expression = (
                                 re.search(r"\{!!(.*?)!!\}", original).group(1).strip()

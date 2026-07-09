@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .MissingValue import MissingValue
 from .Serialization import (
@@ -13,6 +13,9 @@ from .Serialization import (
     opt_int,
     opt_str,
 )
+
+if TYPE_CHECKING:
+    from .ResourceCollection import ResourceCollection
 
 
 class JsonResource:

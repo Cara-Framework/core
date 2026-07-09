@@ -154,13 +154,20 @@ class RedisDriver(HasColoredOutput, Queue):
     def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push jobs immediately to Redis list and return job ID(s)."""
         merged = {**self.options, **(options or {})}
-        queue_name = merged.get("queue", "default")
         callback = merged.get("callback", "handle")
         args = merged.get("args", ())
-        key = self._queue_key(queue_name)
         job_ids = []
 
         for job in jobs:
+            # Per-job queue resolution: PendingDispatch stamps the target
+            # queue on the JOB INSTANCE (``job.queue``) — same bridge as
+            # AMQPDriver.push; without it every direct dispatch landed on
+            # "default" regardless of the job's declared queue.
+            queue_name = (
+                merged.get("queue") or getattr(job, "queue", None) or "default"
+            )
+            key = self._queue_key(queue_name)
+
             # Generate unique job ID
             job_id = str(uuid.uuid4())
             job_ids.append(job_id)
@@ -360,7 +367,11 @@ class RedisDriver(HasColoredOutput, Queue):
         - Otherwise: add to delayed sorted set
         """
         merged = {**self.options, **(options or {})}
-        queue_name = merged.get("queue", "default")
+        # Same per-job queue bridge as push(): honor the queue stamped on
+        # the job instance when options don't name one.
+        queue_name = (
+            merged.get("queue") or getattr(job, "queue", None) or "default"
+        )
         callback = merged.get("callback", "handle")
         args = merged.get("args", ())
         delayed_key = self._delayed_key(queue_name)

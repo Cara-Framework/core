@@ -107,9 +107,7 @@ def is_unique_violation(
 
     if constraint is not None and constraint.lower() in constraint_name:
         return True
-    if column is not None and column.lower() in detail:
-        return True
-    return False
+    return bool(column is not None and column.lower() in detail)
 
 
 __all__ = ["is_unique_violation"]

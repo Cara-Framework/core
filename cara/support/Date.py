@@ -23,6 +23,7 @@ impossible to "forget" in tests.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import pendulum
@@ -149,18 +150,14 @@ class Date:
         We swallow that — :class:`Date`'s own freeze still works for
         any call site routed through :meth:`Date.now`.
         """
-        try:
+        with contextlib.suppress(NotImplementedError, AttributeError, Exception):
             pendulum.travel_to(instant, freeze=True)
-        except (NotImplementedError, AttributeError, Exception):
-            pass
 
     @staticmethod
     def _pendulum_release() -> None:
         """Release any pendulum-side freeze if the test extra exists."""
-        try:
+        with contextlib.suppress(NotImplementedError, AttributeError, Exception):
             pendulum.travel_back()
-        except (NotImplementedError, AttributeError, Exception):
-            pass
 
 
 __all__ = ["Date"]

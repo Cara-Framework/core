@@ -33,12 +33,7 @@ class RequiredRule(BaseRule):
             return False
         if isinstance(value, str) and value.strip() == "":
             return False
-        if (
-            isinstance(value, (list, tuple, set, frozenset, dict, bytes, bytearray))
-            and len(value) == 0
-        ):
-            return False
-        return True
+        return not (isinstance(value, (list, tuple, set, frozenset, dict, bytes, bytearray)) and len(value) == 0)
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default required field message."""

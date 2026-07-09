@@ -241,10 +241,9 @@ class LoginAttemptTracker:
                 )
 
             ips = cls._read_ip_set(email)
-            if ip not in ips:
-                if len(ips) < _IP_SET_CAP:
-                    ips.append(ip)
-                    cls._write_ip_set(email, ips)
+            if ip not in ips and len(ips) < _IP_SET_CAP:
+                ips.append(ip)
+                cls._write_ip_set(email, ips)
 
         distinct_ips = len(cls._read_ip_set(email))
 

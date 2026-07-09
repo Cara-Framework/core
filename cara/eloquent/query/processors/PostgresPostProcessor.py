@@ -42,7 +42,9 @@ class PostgresPostProcessor:
         primary key to fetch
         """
 
-        if column in results:
+        # ``results`` is a dict only when the statement returned a rowset;
+        # plain UPDATE paths hand back the affected row count (int).
+        if isinstance(results, dict) and column in results:
             return results[column]
 
         new_builder = builder.select(column)

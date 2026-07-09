@@ -6,6 +6,7 @@ This module provides a mixin class that adds reload functionality to commands.
 
 from __future__ import annotations
 
+import contextlib
 import signal
 import time
 
@@ -117,17 +118,15 @@ class MakesReloadable:
             pass
 
         modules_to_remove = []
-        for module_name in sys.modules.keys():
+        for module_name in sys.modules:
             for pattern in purge_patterns:
                 if module_name.startswith(pattern):
                     modules_to_remove.append(module_name)
                     break
 
         for module_name in modules_to_remove:
-            try:
+            with contextlib.suppress(KeyError):
                 del sys.modules[module_name]
-            except KeyError:
-                pass
 
         if modules_to_remove:
             self.info(f"🔄 Purged {len(modules_to_remove)} modules for hot reload")
@@ -135,10 +134,8 @@ class MakesReloadable:
     def _cleanup_watching(self):
         """Cleanup file watching resources."""
         if hasattr(self, "command_watcher") and self.command_watcher:
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 self.command_watcher.shutdown()
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
 
     def should_continue(self) -> bool:
         """Check if command should continue running."""

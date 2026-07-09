@@ -188,13 +188,13 @@ class RouteResolver:
 
         try:
             # Handle common type conversions
-            if expected_type == int:
+            if expected_type is int:
                 return int(value)
-            elif expected_type == float:
+            elif expected_type is float:
                 return float(value)
-            elif expected_type == bool:
+            elif expected_type is bool:
                 return value.lower() in ("true", "1", "yes", "on")
-            elif expected_type == str:
+            elif expected_type is str:
                 return str(value)
             elif hasattr(expected_type, "__origin__"):
                 # Handle typing generics like Optional[int], List[str], etc.
@@ -245,7 +245,7 @@ class RouteResolver:
         elif inspect.isclass(handler):
             # If it's a controller class, prefer __call__ or index()
             instance = handler()
-            if hasattr(instance, "__call__"):
+            if callable(instance):
                 self._route_handler = instance.__call__
                 self._handler_signature = self._safe_signature(self._route_handler)
             elif hasattr(instance, "index"):
@@ -254,7 +254,7 @@ class RouteResolver:
             else:
                 raise RouteRegistrationException(f"Cannot resolve handler from class: {handler}")
 
-        elif hasattr(handler, "__call__"):
+        elif callable(handler):
             # Any callable object
             self._route_handler = handler.__call__
             self._handler_signature = self._safe_signature(self._route_handler)

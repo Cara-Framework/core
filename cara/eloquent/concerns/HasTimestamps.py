@@ -31,29 +31,6 @@ class HasTimestamps:
     __timestamps__ = True
     __timezone__ = "UTC"
 
-    def touch(self, date: datetime | None = None, query: bool = True) -> bool:
-        """Touch the model's timestamps."""
-        if not self.__timestamps__:
-            return False
-
-        self._update_timestamps(date)
-
-        if query:
-            return self.save()
-
-        return True
-
-    def _update_timestamps(self, date: datetime | None = None) -> None:
-        """Update the model's timestamps."""
-        current_time = date or self._current_timestamp()
-
-        if hasattr(self, self.date_updated_at):
-            setattr(self, self.date_updated_at, current_time)
-
-    def _current_timestamp(self) -> str:
-        """Get current timestamp in UTC."""
-        return pendulum.now("UTC").to_datetime_string()
-
     def get_new_datetime_string(self, _datetime: datetime | None = None) -> str:
         """Get a new datetime string in the correct format."""
         if _datetime is None:

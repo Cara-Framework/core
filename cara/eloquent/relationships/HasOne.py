@@ -64,6 +64,7 @@ class HasOne(BaseRelationship):
     def __init__(self, fn, foreign_key=None, local_key=None):
         if isinstance(fn, str):
             # When called as @has_one("foreign_key", "local_key")
+            self.fn = None
             self.foreign_key = fn
             self.local_key = foreign_key
         else:

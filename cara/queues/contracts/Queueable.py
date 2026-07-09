@@ -33,6 +33,9 @@ class PendingDispatch:
         self._routing_key = None
         self._use_exchange = False
         self._exchange_name: str | None = None
+        # Defer the push until the enclosing DB transaction commits —
+        # set by .after_commit() or the ShouldDispatchAfterCommit marker.
+        self._after_commit = False
         # Idempotency guard — __del__ must not redispatch or raise during GC.
         self._dispatched = False
 
@@ -65,6 +68,16 @@ class PendingDispatch:
         self._use_exchange = True
         return self
 
+    def after_commit(self) -> PendingDispatch:
+        """Defer the push until the enclosing DB transaction commits.
+
+        See :class:`cara.queues.contracts.ShouldDispatchAfterCommit` for
+        the full semantics (immediate when no transaction is open,
+        discarded on rollback).
+        """
+        self._after_commit = True
+        return self
+
     def __del__(self):
         """Auto-dispatch when PendingDispatch is garbage collected (Laravel pattern).
 
@@ -93,15 +106,44 @@ class PendingDispatch:
 
         IMPORTANT: NO FALLBACK - If queue dispatch fails, exception is raised.
         Idempotent: second call returns the prior job id without redispatching.
+
+        After-commit deferral: when the job opts in (``.after_commit()``
+        or the ShouldDispatchAfterCommit marker) and a DB transaction is
+        open in this context, the actual push is registered on the
+        transaction and fires right after the OUTERMOST commit — or is
+        discarded entirely on rollback. With no transaction open the push
+        happens immediately.
         """
         if getattr(self, "_dispatched", False):
             return getattr(self.job, "job_tracking_id", None)
 
+        from .ShouldDispatchAfterCommit import ShouldDispatchAfterCommit
+
+        if self._after_commit or isinstance(self.job, ShouldDispatchAfterCommit):
+            from cara.eloquent import DatabaseManager
+
+            # Mark dispatched up front so __del__'s GC-time auto-dispatch
+            # and repeated _dispatch_now calls can't double-register.
+            self._dispatched = True
+            outcome: list = []
+            DatabaseManager.get_instance().after_commit(
+                lambda: outcome.append(self._push())
+            )
+            # Immediate mode (no open transaction) ran the push
+            # synchronously — hand back the job id. Deferred mode has
+            # nothing to return yet.
+            return outcome[0] if outcome else None
+
+        job_id = self._push()
+        self._dispatched = True
+        return job_id
+
+    def _push(self):
+        """Perform the actual broker push (no idempotency guard — the
+        caller manages ``_dispatched``)."""
         # Check if we should use exchange routing
         if self._use_exchange and self._routing_key:
-            job_id = self._dispatch_via_exchange()
-            self._dispatched = True
-            return job_id
+            return self._dispatch_via_exchange()
 
         # Standard queue dispatch
         from cara.facades import Queue
@@ -128,7 +170,6 @@ class PendingDispatch:
         if hasattr(self.job, "set_tracking_id"):
             self.job.set_tracking_id(str(job_id))
 
-        self._dispatched = True
         return job_id
 
     def _dispatch_via_exchange(self):
@@ -242,20 +283,36 @@ class Queueable(SerializesModels, CancellableJob):
         if self.job_tracking_id:
             self._job_state_manager.register_job(self.job_tracking_id, context)
 
-    def mark_completed(self) -> None:
-        """Mark job as completed in the tracking system."""
+    def unregister_job(self) -> None:
+        """Remove the job from the cancellation registry (terminal state).
+
+        ``JobStateManager`` only tracks ACTIVE jobs — completion and
+        failure are both "stop tracking". The DatabaseDriver's success/
+        failure paths call this via ``hasattr`` (which previously found
+        nothing and silently leaked registry entries until the
+        cleanup sweep).
+        """
         if self.job_tracking_id:
-            self._job_state_manager.mark_completed(self.job_tracking_id)
+            self._job_state_manager.unregister_job(self.job_tracking_id)
+
+    def mark_completed(self) -> None:
+        """Mark job as completed — drops it from the cancellation registry.
+
+        The previous implementation called
+        ``JobStateManager.mark_completed``, a method that has never
+        existed; every invocation raised AttributeError.
+        """
+        self.unregister_job()
 
     def mark_failed(self, error: str) -> None:
         """
-        Mark job as failed in the tracking system.
+        Mark job as failed — drops it from the cancellation registry.
 
         Args:
-            error: Error message describing the failure
+            error: Error message describing the failure (kept for caller
+                context/logging; the registry has no failure store).
         """
-        if self.job_tracking_id:
-            self._job_state_manager.mark_failed(self.job_tracking_id, error)
+        self.unregister_job()
 
     def get_cancellation_context(self) -> dict:
         """

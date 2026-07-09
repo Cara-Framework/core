@@ -5,6 +5,7 @@ Encapsulates validation, authorization, and custom validation hooks for a single
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from cara.exceptions import AuthorizationFailedException, ValidationException
@@ -73,9 +74,7 @@ class FormRequest:
 
         validated = validator.validated()
 
-        try:
+        with contextlib.suppress(AttributeError):
             request.validated = validated
-        except AttributeError:
-            pass
 
         return validated

@@ -323,7 +323,7 @@ class TinkerCommand(CommandBase):
                         )
 
                         # Add columns
-                        for key in data[0].keys():
+                        for key in data[0]:
                             table.add_column(key, style="cyan")
 
                         # Add rows
@@ -658,7 +658,7 @@ class TinkerCommand(CommandBase):
                         if data:
                             table = Table(title=f"⚡ Queue Jobs (showing {len(data)})")
 
-                            for key in data[0].keys():
+                            for key in data[0]:
                                 table.add_column(key, style="cyan")
 
                             for row in data:

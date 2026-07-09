@@ -189,13 +189,13 @@ class MiddlewareParameterParser:
     @staticmethod
     def _convert_basic_type(value: str, target_type: type) -> Any:
         """Convert string to basic type."""
-        if target_type == str or target_type is str:
+        if target_type is str:
             return value
-        elif target_type == int or target_type is int:
+        elif target_type is int:
             return int(value)
-        elif target_type == float or target_type is float:
+        elif target_type is float:
             return float(value)
-        elif target_type == bool or target_type is bool:
+        elif target_type is bool:
             return value.lower() in ("true", "1", "yes", "on")
         else:
             # Try direct conversion

@@ -187,11 +187,13 @@ class Application(Container):
         if super().has(name):
             return True
 
-        # Check deferred providers
-        if isinstance(name, str) and name in self.deferred_providers:
-            return True
+        # Check deferred providers — mirror make()'s resolution: a class
+        # resolves through its lowercased name, so has(SomeClass) must
+        # agree with make(SomeClass) instead of reporting False.
+        if inspect.isclass(name):
+            return name.__name__.lower() in self.deferred_providers
 
-        return False
+        return bool(isinstance(name, str) and name in self.deferred_providers)
 
     def boot_providers(self) -> None:
         """

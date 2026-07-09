@@ -5,6 +5,7 @@ try:
 except ImportError:  # Python <3.11
     from typing import Self  # noqa: F401
 
+import contextlib
 import re
 import threading
 import time
@@ -102,10 +103,8 @@ class PostgresConnection(BaseConnection):
             self._connection.autocommit = True
             self.enable_disable_foreign_keys()
         except (OSError, RuntimeError, AttributeError):
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 self.close_connection()
-            except (OSError, RuntimeError, AttributeError):
-                pass
             raise
 
         self.open = 1
@@ -141,10 +140,8 @@ class PostgresConnection(BaseConnection):
 
         connect_timeout = self.options.get("connect_timeout")
         if connect_timeout is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 kw["connect_timeout"] = int(connect_timeout)
-            except (TypeError, ValueError):
-                pass
 
         # ``server_settings`` is the asyncpg-style nested dict for GUCs
         # we want SET on every fresh session (statement_timeout,
@@ -274,15 +271,11 @@ class PostgresConnection(BaseConnection):
                         # succeeds or blows up.
                         cursor.execute("SELECT 1")
                     finally:
-                        try:
+                        with contextlib.suppress(OSError, RuntimeError, AttributeError):
                             cursor.close()
-                        except (OSError, RuntimeError, AttributeError):
-                            pass
             except (OSError, RuntimeError, AttributeError):
-                try:
+                with contextlib.suppress(OSError, RuntimeError, AttributeError):
                     connection.close()
-                except (OSError, RuntimeError, AttributeError):
-                    pass
                 connection = None
 
         if not connection:
@@ -373,15 +366,11 @@ class PostgresConnection(BaseConnection):
                             CONNECTION_POOL.append(self._connection)
                         # else: already closed, discard
                     except (OSError, RuntimeError, AttributeError):
-                        try:
+                        with contextlib.suppress(OSError, RuntimeError, AttributeError):
                             self._connection.close()
-                        except (OSError, RuntimeError, AttributeError):
-                            pass
                 else:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError):
                         self._connection.close()
-                    except (OSError, RuntimeError, AttributeError):
-                        pass
 
             if (
                 getattr(self, "_pool_slot_acquired", False)
@@ -390,10 +379,8 @@ class PostgresConnection(BaseConnection):
                 _pool_semaphore.release()
                 self._pool_slot_acquired = False
         else:
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 self._connection.close()
-            except (OSError, RuntimeError, AttributeError):
-                pass
 
         self._connection = None
 
@@ -520,18 +507,20 @@ class PostgresConnection(BaseConnection):
                         return {}
                     return dict(cursor.fetchone() or {})
                 else:
-                    # `cursor.description` is only populated for result-bearing
-                    # statements (SELECT, RETURNING, …). DDL such as
-                    # CREATE MATERIALIZED VIEW reports a status message like
-                    # "SELECT N" even though it yields no rowset, which would
-                    # previously blow up in `fetchall()` with "no results to
-                    # fetch". Guarding on description keeps the behaviour safe.
-                    if (
-                        "SELECT" in cursor.statusmessage
-                        and cursor.description is not None
-                    ):
+                    # ``cursor.description`` is the canonical has-rowset
+                    # signal (SELECT, any RETURNING clause) — DDL like
+                    # CREATE MATERIALIZED VIEW reports "SELECT N" in its
+                    # status message with no rowset, and INSERT ...
+                    # RETURNING reports "INSERT 0 1" WITH one, so the old
+                    # statusmessage check misrouted both.
+                    if cursor.description is not None:
                         return cursor.fetchall()
-                    return {}
+                    # Non-result statements (UPDATE/DELETE/INSERT without
+                    # RETURNING): surface the affected row count —
+                    # ``DB.statement()`` and ``delete()`` callers need it
+                    # (chunked prune loops used to stall on the old ``{}``).
+                    # DDL reports -1; normalize to 0.
+                    return max(cursor.rowcount, 0)
         except Exception as e:
             # Distinguish "DB is down / connection lost" from "bad query"
             # so the exception handler can return 503 (retryable) instead

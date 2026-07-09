@@ -115,14 +115,17 @@ def safe_call(
                 )
                 Log.warning(msg)
             except (ImportError, RuntimeError, AttributeError):
-                from cara.facades import Log
+                # The Log facade itself failed — re-invoking it (the old
+                # "fallback") just re-raised the same failure. Fall back
+                # to stderr so the swallow is still visible somewhere.
+                import sys
 
                 msg = (
                     log_message.format(error=error)
                     if "{error}" in log_message
                     else f"{log_message}: {error}"
                 )
-                Log.warning(msg, exc_info=True)
+                print(f"cara.helpers.safe_call: {msg}", file=sys.stderr)
         return default
 
 
@@ -402,9 +405,16 @@ def report(exception: BaseException) -> None:
 
         Log.error("%s: %s", exception.__class__.__name__, exception, context={'exception_type': exception.__class__.__name__})
     except Exception as log_err:
-        from cara.facades import Log
+        # The Log facade itself failed — re-invoking it (the old
+        # "fallback") just re-raised the same failure and the report was
+        # lost. Deliver on the documented stderr fallback instead.
+        import sys
 
-        Log.error("cara.helpers.report: Log facade failed (%s); original=%s: %s", log_err, exception.__class__.__name__, exception, exc_info=True)
+        print(
+            f"cara.helpers.report: Log facade failed ({log_err}); "
+            f"original={exception.__class__.__name__}: {exception}",
+            file=sys.stderr,
+        )
 
 
 def report_if(condition: Any, exception: BaseException) -> Any:

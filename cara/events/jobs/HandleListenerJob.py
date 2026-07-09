@@ -31,14 +31,12 @@ def _resolve_event_class(dispatcher: EventDispatcher, event_class_name: str) -> 
 def _resolve_listener_class(
     dispatcher: EventDispatcher, listener_class_name: str
 ) -> type[Any]:
-    seen: set[int] = set()
     for bucket in (dispatcher._listeners, dispatcher._wildcard_listeners):
         for listeners in bucket.values():
             for lst in listeners:
                 cls = lst.__class__
                 if cls.__name__ == listener_class_name:
                     return cls
-                seen.add(id(cls))
     raise ListenerNotFoundException(
         f"No subscribed listener with class name {listener_class_name!r} was found "
         "on the event dispatcher (subscribe the listener before queueing)."

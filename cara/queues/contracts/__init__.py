@@ -4,6 +4,7 @@ from .CancellableJob import CancellableJob, JobCancelledException, JobThrottledE
 from .Queue import Queue
 from .Queueable import PendingDispatch, Queueable
 from .SerializesModels import SerializesModels
+from .ShouldDispatchAfterCommit import ShouldDispatchAfterCommit
 from .ShouldQueue import ShouldQueue
 from .UniqueJob import UniqueJob
 
@@ -17,6 +18,7 @@ __all__ = [
     "Queue",
     "Queueable",
     "SerializesModels",
+    "ShouldDispatchAfterCommit",
     "ShouldQueue",
     "UniqueJob",
 ]

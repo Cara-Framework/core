@@ -166,7 +166,7 @@ class ModuleManager:
             module = ModuleManager.import_module(module_path)
             classes = []
 
-            for name, cls in inspect.getmembers(module, inspect.isclass):
+            for _name, cls in inspect.getmembers(module, inspect.isclass):
                 # Include classes from this module or its submodules
                 if cls.__module__.startswith(module.__name__):
                     if base_class is None or (
@@ -189,7 +189,7 @@ class ModuleManager:
             module = ModuleManager.import_module(module_path)
             functions = []
 
-            for name, func in inspect.getmembers(module, inspect.isfunction):
+            for _name, func in inspect.getmembers(module, inspect.isfunction):
                 # Only include functions defined in this module
                 if func.__module__ == module.__name__:
                     functions.append(func)

@@ -19,7 +19,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from threading import RLock
 
-from cara.events.contracts import Event, Listener
+from cara.events.contracts import Listener
 from cara.exceptions import EventDispatchCycleException, EventNameConflictException
 from cara.facades import Log
 from cara.queues.contracts import ShouldQueue
@@ -341,9 +341,7 @@ class Event:
         with self._lock:
             if event_name in self._listeners and self._listeners[event_name]:
                 return True
-        if self._get_matching_wildcard_listeners(event_name):
-            return True
-        return False
+        return bool(self._get_matching_wildcard_listeners(event_name))
 
     async def dispatch(self, event: Event) -> None:
         """
@@ -725,7 +723,6 @@ class Event:
         Args:
             event: The event instance to fire
         """
-        from cara.context import ExecutionContext
 
         app = Event._resolve_application()
         if app is not None:
@@ -734,17 +731,11 @@ class Event:
             instance = Event()
         coro = instance.dispatch(event)
 
-        if ExecutionContext.is_sync():
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.run(coro)
-            else:
-                Event._track(asyncio.create_task(coro))
+        # Same handling regardless of ExecutionContext: run inline when no
+        # loop is running, otherwise schedule on the running loop.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro)
         else:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.run(coro)
-            else:
-                Event._track(asyncio.create_task(coro))
+            Event._track(asyncio.create_task(coro))

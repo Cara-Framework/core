@@ -14,7 +14,12 @@ from cara.http import Request, Response
 class Controller:
     def __init__(self):
         """Initialize the controller with request and response properties."""
-        self.application = app()
+        # ``SupportProvider`` registers ``builtins.app`` at boot — importing
+        # ``cara.helpers`` here instead would re-enter ``cara.configuration``
+        # mid-initialization (circular import through the facades loader).
+        import builtins
+
+        self.application = builtins.app()
         self.request: Request = None  # Populated when the controller is invoked
         self.response: Response = None  # Populated when the controller is invoked
 

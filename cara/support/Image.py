@@ -50,7 +50,7 @@ class ImageProcessor:
 
         try:
             if hasattr(self.image, "_getexif") and self.image._getexif():
-                for orientation in ExifTags.TAGS.keys():
+                for orientation in ExifTags.TAGS:
                     if ExifTags.TAGS[orientation] == "Orientation":
                         break
 

@@ -5,6 +5,7 @@ Laravel-style middleware management with parameter parsing support.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator
 
 from cara.exceptions import RouteMiddlewareNotFoundException
@@ -96,9 +97,7 @@ class MiddlewareCapsule:
         if middleware in self._terminable_middleware:
             return True
         base = getattr(middleware, "__base_middleware__", None)
-        if base is not None and base in self._terminable_middleware:
-            return True
-        return False
+        return bool(base is not None and base in self._terminable_middleware)
 
     def get_terminable_middleware(self) -> set[MiddlewareType]:
         """Get all registered terminable middleware."""
@@ -207,10 +206,8 @@ class MiddlewareCapsule:
             if mw in self._route_middleware:
                 self._route_middleware[mw] = []
         else:
-            try:
+            with contextlib.suppress(ValueError):
                 self._global_middleware.remove(mw)
-            except ValueError:
-                pass
             if mw in self._terminable_middleware:
                 self._terminable_middleware.remove(mw)
         return self

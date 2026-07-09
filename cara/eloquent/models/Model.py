@@ -39,6 +39,8 @@ from cara.support import Collection
 _logger = logging.getLogger("cara.eloquent.models")
 
 # Import cast system
+import contextlib
+
 from ..casts.Collections import ArrayCast, CollectionCast
 from ..casts.DateTime import DateCast, DateTimeCast, TimestampCast
 from ..casts.primitives import BoolCast, DecimalCast, FloatCast, IntCast, JsonCast
@@ -724,8 +726,11 @@ class Model(
         # Get the current datetime in the appropriate format
         current_time = self.get_new_datetime_string()
 
-        # Update only the timestamp column
-        self.update({timestamp_col: current_time})
+        # Framework-managed write: ``updated_at`` is never in __fillable__,
+        # so without ignore_mass_assignment the filter strips it and the
+        # UPDATE silently becomes a no-op (same failure SoftDeleteScope's
+        # _restore fixed).
+        self.update({timestamp_col: current_time}, ignore_mass_assignment=True)
 
         # Also update the local attribute
         self.__attributes__[timestamp_col] = current_time
@@ -1112,10 +1117,8 @@ class Model(
         # Add appends (computed attributes)
         appends = getattr(self, "__appends__", [])
         for append_name in appends:
-            try:
+            with contextlib.suppress(AttributeError):
                 data[append_name] = getattr(self, append_name)
-            except AttributeError:
-                pass
 
         return data
 
@@ -1442,8 +1445,8 @@ class Model(
 
         return new_dic
 
-    # NOTE: timestamp methods (touch, _update_timestamps, _current_timestamp) are now
-    # provided by the HasTimestamps concern imported via MakesTimestamps
+    # NOTE: touch() lives on Model itself (targeted single-column UPDATE);
+    # HasTimestamps only contributes the datetime formatting helpers.
 
     def __getattr__(self, attribute):
         """

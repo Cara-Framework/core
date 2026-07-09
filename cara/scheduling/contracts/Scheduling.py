@@ -39,6 +39,13 @@ class Scheduling:
     def start(self) -> None:
         """Start the scheduling engine if needed (e.g. APScheduler.start())."""
 
+    def run_all(self) -> int:
+        """Execute every registered job immediately, once (``--once`` mode).
+
+        Returns the number of jobs that executed successfully.
+        """
+        return 0
+
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown scheduling engine gracefully."""
 

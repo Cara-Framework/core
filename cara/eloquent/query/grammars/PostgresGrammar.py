@@ -59,6 +59,12 @@ class PostgresGrammar(BaseGrammar):
         """
         return "INSERT INTO {table} ({columns}) VALUES {values} ON CONFLICT ({conflict_columns}) DO UPDATE SET {update_columns} RETURNING *"
 
+    def upsert_do_nothing_format(self):
+        """Insert-if-missing (explicit ``update=[]``): conflicting rows are
+        left untouched. RETURNING only reports the rows actually inserted,
+        so the affected count stays accurate."""
+        return "INSERT INTO {table} ({columns}) VALUES {values} ON CONFLICT ({conflict_columns}) DO NOTHING RETURNING *"
+
     def delete_format(self):
         return "DELETE FROM {table} {wheres}"
 

@@ -176,7 +176,9 @@ class HasManyThrough(BaseRelationship):
         if related and not isinstance(related, Collection):
             related = Collection(related)
 
-        model.add_relation({key: related if related else None})
+        # To-many: an empty result is an empty Collection, not None —
+        # consistent with HasMany.register_related.
+        model.add_relation({key: related if related else Collection()})
 
     def get_related(
         self,
@@ -198,8 +200,13 @@ class HasManyThrough(BaseRelationship):
         distant_table = self.distant_builder.get_table_name()
         intermediate_table = self.intermediary_builder.get_table_name()
 
+        # Nested eagers and with_-callbacks constrain the DISTANT query —
+        # ``current_builder`` is the source model's builder, which has
+        # already executed (and reset) by the time we get here, so
+        # registering anything on it is a silent no-op.
+        self.distant_builder.with_(eagers or [])
         if callback:
-            callback(current_builder)
+            callback(self.distant_builder)
 
         (
             self.distant_builder.select(

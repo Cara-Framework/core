@@ -133,13 +133,17 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
         self.scope = scope or {}
         self.receive = receive
 
+        # HTTP header values are latin-1 on the wire (RFC 9110 obs-text) —
+        # strict UTF-8 decoding raised UnicodeDecodeError outside any try
+        # for any client sending a high byte, failing the request before
+        # routing even started.
         headers = {
-            key.decode().lower(): value.decode()
+            key.decode("latin-1").lower(): value.decode("latin-1")
             for key, value in self.scope.get("headers", [])
         }
         self.headers.load(headers)
 
-        raw_qs = self.scope.get("query_string", b"").decode()
+        raw_qs = self.scope.get("query_string", b"").decode("utf-8", errors="replace")
         if raw_qs:
             self._input.load_query_string(raw_qs)
 
@@ -295,7 +299,4 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
             return True
 
         # Check for AJAX requests (common pattern)
-        if self.header("X-Requested-With", "").lower() == "xmlhttprequest":
-            return True
-
-        return False
+        return self.header("X-Requested-With", "").lower() == "xmlhttprequest"

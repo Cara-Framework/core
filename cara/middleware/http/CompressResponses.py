@@ -35,6 +35,7 @@ Configurable via ``config/compression.py`` → ``COMPRESSION`` dict:
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
@@ -87,10 +88,8 @@ class CompressResponses(Middleware):
                 enabled = bool(cfg_enabled)
             cfg_min = config("compression.compression.min_size", None)
             if cfg_min is not None:
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     min_size = max(0, int(cfg_min))
-                except (TypeError, ValueError):
-                    pass
             cfg_level = config("compression.compression.level", None)
             if cfg_level is not None:
                 try:
@@ -168,9 +167,7 @@ class CompressResponses(Middleware):
             tok = token.strip().lower()
             if not tok.startswith("gzip"):
                 continue
-            if ";q=0" in tok and ";q=0." not in tok:
-                return False
-            return True
+            return not (";q=0" in tok and ";q=0." not in tok)
         return False
 
     @staticmethod
@@ -181,10 +178,13 @@ class CompressResponses(Middleware):
             if headers is not None and hasattr(headers, "get"):
                 existing = headers.get("Content-Encoding")
             if not existing:
-                # Fallback: scan the header bag tuples directly.
+                # Fallback: scan the header bag directly. ``all()``
+                # returns a dict — iterating it bare yields key strings,
+                # and the tuple-unpack ValueError killed EVERY
+                # compression attempt via handle()'s broad except.
                 bag = getattr(response, "header_bag", None)
                 if bag is not None and hasattr(bag, "all"):
-                    for k, v in bag.all() or []:
+                    for k, v in (bag.all() or {}).items():
                         if str(k).lower() == "content-encoding" and v:
                             existing = v
                             break

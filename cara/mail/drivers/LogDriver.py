@@ -60,10 +60,10 @@ class LogDriver(Mail):
         except ImportError:
             # Fallback — still redact; never log raw PII.
             print("=== EMAIL LOG ===")
-            print(f"To: [REDACTED]")
-            print(f"From: [REDACTED]")
+            print("To: [REDACTED]")
+            print("From: [REDACTED]")
             print(f"Subject: {mailable_data.get('subject')}")
-            print(f"Content: [REDACTED]")
+            print("Content: [REDACTED]")
             print("=================")
 
         return True

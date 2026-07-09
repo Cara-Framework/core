@@ -31,7 +31,9 @@ try:
 except ImportError:  # pragma: no cover - exercised only without the extra
     pika = None  # type: ignore[assignment]
 
-from cara.exceptions import QueueDriverLibraryNotFoundException
+import contextlib
+
+from cara.exceptions import QueueDriverLibraryNotFoundException, QueueException
 from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
@@ -47,6 +49,22 @@ from cara.queues.retry.Policy import (
 )
 from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.support import HasColoredOutput
+
+# Connection/stream errors that warrant one publish retry. Built at module
+# level so the ``except`` clause in push() never dereferences
+# ``pika.exceptions`` when the extra isn't installed — doing so raised
+# AttributeError mid-handling and masked the install-hint exception.
+_RETRYABLE_PUBLISH_ERRORS: tuple[type[BaseException], ...] = (
+    BrokenPipeError,
+    ConnectionResetError,
+    ConnectionRefusedError,
+    OSError,
+)
+if pika is not None:
+    _RETRYABLE_PUBLISH_ERRORS = (
+        pika.exceptions.AMQPConnectionError,
+        pika.exceptions.StreamLostError,
+    ) + _RETRYABLE_PUBLISH_ERRORS
 
 
 class AMQPDriver(HasColoredOutput, Queue):
@@ -174,14 +192,7 @@ class AMQPDriver(HasColoredOutput, Queue):
 
             try:
                 self._connect_and_publish(payload, job_opts)
-            except (
-                pika.exceptions.AMQPConnectionError,
-                pika.exceptions.StreamLostError,
-                BrokenPipeError,
-                ConnectionResetError,
-                ConnectionRefusedError,
-                OSError,
-            ):
+            except _RETRYABLE_PUBLISH_ERRORS:
                 # Retry once on connection/stream error — the pooled
                 # connection may have been dropped by the broker (idle
                 # timeout, restart, etc.). _connect_and_publish will
@@ -280,67 +291,22 @@ class AMQPDriver(HasColoredOutput, Queue):
 
         return self.schedule(job, when, merged_opts)
 
-    def retry(
-        self,
-        job: Any,
-        options: dict[str, Any] = None,
-        attempts: int = 3,
-        backoff: str = "exponential",
-    ) -> str | list[str] | None:
+    def retry(self, options: dict[str, Any]) -> None:
+        """Protocol stub — AMQP failed jobs live in the dead-letter queue.
+
+        The worker's failure path (``_handle_failed_message``) already
+        republishes retryable jobs with backoff via ``later()`` and routes
+        exhausted ones to the DLX. Requeuing FROM the DLX is a broker-side
+        operation, not something this driver can do here. The previous
+        implementation took ``(job, options, attempts, backoff)`` — a
+        signature the ``Queue.retry(options=...)`` manager call could never
+        satisfy, so it TypeError'd on every invocation and had no callers.
         """
-        Retry a failed job with optional exponential backoff.
-
-        Implements exponential backoff retry strategy similar to Laravel.
-        Uses AMQP dead letter exchanges and TTL for delayed retries.
-
-        Args:
-            job: Job instance to retry
-            options: Queue options
-            attempts: Maximum retry attempts (default: 3)
-            backoff: Backoff strategy - 'exponential', 'linear', or int for fixed delay in seconds
-
-        Returns:
-            Job ID
-
-        Example:
-            driver.retry(my_job, attempts=5, backoff='exponential')
-        """
-        if options is None:
-            options = {}
-
-        # Get current attempt count
-        attempts_made = options.get("attempts", 0)
-
-        if attempts_made >= attempts:
-            # Max attempts reached, send to dead letter
-            Log.error("Job %s exceeded max retry attempts (%s). Sending to dead letter queue.", job.__class__.__name__, attempts)
-            self._send_to_dead_letter(job, options, attempts_made)
-            return None
-
-        # Calculate delay based on backoff strategy
-        if isinstance(backoff, str) and backoff == "exponential":
-            # Exponential backoff: 1s, 2s, 4s, 8s, etc.
-            delay_seconds = 2**attempts_made
-        elif isinstance(backoff, str) and backoff == "linear":
-            # Linear backoff: 1s, 2s, 3s, 4s, etc.
-            delay_seconds = (attempts_made + 1) * 60  # 1 minute per attempt
-        else:
-            # Fixed delay (assume it's an int)
-            delay_seconds = int(backoff) if backoff else 300  # Default 5 minutes
-
-        attempts_made += 1
-        Log.info("Retrying job %s (attempt %s/%s) with %ss delay", job.__class__.__name__, attempts_made, attempts, delay_seconds)
-
-        # Update options with retry info
-        retry_opts = {
-            **options,
-            "attempts": attempts_made,
-            "retry_backoff": backoff,
-            "max_attempts": attempts,
-        }
-
-        # Schedule retry with delay
-        return self.later(delay_seconds, job, retry_opts)
+        raise QueueException(
+            "AMQPDriver does not support retry(): failed jobs are routed to "
+            "the dead-letter exchange. Requeue them from the DLQ (broker "
+            "shovel or the recovery cron) instead."
+        )
 
     @staticmethod
     def _drive_to_completion(result: Any) -> Any:
@@ -844,10 +810,8 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # to DLX when the budget is exhausted. The ack-first
                 # discipline avoids a duplicate delivery if the
                 # republish raises.
-                try:
+                with contextlib.suppress(OSError, ConnectionError, RuntimeError):
                     ch.basic_ack(delivery_tag=method.delivery_tag)
-                except (OSError, ConnectionError, RuntimeError):
-                    pass
                 retry_scheduled = False
                 try:
                     retry_scheduled = bool(
@@ -899,10 +863,8 @@ class AMQPDriver(HasColoredOutput, Queue):
                 signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
             )
             self.info(f"AMQPDriver: received {sig_name}, stopping consumer gracefully…")
-            try:
+            with contextlib.suppress(OSError, ConnectionError, RuntimeError):
                 channel.stop_consuming()
-            except (OSError, ConnectionError, RuntimeError):
-                pass
 
         prev_term = signal.signal(signal.SIGTERM, _graceful_stop)
         prev_int = signal.signal(signal.SIGINT, _graceful_stop)
@@ -1447,10 +1409,8 @@ class AMQPDriver(HasColoredOutput, Queue):
                 except (OSError, ConnectionError, RuntimeError, AttributeError):
                     pass
                 # Stale entry — close and try the next.
-                try:
+                with contextlib.suppress(OSError, ConnectionError, RuntimeError, AttributeError):
                     conn.close()
-                except (OSError, ConnectionError, RuntimeError, AttributeError):
-                    pass
 
         # Pool empty / nothing healthy — open a fresh connection.
         self.connection, self.channel = self._open_new_connection(opts)
@@ -1484,16 +1444,8 @@ class AMQPDriver(HasColoredOutput, Queue):
         with self._pool_lock:
             pool = self._pool.setdefault(url, [])
             if len(pool) >= self._max_pool_per_url:
-                try:
+                with contextlib.suppress(OSError, ConnectionError, RuntimeError, AttributeError, pika.exceptions.AMQPError):
                     conn.close()
-                except (
-                    OSError,
-                    ConnectionError,
-                    RuntimeError,
-                    AttributeError,
-                    pika.exceptions.AMQPError,
-                ):
-                    pass
                 return
             pool.append((conn, chan))
 

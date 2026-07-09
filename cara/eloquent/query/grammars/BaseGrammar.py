@@ -14,7 +14,7 @@ from cara.eloquent.expressions import (
     SubGroupExpression,
     SubSelectExpression,
 )
-from cara.exceptions import InvalidArgumentException
+from cara.exceptions import InvalidArgumentException, QueryException
 
 _MULTI_SPACE_RE = re.compile(r" +")
 
@@ -110,7 +110,7 @@ class BaseGrammar:
                     # carrying raw bindings on BOTH clauses binds them
                     # into each other's %s slots (qmark/executed path).
                     group_by=self.process_group_by(),
-                    having=self.process_having(),
+                    having=self.process_having(qmark=qmark),
                     order_by=self.process_order_by(),
                     lock=self.process_locks(),
                 )
@@ -138,7 +138,7 @@ class BaseGrammar:
                     # carrying raw bindings on BOTH clauses binds them
                     # into each other's %s slots (qmark/executed path).
                     group_by=self.process_group_by(),
-                    having=self.process_having(),
+                    having=self.process_having(qmark=qmark),
                     order_by=self.process_order_by(),
                     lock=self.process_locks(),
                 )
@@ -479,23 +479,22 @@ class BaseGrammar:
         Returns:
             self
         """
-        sql = ""
         columns = []
         for group_by in self._group_by:
             if group_by.raw:
                 if group_by.bindings:
                     self.add_binding(*group_by.bindings)
 
-                sql += "GROUP BY " + group_by.column
-                return sql
-
+                # Raw entries join the same list — returning early here
+                # used to discard every other GROUP BY column.
+                columns.append(group_by.column)
             else:
                 columns.append(self._table_column_string(group_by.column))
 
         if columns:
-            sql += " GROUP BY {column}".format(column=", ".join(columns))
+            return " GROUP BY {column}".format(column=", ".join(columns))
 
-        return sql
+        return ""
 
     def process_alias(self, column):
         """
@@ -630,13 +629,22 @@ class BaseGrammar:
 
             if not equality and not value:
                 sql_string = self.having_string()
+                compiled_value = ""
             else:
                 sql_string = self.having_equality_string()
+                # Parameterize exactly like the where compiler — the
+                # pre-fix path spliced the value into the SQL string
+                # unescaped even on the executed (qmark) path.
+                if qmark:
+                    compiled_value = "'?'"
+                    self.add_binding(value)
+                else:
+                    compiled_value = self._compile_value(value)
 
             sql += sql_string.format(
                 column=self._table_column_string(column) if raw is False else column,
                 equality=equality,
-                value=self._compile_value(value),
+                value=compiled_value,
             )
 
         return sql
@@ -995,14 +1003,14 @@ class BaseGrammar:
             return self._columns
         elif isinstance(self._columns, list):
             for c in self._columns:
-                for column, value in dict(c).items():
+                for _column, value in dict(c).items():
                     if qmark:
                         self.add_binding(value)
                         sql += f"'?'{separator}".strip()
                     else:
                         sql += self._compile_value(value, separator=separator)
         else:
-            for column, value in dict(self._columns).items():
+            for _column, value in dict(self._columns).items():
                 if qmark:
                     self.add_binding(value)
                     sql += f"'?'{separator}".strip()
@@ -1228,7 +1236,8 @@ class BaseGrammar:
         # Get all values from upsert data
         all_values = [list(record.values()) for record in self._upsert_values]
 
-        # Get column names from first record (all should have same keys)
+        # Rows are canonicalized upstream (QueryBuilder.upsert enforces
+        # uniform keys), so the first record's keys ARE the column list.
         columns = list(self._upsert_values[0].keys()) if self._upsert_values else []
 
         # Build conflict columns string for ON CONFLICT clause
@@ -1237,12 +1246,23 @@ class BaseGrammar:
             for col in self._upsert_unique_by
         )
 
-        # Build update columns string (col = EXCLUDED.col)
-        update_columns = ", ".join(
-            f'"{col}" = EXCLUDED."{col}"' for col in self._upsert_update
+        # Build update columns string (col = EXCLUDED.col) — identifiers
+        # quoted through the grammar, not hardcoded double quotes.
+        quoted_updates = (
+            self.column_string().format(column=col, separator="")
+            for col in self._upsert_update
         )
+        update_columns = ", ".join(f"{col} = EXCLUDED.{col}" for col in quoted_updates)
 
-        self._sql = self.upsert_format().format(
+        # An explicit empty update list is insert-if-missing: conflicting
+        # rows are left untouched (DO NOTHING). ``DO UPDATE SET`` with an
+        # empty SET list would be a syntax error.
+        if self._upsert_update:
+            template = self.upsert_format()
+        else:
+            template = self.upsert_do_nothing_format()
+
+        self._sql = template.format(
             table=self.process_table(self.table),
             columns=self.columnize_bulk_columns(columns),
             values=self.columnize_bulk_values(all_values, qmark=qmark),
@@ -1251,3 +1271,13 @@ class BaseGrammar:
         )
 
         return self
+
+    def upsert_format(self):
+        raise QueryException(
+            f"upsert() is not implemented for the {self.__class__.__name__} dialect."
+        )
+
+    def upsert_do_nothing_format(self):
+        raise QueryException(
+            f"upsert() is not implemented for the {self.__class__.__name__} dialect."
+        )

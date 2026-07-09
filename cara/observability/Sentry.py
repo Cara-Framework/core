@@ -17,6 +17,7 @@ and the rest of the bootstrap continues unaffected.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import socket
 import subprocess
@@ -167,10 +168,8 @@ def set_request_user(user_id: Any, email: str | None = None) -> None:
                 payload["email"] = f"{head}***@{domain}"
         except (OSError, RuntimeError, AttributeError, ConnectionError):
             pass
-    try:
+    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
         sentry_sdk.set_user(payload)
-    except (OSError, RuntimeError, AttributeError, ConnectionError):
-        pass
 
 
 def set_request_tag(key: str, value: Any) -> None:

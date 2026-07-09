@@ -227,10 +227,7 @@ class JobTracker:
             if not job_record:
                 return True
 
-            if job_record.status in [self.job_model.STATUS_CANCELLED]:
-                return False
-
-            return True
+            return job_record.status not in [self.job_model.STATUS_CANCELLED]
 
         except Exception as e:
             Log.warning("Error checking job status %s: %s", job_uid, str(e))

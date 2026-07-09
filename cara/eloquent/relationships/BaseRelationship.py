@@ -88,8 +88,10 @@ class BaseRelationship:
         return self.apply_query(self._related_builder, instance)
 
     def __getattr__(self, attribute):
-        # Use _func if set by decorator, otherwise fn
-        func = getattr(self, "_func", None) or getattr(self, "fn", None)
+        # Use _func if set by decorator, otherwise fn. Read via __dict__:
+        # getattr(self, ...) would re-enter __getattr__ for the probe
+        # names when they're unset (string-form init) and recurse forever.
+        func = self.__dict__.get("_func") or self.__dict__.get("fn")
         if func:
             relationship = func(self)()
             return getattr(relationship.builder, attribute)

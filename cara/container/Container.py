@@ -259,7 +259,10 @@ class Container:
                     MissingContainerBindingException,
                     StrictContainerException,
                 ) = _get_container_exceptions()
-                if name in self._deferred or self._attempt_load_deferred(name):
+                # NOTE: no ``or _attempt_load_deferred(name)`` here — that
+                # helper POPPED and registered the provider itself, so the
+                # pop() below KeyError'd whenever the OR's second arm won.
+                if name in self._deferred:
                     provider_class = self._deferred.pop(name)
                     for k, cls in list(self._deferred.items()):
                         if cls is provider_class:
@@ -371,9 +374,7 @@ class Container:
             self._find_obj(name)
             return True
         except MissingContainerBindingException:
-            if name in self._deferred:
-                return True
-            return False
+            return name in self._deferred
 
     def resolve(self, obj: Any, *resolving_arguments: Any) -> Any:
         """
@@ -588,42 +589,6 @@ class Container:
         return obj(*objects, **keyword_objects)
 
     # ---------------------------------------
-    # Deferred Provider Support Methods
-    # ---------------------------------------
-
-    def add_deferred_provider(self, provider: Any) -> None:
-        """
-        Register a DeferredProvider instance.
-
-        provider.provides() returns a list of service keys (e.g. ["queue", "logger"]).
-        """
-        provides_list = provider.provides()
-        for svc in provides_list:
-            self._deferred[svc] = provider
-
-    def _attempt_load_deferred(self, key_or_class: Any) -> bool:
-        """
-        If key_or_class is in _deferred, pop the provider, register and boot it, then remove any
-        other keys pointing to the same provider.
-
-        Return True. Otherwise return False.
-        """
-        if key_or_class in self._deferred:
-            provider = self._deferred.pop(key_or_class)
-            provider.register()
-            self.providers.append(provider)
-            if hasattr(provider, "boot"):
-                provider.boot()
-
-            # Remove any other keys that reference the same provider class
-            for k, cls in list(self._deferred.items()):
-                if cls is provider:
-                    self._deferred.pop(k, None)
-
-            return True
-
-        return False
-
     def _accepts_container(self, func):
         """Check if callable accepts a container parameter."""
         try:

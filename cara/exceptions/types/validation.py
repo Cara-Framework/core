@@ -12,6 +12,7 @@ __all__ = [
     "InvalidRuleFormatException",
 ]
 
+import contextlib
 from typing import Any
 
 from .Base import CaraException
@@ -129,10 +130,8 @@ class ValidationException(CaraException):
                     self._extract_first_error_from_dict(all_errors)
             except Exception as exc:
                 if Log is not None:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                         Log.debug("ValidationException: errors() method on %s raised %s: %s — falling back to generic envelope", type(self.validation_errors).__name__, type(exc).__name__, exc, category='validation')
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
-                        pass
 
         # Try first_error() method for main message
         if hasattr(self.validation_errors, "first_error"):
@@ -142,14 +141,12 @@ class ValidationException(CaraException):
                     self._extracted_message = first_error
             except Exception as exc:
                 if Log is not None:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                         Log.debug("ValidationException: first_error() method on %s raised %s: %s — falling back to generic envelope", type(self.validation_errors).__name__, type(exc).__name__, exc, category='validation')
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
-                        pass
 
     def _extract_first_error_from_dict(self, errors_dict: dict[str, Any]) -> None:
         """Extract first error message from errors dictionary."""
-        for field_name, field_errors in errors_dict.items():
+        for _field_name, field_errors in errors_dict.items():
             if field_errors:
                 if isinstance(field_errors, list) and field_errors:
                     self._extracted_message = field_errors[0]

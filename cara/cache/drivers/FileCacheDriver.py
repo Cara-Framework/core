@@ -420,12 +420,24 @@ class FileCacheDriver(Cache):
         worker. Previously this was a plain non-atomic RMW.
         """
         with _FILE_CAS_LOCK:
-            current = self.get(key, 0)
+            sentinel = object()
+            current = self.get(key, sentinel)
+            is_new = current is sentinel
             try:
-                new_val = int(current) + amount
+                new_val = (0 if is_new else int(current)) + amount
             except (TypeError, ValueError):
+                is_new = True
                 new_val = amount
-            self.put(key, new_val, ttl)
+            # Redis INCRBY semantics: ``ttl`` applies on creation (or to
+            # a key that lost its expiry) — re-passing it on every hit
+            # reset the expiry window, so a fixed-window counter under
+            # sustained traffic never expired.
+            if is_new:
+                effective_ttl = ttl
+            else:
+                remaining = self.ttl(key)
+                effective_ttl = remaining if remaining is not None else ttl
+            self.put(key, new_val, effective_ttl)
             return new_val
 
     def forget_if(self, key: str, expected_value: Any) -> bool:

@@ -19,8 +19,8 @@ import pendulum
 from cara.exceptions import QueueException
 from cara.queues.contracts import JobCancelledException, Queue
 from cara.queues.JobInstantiation import instantiate_job
-from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.queues.JobStateManager import get_job_state_manager
+from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.support import HasColoredOutput, parse_human_time
 
 
@@ -260,13 +260,11 @@ class DatabaseDriver(HasColoredOutput, Queue):
         if not jobs:
             return
 
-        delay_seconds = 0
-        for job in jobs:
+        for delay_seconds, job in enumerate(jobs):
             self.push(
                 job,
                 options={**options, "delay": f"{delay_seconds} seconds"},
             )
-            delay_seconds += 1
 
     def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
         """Batch push: push all jobs at once."""
@@ -341,11 +339,13 @@ class DatabaseDriver(HasColoredOutput, Queue):
             )
 
         # Fallback path — legacy CAS UPDATE.
+        max_attempts = int(merged.get("attempts", 1))
         builder = self._get_builder(merged, table)
         jobs = (
             builder.where("queue", queue)
             .where("available_at", "<=", now)
             .where_null("reserved_at")
+            .where("attempts", "<", max_attempts)
             .limit(batch_size)
             .order_by("id")
             .get()
@@ -391,10 +391,16 @@ class DatabaseDriver(HasColoredOutput, Queue):
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", table):
             raise QueueException(f"Invalid queue table identifier: {table!r}")
 
+        # Exclude retry-exhausted rows: the failure handler leaves them in
+        # place (attempts bumped, reservation cleared) when no failed_table
+        # is configured — without this filter they'd be re-claimed and
+        # re-executed forever.
+        max_attempts = int(merged.get("attempts", 1))
         select_sql = (
             f"SELECT id, name, payload, attempts, queue, available_at, reserved_at "
             f"FROM {table} "
             f"WHERE queue = %s AND available_at <= %s AND reserved_at IS NULL "
+            f"AND attempts < %s "
             f"ORDER BY id ASC "
             f"LIMIT %s "
             f"FOR UPDATE SKIP LOCKED"
@@ -409,7 +415,12 @@ class DatabaseDriver(HasColoredOutput, Queue):
         try:
             with db.transaction(connection_name):
                 rows = (
-                    db.select(select_sql, [queue, now, batch_size], connection_name) or []
+                    db.select(
+                        select_sql,
+                        [queue, now, max_attempts, batch_size],
+                        connection_name,
+                    )
+                    or []
                 )
                 if not rows:
                     return []

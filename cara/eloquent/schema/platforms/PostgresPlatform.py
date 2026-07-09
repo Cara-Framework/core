@@ -153,7 +153,7 @@ class PostgresPlatform(Platform):
 
     def columnize(self, columns):
         sql = []
-        for name, column in columns.items():
+        for _name, column in columns.items():
             if column.length:
                 length = self.create_column_length(column.column_type).format(
                     length=column.length
@@ -476,7 +476,7 @@ class PostgresPlatform(Platform):
 
     def constraintize(self, constraints, table):
         sql = []
-        for name, constraint in constraints.items():
+        for _name, constraint in constraints.items():
             # A UNIQUE carrying a partial-index ``where`` predicate cannot be a
             # table-level constraint — it is emitted as a standalone
             # ``CREATE UNIQUE INDEX ... WHERE`` after the CREATE TABLE body

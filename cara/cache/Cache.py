@@ -13,7 +13,6 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from cara.cache.contracts import Cache
 from cara.exceptions import DriverNotRegisteredException
 
 _logger = logging.getLogger("cara.cache")

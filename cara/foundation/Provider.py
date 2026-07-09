@@ -6,10 +6,13 @@ This module defines Provider (always‐eager) which all concrete providers shoul
 
 from __future__ import annotations
 
-from abc import ABC
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cara.foundation.Application import Application
 
 
-class Provider(ABC):
+class Provider:
     """
     Base Provider class that all (non‐deferred) service providers should extend.
 

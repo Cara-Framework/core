@@ -5,6 +5,7 @@ try:
 except ImportError:  # Python <3.11
     from typing import Self  # noqa: F401
 
+import contextlib
 import threading
 
 from cara.exceptions import DriverNotFoundException, QueryException
@@ -94,10 +95,8 @@ class MySQLConnection(BaseConnection):
                     except (OSError, RuntimeError, AttributeError):
                         pass
         else:
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 type(self._connection).close(self._connection)
-            except (OSError, RuntimeError, AttributeError):
-                pass
 
         self.open = 0
         self._connection = None
@@ -181,10 +180,8 @@ class MySQLConnection(BaseConnection):
         self.transaction_level -= 1
         if self.get_transaction_level() <= 0:
             self.open = 0
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 self._connection.close()
-            except (OSError, RuntimeError, AttributeError):
-                pass
 
     def dry(self) -> Self:
         """Transaction."""
@@ -203,10 +200,8 @@ class MySQLConnection(BaseConnection):
         self.transaction_level -= 1
         if self.get_transaction_level() <= 0:
             self.open = 0
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 self._connection.close()
-            except (OSError, RuntimeError, AttributeError):
-                pass
 
     def get_transaction_level(self):
         """Transaction."""
@@ -258,6 +253,11 @@ class MySQLConnection(BaseConnection):
                 if results == 1:
                     return self.format_cursor_results(cursor.fetchone())
                 else:
+                    # Non-result statements (UPDATE/DELETE/INSERT): surface
+                    # the affected row count instead of an empty rowset,
+                    # mirroring PostgresConnection.
+                    if cursor.description is None:
+                        return max(cursor.rowcount, 0)
                     return self.format_cursor_results(cursor.fetchall())
         except Exception as e:
             raise QueryException(str(e)) from e

@@ -18,6 +18,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -176,10 +177,8 @@ class BatchAware:
 
         catch_cb = getattr(self, "_batch_catch_callback", None)
         if catch_cb:
-            try:
+            with contextlib.suppress(TypeError, ValueError, RuntimeError):
                 catch_cb(exc, self)
-            except (TypeError, ValueError, RuntimeError):
-                pass
 
         then_cb = getattr(self, "_batch_then_callback", None)
         _decrement_pending(batch_id, then_cb)
@@ -266,7 +265,5 @@ def _decrement_pending(batch_id: str, then_callback=None) -> None:
             _batch_pending_key(batch_id),
             _batch_failed_key(batch_id),
         ):
-            try:
+            with contextlib.suppress(ConnectionError, TimeoutError, OSError, RuntimeError):
                 Cache.forget(key)
-            except (ConnectionError, TimeoutError, OSError, RuntimeError):
-                pass

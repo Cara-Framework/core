@@ -7,6 +7,7 @@ Extracted from Model.py to follow SRP and DRY principles.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from typing import Any
@@ -66,7 +67,7 @@ class HasAttributes:
         # Check for relationship
         if hasattr(self.__class__, attribute):
             attr = getattr(self.__class__, attribute)
-            if hasattr(attr, "__call__") and hasattr(attr, "get_related"):
+            if callable(attr) and hasattr(attr, "get_related"):
                 return attr.__get__(self, self.__class__)
 
         # Get regular attribute
@@ -363,10 +364,8 @@ class HasAttributes:
 
         for attribute in appends:
             # Try to get accessor value
-            try:
+            with contextlib.suppress(AttributeError):
                 result[attribute] = getattr(self, attribute)
-            except AttributeError:
-                pass
 
         return result
 

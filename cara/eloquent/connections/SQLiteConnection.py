@@ -5,6 +5,7 @@ try:
 except ImportError:  # Python <3.11
     from typing import Self  # noqa: F401
 
+import contextlib
 import re
 
 from cara.exceptions import DriverNotFoundException, QueryException
@@ -26,6 +27,9 @@ class SQLiteConnection(BaseConnection):
     name = "sqlite"
 
     _connection = None
+    # sqlite3 raises "parameters are of unsupported type" for explicit
+    # None parameters — bindingless statements must pass an empty tuple.
+    _empty_bindings = ()
 
     def __init__(
         self,
@@ -103,10 +107,8 @@ class SQLiteConnection(BaseConnection):
         if self.get_transaction_level() == 1:
             self._connection.commit()
             self._connection.isolation_level = None
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 self._connection.close()
-            except (OSError, RuntimeError, AttributeError):
-                pass
             self.open = 0
 
         self.transaction_level -= 1
@@ -122,10 +124,8 @@ class SQLiteConnection(BaseConnection):
         """Transaction."""
         if self.get_transaction_level() == 1:
             self._connection.rollback()
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 self._connection.close()
-            except (OSError, RuntimeError, AttributeError):
-                pass
             self.open = 0
 
         self.transaction_level -= 1
@@ -159,8 +159,8 @@ class SQLiteConnection(BaseConnection):
             self._cursor = self._connection.cursor()
 
             if isinstance(query, list):
-                for query in query:
-                    self.statement(query)
+                for single_query in query:
+                    self.statement(single_query)
             else:
                 query = query.replace("'?'", "?")
                 self.statement(query, bindings)
@@ -169,15 +169,19 @@ class SQLiteConnection(BaseConnection):
                     if result:
                         return result[0]
                 else:
+                    # ``description`` is None for non-result statements
+                    # (UPDATE/DELETE/INSERT without RETURNING) — surface
+                    # the affected row count instead of an empty rowset,
+                    # mirroring PostgresConnection.
+                    if self._cursor.description is None:
+                        return max(self._cursor.rowcount, 0)
                     return [dict(row) for row in self._cursor.fetchall()]
         except Exception as e:
             raise QueryException(str(e)) from e
         finally:
             if self.get_transaction_level() <= 0:
-                try:
+                with contextlib.suppress(OSError, RuntimeError, AttributeError):
                     self._connection.close()
-                except (OSError, RuntimeError, AttributeError):
-                    pass
                 self.open = 0
 
     def format_cursor_results(self, cursor_result):
@@ -201,8 +205,6 @@ class SQLiteConnection(BaseConnection):
             # would stay open until GC, leaking handles in every paginated
             # iteration path.
             if self.get_transaction_level() <= 0:
-                try:
+                with contextlib.suppress(OSError, RuntimeError, AttributeError):
                     self._connection.close()
-                except (OSError, RuntimeError, AttributeError):
-                    pass
                 self.open = 0

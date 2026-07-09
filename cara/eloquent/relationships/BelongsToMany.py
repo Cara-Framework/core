@@ -137,11 +137,19 @@ class BelongsToMany(BaseRelationship):
 
         table1 = owner.get_table_name()
         table2 = query.get_table_name()
-        result = query.select(
-            f"{query.get_table_name()}.*",
-            f"{self._table}.{self.local_key} as {self._table}_id",
-            f"{self._table}.{self.foreign_key} as m_reserved2",
-        ).table(f"{table1}")
+        # Run the RELATED model's global scopes BEFORE swapping FROM to the
+        # owner table (they are stripped again before compile) — otherwise
+        # e.g. a soft-delete scope compiles ``owner_table.deleted_at IS
+        # NULL`` against the wrong table. Mirrors make_query (eager path).
+        result = (
+            query.select(
+                f"{query.get_table_name()}.*",
+                f"{self._table}.{self.local_key} as {self._table}_id",
+                f"{self._table}.{self.foreign_key} as m_reserved2",
+            )
+            .run_scopes()
+            .table(f"{table1}")
+        )
 
         if self.pivot_id:
             result.select(f"{self._table}.{self.pivot_id} as m_reserved3")
@@ -174,6 +182,8 @@ class BelongsToMany(BaseRelationship):
         if self.with_fields:
             for field in self.with_fields:
                 result.select(f"{self._table}.{field}")
+
+        result.without_global_scopes()
 
         result = result.get()
 
@@ -380,11 +390,19 @@ class BelongsToMany(BaseRelationship):
 
         table1 = owner.get_table_name()
         table2 = query.get_table_name()
-        result = query.select(
-            f"{query.get_table_name()}.*",
-            f"{self._table}.{self.local_key} as {self._table}_id",
-            f"{self._table}.{self.foreign_key} as m_reserved2",
-        ).table(f"{table1}")
+        # Run the RELATED model's global scopes BEFORE swapping FROM to the
+        # owner table (they are stripped again before compile) — otherwise
+        # e.g. a soft-delete scope compiles ``owner_table.deleted_at IS
+        # NULL`` against the wrong table. Mirrors make_query (eager path).
+        result = (
+            query.select(
+                f"{query.get_table_name()}.*",
+                f"{self._table}.{self.local_key} as {self._table}_id",
+                f"{self._table}.{self.foreign_key} as m_reserved2",
+            )
+            .run_scopes()
+            .table(f"{table1}")
+        )
 
         if self.pivot_id:
             result.select(f"{self._table}.{self.pivot_id} as m_reserved3")
@@ -417,6 +435,8 @@ class BelongsToMany(BaseRelationship):
         if self.with_fields:
             for field in self.with_fields:
                 result.select(f"{self._table}.{field}")
+
+        result.without_global_scopes()
 
         return result
 

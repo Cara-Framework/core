@@ -63,7 +63,7 @@ class MySQLPlatform(Platform):
 
     def columnize(self, columns):
         sql = []
-        for name, column in columns.items():
+        for _name, column in columns.items():
             if column.length:
                 length = self.create_column_length(column.column_type).format(
                     length=column.length
@@ -158,7 +158,7 @@ class MySQLPlatform(Platform):
         )
 
         if table.added_indexes:
-            for name, index in table.added_indexes.items():
+            for _name, index in table.added_indexes.items():
                 sql.append(
                     "CREATE INDEX {name} ON {table}({column})".format(
                         name=index.name,
@@ -397,7 +397,7 @@ class MySQLPlatform(Platform):
 
     def constraintize(self, constraints, table):
         sql = []
-        for name, constraint in constraints.items():
+        for _name, constraint in constraints.items():
             # Partial / conditional UNIQUE is emitted as a standalone
             # CREATE UNIQUE INDEX ... WHERE after the table body, not inline.
             if constraint.constraint_type == "unique" and constraint.where:

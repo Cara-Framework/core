@@ -50,6 +50,8 @@ try:
 except ImportError:
     redis_async = None  # type: ignore[assignment]
 
+import contextlib
+
 from cara.broadcasting.ConnectionManager import (
     ConnectionManager,
     _is_connection_closed_error,
@@ -464,10 +466,8 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 await asyncio.sleep(backoff)
             finally:
                 if self._listener_pubsub is not None:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                         await self._listener_pubsub.aclose()
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
-                        pass
                     self._listener_pubsub = None
                 self._listener_ready.clear()
 
@@ -539,30 +539,22 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
     async def cleanup(self) -> None:
         if self._listener_task and not self._listener_task.done():
             self._listener_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._listener_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
         if self._listener_pubsub is not None:
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 await self._listener_pubsub.aclose()
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
             self._listener_pubsub = None
 
         for client in self._redis_clients.values():
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 await client.aclose()
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
         self._redis_clients.clear()
 
         for pool in self._redis_pools.values():
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 await pool.disconnect()
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
         self._redis_pools.clear()
 
         await super().cleanup()

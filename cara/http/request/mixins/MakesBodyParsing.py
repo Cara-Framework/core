@@ -260,6 +260,21 @@ class MakesBodyParsing:
         self._form_params = {}
         content_type = self.header("content-type", "")
 
+        # application/x-www-form-urlencoded is a form body too — routing
+        # it into the multipart branch used to bail at boundary
+        # validation and silently drop every form field.
+        if "application/x-www-form-urlencoded" in content_type.lower():
+            raw = await self._read_body()
+            if raw:
+                from cara.http.request.utils.QueryStringParser import (
+                    QueryStringParser,
+                )
+
+                self._form_params = QueryStringParser().parse(
+                    raw.decode("utf-8", errors="replace")
+                )
+            return
+
         # Validate and extract boundary
         boundary = self._validate_multipart_structure(content_type)
         if boundary is None:
@@ -282,7 +297,9 @@ class MakesBodyParsing:
                     "name": None,
                     "filename": None,
                     "content_type": None,
-                    "data": b"",
+                    # Chunk list, joined once at part end — ``bytes +=``
+                    # is O(n²) over a large upload (same fix as _read_body).
+                    "data": [],
                 }
 
             def on_header_field(data, start, end):
@@ -308,7 +325,7 @@ class MakesBodyParsing:
                     current_part["content_type"] = value
 
             def on_part_data(data, start, end):
-                current_part["data"] += data[start:end]
+                current_part["data"].append(data[start:end])
 
             max_files = self._max_files()
 
@@ -316,7 +333,7 @@ class MakesBodyParsing:
                 nonlocal current_part, file_count
                 name = current_part.get("name")
                 filename = current_part.get("filename")
-                content = current_part.get("data", b"")
+                content = b"".join(current_part.get("data", []))
 
                 if not name:
                     return  # Skip parts without names

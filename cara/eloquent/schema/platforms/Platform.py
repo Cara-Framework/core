@@ -47,7 +47,7 @@ class Platform:
 
     def columnize(self, columns):
         sql = []
-        for name, column in columns.items():
+        for _name, column in columns.items():
             if column.length:
                 length = self.create_column_length(column.column_type).format(
                     length=column.length
@@ -104,7 +104,7 @@ class Platform:
 
     def foreign_key_constraintize(self, table, foreign_keys):
         sql = []
-        for name, foreign_key in foreign_keys.items():
+        for _name, foreign_key in foreign_keys.items():
             cascade = ""
             if foreign_key.delete_action:
                 cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key.delete_action.lower())}"
@@ -124,7 +124,7 @@ class Platform:
 
     def constraintize(self, constraints):
         sql = []
-        for name, constraint in constraints.items():
+        for _name, constraint in constraints.items():
             sql.append(
                 getattr(
                     self,

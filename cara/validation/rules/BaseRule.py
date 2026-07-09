@@ -20,20 +20,28 @@ class BaseRule(Rule):
     Handles all message logic centrally to eliminate code duplication.
     """
 
-    def _parse_params(self, raw: str) -> dict[str, Any]:
-        """
-        Parse rule parameters from string format.
+    @staticmethod
+    def field_present(data: Any, field: str) -> bool:
+        """Whether ``field`` exists in ``data``, following dotted paths.
 
-        Examples:
-        - "min:5" -> {"min": "5"}
-        - "regex:^[A-Z]+$" -> {"regex": "^[A-Z]+$"}
-        - "required" -> {}
+        Wildcard-expanded rule fields arrive as concrete dotted paths
+        (``items.0.name``) while ``params["_data"]`` stays nested — a
+        flat ``field in data`` check silently reports every nested
+        field as absent.
         """
-        parts = raw.split(":", 1)
-        if len(parts) == 2:
-            key, val = parts
-            return {key: val}
-        return {}
+        node = data
+        for segment in field.split("."):
+            if isinstance(node, dict):
+                if segment not in node:
+                    return False
+                node = node[segment]
+            elif isinstance(node, list):
+                if not segment.isdigit() or int(segment) >= len(node):
+                    return False
+                node = node[int(segment)]
+            else:
+                return False
+        return True
 
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         """
@@ -70,53 +78,3 @@ class BaseRule(Rule):
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement default_message method"
         )
-
-    def get_default_message(self, field: str, params: dict[str, Any]) -> str:
-        """
-        Should be overridden by subclasses to provide default error message.
-        This method should return the default message for the rule.
-        """
-        rule_name = self.__class__.__name__.replace("Rule", "").lower()
-        return f"The {self._format_attribute_name(field).lower()} field failed {rule_name} validation."
-
-    def _format_message(self, message: str, field: str, params: dict[str, Any]) -> str:
-        """
-        Advanced placeholder replacement for custom messages.
-
-        Supported placeholders:
-        - :attribute - Field name (user_name -> User Name)
-        - :field - Raw field name (user_name)
-        - :value - The actual value being validated
-        - :rule - The validation rule name
-        - Rule-specific placeholders (e.g., :min, :max, :size)
-        """
-        if not message:
-            return message
-
-        # Basic replacements
-        replacements = {
-            ":attribute": self._format_attribute_name(field),
-            ":field": field,
-            ":value": str(params.get("_value", "")),
-            ":rule": params.get("_rule", ""),
-        }
-
-        # Add rule-specific parameters as placeholders
-        for key, value in params.items():
-            if not key.startswith("_") and key not in ["data"]:
-                replacements[f":{key}"] = str(value)
-
-        # Apply all replacements
-        formatted_message = message
-        for placeholder, replacement in replacements.items():
-            formatted_message = formatted_message.replace(placeholder, replacement)
-
-        return formatted_message
-
-    def _format_attribute_name(self, field: str) -> str:
-        """Convert field name to human-readable attribute name."""
-        # Convert snake_case to Title Case
-        # user_name -> User Name
-        # email -> Email
-        words = field.replace("_", " ").split()
-        return " ".join(word.capitalize() for word in words)

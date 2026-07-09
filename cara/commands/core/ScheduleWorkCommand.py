@@ -6,6 +6,7 @@ This module provides a CLI command to process scheduled jobs with enhanced UX.
 
 from __future__ import annotations
 
+import contextlib
 import time
 import traceback
 import uuid
@@ -313,10 +314,8 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             # follow-up work and stayed in their initial state (hidden from
             # the client). Overlap between slow ticks is still guarded by the
             # idempotency job lock + any WithoutOverlapping middleware.
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 instance.idempotency_cache_results = False
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
 
             # Resolve handle() parameters via DI container if needed.
             handle_method = getattr(instance, "handle", None)
@@ -329,10 +328,8 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                 if param_name in _kw:
                     handle_kwargs[param_name] = _kw[param_name]
                 elif param.annotation != inspect.Parameter.empty:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                         handle_kwargs[param_name] = _app.make(param.annotation)
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
-                        pass
 
             # OPT-IN scheduler-tick observability (default OFF). The scheduler
             # runs jobs INLINE via handle() — bypassing Bus/driver — so a
@@ -604,18 +601,28 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         self._show_scheduler_status()
         self.start_time = time.time()
 
+        # Initialised before the try — if Schedule.driver() itself raises,
+        # the finally must not trip over an unbound local and mask the
+        # informative CaraException with an UnboundLocalError.
+        driver = None
         try:
             driver = Schedule.driver(scheduler_config["driver_name"])
 
-            # BackgroundScheduler: start() returns immediately, jobs
-            # run in a thread pool. The while-loop below keeps the
-            # command alive until Ctrl-C or auto-reload sets
-            # shutdown_requested.
-            driver.start()
-
             if scheduler_config["run_once"]:
-                self.console.print("[#30e047]Scheduled tasks executed once[/#30e047]")
+                # Execute every registered task inline, once. Starting the
+                # background engine here (the old behavior) meant the
+                # finally shut it down before any cron trigger could fire —
+                # --once executed nothing.
+                executed = driver.run_all()
+                self.console.print(
+                    f"[#30e047]Scheduled tasks executed once ({executed} succeeded)[/#30e047]"
+                )
             else:
+                # BackgroundScheduler: start() returns immediately, jobs
+                # run in a thread pool. The while-loop below keeps the
+                # command alive until Ctrl-C or auto-reload sets
+                # shutdown_requested.
+                driver.start()
                 while not self.shutdown_requested:
                     time.sleep(1)
 
@@ -624,10 +631,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         finally:
             # Ensure the background scheduler stops its thread pool
             # when the command exits (Ctrl-C, auto-reload, --once).
-            try:
-                driver.shutdown(wait=False)
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
+            if driver is not None:
+                with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+                    driver.shutdown(wait=False)
 
     def _show_final_stats(self):
         """Show final scheduler statistics."""

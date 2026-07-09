@@ -41,6 +41,7 @@ The implementation mirrors ``ThrottleRequests`` for parity:
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import Any
 
@@ -88,15 +89,13 @@ class Throttle(Middleware):
             )
         except ServiceUnavailableException as e:
             Log.warning("WebSocket throttle cache failure for key %s; failing closed. %s", key, e, category='cara.websocket')
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 await socket.send(
                     {
                         "type": "websocket.close",
                         "code": _RATE_LIMIT_CLOSE_CODE,
                     }
                 )
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
             raise WebSocketException(
                 "WebSocket rate limiter temporarily unavailable",
                 _RATE_LIMIT_CLOSE_CODE,
@@ -104,15 +103,13 @@ class Throttle(Middleware):
 
         if not allowed:
             Log.warning("WebSocket throttle exceeded: ip=%s path=%s name=%s limit=%s", mask_ip(ip), path, self.name, limit, category='cara.websocket')
-            try:
+            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                 await socket.send(
                     {
                         "type": "websocket.close",
                         "code": _RATE_LIMIT_CLOSE_CODE,
                     }
                 )
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
             raise WebSocketException(
                 f"WebSocket connect rate exceeded (>{limit} per {window}s)",
                 _RATE_LIMIT_CLOSE_CODE,

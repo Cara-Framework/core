@@ -10,6 +10,7 @@ This middleware runs automatically after every HTTP response is sent.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -50,10 +51,8 @@ class ResetAuth(Middleware):
             # use the canonical ``set_user`` setter where available.
             setter = getattr(request, "set_user", None)
             if callable(setter):
-                try:
+                with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                     setter(None)
-                except (OSError, RuntimeError, AttributeError, ConnectionError):
-                    pass
             elif hasattr(request, "_user"):
                 request._user = None
 
@@ -71,6 +70,8 @@ class ResetAuth(Middleware):
                     guard._user = None
                 if hasattr(guard, "_token"):
                     guard._token = None
+                if hasattr(guard, "_last_payload"):
+                    guard._last_payload = None
 
         except Exception as exc:
             # CRITICAL: Never let cache cleanup break the application,

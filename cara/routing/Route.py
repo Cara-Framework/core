@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.http import Response
 from cara.routing.RouteCompiler import RouteCompiler
 from cara.routing.RouteGroup import RouteGroup
 from cara.routing.RouteParameterValidator import RouteParameterValidator
@@ -147,76 +146,6 @@ class Route:
 
     def matches(self, path: str, method: str) -> bool:
         return self.compiler.matches(path) and method.lower() in self.request_method
-
-    async def dispatch(self, request: Any, response: Any) -> Response:
-        """Dispatch a request to this route's controller.
-
-        Extracts route parameters and delegates to the controller.
-
-        Args:
-            request: The HTTP request
-            response: The HTTP response object
-
-        Returns:
-            The response object
-        """
-        # Extract route parameters
-        params = self.extract_parameters(request.path)
-
-        # Set validated parameters on request for easy access
-        self.set_params(params)
-        for key, value in params.items():
-            # Convert to appropriate type based on route compiler
-            converted_value = self._convert_parameter_type(key, value)
-            setattr(request, f"param_{key}", converted_value)
-
-        result = await self.controller.handle(request, response)
-        if isinstance(result, Response):
-            response.clone_from(result)
-            return response
-        elif result is not None:
-            response.json(result)
-            return response
-        return response
-
-    def _convert_parameter_type(
-        self, param_name: str, param_value: str
-    ) -> int | bool | str:
-        """Convert route parameter to appropriate type based on its compiler type.
-
-        Uses the ``param_types`` map populated during route compilation so
-        ``@id:int`` correctly maps ``id`` → ``int`` → ``int(value)``.
-
-        Args:
-            param_name: The parameter name (e.g. ``"id"``)
-            param_value: The parameter value as string
-
-        Returns:
-            The converted parameter value
-        """
-        if param_value is None:
-            return param_value
-
-        # Look up the compiler type for this parameter (e.g. "int", "bool")
-        compiler_type = self.compiler.param_types.get(param_name)
-
-        if not compiler_type:
-            return param_value
-
-        if compiler_type in ("int", "integer"):
-            try:
-                return int(param_value)
-            except (ValueError, TypeError):
-                return param_value
-        elif compiler_type == "bool":
-            return param_value.lower() in ("true", "1")
-        elif compiler_type == "float":
-            try:
-                return float(param_value)
-            except (ValueError, TypeError):
-                return param_value
-
-        return param_value
 
     @classmethod
     def factory(

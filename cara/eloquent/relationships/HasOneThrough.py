@@ -190,8 +190,13 @@ class HasOneThrough(BaseRelationship):
         dist_table = self.distant_builder.get_table_name()
         int_table = self.intermediary_builder.get_table_name()
 
+        # Nested eagers and with_-callbacks constrain the DISTANT query —
+        # ``current_builder`` is the source model's builder, which has
+        # already executed (and reset) by the time we get here, so
+        # registering anything on it is a silent no-op.
+        self.distant_builder.with_(eagers or [])
         if callback:
-            callback(current_builder)
+            callback(self.distant_builder)
 
         (
             self.distant_builder.select(

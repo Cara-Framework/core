@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from cara.exceptions import DriverNotFoundException
 from cara.facades import Log, Queue
-from cara.mail.contracts import Mail
 from cara.mail.Mailable import Mailable
 from cara.queues.contracts import ShouldQueue
 

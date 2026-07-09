@@ -16,9 +16,7 @@ from cara.validation.rules.BaseRule import BaseRule
 def _is_present(v) -> bool:
     if v is None:
         return False
-    if isinstance(v, str) and v.strip() == "":
-        return False
-    return True
+    return not (isinstance(v, str) and v.strip() == "")
 
 
 class RequiredWithoutRule(BaseRule):

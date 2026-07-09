@@ -37,9 +37,7 @@ class RequiredUnlessRule(BaseRule):
             return True
         if value is None:
             return False
-        if isinstance(value, str) and value.strip() == "":
-            return False
-        return True
+        return not (isinstance(value, str) and value.strip() == "")
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)

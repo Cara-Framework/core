@@ -7,6 +7,7 @@ collection methods with support for mapping, filtering, sorting, and aggregation
 
 from __future__ import annotations
 
+import contextlib
 import json
 import operator
 import random
@@ -196,11 +197,9 @@ class Collection(Macroable):
             The average value.
         """
         result = 0
-        items = self._get_value(key) or self._items
-        try:
+        items = (self._get_value(key) or []) if key is not None else self._items
+        with contextlib.suppress(TypeError, ZeroDivisionError):
             result = sum(items) / len(items)
-        except (TypeError, ZeroDivisionError):
-            pass
         return result
 
     def median(self, key=None):
@@ -215,7 +214,7 @@ class Collection(Macroable):
         Returns:
             The median value.
         """
-        items = self._get_value(key) or self._items
+        items = (self._get_value(key) or []) if key is not None else self._items
 
         try:
             # Sort the items
@@ -249,7 +248,7 @@ class Collection(Macroable):
         Returns:
             The mode value or None if the collection is empty.
         """
-        items = self._get_value(key) or self._items
+        items = (self._get_value(key) or []) if key is not None else self._items
 
         if not items:
             return None
@@ -289,7 +288,7 @@ class Collection(Macroable):
             The maximum value.
         """
         result = 0
-        items = self._get_value(key) or self._items
+        items = (self._get_value(key) or []) if key is not None else self._items
 
         try:
             if not items:
@@ -311,7 +310,7 @@ class Collection(Macroable):
         Returns:
             The minimum value.
         """
-        items = self._get_value(key) or self._items
+        items = (self._get_value(key) or []) if key is not None else self._items
 
         try:
             if not items:
@@ -592,12 +591,10 @@ class Collection(Macroable):
 
             if isinstance(items, dict):
                 for v in items.values():
-                    for x in _flatten(v, current_depth + 1):
-                        yield x
+                    yield from _flatten(v, current_depth + 1)
             elif isinstance(items, (list, tuple)):
                 for i in items:
-                    for j in _flatten(i, current_depth + 1):
-                        yield j
+                    yield from _flatten(i, current_depth + 1)
             else:
                 yield items
 
@@ -1076,7 +1073,13 @@ class Collection(Macroable):
                     return key
         else:
             for key, item in enumerate(self):
-                if (strict and item == value) or (not strict and item == value):
+                # strict: type must match too (Laravel's === semantics) —
+                # the two branches used to be identical, making the
+                # parameter a no-op.
+                if strict:
+                    if type(item) is type(value) and item == value:
+                        return key
+                elif item == value:
                     return key
 
         return False
@@ -1235,11 +1238,9 @@ class Collection(Macroable):
             The sum of the items.
         """
         result = 0
-        items = self._get_value(key) or self._items
-        try:
+        items = (self._get_value(key) or []) if key is not None else self._items
+        with contextlib.suppress(TypeError):
             result = sum(items)
-        except TypeError:
-            pass
         return result
 
     def to_json(self, **kwargs):
@@ -1797,8 +1798,7 @@ class Collection(Macroable):
         Yields:
             Each item in the collection.
         """
-        for item in self._items:
-            yield item
+        yield from self._items
 
     def __eq__(self, other):
         """

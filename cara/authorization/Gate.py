@@ -324,6 +324,10 @@ class Gate(GateContract):
 
             Log.error(message, category="cara.authorization", exc_info=True)
         except Exception:  # noqa: BLE001 — logging must never raise
-            from cara.facades import Log
+            # The Log facade itself failed (unbooted container, broken
+            # channel). The old fallback re-ran the identical facade call
+            # — re-raising the same failure — so the message was lost AND
+            # the "never raise" promise broke. Fall back to stderr.
+            import sys
 
-            Log.error(message, category="cara.authorization", exc_info=True)
+            print(f"[cara.authorization] {message}", file=sys.stderr)

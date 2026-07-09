@@ -58,8 +58,13 @@ class ResourceCollection:
 
         if self.wrap:
             payload = {self.wrap: data}
+        elif self._meta or self._additional:
+            # meta/additional need an object envelope — attaching them to a
+            # bare list raised TypeError for wrap-opted-out subclasses.
+            # Laravel does the same: metadata forces the "data" wrapper.
+            payload = {"data": data}
         else:
-            payload = data
+            return data
 
         if self._meta:
             payload["meta"] = self._meta

@@ -27,6 +27,7 @@ Key invariants
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections import defaultdict
 from typing import Any
@@ -558,10 +559,8 @@ class ConnectionManager:
         graceful shutdown so background tasks don't leak."""
         if self._cleanup_task and not self._cleanup_task.done():
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._cleanup_task
-            except (asyncio.CancelledError, Exception):
-                pass
         for task in list(self._heartbeat_tasks.values()):
             if task and not task.done():
                 task.cancel()

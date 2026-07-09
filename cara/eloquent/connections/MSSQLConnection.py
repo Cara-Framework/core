@@ -5,6 +5,8 @@ try:
 except ImportError:  # Python <3.11
     from typing import Self  # noqa: F401
 
+import contextlib
+
 from cara.exceptions import DriverNotFoundException, QueryException
 
 from ..query.grammars import MSSQLGrammar
@@ -163,7 +165,9 @@ class MSSQLConnection(BaseConnection):
                     return dict(zip(columnNames, result, strict=False)) if result is not None else {}
                 else:
                     if not cursor.description:
-                        return {}
+                        # Non-result statements: affected row count,
+                        # mirroring PostgresConnection.
+                        return max(cursor.rowcount, 0)
                     return self.format_cursor_results(cursor.fetchall())
 
                 return {}
@@ -171,10 +175,8 @@ class MSSQLConnection(BaseConnection):
             raise QueryException(str(e)) from e
         finally:
             if self.get_transaction_level() <= 0:
-                try:
+                with contextlib.suppress(OSError, RuntimeError, AttributeError):
                     self._connection.close()
-                except (OSError, RuntimeError, AttributeError):
-                    pass
 
     def format_cursor_results(self, cursor_result):
         cursor = self.get_cursor()

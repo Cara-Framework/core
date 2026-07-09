@@ -27,7 +27,7 @@ Tests for concurrent begin/commit/rollback live alongside the rest of
 the ORM suite; see ``tests/cara/eloquent/test_concurrent_transactions.py``.
 """
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 
 from cara.exceptions import (
@@ -359,10 +359,8 @@ class ConnectionResolver:
         try:
             self.commit(connection_name)
         except BaseException:
-            try:
+            with suppress(OSError, RuntimeError, AttributeError):
                 self.rollback(connection_name)
-            except (OSError, RuntimeError, AttributeError):
-                pass
             raise
 
     def _get_active_connection(self, connection_name):

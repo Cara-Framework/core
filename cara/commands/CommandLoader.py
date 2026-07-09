@@ -6,6 +6,7 @@ This module provides utilities for dynamically loading CLI command classes from 
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import pkgutil
 
@@ -34,7 +35,5 @@ class CommandLoader:
             return
         for _, name, _ in pkgutil.iter_modules(module.__path__):
             full = f"{self.package}.{name}"
-            try:
+            with contextlib.suppress(ImportError):
                 importlib.import_module(full)
-            except ImportError:
-                pass

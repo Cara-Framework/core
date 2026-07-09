@@ -258,10 +258,7 @@ class ContentTypeDetector:
             return True
 
         # Check for XML declaration followed by SVG
-        if content_lower.startswith("<?xml") and "<svg" in content_lower:
-            return True
-
-        return False
+        return bool(content_lower.startswith("<?xml") and "<svg" in content_lower)
 
     @staticmethod
     def get_charset_from_content_type(content_type: str) -> str:

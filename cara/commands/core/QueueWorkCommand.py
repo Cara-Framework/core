@@ -10,6 +10,7 @@ import asyncio
 import atexit
 import builtins
 import concurrent.futures
+import contextlib
 import inspect
 import json
 import logging
@@ -33,13 +34,13 @@ from cara.facades import Log
 # package. A worker that actually runs still needs pika and fails LOUD when it
 # opens a connection.
 from cara.queues.contracts import UniqueJob
-from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 from cara.queues.retry.Policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
 from cara.queues.retry.Policy import (
     DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS,
 )
+from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
 
 # Prometheus metrics — framework-owned MetricsBase carries the queue/worker
 # metrics. Guarded so a partial import never breaks the worker.
@@ -133,10 +134,8 @@ class AMQPConnectionManager:
                     # than much later in the consumer loop.
                     self.connection.process_data_events(time_limit=0)
                 except Exception:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                         self.connection.close()
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
-                        pass
                     self.connection = None
 
             if self.connection is None or self.connection.is_closed:
@@ -187,10 +186,8 @@ class AMQPConnectionManager:
     def close(self):
         """Clean up connection."""
         if self.connection and not self.connection.is_closed:
-            try:
+            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
                 self.connection.close()
-            except (ImportError, RuntimeError, AttributeError, OSError):
-                pass
 
 
 class JobProcessor:
@@ -221,10 +218,13 @@ class JobProcessor:
             future.cancel()
             raise TimeoutError(f"Job exceeded timeout of {timeout_seconds}s")
         finally:
-            # Give worker thread up to 5s to release resources, then
-            # abandon. True wait prevents the pool-leak that wait=False
-            # caused, while the bounded timeout prevents infinite hangs.
-            executor.shutdown(wait=True, cancel_futures=True)
+            # Give the worker thread up to 5s to release resources
+            # (DB rollback, lock release), then abandon it.
+            # ``shutdown(wait=True)`` has NO timeout — on a truly hung
+            # job it would join forever and freeze the worker loop, so
+            # the bounded grace-wait has to happen on the future.
+            concurrent.futures.wait([future], timeout=5)
+            executor.shutdown(wait=False, cancel_futures=True)
 
     @staticmethod
     def _execute_async_job_with_timeout(method_to_call, init_args, timeout_seconds):
@@ -516,10 +516,8 @@ class JobProcessor:
         # Terminal — give up the slot.
         JobProcessor._ack_to_dlq(channel, method_frame, msg, str(exc))
         if instance is not None and isinstance(instance, UniqueJob):
-            try:
+            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
                 UniqueJob.release_unique_lock(instance.unique_id())
-            except (ImportError, RuntimeError, AttributeError, OSError):
-                pass
 
         # Batch completion hook (terminal failure) — decrement the
         # pending counter AND increment the failed counter so
@@ -741,10 +739,10 @@ class JobProcessor:
             else:
                 wait_secs = None
 
-            # Metric labels — now that we have a resolved job instance. Pass
-            # the polled queue through: it is _queue_label's priority-1
-            # source, and dropping it here (unlike the orphan paths above)
-            # made every successfully consumed job read queue="unknown".
+            # Metric labels — now that we have a resolved job instance.
+            # ``queue_name`` (the queue this worker actually polled) is the
+            # highest-fidelity label; dropping it here collapsed most
+            # consumed jobs onto the producer-side hint or "unknown".
             _mx_queue = _queue_label(msg, instance, queue_name=queue_name)
             _mx_job = _job_label(instance, msg)
             if _M is not None:
@@ -757,13 +755,11 @@ class JobProcessor:
                 except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
                 if wait_secs is not None:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                         _M.queue_wait_seconds.labels(
                             queue=_mx_queue,
                             job=_mx_job,
                         ).observe(wait_secs)
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
-                        pass
 
             # Set up job tracking
             job_id = msg.get("job_id")
@@ -1348,11 +1344,14 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
             from cara.configuration import config
 
-            host = config("queue.connections.amqp.host", "127.0.0.1")
-            mgmt_port = config("queue.connections.amqp.management_port", 15672)
-            user = config("queue.connections.amqp.user", "guest")
-            password = config("queue.connections.amqp.password", "guest")
-            vhost = config("queue.connections.amqp.vhost", "/")
+            # The AMQP config lives under queue.drivers.amqp.* (see
+            # QueueProvider) — the old queue.connections.amqp.* paths never
+            # existed, so discovery always probed guest@127.0.0.1.
+            host = config("queue.drivers.amqp.host", "127.0.0.1")
+            mgmt_port = config("queue.drivers.amqp.management_port", 15672)
+            user = config("queue.drivers.amqp.username", "guest")
+            password = config("queue.drivers.amqp.password", "guest")
+            vhost = config("queue.drivers.amqp.vhost", "/")
 
             import urllib.parse
 
@@ -1506,7 +1505,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
                     # Sleep if no jobs found
                     if not outcome:
-                        time.sleep(config.get("poll", 5))
+                        time.sleep(config.get("timeout", 5))
 
             finally:
                 connection_manager.close()
@@ -1560,7 +1559,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     if not outcome:
                         # Stagger sleeps a tiny bit so N threads don't wake
                         # up in lockstep and hammer the broker simultaneously.
-                        jittered = config.get("poll", 5) * (1.0 + (slot_idx % 4) * 0.1)
+                        jittered = config.get("timeout", 5) * (1.0 + (slot_idx % 4) * 0.1)
                         time.sleep(jittered)
             finally:
                 mgr.close()
@@ -1606,10 +1605,8 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             deadline = time.monotonic() + drain_budget
             for t in threads:
                 remaining = max(0.0, deadline - time.monotonic())
-                try:
+                with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
                     t.join(timeout=remaining)
-                except (ImportError, RuntimeError, AttributeError, OSError):
-                    pass
             still_alive = [t for t in threads if t.is_alive()]
             if still_alive:
                 Log.warning(
@@ -1620,10 +1617,8 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     drain_budget,
                 )
             for mgr in managers:
-                try:
+                with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
                     mgr.close()
-                except (ImportError, RuntimeError, AttributeError, OSError):
-                    pass
             self._shutdown_worker_resources()
 
     @staticmethod
@@ -1913,10 +1908,8 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
         finally:
             # Always close channel
-            try:
+            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
                 channel.close()
-            except (ImportError, RuntimeError, AttributeError, OSError):
-                pass
 
     def _handle_queue_error(
         self,
@@ -2051,7 +2044,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
             # Simple approach: Just clear all references without trying to close broken connections
             drivers = config("queue.drivers", {})
-            for driver_name in drivers.keys():
+            for driver_name in drivers:
                 try:
                     driver = Queue.driver(driver_name)
 
@@ -2080,7 +2073,5 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
     def _cleanup_watching(self):
         """Cleanup file watching resources."""
         if hasattr(self, "command_watcher") and self.command_watcher:
-            try:
+            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
                 self.command_watcher.shutdown()
-            except (ImportError, RuntimeError, AttributeError, OSError):
-                pass
