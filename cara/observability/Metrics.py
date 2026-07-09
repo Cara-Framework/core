@@ -546,9 +546,17 @@ def sample_db_pool_metrics(metrics_cls: type = MetricsBase) -> None:
 
 
 def init_build_info(metrics_cls: type = MetricsBase) -> None:
-    """Set the static build-info gauge once at import time."""
+    """(Re-)stamp the static build-info gauge.
+
+    Called at import time for early exposure, but import can run BEFORE the
+    app config is bootstrapped — service/role then resolve to their defaults
+    ("unknown"). ``start_http_server`` calls this again once config is
+    definitely loaded; ``clear()`` first so the stale default-labelled child
+    doesn't linger next to the corrected one.
+    """
     service = config("metrics.service", _NS)
     role = config("metrics.role", "unknown")
+    metrics_cls.build_info.clear()
     metrics_cls.build_info.labels(service=service, role=role).set(1)
 
 
@@ -601,6 +609,24 @@ def start_http_server(port: int | None = None, host: str = "0.0.0.0") -> int | N
         effective_port = int(port if port is not None else config("metrics.port", 9101))
         if effective_port <= 0:
             return None
-        _prom_start_http_server(effective_port, addr=host, registry=REGISTRY)
+        # A worker restart races its predecessor for the socket: the old
+        # process may hold the port for a few seconds after SIGTERM. Losing
+        # that race must not mean a silently metrics-less process until the
+        # NEXT restart — retry EADDRINUSE briefly before giving up.
+        import errno
+        import time as _time
+
+        for attempt in range(5):
+            try:
+                _prom_start_http_server(effective_port, addr=host, registry=REGISTRY)
+                break
+            except OSError as e:
+                if e.errno != errno.EADDRINUSE or attempt == 4:
+                    raise
+                _time.sleep(2)
+        # Config is guaranteed loaded here (the port above came from it) —
+        # re-stamp build_info so service/role reflect the real values instead
+        # of the import-time "unknown" defaults.
+        init_build_info()
         _http_server_started = True
         return effective_port

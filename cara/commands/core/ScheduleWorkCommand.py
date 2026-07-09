@@ -20,7 +20,7 @@ from cara.exceptions import (
     ConfigurationException,
     InvalidArgumentException,
 )
-from cara.facades import Queue, Schedule
+from cara.facades import Log, Queue, Schedule
 from cara.scheduling.contracts import ShouldSchedule
 
 
@@ -49,6 +49,22 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
         # Store parameters for restart
         self.store_restart_params(driver)
+
+        # Stand up /metrics on a side-thread HTTP server so Prometheus can
+        # scrape the SCHEDULER process too — its tick/dispatch counters live
+        # in this process and are invisible from the worker's exporter. The
+        # port is ``metrics.scheduler_port`` (NOT ``metrics.port``: worker and
+        # scheduler share one host, so they must not race for one socket).
+        # Opt out with a port of 0.
+        try:
+            from cara.observability import start_http_server as _start_metrics
+
+            _port = _start_metrics(port=int(config("metrics.scheduler_port", 0)))
+            if _port:
+                Log.info("📈 Metrics server on :%s/metrics", _port)
+        except Exception as e:
+            # Non-fatal: scheduler keeps running with no metrics exposure.
+            Log.warning("metrics server startup failed: %s", e)
 
         # Setup auto-reload if enabled (default: true for development)
         if self.option("reload") or config("app.debug", True):
