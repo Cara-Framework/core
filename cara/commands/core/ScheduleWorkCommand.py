@@ -363,10 +363,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
             def _finish_tick(status: str, _t=tracker, _id=db_job_id) -> None:
                 if _t is not None and _id is not None:
-                    try:
+                    # Tracking must never break the tick itself.
+                    with contextlib.suppress(Exception):
                         _t.update_job_status(_id, status)
-                    except Exception:  # noqa: BLE001
-                        pass
 
             try:
                 result = handle_method(**handle_kwargs)
