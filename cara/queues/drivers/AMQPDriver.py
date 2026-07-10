@@ -189,6 +189,14 @@ class AMQPDriver(HasColoredOutput, Queue):
             # as ``attempts``) so the consumer re-parents the job's span
             # → one product = one trace across workers. No-op when off.
             payload["_otel"] = _Trace.inject({})
+            # Same rail for tenancy: a job dispatched from tenant scope
+            # runs UNDER that tenant in the worker — the consumer arms
+            # ``cara.context.Tenancy`` (and with it TenantScope's
+            # fail-closed query filter) around the job call. ``None``
+            # (scheduler/CLI dispatch) means "no tenant scope".
+            from cara.context import Tenancy as _Tenancy
+
+            payload["_tenant"] = _Tenancy.id()
 
             try:
                 self._connect_and_publish(payload, job_opts)
@@ -731,6 +739,10 @@ class AMQPDriver(HasColoredOutput, Queue):
                     # Carry the dispatcher's trace context onto the job
                     # so BaseJob.handle re-parents its span (Obs-4).
                     instance._otel_carrier = payload.get("_otel")
+                    # Dispatcher's tenant scope — armed around the job
+                    # call in _run_job (and by run_through_middleware_async
+                    # on the queue:work path).
+                    instance._tenant_id = payload.get("_tenant")
 
                 # Propagate tracing context so logs show real IDs
                 # instead of [job_id=unknown].
@@ -762,15 +774,21 @@ class AMQPDriver(HasColoredOutput, Queue):
                 )
 
                 def _run_job():
-                    if hasattr(self.application, "call"):
-                        r = self.application.call(method_to_call, *args)
-                    else:
-                        r = method_to_call(*args) if args else method_to_call()
-                    # ``BaseJob.handle`` is ``async def``.
-                    # Container.call returns the bare coroutine —
-                    # ``_drive_to_completion`` runs it to completion
-                    # (matches QueueWorkCommand.process_message).
-                    AMQPDriver._drive_to_completion(r)
+                    # Arm the dispatcher's tenant scope for the job body
+                    # (set INSIDE the executor thread — a fresh thread
+                    # starts with an empty contextvar context).
+                    from cara.context import Tenancy as _Tenancy
+
+                    with _Tenancy.as_tenant(getattr(instance, "_tenant_id", None)):
+                        if hasattr(self.application, "call"):
+                            r = self.application.call(method_to_call, *args)
+                        else:
+                            r = method_to_call(*args) if args else method_to_call()
+                        # ``BaseJob.handle`` is ``async def``.
+                        # Container.call returns the bare coroutine —
+                        # ``_drive_to_completion`` runs it to completion
+                        # (matches QueueWorkCommand.process_message).
+                        AMQPDriver._drive_to_completion(r)
 
                 _executor = concurrent.futures.ThreadPoolExecutor(
                     max_workers=1

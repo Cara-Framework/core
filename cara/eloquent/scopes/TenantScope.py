@@ -115,49 +115,12 @@ class TenantScope(BaseScope):
             )
 
     def _get_current_tenant_id(self):
-        """Get current tenant_id from request context or thread-local storage."""
-        try:
-            # First try to get from thread-local storage (for CLI/job contexts)
-            thread_tenant_id = TenantScope.get_thread_tenant_id()
-            if thread_tenant_id is not None:
-                return thread_tenant_id
+        """The current tenant from :class:`cara.context.Tenancy` — the
+        single source HTTP middleware, the queue rail and CLI code all
+        write to. ContextVar-backed, so it survives the
+        ``run_in_thread`` hop and stays isolated per request/job
+        (thread-local storage leaked across requests on reused
+        executor-pool threads and was removed)."""
+        from cara.context import Tenancy
 
-            # Then try request context using Cara's context system
-            from cara.http.request.Context import current_request
-
-            try:
-                request = current_request.get()
-                return getattr(request, "tenant_id", None)
-            except (LookupError, RuntimeError):
-                return None
-            except Exception:
-                _logger.error(
-                    "Unexpected error resolving tenant_id from request context",
-                    exc_info=True,
-                )
-                return None
-
-        except Exception:
-            _logger.error(
-                "Unexpected error resolving current tenant_id",
-                exc_info=True,
-            )
-            return None
-
-    @classmethod
-    def set_tenant_id(cls, tenant_id):
-        """Set tenant_id for current thread (useful for CLI/job contexts)."""
-        import threading
-
-        if not hasattr(cls, "_tenant_storage"):
-            cls._tenant_storage = threading.local()
-        cls._tenant_storage.tenant_id = tenant_id
-
-    @classmethod
-    def get_thread_tenant_id(cls):
-        """Get tenant_id from thread-local storage."""
-        import threading
-
-        if not hasattr(cls, "_tenant_storage"):
-            cls._tenant_storage = threading.local()
-        return getattr(cls._tenant_storage, "tenant_id", None)
+        return Tenancy.id()

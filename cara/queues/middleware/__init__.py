@@ -55,18 +55,39 @@ def _build_chain(job, handler: Callable) -> Callable:
     return chain
 
 
+_TENANT_UNSET = object()
+
+
 async def run_through_middleware_async(job, handler: Callable) -> Any:
     """Run an async handler through the job's middleware pipeline.
 
     ``handler`` must be an async callable ``(job) -> coroutine``. Each
     middleware's ``handle`` is expected to be async as well; middleware may
     short-circuit by returning ``None`` without invoking ``next_fn``.
+
+    Tenancy: a job consumed off the queue carries the dispatcher's
+    tenant scope as ``_tenant_id`` (stamped by the worker from the
+    payload's ``_tenant``); the whole pipeline runs under
+    ``Tenancy.as_tenant`` so TenantScope filters exactly as it did at
+    dispatch time. An inline (sync-mode) dispatch never sets the attr —
+    the job simply inherits the caller's live context.
     """
-    chain = _build_chain(job, handler)
-    result = chain(job)
-    if asyncio.iscoroutine(result):
-        return await result
-    return result
+    tenant_marker = getattr(job, "_tenant_id", _TENANT_UNSET)
+    if tenant_marker is _TENANT_UNSET:
+        chain = _build_chain(job, handler)
+        result = chain(job)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
+
+    from cara.context import Tenancy
+
+    with Tenancy.as_tenant(tenant_marker):
+        chain = _build_chain(job, handler)
+        result = chain(job)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
 
 
 def run_through_middleware(job, handler: Callable) -> Any:

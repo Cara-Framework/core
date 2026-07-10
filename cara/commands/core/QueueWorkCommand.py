@@ -693,6 +693,9 @@ class JobProcessor:
                 # Carry the dispatcher's trace context onto the job so
                 # BaseJob.handle re-parents its span (Obs-4 propagation).
                 instance._otel_carrier = msg.get("_otel")
+                # Dispatcher's tenant scope — armed around the job body
+                # by run_through_middleware_async.
+                instance._tenant_id = msg.get("_tenant")
             callback = msg.get("callback", "handle")
             init_args = msg.get("args", ())
             db_job_id = msg.get("db_job_id")

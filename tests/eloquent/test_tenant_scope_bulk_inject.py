@@ -25,9 +25,11 @@ class _FakeBuilder:
 
 @pytest.fixture
 def tenant_context():
-    TenantScope.set_tenant_id(42)
+    from cara.context import Tenancy
+
+    token = Tenancy.set(42)
     yield 42
-    TenantScope.set_tenant_id(None)
+    Tenancy.reset(token)
 
 
 class TestBulkInjection:
@@ -58,7 +60,6 @@ class TestBulkInjection:
         assert [row["tenant_id"] for row in builder._creates] == [7, 42]
 
     def test_no_tenant_context_leaves_rows_untouched(self):
-        TenantScope.set_tenant_id(None)
         scope = TenantScope()
         builder = _FakeBuilder([{"name": "a"}])
 
