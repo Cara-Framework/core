@@ -46,6 +46,11 @@ class Gate(GateContract):
         self._before_callbacks: list[Callable] = []
         self._after_callbacks: list[Callable] = []
         self._current_user: Any = None
+        # Distinguishes "for_user(None) — treat as guest" from "no override
+        # — ask the resolver". Without it, an explicit guest check fell
+        # through to the request resolver, which raises outside a request
+        # (log spam) or resolves a DIFFERENT user than the caller intended.
+        self._user_overridden: bool = False
 
     # -- configuration ----------------------------------------------------- #
 
@@ -157,6 +162,9 @@ class Gate(GateContract):
         scoped._before_callbacks = self._before_callbacks
         scoped._after_callbacks = self._after_callbacks
         scoped._current_user = user
+        # An explicit for_user(None) means "check as guest" — it must NOT
+        # fall back to the request resolver.
+        scoped._user_overridden = True
         return scoped
 
     # -- resolution -------------------------------------------------------- #
@@ -308,7 +316,7 @@ class Gate(GateContract):
         return cls.__name__.lower() if cls is not None else None
 
     def _resolve_user(self) -> Any | None:
-        if self._current_user is not None:
+        if self._user_overridden or self._current_user is not None:
             return self._current_user
         if self._user_resolver:
             try:
