@@ -86,7 +86,8 @@ def test_start_server_terminates_process_when_monitor_raises():
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
         _patch_killpg_unavailable(),
     ):
-        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+        with patch.object(cmd, "_port_has_listener", return_value=False):
+            cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     (
         fake_process.terminate.assert_called(),
@@ -119,7 +120,8 @@ def test_start_server_kills_process_when_terminate_times_out():
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
         _patch_killpg_unavailable(),
     ):
-        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+        with patch.object(cmd, "_port_has_listener", return_value=False):
+            cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     fake_process.terminate.assert_called()
     (
@@ -147,7 +149,8 @@ def test_start_server_closes_stdout_pipe_when_monitor_raises():
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
         _patch_killpg_unavailable(),
     ):
-        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+        with patch.object(cmd, "_port_has_listener", return_value=False):
+            cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     (
         fake_process.stdout.close.assert_called(),
@@ -171,7 +174,25 @@ def test_start_server_does_not_terminate_already_exited_process():
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
         _patch_killpg_unavailable(),
     ):
-        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+        with patch.object(cmd, "_port_has_listener", return_value=False):
+            cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     fake_process.terminate.assert_not_called()
     fake_process.kill.assert_not_called()
+
+
+
+def test_start_server_refuses_port_with_live_listener():
+    """A live listener on the target port must abort BEFORE Popen — a
+    second server binding alongside an orphan (SO_REUSEPORT) splits
+    traffic between two code versions."""
+    cmd = _make_serve_command()
+    with (
+        patch.object(cmd, "_port_has_listener", return_value=True),
+        patch.object(cmd, "error") as error,
+        patch("subprocess.Popen") as popen,
+    ):
+        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+
+    error.assert_called()
+    popen.assert_not_called()

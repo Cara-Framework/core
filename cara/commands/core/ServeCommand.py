@@ -213,8 +213,37 @@ class ServeCommand(CommandBase):
                 )
             self.console.print("[#e5c07b]└─[/#e5c07b]")
 
+    @staticmethod
+    def _port_has_listener(host: str, port) -> bool:
+        """True when something is already ACCEPTING on the target port.
+
+        A cheap TCP connect probe — bind-time checks lie here: with
+        SO_REUSEPORT (and macOS's permissive SO_REUSEADDR) a second
+        server can bind alongside a crashed run's orphan and the two
+        code versions then split traffic request-by-request. Probing
+        for a live listener up front turns that silent roulette into a
+        loud refusal.
+        """
+        import socket
+
+        probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.settimeout(0.25)
+                return probe.connect_ex((probe_host, int(port))) == 0
+        except OSError:
+            return False
+
     def _start_server(self, config: dict) -> None:
         """Start the development server."""
+        if self._port_has_listener(config["host"], config["port"]):
+            self.error(
+                f"× Port {config['port']} already has a live listener — refusing to "
+                "start a second server on it (two versions would split traffic). "
+                f"Free it first: lsof -ti :{config['port']} | xargs kill -9"
+            )
+            return
+
         self.console.print()
         self.console.print("[bold #e5c07b]┌─ Starting Server[/bold #e5c07b]")
         self.console.print("[#e5c07b]│[/#e5c07b] [dim]Initializing...[/dim]")
