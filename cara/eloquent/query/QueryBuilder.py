@@ -3513,6 +3513,10 @@ class QueryBuilder(ObservesEvents):
             "<>",
             "like",
             "not like",
+            # PostgreSQL case-insensitive LIKE — passes through to the
+            # grammar verbatim, same as "like".
+            "ilike",
+            "not ilike",
             "regexp",
             "not regexp",
         ]
