@@ -198,11 +198,21 @@ class Validation(ValidationContract):
             # tokenized chain — NOT a substring of rule_string — so a value
             # inside an ``in:nullable,active`` parameter can't accidentally
             # make the field skip ``required``.
+            #
+            # Store ``None`` — NOT the raw blank — so "blank means null" is
+            # true for CONSUMERS too. Pre-fix a whitespace-only query param
+            # (``?offset=%20``; parse_qs keeps blank-only values) skipped the
+            # ``integer``/``numeric`` rules here yet landed in ``validated()``
+            # as ``" "``, so every downstream ``int(v.get("offset") or 0)``
+            # crashed with ValueError → an unauthenticated 500 on endpoints
+            # whose contract is "validation errors are 422". With ``None``
+            # stored, both the ``or default`` and the ``is not None`` guard
+            # idioms behave. (Ported from the cheapa cara copy, 2026-07-10.)
             if "nullable" in _chain and (
                 value is None or (isinstance(value, str) and value.strip() == "")
             ):
                 if not is_wildcard:
-                    instance._validated[concrete_field] = value
+                    instance._validated[concrete_field] = None
                 continue
 
             # Laravel ``bail`` modifier: stop running further rules for the

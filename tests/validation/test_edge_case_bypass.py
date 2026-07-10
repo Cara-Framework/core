@@ -189,3 +189,47 @@ def test_in_rule_handles_empty_in_param_safely():
     matches) without raising — defensive against misconfigured rules."""
     assert InRule().validate("x", "a", {}) is False
     assert InRule().validate("x", "a", {"in": ""}) is False
+
+
+# ── nullable: blank stores None, never the raw blank ────────────────
+
+
+def test_nullable_blank_string_validates_to_none():
+    """Previously: a whitespace-only value on a ``nullable|integer`` field
+    skipped the integer rule (correct) but landed in ``validated()`` as the
+    RAW ``" "`` (incorrect). ``parse_qs`` keeps blank-only query params, so
+    ``?offset=%20`` reached every downstream ``int(v.get("offset") or 0)``
+    as ``int(" ")`` → ValueError → an unauthenticated 500 on endpoints whose
+    contract is "validation errors are 422". Blank now means null for
+    consumers too. (Ported from the cheapa cara copy.)"""
+    from cara.validation import Validation
+
+    v = Validation.make(
+        {"offset": " ", "min_pct": "\t", "q": ""},
+        {
+            "offset": "nullable|integer|min:0",
+            "min_pct": "nullable|numeric|min:0",
+            "q": "nullable|string|max:200",
+        },
+    )
+    assert v.passes()
+    validated = v.validated()
+    assert validated["offset"] is None
+    assert validated["min_pct"] is None
+    assert validated["q"] is None
+
+
+def test_nullable_absent_key_still_materialises_none():
+    from cara.validation import Validation
+
+    v = Validation.make({}, {"limit": "nullable|integer|min:1"})
+    assert v.passes()
+    assert v.validated()["limit"] is None
+
+
+def test_nullable_real_value_still_flows_through():
+    from cara.validation import Validation
+
+    v = Validation.make({"offset": "48"}, {"offset": "nullable|integer|min:0"})
+    assert v.passes()
+    assert v.validated()["offset"] == "48"
