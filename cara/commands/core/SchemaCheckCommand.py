@@ -281,7 +281,8 @@ class SchemaCheckCommand(CommandBase):
         target_schema = schema_name or live_schema.get_schema() or "public"
 
         sql = (
-            "SELECT table_name, column_name, data_type, is_nullable "
+            "SELECT table_name, column_name, data_type, is_nullable, "
+            "character_maximum_length "
             "FROM information_schema.columns "
             f"WHERE table_schema = '{self._sql_literal(target_schema)}' "
             "ORDER BY table_name, ordinal_position"
@@ -295,6 +296,8 @@ class SchemaCheckCommand(CommandBase):
             tables.setdefault(table_name, {})[row["column_name"]] = {
                 "data_type": (row["data_type"] or "").lower(),
                 "is_nullable": (row["is_nullable"] or "").upper() == "YES",
+                # None for unbounded types (text, jsonb, …).
+                "max_length": row.get("character_maximum_length"),
             }
         return tables
 
@@ -376,6 +379,10 @@ class SchemaCheckCommand(CommandBase):
                 # Primary keys (the *increments family) and uniquely-keyed PKs
                 # are NOT NULL; everything else honours the declared nullable.
                 "nullable": bool(params.get("nullable", False)),
+                # Declared capacity — None for unbounded types (text/jsonb) or
+                # when the model omitted a length. Feeds the NARROWER-THAN-
+                # DECLARED check in ``_diff_column``.
+                "length": params.get("length"),
             }
 
         if model.get("uses_soft_deletes") and "deleted_at" not in columns:
@@ -505,6 +512,38 @@ class SchemaCheckCommand(CommandBase):
                 f"column '{name}' type differs: model={declared['type']} "
                 f"(~{model_cat}), db={live['data_type']} (~{db_cat})"
             )
+
+        # NARROWER-THAN-DECLARED capacity — the one length comparison that is
+        # pure signal. The coarse categories above deliberately treat
+        # string/varchar/text as one bucket, which let an undersized live
+        # varchar hide behind a widened model FOREVER: pipeline_product_trace
+        # kept varchar(100) job_ids while real ids ran 100+ chars, Postgres
+        # rejected every long INSERT, and the fail-open writer silently
+        # dropped ~3.8k trace rows before anything noticed. Direction matters:
+        #   * live BOUNDED  + model UNBOUNDED (text/…)      -> drift (data loss)
+        #   * live max_len  <  declared length              -> drift (data loss)
+        #   * live WIDER than declared                      -> fine (lenient)
+        # so this can never cry wolf on the aliases the categories blur.
+        live_max = live.get("max_length")
+        if live_max is not None and model_cat == "text" and db_cat == "text":
+            declared_len = declared.get("length")
+            if declared_len is None and declared["type"] in (
+                "text",
+                "tiny_text",
+                "long_text",
+            ):
+                issues.append(
+                    f"column '{name}' is NARROWER than declared: model="
+                    f"{declared['type']} (unbounded), db={live['data_type']}"
+                    f"({live_max}) — oversized writes are being rejected"
+                )
+            elif declared_len is not None and int(live_max) < int(declared_len):
+                issues.append(
+                    f"column '{name}' is NARROWER than declared: model="
+                    f"{declared['type']}({declared_len}), db="
+                    f"{live['data_type']}({live_max}) — oversized writes are "
+                    "being rejected"
+                )
 
         return issues
 

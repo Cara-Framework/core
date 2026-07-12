@@ -326,7 +326,11 @@ class PostgresPlatform(Platform):
                         constraint="PRIMARY KEY" if column.primary else "",
                         length=(
                             "(" + str(column.length) + ")"
-                            if column.column_type not in self.types_without_lengths
+                            # ``column.length`` is None for TEXT/JSONB-style
+                            # types — the old guard only checked the type
+                            # list and emitted ``TYPE TEXT(None)``.
+                            if column.length
+                            and column.column_type not in self.types_without_lengths
                             else ""
                         ),
                     )

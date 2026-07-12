@@ -156,3 +156,75 @@ def test_column_diff_still_detects_nullability_mismatch():
     live = {"name": {"data_type": "character varying", "is_nullable": True}}
     issues = cmd._diff_table(declared, live)
     assert any("nullability differs" in i for i in issues)
+
+
+# ── narrower-than-declared capacity (the silent-truncate class) ──────────────
+#
+# The coarse type categories deliberately blur string/varchar/text, which let
+# an undersized live varchar hide behind a widened model FOREVER: cheapa's
+# pipeline_product_trace kept varchar(100) job_ids while real ids ran 100+
+# chars — Postgres rejected every long INSERT and the fail-open writer dropped
+# ~3.8k trace rows before anything noticed. The check is one-directional
+# (live NARROWER than declared = drift; live wider = fine) so it cannot cry
+# wolf on the aliases the categories blur.
+
+
+def test_unbounded_model_over_bounded_live_column_is_drift():
+    cmd = _cmd()
+    declared = {"job_id": {"type": "text", "nullable": True, "length": None}}
+    live = {
+        "job_id": {
+            "data_type": "character varying",
+            "is_nullable": True,
+            "max_length": 100,
+        }
+    }
+    issues = cmd._diff_table(declared, live)
+    assert any("NARROWER than declared" in i for i in issues)
+
+
+def test_live_shorter_than_declared_length_is_drift():
+    cmd = _cmd()
+    declared = {"title": {"type": "string", "nullable": True, "length": 500}}
+    live = {
+        "title": {
+            "data_type": "character varying",
+            "is_nullable": True,
+            "max_length": 255,
+        }
+    }
+    issues = cmd._diff_table(declared, live)
+    assert any("NARROWER than declared" in i for i in issues)
+
+
+def test_live_wider_than_declared_is_not_drift():
+    cmd = _cmd()
+    declared = {"title": {"type": "string", "nullable": True, "length": 255}}
+    live = {
+        "title": {
+            "data_type": "character varying",
+            "is_nullable": True,
+            "max_length": 500,
+        }
+    }
+    assert cmd._diff_table(declared, live) == []
+
+
+def test_matching_bounds_are_not_drift():
+    cmd = _cmd()
+    declared = {"title": {"type": "string", "nullable": True, "length": 255}}
+    live = {
+        "title": {
+            "data_type": "character varying",
+            "is_nullable": True,
+            "max_length": 255,
+        }
+    }
+    assert cmd._diff_table(declared, live) == []
+
+
+def test_unbounded_both_sides_is_not_drift():
+    cmd = _cmd()
+    declared = {"body": {"type": "text", "nullable": True, "length": None}}
+    live = {"body": {"data_type": "text", "is_nullable": True, "max_length": None}}
+    assert cmd._diff_table(declared, live) == []

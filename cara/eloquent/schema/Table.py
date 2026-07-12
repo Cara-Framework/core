@@ -27,9 +27,31 @@ class Table:
         # auto-generated update migration's rollback) raised
         # ``'Table' object has no attribute 'drop_column'``.
         self.dropped_columns = []
+        # Columns to MODIFY on an ALTER (``…().change()`` in a migration).
+        # The platform compilers have emitted ``ALTER COLUMN … TYPE`` from
+        # ``changed_columns`` all along (Postgres even hasattr-guards it) —
+        # Table just never declared the slot or the ``change()`` method, so
+        # every auto-generated update migration crashed with ``'Table'
+        # object has no attribute 'change'`` and the model-driven ALTER
+        # flow was decorative. Same latent gap ``drop_column`` had.
+        self.changed_columns = {}
         self.foreign_keys = {}
         self.primary_key = None
         self.comment = None
+
+    def change(self) -> Self:
+        """Re-classify the most recently added column as a MODIFICATION.
+
+        The fluent migration idiom is ``table.text("col").nullable().change()``
+        — every chain method returns the blueprint, so by the time
+        ``change()`` runs the column already landed in ``added_columns``.
+        Move that last column into ``changed_columns`` so the ALTER compiler
+        emits ``ALTER COLUMN … TYPE`` instead of ``ADD COLUMN``.
+        """
+        if self.added_columns:
+            name = next(reversed(self.added_columns))
+            self.changed_columns[name] = self.added_columns.pop(name)
+        return self
 
     def drop_column(self, *columns) -> Self:
         """Queue one or more columns for ``ALTER TABLE … DROP COLUMN``."""
