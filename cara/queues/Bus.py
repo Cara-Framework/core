@@ -159,7 +159,7 @@ class Bus:
                 )
                 _M.queue_dispatches_total.labels(
                     queue=str(_queue_lbl),
-                    job=job.__class__.__name__,
+                    job_class=job.__class__.__name__,
                 ).inc()
             except Exception:
                 pass

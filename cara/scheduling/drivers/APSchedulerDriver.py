@@ -13,6 +13,7 @@ scheduler to sit idle for hours.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
 import time as _time
@@ -41,12 +42,22 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
         try:
             _M.scheduled_tasks_total.labels(task=identifier, outcome=outcome).inc()
             _M.scheduled_task_duration_seconds.labels(task=identifier).observe(duration)
+            _M.scheduled_task_last_run_timestamp_seconds.labels(task=identifier).set(
+                _time.time()
+            )
         except (AttributeError, TypeError):
             pass
+
+    def _mark_tick() -> None:
+        if _M is None:
+            return
+        with contextlib.suppress(AttributeError, TypeError):
+            _M.scheduler_last_tick_timestamp_seconds.set(_time.time())
 
     if inspect.iscoroutinefunction(callback):
 
         async def _async_wrapped(*a, **kw):
+            _mark_tick()
             start = _time.time()
             try:
                 result = await callback(*a, **kw)
@@ -60,6 +71,7 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
         return _async_wrapped
 
     def _sync_wrapped(*a, **kw):
+        _mark_tick()
         start = _time.time()
         try:
             result = callback(*a, **kw)

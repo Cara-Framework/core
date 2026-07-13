@@ -589,17 +589,17 @@ class JobProcessor:
             try:
                 _M.queue_jobs_consumed_total.labels(
                     queue=_mx_queue,
-                    job=_mx_job,
+                    job_class=_mx_job,
                     outcome=outcome,
                 ).inc()
                 _M.queue_job_duration_seconds.labels(
                     queue=_mx_queue,
-                    job=_mx_job,
+                    job_class=_mx_job,
                 ).observe(time.time() - _mx_start)
                 if _mx_inflight_entered:
                     _M.queue_jobs_in_flight.labels(
                         queue=_mx_queue,
-                        job=_mx_job,
+                        job_class=_mx_job,
                     ).dec()
             except (ImportError, RuntimeError, AttributeError, OSError):
                 pass
@@ -752,7 +752,7 @@ class JobProcessor:
                 try:
                     _M.queue_jobs_in_flight.labels(
                         queue=_mx_queue,
-                        job=_mx_job,
+                        job_class=_mx_job,
                     ).inc()
                     _mx_inflight_entered = True
                 except (ImportError, RuntimeError, AttributeError, OSError):
@@ -761,7 +761,7 @@ class JobProcessor:
                     with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                         _M.queue_wait_seconds.labels(
                             queue=_mx_queue,
-                            job=_mx_job,
+                            job_class=_mx_job,
                         ).observe(wait_secs)
 
             # Set up job tracking
@@ -1074,7 +1074,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         try:
             from cara.observability import start_http_server as _start_metrics
 
-            _port = _start_metrics()
+            _port = _start_metrics(role="worker")
             if _port:
                 Log.info("📈 Metrics server on :%s/metrics", _port)
         except Exception as e:

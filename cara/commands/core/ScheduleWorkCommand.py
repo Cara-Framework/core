@@ -60,7 +60,10 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         try:
             from cara.observability import start_http_server as _start_metrics
 
-            _port = _start_metrics(port=int(config("metrics.scheduler_port", 0)))
+            _port = _start_metrics(
+                port=int(config("metrics.scheduler_port", 0)),
+                role="scheduler",
+            )
             if _port:
                 Log.info("📈 Metrics server on :%s/metrics", _port)
         except Exception as e:

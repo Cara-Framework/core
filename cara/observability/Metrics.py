@@ -18,7 +18,8 @@ Cardinality budget (keep low to protect Prometheus scrape cost):
 - ``route``: controller@action form (bounded by codebase — dozens)
 - ``status_class``: "2xx"/"3xx"/"4xx"/"5xx"/"error" — always 5 values
 - ``queue``: literal queue name — dozens project-wide
-- ``job``: class name — dozens
+- ``job_class``: class name — dozens (``job`` is reserved for the Prometheus
+  scrape-target label and would be overwritten during ingestion)
 - ``task``: task-profile name — single digits
 - ``listener``: listener class name — dozens
 - ``command``: CLI command name — dozens
@@ -306,39 +307,39 @@ class MetricsBase:
     queue_dispatches_total = Counter(
         metric_name("queue_dispatches_total"),
         "Jobs dispatched onto the queue (counted at Bus.dispatch call-site).",
-        labelnames=("queue", "job"),
+        labelnames=("queue", "job_class"),
         registry=REGISTRY,
     )
     queue_jobs_consumed_total = Counter(
         metric_name("queue_jobs_consumed_total"),
         "Jobs consumed by workers, tagged by outcome.",
-        labelnames=("queue", "job", "outcome"),  # success|failed|timeout|orphan
+        labelnames=("queue", "job_class", "outcome"),
         registry=REGISTRY,
     )
     queue_job_duration_seconds = Histogram(
         metric_name("queue_job_duration_seconds"),
         "Wall-clock time a worker spent executing a job.",
-        labelnames=("queue", "job"),
+        labelnames=("queue", "job_class"),
         buckets=histogram_buckets_long(),
         registry=REGISTRY,
     )
     queue_jobs_in_flight = Gauge(
         metric_name("queue_jobs_in_flight"),
         "Jobs currently being executed by this worker process.",
-        labelnames=("queue", "job"),
+        labelnames=("queue", "job_class"),
         registry=REGISTRY,
     )
     queue_wait_seconds = Histogram(
         metric_name("queue_wait_seconds"),
         "Time a message sat in the queue before being picked up.",
-        labelnames=("queue", "job"),
+        labelnames=("queue", "job_class"),
         buckets=histogram_buckets_long(),
         registry=REGISTRY,
     )
     queue_jobs_dead_lettered_total = Counter(
         metric_name("queue_jobs_dead_lettered_total"),
         "Jobs sent to the dead-letter queue after exhausting max_attempts.",
-        labelnames=("job",),
+        labelnames=("job_class",),
         registry=REGISTRY,
     )
     idempotency_total = Counter(
@@ -390,6 +391,17 @@ class MetricsBase:
         "Scheduled task wall-clock duration.",
         labelnames=("task",),
         buckets=histogram_buckets_long(),
+        registry=REGISTRY,
+    )
+    scheduler_last_tick_timestamp_seconds = Gauge(
+        metric_name("scheduler_last_tick_timestamp_seconds"),
+        "Unix timestamp when the scheduler most recently started a task tick.",
+        registry=REGISTRY,
+    )
+    scheduled_task_last_run_timestamp_seconds = Gauge(
+        metric_name("scheduled_task_last_run_timestamp_seconds"),
+        "Unix timestamp when a scheduled task most recently finished.",
+        labelnames=("task",),
         registry=REGISTRY,
     )
 
@@ -545,7 +557,16 @@ def sample_db_pool_metrics(metrics_cls: type = MetricsBase) -> None:
         return
 
 
-def init_build_info(metrics_cls: type = MetricsBase) -> None:
+_build_info_lock = threading.Lock()
+_build_info_identity: tuple[int, str, str] | None = None
+
+
+def init_build_info(
+    metrics_cls: type = MetricsBase,
+    *,
+    service: str | None = None,
+    role: str | None = None,
+) -> None:
     """(Re-)stamp the static build-info gauge.
 
     Called at import time for early exposure, but import can run BEFORE the
@@ -554,10 +575,21 @@ def init_build_info(metrics_cls: type = MetricsBase) -> None:
     definitely loaded; ``clear()`` first so the stale default-labelled child
     doesn't linger next to the corrected one.
     """
-    service = config("metrics.service", _NS)
-    role = config("metrics.role", "unknown")
-    metrics_cls.build_info.clear()
-    metrics_cls.build_info.labels(service=service, role=role).set(1)
+    global _build_info_identity
+
+    resolved_service = service or config("metrics.service", _NS)
+    resolved_role = role or config("metrics.role", "unknown")
+    identity = (
+        id(metrics_cls.build_info),
+        str(resolved_service),
+        str(resolved_role),
+    )
+    with _build_info_lock:
+        if _build_info_identity == identity:
+            return
+        metrics_cls.build_info.clear()
+        metrics_cls.build_info.labels(service=identity[1], role=identity[2]).set(1)
+        _build_info_identity = identity
 
 
 def status_class(code: int | None) -> str:
@@ -585,10 +617,11 @@ def bool_label(flag: object) -> str:
 def render() -> tuple[bytes, str]:
     """Produce the Prometheus text payload + content-type.
 
-    Refreshes pull-style gauges (the DB connection-pool saturation
-    sample) immediately before serialising so the scrape reflects the
-    live pool rather than the last query's snapshot.
+    Refreshes build identity and pull-style gauges immediately before
+    serialising so API processes whose metrics module was imported before
+    config boot do not remain permanently labelled ``unknown``.
     """
+    init_build_info()
     sample_db_pool_metrics()
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
 
@@ -597,7 +630,13 @@ _http_server_started = False
 _http_server_lock = threading.Lock()
 
 
-def start_http_server(port: int | None = None, host: str = "0.0.0.0") -> int | None:
+def start_http_server(
+    port: int | None = None,
+    host: str = "0.0.0.0",
+    *,
+    service: str | None = None,
+    role: str | None = None,
+) -> int | None:
     """Stand up a ``/metrics`` HTTP server on ``port`` (default: $METRICS_PORT or 9101).
 
     Safe to call multiple times — subsequent calls after the first are no-ops.
@@ -627,6 +666,6 @@ def start_http_server(port: int | None = None, host: str = "0.0.0.0") -> int | N
         # Config is guaranteed loaded here (the port above came from it) —
         # re-stamp build_info so service/role reflect the real values instead
         # of the import-time "unknown" defaults.
-        init_build_info()
+        init_build_info(service=service, role=role)
         _http_server_started = True
         return effective_port

@@ -611,7 +611,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     from cara.observability.Metrics import MetricsBase as Metrics
 
                     Metrics.queue_jobs_dead_lettered_total.labels(
-                        job=job.__class__.__name__,
+                        job_class=job.__class__.__name__,
                     ).inc()
                 except Exception:
                     pass
