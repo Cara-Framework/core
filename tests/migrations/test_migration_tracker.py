@@ -161,3 +161,13 @@ def test_create_table_sql_is_sqlite_compatible_when_driver_is_sqlite():
     assert "AUTOINCREMENT" in create_stmt.upper(), (
         "SQLite driver should use AUTOINCREMENT, not SERIAL"
     )
+
+
+def test_tracker_does_not_close_executor_owned_transaction_connection():
+    manager, connection, _queries = _fake_db_manager()
+    connection.transaction_level = 1
+
+    MigrationTracker(manager).record_migration("0112_demo", 6)
+
+    connection.query.assert_called_once()
+    connection.close_connection.assert_not_called()

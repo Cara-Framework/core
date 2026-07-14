@@ -17,8 +17,18 @@ _logger = logging.getLogger("cara.migrations")
 
 
 def _release(connection) -> None:
-    """Return a borrowed connection to the pool (best-effort)."""
+    """Return an owned connection, never the executor's active transaction.
+
+    ``DatabaseManager.create_connection_instance`` is transaction-aware and
+    returns the context-pinned handle while a transactional migration is
+    running. Closing that borrowed handle here removes the executor's live
+    session before its outer commit (``NoneType.commit``). A positive
+    ``transaction_level`` means the context manager still owns the handle.
+    """
     if connection is None:
+        return
+    transaction_level = getattr(connection, "transaction_level", 0)
+    if isinstance(transaction_level, (int, float)) and transaction_level > 0:
         return
     try:
         close = getattr(connection, "close_connection", None)
