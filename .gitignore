@@ -26,3 +26,6 @@ Thumbs.db
 logs/ 
 # usta internal files
 .usta/
+
+# Persistent advisory-lock files; the inode must survive between processes.
+database/migrations/.*.lock
