@@ -351,3 +351,27 @@ def test_sql_style_is_rejected_before_discovery():
 
     assert cmd.handle() == 2
     cmd.discoverer.discover_models.assert_not_called()
+
+
+def test_finalize_counter_accounts_for_preserved_high_sequence(migrations_dir):
+    cmd = _make_command()
+    cmd.generator.migrations_dir = migrations_dir
+    cmd.generator.counter_file = migrations_dir / ".migration_counter"
+    _write(
+        migrations_dir,
+        "9984_01_01_000000_framework_data_migration.py",
+        "class FrameworkDataMigration:\n    pass\n",
+    )
+
+    cmd.generator.reset_counter()
+    first = cmd.generator.create_migration_file(
+        "create_widget_table", "class WidgetMigration:\n    pass\n"
+    )
+    cmd.generator.finalize_counter()
+
+    assert first.name.startswith("0001_")
+    assert cmd.generator.counter_file.read_text() == "9984"
+    following = cmd.generator.create_migration_file(
+        "add_name_to_widget_table", "class AddName:\n    pass\n"
+    )
+    assert following.name.startswith("9985_")

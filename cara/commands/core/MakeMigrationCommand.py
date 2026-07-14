@@ -46,6 +46,11 @@ class MakeMigrationCommand(CommandBase):
 
     def handle(self):
         """Generate migrations from model Field.* definitions."""
+        with self.generator.generation_lock():
+            return self._handle_locked()
+
+    def _handle_locked(self):
+        """Generate while holding the cross-process generation lock."""
         self.info("Auto-generating migrations from models...")
 
         if self.option("style", "blueprint") != "blueprint":
@@ -222,6 +227,7 @@ class MakeMigrationCommand(CommandBase):
                         dependency_order=dependency_order,
                     )
                 )
+            self.generator.finalize_counter()
         except BaseException:
             for path in generated:
                 try:
@@ -237,6 +243,7 @@ class MakeMigrationCommand(CommandBase):
                 from cara.eloquent.migrations.MigrationGenerator import _atomic_write
 
                 _atomic_write(counter_file, previous_counter.decode("utf-8"))
+            self.generator.cancel_fresh_counter_batch()
             raise
         finally:
             shutil.rmtree(backup_dir, ignore_errors=True)

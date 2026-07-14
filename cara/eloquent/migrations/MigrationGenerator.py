@@ -18,6 +18,7 @@ from cara.support import paths
 from .ModelMigrationComparator import FieldDiff, summarize_change_name
 
 _COUNTER_THREAD_LOCK = threading.Lock()
+_GENERATION_THREAD_LOCK = threading.Lock()
 
 
 @contextmanager
@@ -93,6 +94,22 @@ class MigrationGenerator:
     def __init__(self):
         self.migrations_dir = Path(paths("migrations"))
         self.counter_file = self.migrations_dir / ".migration_counter"
+        self._fresh_counter_batch = False
+
+    @contextmanager
+    def generation_lock(self):
+        """Serialize complete make:migration runs, including overwrite."""
+        self.migrations_dir.mkdir(parents=True, exist_ok=True)
+        with _GENERATION_THREAD_LOCK:
+            lock_path = self.migrations_dir / ".migration_generation.lock"
+            with lock_path.open("a+") as lock_handle:
+                try:
+                    import fcntl
+
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                except ImportError:  # pragma: no cover - Windows thread safety
+                    pass
+                yield
 
     def _get_counter(self):
         """Get current counter value from file."""
@@ -107,6 +124,8 @@ class MigrationGenerator:
         """Atomically reserve the next process-safe migration sequence."""
         with _counter_lock(self.migrations_dir):
             current = self._get_counter()
+            if not self._fresh_counter_batch:
+                current = max(current, self._highest_disk_sequence())
             new_counter = current + 1
             _atomic_write(self.counter_file, str(new_counter))
             return new_counter
@@ -114,7 +133,27 @@ class MigrationGenerator:
     def reset_counter(self):
         """Reset the migration counter for a fresh batch."""
         with _counter_lock(self.migrations_dir):
+            self._fresh_counter_batch = True
             _atomic_write(self.counter_file, "0")
+
+    def finalize_counter(self):
+        """Leave the counter beyond generated and preserved migration files."""
+        with _counter_lock(self.migrations_dir):
+            final_value = max(self._get_counter(), self._highest_disk_sequence())
+            _atomic_write(self.counter_file, str(final_value))
+            self._fresh_counter_batch = False
+
+    def cancel_fresh_counter_batch(self):
+        """Restore normal disk-floor behavior after a failed overwrite."""
+        self._fresh_counter_batch = False
+
+    def _highest_disk_sequence(self) -> int:
+        highest = 0
+        for path in self.migrations_dir.glob("*.py"):
+            prefix = path.name.split("_", 1)[0]
+            if prefix.isdigit():
+                highest = max(highest, int(prefix))
+        return highest
 
     def generate_create_migration(
         self, model_info: dict, style: str = "blueprint"
