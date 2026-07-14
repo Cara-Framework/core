@@ -181,7 +181,7 @@ class MigrationExecutor:
         return status
 
     def _validate_applied_checksums(self, migration_files) -> None:
-        """Refuse altered/deleted applied migrations; adopt legacy NULL hashes once."""
+        """Refuse altered, deleted, or unverifiable applied migrations."""
         records = self.tracker.get_ran_migration_records()
         # Lightweight test doubles and third-party trackers written before the
         # checksum API may return a mock/non-sequence. Real Cara trackers
@@ -208,8 +208,11 @@ class MigrationExecutor:
             actual = self.file_manager.checksum(file_path)
             expected = record.get("checksum")
             if not expected:
-                self.tracker.set_migration_checksum(name, actual)
-                continue
+                raise ORMException(
+                    f"Applied migration '{name}' has no trusted checksum. Run "
+                    "schema:check, then explicitly adopt a squashed history with "
+                    "migrate:baseline --force."
+                )
             if not hmac.compare_digest(str(expected), actual):
                 raise ORMException(
                     f"Applied migration '{name}' was modified after execution. "

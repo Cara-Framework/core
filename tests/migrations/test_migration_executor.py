@@ -369,14 +369,13 @@ def test_applied_migration_checksum_mismatch_aborts_before_up():
     assert "up" not in calls
 
 
-def test_legacy_null_checksum_is_backfilled_once():
+def test_null_checksum_requires_explicit_verified_baseline():
     executor, _, _, tracker = _setup(transactional=True)
     tracker.get_ran_migration_records.return_value = [
         {"migration": "0001_a", "checksum": None}
     ]
     executor.file_manager.checksum.return_value = "c" * 64
-    tracker.get_ran_migrations.return_value = ["0001_a"]
+    with pytest.raises(ORMException, match="migrate:baseline --force"):
+        executor.run_pending_migrations()
 
-    executor.run_pending_migrations()
-
-    tracker.set_migration_checksum.assert_called_once_with("0001_a", "c" * 64)
+    tracker.set_migration_checksum.assert_not_called()
