@@ -314,6 +314,20 @@ class ModelMigrationComparator:
                 default=params.get("default"),
                 has_default="default" in params,
             )
+
+        # Standalone one-column declarations live outside field params:
+        # ``field.index("email")`` / ``field.unique(["sid"])`` become
+        # ``table.index(["email"])`` / ``table.unique(["sid"])`` in the
+        # generated migration. Project them back onto the column snapshot so
+        # overwrite followed by dry-run is genuinely idempotent.
+        for declaration in model_info.get("composite_indexes", []):
+            names = [declaration] if isinstance(declaration, str) else declaration
+            if len(names) == 1 and names[0] in cols:
+                cols[names[0]].index = True
+        for declaration in model_info.get("composite_uniques", []):
+            names = [declaration] if isinstance(declaration, str) else declaration
+            if len(names) == 1 and names[0] in cols:
+                cols[names[0]].unique = True
         return cols
 
     # ── Migration side ──────────────────────────────────────────────────

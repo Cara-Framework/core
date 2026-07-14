@@ -122,3 +122,28 @@ def test_intent_named_migrations_are_applied_to_snapshot(tmp_path):
 
     assert exists is True
     assert set(columns) == {"name", "status"}
+
+
+def test_scalar_standalone_constraints_round_trip_without_diff(tmp_path):
+    migration = tmp_path / "0001_create_widget_table.py"
+    migration.write_text(
+        'class X:\n    def up(self):\n        with self.schema.create("widget") as table:\n'
+        '            table.string("email", 255)\n'
+        '            table.string("sid", 64)\n'
+        '            table.index(["email"])\n'
+        '            table.unique(["sid"])\n'
+        '    def down(self):\n        pass\n'
+    )
+    comparator = ModelMigrationComparator.__new__(ModelMigrationComparator)
+    comparator.migrations_dir = tmp_path
+    model_info = {
+        "table": "widget",
+        "fields": {
+            "email": {"type": "string", "params": {"length": 255}},
+            "sid": {"type": "string", "params": {"length": 64}},
+        },
+        "composite_indexes": [["email"]],
+        "composite_uniques": [["sid"]],
+    }
+
+    assert comparator.compare_model_with_migrations(model_info) == []
