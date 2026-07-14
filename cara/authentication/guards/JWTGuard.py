@@ -445,7 +445,13 @@ class JWTGuard(Guard):
                 # that shows up a SECOND time is the classic leaked-token
                 # signal, so revoke this login family. Other devices keep
                 # their independent families.
-                self.revoke_token_family(str(payload["fid"]), ttl=ttl)
+                # Descendant refresh tokens minted by the winning request can
+                # live for a full refresh window even when this replayed token
+                # was near expiry. Keep the family tombstone for that full
+                # window or those descendants would become valid again.
+                self.revoke_token_family(
+                    str(payload["fid"]), ttl=max(ttl, self.refresh_ttl)
+                )
             return won
         except (jwt.InvalidTokenError, jwt.ExpiredSignatureError):
             _logger.debug("Refresh token consume failed", exc_info=True)
@@ -704,7 +710,7 @@ class JWTGuard(Guard):
             # Cache.get(..., 0) returning ``None`` / ``0`` is the
             # legitimate "no revocation event recorded" branch — fall
             # through and accept the token. Only a positive cutoff
-            # whose value strictly exceeds the token's ``iat`` rejects.
+            # whose value equals or exceeds the token's ``iat`` rejects.
             if cutoff and float(iat) <= float(cutoff):
                 raise TokenBlacklistedException(
                     "Token revoked: issued before user-level revocation cutoff"

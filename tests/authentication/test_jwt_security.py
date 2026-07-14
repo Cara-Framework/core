@@ -68,12 +68,22 @@ def test_token_pair_has_required_bound_claims(monkeypatch) -> None:
 
 
 def test_refresh_reuse_revokes_entire_family(monkeypatch) -> None:
-    jwt_guard, _ = guard(monkeypatch)
+    jwt_guard, cache = guard(monkeypatch)
     pair = jwt_guard.generate_token_pair(User())
+    claims = jwt.decode(
+        pair["refresh_token"],
+        jwt_guard.secret,
+        algorithms=[jwt_guard.algorithm],
+        issuer="test-api",
+        audience="test-clients",
+    )
 
     assert jwt_guard.consume_refresh_token(pair["refresh_token"]) is True
     assert jwt_guard.consume_refresh_token(pair["refresh_token"]) is False
     assert jwt_guard.validate_token(pair["access_token"]) is False
+    assert cache.ttl_of(f"jwt_family_revoke:{claims['fid']}") >= (
+        jwt_guard.refresh_ttl - 1
+    )
 
 
 def test_controller_refresh_path_detects_reuse(monkeypatch) -> None:
