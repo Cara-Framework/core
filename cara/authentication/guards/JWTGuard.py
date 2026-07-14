@@ -103,9 +103,9 @@ class JWTGuard(Guard):
                 "Please install it with: pip install PyJWT"
             ) from e
 
-        if len(secret) < 32:
+        if len(secret.encode("utf-8")) < 32:
             raise AuthenticationConfigurationException(
-                "JWT signing secret must contain at least 32 characters"
+                "JWT signing secret must contain at least 32 bytes"
             )
         if algorithm not in _ALLOWED_ALGORITHMS:
             raise AuthenticationConfigurationException(
@@ -118,6 +118,14 @@ class JWTGuard(Guard):
         if int(refresh_ttl) <= int(ttl):
             raise AuthenticationConfigurationException(
                 "JWT refresh-token TTL must be longer than the access-token TTL"
+            )
+        if int(refresh_ttl) > 30 * 24 * 60 * 60:
+            raise AuthenticationConfigurationException(
+                "JWT refresh-token TTL must not exceed 30 days"
+            )
+        if int(blacklist_grace_period) < 0:
+            raise AuthenticationConfigurationException(
+                "JWT blacklist grace period cannot be negative"
             )
         if not blacklist_enabled:
             raise AuthenticationConfigurationException(
@@ -317,6 +325,34 @@ class JWTGuard(Guard):
                 "Refresh token user resolution failed unexpectedly",
                 exc_info=True,
             )
+            return None
+
+    def consume_refresh_token_user(self, token: str) -> Any | None:
+        """Atomically claim a refresh token and resolve its current user.
+
+        The regular resolver checks the per-token blacklist first, which is
+        correct for validation but hides a replay from rotation-reuse
+        detection. This path deliberately skips only that one lookup, still
+        verifies signature/expiry/family/user cutoff, then lets the atomic
+        claim detect a second use and revoke the whole family.
+        """
+        try:
+            payload = self._decode_token(token, check_token_blacklist=False)
+            if payload.get("typ") != TOKEN_TYPE_REFRESH:
+                return None
+            user_id = payload.get("sub")
+            if not user_id:
+                return None
+            user = self._resolve_user_by_id(str(user_id), payload)
+            if user is None or not self.consume_refresh_token(token):
+                return None
+            self._last_payload = dict(payload)
+            return user
+        except _AUTH_FAILURES:
+            _logger.debug("Refresh token claim failed", exc_info=True)
+            return None
+        except Exception:
+            _logger.warning("Refresh token claim failed unexpectedly", exc_info=True)
             return None
 
     def blacklist_token(self, token: str) -> None:
@@ -571,7 +607,13 @@ class JWTGuard(Guard):
             )
             return False
 
-    def _decode_token(self, token: str, verify_exp: bool = True) -> dict[str, Any]:
+    def _decode_token(
+        self,
+        token: str,
+        verify_exp: bool = True,
+        *,
+        check_token_blacklist: bool = True,
+    ) -> dict[str, Any]:
         """
         Decode and validate JWT token.
 
@@ -596,7 +638,11 @@ class JWTGuard(Guard):
 
         # Verify the signature and mandatory registered claims BEFORE touching
         # cache. Invalid attacker-controlled strings must not become Redis I/O.
-        if self.blacklist_enabled and self._is_blacklisted(token):
+        if (
+            check_token_blacklist
+            and self.blacklist_enabled
+            and self._is_blacklisted(token)
+        ):
             raise TokenBlacklistedException("Token has been blacklisted")
         if self._is_family_revoked(str(payload["fid"])):
             raise TokenBlacklistedException("Token family has been revoked")

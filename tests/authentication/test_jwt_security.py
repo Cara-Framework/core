@@ -76,11 +76,32 @@ def test_refresh_reuse_revokes_entire_family(monkeypatch) -> None:
     assert jwt_guard.validate_token(pair["access_token"]) is False
 
 
+def test_controller_refresh_path_detects_reuse(monkeypatch) -> None:
+    jwt_guard, _ = guard(monkeypatch)
+    pair = jwt_guard.generate_token_pair(User())
+
+    assert jwt_guard.consume_refresh_token_user(pair["refresh_token"]) is not None
+    assert jwt_guard.consume_refresh_token_user(pair["refresh_token"]) is None
+    assert jwt_guard.validate_token(pair["access_token"]) is False
+
+
 def test_guard_rejects_weak_secret(monkeypatch) -> None:
     module = importlib.import_module("cara.authentication.guards.JWTGuard")
     monkeypatch.setattr(module.JWTGuard, "_load_user_class", lambda *_: object)
     with pytest.raises(AuthenticationConfigurationException):
         module.JWTGuard(application=None, secret="short")
+
+
+def test_guard_rejects_excessive_refresh_lifetime(monkeypatch) -> None:
+    module = importlib.import_module("cara.authentication.guards.JWTGuard")
+    monkeypatch.setattr(module.JWTGuard, "_load_user_class", lambda *_: object)
+    with pytest.raises(AuthenticationConfigurationException, match="30 days"):
+        module.JWTGuard(
+            application=None,
+            secret="x" * 48,
+            ttl=900,
+            refresh_ttl=31 * 24 * 60 * 60,
+        )
 
 
 def test_websocket_ticket_is_opaque_and_single_use(monkeypatch) -> None:
