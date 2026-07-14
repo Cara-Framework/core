@@ -422,6 +422,12 @@ class JWTGuard(Guard):
         a token that was burned via ``logout`` or admin revocation
         still loses the race here.
         """
+        if not self.blacklist_enabled:
+            # Refresh-token rotation is configured as fail-closed in the
+            # constructor. Keep this boundary explicit in case a subclass
+            # bypasses that invariant: never pretend one-time use is active
+            # when there is no atomic claim store.
+            return False
         try:
             # Decode signature + registered claims without consulting the
             # per-token blacklist: a replayed token is already blacklisted,

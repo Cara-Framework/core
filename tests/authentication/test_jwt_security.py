@@ -95,6 +95,14 @@ def test_controller_refresh_path_detects_reuse(monkeypatch) -> None:
     assert jwt_guard.validate_token(pair["access_token"]) is False
 
 
+def test_refresh_consumption_fails_closed_without_blacklist(monkeypatch) -> None:
+    jwt_guard, _ = guard(monkeypatch)
+    pair = jwt_guard.generate_token_pair(User())
+    jwt_guard.blacklist_enabled = False
+
+    assert jwt_guard.consume_refresh_token(pair["refresh_token"]) is False
+
+
 def test_guard_rejects_weak_secret(monkeypatch) -> None:
     module = importlib.import_module("cara.authentication.guards.JWTGuard")
     monkeypatch.setattr(module.JWTGuard, "_load_user_class", lambda *_: object)
