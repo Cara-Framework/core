@@ -79,6 +79,11 @@ class LoginAttemptTracker:
     """
 
     @staticmethod
+    def identifier_digest(value: str) -> str:
+        """Opaque, deployment-keyed digest for identifiers in shared storage."""
+        return LoginAttemptTracker._digest(value)
+
+    @staticmethod
     def _max_failures() -> int:
         return int(config("security.login_max_failures", 5))
 
