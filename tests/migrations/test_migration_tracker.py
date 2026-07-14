@@ -184,3 +184,37 @@ def test_migration_lock_rejects_invalid_timeout():
     with pytest.raises(ORMException, match="positive integer"):
         with tracker.migration_lock(timeout_seconds=0):
             pass
+
+
+def test_replace_migration_history_is_atomic():
+    manager, connection, queries = _fake_db_manager()
+    tracker = MigrationTracker(manager)
+
+    tracker.replace_migration_history(
+        [("0001_create_users", "a" * 64), ("0002_create_jobs", "b" * 64)]
+    )
+
+    connection.begin.assert_called_once()
+    connection.commit.assert_called_once()
+    connection.rollback.assert_not_called()
+    assert queries[0] == "DELETE FROM migrations"
+    assert sum(query.startswith("INSERT INTO migrations") for query in queries) == 2
+
+
+def test_replace_migration_history_rolls_back_on_failure():
+    calls = {"count": 0}
+
+    def handler(sql, *_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("write failed")
+        return []
+
+    manager, connection, _queries = _fake_db_manager(query_handler=handler)
+    tracker = MigrationTracker(manager)
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        tracker.replace_migration_history([("0001_create_users", "a" * 64)])
+
+    connection.rollback.assert_called_once()
+    connection.commit.assert_not_called()

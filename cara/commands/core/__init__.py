@@ -15,6 +15,7 @@ from .MakeModelCommand import MakeModelCommand
 from .MakeNotificationCommand import MakeNotificationCommand
 from .MakePolicyCommand import MakePolicyCommand
 from .MigrateCommand import MigrateCommand
+from .MigrateBaselineCommand import MigrateBaselineCommand
 from .MigrateResetCommand import MigrateResetCommand
 from .MigrateRollbackCommand import MigrateRollbackCommand
 from .MigrateStatusCommand import MigrateStatusCommand
@@ -51,6 +52,7 @@ __all__ = [
     "MakeNotificationCommand",
     "MakePolicyCommand",
     "MigrateCommand",
+    "MigrateBaselineCommand",
     "MigrateResetCommand",
     "MigrateRollbackCommand",
     "MigrateStatusCommand",

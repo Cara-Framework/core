@@ -394,6 +394,44 @@ class MigrationTracker:
         finally:
             _release(connection)
 
+    def replace_migration_history(
+        self, records: list[tuple[str, str]], *, batch: int = 1
+    ) -> None:
+        """Atomically replace history after an explicit, schema-verified baseline."""
+        if not records or int(batch) <= 0:
+            raise ORMException("Baseline history and batch must be non-empty.")
+        names = [name for name, _checksum in records]
+        if len(names) != len(set(names)):
+            raise ORMException("Baseline migration names must be unique.")
+        if any(not checksum or len(checksum) != 64 for _name, checksum in records):
+            raise ORMException("Every baseline migration requires a SHA-256 checksum.")
+
+        connection = self._get_connection()
+        began = False
+        try:
+            begin = getattr(connection, "begin", None)
+            if callable(begin):
+                begin()
+                began = True
+            connection.query(f"DELETE FROM {self.table_name}")
+            placeholder = self._get_placeholder()
+            for name, checksum in records:
+                connection.query(
+                    f"INSERT INTO {self.table_name} (migration, batch, checksum) "
+                    f"VALUES ({placeholder}, {placeholder}, {placeholder})",
+                    (name, int(batch), checksum),
+                )
+            commit = getattr(connection, "commit", None)
+            if began and callable(commit):
+                commit()
+        except Exception:
+            rollback = getattr(connection, "rollback", None)
+            if began and callable(rollback):
+                rollback()
+            raise
+        finally:
+            _release(connection)
+
     def remove_migration(self, migration_name: str) -> None:
         connection = self._get_connection()
         try:
