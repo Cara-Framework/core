@@ -50,7 +50,7 @@ class EncryptionProvider(DeferredProvider):
             raise EncryptionException("Application key is not set in config")
 
         # Bind the ``Hash`` class itself so the ``Hash`` facade mirrors the
-        # full class API: ``Hash.make(value)`` uses the secure bcrypt default
+        # full class API: ``Hash.make(value)`` uses the secure Argon2id default
         # for passwords, while ``Hash.make(value, algorithm="sha256")`` yields a
         # deterministic digest for at-rest token storage, and ``Hash.check``
         # auto-detects the algorithm. ``Hash`` is all classmethods (no

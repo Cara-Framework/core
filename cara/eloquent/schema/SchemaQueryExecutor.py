@@ -41,8 +41,11 @@ class SchemaQueryExecutor:
 
     @staticmethod
     def _release(connection) -> None:
-        """Return the connection to the pool, swallow any cleanup error."""
+        """Return an owned connection, never the active transaction handle."""
         if connection is None:
+            return
+        transaction_level = getattr(connection, "transaction_level", 0)
+        if isinstance(transaction_level, (int, float)) and transaction_level > 0:
             return
         try:
             close = getattr(connection, "close_connection", None)

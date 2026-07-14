@@ -61,6 +61,8 @@ class AuthenticationProvider(DeferredProvider):
             user_model=config("auth.guards.jwt.user_model", "app.models.User"),
             header_name=config("auth.guards.jwt.header_name", "Authorization"),
             header_prefix=config("auth.guards.jwt.header_prefix", "Bearer"),
+            issuer=config("auth.guards.jwt.issuer", "cara"),
+            audience=config("auth.guards.jwt.audience", "cara-clients"),
         )
 
         auth_manager.add_guard("jwt", jwt_guard)

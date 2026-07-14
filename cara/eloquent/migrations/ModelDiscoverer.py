@@ -177,7 +177,12 @@ class ModelDiscoverer:
             try:
                 from cara.facades import Log
 
-                Log.warning("Could not parse %s: %s", init_file, e, category='cara.eloquent.migrations')
+                Log.warning(
+                    "Could not parse %s: %s",
+                    init_file,
+                    e,
+                    category="cara.eloquent.migrations",
+                )
             except Exception:
                 _logger.warning("model discovery logging failed", exc_info=True)
 
@@ -281,9 +286,7 @@ class ModelDiscoverer:
                 # otherwise ``public_id`` would invent a phantom FK to a
                 # non-existent ``public`` table (and merged_into_brand_id
                 # would point at the wrong table).
-                elif self._is_foreign_key_field(
-                    field_name, field_info, all_table_names
-                ):
+                elif self._is_foreign_key_field(field_name, field_info, all_table_names):
                     referenced_table = self._extract_referenced_table(
                         field_name, field_info, all_table_names
                     )
@@ -335,9 +338,7 @@ class ModelDiscoverer:
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and self._is_model_class(node):
-                return self._extract_model_structure(
-                    node, file_path.stem, str(file_path)
-                )
+                return self._extract_model_structure(node, file_path.stem, str(file_path))
 
         return None
 

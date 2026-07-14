@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import hashlib
 import importlib.util
 import os
 
@@ -56,6 +57,14 @@ class MigrationFileManager:
         """Extract migration name from file path"""
         filename = os.path.basename(file_path)
         return filename.replace(".py", "")
+
+    def checksum(self, file_path) -> str:
+        """SHA-256 of the exact migration source applied to the database."""
+        digest = hashlib.sha256()
+        with open(file_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(128 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def create_migration_file(self, name, content):
         """Create new migration file"""

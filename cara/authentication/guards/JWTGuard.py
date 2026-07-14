@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import secrets
 import time
 from contextvars import ContextVar
 from typing import Any
@@ -49,6 +50,19 @@ _AUTH_FAILURES = (
 # swapped in where a refresh token is required (and vice versa).
 TOKEN_TYPE_ACCESS = "access"
 TOKEN_TYPE_REFRESH = "refresh"
+_REQUIRED_CLAIMS = (
+    "sub",
+    "iat",
+    "exp",
+    "typ",
+    "jti",
+    "fid",
+    "iss",
+    "aud",
+    "ver",
+)
+_ALLOWED_ALGORITHMS = {"HS256", "HS384", "HS512"}
+_WEBSOCKET_TICKET_TTL_SECONDS = 30
 
 
 def _hash_token(token: str) -> str:
@@ -76,6 +90,8 @@ class JWTGuard(Guard):
         user_model: str = "app.models.User",
         header_name: str = "Authorization",
         header_prefix: str = "Bearer",
+        issuer: str = "cara",
+        audience: str = "cara-clients",
     ):
         # Validate PyJWT dependency
         try:
@@ -87,6 +103,31 @@ class JWTGuard(Guard):
                 "Please install it with: pip install PyJWT"
             ) from e
 
+        if len(secret) < 32:
+            raise AuthenticationConfigurationException(
+                "JWT signing secret must contain at least 32 characters"
+            )
+        if algorithm not in _ALLOWED_ALGORITHMS:
+            raise AuthenticationConfigurationException(
+                f"JWT algorithm must be one of {sorted(_ALLOWED_ALGORITHMS)}"
+            )
+        if not 0 < int(ttl) <= 3600:
+            raise AuthenticationConfigurationException(
+                "JWT access-token TTL must be between 1 and 3600 seconds"
+            )
+        if int(refresh_ttl) <= int(ttl):
+            raise AuthenticationConfigurationException(
+                "JWT refresh-token TTL must be longer than the access-token TTL"
+            )
+        if not blacklist_enabled:
+            raise AuthenticationConfigurationException(
+                "JWT refresh-token rotation requires blacklist support"
+            )
+        if not issuer or not audience:
+            raise AuthenticationConfigurationException(
+                "JWT issuer and audience must be configured"
+            )
+
         # Configuration
         self.application = application
         self.secret = secret
@@ -95,6 +136,8 @@ class JWTGuard(Guard):
         self.refresh_ttl = refresh_ttl
         self.blacklist_enabled = blacklist_enabled
         self.blacklist_grace_period = blacklist_grace_period
+        self.issuer = issuer
+        self.audience = audience
 
         # Token extraction settings
         self.header_name = header_name
@@ -258,7 +301,7 @@ class JWTGuard(Guard):
     def resolve_refresh_token_user(self, token: str) -> Any | None:
         """Decode a refresh token and return the associated user (or None)."""
         try:
-            payload = self._decode_token(token, verify_exp=False)
+            payload = self._decode_token(token)
             self._last_payload = dict(payload)
             user_id = payload.get("sub")
             if not user_id:
@@ -280,6 +323,50 @@ class JWTGuard(Guard):
         """Public wrapper around _blacklist_token for external callers."""
         self._blacklist_token(token)
 
+    def issue_websocket_ticket(self, access_token: str) -> str:
+        """Exchange a valid access JWT for a short-lived one-time WS ticket.
+
+        Browser WebSocket APIs cannot set Authorization headers. Putting a JWT
+        in the URL leaks it into proxy/access logs, so the URL carries only an
+        opaque 30-second ticket whose cache record contains verified claims.
+        """
+        payload = self._decode_token(access_token)
+        if payload.get("typ") != TOKEN_TYPE_ACCESS:
+            raise TokenInvalidException("An access token is required")
+        user = self._resolve_user_by_id(str(payload["sub"]), payload)
+        if user is None:
+            raise TokenInvalidException("Invalid access token")
+        ticket = secrets.token_urlsafe(32)
+        Cache.put(
+            f"jwt_ws_ticket:{_hash_token(ticket)}",
+            {"sub": str(payload["sub"]), "claims": dict(payload)},
+            _WEBSOCKET_TICKET_TTL_SECONDS,
+            strict=True,
+        )
+        return ticket
+
+    def consume_websocket_ticket(self, ticket: str) -> Any | None:
+        """Atomically consume a WS ticket and resolve its still-live user."""
+        if not ticket:
+            return None
+        record = Cache.pull(f"jwt_ws_ticket:{_hash_token(ticket)}", None)
+        if not isinstance(record, dict) or not isinstance(record.get("claims"), dict):
+            return None
+        claims = dict(record["claims"])
+        if claims.get("typ") != TOKEN_TYPE_ACCESS or str(claims.get("sub")) != str(
+            record.get("sub")
+        ):
+            return None
+        family_id = claims.get("fid")
+        if not isinstance(family_id, str) or not family_id:
+            return None
+        if self._is_family_revoked(family_id):
+            return None
+        user = self._resolve_user_by_id(str(record["sub"]), claims)
+        if user is not None:
+            self._last_payload = claims
+        return user
+
     def consume_refresh_token(self, token: str) -> bool:
         """Atomically claim a refresh token for one-time use.
 
@@ -299,37 +386,39 @@ class JWTGuard(Guard):
         a token that was burned via ``logout`` or admin revocation
         still loses the race here.
         """
-        if not self.blacklist_enabled:
-            return True
         try:
-            payload = jwt.decode(
-                token,
-                self.secret,
-                algorithms=[self.algorithm],
-                options={"verify_exp": False},
-            )
+            # Decode signature + registered claims without consulting the
+            # per-token blacklist: a replayed token is already blacklisted,
+            # but we still need its verified family id to revoke the family.
+            payload = self._decode_signed_token(token)
+            if payload.get("typ") != TOKEN_TYPE_REFRESH:
+                return False
+            if self._is_family_revoked(str(payload["fid"])):
+                return False
             exp = payload.get("exp", 0)
-            ttl = max(0, exp - int(time.time()) + self.blacklist_grace_period)
+            ttl = max(0, int(exp - time.time()) + self.blacklist_grace_period)
             if ttl <= 0:
                 # Token already past its natural lifetime; refuse rather
                 # than write a zero-TTL key that vanishes immediately.
                 return False
-            return bool(Cache.add(f"jwt_blacklist:{_hash_token(token)}", True, ttl))
+            won = bool(Cache.add(f"jwt_blacklist:{_hash_token(token)}", True, ttl))
+            if not won:
+                # REUSE DETECTION (OAuth 2.0 Security BCP §4.13.2): this
+                # refresh token was ALREADY burned — rotated once and now
+                # replayed, or killed by logout/admin. A rotated refresh
+                # that shows up a SECOND time is the classic leaked-token
+                # signal, so revoke this login family. Other devices keep
+                # their independent families.
+                self.revoke_token_family(str(payload["fid"]), ttl=ttl)
+            return won
         except (jwt.InvalidTokenError, jwt.ExpiredSignatureError):
             _logger.debug("Refresh token consume failed", exc_info=True)
-            return False
-        except Exception:
-            _logger.warning(
-                "Refresh token consume failed unexpectedly",
-                exc_info=True,
-            )
             return False
 
     def validate_refresh_token(self, token: str) -> bool:
         """Validate a refresh token specifically - ignores expiration for refresh window check."""
         try:
-            # Decode token without expiration check first
-            payload = self._decode_token(token, verify_exp=False)
+            payload = self._decode_token(token)
             user_id = payload.get("sub")
 
             if not user_id:
@@ -340,86 +429,12 @@ class JWTGuard(Guard):
             if payload.get("typ") != TOKEN_TYPE_REFRESH:
                 return False
 
-            # Check refresh window. The refresh token is minted with
-            # ``exp = iat + refresh_ttl`` (see generate_refresh_token), so
-            # ``exp`` already IS the end of the refresh window. Adding
-            # ``refresh_ttl`` again doubled it — a 3-day refresh token was
-            # accepted for 6 days, doubling the replay window of a stolen,
-            # never-consumed refresh token.
-            exp = payload.get("exp", 0)
-            now = int(time.time())
-            if now > exp:
-                return False  # Beyond refresh window
-
             # Resolve user
             user = self._resolve_user_by_id(user_id, payload)
             return user is not None
         except _AUTH_FAILURES:
             _logger.debug("Refresh token validation failed", exc_info=True)
             return False
-        except Exception:
-            _logger.warning(
-                "Refresh token validation failed unexpectedly",
-                exc_info=True,
-            )
-            return False
-
-    def refresh(self) -> str:
-        """
-        Refresh the current JWT token.
-
-        Returns:
-            str: New JWT token
-
-        Raises:
-            TokenInvalidException: If no token or invalid token
-            TokenExpiredException: If token is beyond refresh window
-            UserNotFoundException: If user no longer exists
-        """
-        token = self._extract_token()
-        if not token:
-            raise TokenInvalidException("No token provided")
-
-        try:
-            # Decode token without expiration check
-            payload = self._decode_token(token, verify_exp=False)
-            user_id = payload.get("sub")
-
-            if not user_id:
-                raise TokenInvalidException("Invalid token payload")
-
-            # Reject access tokens passed to /refresh — defence in depth
-            # against access-token leaks (logs, dev tools, XSS).
-            if payload.get("typ") != TOKEN_TYPE_REFRESH:
-                raise TokenInvalidException("Provided token is not a refresh token")
-
-            # Check refresh window. ``exp`` is already ``iat + refresh_ttl``
-            # (see generate_refresh_token), so it IS the window end; adding
-            # refresh_ttl again doubled the accepted lifetime.
-            exp = payload.get("exp", 0)
-            now = int(time.time())
-            if now > exp:
-                raise TokenExpiredException("Refresh token expired")
-
-            # Resolve user
-            user = self._resolve_user_by_id(user_id, payload)
-            if not user:
-                raise UserNotFoundException("User not found")
-
-            if not isinstance(user, Authenticatable):
-                raise TypeError("User must implement Authenticatable")
-
-            # Blacklist old token and generate new one
-            if self.blacklist_enabled:
-                self._blacklist_token(token)
-
-            self._user = user
-            return self._generate_token(user)
-
-        except jwt.ExpiredSignatureError:
-            raise TokenExpiredException("Token expired")
-        except jwt.InvalidTokenError:
-            raise TokenInvalidException("Invalid token")
 
     # ========================================================================
     # INTERNAL HELPER METHODS
@@ -572,23 +587,24 @@ class JWTGuard(Guard):
             TokenExpiredException: If token is expired
             TokenInvalidException: If token is invalid
         """
-        if self.blacklist_enabled and self._is_blacklisted(token):
-            raise TokenBlacklistedException("Token has been blacklisted")
-
         try:
-            options = {"verify_exp": verify_exp}
-            payload = jwt.decode(
-                token, self.secret, algorithms=[self.algorithm], options=options
-            )
+            payload = self._decode_signed_token(token, verify_exp=verify_exp)
         except jwt.ExpiredSignatureError:
             raise TokenExpiredException("Token expired")
         except jwt.InvalidTokenError:
             raise TokenInvalidException("Invalid token")
 
+        # Verify the signature and mandatory registered claims BEFORE touching
+        # cache. Invalid attacker-controlled strings must not become Redis I/O.
+        if self.blacklist_enabled and self._is_blacklisted(token):
+            raise TokenBlacklistedException("Token has been blacklisted")
+        if self._is_family_revoked(str(payload["fid"])):
+            raise TokenBlacklistedException("Token family has been revoked")
+
         # Per-user revocation cutoff. After a security-sensitive change
         # (password reset, email change, "log out all sessions"), the
         # caller bumps ``jwt_user_revoke:{sub}`` to ``now``. Any token
-        # with ``iat`` strictly older than that cutoff is treated as
+        # with ``iat`` at or before that cutoff is treated as
         # revoked even though its signature is still valid. This is the
         # missing primitive that lets ``change_email`` actually expire
         # outstanding sessions instead of leaving stolen tokens live
@@ -611,42 +627,9 @@ class JWTGuard(Guard):
         sub = payload.get("sub")
         iat = payload.get("iat")
         if sub and iat is not None:
-            # Collect the set of exception types that mean "cache
-            # backend is degraded — we cannot trust an absent
-            # revocation cutoff". Built-in network / timeout types
-            # always; redis-py types when the library is importable
-            # so we don't accidentally widen the catch to unrelated
-            # exceptions. Anything outside this set bubbles up to the
-            # caller (legitimate programming errors stay loud).
-            cache_failure_types: tuple[type[BaseException], ...] = (
-                ConnectionError,
-                TimeoutError,
-                OSError,
-            )
             try:
-                from cara.exceptions import (
-                    CacheConfigurationException,
-                    DriverNotRegisteredException,
-                )
-
-                cache_failure_types = cache_failure_types + (
-                    CacheConfigurationException,
-                    DriverNotRegisteredException,
-                )
-            except ImportError:
-                pass
-            try:
-                import redis as _redis  # type: ignore[import-untyped]
-
-                cache_failure_types = cache_failure_types + (
-                    _redis.exceptions.RedisError,  # type: ignore[attr-defined]
-                )
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                cutoff = Cache.get(f"jwt_user_revoke:{sub}", 0)
-            except cache_failure_types as exc:
+                cutoff = Cache.get(f"jwt_user_revoke:{sub}", 0, strict=True)
+            except Exception as exc:
                 # Cache backend failure — fail CLOSED. We don't know
                 # whether this user's tokens were revoked; treat them
                 # as if they were. Log at ERROR so ops can spot the
@@ -658,7 +641,14 @@ class JWTGuard(Guard):
                 try:
                     from cara.facades import Log
 
-                    Log.error("JWTGuard._decode_token: revocation-cutoff cache read failed for sub=%s; failing closed: %s: %s", sub, type(exc).__name__, exc, category='cara.auth.jwt', exc_info=True)
+                    Log.error(
+                        "JWTGuard._decode_token: revocation-cutoff cache read failed for sub=%s; failing closed: %s: %s",
+                        sub,
+                        type(exc).__name__,
+                        exc,
+                        category="cara.auth.jwt",
+                        exc_info=True,
+                    )
                 except ImportError:
                     pass
                 raise TokenBlacklistedException(
@@ -669,7 +659,7 @@ class JWTGuard(Guard):
             # legitimate "no revocation event recorded" branch — fall
             # through and accept the token. Only a positive cutoff
             # whose value strictly exceeds the token's ``iat`` rejects.
-            if cutoff and int(iat) < int(cutoff):
+            if cutoff and float(iat) <= float(cutoff):
                 raise TokenBlacklistedException(
                     "Token revoked: issued before user-level revocation cutoff"
                 )
@@ -685,17 +675,48 @@ class JWTGuard(Guard):
         token type expires naturally, the cutoff is no longer needed.
         """
         cache_ttl = ttl if ttl is not None else max(self.refresh_ttl, self.ttl)
-        try:
-            Cache.put(f"jwt_user_revoke:{user_id}", int(time.time()), cache_ttl)
-        except Exception:
-            # Logging only — we never want a cache hiccup to silently
-            # skip revocation. Caller should treat this as best-effort.
-            try:
-                from cara.facades import Log
+        Cache.put(
+            f"jwt_user_revoke:{user_id}",
+            time.time(),
+            cache_ttl,
+            strict=True,
+        )
 
-                Log.error("JWTGuard.revoke_user_sessions failed for user_id=%s", user_id, category='cara.auth.jwt', exc_info=True)
-            except ImportError:
-                pass
+    def revoke_token_family(self, family_id: str, ttl: int | None = None) -> None:
+        """Revoke one login/refresh family without signing out other devices."""
+        if not family_id:
+            raise ValueError("family_id is required")
+        cache_ttl = ttl if ttl is not None else self.refresh_ttl
+        Cache.put(
+            f"jwt_family_revoke:{family_id}",
+            True,
+            cache_ttl,
+            strict=True,
+        )
+
+    def _is_family_revoked(self, family_id: str) -> bool:
+        return bool(
+            Cache.get(
+                f"jwt_family_revoke:{family_id}",
+                False,
+                strict=True,
+            )
+        )
+
+    def _decode_signed_token(
+        self, token: str, *, verify_exp: bool = True
+    ) -> dict[str, Any]:
+        return jwt.decode(
+            token,
+            self.secret,
+            algorithms=[self.algorithm],
+            audience=self.audience,
+            issuer=self.issuer,
+            options={
+                "verify_exp": verify_exp,
+                "require": list(_REQUIRED_CLAIMS),
+            },
+        )
 
     def generate_token_with_ttl(
         self,
@@ -703,6 +724,8 @@ class JWTGuard(Guard):
         ttl: int,
         token_type: str = TOKEN_TYPE_ACCESS,
         extra_claims: dict | None = None,
+        *,
+        family_id: str | None = None,
     ) -> str:
         """Generate JWT token for user with custom TTL and type.
 
@@ -715,45 +738,88 @@ class JWTGuard(Guard):
         markers (e.g. an impersonation ``imp`` claim) but can never forge
         identity or lifetime.
         """
-        now = int(time.time())
+        now = time.time()
+        subject = str(
+            user.get_auth_id()
+            if hasattr(user, "get_auth_id")
+            else user.get_auth_identifier()
+        )
+        reserved = {
+            "sub": subject,
+            "iat": now,
+            "exp": now + ttl,
+            "typ": token_type,
+            "jti": secrets.token_urlsafe(24),
+            "fid": family_id or secrets.token_urlsafe(24),
+            "iss": self.issuer,
+            "aud": self.audience,
+            "ver": int(
+                user.get_auth_version()
+                if hasattr(user, "get_auth_version")
+                else getattr(user, "auth_version", 1)
+            ),
+        }
 
         # Use user's custom payload if available
         if hasattr(user, "to_jwt_payload") and callable(user.to_jwt_payload):
-            payload = user.to_jwt_payload()
+            payload = dict(user.to_jwt_payload() or {})
             if extra_claims:
                 payload.update(extra_claims)
-            payload.update({"iat": now, "exp": now + ttl, "typ": token_type})
+            payload.update(reserved)
         else:
-            # Default payload
-            payload = {
-                **(extra_claims or {}),
-                "sub": str(
-                    user.get_auth_id()
-                    if hasattr(user, "get_auth_id")
-                    else user.get_auth_identifier()
-                ),
-                "iat": now,
-                "exp": now + ttl,
-                "typ": token_type,
-            }
+            payload = {**(extra_claims or {}), **reserved}
 
         return jwt.encode(payload, self.secret, algorithm=self.algorithm)
 
     def generate_access_token(
-        self, user: Authenticatable, extra_claims: dict | None = None
+        self,
+        user: Authenticatable,
+        extra_claims: dict | None = None,
+        *,
+        family_id: str | None = None,
     ) -> str:
         """Generate access token with configured TTL."""
         return self.generate_token_with_ttl(
-            user, self.ttl, TOKEN_TYPE_ACCESS, extra_claims=extra_claims
+            user,
+            self.ttl,
+            TOKEN_TYPE_ACCESS,
+            extra_claims=extra_claims,
+            family_id=family_id,
         )
 
     def generate_refresh_token(
-        self, user: Authenticatable, extra_claims: dict | None = None
+        self,
+        user: Authenticatable,
+        extra_claims: dict | None = None,
+        *,
+        family_id: str | None = None,
     ) -> str:
         """Generate refresh token with configured refresh TTL."""
         return self.generate_token_with_ttl(
-            user, self.refresh_ttl, TOKEN_TYPE_REFRESH, extra_claims=extra_claims
+            user,
+            self.refresh_ttl,
+            TOKEN_TYPE_REFRESH,
+            extra_claims=extra_claims,
+            family_id=family_id,
         )
+
+    def generate_token_pair(
+        self,
+        user: Authenticatable,
+        extra_claims: dict | None = None,
+        *,
+        family_id: str | None = None,
+    ) -> dict[str, str]:
+        """Mint an access/refresh pair bound to one rotation family."""
+        family = family_id or secrets.token_urlsafe(24)
+        return {
+            "access_token": self.generate_access_token(
+                user, extra_claims=extra_claims, family_id=family
+            ),
+            "refresh_token": self.generate_refresh_token(
+                user, extra_claims=extra_claims, family_id=family
+            ),
+        }
 
     def _generate_token(self, user: Authenticatable) -> str:
         """Generate JWT access token for user."""
@@ -770,27 +836,23 @@ class JWTGuard(Guard):
             return
 
         try:
-            payload = jwt.decode(
-                token,
-                self.secret,
-                algorithms=[self.algorithm],
-                options={"verify_exp": False},
+            payload = self._decode_signed_token(token, verify_exp=False)
+        except jwt.InvalidTokenError:
+            _logger.warning("Refusing to blacklist an invalid JWT", exc_info=True)
+            return
+
+        exp = payload.get("exp", 0)
+        ttl = max(0, int(exp - time.time()) + self.blacklist_grace_period)
+        if ttl > 0:
+            # Security state writes are fail-closed. Callers must know when a
+            # logout/revocation did not reach the backing store; reporting
+            # success while a bearer token remains live is unsafe.
+            Cache.put(
+                f"jwt_blacklist:{_hash_token(token)}",
+                True,
+                ttl,
+                strict=True,
             )
-            exp = payload.get("exp", 0)
-
-            # Calculate TTL for blacklist
-            ttl = max(0, exp - int(time.time()) + self.blacklist_grace_period)
-            if ttl > 0:
-                Cache.put(f"jwt_blacklist:{_hash_token(token)}", True, ttl)
-        except Exception as exc:
-            # A malformed or already-expired token reaching blacklist is
-            # notable but recoverable — log rather than silently swallow.
-            try:
-                from cara.facades import Log
-
-                Log.warning("JWT blacklist add failed (token ignored): %s", exc, category='cara.auth.jwt')
-            except ImportError:
-                pass
 
     def _is_blacklisted(self, token: str) -> bool:
         """Check if token is blacklisted (by hash — see _blacklist_token).
@@ -804,7 +866,13 @@ class JWTGuard(Guard):
             return False
 
         try:
-            return Cache.get(f"jwt_blacklist:{_hash_token(token)}", False)
+            return bool(
+                Cache.get(
+                    f"jwt_blacklist:{_hash_token(token)}",
+                    False,
+                    strict=True,
+                )
+            )
         except Exception:
             _logger.warning(
                 "JWT blacklist check failed — failing closed (treating as blacklisted)",

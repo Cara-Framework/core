@@ -33,6 +33,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cara.eloquent.migrations import MigrationExecutor
+from cara.exceptions import ORMException
 
 
 class _NoOpMigration:
@@ -353,3 +354,29 @@ def test_run_pending_calls_ensure_migrations_table_before_any_work():
         i for i, c in enumerate(tracker.method_calls) if c[0] == "get_ran_migrations"
     )
     assert ensure_idx < read_idx
+
+
+def test_applied_migration_checksum_mismatch_aborts_before_up():
+    executor, calls, _, tracker = _setup(transactional=True)
+    tracker.get_ran_migration_records.return_value = [
+        {"migration": "0001_a", "checksum": "a" * 64}
+    ]
+    executor.file_manager.checksum.return_value = "b" * 64
+
+    with pytest.raises(ORMException, match="modified after execution"):
+        executor.run_pending_migrations()
+
+    assert "up" not in calls
+
+
+def test_legacy_null_checksum_is_backfilled_once():
+    executor, _, _, tracker = _setup(transactional=True)
+    tracker.get_ran_migration_records.return_value = [
+        {"migration": "0001_a", "checksum": None}
+    ]
+    executor.file_manager.checksum.return_value = "c" * 64
+    tracker.get_ran_migrations.return_value = ["0001_a"]
+
+    executor.run_pending_migrations()
+
+    tracker.set_migration_checksum.assert_called_once_with("0001_a", "c" * 64)

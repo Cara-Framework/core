@@ -35,9 +35,14 @@ _OBSERVER: CacheObserver | None = None
 # Apps register their own DOMAIN scopes at boot via register_cache_scopes()
 # — the same "framework ships the mechanism, app supplies the specifics"
 # pattern as set_cache_observer below, so no project vocabulary lives here.
-_KNOWN_SCOPES: frozenset[str] = frozenset({
-    "lock", "stampede", "idempotency", "health",
-})
+_KNOWN_SCOPES: frozenset[str] = frozenset(
+    {
+        "lock",
+        "stampede",
+        "idempotency",
+        "health",
+    }
+)
 
 
 def register_cache_scopes(*scopes: str) -> None:

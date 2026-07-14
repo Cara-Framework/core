@@ -61,9 +61,7 @@ def test_ensure_table_does_not_drop_existing_table():
     assert not any("DROP TABLE" in q.upper() for q in queries), (
         f"ensure should not DROP when table is valid; queries={queries}"
     )
-    assert not any("CREATE TABLE" in q.upper() for q in queries), (
-        f"ensure should not CREATE when table is valid; queries={queries}"
-    )
+    assert any("CREATE TABLE IF NOT EXISTS" in q.upper() for q in queries)
 
 
 def test_ensure_table_raises_on_structure_mismatch_instead_of_dropping():
@@ -78,12 +76,14 @@ def test_ensure_table_raises_on_structure_mismatch_instead_of_dropping():
         queries.append(sql.strip())
         call_count["n"] += 1
         upper = sql.upper()
+        if "CREATE TABLE" in upper:
+            return []
         # _table_exists probe (SELECT 1 FROM ... LIMIT 1) → table exists
         if "SELECT 1 FROM" in upper:
             return []
         # _table_has_correct_structure probe (SELECT id, migration, batch ...)
         # → fails because the table is misshapen
-        if "MIGRATION" in upper and "BATCH" in upper:
+        if upper.startswith("SELECT ID, MIGRATION, BATCH"):
             raise RuntimeError("column does not exist")
         return []
 
@@ -108,10 +108,7 @@ def test_ensure_table_creates_with_if_not_exists_clause():
 
     def handler(sql, *a, **k):
         queries.append(sql.strip())
-        # Probes fail (table missing); CREATE succeeds.
-        if "CREATE TABLE" in sql.upper():
-            return []
-        raise RuntimeError("relation does not exist")
+        return []
 
     manager, _, _ = _fake_db_manager(query_handler=handler)
     tracker = MigrationTracker(manager)
@@ -132,9 +129,7 @@ def test_ensure_table_no_drop_on_fresh_install():
 
     def handler(sql, *a, **k):
         queries.append(sql.strip())
-        if "CREATE TABLE" in sql.upper():
-            return []
-        raise RuntimeError("relation does not exist")
+        return []
 
     manager, _, _ = _fake_db_manager(query_handler=handler)
     MigrationTracker(manager).ensure_migrations_table()
@@ -149,9 +144,7 @@ def test_create_table_sql_is_sqlite_compatible_when_driver_is_sqlite():
 
     def handler(sql, *a, **k):
         queries.append(sql.strip())
-        if "CREATE TABLE" in sql.upper():
-            return []
-        raise RuntimeError("not found")
+        return []
 
     manager, _, _ = _fake_db_manager(driver="sqlite", query_handler=handler)
     MigrationTracker(manager).ensure_migrations_table()
@@ -167,7 +160,27 @@ def test_tracker_does_not_close_executor_owned_transaction_connection():
     manager, connection, _queries = _fake_db_manager()
     connection.transaction_level = 1
 
-    MigrationTracker(manager).record_migration("0112_demo", 6)
+    MigrationTracker(manager).record_migration("0112_demo", 6, "a" * 64)
 
     connection.query.assert_called_once()
     connection.close_connection.assert_not_called()
+
+
+def test_mssql_tracker_uses_native_datetime_and_top_syntax():
+    manager, _connection, queries = _fake_db_manager(driver="mssql")
+    MigrationTracker(manager).ensure_migrations_table()
+
+    sql = "\n".join(queries).upper()
+    assert "DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()" in sql
+    assert "SELECT TOP 1 ID, MIGRATION, BATCH" in sql
+    assert " LIMIT 1" not in sql
+    assert "ADD COLUMN CHECKSUM" not in sql
+
+
+def test_migration_lock_rejects_invalid_timeout():
+    manager, _connection, _queries = _fake_db_manager(driver="sqlite")
+    tracker = MigrationTracker(manager)
+
+    with pytest.raises(ORMException, match="positive integer"):
+        with tracker.migration_lock(timeout_seconds=0):
+            pass

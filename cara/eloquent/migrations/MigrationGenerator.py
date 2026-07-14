@@ -4,7 +4,12 @@ MigrationGenerator: Generate migration content from model definitions.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from cara.exceptions import InvalidArgumentException
@@ -12,17 +17,67 @@ from cara.support import paths
 
 from .ModelMigrationComparator import FieldDiff, summarize_change_name
 
+_COUNTER_THREAD_LOCK = threading.Lock()
+
+
+@contextmanager
+def _counter_lock(migrations_dir: Path):
+    """Serialize counter reads/writes across threads and local processes."""
+    migrations_dir.mkdir(parents=True, exist_ok=True)
+    with _COUNTER_THREAD_LOCK:
+        lock_path = migrations_dir / ".migration_counter.lock"
+        with lock_path.open("a+") as lock_handle:
+            try:
+                import fcntl
+
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            except ImportError:  # pragma: no cover - Windows has thread safety
+                pass
+            yield
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Write a complete file then atomically publish it with ``os.replace``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+
+
 # Cara field-type -> Postgres type for the rename API (table.rename needs the
 # column's SQL type since RENAME COLUMN goes through the same path as retype).
 _RENAME_SQL_TYPE = {
-    "string": "varchar", "char": "varchar", "text": "text",
-    "integer": "integer", "tiny_integer": "smallint", "small_integer": "smallint",
-    "medium_integer": "integer", "big_integer": "bigint",
-    "unsigned_integer": "integer", "unsigned_big_integer": "bigint",
-    "boolean": "boolean", "decimal": "numeric", "float": "double precision",
-    "double": "double precision", "jsonb": "jsonb", "json": "json",
-    "timestamp": "timestamp", "datetime": "timestamp", "date": "date",
-    "time": "time", "uuid": "uuid", "binary": "bytea",
+    "string": "varchar",
+    "char": "varchar",
+    "text": "text",
+    "integer": "integer",
+    "tiny_integer": "smallint",
+    "small_integer": "smallint",
+    "medium_integer": "integer",
+    "big_integer": "bigint",
+    "unsigned_integer": "integer",
+    "unsigned_big_integer": "bigint",
+    "boolean": "boolean",
+    "decimal": "numeric",
+    "float": "double precision",
+    "double": "double precision",
+    "jsonb": "jsonb",
+    "json": "json",
+    "timestamp": "timestamp",
+    "datetime": "timestamp",
+    "date": "date",
+    "time": "time",
+    "uuid": "uuid",
+    "binary": "bytea",
 }
 
 
@@ -49,17 +104,17 @@ class MigrationGenerator:
         return 0
 
     def _increment_counter(self):
-        """Increment and save counter."""
-        current = self._get_counter()
-        new_counter = current + 1
-        self.migrations_dir.mkdir(parents=True, exist_ok=True)
-        self.counter_file.write_text(str(new_counter))
-        return new_counter
+        """Atomically reserve the next process-safe migration sequence."""
+        with _counter_lock(self.migrations_dir):
+            current = self._get_counter()
+            new_counter = current + 1
+            _atomic_write(self.counter_file, str(new_counter))
+            return new_counter
 
     def reset_counter(self):
         """Reset the migration counter for a fresh batch."""
-        self.migrations_dir.mkdir(parents=True, exist_ok=True)
-        self.counter_file.write_text("0")
+        with _counter_lock(self.migrations_dir):
+            _atomic_write(self.counter_file, "0")
 
     def generate_create_migration(
         self, model_info: dict, style: str = "blueprint"
@@ -130,8 +185,9 @@ class MigrationGenerator:
         filename = f"{sequence}_{batch}_{sub_order}_{micro_order}_{name}.py"
         filepath = self.migrations_dir / filename
 
-        self.migrations_dir.mkdir(parents=True, exist_ok=True)
-        filepath.write_text(content, encoding="utf-8")
+        if filepath.exists():
+            raise FileExistsError(f"Migration file already exists: {filepath}")
+        _atomic_write(filepath, content)
 
         return filepath
 
@@ -627,9 +683,7 @@ class {class_name}(Migration):
         if field_method == "decimal":
             precision = params.get("precision", 10)
             scale = params.get("scale", 2)
-            blueprint_call = (
-                f'table.{field_method}("{field_name}", {precision}, {scale})'
-            )
+            blueprint_call = f'table.{field_method}("{field_name}", {precision}, {scale})'
         elif field_method in ("string", "char"):
             length = params.get("length", 255)
             blueprint_call = f'table.{field_method}("{field_name}", {length})'
@@ -722,8 +776,7 @@ class {class_name}(Migration):
             cols_str = ", ".join(f'"{c}"' for c in columns)
             refs_str = ", ".join(f'"{c}"' for c in references)
             fk_line = (
-                f"table.foreign([{cols_str}])"
-                f".references([{refs_str}]).on(\"{on_table}\")"
+                f'table.foreign([{cols_str}]).references([{refs_str}]).on("{on_table}")'
             )
         else:
             # Scalar FK — unchanged.
@@ -870,7 +923,9 @@ class {class_name}(Migration):
         down_lines = []
         for entry in reversed(indexes):
             sql = entry["down"].strip()
-            down_lines.append(f'        DB.statement("""\n            {sql}\n        """)')
+            down_lines.append(
+                f'        DB.statement("""\n            {sql}\n        """)'
+            )
 
         # Ensure ``from cara.facades import DB`` is present.
         if "from cara.facades import DB" not in migration_content:

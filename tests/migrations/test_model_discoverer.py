@@ -41,7 +41,7 @@ def discoverer() -> ModelDiscoverer:
 
 
 def test_chained_single_column_index_is_captured(discoverer, tmp_path):
-    src = '''
+    src = """
         from cara.eloquent.schema import Schema
 
         class Widget(Model):
@@ -56,7 +56,7 @@ def test_chained_single_column_index_is_captured(discoverer, tmp_path):
                         field.string("plain", 50),
                     )
                 )
-    '''
+    """
     model_path = _write_model(tmp_path, "Widget.py", src)
     info = discoverer._parse_model_file(model_path)
 
@@ -72,7 +72,7 @@ def test_chained_single_column_index_is_captured(discoverer, tmp_path):
 
 
 def test_chained_index_coexists_with_composite_index(discoverer, tmp_path):
-    src = '''
+    src = """
         from cara.eloquent.schema import Schema
 
         class Combo(Model):
@@ -88,7 +88,7 @@ def test_chained_index_coexists_with_composite_index(discoverer, tmp_path):
                         field.index(["queue", "status"]),
                     )
                 )
-    '''
+    """
     model_path = _write_model(tmp_path, "Combo.py", src)
     info = discoverer._parse_model_file(model_path)
 
@@ -133,15 +133,11 @@ def test_topological_sort_is_deterministic_and_fk_respecting(discoverer):
 
     order_a = [
         m["table"]
-        for m in discoverer.resolve_dependency_order(
-            [zeta, child, alpha, parent]
-        )
+        for m in discoverer.resolve_dependency_order([zeta, child, alpha, parent])
     ]
     order_b = [
         m["table"]
-        for m in discoverer.resolve_dependency_order(
-            [parent, alpha, child, zeta]
-        )
+        for m in discoverer.resolve_dependency_order([parent, alpha, child, zeta])
     ]
 
     # Same result regardless of input order → deterministic.
@@ -166,8 +162,7 @@ def test_circular_dependency_breaks_on_lowest_table_deterministically(discoverer
     ]
     result = [m["table"] for m in discoverer._topological_sort(models, graph)]
     result2 = [
-        m["table"]
-        for m in discoverer._topological_sort(list(reversed(models)), graph)
+        m["table"] for m in discoverer._topological_sort(list(reversed(models)), graph)
     ]
     # beta < gamma → cycle broken on beta, stable across input orders.
     assert result == ["beta", "gamma"]
@@ -228,7 +223,7 @@ def test_phantom_fk_excluded_from_dependency_graph(discoverer):
 
 
 def test_uuid_and_double_field_types_are_captured(discoverer, tmp_path):
-    src = '''
+    src = """
         from cara.eloquent.schema import Schema
 
         class Sample(Model):
@@ -242,7 +237,7 @@ def test_uuid_and_double_field_types_are_captured(discoverer, tmp_path):
                         field.double("ratio"),
                     )
                 )
-    '''
+    """
     model_path = _write_model(tmp_path, "Sample.py", src)
     info = discoverer._parse_model_file(model_path)
     assert info["fields"]["external_uuid"]["type"] == "uuid"

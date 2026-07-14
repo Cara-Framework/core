@@ -50,7 +50,7 @@ def generator() -> MigrationGenerator:
     return MigrationGenerator.__new__(MigrationGenerator)
 
 
-_COMPOSITE_MODEL_SRC = '''
+_COMPOSITE_MODEL_SRC = """
     from cara.eloquent.schema import Schema
 
     class OrderLine(Model):
@@ -69,7 +69,7 @@ _COMPOSITE_MODEL_SRC = '''
                     .on_delete("CASCADE"),
                 )
             )
-'''
+"""
 
 
 # --------------------------------------------------------------------------
@@ -105,7 +105,7 @@ def test_discoverer_registers_composite_fk_as_dependency(discoverer, tmp_path):
     orders_path = _write_model(
         tmp_path,
         "Orders.py",
-        '''
+        """
         from cara.eloquent.schema import Schema
 
         class Orders(Model):
@@ -119,7 +119,7 @@ def test_discoverer_registers_composite_fk_as_dependency(discoverer, tmp_path):
                         field.string("tenant_id", 50),
                     )
                 )
-        ''',
+        """,
     )
 
     models = [
@@ -137,8 +137,7 @@ def test_discoverer_registers_composite_fk_as_dependency(discoverer, tmp_path):
     # local columns preserved as a list.
     fks = by_table["order_line"]["foreign_keys"]
     assert any(
-        fk["references_table"] == "orders"
-        and fk["field"] == ["order_id", "tenant_id"]
+        fk["references_table"] == "orders" and fk["field"] == ["order_id", "tenant_id"]
         for fk in fks
     )
 
@@ -146,7 +145,7 @@ def test_discoverer_registers_composite_fk_as_dependency(discoverer, tmp_path):
 def test_discoverer_skips_malformed_composite_fk(discoverer, tmp_path):
     """A composite local side with a mismatched ``references`` count is a
     malformed declaration — it must be dropped, not emitted broken."""
-    src = '''
+    src = """
         from cara.eloquent.schema import Schema
 
         class Bad(Model):
@@ -162,7 +161,7 @@ def test_discoverer_skips_malformed_composite_fk(discoverer, tmp_path):
                         field.foreign(["a", "b"]).references(["x"]).on("t"),
                     )
                 )
-    '''
+    """
     model_path = _write_model(tmp_path, "Bad.py", src)
     info = discoverer._parse_model_file(model_path)
     assert info["composite_foreign_keys"] == []
@@ -232,9 +231,9 @@ def test_emitted_composite_line_renders_composite_sql(discoverer, generator, tmp
     # Re-run the emitted Blueprint chain against a fresh table named
     # "order_line" (table is the 2nd ctor arg; the 1st is the grammar).
     blueprint = Blueprint(None, table="order_line")
-    blueprint.foreign(["order_id", "tenant_id"]).references(
-        ["id", "tenant_id"]
-    ).on("orders").on_delete("CASCADE")
+    blueprint.foreign(["order_id", "tenant_id"]).references(["id", "tenant_id"]).on(
+        "orders"
+    ).on_delete("CASCADE")
 
     platform = PostgresPlatform()
     sql = platform.foreign_key_constraintize(
@@ -254,9 +253,7 @@ def test_scalar_fk_sql_is_byte_identical():
     blueprint.foreign("user_id").references("id").on("users").on_delete("CASCADE")
 
     platform = PostgresPlatform()
-    sql = platform.foreign_key_constraintize(
-        "orders", blueprint.table.added_foreign_keys
-    )
+    sql = platform.foreign_key_constraintize("orders", blueprint.table.added_foreign_keys)
     assert sql == [
         "CONSTRAINT orders_user_id_foreign "
         'FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE'

@@ -37,10 +37,12 @@ All thresholds are env-overridable via ``config("security.*")``.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 
 from cara.configuration import config
-from cara.exceptions import AccountLockedException
+from cara.exceptions import AccountLockedException, AuthenticationConfigurationException
 from cara.facades import Cache, Log
 from cara.support import email_mask, mask_ip
 
@@ -102,19 +104,25 @@ class LoginAttemptTracker:
 
     @staticmethod
     def _failure_key(email: str) -> str:
-        return f"login_fails:{email.strip().lower()}"
+        return f"login_fails:{LoginAttemptTracker._digest(email)}"
 
     @staticmethod
     def _lock_key(email: str) -> str:
-        return f"login_locked:{email.strip().lower()}"
+        return f"login_locked:{LoginAttemptTracker._digest(email)}"
 
     @staticmethod
     def _ip_set_key(email: str) -> str:
-        return f"login_fail_ips:{email.strip().lower()}"
+        return f"login_fail_ips:{LoginAttemptTracker._digest(email)}"
 
     @staticmethod
     def _per_ip_key(email: str, ip: str) -> str:
-        return f"login_fails_ip:{email.strip().lower()}:{ip.strip()}"
+        return LoginAttemptTracker._per_ip_digest_key(
+            email, LoginAttemptTracker._digest(ip)
+        )
+
+    @staticmethod
+    def _per_ip_digest_key(email: str, ip_digest: str) -> str:
+        return f"login_fails_ip:{LoginAttemptTracker._digest(email)}:{ip_digest}"
 
     @classmethod
     def assert_unlocked(cls, email: str | None) -> None:
@@ -240,9 +248,10 @@ class LoginAttemptTracker:
                     category="security.login",
                 )
 
+            ip_digest = cls._digest(ip)
             ips = cls._read_ip_set(email)
-            if ip not in ips and len(ips) < _IP_SET_CAP:
-                ips.append(ip)
+            if ip_digest not in ips and len(ips) < _IP_SET_CAP:
+                ips.append(ip_digest)
                 cls._write_ip_set(email, ips)
 
         distinct_ips = len(cls._read_ip_set(email))
@@ -310,13 +319,13 @@ class LoginAttemptTracker:
         # Wipe the per-IP counters and the IP set so a fresh login session
         # doesn't carry stale per-IP buckets into the next window's multi-IP
         # threshold calculation.
-        for ip in cls._read_ip_set(email):
+        for ip_digest in cls._read_ip_set(email):
             try:
-                Cache.forget(cls._per_ip_key(email, ip))
+                Cache.forget(cls._per_ip_digest_key(email, ip_digest))
             except Exception as e:
                 Log.debug(
                     f"LoginAttemptTracker.record_success: per-IP forget failed "
-                    f"for {email_mask(email)}/{mask_ip(ip or '')}: {e}",
+                    f"for {email_mask(email)}: {e}",
                     category="security.login",
                 )
         try:
@@ -361,13 +370,13 @@ class LoginAttemptTracker:
                 f"LoginAttemptTracker.clear_lockout: lock forget failed for {email_mask(email)}: {e}",
                 category="security.login",
             )
-        for ip in cls._read_ip_set(email):
+        for ip_digest in cls._read_ip_set(email):
             try:
-                Cache.forget(cls._per_ip_key(email, ip))
+                Cache.forget(cls._per_ip_digest_key(email, ip_digest))
             except Exception as e:
                 Log.debug(
                     f"LoginAttemptTracker.clear_lockout: per-IP forget failed "
-                    f"for {email_mask(email)}/{mask_ip(ip or '')}: {e}",
+                    f"for {email_mask(email)}: {e}",
                     category="security.login",
                 )
         try:
@@ -377,3 +386,20 @@ class LoginAttemptTracker:
                 f"LoginAttemptTracker.clear_lockout: ip-set forget failed for {email_mask(email)}: {e}",
                 category="security.login",
             )
+
+    @staticmethod
+    def _digest(value: str) -> str:
+        """HMAC identifiers before they enter shared cache keys/values."""
+        secret_value = (
+            config("security.identifier_hmac_key")
+            or config("app.key")
+            or config("auth.guards.jwt.secret")
+        )
+        if not secret_value:
+            raise AuthenticationConfigurationException(
+                "A security identifier HMAC key, app key, or JWT secret is required"
+            )
+        secret = str(secret_value).encode()
+        return hmac.new(
+            secret, value.strip().lower().encode(), hashlib.sha256
+        ).hexdigest()

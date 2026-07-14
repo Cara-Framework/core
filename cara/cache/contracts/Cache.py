@@ -24,7 +24,7 @@ class Cache:
     - add(key, value, ttl=None)
     """
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
         raise NotImplementedError
 
     def put(
@@ -32,6 +32,8 @@ class Cache:
         key: str,
         value: Any,
         ttl: int | None = None,
+        *,
+        strict: bool = False,
     ) -> None:
         raise NotImplementedError
 
@@ -39,6 +41,14 @@ class Cache:
         raise NotImplementedError
 
     def forget(self, key: str) -> bool:
+        raise NotImplementedError
+
+    def pull(self, key: str, default: Any = None) -> Any:
+        """Atomically return and delete ``key``.
+
+        Security-sensitive one-time handles (OAuth state, login challenges,
+        passwordless links) must not use a racy ``get`` followed by ``forget``.
+        """
         raise NotImplementedError
 
     def flush(self) -> None:

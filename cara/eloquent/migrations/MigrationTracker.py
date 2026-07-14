@@ -1,30 +1,27 @@
-"""Migration tracker — knows what has run, persists new entries.
-
-Connection discipline: every method that runs SQL borrows a fresh pool
-slot via ``_get_connection`` and MUST release it through
-``_release_connection`` in a ``finally``. Without that, a sweep of N
-migrations leaks N pool slots and the runner hits ``pool_max`` after
-~50 migrations (each migration calls ``record_migration``).
-"""
+"""Durable migration history, checksums, and deployment serialization."""
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
+import re
+import tempfile
+import threading
+import time
+from contextlib import contextmanager
+from pathlib import Path
 
 from cara.exceptions import ORMException
 
 _logger = logging.getLogger("cara.migrations")
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SQLITE_LOCKS: dict[str, threading.Lock] = {}
+_SQLITE_LOCKS_GUARD = threading.Lock()
 
 
 def _release(connection) -> None:
-    """Return an owned connection, never the executor's active transaction.
-
-    ``DatabaseManager.create_connection_instance`` is transaction-aware and
-    returns the context-pinned handle while a transactional migration is
-    running. Closing that borrowed handle here removes the executor's live
-    session before its outer commit (``NoneType.commit``). A positive
-    ``transaction_level`` means the context manager still owns the handle.
-    """
+    """Return an owned connection, never an executor transaction handle."""
     if connection is None:
         return
     transaction_level = getattr(connection, "transaction_level", 0)
@@ -35,208 +32,375 @@ def _release(connection) -> None:
         if callable(close):
             close()
     except Exception:
-        # Cleanup must never mask the caller's primary error.
         _logger.debug("migration connection close failed", exc_info=True)
 
 
-class MigrationTracker:
-    """Single Responsibility: Tracks migration state in database."""
+def _row_value(row, key: str, index: int = 0):
+    if hasattr(row, "get"):
+        return row.get(key)
+    return row[index]
 
-    def __init__(self, db_manager, table_name="migrations"):
+
+class MigrationTracker:
+    """Tracks applied files and protects the migration critical section."""
+
+    def __init__(self, db_manager, table_name: str = "migrations"):
+        if not _IDENTIFIER.fullmatch(table_name or ""):
+            raise ORMException(f"Invalid migrations table identifier: {table_name!r}")
         self.db_manager = db_manager
         self.table_name = table_name
 
-    # ── Connection helpers ────────────────────────────────────────────
     def _get_connection(self):
-        """Get database connection from manager."""
         return self.db_manager.create_connection_instance()
 
-    def _get_driver_type(self):
-        """Get the database driver type."""
-        connection_info = self.db_manager.get_connection_info()
-        return connection_info.get("driver", "sqlite")
+    def _get_driver_type(self) -> str:
+        info = self.db_manager.get_connection_info() or {}
+        return str(info.get("driver", "sqlite")).lower()
 
-    def _get_placeholder(self):
-        """Get the correct placeholder for the database driver."""
-        driver = self._get_driver_type()
-        if driver in ["postgres", "postgresql"]:
-            return "%s"
-        else:  # sqlite, mysql
-            return "?"
+    def _get_placeholder(self) -> str:
+        return (
+            "%s"
+            if self._get_driver_type() in {"postgres", "postgresql", "mysql"}
+            else "?"
+        )
+
+    def _select_one(self, columns: str) -> str:
+        if self._get_driver_type() in {"mssql", "sqlserver"}:
+            return f"SELECT TOP 1 {columns} FROM {self.table_name}"
+        return f"SELECT {columns} FROM {self.table_name} LIMIT 1"
 
     # ── Schema bootstrap ──────────────────────────────────────────────
-    def ensure_migrations_table(self):
-        """Create migrations table if it doesn't exist.
-
-        Previous implementation DROPPED the table whenever
-        ``_table_has_correct_structure`` returned False. That probe
-        swallows every exception (transient connection blip, lock
-        timeout, replica lag) and reports "structure wrong" — meaning
-        a single network hiccup at startup would erase the entire
-        migration history. We now use ``CREATE TABLE IF NOT EXISTS``
-        and never destroy existing tracker rows. If a real schema
-        mismatch is detected, surface it as an explicit error so the
-        operator can decide whether to migrate the tracker schema
-        themselves rather than auto-deleting their audit trail.
-        """
-        if self._table_exists():
-            if not self._table_has_correct_structure():
-                raise ORMException(
-                    f"Migrations table '{self.table_name}' exists but has "
-                    f"an unexpected schema (missing id/migration/batch "
-                    f"columns). Refusing to drop it automatically; "
-                    f"resolve manually to preserve migration history."
-                )
-            return
-
+    def ensure_migrations_table(self) -> None:
+        """Create/upgrade the tracker without ever deleting its history."""
         connection = self._get_connection()
         try:
             self._create_migrations_table(connection)
+            self._assert_base_structure(connection)
+            self._ensure_checksum_column(connection)
+            self._ensure_unique_migration_index(connection)
+        except ORMException:
+            raise
+        except Exception as exc:
+            raise ORMException(
+                f"Could not initialize migrations table '{self.table_name}': {exc}"
+            ) from exc
         finally:
             _release(connection)
 
-    def _table_exists(self):
-        """Check if migrations table exists."""
-        connection = self._get_connection()
-        try:
-            connection.query(f"SELECT 1 FROM {self.table_name} LIMIT 1")
-            return True
-        except Exception:
-            _logger.warning("migration state query failed", exc_info=True)
-            return False
-        finally:
-            _release(connection)
-
-    def _table_has_correct_structure(self):
-        """Check if migrations table exists with correct structure."""
-        connection = self._get_connection()
-        try:
-            connection.query(
-                f"SELECT id, migration, batch FROM {self.table_name} LIMIT 1"
-            )
-            return True
-        except Exception:
-            _logger.warning("migration state query failed", exc_info=True)
-            return False
-        finally:
-            _release(connection)
-
-    def _create_migrations_table(self, connection):
-        """Create the migrations tracking table.
-
-        Caller owns the connection lifecycle — do NOT release here.
-        """
-        # ``IF NOT EXISTS`` closes the concurrent-bootstrap race: two
-        # workers calling ``ensure_migrations_table`` simultaneously
-        # both see the table missing in ``_table_exists`` (TOCTOU) and
-        # race into ``CREATE TABLE``. Without IF NOT EXISTS, the loser
-        # crashes with "relation already exists" and the migration
-        # sweep aborts.
+    def _create_migrations_table(self, connection) -> None:
         driver = self._get_driver_type()
-        if driver in ["postgres", "postgresql"]:
-            sql = f"""
-            CREATE TABLE IF NOT EXISTS {self.table_name} (
-                id SERIAL PRIMARY KEY,
-                migration VARCHAR(255) NOT NULL,
-                batch INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+        if driver in {"postgres", "postgresql"}:
+            identity = "BIGSERIAL PRIMARY KEY"
+        elif driver == "mysql":
+            identity = "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY"
+        elif driver in {"mssql", "sqlserver"}:
+            identity = "BIGINT IDENTITY(1,1) PRIMARY KEY"
         else:
-            sql = f"""
-            CREATE TABLE IF NOT EXISTS {self.table_name} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity = "INTEGER PRIMARY KEY AUTOINCREMENT"
+        created_at = (
+            "DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()"
+            if driver in {"mssql", "sqlserver"}
+            else "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        )
+        body = f"""
+            CREATE TABLE {self.table_name} (
+                id {identity},
                 migration VARCHAR(255) NOT NULL,
                 batch INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                checksum VARCHAR(64) NULL,
+                created_at {created_at}
             )
-            """
-        connection.query(sql)
+        """
+        if driver in {"mssql", "sqlserver"}:
+            connection.query(
+                f"IF OBJECT_ID(N'{self.table_name}', N'U') IS NULL BEGIN {body} END"
+            )
+        else:
+            connection.query(
+                body.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+            )
 
-    # ── Read APIs ─────────────────────────────────────────────────────
-    def get_ran_migrations(self):
-        """Get list of migrations that have been run."""
-        connection = self._get_connection()
+    def _assert_base_structure(self, connection) -> None:
         try:
-            result = connection.query(
-                f"SELECT migration FROM {self.table_name} ORDER BY batch, id"
-            )
-            migrations = []
-            if result:
-                for row in result:
-                    if hasattr(row, "get"):  # dict-like (PostgreSQL)
-                        migrations.append(row.get("migration"))
-                    else:  # tuple-like (SQLite)
-                        migrations.append(row[0])
-            return migrations
+            connection.query(self._select_one("id, migration, batch"))
+        except Exception as exc:
+            raise ORMException(
+                f"Migrations table '{self.table_name}' has an unexpected schema; "
+                "required columns are id, migration, and batch."
+            ) from exc
+
+    def _ensure_checksum_column(self, connection) -> None:
+        try:
+            connection.query(self._select_one("checksum"))
+            return
         except Exception:
-            _logger.warning("migration state query failed", exc_info=True)
-            return []
-        finally:
-            _release(connection)
-
-    def get_last_batch_number(self):
-        """Get the last batch number."""
-        connection = self._get_connection()
+            pass
         try:
-            result = connection.query(f"SELECT MAX(batch) FROM {self.table_name}")
-            if result and result[0]:
-                row = result[0]
-                if hasattr(row, "get"):
-                    max_batch = row.get("max")
-                    batch = max_batch if max_batch is not None else 0
-                else:
-                    batch = row[0] if row[0] is not None else 0
+            add = (
+                "ADD"
+                if self._get_driver_type() in {"mssql", "sqlserver"}
+                else "ADD COLUMN"
+            )
+            connection.query(
+                f"ALTER TABLE {self.table_name} {add} checksum VARCHAR(64) NULL"
+            )
+            connection.query(self._select_one("checksum"))
+        except Exception as exc:
+            raise ORMException(
+                f"Could not add checksum tracking to '{self.table_name}'."
+            ) from exc
+
+    def _ensure_unique_migration_index(self, connection) -> None:
+        index_name = f"{self.table_name}_migration_unique"
+        driver = self._get_driver_type()
+        try:
+            if driver == "mysql":
+                rows = connection.query(
+                    f"SHOW INDEX FROM {self.table_name} WHERE Key_name = %s",
+                    (index_name,),
+                )
+                if not rows:
+                    connection.query(
+                        f"CREATE UNIQUE INDEX {index_name} "
+                        f"ON {self.table_name} (migration)"
+                    )
+            elif driver in {"mssql", "sqlserver"}:
+                connection.query(
+                    f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = ?) "
+                    f"CREATE UNIQUE INDEX {index_name} "
+                    f"ON {self.table_name} (migration)",
+                    (index_name,),
+                )
             else:
-                batch = 0
-            return batch
-        except Exception:
-            _logger.warning("migration state query failed", exc_info=True)
-            return 0
+                connection.query(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
+                    f"ON {self.table_name} (migration)"
+                )
+        except Exception as exc:
+            raise ORMException(
+                f"Could not enforce unique migration names in '{self.table_name}'. "
+                "Remove duplicate tracker rows before retrying."
+            ) from exc
+
+    # ── Deployment lock ──────────────────────────────────────────────
+    @contextmanager
+    def migration_lock(self, timeout_seconds: int = 60):
+        """Serialize migration runners with a database advisory lock."""
+        if not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+            raise ORMException("Migration lock timeout must be a positive integer.")
+        driver = self._get_driver_type()
+        if driver == "sqlite":
+            # SQLite only serializes each individual write. Without an outer
+            # lock, two runners can both calculate the same pending set before
+            # either writes. A host-level lock covers the whole plan/apply
+            # critical section; SQLite is not a multi-host database.
+            with self._sqlite_migration_lock(timeout_seconds):
+                yield
+            return
+
+        connection = self._get_connection()
+        lock_key = self._migration_lock_key()
+        began = False
+        mysql_locked = False
+        try:
+            begin = getattr(connection, "begin", None)
+            if callable(begin):
+                begin()
+                began = True
+
+            if driver in {"postgres", "postgresql"}:
+                connection.query(
+                    f"SET LOCAL lock_timeout = '{int(timeout_seconds) * 1000}ms'"
+                )
+                connection.query(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (lock_key,),
+                )
+            elif driver == "mysql":
+                rows = connection.query(
+                    "SELECT GET_LOCK(%s, %s) AS acquired",
+                    (lock_key, int(timeout_seconds)),
+                )
+                acquired = _row_value(rows[0], "acquired") if rows else 0
+                if int(acquired or 0) != 1:
+                    raise ORMException("Timed out waiting for the migration lock.")
+                mysql_locked = True
+            elif driver in {"mssql", "sqlserver"}:
+                rows = connection.query(
+                    "DECLARE @result int; "
+                    "EXEC @result = sp_getapplock @Resource=?, "
+                    "@LockMode='Exclusive', @LockOwner='Session', @LockTimeout=?; "
+                    "SELECT @result AS lock_result",
+                    (lock_key, int(timeout_seconds) * 1000),
+                )
+                result = _row_value(rows[0], "lock_result") if rows else -999
+                if int(result) < 0:
+                    raise ORMException("Timed out waiting for the migration lock.")
+            yield
         finally:
+            if mysql_locked:
+                try:
+                    connection.query("SELECT RELEASE_LOCK(%s)", (lock_key,))
+                except Exception:
+                    _logger.error("failed to release migration lock", exc_info=True)
+            if began:
+                try:
+                    connection.rollback()
+                except Exception:
+                    _logger.debug(
+                        "migration lock transaction cleanup failed", exc_info=True
+                    )
             _release(connection)
 
-    def get_migrations_by_batch(self, batch):
-        """Get migrations from specific batch."""
-        connection = self._get_connection()
+    def _migration_lock_key(self) -> str:
+        info = self.db_manager.get_connection_info() or {}
+        database = info.get("database") or info.get("name") or "default"
+        return f"cara:migrations:{database}:{self.table_name}"
+
+    @contextmanager
+    def _sqlite_migration_lock(self, timeout_seconds: int):
+        lock_key = self._migration_lock_key()
+        with _SQLITE_LOCKS_GUARD:
+            thread_lock = _SQLITE_LOCKS.setdefault(lock_key, threading.Lock())
+        if not thread_lock.acquire(timeout=timeout_seconds):
+            raise ORMException("Timed out waiting for the SQLite migration lock.")
+
+        digest = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()[:24]
+        lock_path = Path(tempfile.gettempdir()) / f"cara-migrations-{digest}.lock"
+        handle = None
+        process_locked = False
         try:
-            placeholder = self._get_placeholder()
-            sql = (
-                f"SELECT migration FROM {self.table_name} "
-                f"WHERE batch = {placeholder} ORDER BY id DESC"
-            )
-            result = connection.query(sql, (batch,))
-            migrations = []
-            if result:
-                for row in result:
-                    if hasattr(row, "get"):
-                        migrations.append(row.get("migration"))
+            handle = lock_path.open("a+b")
+            handle.seek(0)
+            if handle.read(1) == b"":
+                handle.write(b"\0")
+                handle.flush()
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                try:
+                    if os.name == "nt":  # pragma: no cover - Windows CI only
+                        import msvcrt
+
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                     else:
-                        migrations.append(row[0])
-            return migrations
-        finally:
-            _release(connection)
+                        import fcntl
 
-    # ── Write APIs ────────────────────────────────────────────────────
-    def record_migration(self, migration_name, batch):
-        """Record that a migration has been run."""
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    process_locked = True
+                    break
+                except (BlockingIOError, OSError):
+                    if time.monotonic() >= deadline:
+                        raise ORMException(
+                            "Timed out waiting for the SQLite migration lock."
+                        ) from None
+                    time.sleep(0.05)
+            yield
+        finally:
+            if handle is not None:
+                if process_locked:
+                    try:
+                        if os.name == "nt":  # pragma: no cover - Windows CI only
+                            import msvcrt
+
+                            handle.seek(0)
+                            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                        else:
+                            import fcntl
+
+                            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        _logger.debug("SQLite migration unlock failed", exc_info=True)
+                handle.close()
+            thread_lock.release()
+
+    # ── Read APIs ────────────────────────────────────────────────────
+    def get_ran_migrations(self) -> list[str]:
+        return [row["migration"] for row in self.get_ran_migration_records()]
+
+    def get_ran_migration_records(self) -> list[dict[str, str | None]]:
         connection = self._get_connection()
         try:
-            placeholder = self._get_placeholder()
-            sql = (
-                f"INSERT INTO {self.table_name} (migration, batch) "
-                f"VALUES ({placeholder}, {placeholder})"
+            rows = (
+                connection.query(
+                    f"SELECT migration, checksum FROM {self.table_name} ORDER BY batch, id"
+                )
+                or []
             )
-            connection.query(sql, (migration_name, batch))
+            return [
+                {
+                    "migration": _row_value(row, "migration", 0),
+                    "checksum": _row_value(row, "checksum", 1),
+                }
+                for row in rows
+            ]
         finally:
             _release(connection)
 
-    def remove_migration(self, migration_name):
-        """Remove migration record (for rollback)."""
+    def get_last_batch_number(self) -> int:
+        connection = self._get_connection()
+        try:
+            rows = (
+                connection.query(f"SELECT MAX(batch) AS max_batch FROM {self.table_name}")
+                or []
+            )
+            if not rows:
+                return 0
+            value = _row_value(rows[0], "max_batch", 0)
+            return int(value or 0)
+        finally:
+            _release(connection)
+
+    def get_migrations_by_batch(self, batch: int) -> list[str]:
         connection = self._get_connection()
         try:
             placeholder = self._get_placeholder()
-            sql = f"DELETE FROM {self.table_name} WHERE migration = {placeholder}"
-            connection.query(sql, (migration_name,))
+            rows = (
+                connection.query(
+                    f"SELECT migration FROM {self.table_name} "
+                    f"WHERE batch = {placeholder} ORDER BY id DESC",
+                    (batch,),
+                )
+                or []
+            )
+            return [_row_value(row, "migration", 0) for row in rows]
+        finally:
+            _release(connection)
+
+    # ── Write APIs ───────────────────────────────────────────────────
+    def record_migration(self, migration_name: str, batch: int, checksum: str) -> None:
+        if not checksum or len(checksum) != 64:
+            raise ORMException("A SHA-256 migration checksum is required.")
+        connection = self._get_connection()
+        try:
+            placeholder = self._get_placeholder()
+            connection.query(
+                f"INSERT INTO {self.table_name} (migration, batch, checksum) "
+                f"VALUES ({placeholder}, {placeholder}, {placeholder})",
+                (migration_name, batch, checksum),
+            )
+        finally:
+            _release(connection)
+
+    def set_migration_checksum(self, migration_name: str, checksum: str) -> None:
+        connection = self._get_connection()
+        try:
+            placeholder = self._get_placeholder()
+            connection.query(
+                f"UPDATE {self.table_name} SET checksum = {placeholder} "
+                f"WHERE migration = {placeholder} AND checksum IS NULL",
+                (checksum, migration_name),
+            )
+        finally:
+            _release(connection)
+
+    def remove_migration(self, migration_name: str) -> None:
+        connection = self._get_connection()
+        try:
+            placeholder = self._get_placeholder()
+            connection.query(
+                f"DELETE FROM {self.table_name} WHERE migration = {placeholder}",
+                (migration_name,),
+            )
         finally:
             _release(connection)

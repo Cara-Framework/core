@@ -403,7 +403,12 @@ def report(exception: BaseException) -> None:
     try:
         from cara.facades import Log
 
-        Log.error("%s: %s", exception.__class__.__name__, exception, context={'exception_type': exception.__class__.__name__})
+        Log.error(
+            "%s: %s",
+            exception.__class__.__name__,
+            exception,
+            context={"exception_type": exception.__class__.__name__},
+        )
     except Exception as log_err:
         # The Log facade itself failed — re-invoking it (the old
         # "fallback") just re-raised the same failure and the report was
@@ -500,7 +505,7 @@ def bcrypt(password: str, *, rounds: int = 12) -> str:
     """
     from cara.encryption import Hash
 
-    return Hash.make(password, rounds=rounds)
+    return Hash.make(password, algorithm="bcrypt", rounds=rounds)
 
 
 # ── Misc ──────────────────────────────────────────────────────────────────

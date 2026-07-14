@@ -27,6 +27,7 @@ legacy string protocol is gone. ``table_exists_in_migrations`` is preserved.
 
 from __future__ import annotations
 
+import ast
 import logging
 import re
 from dataclasses import dataclass, field
@@ -51,12 +52,47 @@ _FRAMEWORK_TYPES = frozenset(
     {"increments", "big_increments", "timestamps", "soft_deletes"}
 )
 
-# The column attributes a diff is allowed to flag as an ALTER. Deliberately
-# EXCLUDES ``default`` — a default round-trips through the parser too fragilely
-# (bool True vs "True", DB.raw expressions, enum members), and a false-positive
-# ALTER on every table is worse than missing a default tweak. Type/length/
-# precision/scale/nullable/unique parse reliably from the canonical line.
-_COMPARED_ATTRS = ("type", "length", "precision", "scale", "nullable", "unique")
+# Attributes that round-trip through generated blueprint migrations.
+_COMPARED_ATTRS = (
+    "type",
+    "length",
+    "precision",
+    "scale",
+    "nullable",
+    "unique",
+    "index",
+)
+
+
+def _method_body_text(content: str, which: str) -> str:
+    if which == "up":
+        match = re.search(
+            r"def up\(self\):(.*?)(?:\n    def down\(self\):|$)",
+            content,
+            re.DOTALL,
+        )
+    else:
+        match = re.search(r"def down\(self\):(.*?)$", content, re.DOTALL)
+    return match.group(1) if match else ""
+
+
+def migration_table_actions(content: str, table_name: str) -> tuple[bool, bool]:
+    """Return whether ``up()`` creates and/or alters ``table_name``.
+
+    File names are intentionally ignored. Generated intent names include
+    ``add_*_to``, ``drop_*_from``, ``change_*_on`` and ``rename_*_on``; using
+    only create/update globs made those migrations invisible on the next run.
+    """
+    up = _method_body_text(content, "up")
+    quoted = rf"[\"']{re.escape(table_name)}[\"']"
+    creates = bool(
+        re.search(
+            rf"\bself\.schema\.create(?:_table_if_not_exists)?\(\s*{quoted}\s*\)",
+            up,
+        )
+    )
+    alters = bool(re.search(rf"\bself\.schema\.table\(\s*{quoted}\s*\)", up))
+    return creates, alters
 
 
 @dataclass
@@ -81,7 +117,24 @@ class Column:
     def signature(self) -> tuple:
         """Identity used for ALTER + RENAME detection (the reliably-parsed
         attrs only — see ``_COMPARED_ATTRS``)."""
-        return tuple(getattr(self, a) for a in _COMPARED_ATTRS)
+        return tuple(getattr(self, a) for a in _COMPARED_ATTRS) + (
+            self.default_signature(),
+        )
+
+    def default_signature(self) -> tuple[bool, Any]:
+        """Canonical default value across model objects and parsed source."""
+        if not self.has_default:
+            return False, None
+        value = self.default
+        if isinstance(value, str):
+            source = value.strip()
+            try:
+                value = ast.literal_eval(source)
+            except (SyntaxError, ValueError):
+                value = source
+        if isinstance(value, (dict, list, set, tuple)):
+            value = repr(value)
+        return True, value
 
 
 @dataclass
@@ -187,10 +240,14 @@ class ModelMigrationComparator:
         # timestamps() → created_at+updated_at, so without this filter every
         # timestamped table shows a spurious created_at/updated_at drop.
         added_names = [
-            n for n in model_cols if n not in migration_cols and n not in _FRAMEWORK_FIELDS
+            n
+            for n in model_cols
+            if n not in migration_cols and n not in _FRAMEWORK_FIELDS
         ]
         removed_names = [
-            n for n in migration_cols if n not in model_cols and n not in _FRAMEWORK_FIELDS
+            n
+            for n in migration_cols
+            if n not in model_cols and n not in _FRAMEWORK_FIELDS
         ]
 
         diffs: list[FieldDiff] = []
@@ -226,6 +283,8 @@ class ModelMigrationComparator:
                 changed = [
                     a for a in _COMPARED_ATTRS if getattr(new, a) != getattr(old, a)
                 ]
+                if new.default_signature() != old.default_signature():
+                    changed.append("default")
                 if changed:
                     diffs.append(
                         FieldDiff(
@@ -265,30 +324,29 @@ class ModelMigrationComparator:
         if not self.migrations_dir.exists():
             return cols, exists
 
-        patterns = [f"*create_{table_name}_table.py", f"*update_{table_name}_table.py"]
-        files: list[Path] = []
-        for pat in patterns:
-            files.extend(self.migrations_dir.glob(pat))
-
-        # Chronological order: the consolidated CREATE first, then ALTERs.
-        for mf in sorted(files, key=lambda p: p.name):
+        # Parse every migration in chronological order and select by the
+        # actual schema operation in up(), not by a fragile filename glob.
+        for mf in sorted(self.migrations_dir.glob("*.py"), key=lambda p: p.name):
             try:
-                content = mf.read_text()
+                content = mf.read_text(encoding="utf-8")
             except OSError:
                 _logger.warning("unreadable migration file: %s", mf)
                 continue
-            if f"create_{table_name}_table" in mf.name:
+            creates, alters = migration_table_actions(content, table_name)
+            if creates:
                 exists = True
                 self._apply_create(content, cols)
-            elif f"update_{table_name}_table" in mf.name:
+            if alters:
                 self._apply_update(content, cols)
         return cols, exists
 
     def _apply_create(self, content: str, cols: dict[str, Column]) -> None:
-        for line in self._blueprint_column_lines(self._method_body(content, "up")):
+        up = self._method_body(content, "up")
+        for line in self._blueprint_column_lines(up):
             col = self._parse_column_line(line)
             if col and col.name not in _FRAMEWORK_FIELDS:
                 cols[col.name] = col
+        self._apply_standalone_indexes(up, cols)
         if "table.timestamps()" in content:
             cols.setdefault("created_at", Column("created_at", "timestamp"))
             cols.setdefault("updated_at", Column("updated_at", "timestamp"))
@@ -300,8 +358,10 @@ class ModelMigrationComparator:
             col = self._parse_column_line(line)
             if col and col.name not in _FRAMEWORK_FIELDS:
                 cols[col.name] = col
+        self._apply_standalone_indexes(up, cols)
         for old, new in re.findall(
-            r'table\.rename_column\(\s*["\'](\w+)["\']\s*,\s*["\'](\w+)["\']', up
+            r'table\.(?:rename_column|rename)\(\s*["\'](\w+)["\']\s*,\s*["\'](\w+)["\']',
+            up,
         ):
             if old in cols:
                 renamed = cols.pop(old)
@@ -314,11 +374,19 @@ class ModelMigrationComparator:
 
     @staticmethod
     def _method_body(content: str, which: str) -> str:
-        if which == "up":
-            m = re.search(r"def up\(self\):(.*?)(?:\n    def down\(self\):|$)", content, re.DOTALL)
-        else:
-            m = re.search(r"def down\(self\):(.*?)$", content, re.DOTALL)
-        return m.group(1) if m else ""
+        return _method_body_text(content, which)
+
+    @staticmethod
+    def _apply_standalone_indexes(body: str, cols: dict[str, Column]) -> None:
+        """Apply scalar/list-of-one table.index/unique declarations."""
+        for method, raw in re.findall(r"table\.(index|unique)\(([^\n)]*)\)", body):
+            names = re.findall(r"[\"'](\w+)[\"']", raw)
+            if len(names) != 1 or names[0] not in cols:
+                continue
+            if method == "index":
+                cols[names[0]].index = True
+            else:
+                cols[names[0]].unique = True
 
     @staticmethod
     def _blueprint_column_lines(body: str) -> list[str]:
@@ -335,6 +403,7 @@ class ModelMigrationComparator:
             if method.group(1) in (
                 "drop_column",
                 "rename_column",
+                "rename",
                 "index",
                 "unique",
                 "foreign",

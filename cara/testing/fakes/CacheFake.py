@@ -18,10 +18,17 @@ class CacheFake:
         self._ttls: dict[str, int | None] = {}
 
     # Production-side surface
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
         return self._store.get(key, default)
 
-    def put(self, key: str, value: Any, ttl: int | None = None) -> None:
+    def put(
+        self,
+        key: str,
+        value: Any,
+        ttl: int | None = None,
+        *,
+        strict: bool = False,
+    ) -> None:
         # Contract returns None — Redis/File drivers all return None on
         # put. The fake used to return ``True`` so any test asserting
         # on the return value silently passed against the fake and
@@ -69,6 +76,14 @@ class CacheFake:
         self._store.pop(key, None)
         self._ttls.pop(key, None)
         return existed
+
+    def pull(self, key: str, default: Any = None) -> Any:
+        """Return and remove a value in one fake-cache operation."""
+        if key not in self._store:
+            return default
+        value = self._store.pop(key)
+        self._ttls.pop(key, None)
+        return value
 
     def forget_if(self, key: str, expected_value: Any) -> bool:
         """Atomically delete ``key`` only if it currently equals ``expected_value``.

@@ -155,6 +155,32 @@ _DB_TYPE_CATEGORY = {
     "point": "point",
 }
 
+# Integer CAPACITY rank — the coarse "integer" category above blurs
+# smallint/integer/bigint into one bucket, so a column WIDENED in the model
+# (e.g. integer → big_integer for an id that will cross 2.1B) passes the
+# category check silently while the live column stays too narrow. These
+# ranks restore the one signal that matters: is the live column big enough
+# to hold what the model now declares? Same data-loss-only direction as the
+# varchar narrower-than-declared check.
+_MODEL_INT_RANK = {
+    "tiny_integer": 1,
+    "tiny_increments": 1,
+    "tiny_integer_unsigned": 1,
+    "small_integer": 1,
+    "small_integer_unsigned": 1,
+    "integer": 2,
+    "medium_integer": 2,
+    "increments": 2,
+    "unsigned_integer": 2,
+    "integer_unsigned": 2,
+    "medium_integer_unsigned": 2,
+    "big_integer": 3,
+    "big_increments": 3,
+    "unsigned_big_integer": 3,
+    "big_integer_unsigned": 3,
+}
+_DB_INT_RANK = {"smallint": 1, "integer": 2, "bigint": 3}
+
 # Field "types" that are not real columns by themselves — they expand into one
 # or more concrete columns at migration time.
 _PSEUDO_FIELD_EXPANSIONS = {
@@ -169,6 +195,7 @@ _PSEUDO_FIELD_EXPANSIONS = {
     options={
         "--c|connection=default": "The connection to introspect",
         "--schema=?": "The Postgres schema to introspect (defaults to the connection's)",
+        "--allow_unavailable": "Explicitly skip when the target database is unavailable",
     },
 )
 class SchemaCheckCommand(CommandBase):
@@ -189,16 +216,17 @@ class SchemaCheckCommand(CommandBase):
         self.info("Checking schema drift (models vs. live database)...")
 
         # Build a read-only Schema bound to the connection. If no database is
-        # configured (or it's unreachable), skip cleanly rather than crash —
-        # CI on a DB-less context must stay green.
+        # configured (or it is unreachable), fail by default. A green drift
+        # gate that checked nothing is more dangerous than a failed pipeline.
         try:
             live_schema = Schema(connection=None, schema=schema_name).on(connection)
         except Exception as exc:  # noqa: BLE001 — any connection-resolution failure
-            self.warning(
-                "No usable database connection "
-                f"('{connection}'): {exc}. Skipping schema:check."
-            )
-            return
+            message = f"No usable database connection ('{connection}'): {exc}."
+            if self.option("allow_unavailable"):
+                self.warning(f"{message} Skipping by explicit request.")
+                return 0
+            self.error(message)
+            return 2
 
         # Discover models (table + declared fields). Independent of the
         # comparator/generator by design.
@@ -220,11 +248,12 @@ class SchemaCheckCommand(CommandBase):
             live_checks = self._introspect_live_checks(live_schema, schema_name)
             live_indexes = self._introspect_live_indexes(live_schema, schema_name)
         except Exception as exc:  # noqa: BLE001 — DB unreachable / introspection failed
-            self.warning(
-                f"Could not introspect the live database: {exc}. "
-                "Skipping schema:check."
-            )
-            return
+            message = f"Could not introspect the live database: {exc}."
+            if self.option("allow_unavailable"):
+                self.warning(f"{message} Skipping by explicit request.")
+                return 0
+            self.error(message)
+            return 2
 
         total_drift = 0
         tables_with_drift = 0
@@ -395,9 +424,7 @@ class SchemaCheckCommand(CommandBase):
         # so mark the type unknown (skips the type check) and nullable=None
         # (skips the nullable check) — we only assert the column EXISTS.
         for raw_col in self._raw_sql_columns(model):
-            columns.setdefault(
-                raw_col, {"type": "__raw__", "nullable": None}
-            )
+            columns.setdefault(raw_col, {"type": "__raw__", "nullable": None})
 
         return columns
 
@@ -495,7 +522,10 @@ class SchemaCheckCommand(CommandBase):
 
         # Nullable mismatch — cheap and high-signal. ``nullable is None`` means
         # "declared via raw SQL, nullability not cheaply known" → skip.
-        if declared["nullable"] is not None and declared["nullable"] != live["is_nullable"]:
+        if (
+            declared["nullable"] is not None
+            and declared["nullable"] != live["is_nullable"]
+        ):
             model_null = "NULL" if declared["nullable"] else "NOT NULL"
             db_null = "NULL" if live["is_nullable"] else "NOT NULL"
             issues.append(
@@ -512,6 +542,21 @@ class SchemaCheckCommand(CommandBase):
                 f"column '{name}' type differs: model={declared['type']} "
                 f"(~{model_cat}), db={live['data_type']} (~{db_cat})"
             )
+
+        # NARROWER INTEGER CAPACITY — both sides land in the coarse "integer"
+        # bucket, so a model widened to big_integer while the live column is
+        # still integer/smallint passed SILENTLY (schema:check green, yet
+        # values past the live column's range overflow on write). One-way,
+        # data-loss-only — a model narrower than live is fine (lenient).
+        if model_cat == "integer" and db_cat == "integer":
+            model_rank = _MODEL_INT_RANK.get(declared["type"])
+            db_rank = _DB_INT_RANK.get(live["data_type"])
+            if model_rank and db_rank and model_rank > db_rank:
+                issues.append(
+                    f"column '{name}' is NARROWER than declared: model="
+                    f"{declared['type']}, db={live['data_type']} — the live "
+                    "column can't hold the model's full integer range"
+                )
 
         # NARROWER-THAN-DECLARED capacity — the one length comparison that is
         # pure signal. The coarse categories above deliberately treat

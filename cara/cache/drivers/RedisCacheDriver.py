@@ -130,13 +130,17 @@ class RedisCacheDriver(Cache):
                 "`cache.drivers.redis.db` must be a non‐negative integer."
             )
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
         redis_key = f"{self._prefix}{key}"
         try:
             raw_data = self._client.get(redis_key)
         except Exception as exc:
-            Log.warning("[RedisCacheDriver] GET failed for '%s': %s", key, exc, category='cache')
+            Log.warning(
+                "[RedisCacheDriver] GET failed for '%s': %s", key, exc, category="cache"
+            )
             notify_cache_event("get", "error", key, None)
+            if strict:
+                raise
             return default
 
         if raw_data is None:
@@ -154,6 +158,10 @@ class RedisCacheDriver(Cache):
                 return value
             except (OSError, RuntimeError, AttributeError, ConnectionError):
                 pass
+            if strict:
+                raise CacheConfigurationException(
+                    f"Corrupt cache value for security-sensitive key '{key}'"
+                ) from unpickle_error
             # Self-heal a corrupt / pickle-incompatible entry instead of
             # serving the default forever. Without the proactive DELETE
             # every subsequent GET re-fetched, re-failed to unpickle,
@@ -162,7 +170,12 @@ class RedisCacheDriver(Cache):
             # for ``BRAND_VERSION_TTL`` and friends, is 30 days). Drop
             # it on first miss so the next caller's ``Cache.remember``
             # repopulates with the current pickle protocol.
-            Log.warning("[RedisCacheDriver] unpickle failed for '%s' (corrupt entry, deleting): %s", key, unpickle_error, category='cache')
+            Log.warning(
+                "[RedisCacheDriver] unpickle failed for '%s' (corrupt entry, deleting): %s",
+                key,
+                unpickle_error,
+                category="cache",
+            )
             try:
                 self._client.delete(redis_key)
             except Exception:
@@ -198,7 +211,13 @@ class RedisCacheDriver(Cache):
         _threshold = _large_value_threshold()
         if payload_size > _threshold and key not in _LARGE_VALUE_WARNED:
             _LARGE_VALUE_WARNED.add(key)
-            Log.warning("[RedisCacheDriver] large cache value: key='%s' size=%sB threshold=%sB — consider normalising or sharding the payload", key, payload_size, _threshold, category='cache')
+            Log.warning(
+                "[RedisCacheDriver] large cache value: key='%s' size=%sB threshold=%sB — consider normalising or sharding the payload",
+                key,
+                payload_size,
+                _threshold,
+                category="cache",
+            )
         try:
             if ttl_seconds > 0:
                 self._client.set(redis_key, payload, ex=ttl_seconds)
@@ -206,7 +225,7 @@ class RedisCacheDriver(Cache):
                 self._client.set(redis_key, payload)
             notify_cache_event("put", "set", key, payload_size)
         except Exception as e:
-            Log.warning("[RedisCacheDriver] set failed: %s", e, category='cache')
+            Log.warning("[RedisCacheDriver] set failed: %s", e, category="cache")
             notify_cache_event("put", "error", key, payload_size)
             if strict:
                 raise
@@ -227,9 +246,48 @@ class RedisCacheDriver(Cache):
             # is interpreted as "key wasn't there", not "Redis is
             # down". Surface the failure so the caller's audit trail
             # records something operators can act on.
-            Log.warning("[RedisCacheDriver] forget failed for '%s': %s", key, e, category='cache')
+            Log.warning(
+                "[RedisCacheDriver] forget failed for '%s': %s", key, e, category="cache"
+            )
             notify_cache_event("forget", "error", key, None)
             return False
+
+    def pull(self, key: str, default: Any = None) -> Any:
+        """Atomically return and delete ``key`` using Redis ``GETDEL``."""
+        redis_key = f"{self._prefix}{key}"
+        try:
+            raw_data = self._client.getdel(redis_key)
+        except Exception as exc:
+            Log.error(
+                "[RedisCacheDriver] GETDEL failed for '%s': %s",
+                key,
+                exc,
+                category="cache",
+                exc_info=True,
+            )
+            notify_cache_event("pull", "error", key, None)
+            raise
+
+        if raw_data is None:
+            notify_cache_event("pull", "miss", key, None)
+            return default
+
+        try:
+            value = pickle.loads(raw_data)
+        except Exception:
+            try:
+                value = raw_data.decode("utf-8")
+            except (UnicodeDecodeError, AttributeError):
+                Log.warning(
+                    "[RedisCacheDriver] pulled corrupt value for '%s'",
+                    key,
+                    category="cache",
+                )
+                notify_cache_event("pull", "error", key, len(raw_data))
+                return default
+
+        notify_cache_event("pull", "hit", key, len(raw_data))
+        return value
 
     def flush(self) -> None:
         """Flush every cache entry under our prefix.
@@ -262,7 +320,7 @@ class RedisCacheDriver(Cache):
                 if cursor == 0:
                     break
         except Exception as e:
-            Log.warning("[RedisCacheDriver] flush failed: %s", e, category='cache')
+            Log.warning("[RedisCacheDriver] flush failed: %s", e, category="cache")
 
     def has(self, key: str) -> bool:
         """Check if a key exists in cache."""
@@ -319,7 +377,13 @@ class RedisCacheDriver(Cache):
             notify_cache_event("add", "set" if won else "noop", key, payload_size)
             return won
         except Exception as e:
-            Log.error("[RedisCacheDriver] add() flight-claim failed for '%s': %s", key, e, category='cache', exc_info=True)
+            Log.error(
+                "[RedisCacheDriver] add() flight-claim failed for '%s': %s",
+                key,
+                e,
+                category="cache",
+                exc_info=True,
+            )
             notify_cache_event("add", "error", key, payload_size)
             raise
 
@@ -419,7 +483,7 @@ class RedisCacheDriver(Cache):
             result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, owner_token)
             return bool(result) and int(result) > 0
         except Exception as e:
-            Log.warning("[RedisCacheDriver] forget_if failed: %s", e, category='cache')
+            Log.warning("[RedisCacheDriver] forget_if failed: %s", e, category="cache")
             return False
 
     def ttl(self, key: str) -> int | None:

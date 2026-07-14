@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from cara.exceptions import InvalidArgumentException
+import hmac
+
+from cara.exceptions import InvalidArgumentException, ORMException
 from cara.facades import Log
 
 
@@ -14,11 +16,16 @@ class MigrationExecutor:
 
     def run_pending_migrations(self):
         """Run all pending migrations"""
+        with self.tracker.migration_lock():
+            return self._run_pending_migrations_locked()
+
+    def _run_pending_migrations_locked(self):
         self.tracker.ensure_migrations_table()
 
         # Get all migration files
         migration_files = self.file_manager.get_migration_files()
         migration_files.sort()  # Ensure proper order
+        self._validate_applied_checksums(migration_files)
 
         # Get already run migrations
         ran_migrations = self.tracker.get_ran_migrations()
@@ -56,14 +63,30 @@ class MigrationExecutor:
             if transactional:
                 with self.db_manager.transaction():
                     self._run_migration(file_path, "up")
-                    self.tracker.record_migration(migration_name, batch)
+                    self.tracker.record_migration(
+                        migration_name,
+                        batch,
+                        self.file_manager.checksum(file_path),
+                    )
             else:
                 self._run_migration(file_path, "up")
-                self.tracker.record_migration(migration_name, batch)
+                self.tracker.record_migration(
+                    migration_name,
+                    batch,
+                    self.file_manager.checksum(file_path),
+                )
             Log.info("Migrated: %s", migration_name)
 
     def rollback_last_batch(self):
         """Rollback the last batch of migrations"""
+        with self.tracker.migration_lock():
+            return self._rollback_last_batch_locked()
+
+    def _rollback_last_batch_locked(self):
+        self.tracker.ensure_migrations_table()
+        migration_files = self.file_manager.get_migration_files()
+        migration_files.sort()
+        self._validate_applied_checksums(migration_files)
         last_batch = self.tracker.get_last_batch_number()
         if last_batch == 0:
             Log.info("Nothing to rollback.")
@@ -77,7 +100,6 @@ class MigrationExecutor:
             return
 
         # Rollback migrations in reverse order
-        migration_files = self.file_manager.get_migration_files()
         file_map = {}
         for file_path in migration_files:
             name = self.file_manager.get_migration_name_from_file(file_path)
@@ -107,7 +129,9 @@ class MigrationExecutor:
             elif direction == "down":
                 migration_instance.down()
             else:
-                raise InvalidArgumentException(f"Invalid migration direction: {direction}")
+                raise InvalidArgumentException(
+                    f"Invalid migration direction: {direction}"
+                )
 
         except Exception as e:
             Log.error(
@@ -142,6 +166,7 @@ class MigrationExecutor:
 
         migration_files = self.file_manager.get_migration_files()
         migration_files.sort()
+        self._validate_applied_checksums(migration_files)
 
         ran_migrations = self.tracker.get_ran_migrations()
 
@@ -154,3 +179,40 @@ class MigrationExecutor:
             )
 
         return status
+
+    def _validate_applied_checksums(self, migration_files) -> None:
+        """Refuse altered/deleted applied migrations; adopt legacy NULL hashes once."""
+        records = self.tracker.get_ran_migration_records()
+        # Lightweight test doubles and third-party trackers written before the
+        # checksum API may return a mock/non-sequence. Real Cara trackers
+        # always return a list of dicts.
+        if not isinstance(records, (list, tuple)):
+            return
+
+        file_map = {
+            self.file_manager.get_migration_name_from_file(path): path
+            for path in migration_files
+        }
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            name = record.get("migration")
+            if not name:
+                continue
+            file_path = file_map.get(name)
+            if file_path is None:
+                raise ORMException(
+                    f"Applied migration '{name}' is missing from disk. Restore the "
+                    "file or rebuild the development database after an overwrite."
+                )
+            actual = self.file_manager.checksum(file_path)
+            expected = record.get("checksum")
+            if not expected:
+                self.tracker.set_migration_checksum(name, actual)
+                continue
+            if not hmac.compare_digest(str(expected), actual):
+                raise ORMException(
+                    f"Applied migration '{name}' was modified after execution. "
+                    "Create a new migration; for a model-first development "
+                    "overwrite, rebuild the database before migrating."
+                )

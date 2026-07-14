@@ -199,13 +199,20 @@ class CacheTaggedStore:
         tag_prefix = ":".join(self.tags)
         return f"{tag_prefix}:{key}"
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
         """Get value from tagged cache."""
-        return self.cache.get(self._build_tagged_key(key), default)
+        return self.cache.get(self._build_tagged_key(key), default, strict=strict)
 
-    def put(self, key: str, value: Any, ttl: int | None = None) -> None:
+    def put(
+        self,
+        key: str,
+        value: Any,
+        ttl: int | None = None,
+        *,
+        strict: bool = False,
+    ) -> None:
         """Store value in tagged cache."""
-        self.cache.put(self._build_tagged_key(key), value, ttl)
+        self.cache.put(self._build_tagged_key(key), value, ttl, strict=strict)
 
     def forever(self, key: str, value: Any) -> None:
         """Store value permanently in tagged cache."""
@@ -214,6 +221,10 @@ class CacheTaggedStore:
     def forget(self, key: str) -> bool:
         """Remove value from tagged cache."""
         return self.cache.forget(self._build_tagged_key(key))
+
+    def pull(self, key: str, default: Any = None) -> Any:
+        """Atomically return and remove a tagged value."""
+        return self.cache.pull(self._build_tagged_key(key), default)
 
     def flush(self) -> int:
         """Flush all entries with these tags."""
@@ -260,9 +271,11 @@ class Cache:
         key: str,
         default: Any = None,
         driver_name: str | None = None,
+        *,
+        strict: bool = False,
     ) -> Any:
         """Retrieve a value from cache via the given driver (or default)."""
-        return self.driver(driver_name).get(key, default)
+        return self.driver(driver_name).get(key, default, strict=strict)
 
     def put(
         self,
@@ -270,9 +283,11 @@ class Cache:
         value: Any,
         ttl: int | None = None,
         driver_name: str | None = None,
+        *,
+        strict: bool = False,
     ) -> None:
         """Store a value under `key` with optional TTL (seconds) via the given driver."""
-        self.driver(driver_name).put(key, value, ttl)
+        self.driver(driver_name).put(key, value, ttl, strict=strict)
 
     def forever(
         self,
@@ -290,6 +305,15 @@ class Cache:
         Returns True if deleted.
         """
         return self.driver(driver_name).forget(key)
+
+    def pull(
+        self,
+        key: str,
+        default: Any = None,
+        driver_name: str | None = None,
+    ) -> Any:
+        """Atomically return and remove a value from the selected driver."""
+        return self.driver(driver_name).pull(key, default)
 
     def forget_if(
         self, key: str, expected_value: Any, driver_name: str | None = None

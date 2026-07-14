@@ -5,6 +5,11 @@ Orchestrates model discovery, schema comparison, and migration generation.
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
 from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
 
@@ -15,7 +20,7 @@ from cara.decorators import command
     options={
         "--overwrite": "Recreate all migrations from scratch (DELETES existing migration files)",
         "--force": "Skip the hand-edit confirmation prompt when --overwrite clobbers files",
-        "--style=blueprint": "Migration style: 'blueprint' (default) or 'sql'",
+        "--style=blueprint": "Migration style (blueprint is the only supported SSOT)",
         "--dry_run": "Show what would be generated without creating files",
     },
 )
@@ -42,6 +47,13 @@ class MakeMigrationCommand(CommandBase):
     def handle(self):
         """Generate migrations from model Field.* definitions."""
         self.info("Auto-generating migrations from models...")
+
+        if self.option("style", "blueprint") != "blueprint":
+            self.error(
+                "Only --style=blueprint is supported. Raw SQL cannot be "
+                "round-tripped safely by the model comparator."
+            )
+            return 2
 
         # Check for overwrite mode
         overwrite_mode = self.option("overwrite", False)
@@ -93,9 +105,7 @@ class MakeMigrationCommand(CommandBase):
         verb = "Would create" if dry_run else "Created"
         # Always show the full tally so the run is self-describing (even a
         # no-op states that every model is already covered).
-        self.success(
-            f"{verb} {created} new, {updated} updated, {unchanged} unchanged"
-        )
+        self.success(f"{verb} {created} new, {updated} updated, {unchanged} unchanged")
         if error:
             # Errors were already printed per-model via self.error(); surface
             # the count so a partially-failed sweep isn't mistaken for success.
@@ -122,14 +132,19 @@ class MakeMigrationCommand(CommandBase):
         # Sort models by dependency order (FK dependencies first)
         ordered_models = self.discoverer.resolve_dependency_order(models)
 
+        # Render and compile the complete replacement before touching disk. A
+        # bad model or stub cannot leave a half-erased migration set.
+        try:
+            prepared = self._prepare_overwrite(ordered_models)
+        except Exception as exc:
+            self.error(f"Overwrite preflight failed; no files changed: {exc}")
+            return 1
+
         # Safety gate: refuse to silently clobber hand-edited migrations.
         # Returns False (abort) only when the user declines the confirm.
         if not self._confirm_clobber(ordered_models):
             self.warning("Aborted: no files were changed.")
             return
-
-        # Clear existing migrations (handles dry_run internally)
-        self._clear_existing_migrations(ordered_models)
 
         # Reset migration counter for fresh numbering.
         # NOTE: the regenerated filenames are NNNN_01_01_NNNNNN_<name>.py. The
@@ -142,15 +157,18 @@ class MakeMigrationCommand(CommandBase):
         # keys migrations by full filename, so a rename would make already-applied
         # migrations look pending) for zero functional gain, so it is deliberately
         # left intact. Do not "simplify" it.
-        self.generator.reset_counter()
-
-        created_count = 0
-
-        # Create fresh CREATE TABLE migrations for each model with proper ordering
-        for index, model_info in enumerate(ordered_models):
-            result = self._create_fresh_migration(model_info, dependency_order=index)
-            if result == "created":
-                created_count += 1
+        if self.option("dry_run"):
+            for model_info, index, content in prepared:
+                self.info(
+                    f"Would create fresh migration for {model_info['name']} -> "
+                    f"{model_info['table']} (order: {index})"
+                )
+                self.info(content)
+            created_count = len(prepared)
+        else:
+            created_count = self._replace_model_migrations_atomically(
+                ordered_models, prepared
+            )
 
         # Summary message
         if self.option("dry_run"):
@@ -161,6 +179,69 @@ class MakeMigrationCommand(CommandBase):
             self.success(
                 f"Recreated {created_count} migration(s) with dependency-based ordering"
             )
+
+    def _prepare_overwrite(self, ordered_models):
+        """Render and syntax-check the complete replacement set in memory."""
+        style = self.option("style", "blueprint")
+        prepared = []
+        for index, model_info in enumerate(ordered_models):
+            if not model_info.get("has_fields_method", False):
+                continue
+            content = self.generator.generate_create_migration(model_info, style)
+            if not content:
+                continue
+            compile(content, f"<migration:{model_info['table']}>", "exec")
+            prepared.append((model_info, index, content))
+        return prepared
+
+    def _replace_model_migrations_atomically(self, models, prepared) -> int:
+        """Move old model migrations aside; restore all of them on failure."""
+        migrations_dir = self._migrations_dir() or self.generator.migrations_dir
+        migrations_dir.mkdir(parents=True, exist_ok=True)
+        targets = self._collect_clobber_targets(models)
+        backup_dir = Path(
+            tempfile.mkdtemp(prefix=".cara-overwrite-", dir=str(migrations_dir))
+        )
+        moved: list[tuple[Path, Path]] = []
+        generated: list[Path] = []
+        counter_file = self.generator.counter_file
+        previous_counter = counter_file.read_bytes() if counter_file.exists() else None
+
+        try:
+            for source in targets:
+                backup = backup_dir / source.name
+                os.replace(source, backup)
+                moved.append((source, backup))
+
+            self.generator.reset_counter()
+            for model_info, dependency_order, content in prepared:
+                generated.append(
+                    self.generator.create_migration_file(
+                        f"create_{model_info['table']}_table",
+                        content,
+                        dependency_order=dependency_order,
+                    )
+                )
+        except BaseException:
+            for path in generated:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            for original, backup in reversed(moved):
+                if backup.exists():
+                    os.replace(backup, original)
+            if previous_counter is None:
+                counter_file.unlink(missing_ok=True)
+            else:
+                from cara.eloquent.migrations.MigrationGenerator import _atomic_write
+
+                _atomic_write(counter_file, previous_counter.decode("utf-8"))
+            raise
+        finally:
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+        return len(generated)
 
     def _migrations_dir(self):
         """Resolve the migrations directory via the paths() helper, or None."""
@@ -181,28 +262,24 @@ class MakeMigrationCommand(CommandBase):
         if migrations_dir is None:
             return []
 
+        from cara.eloquent.migrations.ModelMigrationComparator import (
+            migration_table_actions,
+        )
+
+        table_names = {model_info["table"] for model_info in models}
         targets: list = []
-        seen: set = set()
-        for model_info in models:
-            table_name = model_info["table"]
-            patterns = [
-                f"*create_{table_name}_table.py",
-                f"*update_{table_name}_table.py",
-                # Column-level incremental migrations (e.g.
-                # ``add_<col>_to_<table>_table.py``) are fully subsumed by the
-                # freshly regenerated ``create_<table>`` migration, which is
-                # built from the current model and already declares every
-                # column. Leaving them behind made a from-scratch ``migrate``
-                # abort with ``column "<col>" of relation "<table>" already
-                # exists``. In this development workflow the model is the sole
-                # source of truth, so drop the redundant incremental ones too.
-                f"*_to_{table_name}_table.py",
-            ]
-            for pattern in patterns:
-                for file_path in sorted(migrations_dir.glob(pattern)):
-                    if file_path not in seen:
-                        seen.add(file_path)
-                        targets.append(file_path)
+        for file_path in sorted(migrations_dir.glob("*.py")):
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Cannot safely inspect migration '{file_path.name}': {exc}"
+                ) from exc
+            if any(
+                any(migration_table_actions(content, table_name))
+                for table_name in table_names
+            ):
+                targets.append(file_path)
         return targets
 
     # Comment fragments the generator DOES emit (inline annotations on the
@@ -228,8 +305,17 @@ class MakeMigrationCommand(CommandBase):
             return True
 
         suspicious_tokens = (
-            "if ", "for ", "while ", "try:", "except", "DB.connection",
-            ".cursor(", ".execute(", "raw(", "lambda", "import os",
+            "if ",
+            "for ",
+            "while ",
+            "try:",
+            "except",
+            "DB.connection",
+            ".cursor(",
+            ".execute(",
+            "raw(",
+            "lambda",
+            "import os",
         )
         in_docstring = False
         for raw in text.splitlines():
@@ -253,7 +339,7 @@ class MakeMigrationCommand(CommandBase):
 
             # Any ``#`` (whole-line or inline) that isn't a generated annotation.
             if "#" in line:
-                comment = line[line.index("#"):]
+                comment = line[line.index("#") :]
                 if not any(m in comment for m in self._GENERATED_COMMENT_MARKERS):
                     return True
             # A def for something other than up()/down().
@@ -412,9 +498,7 @@ class MakeMigrationCommand(CommandBase):
                         filepath = self.generator.create_migration_file(name, content)
                         self.info(f"Created migration: \n{filepath}")
                     else:
-                        self.info(
-                            f"Would create '{name}' for {model_info['name']}:"
-                        )
+                        self.info(f"Would create '{name}' for {model_info['name']}:")
                         self.info(content)
                         self.info("=" * 50)
                     return "created"

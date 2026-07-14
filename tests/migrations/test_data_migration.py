@@ -43,7 +43,9 @@ def migrations_dir(tmp_path):
 
 
 def _load_class(file_path):
-    return MigrationFileManager(str(file_path.parent)).load_migration_class(str(file_path))
+    return MigrationFileManager(str(file_path.parent)).load_migration_class(
+        str(file_path)
+    )
 
 
 def test_scaffold_uses_the_raw_name_no_special_prefix(migrations_dir):

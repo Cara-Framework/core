@@ -151,7 +151,7 @@ class FileCacheDriver(Cache):
                 "`cache.drivers.file.path` must be a non‐empty string."
             )
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
         file_path = self._file_path(key)
         if not os.path.exists(file_path):
             return default
@@ -162,6 +162,10 @@ class FileCacheDriver(Cache):
             # logic kicks in. Previously we returned `stored_value` (None) which
             # caused Cache.remember to return None even when the caller's
             # callback produced a real value, breaking tuple-unpacking sites.
+            if strict:
+                raise CacheConfigurationException(
+                    f"Unreadable cache value for security-sensitive key '{key}'"
+                )
             return default
 
         if expires_at is None or expires_at >= time.time():
@@ -176,10 +180,12 @@ class FileCacheDriver(Cache):
         key: str,
         value: Any,
         ttl: int | None = None,
+        *,
+        strict: bool = False,
     ) -> None:
         expires_at = self._compute_expiration(ttl)
         file_path = self._file_path(key)
-        self._write_file(file_path, expires_at, value)
+        self._write_file(file_path, expires_at, value, strict=strict)
 
     def forever(self, key: str, value: Any) -> None:
         file_path = self._file_path(key)
@@ -188,6 +194,26 @@ class FileCacheDriver(Cache):
     def forget(self, key: str) -> bool:
         file_path = self._file_path(key)
         return self._delete_file(file_path)
+
+    def pull(self, key: str, default: Any = None) -> Any:
+        """Atomically return and delete a file-backed cache entry.
+
+        The file driver only promises in-process atomicity; distributed
+        one-time claims must use Redis.
+        """
+        file_path = self._file_path(key)
+        with _FILE_CAS_LOCK:
+            if not os.path.exists(file_path):
+                return default
+            ok, expires_at, stored_value = self._read_file(file_path)
+            if not ok:
+                return default
+            if expires_at is not None and expires_at < time.time():
+                self._delete_file(file_path)
+                return default
+            if not self._delete_file(file_path):
+                return default
+            return stored_value
 
     def flush(self) -> None:
         for filename in os.listdir(self.cache_directory):
@@ -268,7 +294,7 @@ class FileCacheDriver(Cache):
                     f.write(payload)
                 return True
             except Exception as e:
-                Log.warning("[FileCacheDriver] add write failed: %s", e, category='cache')
+                Log.warning("[FileCacheDriver] add write failed: %s", e, category="cache")
                 # Roll back the empty/partial file we created.
                 try:
                     os.remove(file_path)
@@ -372,6 +398,8 @@ class FileCacheDriver(Cache):
         file_path: str,
         expires_at: float | None,
         value: Any,
+        *,
+        strict: bool = False,
     ) -> None:
         """Atomic, HMAC-tagged write.
 
@@ -392,12 +420,14 @@ class FileCacheDriver(Cache):
                 f.write(payload)
             os.replace(tmp_path, file_path)
         except Exception as e:
-            Log.warning("[FileCacheDriver] write failed: %s", e, category='cache')
+            Log.warning("[FileCacheDriver] write failed: %s", e, category="cache")
             # Best-effort cleanup of the tmp file.
             try:
                 os.remove(tmp_path)
             except OSError:
                 pass  # best-effort cleanup of temp file
+            if strict:
+                raise
 
     def _delete_file(self, file_path: str) -> bool:
         try:
@@ -506,6 +536,8 @@ class FileCacheDriver(Cache):
                 if self._delete_file(file_path):
                     deleted_count += 1
         except Exception as e:
-            Log.warning("[FileCacheDriver] forget_pattern failed: %s", e, category='cache')
+            Log.warning(
+                "[FileCacheDriver] forget_pattern failed: %s", e, category="cache"
+            )
 
         return deleted_count

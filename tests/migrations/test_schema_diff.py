@@ -77,10 +77,48 @@ def test_intent_revealing_names():
     assert summarize_change_name("product", [FieldDiff("removed", "sku")])[0] == (
         "drop_sku_from_product_table"
     )
-    assert summarize_change_name(
-        "product", [FieldDiff("renamed", "title", old_name="name")]
-    )[0] == "rename_name_to_title_on_product_table"
+    assert (
+        summarize_change_name(
+            "product", [FieldDiff("renamed", "title", old_name="name")]
+        )[0]
+        == "rename_name_to_title_on_product_table"
+    )
     # mixed change set falls back to the generic name
     assert summarize_change_name(
         "product", [FieldDiff("added", "a"), FieldDiff("removed", "b")]
     ) == ("update_product_table", "UpdateProductTable")
+
+
+def test_default_and_scalar_index_changes_are_detected():
+    model = {
+        "state": Column("state", "string", default="active", has_default=True, index=True)
+    }
+    migration = {
+        "state": Column(
+            "state", "string", default="'pending'", has_default=True, index=False
+        )
+    }
+    diffs = _diff(model, migration)
+    assert len(diffs) == 1
+    assert set(diffs[0].changed_attrs) == {"default", "index"}
+
+
+def test_intent_named_migrations_are_applied_to_snapshot(tmp_path):
+    create = tmp_path / "0001_create_widget_table.py"
+    create.write_text(
+        'class X:\n    def up(self):\n        with self.schema.create("widget") as table:\n'
+        '            table.string("name", 255)\n    def down(self):\n        pass\n'
+    )
+    add = tmp_path / "0002_add_status_to_widget_table.py"
+    add.write_text(
+        'class X:\n    def up(self):\n        with self.schema.table("widget") as table:\n'
+        '            table.string("status", 20).default("active")\n'
+        "    def down(self):\n        pass\n"
+    )
+    comparator = ModelMigrationComparator.__new__(ModelMigrationComparator)
+    comparator.migrations_dir = tmp_path
+
+    columns, exists = comparator._migration_columns("widget")
+
+    assert exists is True
+    assert set(columns) == {"name", "status"}

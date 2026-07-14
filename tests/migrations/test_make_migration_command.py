@@ -103,29 +103,37 @@ def _write(d, name, content):
 
 def test_generated_create_not_flagged(migrations_dir):
     cmd = _make_command()
-    p = _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
+    p = _write(
+        migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE
+    )
     assert cmd._looks_hand_edited(p) is False
 
 
 def test_generated_update_annotations_not_flagged(migrations_dir):
     cmd = _make_command()
-    p = _write(migrations_dir, "0002_01_01_000000_add_note_to_widget_table.py",
-               _GENERATED_UPDATE_WITH_ANNOTATIONS)
+    p = _write(
+        migrations_dir,
+        "0002_01_01_000000_add_note_to_widget_table.py",
+        _GENERATED_UPDATE_WITH_ANNOTATIONS,
+    )
     assert cmd._looks_hand_edited(p) is False
 
 
 def test_generated_db_statement_not_flagged(migrations_dir):
     cmd = _make_command()
-    p = _write(migrations_dir, "0003_01_01_000000_create_widget_table.py",
-               _GENERATED_WITH_DB_STATEMENT)
+    p = _write(
+        migrations_dir,
+        "0003_01_01_000000_create_widget_table.py",
+        _GENERATED_WITH_DB_STATEMENT,
+    )
     assert cmd._looks_hand_edited(p) is False
 
 
 def test_human_comment_flagged(migrations_dir):
     cmd = _make_command()
     edited = _GENERATED_CREATE.replace(
-        '            table.timestamps()',
-        '            table.timestamps()\n            # NOTE: keep this column for the legacy importer',
+        "            table.timestamps()",
+        "            table.timestamps()\n            # NOTE: keep this column for the legacy importer",
     )
     p = _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
     assert cmd._looks_hand_edited(p) is True
@@ -145,8 +153,7 @@ def test_custom_down_logic_flagged(migrations_dir):
     cmd = _make_command()
     edited = _GENERATED_CREATE.replace(
         '        self.schema.drop("widget")',
-        '        for t in ("widget", "widget_audit"):\n'
-        '            self.schema.drop(t)',
+        '        for t in ("widget", "widget_audit"):\n            self.schema.drop(t)',
     )
     p = _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
     assert cmd._looks_hand_edited(p) is True
@@ -165,9 +172,17 @@ def test_unreadable_file_treated_as_hand_edited(migrations_dir):
 def test_collect_targets_dedupes_and_matches_patterns(migrations_dir):
     cmd = _make_command()
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
-    _write(migrations_dir, "0002_01_01_000000_add_note_to_widget_table.py", _GENERATED_CREATE)
+    _write(
+        migrations_dir, "0002_01_01_000000_add_note_to_widget_table.py", _GENERATED_CREATE
+    )
     # unrelated table — must be left alone
-    _write(migrations_dir, "0003_01_01_000000_create_gadget_table.py", _GENERATED_CREATE)
+    _write(
+        migrations_dir,
+        "0003_01_01_000000_create_gadget_table.py",
+        _GENERATED_CREATE.replace('create("widget")', 'create("gadget")').replace(
+            'drop("widget")', 'drop("gadget")'
+        ),
+    )
 
     targets = cmd._collect_clobber_targets([{"table": "widget"}])
     names = sorted(p.name for p in targets)
@@ -187,7 +202,9 @@ def test_confirm_clobber_no_targets_proceeds(migrations_dir):
 
 def test_confirm_clobber_clean_files_proceeds_without_prompt(migrations_dir):
     cmd = _make_command()
-    cmd.confirm = MagicMock(side_effect=AssertionError("should not prompt for clean files"))
+    cmd.confirm = MagicMock(
+        side_effect=AssertionError("should not prompt for clean files")
+    )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
     assert cmd._confirm_clobber([{"table": "widget"}]) is True
 
@@ -196,8 +213,8 @@ def test_confirm_clobber_hand_edited_prompts_and_respects_no(migrations_dir):
     cmd = _make_command()
     cmd.confirm = MagicMock(return_value=False)
     edited = _GENERATED_CREATE.replace(
-        '            table.timestamps()',
-        '            table.timestamps()\n            # manual tweak',
+        "            table.timestamps()",
+        "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
     assert cmd._confirm_clobber([{"table": "widget"}]) is False
@@ -208,8 +225,8 @@ def test_confirm_clobber_hand_edited_prompts_and_respects_yes(migrations_dir):
     cmd = _make_command()
     cmd.confirm = MagicMock(return_value=True)
     edited = _GENERATED_CREATE.replace(
-        '            table.timestamps()',
-        '            table.timestamps()\n            # manual tweak',
+        "            table.timestamps()",
+        "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
     assert cmd._confirm_clobber([{"table": "widget"}]) is True
@@ -220,8 +237,8 @@ def test_force_skips_prompt_even_when_hand_edited(migrations_dir):
     cmd = _make_command({"force": True})
     cmd.confirm = MagicMock(side_effect=AssertionError("--force must not prompt"))
     edited = _GENERATED_CREATE.replace(
-        '            table.timestamps()',
-        '            table.timestamps()\n            # manual tweak',
+        "            table.timestamps()",
+        "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
     assert cmd._confirm_clobber([{"table": "widget"}]) is True
@@ -231,8 +248,8 @@ def test_dry_run_skips_prompt_even_when_hand_edited(migrations_dir):
     cmd = _make_command({"dry_run": True})
     cmd.confirm = MagicMock(side_effect=AssertionError("--dry_run must not prompt"))
     edited = _GENERATED_CREATE.replace(
-        '            table.timestamps()',
-        '            table.timestamps()\n            # manual tweak',
+        "            table.timestamps()",
+        "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
     assert cmd._confirm_clobber([{"table": "widget"}]) is True
@@ -243,14 +260,18 @@ def test_dry_run_skips_prompt_even_when_hand_edited(migrations_dir):
 
 def test_clear_deletes_files_when_not_dry_run(migrations_dir):
     cmd = _make_command()
-    p = _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
+    p = _write(
+        migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE
+    )
     cmd._clear_existing_migrations([{"table": "widget"}])
     assert not p.exists()
 
 
 def test_clear_preserves_files_on_dry_run(migrations_dir):
     cmd = _make_command({"dry_run": True})
-    p = _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
+    p = _write(
+        migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE
+    )
     cmd._clear_existing_migrations([{"table": "widget"}])
     assert p.exists()
 
@@ -282,3 +303,51 @@ def test_summary_surfaces_errors():
     cmd._print_summary(0, 0, 3, 2, dry_run=False)
     cmd.warning.assert_called_once()
     assert "2 model(s)" in cmd.warning.call_args.args[0]
+
+
+def test_overwrite_prepares_before_replacing_files():
+    cmd = _make_command({"overwrite": True, "force": True})
+    model = {
+        "name": "Widget",
+        "table": "widget",
+        "has_fields_method": True,
+    }
+    cmd.discoverer.discover_models = MagicMock(return_value=[model])
+    cmd.discoverer.resolve_dependency_order = MagicMock(return_value=[model])
+    cmd.generator.generate_create_migration = MagicMock(
+        return_value="class MigrationFile:\n    pass\n"
+    )
+    cmd._confirm_clobber = MagicMock(return_value=True)
+    cmd._replace_model_migrations_atomically = MagicMock(return_value=1)
+
+    result = cmd.handle()
+
+    assert result is None
+    prepared = cmd._replace_model_migrations_atomically.call_args.args[1]
+    assert prepared == [(model, 0, "class MigrationFile:\n    pass\n")]
+
+
+def test_overwrite_bad_generated_syntax_changes_nothing():
+    cmd = _make_command({"overwrite": True, "force": True})
+    model = {
+        "name": "Widget",
+        "table": "widget",
+        "has_fields_method": True,
+    }
+    cmd.discoverer.discover_models = MagicMock(return_value=[model])
+    cmd.discoverer.resolve_dependency_order = MagicMock(return_value=[model])
+    cmd.generator.generate_create_migration = MagicMock(return_value="not python :")
+    cmd._confirm_clobber = MagicMock(return_value=True)
+    cmd._replace_model_migrations_atomically = MagicMock()
+
+    assert cmd.handle() == 1
+    cmd._confirm_clobber.assert_not_called()
+    cmd._replace_model_migrations_atomically.assert_not_called()
+
+
+def test_sql_style_is_rejected_before_discovery():
+    cmd = _make_command({"style": "sql"})
+    cmd.discoverer.discover_models = MagicMock()
+
+    assert cmd.handle() == 2
+    cmd.discoverer.discover_models.assert_not_called()

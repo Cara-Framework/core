@@ -18,14 +18,10 @@ class Migration:
     Dependency Inversion: Depends on abstractions (DB facade, components)
     """
 
-    # Default to non-transactional. Schema.create() and Schema.statement()
-    # already commit on their own pooled connection; wrapping them in an
-    # outer ``db.transaction()`` causes the executor to fetch a freshly
-    # closed handle when the inner work is done, which crashes with
-    # "'NoneType' object has no attribute 'commit'". Migrations that
-    # genuinely need outer-tx atomicity can opt in with
-    # ``transactional = True``.
-    transactional = False
+    # PostgreSQL and SQLite DDL is transactional; atomic schema + tracker
+    # writes are therefore the safe default. Operations that explicitly
+    # forbid a transaction (for example CREATE INDEX CONCURRENTLY) opt out.
+    transactional = True
 
     def __init__(
         self,
@@ -118,46 +114,8 @@ class Migration:
         if migration == "all":
             self.executor.run_pending_migrations()
         else:
-            # Run specific migration — must use the same transactional
-            # wrapping as ``run_pending_migrations`` so a crash between
-            # ``up()`` and ``record_migration`` cannot leave the schema
-            # changed but unrecorded (or vice versa). Previously this
-            # path called the two side-by-side with no atomicity,
-            # producing inconsistent state on any mid-flight failure.
-            #
-            # IDEMPOTENCY: the executor's ``run_pending_migrations``
-            # skips migrations already in the tracker; this specific-
-            # name path used to run ``up()`` unconditionally, so
-            # ``python craft migrate --m=foo`` twice ran ``foo.up()``
-            # twice (typically a ``CREATE TABLE`` followed by an
-            # ``already exists`` crash on the second invocation, plus a
-            # duplicate tracker row when ``up`` was idempotent enough
-            # to survive). Treat already-ran migrations as a no-op to
-            # match the bulk path's contract.
-            self.tracker.ensure_migrations_table()
-            ran_migrations = set(self.tracker.get_ran_migrations())
-            if migration in ran_migrations:
-                Log.info("Migration %s already ran; skipping.", migration)
-                if output and self.command_class:
-                    self.command_class.info("Migrations completed.")
-                return
-
-            migration_files = self.file_manager.get_migration_files()
-            for file_path in migration_files:
-                migration_name = self.file_manager.get_migration_name_from_file(file_path)
-                if migration_name == migration:
-                    Log.info("Running migration: %s", migration_name)
-                    batch = self.tracker.get_last_batch_number() + 1
-                    transactional = self.executor._migration_is_transactional(file_path)
-                    if transactional:
-                        with DB.transaction():
-                            self.executor._run_migration(file_path, "up")
-                            self.tracker.record_migration(migration_name, batch)
-                    else:
-                        self.executor._run_migration(file_path, "up")
-                        self.tracker.record_migration(migration_name, batch)
-                    Log.info("Migrated: %s", migration_name)
-                    break
+            with self.tracker.migration_lock():
+                self._migrate_specific_locked(migration)
 
         if output and self.command_class:
             self.command_class.info("Migrations completed.")
@@ -170,46 +128,8 @@ class Migration:
         if migration == "all":
             self.executor.rollback_last_batch()
         else:
-            # Rollback specific migration — symmetric to the migrate
-            # branch above: ``down()`` and ``remove_migration`` must
-            # commit together. Otherwise a failure between them either
-            # un-applies the schema while leaving the tracker entry
-            # behind, or removes the tracker entry while leaving the
-            # schema intact.
-            #
-            # IDEMPOTENCY: previously ran ``down()`` even if the named
-            # migration was already rolled back, so calling
-            # ``migrate:rollback --m=foo`` twice ran
-            # ``DROP TABLE foo`` twice and the second invocation
-            # crashed with "table does not exist" — masking the actual
-            # state ("we already rolled it back").
-            self.tracker.ensure_migrations_table()
-            ran_migrations = set(self.tracker.get_ran_migrations())
-            if migration not in ran_migrations:
-                Log.info("Migration %s was not in the tracker; nothing to rollback.", migration)
-                if output and self.command_class:
-                    self.command_class.info("Rollback completed.")
-                return
-
-            migration_files = self.file_manager.get_migration_files()
-            file_map = {}
-            for file_path in migration_files:
-                name = self.file_manager.get_migration_name_from_file(file_path)
-                file_map[name] = file_path
-
-            if migration in file_map:
-                Log.info("Rolling back: %s", migration)
-                transactional = self.executor._migration_is_transactional(
-                    file_map[migration]
-                )
-                if transactional:
-                    with DB.transaction():
-                        self.executor._run_migration(file_map[migration], "down")
-                        self.tracker.remove_migration(migration)
-                else:
-                    self.executor._run_migration(file_map[migration], "down")
-                    self.tracker.remove_migration(migration)
-                Log.info("Rolled back: %s", migration)
+            with self.tracker.migration_lock():
+                self._rollback_specific_locked(migration)
 
         if output and self.command_class:
             self.command_class.info("Rollback completed.")
@@ -217,21 +137,60 @@ class Migration:
     def reset(self, migration="all"):
         """Reset all migrations"""
         if migration == "all":
-            # Get all ran migrations in reverse order
-            ran_migrations = self.get_all_migrations(reverse=True)
-            migration_files = self.file_manager.get_migration_files()
+            for migration_name in self.get_all_migrations(reverse=True):
+                self.rollback(migration_name)
+        else:
+            self.rollback(migration)
 
-            file_map = {}
-            for file_path in migration_files:
-                name = self.file_manager.get_migration_name_from_file(file_path)
-                file_map[name] = file_path
+    def _migrate_specific_locked(self, migration: str) -> None:
+        self.tracker.ensure_migrations_table()
+        files = sorted(self.file_manager.get_migration_files())
+        self.executor._validate_applied_checksums(files)
+        if migration in set(self.tracker.get_ran_migrations()):
+            Log.info("Migration %s already ran; skipping.", migration)
+            return
+        file_map = {
+            self.file_manager.get_migration_name_from_file(path): path for path in files
+        }
+        file_path = file_map.get(migration)
+        if file_path is None:
+            raise FileNotFoundError(f"Migration not found: {migration}")
+        batch = self.tracker.get_last_batch_number() + 1
+        Log.info("Running migration: %s", migration)
+        checksum = self.file_manager.checksum(file_path)
+        if self.executor._migration_is_transactional(file_path):
+            with DB.transaction():
+                self.executor._run_migration(file_path, "up")
+                self.tracker.record_migration(migration, batch, checksum)
+        else:
+            self.executor._run_migration(file_path, "up")
+            self.tracker.record_migration(migration, batch, checksum)
+        Log.info("Migrated: %s", migration)
 
-            for migration_name in ran_migrations:
-                if migration_name in file_map:
-                    Log.info("Rolling back: %s", migration_name)
-                    self.executor._run_migration(file_map[migration_name], "down")
-                    self.tracker.remove_migration(migration_name)
-                    Log.info("Rolled back: %s", migration_name)
+    def _rollback_specific_locked(self, migration: str) -> None:
+        self.tracker.ensure_migrations_table()
+        files = sorted(self.file_manager.get_migration_files())
+        self.executor._validate_applied_checksums(files)
+        if migration not in set(self.tracker.get_ran_migrations()):
+            Log.info(
+                "Migration %s was not in the tracker; nothing to rollback.", migration
+            )
+            return
+        file_map = {
+            self.file_manager.get_migration_name_from_file(path): path for path in files
+        }
+        file_path = file_map.get(migration)
+        if file_path is None:
+            raise FileNotFoundError(f"Migration not found: {migration}")
+        Log.info("Rolling back: %s", migration)
+        if self.executor._migration_is_transactional(file_path):
+            with DB.transaction():
+                self.executor._run_migration(file_path, "down")
+                self.tracker.remove_migration(migration)
+        else:
+            self.executor._run_migration(file_path, "down")
+            self.tracker.remove_migration(migration)
+        Log.info("Rolled back: %s", migration)
 
     def refresh(self, migration="all"):
         """Refresh migrations (reset + migrate)"""

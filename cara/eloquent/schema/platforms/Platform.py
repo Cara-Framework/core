@@ -37,7 +37,9 @@ class Platform:
             InvalidArgumentException: If the identifier contains invalid characters
         """
         if not name or not isinstance(name, str):
-            raise InvalidArgumentException(f"Invalid SQL {label}: must be a non-empty string")
+            raise InvalidArgumentException(
+                f"Invalid SQL {label}: must be a non-empty string"
+            )
         if not _SQL_IDENTIFIER_RE.match(name):
             raise InvalidArgumentException(
                 f"Invalid SQL {label} '{name}': "

@@ -32,8 +32,14 @@ class Authenticate(Middleware):
         # config so it stays empty (= unrestricted, matches legacy
         # behaviour) until ops opts in.
         if not self._origin_is_allowed(socket):
-            Log.warning("WebSocket origin rejected: %s", self._read_origin(socket), category='cara.websocket')
-            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+            Log.warning(
+                "WebSocket origin rejected: %s",
+                self._read_origin(socket),
+                category="cara.websocket",
+            )
+            with contextlib.suppress(
+                OSError, RuntimeError, AttributeError, ConnectionError
+            ):
                 await socket.send({"type": "websocket.close", "code": 4003})
             raise WebSocketException("Origin not allowed", 4003)
 
@@ -41,7 +47,9 @@ class Authenticate(Middleware):
             if await self._authenticate_socket(socket):
                 return await next_fn(socket)
         except Exception as e:
-            Log.error("WebSocket auth error: %s", e, category='cara.websocket', exc_info=True)
+            Log.error(
+                "WebSocket auth error: %s", e, category="cara.websocket", exc_info=True
+            )
             # Don't try to send close message on error - just raise the exception
             raise WebSocketException("Unauthorized WebSocket", 4006) from e
 
@@ -50,12 +58,39 @@ class Authenticate(Middleware):
             await socket.send({"type": "websocket.close", "code": 4006})
         except Exception as e:
             # Connection might already be closed, just log and continue
-            Log.debug("Could not send close message to WebSocket: %s", e, category='cara.websocket')
+            Log.debug(
+                "Could not send close message to WebSocket: %s",
+                e,
+                category="cara.websocket",
+            )
 
         raise WebSocketException("Unauthorized WebSocket", 4006)
 
     async def _authenticate_socket(self, socket: Socket) -> bool:
-        """Authenticate using token from header or query param."""
+        """Authenticate using a one-time ticket or a non-browser header."""
+        ticket = self._extract_ticket(socket)
+        if ticket:
+            auth_manager = self.application.make("auth")
+            for guard_name in self.guards:
+                guard = auth_manager.guard(guard_name)
+                consume = getattr(guard, "consume_websocket_ticket", None)
+                if not callable(consume):
+                    continue
+                try:
+                    user = consume(ticket)
+                    if user is not None:
+                        guard._user = user  # type: ignore[attr-defined]
+                        socket._user = user
+                        socket.jwt_claims = getattr(guard, "last_payload", {})
+                        return True
+                except Exception as exc:
+                    Log.warning(
+                        "WebSocket ticket rejected: %s",
+                        exc,
+                        category="cara.websocket",
+                    )
+            return False
+
         token = self._extract_token(socket)
         if not token:
             Log.debug("WebSocket auth: no token found", category="cara.websocket")
@@ -73,10 +108,18 @@ class Authenticate(Middleware):
                         continue
                     guard._user = user  # type: ignore[attr-defined]
                     socket._user = user  # attach to socket
-                    Log.debug("WebSocket auth succeeded via %s for user %s", guard_name, user, category='cara.websocket')
+                    socket.jwt_claims = getattr(guard, "last_payload", {})
+                    Log.debug(
+                        "WebSocket auth succeeded via %s for user %s",
+                        guard_name,
+                        user,
+                        category="cara.websocket",
+                    )
                     return True
             except Exception as e:
-                Log.warning("Guard %s failed: %s", guard_name, e, category='cara.websocket')
+                Log.warning(
+                    "Guard %s failed: %s", guard_name, e, category="cara.websocket"
+                )
                 continue
         return False
 
@@ -129,12 +172,13 @@ class Authenticate(Middleware):
                     token_val = proto[7:]
                     break
 
-        # query string
-        if not token_val:
-            qs_raw = socket.scope.get("query_string", b"").decode()
-            if qs_raw:
-                from urllib.parse import parse_qs
-
-                qs = parse_qs(qs_raw)
-                token_val = (qs.get("token") or qs.get("access_token") or [None])[0]
         return token_val
+
+    @staticmethod
+    def _extract_ticket(socket: Socket) -> str | None:
+        from urllib.parse import parse_qs
+
+        query = socket.scope.get("query_string", b"").decode()
+        if not query:
+            return None
+        return (parse_qs(query).get("ticket") or [None])[0]

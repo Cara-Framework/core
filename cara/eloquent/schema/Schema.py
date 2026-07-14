@@ -18,8 +18,11 @@ from .TableDiff import TableDiff
 
 
 def _release_connection(connection) -> None:
-    """Return a borrowed connection to the pool. Best-effort."""
+    """Return an owned connection, never the active transaction handle."""
     if connection is None:
+        return
+    transaction_level = getattr(connection, "transaction_level", 0)
+    if isinstance(transaction_level, (int, float)) and transaction_level > 0:
         return
     try:
         close = getattr(connection, "close_connection", None)

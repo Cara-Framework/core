@@ -71,9 +71,7 @@ class Table:
     def rename_column(self, old_column, new_column, data_type=None, length=None) -> Self:
         """Queue a column rename on an ALTER (platform reads new name off the
         Column, old name off the dict key)."""
-        self.renamed_columns[old_column] = Column(
-            new_column, data_type, length=length
-        )
+        self.renamed_columns[old_column] = Column(new_column, data_type, length=length)
         return self
 
     def __str__(self):

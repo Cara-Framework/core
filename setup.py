@@ -56,6 +56,7 @@ setup(
         "loguru>=0.7",  # logging sink
         "cryptography>=42.0",  # cara.encryption
         "bcrypt>=4.0",  # cara.encryption.Hash
+        "argon2-cffi>=25.1",  # default Argon2id password hashing
     ],
     # OPTIONAL feature groups — a service installs only what it uses. A DB-less
     # HTTP/render service (e.g. studio) installs neither; ``cara.commands.core``
