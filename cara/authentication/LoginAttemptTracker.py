@@ -405,6 +405,16 @@ class LoginAttemptTracker:
                 "A security identifier HMAC key, app key, or JWT secret is required"
             )
         secret = str(secret_value).encode()
+        if len(secret) < 32:
+            raise AuthenticationConfigurationException(
+                "The security identifier HMAC key must contain at least 32 bytes"
+            )
+        # Derive a purpose-specific key before hashing user identifiers. This
+        # keeps the fallback app/JWT secret cryptographically separated from
+        # any other protocol that uses it directly.
+        digest_key = hmac.new(
+            secret, b"cara:security-identifier:v1", hashlib.sha256
+        ).digest()
         return hmac.new(
-            secret, value.strip().lower().encode(), hashlib.sha256
+            digest_key, value.strip().lower().encode(), hashlib.sha256
         ).hexdigest()
