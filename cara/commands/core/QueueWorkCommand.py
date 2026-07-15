@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import signal
+import sys
 import threading
 import time
 from typing import Any
@@ -190,6 +191,56 @@ class AMQPConnectionManager:
                 self.connection.close()
 
 
+class ActiveJobCancellationRegistry:
+    """Thread-safe registry of async jobs that can be cancelled on shutdown.
+
+    A queue worker owns one registry and shares it with every consumer slot.
+    The main thread never touches a consumer's event loop directly; it asks
+    that loop to cancel its registered task with ``call_soon_threadsafe``.
+    Synchronous handlers are intentionally absent because Python cannot safely
+    interrupt a running thread — the worker's bounded hard-exit path handles
+    those by letting the broker redeliver their unacknowledged messages.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tasks: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Task]] = {}
+
+    def register_current(self) -> int:
+        """Register the current asyncio task and return its removal token."""
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover - asyncio always supplies one here
+            raise RuntimeError("No current asyncio task to register")
+        token = id(task)
+        with self._lock:
+            self._tasks[token] = (loop, task)
+        return token
+
+    def unregister(self, token: int) -> None:
+        with self._lock:
+            self._tasks.pop(token, None)
+
+    def cancel_all(self) -> int:
+        """Request cancellation on every active job's owning event loop."""
+        with self._lock:
+            tasks = list(self._tasks.values())
+
+        requested = 0
+        for loop, task in tasks:
+            if task.done():
+                continue
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+                requested += 1
+            except RuntimeError:
+                # The consumer completed and closed its loop between the
+                # snapshot and this call. Its registry ``finally`` will remove
+                # the stale entry; there is nothing left to cancel.
+                continue
+        return requested
+
+
 class JobProcessor:
     """Processes individual jobs from queue messages (Single Responsibility)."""
 
@@ -226,8 +277,19 @@ class JobProcessor:
             concurrent.futures.wait([future], timeout=5)
             executor.shutdown(wait=False, cancel_futures=True)
 
+    def __init__(
+        self,
+        cancellation_registry: ActiveJobCancellationRegistry | None = None,
+    ) -> None:
+        self.cancellation_registry = cancellation_registry
+
     @staticmethod
-    def _execute_async_job_with_timeout(method_to_call, init_args, timeout_seconds):
+    def _execute_async_job_with_timeout(
+        method_to_call,
+        init_args,
+        timeout_seconds,
+        cancellation_registry: ActiveJobCancellationRegistry | None = None,
+    ):
         """Execute async job with timeout enforcement.
 
         Wraps the coroutine in ``asyncio.wait_for(...)`` so a hung
@@ -242,10 +304,22 @@ class JobProcessor:
         is here so anyone reaching for it (debug shim, alternative
         worker mode, unit test) gets the same contract.
         """
-        try:
-            asyncio.run(
-                asyncio.wait_for(method_to_call(*init_args), timeout=timeout_seconds)
+        async def _run_registered():
+            token = (
+                cancellation_registry.register_current()
+                if cancellation_registry is not None
+                else None
             )
+            try:
+                return await asyncio.wait_for(
+                    method_to_call(*init_args), timeout=timeout_seconds
+                )
+            finally:
+                if token is not None:
+                    cancellation_registry.unregister(token)
+
+        try:
+            return asyncio.run(_run_registered())
         except TimeoutError as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
 
@@ -562,7 +636,11 @@ class JobProcessor:
 
     @staticmethod
     def process_message(
-        channel, method_frame, body, queue_name: str | None = None
+        channel,
+        method_frame,
+        body,
+        queue_name: str | None = None,
+        cancellation_registry: ActiveJobCancellationRegistry | None = None,
     ) -> bool:
         """Process a single queue message and return success status.
 
@@ -821,8 +899,17 @@ class JobProcessor:
                         return await _m(*_args)
 
                     try:
-                        coro = run_through_middleware_async(instance, _async_handler)
-                        asyncio.run(asyncio.wait_for(coro, timeout=job_timeout))
+                        async def _call_with_middleware():
+                            return await run_through_middleware_async(
+                                instance, _async_handler
+                            )
+
+                        JobProcessor._execute_async_job_with_timeout(
+                            _call_with_middleware,
+                            (),
+                            job_timeout,
+                            cancellation_registry=cancellation_registry,
+                        )
                     except TimeoutError as e:
                         raise TimeoutError(
                             f"Job exceeded timeout of {job_timeout}s"
@@ -887,6 +974,27 @@ class JobProcessor:
 
             _mx_record("success")
             return "success"
+
+        except asyncio.CancelledError:
+            # Worker shutdown is not a job failure. Leave the AMQP delivery
+            # UNACKNOWLEDGED so closing this consumer's own channel requeues it
+            # atomically. Reset the advisory DB tracker to pending when possible;
+            # never call ``failed()``, burn retry attempts or route to the DLQ.
+            Log.info(
+                "Job %s interrupted by worker shutdown; delivery will redeliver",
+                _mx_job,
+            )
+            if tracker and db_job_id:
+                try:
+                    tracker.update_job_status(db_job_id, "pending")
+                except Exception as tracking_error:
+                    Log.warning(
+                        "Could not reset interrupted job %s to pending: %s",
+                        db_job_id,
+                        tracking_error,
+                    )
+            _mx_record("interrupted")
+            raise
 
         except TimeoutError as timeout_error:
             Log.error("Job timeout: %s", timeout_error, exc_info=True)
@@ -1005,6 +1113,12 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         self._missing_queue_retry_s: float = 5.0
         self._signal_handlers_installed = False
         self._atexit_registered = False
+        self._shutdown_signal: int | None = None
+        self._consumer_threads: list[threading.Thread] = []
+        self._active_job_cancellations = ActiveJobCancellationRegistry()
+        self._resource_shutdown_lock = threading.Lock()
+        self._worker_resources_shutdown = False
+        self._reload_requested = False
 
     def _setup_worker_lifecycle_hooks(self) -> None:
         """Install graceful-shutdown hooks once per worker process.
@@ -1016,10 +1130,19 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         still run interpreter teardown.
         """
         if not self._signal_handlers_installed:
-            previous_int = signal.getsignal(signal.SIGINT)
-            previous_term = signal.getsignal(signal.SIGTERM)
-
             def _graceful_stop(signum, _frame):
+                # First signal requests a bounded graceful drain. A second
+                # signal is an explicit operator request to stop immediately;
+                # hard process exit is the only safe way to interrupt arbitrary
+                # Python threads, and lets RabbitMQ redeliver every unacked job.
+                if self.shutdown_requested:
+                    self._force_terminate_for_redelivery(
+                        reason="second shutdown signal",
+                        signal_number=signum,
+                    )
+                    return
+
+                self._shutdown_signal = signum
                 self.shutdown_requested = True
                 Log.info(
                     "Queue worker received %s — draining current job then exiting",
@@ -1027,9 +1150,6 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     if hasattr(signal, "Signals")
                     else signum,
                 )
-                # Restore prior handlers so a second Ctrl+C force-quits.
-                signal.signal(signal.SIGINT, previous_int)
-                signal.signal(signal.SIGTERM, previous_term)
 
             signal.signal(signal.SIGINT, _graceful_stop)
             signal.signal(signal.SIGTERM, _graceful_stop)
@@ -1122,6 +1242,28 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         finally:
             self.cleanup_auto_reload()
             self._show_final_stats()
+        if self._reload_requested:
+            self._restart_worker_process()
+
+    def _trigger_auto_reload(self) -> None:
+        """Drain the worker, then replace the process for code reload.
+
+        The generic in-process reload purges app modules and resource pools
+        after a fixed 500ms sleep. That is unsafe for queue consumers whose
+        jobs may still be executing in other threads. A process replacement
+        after the normal drain gives every consumer the same shutdown contract
+        as SIGTERM and starts with a coherent module/container graph.
+        """
+        if not self._auto_reload_enabled or self._reload_requested:
+            return
+        self.info("🔄 File changed — draining worker before process reload")
+        self._reload_requested = True
+        self.shutdown_requested = True
+
+    @staticmethod
+    def _restart_worker_process() -> None:
+        """Replace the drained worker with the same interpreter/arguments."""
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
     def _prepare_config(
         self,
@@ -1444,8 +1586,10 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
     def _run_worker(self, config: dict[str, Any]) -> None:
         """Run the queue worker with multiple queue priority support.
 
-        When ``self._concurrency > 1`` we spin up N independent consumer
-        threads, each with its own AMQP connection + channel. pika's
+        We spin up N independent consumer threads, including when N=1, each
+        with its own AMQP connection + channel. Keeping the command/signal
+        loop on the main thread is what makes the bounded shutdown and async
+        cancellation contract enforceable for every concurrency setting. pika's
         BlockingConnection is not thread-safe across threads, so each
         thread keeps its own manager. The threads share:
 
@@ -1468,64 +1612,25 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
         self._show_worker_startup_info(queue_names, concurrency)
         self.start_time = time.time()
+        self._active_job_cancellations = ActiveJobCancellationRegistry()
+        self._consumer_threads = []
 
         # Lock protecting shared counters + shutdown flag read-modify-writes.
         # shutdown_requested itself is a bool (atomic) so we read it
         # unlocked; counters genuinely need a lock.
         self._stats_lock = threading.Lock()
 
-        if concurrency <= 1:
-            # Fast path: original single-threaded loop, no thread overhead.
-            from cara.configuration import config as global_config
-
-            connection_manager = AMQPConnectionManager(global_config)
-            job_processor = JobProcessor()
-
-            try:
-                while not self.shutdown_requested:
-                    outcome = self._process_queue_cycle(
-                        queue_names, connection_manager, job_processor, config
-                    )
-
-                    # Update terminal-attempt counters. Without this,
-                    # ``jobs_processed`` and ``jobs_failed`` stay at 0
-                    # for the worker's lifetime — they were only ever
-                    # initialised, never incremented — which (a) made
-                    # the final-stats summary lie and (b) silently
-                    # neutralised --max-jobs entirely.
-                    if outcome == "success":
-                        self.jobs_processed += 1
-                    elif outcome == "failure":
-                        self.jobs_failed += 1
-
-                    # Enforce --max-jobs / --max-time. Without this
-                    # check the limits printed in the startup banner
-                    # are decorative only — the worker would only
-                    # exit on SIGTERM/SIGINT.
-                    if self._should_stop(config):
-                        self.shutdown_requested = True
-                        break
-
-                    # Sleep if no jobs found
-                    if not outcome:
-                        time.sleep(config.get("timeout", 5))
-
-            finally:
-                connection_manager.close()
-            self._shutdown_worker_resources()
-            return
-
-        # Multi-threaded consumer mode.
+        # Consumer-thread mode. Even concurrency=1 stays off the main thread so
+        # SIGTERM can cancel/force-redeliver a job that exceeds the drain budget.
         from cara.configuration import config as global_config
 
-        job_processor = JobProcessor()  # stateless, shared
+        job_processor = JobProcessor(self._active_job_cancellations)
         threads: list[threading.Thread] = []
-        managers: list[AMQPConnectionManager] = []
+        self._consumer_threads = threads
 
         def _consumer_loop(slot_idx: int) -> None:
             """One consumer slot. Owns its own AMQP connection."""
             mgr = AMQPConnectionManager(global_config)
-            managers.append(mgr)
             try:
                 while not self.shutdown_requested:
                     try:
@@ -1591,38 +1696,85 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     break
                 time.sleep(1)
         finally:
-            # Ask all threads to stop and let them DRAIN their in-flight job.
-            # A consumer thread only re-checks ``shutdown_requested`` at the top
-            # of its loop, so a job already running (a scrape takes 30-120s; a
-            # job's ``timeout`` can be minutes) finishes first. Give the whole
-            # pool ONE generous DEADLINE (not a flat 10s PER thread) so a long
-            # in-flight job isn't abandoned mid-transaction on process exit — an
-            # abandoned daemon thread drops its pinned DB connection with no
-            # commit/rollback, and although the unacked message safely
-            # redelivers (jobs are idempotent), a clean drain avoids the churn.
-            # Bounded so a genuinely-wedged poison thread can't hold a deploy
-            # forever; whatever is still alive at the deadline is logged and
-            # left to the broker's redelivery.
             self.shutdown_requested = True
-            drain_budget = self._shutdown_drain_seconds()
-            deadline = time.monotonic() + drain_budget
-            for t in threads:
-                remaining = max(0.0, deadline - time.monotonic())
-                with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
-                    t.join(timeout=remaining)
-            still_alive = [t for t in threads if t.is_alive()]
-            if still_alive:
-                Log.warning(
-                    "Worker shutdown: %s consumer thread(s) did not drain within "
-                    "%ss — their in-flight jobs were interrupted and will "
-                    "redeliver.",
-                    len(still_alive),
-                    drain_budget,
-                )
-            for mgr in managers:
-                with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
-                    mgr.close()
-            self._shutdown_worker_resources()
+            drained = self._drain_consumer_threads(threads)
+            # Production cannot observe ``False`` because the escalation path
+            # calls ``os._exit``. The condition lets tests replace hard-exit
+            # without accidentally running hooks while fake consumers remain.
+            if drained:
+                self._shutdown_worker_resources()
+
+    def _drain_consumer_threads(self, threads: list[threading.Thread]) -> bool:
+        """Drain, then cancel, parallel consumers without tearing resources down.
+
+        Phase 1 gives in-flight work the configured graceful budget. Phase 2
+        cooperatively cancels registered asyncio jobs; their deliveries remain
+        unacknowledged and each consumer closes its own AMQP connection before
+        returning. Python cannot safely interrupt a running synchronous thread,
+        so anything still alive after the cancellation grace forces a process
+        exit. The OS then closes sockets and DB connections atomically, which
+        makes RabbitMQ redeliver instead of fabricating job failures.
+        """
+        drain_budget = self._shutdown_drain_seconds()
+        self._join_threads_until(threads, time.monotonic() + drain_budget)
+        still_alive = [thread for thread in threads if thread.is_alive()]
+        if not still_alive:
+            return True
+
+        cancelled = self._active_job_cancellations.cancel_all()
+        cancel_budget = self._shutdown_cancel_seconds()
+        Log.warning(
+            "Worker shutdown: %s consumer thread(s) exceeded the %ss drain; "
+            "requested cancellation for %s async job(s)",
+            len(still_alive),
+            drain_budget,
+            cancelled,
+        )
+        self._join_threads_until(still_alive, time.monotonic() + cancel_budget)
+        still_alive = [thread for thread in still_alive if thread.is_alive()]
+        if not still_alive:
+            return True
+
+        self._force_terminate_for_redelivery(
+            reason=(
+                f"{len(still_alive)} consumer thread(s) remained active after "
+                f"{drain_budget + cancel_budget:g}s shutdown budget"
+            ),
+            signal_number=self._shutdown_signal,
+        )
+        return False
+
+    @staticmethod
+    def _join_threads_until(
+        threads: list[threading.Thread], deadline: float
+    ) -> None:
+        """Join multiple threads against one shared deadline."""
+        for thread in threads:
+            remaining = max(0.0, deadline - time.monotonic())
+            with contextlib.suppress(
+                ImportError, RuntimeError, AttributeError, OSError
+            ):
+                thread.join(timeout=remaining)
+
+    @staticmethod
+    def _force_terminate_for_redelivery(
+        *, reason: str, signal_number: int | None = None
+    ) -> None:
+        """Terminate without cleanup so the broker redelivers unacked work.
+
+        Running resource hooks or closing pika connections from the main thread
+        would race live consumers and turn shutdown into ordinary job errors.
+        ``os._exit`` deliberately skips those callbacks; the kernel closes the
+        process' sockets and open DB transactions, giving RabbitMQ/DB their
+        native redelivery/rollback semantics.
+        """
+        Log.error("Worker forced shutdown: %s; unacked jobs will redeliver", reason)
+        exit_code = (
+            128 + int(signal_number)
+            if signal_number is not None
+            else getattr(os, "EX_TEMPFAIL", 75)
+        )
+        os._exit(exit_code)
 
     @staticmethod
     def _shutdown_drain_seconds() -> float:
@@ -1638,6 +1790,14 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             return max(0.0, float(config("queue.shutdown_drain_seconds", 120.0)))
         except (TypeError, ValueError):
             return 120.0
+
+    @staticmethod
+    def _shutdown_cancel_seconds() -> float:
+        """Grace after async cancellation before forced process exit."""
+        try:
+            return max(0.0, float(config("queue.shutdown_cancel_seconds", 5.0)))
+        except (TypeError, ValueError):
+            return 5.0
 
     @staticmethod
     def _run_worker_startup_hooks() -> None:
@@ -1663,8 +1823,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             except Exception as exc:
                 Log.warning("worker startup hook %s failed: %s", path, exc)
 
-    @staticmethod
-    def _shutdown_worker_resources() -> None:
+    def _shutdown_worker_resources(self) -> bool:
         """Run app-declared worker-shutdown hooks (release pooled resources).
 
         Hooks live in the APP (``config/queue.py::WORKER_SHUTDOWN_HOOKS``) as
@@ -1676,12 +1835,37 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         import asyncio
         import importlib
 
+        active_consumers = [
+            thread
+            for thread in getattr(self, "_consumer_threads", [])
+            if thread.is_alive()
+        ]
+        if active_consumers:
+            Log.warning(
+                "Worker resource shutdown deferred: %s consumer thread(s) "
+                "are still active",
+                len(active_consumers),
+            )
+            return False
+
+        resource_lock = getattr(self, "_resource_shutdown_lock", None)
+        if resource_lock is None:
+            resource_lock = threading.Lock()
+            self._resource_shutdown_lock = resource_lock
+
+        with resource_lock:
+            if getattr(self, "_worker_resources_shutdown", False):
+                return True
+            # Mark before invoking hooks so atexit and the normal finally path
+            # cannot race the same browser/executor shutdown twice.
+            self._worker_resources_shutdown = True
+
         try:
             hooks = config("queue.worker_shutdown_hooks", []) or []
         except Exception:
             hooks = []
         if not hooks:
-            return
+            return True
 
         async def _close_all() -> None:
             for path in hooks:
@@ -1704,6 +1888,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                 loop.run_until_complete(_close_all())
         except RuntimeError:
             asyncio.run(_close_all())
+        return True
 
     def _check_memory_usage(self) -> bool:
         """
@@ -1905,6 +2090,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     method_frame,
                     body,
                     queue_name=queue_name,
+                    cancellation_registry=job_processor.cancellation_registry,
                 )
 
             return False  # No message

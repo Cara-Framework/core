@@ -7,6 +7,7 @@ This module provides a CLI command to start the development server with enhanced
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import logging
 import os
 import platform
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import time
 from multiprocessing import cpu_count
+from pathlib import Path
 
 from cara.commands import CommandBase
 from cara.configuration import config
@@ -38,6 +40,24 @@ _logger = logging.getLogger("cara.serve")
 )
 class ServeCommand(CommandBase):
     """Start development server with enhanced configuration and monitoring."""
+
+    _RELOAD_IGNORED_DIRECTORIES = (
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "database",
+        "fixtures",
+        "node_modules",
+        "scripts",
+        "storage",
+        "tests",
+        "venv",
+    )
+    _RELOAD_RUNTIME_DIRECTORIES = ("app", "config", "packages", "routes")
+    _RELOAD_SHARED_RUNTIME_DIRECTORIES = ("jobs", "models", "support")
 
     def __init__(self, application=None):
         super().__init__(application)
@@ -285,14 +305,10 @@ class ServeCommand(CommandBase):
         for shutdown_signal in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
             if shutdown_signal is None:
                 continue
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 previous_handlers[shutdown_signal] = signal.signal(
                     shutdown_signal, _raise_shutdown
                 )
-            except (ValueError, OSError):
-                # Not the main thread / unsupported platform — the
-                # finally-teardown still covers the exception paths.
-                pass
 
         try:
             # Capture subprocess output so we can colorize it.
@@ -331,10 +347,14 @@ class ServeCommand(CommandBase):
             # process pinned to the configured port, blocking the
             # next ``serve``. Force teardown on the way out.
             if process is not None:
-                with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+                with contextlib.suppress(
+                    OSError, RuntimeError, AttributeError, ConnectionError
+                ):
                     self._terminate_server_tree(process)
                 if process.stdout is not None:
-                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+                    with contextlib.suppress(
+                        OSError, RuntimeError, AttributeError, ConnectionError
+                    ):
                         process.stdout.close()
 
     @staticmethod
@@ -364,10 +384,8 @@ class ServeCommand(CommandBase):
             ServeCommand._signal_server_group(
                 process.pid, signal.SIGKILL, fallback=process.kill
             )
-            try:
+            with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=5)
-            except subprocess.TimeoutExpired:  # pragma: no cover — kernel-level stall
-                pass
             return False
 
     @staticmethod
@@ -440,11 +458,90 @@ class ServeCommand(CommandBase):
 
         if config["reload"]:
             cmd.append("--reload")
+            reload_directories = self._reload_directories()
+            for directory in reload_directories:
+                cmd.extend(["--reload-dir", directory])
+            for directory in self._reload_excluded_directories(reload_directories):
+                cmd.extend(["--reload-exclude", directory])
 
         if config["workers"] > 1:
             cmd.extend(["--workers", str(config["workers"])])
 
         return cmd
+
+    @classmethod
+    def _reload_directories(cls, project_root: str | None = None) -> list[str]:
+        """Return the smallest complete set of runtime source roots.
+
+        ``uvicorn --reload`` falls back to ``StatReload`` when ``watchfiles``
+        is absent. Its default is the entire working tree, which means every
+        poll stats virtualenv, test and generated files. A large development
+        checkout can then consume a full CPU core and continuously interrupt
+        startup while unrelated test files are being edited.
+
+        A correctly installed Cara environment has ``watchfiles`` through
+        ``uvicorn[standard]``. In that case the project root is safe and keeps
+        root entry points such as ``bootstrap.py`` and ``Kernel.py`` covered.
+        The fallback deliberately watches only runtime package directories so
+        a partially installed environment remains usable instead of busy-
+        polling thousands of dependency files.
+
+        Shared source directories are commonly symlinked outside the project
+        root. Resolve and watch those targets explicitly; neither StatReload
+        nor platform file watchers reliably follow directory symlinks.
+        """
+        root = Path(project_root or os.getcwd()).resolve()
+        candidates: list[Path] = []
+        event_driven = importlib.util.find_spec("watchfiles") is not None
+
+        if event_driven:
+            candidates.append(root)
+        else:
+            candidates.extend(root / name for name in cls._RELOAD_RUNTIME_DIRECTORIES)
+
+        framework = (root / "cara").resolve()
+        shared = (root / "commons").resolve()
+        candidates.append(framework)
+        if event_driven:
+            candidates.append(shared)
+        else:
+            candidates.extend(
+                shared / name for name in cls._RELOAD_SHARED_RUNTIME_DIRECTORIES
+            )
+
+        existing = sorted(
+            {path for path in candidates if path.is_dir()},
+            key=lambda path: (len(path.parts), str(path)),
+        )
+        selected: list[Path] = []
+        for path in existing:
+            if any(path == parent or path.is_relative_to(parent) for parent in selected):
+                continue
+            selected.append(path)
+
+        return [str(path) for path in selected]
+
+    @classmethod
+    def _reload_excluded_directories(cls, reload_directories: list[str]) -> list[str]:
+        """Return real directories that must never trigger an API reload."""
+        excluded: set[Path] = set()
+        for raw_root in reload_directories:
+            root = Path(raw_root)
+            for name in cls._RELOAD_IGNORED_DIRECTORIES:
+                candidate = root / name
+                if candidate.is_dir():
+                    excluded.add(candidate.resolve())
+
+            # A shared root commonly contains the Cara checkout one level
+            # below it. Exclude that checkout's non-runtime trees as well.
+            framework_root = root / "cara"
+            if framework_root.is_dir():
+                for name in cls._RELOAD_IGNORED_DIRECTORIES:
+                    candidate = framework_root / name
+                    if candidate.is_dir():
+                        excluded.add(candidate.resolve())
+
+        return [str(path) for path in sorted(excluded, key=str)]
 
     def _show_additional_metrics(self, cfg: dict) -> None:
         """Show extra runtime and integration metrics helpful during development."""
