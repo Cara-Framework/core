@@ -72,17 +72,20 @@ class StreamingResponse:
             if name.lower() != "content-length":
                 response_headers.append((name.encode(), value.encode()))
 
-        # Send response start
-        await send(
-            {
-                "type": "http.response.start",
-                "status": status,
-                "headers": response_headers,
-            }
-        )
-
-        # Stream content chunks
+        started = False
         try:
+            # Headers are emitted before advancing the generator.  Slow data
+            # sources therefore cannot delay time-to-first-byte or monopolise
+            # the request handler before the client knows the download began.
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": status,
+                    "headers": response_headers,
+                }
+            )
+            started = True
+
             async for chunk in generator:
                 await send(
                     {
@@ -92,9 +95,6 @@ class StreamingResponse:
                     }
                 )
         except Exception as e:
-            # Log error and close stream gracefully. Previously only
-            # the client saw the error message; the server had no record
-            # of the failure.
             import logging
 
             logging.getLogger("cara.http.stream").error(
@@ -102,14 +102,22 @@ class StreamingResponse:
                 e,
                 exc_info=True,
             )
-            error_chunk = f"Stream error: {str(e)}".encode()
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": error_chunk,
-                    "more_body": False,
-                }
-            )
+            if not started:
+                # The caller can still render a regular 500 because no ASGI
+                # response has begun yet.
+                raise
+            # Once headers are on the wire the status cannot change.  Close
+            # the body without leaking exception text into the download.
+            try:
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"",
+                        "more_body": False,
+                    }
+                )
+            finally:
+                self.response._sent = True
             return
 
         # End stream
@@ -122,6 +130,37 @@ class StreamingResponse:
         )
 
         self.response._sent = True
+
+    @staticmethod
+    async def csv_chunks(
+        data_generator: AsyncGenerator[list[Any]],
+        *,
+        chunk_size: int = 64 * 1024,
+    ) -> AsyncGenerator[bytes]:
+        """Encode CSV rows into bounded chunks.
+
+        The first row is flushed immediately (normally the header) so clients
+        receive body bytes before the backing data query starts.  Remaining
+        rows are coalesced up to ``chunk_size`` to avoid one ASGI event per row
+        while keeping memory flat for arbitrarily large exports.
+        """
+        import csv
+        import io
+
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        first = True
+
+        async for row in data_generator:
+            writer.writerow(row)
+            if first or output.tell() >= chunk_size:
+                yield output.getvalue().encode("utf-8")
+                output.seek(0)
+                output.truncate(0)
+                first = False
+
+        if output.tell():
+            yield output.getvalue().encode("utf-8")
 
     async def stream_json_lines(
         self,
@@ -249,17 +288,6 @@ class StreamingResponse:
             send: ASGI send callable
             headers: Additional headers
         """
-        import csv
-        import io
-
-        async def csv_chunk_generator():
-            async for row in data_generator:
-                output = io.StringIO()
-                writer = csv.writer(output)
-                writer.writerow(row)
-                csv_line = output.getvalue()
-                yield csv_line.encode("utf-8")
-
         download_headers = {
             "Content-Disposition": f'attachment; filename="{filename}"',
         }
@@ -268,7 +296,7 @@ class StreamingResponse:
             download_headers.update(headers)
 
         await self.stream(
-            csv_chunk_generator(),
+            self.csv_chunks(data_generator),
             send,
             status=200,
             content_type="text/csv; charset=utf-8",

@@ -7,7 +7,7 @@ Orchestrates BaseResponse, ResponseFactory, HeaderManager, ContentTypeDetector, 
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from .BaseResponse import BaseResponse
@@ -42,6 +42,12 @@ class Response(BaseResponse):
         self.headers = HeaderManager(self.header_bag)
         self.factory = ResponseFactory(self)
         self.streaming = StreamingResponse(self)
+        self._stream_spec: tuple[
+            AsyncGenerator[bytes],
+            int,
+            str,
+            dict[str, str] | None,
+        ] | None = None
 
     def clone_from(self, other: Response) -> None:
         """
@@ -71,6 +77,13 @@ class Response(BaseResponse):
             other_content_type_explicit = other.headers.is_content_type_explicit()
             other_content_type_value = other.headers.get("Content-Type")
 
+        # ``RouteDispatcher`` merges a controller-returned response into the
+        # request-scoped response object.  Streaming state must survive that
+        # merge just like content/status/headers do; otherwise a controller can
+        # configure a stream successfully and the conductor will later emit an
+        # empty regular response.
+        other_stream_spec = getattr(other, "_stream_spec", None)
+
         # Clone base response attributes (content, status, etc.)
         super().clone_from(other)
 
@@ -78,6 +91,7 @@ class Response(BaseResponse):
         self.headers = HeaderManager(self.header_bag)
         self.factory = ResponseFactory(self)
         self.streaming = StreamingResponse(self)
+        self._stream_spec = other_stream_spec
 
         # Copy header data and preserve explicit content-type state
         if hasattr(other, "headers") and other.headers:
@@ -94,6 +108,17 @@ class Response(BaseResponse):
             return
 
         try:
+            if self._stream_spec is not None:
+                generator, status, content_type, headers = self._stream_spec
+                await self.streaming.stream(
+                    generator,
+                    send,
+                    status=status,
+                    content_type=content_type,
+                    headers=headers,
+                )
+                return
+
             self.prepare_content()
             self._finalize_response()
             await self._send_response(scope, receive, send)
@@ -428,62 +453,126 @@ class Response(BaseResponse):
     # STREAMING SUPPORT (Laravel-style)
     # =============================================================================
 
-    async def stream(
+    def stream(
         self,
         generator: AsyncGenerator[bytes],
-        send: Callable,
         status: int = 200,
         content_type: str = "application/octet-stream",
         headers: dict[str, str] | None = None,
-    ) -> None:
-        """Laravel-style streaming response."""
-        await self.streaming.stream(generator, send, status, content_type, headers)
+    ) -> Response:
+        """Configure a deferred streaming response.
 
-    async def stream_json_lines(
+        Controllers do not receive the raw ASGI ``send`` callable; the
+        conductor owns it and invokes the returned response after middleware
+        completes.  Streaming is therefore configured here and consumed later
+        by :meth:`__call__`, exactly like a regular ``json()``/``text()``
+        response.  No content-length is calculated and the generator is not
+        advanced while the controller is running.
+        """
+        self.content = b""
+        self._status = int(status)
+        stream_headers = dict(headers) if headers else None
+        self.headers.content_type(content_type)
+        if stream_headers:
+            self.headers.merge(stream_headers)
+        self._stream_spec = (
+            generator,
+            self._status,
+            content_type,
+            stream_headers,
+        )
+        return self
+
+    def stream_json_lines(
         self,
         data_generator: AsyncGenerator[Any],
-        send: Callable,
         status: int = 200,
         headers: dict[str, str] | None = None,
-    ) -> None:
+    ) -> Response:
         """Stream JSON Lines (JSONL) format."""
-        await self.streaming.stream_json_lines(data_generator, send, status, headers)
+        import json
 
-    async def stream_sse(
-        self,
-        event_generator: AsyncGenerator[dict[str, Any]],
-        send: Callable,
-        status: int = 200,
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        """Stream Server-Sent Events."""
-        await self.streaming.stream_server_sent_events(
-            event_generator, send, status, headers
+        async def chunks() -> AsyncGenerator[bytes]:
+            async for data in data_generator:
+                yield (
+                    json.dumps(data, ensure_ascii=False, default=str) + "\n"
+                ).encode("utf-8")
+
+        return self.stream(
+            chunks(),
+            status=status,
+            content_type="application/x-ndjson; charset=utf-8",
+            headers=headers,
         )
 
-    async def stream_download(
+    def stream_sse(
+        self,
+        event_generator: AsyncGenerator[dict[str, Any]],
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> Response:
+        """Stream Server-Sent Events."""
+        async def chunks() -> AsyncGenerator[bytes]:
+            async for event in event_generator:
+                yield self.streaming._format_sse_event(event).encode("utf-8")
+
+        sse_headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Cache-Control",
+        }
+        if headers:
+            sse_headers.update(headers)
+
+        return self.stream(
+            chunks(),
+            status=status,
+            content_type="text/event-stream; charset=utf-8",
+            headers=sse_headers,
+        )
+
+    def stream_download(
         self,
         file_generator: AsyncGenerator[bytes],
         filename: str,
-        send: Callable,
         content_type: str = "application/octet-stream",
         content_length: int | None = None,
         headers: dict[str, str] | None = None,
-    ) -> None:
+    ) -> Response:
         """Stream file download."""
-        await self.streaming.stream_file_download(
-            file_generator, filename, send, content_type, content_length, headers
+        download_headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        }
+        if content_length is not None:
+            download_headers["Content-Length"] = str(content_length)
+        if headers:
+            download_headers.update(headers)
+
+        return self.stream(
+            file_generator,
+            content_type=content_type,
+            headers=download_headers,
         )
 
-    async def stream_csv(
+    def stream_csv(
         self,
-        data_generator: AsyncGenerator[list[str]],
+        data_generator: AsyncGenerator[list[Any]],
         filename: str,
-        send: Callable,
         headers: dict[str, str] | None = None,
-    ) -> None:
-        """Stream CSV data."""
-        await self.streaming.stream_csv(data_generator, filename, send, headers)
+    ) -> Response:
+        """Configure a chunked CSV attachment without materialising its body."""
+        download_headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        }
+        if headers:
+            download_headers.update(headers)
+
+        return self.stream(
+            self.streaming.csv_chunks(data_generator),
+            content_type="text/csv; charset=utf-8",
+            headers=download_headers,
+        )
 
     # =============================================================================
     # COMPATIBILITY AND UTILITY METHODS
