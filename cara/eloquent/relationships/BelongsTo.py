@@ -157,7 +157,16 @@ class BelongsTo(BaseRelationship):
             ).first()
 
     def register_related(self, key, model, collection):
-        related = collection.get(getattr(model, self.local_key), None)
+        local_value = getattr(model, self.local_key, None)
+        if local_value is None:
+            # A nullable foreign key has no related record.  The lazy-loading
+            # path already returns None without querying; eager loading must
+            # preserve the same contract instead of attempting to use None as
+            # an index on an empty, list-backed Collection.
+            model.add_relation({key: None})
+            return
+
+        related = collection.get(local_value, None)
 
         model.add_relation({key: related[0] if related else None})
 
