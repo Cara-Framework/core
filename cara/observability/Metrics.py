@@ -275,6 +275,17 @@ class MetricsBase:
             # Intentional: see safe_inc above.
             return
 
+    @staticmethod
+    def safe_set(metric, labels: dict, value: float) -> None:
+        """Set a gauge value without raising on failure (mirrors safe_inc/
+        safe_observe): a metric backend hiccup must never break the sampler
+        that feeds it."""
+        try:
+            metric.labels(**labels).set(value)
+        except Exception:
+            # Intentional: see safe_inc above.
+            return
+
     # ─── Service-level info (static label) ──────────────────────────────
     build_info = Gauge(
         metric_name("build_info"),
