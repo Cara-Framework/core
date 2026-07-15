@@ -151,6 +151,10 @@ class RedisDriver(HasColoredOutput, Queue):
         self.blocking_timeout = int(self.options.get("blocking_timeout", 5))
         self.tz = self.options.get("tz", "UTC")
 
+    def ping(self, timeout_ms: int = 1000) -> None:
+        """Verify the Redis queue connection with a server round-trip."""
+        self._redis.ping()
+
     def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push jobs immediately to Redis list and return job ID(s)."""
         merged = {**self.options, **(options or {})}

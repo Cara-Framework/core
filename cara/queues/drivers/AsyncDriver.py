@@ -44,6 +44,9 @@ class AsyncDriver(HasColoredOutput, Queue):
         self.application = application
         self.options = options
 
+    def ping(self, timeout_ms: int = 1000) -> None:
+        """The in-process driver has no external dependency to probe."""
+
     def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Execute jobs immediately and return job ID(s) for tracking."""
         merged_opts = {**self.options, **options}

@@ -88,6 +88,12 @@ class DatabaseDriver(HasColoredOutput, Queue):
         self.application = application
         self.options = options
 
+    def ping(self, timeout_ms: int = 1000) -> None:
+        """Verify the configured database queue connection."""
+        from cara.facades import DB
+
+        DB.select("SELECT 1", connection=self.options.get("connection"))
+
     def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push jobs to database queue and return job ID(s) for tracking."""
         merged = {**self.options, **options}

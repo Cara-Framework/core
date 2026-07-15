@@ -142,6 +142,52 @@ class AMQPDriver(HasColoredOutput, Queue):
     def channel(self, value):
         self._tls.channel = value
 
+    def ping(self, timeout_ms: int = 1000) -> None:
+        """Perform an isolated AMQP handshake without touching publish state.
+
+        A driver's thread-local or pooled connection only proves that an old
+        connection existed. A fresh handshake verifies DNS/TCP, TLS (when
+        configured), authentication, vhost access, and channel creation. The
+        probe connection is never placed in the publisher pool.
+        """
+        if pika is None:
+            raise QueueDriverLibraryNotFoundException(
+                "pika is required for AMQPDriver. Install with: pip install pika"
+            )
+
+        timeout_seconds = max(int(timeout_ms), 1) / 1000
+        parameters = pika.URLParameters(self._build_url(self.options))
+        parameters.connection_attempts = 1
+        parameters.retry_delay = 0
+        parameters.socket_timeout = timeout_seconds
+        parameters.stack_timeout = timeout_seconds
+        parameters.blocked_connection_timeout = timeout_seconds
+
+        connection = None
+        channel = None
+        try:
+            connection = pika.BlockingConnection(parameters)
+            channel = connection.channel()
+        finally:
+            if channel is not None:
+                with contextlib.suppress(
+                    OSError,
+                    ConnectionError,
+                    RuntimeError,
+                    AttributeError,
+                    pika.exceptions.AMQPError,
+                ):
+                    channel.close()
+            if connection is not None:
+                with contextlib.suppress(
+                    OSError,
+                    ConnectionError,
+                    RuntimeError,
+                    AttributeError,
+                    pika.exceptions.AMQPError,
+                ):
+                    connection.close()
+
     def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push jobs to queue and return job ID(s) for tracking."""
         merged_opts = {**self.options, **options}

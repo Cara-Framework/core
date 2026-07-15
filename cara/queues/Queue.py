@@ -38,6 +38,10 @@ class Queue:
             )
         return inst
 
+    def ping(self, timeout_ms: int = 1000, driver_name: str | None = None) -> None:
+        """Verify that the selected queue driver's dependency is reachable."""
+        self.driver(driver_name).ping(timeout_ms=timeout_ms)
+
     def push(
         self,
         *jobs: Any,

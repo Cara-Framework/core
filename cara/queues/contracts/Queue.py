@@ -13,6 +13,13 @@ from typing import Any, Protocol
 class Queue(Protocol):
     """Protocol that any Queue driver must implement."""
 
+    def ping(self, timeout_ms: int = 1000) -> None:
+        """Verify that the driver's backing queue is reachable.
+
+        Implementations must perform a real round-trip when the driver has an
+        external dependency and raise when it cannot be reached.
+        """
+
     def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push one or more job objects onto the queue with given options. Returns job ID(s)."""
 
