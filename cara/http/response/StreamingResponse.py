@@ -136,7 +136,7 @@ class StreamingResponse:
         data_generator: AsyncGenerator[list[Any]],
         *,
         chunk_size: int = 64 * 1024,
-        cooperative_rows: int = 64,
+        cooperative_rows: int = 16,
     ) -> AsyncGenerator[bytes]:
         """Encode CSV rows into bounded chunks.
 
