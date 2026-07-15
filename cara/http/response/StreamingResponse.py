@@ -136,6 +136,7 @@ class StreamingResponse:
         data_generator: AsyncGenerator[list[Any]],
         *,
         chunk_size: int = 64 * 1024,
+        cooperative_rows: int = 64,
     ) -> AsyncGenerator[bytes]:
         """Encode CSV rows into bounded chunks.
 
@@ -144,20 +145,30 @@ class StreamingResponse:
         rows are coalesced up to ``chunk_size`` to avoid one ASGI event per row
         while keeping memory flat for arbitrarily large exports.
         """
+        import asyncio
         import csv
         import io
 
         output = io.StringIO(newline="")
         writer = csv.writer(output)
         first = True
+        processed = 0
 
         async for row in data_generator:
             writer.writerow(row)
+            processed += 1
             if first or output.tell() >= chunk_size:
                 yield output.getvalue().encode("utf-8")
                 output.seek(0)
                 output.truncate(0)
                 first = False
+
+            # An async generator may produce immediately-ready rows without a
+            # real await between them.  Explicitly hand control back after a
+            # small bounded slice so CSV encoding/model serialization cannot
+            # starve unrelated requests on the ASGI event loop.
+            if cooperative_rows > 0 and processed % cooperative_rows == 0:
+                await asyncio.sleep(0)
 
         if output.tell():
             yield output.getvalue().encode("utf-8")

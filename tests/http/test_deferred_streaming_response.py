@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 from unittest.mock import MagicMock
@@ -61,13 +62,38 @@ async def test_csv_encoder_flushes_header_then_coalesces_bounded_chunks() -> Non
             yield [index, "x" * 20]
 
     chunks = [
-        chunk
-        async for chunk in StreamingResponse.csv_chunks(rows(), chunk_size=256)
+        chunk async for chunk in StreamingResponse.csv_chunks(rows(), chunk_size=256)
     ]
 
     assert chunks[0] == b"id,value\r\n"
     assert 2 < len(chunks) < 101
     assert all(len(chunk) < 300 for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_csv_encoder_cooperates_with_other_event_loop_tasks() -> None:
+    state = {"scheduled": False}
+
+    async def rows():
+        yield ["id"]
+        for index in range(1000):
+            yield [index]
+
+    async def scheduled_task() -> None:
+        await asyncio.sleep(0)
+        state["scheduled"] = True
+
+    task = asyncio.create_task(scheduled_task())
+    _ = [
+        chunk
+        async for chunk in StreamingResponse.csv_chunks(
+            rows(),
+            chunk_size=1024 * 1024,
+            cooperative_rows=16,
+        )
+    ]
+    assert state["scheduled"] is True
+    await task
 
 
 @pytest.mark.asyncio
