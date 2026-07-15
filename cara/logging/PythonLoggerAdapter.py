@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from cara.facades import Log
+from cara.support.Str import redact_log_secrets
 
 
 class CaraPythonLoggerAdapter(logging.Logger):
@@ -146,6 +147,8 @@ class CaraPythonLoggerAdapter(logging.Logger):
             clean_message = message[len(f"[{self.library_name}]") :].strip()
         else:
             clean_message = message
+
+        clean_message = redact_log_secrets(clean_message)
 
         # Forward to Cara Logger with category and module override
         getattr(self.cara_logger, cara_level)(

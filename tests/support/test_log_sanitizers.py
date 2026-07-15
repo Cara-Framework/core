@@ -25,6 +25,7 @@ email_mask = _mod.email_mask
 mask_ip = _mod.mask_ip
 mask_proxy_url = _mod.mask_proxy_url
 mask_token = _mod.mask_token
+redact_log_secrets = _mod.redact_log_secrets
 
 
 # ── email_mask ──────────────────────────────────────────────────────
@@ -186,3 +187,39 @@ class TestNoLeaks:
         masked = mask_proxy_url(original)
         assert "myuser" not in masked
         assert "mypass" not in masked
+
+
+class TestLogSecretRedaction:
+    def test_httpx_request_url_query_token_is_fully_redacted(self):
+        secret = "scrape-provider-secret-value"
+        message = (
+            "HTTP Request: GET https://api.example.test/?token="
+            f"{secret}&url=https%3A%2F%2Fshop.example%2Fitem \"HTTP/2 200 OK\""
+        )
+
+        redacted = redact_log_secrets(message)
+
+        assert secret not in redacted
+        assert "token=[REDACTED]" in redacted
+        assert "url=https%3A%2F%2Fshop.example%2Fitem" in redacted
+
+    def test_json_and_header_credentials_are_redacted(self):
+        message = (
+            "payload={'api_key': 'key-secret'} "
+            "Authorization: Bearer bearer-secret"
+        )
+
+        redacted = redact_log_secrets(message)
+
+        assert "key-secret" not in redacted
+        assert "bearer-secret" not in redacted
+        assert redacted.count("[REDACTED]") == 2
+
+    def test_url_userinfo_is_redacted_but_host_is_preserved(self):
+        redacted = redact_log_secrets(
+            "proxy=https://username:password@proxy.example.test:8443/path"
+        )
+
+        assert "username" not in redacted
+        assert "password" not in redacted
+        assert "https://[REDACTED]@proxy.example.test:8443/path" in redacted

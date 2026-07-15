@@ -27,6 +27,21 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _MULTI_SPACE_RE = re.compile(r"[ \t]+")
 _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
 
+_LOG_SECRET_NAME = (
+    r"(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|"
+    r"api[_-]?key|apikey|client[_-]?secret|secret|password|passwd|"
+    r"signature|x-amz-signature|x-amz-security-token)"
+)
+_LOG_SECRET_ASSIGNMENT_RE = re.compile(
+    rf"(?i)([\"']?{_LOG_SECRET_NAME}[\"']?\s*[:=]\s*)([\"']?)"
+    r"([^\"'\s,;&#}]+)(\2)"
+)
+_LOG_AUTHORIZATION_RE = re.compile(
+    r"(?i)(\b(?:authorization|proxy-authorization)\s*[:=]\s*"
+    r"(?:bearer|basic)\s+)([^\s,;]+)"
+)
+_LOG_URL_CREDENTIALS_RE = re.compile(r"(?i)(https?://)([^/@\s]+)@")
+
 
 def modularize(file_path, suffix=".py"):
     """
@@ -209,6 +224,22 @@ def mask_token(token: str) -> str:
     if len(token) <= 8:
         return "*" * len(token)
     return f"{token[:4]}***{token[-4:]}"
+
+
+def redact_log_secrets(message: Any) -> str:
+    """Remove credentials from arbitrary log messages.
+
+    Third-party clients commonly log complete request URLs at INFO level.
+    Query-string API keys therefore need redaction at the logging boundary,
+    independent of each client's configuration. The replacement is total
+    rather than partial so log aggregation can never become a credential
+    store. URL hosts, paths and non-sensitive parameters remain available for
+    debugging.
+    """
+    text = str(message)
+    text = _LOG_URL_CREDENTIALS_RE.sub(r"\1[REDACTED]@", text)
+    text = _LOG_AUTHORIZATION_RE.sub(r"\1[REDACTED]", text)
+    return _LOG_SECRET_ASSIGNMENT_RE.sub(r"\1\2[REDACTED]\4", text)
 
 
 def mask_ip(ip: str) -> str:
