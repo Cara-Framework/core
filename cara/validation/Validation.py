@@ -166,12 +166,14 @@ class Validation(ValidationContract):
         # against the incoming data. Non-wildcard keys pass through
         # unchanged so existing semantics (including data.get(field)
         # returning None for missing fields) are preserved.
-        rule_plan: list[tuple[str, str, str, Any, bool]] = []
+        rule_plan: list[tuple[str, str, str, Any, bool, bool]] = []
         for field, rule_string in rules.items():
             if instance._WILDCARD in field.split("."):
                 any_expansion = False
                 for concrete_field, value in instance._expand_wildcard_field(field, data):
-                    rule_plan.append((field, concrete_field, rule_string, value, True))
+                    rule_plan.append(
+                        (field, concrete_field, rule_string, value, True, True)
+                    )
                     any_expansion = True
                 # If the wildcard produced no concrete paths (e.g. the
                 # source array is missing/empty), we skip — the parent
@@ -180,9 +182,18 @@ class Validation(ValidationContract):
                 if not any_expansion:
                     continue
             else:
-                rule_plan.append((field, field, rule_string, data.get(field), False))
+                rule_plan.append(
+                    (field, field, rule_string, data.get(field), False, field in data)
+                )
 
-        for original_field, concrete_field, rule_string, value, is_wildcard in rule_plan:
+        for (
+            original_field,
+            concrete_field,
+            rule_string,
+            value,
+            is_wildcard,
+            was_provided,
+        ) in rule_plan:
             field_passed = True
 
             # Precompute rule names for this field so individual rules can
@@ -193,6 +204,12 @@ class Validation(ValidationContract):
                 instance._split_token(tok)[0] for tok in rule_string.split("|")
             )
 
+            # Laravel ``sometimes``: validate only when the key is present.
+            # Unlike ``nullable``, an explicitly sent null/blank still runs
+            # the remaining rules and may fail.
+            if "sometimes" in _chain and not was_provided:
+                continue
+
             # Handle nullable logic: if 'nullable' is one of the RULE tokens
             # and the value is None/empty, skip validation. Check the
             # tokenized chain — NOT a substring of rule_string — so a value
@@ -200,7 +217,10 @@ class Validation(ValidationContract):
             # make the field skip ``required``.
             #
             # Store ``None`` — NOT the raw blank — so "blank means null" is
-            # true for CONSUMERS too. Pre-fix a whitespace-only query param
+            # true for CONSUMERS too, but only when the caller actually sent
+            # the field. An omitted optional key must stay omitted from
+            # ``validated()``; otherwise PATCH requests turn every absent
+            # nullable field into an explicit clear. Pre-fix a whitespace-only query param
             # (``?offset=%20``; parse_qs keeps blank-only values) skipped the
             # ``integer``/``numeric`` rules here yet landed in ``validated()``
             # as ``" "``, so every downstream ``int(v.get("offset") or 0)``
@@ -211,7 +231,7 @@ class Validation(ValidationContract):
             if "nullable" in _chain and (
                 value is None or (isinstance(value, str) and value.strip() == "")
             ):
-                if not is_wildcard:
+                if not is_wildcard and was_provided:
                     instance._validated[concrete_field] = None
                 continue
 
@@ -221,8 +241,8 @@ class Validation(ValidationContract):
 
             for token in rule_string.split("|"):
                 rule_name, params = instance._split_token(token)
-                # ``bail`` itself is a modifier, not a real rule.
-                if rule_name == "bail":
+                # ``bail`` and ``sometimes`` are modifiers, not real rules.
+                if rule_name in {"bail", "sometimes"}:
                     continue
                 params["_rules"] = _chain
                 rule_cls = instance._Validation__rule_classes.get(rule_name)
@@ -259,11 +279,12 @@ class Validation(ValidationContract):
                     if bail:
                         break
 
-            if field_passed and not is_wildcard:
+            if field_passed and not is_wildcard and was_provided:
                 # All rules for this field passed. Wildcard-expanded
                 # entries are not added to validated() individually; the
                 # parent field (if declared) already carries the full
-                # structure.
+                # structure. Omitted optional fields stay omitted rather
+                # than being reintroduced as synthetic ``None`` values.
                 instance._validated[concrete_field] = value
 
         # After-callbacks (registered via .after()) run lazily on the first

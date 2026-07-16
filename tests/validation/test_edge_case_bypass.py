@@ -4,8 +4,7 @@ Each test pins a specific bypass that was reachable before the fix
 shipped alongside this file.
 """
 
-from cara.validation.rules import InRule
-from cara.validation.rules import RequiredRule
+from cara.validation.rules import InRule, RequiredRule
 
 # ── RequiredRule: must reject empty collections ─────────────────────
 
@@ -219,12 +218,12 @@ def test_nullable_blank_string_validates_to_none():
     assert validated["q"] is None
 
 
-def test_nullable_absent_key_still_materialises_none():
+def test_nullable_absent_key_is_omitted_from_validated_payload():
     from cara.validation import Validation
 
     v = Validation.make({}, {"limit": "nullable|integer|min:1"})
     assert v.passes()
-    assert v.validated()["limit"] is None
+    assert "limit" not in v.validated()
 
 
 def test_nullable_real_value_still_flows_through():
@@ -233,3 +232,20 @@ def test_nullable_real_value_still_flows_through():
     v = Validation.make({"offset": "48"}, {"offset": "nullable|integer|min:0"})
     assert v.passes()
     assert v.validated()["offset"] == "48"
+
+
+def test_sometimes_skips_absent_field_but_validates_explicit_blank():
+    from cara.validation import Validation
+
+    omitted = Validation.make(
+        {},
+        {"cursor": "bail|sometimes|required|string|max:4096"},
+    )
+    blank = Validation.make(
+        {"cursor": ""},
+        {"cursor": "bail|sometimes|required|string|max:4096"},
+    )
+
+    assert omitted.passes()
+    assert "cursor" not in omitted.validated()
+    assert blank.fails()
