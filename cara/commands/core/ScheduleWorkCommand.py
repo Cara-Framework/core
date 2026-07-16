@@ -269,7 +269,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             trigger  – "interval" | "cron"
             id       – unique job identifier
             name     – human label
-            + trigger-specific keys: hours/minutes/seconds (interval)
+            + trigger-specific keys: hours/minutes/seconds (interval)  # gitleaks:allow
               or hour/minute/day_of_week (cron)
             kwargs   – (optional) passed to handle()
         """
