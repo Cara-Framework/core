@@ -1,8 +1,8 @@
 """Regression pins for ``cara.features`` — the framework feature-flag gate.
 
-Generic core graduated from synkronus' FeatureGate: pluggable resolver,
-read-through caching of hits AND misses, fail-open resolution, explicit
-boolean over percentage, deterministic bucketing, and a test fake.
+Pins the pluggable resolver, read-through caching of hits and misses,
+fail-open resolution, explicit boolean over percentage, deterministic
+bucketing, and the test fake.
 """
 
 from __future__ import annotations

@@ -315,15 +315,16 @@ class JWTGenerateCommand(CommandBase):
 
     def _show_usage_examples(self, token: str):
         """Show usage examples for the generated token."""
+        protected_url = "https://api.example.com/protected-resource"
         self.info("")
         self.info("💡 Usage Examples:")
         self.info("   cURL:")
         self.info(
-            f"     curl -H 'Authorization: Bearer {token[:20]}...' http://localhost:8300/api/user/resolve"
+            f"     curl -H 'Authorization: Bearer {token[:20]}...' {protected_url}"
         )
         self.info("")
         self.info("   JavaScript:")
-        self.info("     const response = await fetch('/api/user/resolve', {")
+        self.info(f"     const response = await fetch('{protected_url}', {{")
         self.info("       headers: {")
         self.info(f"         'Authorization': 'Bearer {token[:20]}...'")
         self.info("       }")
@@ -333,7 +334,7 @@ class JWTGenerateCommand(CommandBase):
         self.info("     headers = {")
         self.info(f"         'Authorization': 'Bearer {token[:20]}...'")
         self.info("     }")
-        self.info("     response = requests.get('/api/user/resolve', headers=headers)")
+        self.info(f"     response = requests.get('{protected_url}', headers=headers)")
 
     def _save_token(self, token_info: dict[str, Any], file_path: str):
         """Save token to file."""

@@ -200,7 +200,7 @@ def test_nullable_blank_string_validates_to_none():
     ``?offset=%20`` reached every downstream ``int(v.get("offset") or 0)``
     as ``int(" ")`` → ValueError → an unauthenticated 500 on endpoints whose
     contract is "validation errors are 422". Blank now means null for
-    consumers too. (Ported from the cheapa cara copy.)"""
+    every consumer."""
     from cara.validation import Validation
 
     v = Validation.make(

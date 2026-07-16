@@ -224,8 +224,8 @@ class Bus:
         # by the caller's listener fan-out leaks into the job's own
         # event chain. In particular, when a listener triggered by
         # event ``X`` dispatches a child job whose ``handle()`` also
-        # fires event ``X`` (for a DIFFERENT entity — e.g. variation
-        # sibling discovery in ``AmazonPostCollectionListener``), the
+        # fires event ``X`` for a different entity (e.g. sibling-record
+        # discovery), the
         # cycle detector pre-fix saw ``X`` already in the stack and
         # raised ``EventDispatchCycleException``. Queued mode doesn't
         # have this problem because each worker has its own contextvar

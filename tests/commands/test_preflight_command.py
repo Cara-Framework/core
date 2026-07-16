@@ -59,7 +59,7 @@ def _prodlike_ready() -> dict:
         "auth.guards": {"jwt": {"secret": "z" * 48}},
         "database.default": "app",
         "database.drivers": {
-            "app": {"driver": "postgres", "host": "db.internal", "database": "cheapa"}
+            "app": {"driver": "postgres", "host": "db.internal", "database": "app"}
         },
         "cache.default": "redis",
         "cache.drivers": {"redis": {"host": "redis.internal"}},
@@ -147,7 +147,9 @@ def test_required_config_ok(monkeypatch):
 
 def test_required_config_fails_on_missing_db_host(monkeypatch):
     cfg = _prodlike_ready()
-    cfg["database.drivers"] = {"app": {"driver": "postgres", "host": "", "database": "cheapa"}}
+    cfg["database.drivers"] = {
+        "app": {"driver": "postgres", "host": "", "database": "app"}
+    }
     _install_config(monkeypatch, cfg)
     r = check_required_config_present()
     assert r.failed and "database host" in r.message

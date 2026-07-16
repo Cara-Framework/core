@@ -227,7 +227,7 @@ class Validation(ValidationContract):
             # crashed with ValueError → an unauthenticated 500 on endpoints
             # whose contract is "validation errors are 422". With ``None``
             # stored, both the ``or default`` and the ``is not None`` guard
-            # idioms behave. (Ported from the cheapa cara copy, 2026-07-10.)
+            # idioms behave.
             if "nullable" in _chain and (
                 value is None or (isinstance(value, str) and value.strip() == "")
             ):

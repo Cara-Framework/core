@@ -36,7 +36,7 @@ CARA_SRC = Path(__file__).resolve().parent.parent.parent / "cara"
 WS_SETTINGS = {
     "max_subscriptions_per_connection": 7,
     "max_connections_per_user": 3,
-    "allowed_origins": ["https://cheapa.io"],
+    "allowed_origins": ["https://app.example"],
 }
 
 
@@ -105,7 +105,7 @@ def test_load_materialises_websocket_dict_under_lowercase_path(loaded_config):
     assert loaded_config.get("broadcasting.WEBSOCKET") is None
     # Nested dotted access into the dict works too (Authenticate uses it).
     assert loaded_config.get("broadcasting.websocket.allowed_origins") == [
-        "https://cheapa.io"
+        "https://app.example"
     ]
 
 
@@ -134,7 +134,7 @@ def test_ws_authenticate_origin_allowlist_reads_lowercase_key(loaded_config):
         headers = [] if origin is None else [(b"origin", origin.encode())]
         return types.SimpleNamespace(scope={"headers": headers})
 
-    assert mw._origin_is_allowed(_socket_with_origin("https://cheapa.io")) is True
+    assert mw._origin_is_allowed(_socket_with_origin("https://app.example")) is True
     assert mw._origin_is_allowed(_socket_with_origin("https://evil.example")) is False, (
         "configured broadcasting.websocket.allowed_origins was ignored — "
         "the origin allow-list can never activate if the reader misses the key"

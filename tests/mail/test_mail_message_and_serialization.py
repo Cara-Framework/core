@@ -30,14 +30,14 @@ class TestMailableSerialization:
         m = (
             Mailable()
             .to("user@example.com")
-            .from_("noreply@cheapa.io")
-            .reply_to("support@cheapa.io")
+            .from_("noreply@app.example")
+            .reply_to("support@app.example")
             .cc("cc@example.com")
             .bcc("bcc@example.com")
             .high_priority()
         )
         d = m.to_dict()
-        assert d["reply_to"] == "support@cheapa.io"
+        assert d["reply_to"] == "support@app.example"
         assert d["cc"] == ["cc@example.com"]
         assert d["bcc"] == ["bcc@example.com"]
         assert d["priority"] == 1
@@ -50,7 +50,7 @@ class TestMailableSerialization:
         data = (
             Mailable()
             .to("user@example.com")
-            .from_("noreply@synkronus.io")
+            .from_("noreply@app.example")
             .subject("Inventory alert")
             .headers(headers)
             .to_dict()
@@ -64,7 +64,7 @@ class TestMailableSerialization:
         )
 
         mailgun_data = MailgunDriver(
-            {"secret": "secret", "domain": "mail.synkronus.io"}
+            {"secret": "secret", "domain": "mail.app.example"}
         )._prepare_data(data)
         assert (
             mailgun_data["h:List-Unsubscribe"]
@@ -94,20 +94,20 @@ class TestMailableSerialization:
 
 class TestMailMessageFluentApi:
     def test_from_accepts_optional_display_name(self) -> None:
-        msg = MailMessage(manager=None).from_("noreply@cheapa.io", "Cheapa")
-        # Encoded as "Cheapa <noreply@cheapa.io>"; the bare address is still
-        # recoverable for the SMTP envelope (send_message does this itself).
+        msg = MailMessage(manager=None).from_("noreply@app.example", "Example App")
+        # The bare address remains recoverable from the encoded display-name
+        # form for the SMTP envelope (send_message does this itself).
         name, addr = parseaddr(msg.mailable.to_dict()["from"])
-        assert name == "Cheapa"
-        assert addr == "noreply@cheapa.io"
+        assert name == "Example App"
+        assert addr == "noreply@app.example"
 
     def test_from_without_name_is_bare_address(self) -> None:
-        msg = MailMessage(manager=None).from_("noreply@cheapa.io")
-        assert msg.mailable.to_dict()["from"] == "noreply@cheapa.io"
+        msg = MailMessage(manager=None).from_("noreply@app.example")
+        assert msg.mailable.to_dict()["from"] == "noreply@app.example"
 
     def test_reply_to_is_exposed_and_serialized(self) -> None:
-        msg = MailMessage(manager=None).reply_to("support@cheapa.io")
-        assert msg.mailable.to_dict()["reply_to"] == "support@cheapa.io"
+        msg = MailMessage(manager=None).reply_to("support@app.example")
+        assert msg.mailable.to_dict()["reply_to"] == "support@app.example"
 
     def test_custom_headers_are_exposed_and_serialized(self) -> None:
         msg = MailMessage(manager=None).header("X-Message-Class", "inventory")

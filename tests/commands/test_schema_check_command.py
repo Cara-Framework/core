@@ -161,10 +161,10 @@ def test_column_diff_still_detects_nullability_mismatch():
 # ── narrower-than-declared capacity (the silent-truncate class) ──────────────
 #
 # The coarse type categories deliberately blur string/varchar/text, which let
-# an undersized live varchar hide behind a widened model FOREVER: cheapa's
-# pipeline_product_trace kept varchar(100) job_ids while real ids ran 100+
-# chars — Postgres rejected every long INSERT and the fail-open writer dropped
-# ~3.8k trace rows before anything noticed. The check is one-directional
+# an undersized live varchar hide behind a widened model forever: a trace
+# table kept varchar(100) job ids while real ids ran longer, so Postgres
+# rejected long inserts and a fail-open writer silently dropped data.
+# The check is one-directional
 # (live NARROWER than declared = drift; live wider = fine) so it cannot cry
 # wolf on the aliases the categories blur.
 

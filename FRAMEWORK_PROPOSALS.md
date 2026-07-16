@@ -1,13 +1,13 @@
 # Cara — Project-Agnostic Primitive Önerileri
 
-> Amaç: Synkronus'un **app katmanında** (api/services/commons) olgunlaşmış ama
+> Amaç: Bir consumer uygulamanın **API ve worker katmanlarında** olgunlaşmış ama
 > aslında **projeye özel olmayan** birkaç deseni cara'ya çıkarmak. Böylece her
 > yeni proje bunları bedavaya alır ve app katmanı incelir.
 >
 > Bu doküman Akinon (omnitron/channel_app) incelemesinin çıktısıdır. Önemli
 > bulgu: Akinon'dan **taşınacak yeni bir mimari desen yok** — outbox, inbox,
 > delta/drift, 3 seviye mapping, connector-contract, verify/reconcile hepsi
-> Synkronus'ta zaten var ve çoğu daha temiz. Aşağıdakiler Akinon'dan değil,
+> incelenen consumer uygulamada zaten var. Aşağıdakiler Akinon'dan değil,
 > **kendi kodumuzdaki tekrar/eksikten** çıkan, framework'e ait generic parçalar.
 
 Her öneri şu formatta: **neden** · **şu an app'te nasıl (kanıt)** · **cara API taslağı** · **sınır (cara'ya girMEyecek kısım)**.
@@ -161,7 +161,7 @@ ardından, gerçekten ikinci bir "kanala projekte edilen kayıt" tipi doğarsa y
 
 ## cara'ya GİRMEYECEKLER (net sınır)
 
-Bunlar Synkronus domain'i, framework değil — app'te kalır:
+Bunlar consumer domain'i, framework değil — app'te kalır:
 
 - Marketplace mapping (attribute/value/category eşleştirme kuralları)
 - Product-linking confidence ladder (identifier→sku→manual)

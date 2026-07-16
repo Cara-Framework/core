@@ -461,17 +461,17 @@ async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
     treated as a fresh top-level dispatch — not a continuation of the
     parent listener's event chain.
 
-    Real-world shape (variation discovery):
+    Representative shape (sibling discovery):
 
-      1. Parent product fires ``product.collected``.
-      2. ``AmazonPostCollectionListener`` runs as a listener for that
-         event — so ``_dispatch_stack`` is ``("product.collected",)``.
-      3. The listener calls ``Bus.dispatch(CollectProductJob(sibling))``;
+      1. A parent record fires ``record.collected``.
+      2. A sibling-discovery listener handles that event, so
+         ``_dispatch_stack`` is ``("record.collected",)``.
+      3. The listener calls ``Bus.dispatch(CollectRecordJob(sibling))``;
          in ``--sync`` mode the child job runs INLINE in the same
          async context (same contextvar bindings).
-      4. The child job completes and fires ``product.collected`` for
-         the sibling product.
-      5. Pre-fix: cycle detector sees ``"product.collected"`` already
+      4. The child job completes and fires ``record.collected`` for
+         the sibling record.
+      5. Pre-fix: cycle detector sees ``"record.collected"`` already
          in the stack and raises ``EventDispatchCycleException`` even
          though the two dispatches are for DIFFERENT entities — a
          legitimate fan-out tree, not a recursive loop.
@@ -489,9 +489,8 @@ async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
         """Simulates a queued job that runs synchronously inline. Its
         ``handle()`` fires ``user.registered`` for a SIBLING user
         (different id from the parent that triggered this dispatch).
-        Real-world equivalent: ``CollectProductJob`` for a variation
-        ASIN, whose ``handle()`` ends with ``Event.fire(ProductCollected(...))``
-        for the sibling product."""
+        Equivalent app shape: a child-record job whose ``handle()``
+        fires the same event type for a sibling record."""
 
         async def handle(self, sibling_id):
             with fresh_dispatch_scope():
@@ -502,13 +501,10 @@ async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
                 )
 
     class SiblingDispatcher:
-        """Listener mirroring ``AmazonPostCollectionListener``: only
-        dispatches sibling work when handling the ROOT event (user_id=1
-        is the parent; user_id>=2 is a sibling that already has its
-        own listener pass and must NOT recurse). Gating on the parent
-        id is the natural termination — sibling discovery in the real
-        listener gates on ``listing.metadata.variation_asins`` and the
-        ``already_exists`` set, which is the same shape."""
+        """Only dispatches sibling work when handling the root event
+        (user_id=1 is the parent; user_id>=2 is a sibling that already
+        has its own listener pass and must not recurse). Gating on the
+        parent id provides the natural fan-out termination."""
 
         propagate_failures = True
 

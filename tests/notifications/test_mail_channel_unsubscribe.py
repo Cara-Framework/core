@@ -70,8 +70,8 @@ def test_notification_mail_adds_confirmation_link_and_rfc8058_headers(
 ) -> None:
     configuration = importlib.import_module("cara.configuration")
     values = {
-        "app.frontend_url": "https://synkronus.io",
-        "app.unsubscribe_url": "https://synkronus.io/api/unsubscribe",
+        "app.frontend_url": "https://app.example",
+        "app.unsubscribe_url": "https://app.example/api/unsubscribe",
         "app.unsubscribe_secret": SECRET,
     }
     monkeypatch.setattr(
@@ -83,29 +83,29 @@ def test_notification_mail_adds_confirmation_link_and_rfc8058_headers(
     notifiable = SimpleNamespace(
         id=41,
         public_id=USER_PUBLIC_ID,
-        email="seller@example.com",
+        email="user@example.com",
     )
 
     assert MailChannel(manager).send(notifiable, _Notification()) is True
 
     token = hmac.new(
         SECRET.encode(),
-        f"{USER_PUBLIC_ID}:seller@example.com".encode(),
+        f"{USER_PUBLIC_ID}:user@example.com".encode(),
         hashlib.sha256,
     ).hexdigest()
     query = urlencode({"user": USER_PUBLIC_ID, "token": token})
     assert manager.message.view_data == {
-        "frontend_url": "https://synkronus.io",
-        "preferences_url": "https://synkronus.io/account#notifications",
-        "unsubscribe_url": f"https://synkronus.io/unsubscribe?{query}",
+        "frontend_url": "https://app.example",
+        "preferences_url": "https://app.example/account#notifications",
+        "unsubscribe_url": f"https://app.example/unsubscribe?{query}",
         "unsubscribe_one_click_url": (
-            f"https://synkronus.io/api/unsubscribe?{query}"
+            f"https://app.example/api/unsubscribe?{query}"
         ),
     }
     assert manager.message.headers_value == {
         "X-Message-Class": "inventory",
         "List-Unsubscribe": (
-            f"<https://synkronus.io/api/unsubscribe?{query}>"
+            f"<https://app.example/api/unsubscribe?{query}>"
         ),
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
@@ -116,8 +116,8 @@ def test_notification_mail_never_falls_back_to_internal_numeric_user_id(
 ) -> None:
     configuration = importlib.import_module("cara.configuration")
     values = {
-        "app.frontend_url": "https://synkronus.io",
-        "app.unsubscribe_url": "https://synkronus.io/api/unsubscribe",
+        "app.frontend_url": "https://app.example",
+        "app.unsubscribe_url": "https://app.example/api/unsubscribe",
         "app.unsubscribe_secret": SECRET,
     }
     monkeypatch.setattr(
@@ -126,10 +126,10 @@ def test_notification_mail_never_falls_back_to_internal_numeric_user_id(
         lambda key, default=None: values.get(key, default),
     )
     manager = _MailManager()
-    notifiable = SimpleNamespace(id=41, email="seller@example.com")
+    notifiable = SimpleNamespace(id=41, email="user@example.com")
 
     assert MailChannel(manager).send(notifiable, _Notification()) is True
     assert manager.message.view_data["unsubscribe_url"] == (
-        "https://synkronus.io/account#notifications"
+        "https://app.example/account#notifications"
     )
     assert "List-Unsubscribe" not in manager.message.headers_value

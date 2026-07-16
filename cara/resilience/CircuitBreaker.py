@@ -12,7 +12,7 @@ Usage:
     from cara.resilience.CircuitBreaker import CircuitBreaker
 
     breaker = CircuitBreaker(
-        name="amazon_api",
+        name="upstream_api",
         failure_threshold=5,
         recovery_timeout=60,
     )

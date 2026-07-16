@@ -1,9 +1,8 @@
 """Feature flags — cached, fail-open runtime gate (Laravel Pennant-lite).
 
-Framework-generic core graduated from synkronus' FeatureGate: the cache
-wiring, negative caching, deterministic percentage bucketing, fail-open
-resolution and flush are project-agnostic; only WHERE flag state comes
-from differs per app. Apps plug that in once at boot::
+The cache wiring, negative caching, deterministic percentage bucketing,
+fail-open resolution and flush are framework concerns; only where flag
+state comes from differs per app. Apps plug that in once at boot::
 
     from cara.facades import Feature
 

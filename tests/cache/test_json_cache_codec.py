@@ -36,7 +36,7 @@ def test_round_trips_explicit_supported_types() -> None:
         "bool": True,
         "int": -(2**80),
         "float": -0.125,
-        "str": "Synkronus 🛡️",
+        "str": "Cara 🛡️",
         "bytes": b"\x00\xff",
         "bytearray": bytearray(b"mutable"),
         "decimal": Decimal("1234.500"),

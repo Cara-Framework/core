@@ -117,9 +117,10 @@ def test_publisher_health_proves_write_permission_with_unroutable_probe() -> Non
     channel.confirm_delivery.assert_called_once_with()
     publish = channel.basic_publish.call_args.kwargs
     assert publish["exchange"] == ""
-    assert publish["routing_key"].startswith("__synkronus_write_probe__.")
+    assert publish["routing_key"].startswith("__cara_write_probe__.")
     assert publish["body"] == b""
     assert publish["mandatory"] is True
+    assert publish["properties"].type == "cara.queue.write-probe"
     channel.queue_declare.assert_not_called()
     channel.exchange_declare.assert_not_called()
     channel.close.assert_called_once_with()

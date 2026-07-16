@@ -39,8 +39,8 @@ class LogWSRequests(Middleware):
             elapsed = (time.perf_counter() - started) * 1000
             # Client-close race on send raises WebSocketException(4002) — benign.
             # RouteNotFoundException = client connected to an unregistered /ws
-            # path (e.g. a live-feed client pointed at this jobs process
-            # instead of api/:8300). Not a server fault — debug, not warning.
+            # path (e.g. a live-feed client reached a process that does not
+            # serve that route). Not a server fault — debug, not warning.
             name = type(e).__name__
             code = getattr(e, "code", None)
             is_benign = (

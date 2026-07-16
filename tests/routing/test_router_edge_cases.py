@@ -79,8 +79,8 @@ class TestRouteParameterDecoding:
         assert params == {"slug": "café"}
 
     def test_turkish_characters_round_trip(self):
-        # Cheapa.io is a Turkish-locale storefront; pin both raw
-        # Turkish chars and the percent-encoded form. ``ç`` is %C3%A7.
+        # Pin both raw Turkish characters and the percent-encoded form.
+        # ``ç`` is %C3%A7.
         compiler = self._compile("/products/@slug")
         assert compiler.extract_parameters("/products/çay-bardağı") == {
             "slug": "çay-bardağı"

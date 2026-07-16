@@ -128,12 +128,10 @@ class WebsocketConductor:
             raise
         except RouteNotFoundException:
             # A WS connection to an unregistered path is a 404, not a server
-            # error. This process (services/) deliberately registers NO /ws
-            # routes — every terminator lives on api/:8300 — so any /ws/*
-            # connection that reaches here is a misrouted client. Close
-            # cleanly with 1008 (policy) instead of re-raising, which would
-            # otherwise bubble to uvicorn as a noisy "Exception in ASGI
-            # application" traceback for what is a benign client mistake.
+            # error. The active API process has no matching route, so this is
+            # a misrouted or stale client. Close cleanly with 1008 (policy)
+            # instead of re-raising, which would otherwise bubble to the ASGI
+            # server as a noisy traceback for a benign client mistake.
             # ``clean_exit`` stays False so the finally closes with the code
             # set below.
             Log.debug("No WS route for path '%s'; closing 1008", getattr(self.socket, 'path', '?'), category='cara.websocket')

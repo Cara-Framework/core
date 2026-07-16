@@ -25,9 +25,9 @@ class _PickleGadget:
 
 def _driver() -> RedisCacheDriver:
     driver = object.__new__(RedisCacheDriver)
-    driver._prefix = "synkronus_cache:j1:"
-    driver._value_prefix = "synkronus_cache:j1:v:"
-    driver._counter_prefix = "synkronus_cache:j1:c:"
+    driver._prefix = "test_cache:j1:"
+    driver._value_prefix = "test_cache:j1:v:"
+    driver._counter_prefix = "test_cache:j1:c:"
     driver._codec = JsonCacheCodec(_KEY)
     driver._default_ttl = 60
     driver._client = MagicMock()
@@ -40,13 +40,13 @@ def test_constructor_uses_clean_versioned_type_namespaces() -> None:
         port=6379,
         db=0,
         password=None,
-        prefix="synkronus_cache:",
+        prefix="test_cache:",
         signing_key=_KEY,
     )
 
-    assert driver._prefix == "synkronus_cache:j1:"
-    assert driver._value_key("user:1") == "synkronus_cache:j1:v:user:1"
-    assert driver._counter_key("rate:1") == "synkronus_cache:j1:c:rate:1"
+    assert driver._prefix == "test_cache:j1:"
+    assert driver._value_key("user:1") == "test_cache:j1:v:user:1"
+    assert driver._counter_key("rate:1") == "test_cache:j1:c:rate:1"
 
 
 def test_constructor_never_falls_back_to_app_key(monkeypatch) -> None:
@@ -70,8 +70,8 @@ def test_legacy_pickle_is_deleted_as_a_miss_without_execution() -> None:
 
     assert driver.get("auth", "missing") == "missing"
 
-    driver._client.get.assert_called_once_with("synkronus_cache:j1:v:auth")
-    driver._client.delete.assert_called_once_with("synkronus_cache:j1:v:auth")
+    driver._client.get.assert_called_once_with("test_cache:j1:v:auth")
+    driver._client.delete.assert_called_once_with("test_cache:j1:v:auth")
     assert _PICKLE_EXECUTED is False
 
 
@@ -84,7 +84,7 @@ def test_strict_get_deletes_tampered_value_before_raising() -> None:
     with pytest.raises(CacheConfigurationException, match="security-sensitive"):
         driver.get("oauth-state", strict=True)
 
-    driver._client.delete.assert_called_once_with("synkronus_cache:j1:v:oauth-state")
+    driver._client.delete.assert_called_once_with("test_cache:j1:v:oauth-state")
 
 
 def test_put_writes_authenticated_envelope_only() -> None:
@@ -93,7 +93,7 @@ def test_put_writes_authenticated_envelope_only() -> None:
     driver.put("user:7", {"role": "viewer"}, ttl=30)
 
     redis_key, payload = driver._client.set.call_args.args
-    assert redis_key == "synkronus_cache:j1:v:user:7"
+    assert redis_key == "test_cache:j1:v:user:7"
     assert payload.startswith(JsonCacheCodec.MAGIC)
     assert driver._codec.decode(payload) == {"role": "viewer"}
     assert driver._client.set.call_args.kwargs == {"ex": 30}
@@ -106,11 +106,11 @@ def test_counter_namespace_never_overlaps_authenticated_values() -> None:
     assert driver.increment("rate:user:7", 1, ttl=60) == 1
 
     driver._client.incrby.assert_called_once_with(
-        "synkronus_cache:j1:c:rate:user:7",
+        "test_cache:j1:c:rate:user:7",
         1,
     )
     driver._client.expire.assert_called_once_with(
-        "synkronus_cache:j1:c:rate:user:7",
+        "test_cache:j1:c:rate:user:7",
         60,
     )
 
@@ -124,8 +124,8 @@ def test_forget_and_has_cover_both_type_namespaces() -> None:
     assert driver.has("shared-key") is True
 
     keys = (
-        "synkronus_cache:j1:v:shared-key",
-        "synkronus_cache:j1:c:shared-key",
+        "test_cache:j1:v:shared-key",
+        "test_cache:j1:c:shared-key",
     )
     driver._client.delete.assert_called_once_with(*keys)
     driver._client.exists.assert_called_once_with(*keys)
@@ -152,6 +152,6 @@ def test_ttl_prefers_counter_then_falls_back_to_value() -> None:
 
     assert driver.ttl("key") == 42
     assert driver._client.ttl.call_args_list == [
-        (("synkronus_cache:j1:c:key",),),
-        (("synkronus_cache:j1:v:key",),),
+        (("test_cache:j1:c:key",),),
+        (("test_cache:j1:v:key",),),
     ]

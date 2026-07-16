@@ -257,7 +257,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                         channel.basic_publish(
                             exchange="",
                             routing_key=(
-                                "__synkronus_write_probe__."
+                                "__cara_write_probe__."
                                 f"{uuid.uuid4().hex}"
                             ),
                             body=b"",
@@ -266,7 +266,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                                 content_type="application/octet-stream",
                                 delivery_mode=1,
                                 expiration="1",
-                                type="synkronus.queue.write-probe",
+                                type="cara.queue.write-probe",
                             ),
                         )
                     except pika.exceptions.UnroutableError:
