@@ -37,8 +37,8 @@ from typing import Any
 
 import pytest
 
-from cara.events.contracts import Listener
 from cara.events import Event as EventDispatcher
+from cara.events.contracts import Listener
 from cara.events.jobs.HandleListenerJob import _instantiate_event
 
 # ── Fixtures ────────────────────────────────────────────────────────

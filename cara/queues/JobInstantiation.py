@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 
 
-def instantiate_job(application, raw, init_args=()):
+def instantiate_job(application, raw, init_args=(), init_kwargs=None):
     """Instantiate a job from a class or return the instance, stamping the container.
 
     The container path is preferred — it lets jobs declare type-hinted
@@ -21,8 +21,9 @@ def instantiate_job(application, raw, init_args=()):
     3. The container doesn't expose a ``make`` method (rare, but
        happens during early boot or in skeletal test rigs).
     """
+    init_kwargs = init_kwargs or {}
     if inspect.isclass(raw):
-        if hasattr(application, "make") and not init_args:
+        if hasattr(application, "make") and not init_args and not init_kwargs:
             try:
                 instance = application.make(raw)
             except Exception as e:
@@ -32,9 +33,9 @@ def instantiate_job(application, raw, init_args=()):
                 # this module usable during early bootstrap; resolve it
                 # lazily and degrade to ``print`` if even that fails.
                 _emit_make_failure(raw, e)
-                instance = raw(*init_args)
+                instance = raw(*init_args, **init_kwargs)
         else:
-            instance = raw(*init_args)
+            instance = raw(*init_args, **init_kwargs)
     else:
         instance = raw
 

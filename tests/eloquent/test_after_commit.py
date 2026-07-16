@@ -99,10 +99,9 @@ def test_callback_does_not_fire_on_rollback():
     resolver = _resolver_with_fake(conn)
     fired = []
 
-    with pytest.raises(RuntimeError):
-        with resolver.transaction("app"):
-            resolver.after_commit("app", lambda: fired.append("nope"))
-            raise RuntimeError("boom")  # forces rollback
+    with pytest.raises(RuntimeError), resolver.transaction("app"):
+        resolver.after_commit("app", lambda: fired.append("nope"))
+        raise RuntimeError("boom")  # forces rollback
 
     # Rolled-back transaction → after-commit callback discarded entirely.
     assert fired == []

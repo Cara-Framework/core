@@ -1,7 +1,7 @@
 """Lazy optional-dependency loading for CLI command groups.
 
 cara's command groups for DB migrations (``cara.eloquent`` → ``psycopg2`` /
-``faker``) and queues (``cara.queues`` → ``pika`` / ``redis``) depend on heavy,
+``faker``) and queues (``cara.queues`` → ``pika``) depend on heavy,
 OPTIONAL third-party packages. Importing those at command-MODULE load time
 forced every service to install them just to have a working CLI — and because
 ``cara.commands.core.__init__`` imports every command eagerly, ONE missing dep

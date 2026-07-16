@@ -120,7 +120,7 @@ class ExecutionContext:
         """
         Context manager for queue execution (explicit).
 
-        Jobs will be dispatched to queue (RabbitMQ/Redis/Database).
+        Jobs will be dispatched through the signed AMQP queue rail.
         This is the default behavior, use this for clarity.
 
         Args:

@@ -255,8 +255,8 @@ def test_without_overlapping_blocks_concurrent():
 3. **Middleware hooks** system
    - `before_dispatch()`, `after_completion()`, etc.
 
-4. **Job chaining** with middleware support
-   - Chain multiple jobs with shared middleware
+4. **Durable chain/batch orchestration**
+   - Define signed JSON descriptors; never serialize callables or job instances
 
 5. **Metrics collection**
    - Track rate limit violations, overlap blocks, etc.

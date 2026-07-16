@@ -7,6 +7,7 @@ Follows HttpConductor architecture with proper route resolution and middleware.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 from typing import Any
 
@@ -155,10 +156,10 @@ class WebsocketConductor:
                 else:
                     code = getattr(self, "_wsx_close_code", 1011)
                     reason = "Internal error" if code == 1011 else ""
-                try:
+                with contextlib.suppress(
+                    OSError, RuntimeError, AttributeError, ConnectionError
+                ):
                     await self.socket.close(code, reason)
-                except (OSError, RuntimeError, AttributeError, ConnectionError):
-                    pass  # Already closed by client or transport
             # Always run terminable middleware on the EXACT instances
             # that executed for this request — same contract as the
             # HTTP conductor. See _run_terminable_middleware docstring.

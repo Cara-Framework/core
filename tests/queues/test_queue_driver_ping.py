@@ -4,6 +4,7 @@ import importlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pika
 import pytest
 
 from cara.queues.drivers.AMQPDriver import AMQPDriver
@@ -73,3 +74,73 @@ def test_amqp_ping_propagates_connection_failure(
 
     with pytest.raises(ConnectionRefusedError):
         driver.ping(timeout_ms=100)
+
+
+def _runtime_health_driver(access: str):
+    driver = object.__new__(AMQPDriver)
+    driver.options = {"broker_access": access}
+    driver._canonical_queues = frozenset({"connector", "sync"})
+    driver._runtime_health_cache = {}
+    driver._delivery_store = SimpleNamespace(verify_schema=MagicMock())
+    bootstrap = MagicMock()
+    channel = MagicMock()
+    connection = MagicMock()
+    connection.channel.return_value = channel
+    driver.open_topology_connection = MagicMock(
+        return_value=(connection, bootstrap)
+    )
+    return driver, connection, channel
+
+
+def test_consumer_health_checks_only_assigned_readable_queues() -> None:
+    driver, connection, channel = _runtime_health_driver("consume")
+
+    driver.verify_runtime_health(["sync"], force=True)
+
+    driver._delivery_store.verify_schema.assert_called_once_with()
+    channel.queue_declare.assert_called_once_with(
+        queue="sync",
+        passive=True,
+    )
+    channel.exchange_declare.assert_not_called()
+    connection.close.assert_called_once_with()
+
+
+def test_publisher_health_proves_write_permission_with_unroutable_probe() -> None:
+    driver, connection, channel = _runtime_health_driver("publish")
+    channel.basic_publish.side_effect = pika.exceptions.UnroutableError([])
+
+    driver.verify_runtime_health(force=True)
+
+    driver._delivery_store.verify_schema.assert_called_once_with()
+    connection.channel.assert_called_once_with()
+    channel.confirm_delivery.assert_called_once_with()
+    publish = channel.basic_publish.call_args.kwargs
+    assert publish["exchange"] == ""
+    assert publish["routing_key"].startswith("__synkronus_write_probe__.")
+    assert publish["body"] == b""
+    assert publish["mandatory"] is True
+    channel.queue_declare.assert_not_called()
+    channel.exchange_declare.assert_not_called()
+    channel.close.assert_called_once_with()
+    connection.close.assert_called_once_with()
+
+
+def test_publisher_health_fails_when_default_exchange_write_is_denied() -> None:
+    driver, _connection, channel = _runtime_health_driver("publish")
+    channel.basic_publish.side_effect = pika.exceptions.ChannelClosedByBroker(
+        403,
+        "ACCESS_REFUSED",
+    )
+
+    with pytest.raises(pika.exceptions.ChannelClosedByBroker):
+        driver.verify_runtime_health(force=True)
+
+
+def test_db_only_health_never_attempts_broker_authentication() -> None:
+    driver, _connection, _channel = _runtime_health_driver("none")
+
+    driver.verify_runtime_health(force=True)
+
+    driver._delivery_store.verify_schema.assert_called_once_with()
+    driver.open_topology_connection.assert_not_called()

@@ -181,9 +181,11 @@ def test_migration_lock_rejects_invalid_timeout():
     manager, _connection, _queries = _fake_db_manager(driver="sqlite")
     tracker = MigrationTracker(manager)
 
-    with pytest.raises(ORMException, match="positive integer"):
-        with tracker.migration_lock(timeout_seconds=0):
-            pass
+    with (
+        pytest.raises(ORMException, match="positive integer"),
+        tracker.migration_lock(timeout_seconds=0),
+    ):
+        pass
 
 
 def test_replace_migration_history_is_atomic():

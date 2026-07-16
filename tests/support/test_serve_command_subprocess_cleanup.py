@@ -85,9 +85,9 @@ def test_start_server_terminates_process_when_monitor_raises():
         ),
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
         _patch_killpg_unavailable(),
+        patch.object(cmd, "_port_has_listener", return_value=False),
     ):
-        with patch.object(cmd, "_port_has_listener", return_value=False):
-            cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     (
         fake_process.terminate.assert_called(),
@@ -119,9 +119,9 @@ def test_start_server_kills_process_when_terminate_times_out():
         ),
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
         _patch_killpg_unavailable(),
+        patch.object(cmd, "_port_has_listener", return_value=False),
     ):
-        with patch.object(cmd, "_port_has_listener", return_value=False):
-            cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     fake_process.terminate.assert_called()
     (
@@ -148,9 +148,9 @@ def test_start_server_closes_stdout_pipe_when_monitor_raises():
         patch.object(cmd, "_monitor_server_process", side_effect=RuntimeError("boom")),
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
         _patch_killpg_unavailable(),
+        patch.object(cmd, "_port_has_listener", return_value=False),
     ):
-        with patch.object(cmd, "_port_has_listener", return_value=False):
-            cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     (
         fake_process.stdout.close.assert_called(),
@@ -173,9 +173,9 @@ def test_start_server_does_not_terminate_already_exited_process():
         patch.object(cmd, "_monitor_server_process", return_value=None),
         patch.object(cmd, "_build_server_command", return_value=["/bin/true"]),
         _patch_killpg_unavailable(),
+        patch.object(cmd, "_port_has_listener", return_value=False),
     ):
-        with patch.object(cmd, "_port_has_listener", return_value=False):
-            cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
+        cmd._start_server({"host": "127.0.0.1", "port": 8000, "reload": False})
 
     fake_process.terminate.assert_not_called()
     fake_process.kill.assert_not_called()

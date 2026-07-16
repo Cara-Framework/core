@@ -17,6 +17,7 @@ from email.mime.text import MIMEText
 from typing import Any
 
 from cara.mail.contracts import Mail
+from cara.mail.Mailable import validate_custom_header
 
 
 class SmtpDriver(Mail):
@@ -86,6 +87,10 @@ class SmtpDriver(Mail):
         elif priority == 5:
             msg["X-Priority"] = "5 (Lowest)"
             msg["X-MSMail-Priority"] = "Low"
+
+        for name, value in (data.get("headers") or {}).items():
+            header_name, header_value = validate_custom_header(name, value)
+            msg[header_name] = header_value
 
         # Add text content
         if data.get("text"):

@@ -119,7 +119,7 @@ class PostgresPlatform(Platform):
         )
 
         if table.added_indexes:
-            for name, index in table.added_indexes.items():
+            for _name, index in table.added_indexes.items():
                 # Double-quote each column so Postgres reserved
                 # keywords (``order``, ``user``, ``timestamp``, ...)
                 # don't break the CREATE INDEX statement. Without
@@ -207,7 +207,7 @@ class PostgresPlatform(Platform):
             add_columns = []
 
             for (
-                name,
+                _name,
                 column,
             ) in table.get_added_columns().items():
                 if column.length:
@@ -359,7 +359,7 @@ class PostgresPlatform(Platform):
             )
         if hasattr(table, "added_foreign_keys") and table.added_foreign_keys:
             for (
-                column,
+                _column,
                 foreign_key_constraint,
             ) in table.get_added_foreign_keys().items():
                 cascade = ""
@@ -405,7 +405,7 @@ class PostgresPlatform(Platform):
                 )
 
         if hasattr(table, "added_indexes") and table.added_indexes:
-            for name, index in table.added_indexes.items():
+            for _name, index in table.added_indexes.items():
                 # Double-quote each column so Postgres reserved
                 # keywords (``order``, ``user``, ``timestamp``, ...)
                 # don't break the CREATE INDEX statement. Without
@@ -418,7 +418,7 @@ class PostgresPlatform(Platform):
 
         if hasattr(table, "added_constraints") and table.added_constraints:
             for (
-                name,
+                _name,
                 constraint,
             ) in table.added_constraints.items():
                 if constraint.constraint_type == "unique":

@@ -11,5 +11,11 @@ class MakesTenantScope:
         builder.set_global_scope(TenantScope())
 
     def scope_without_tenant(self, query):
-        """Query scope to remove tenant filtering."""
+        """Remove tenant filtering only inside an explicit central scope."""
+        from cara.context import Tenancy
+
+        if not Tenancy.is_central():
+            raise RuntimeError(
+                "without_tenant() requires an explicit Tenancy.central() scope."
+            )
         return query.remove_global_scope("_tenant_filter", action="select")

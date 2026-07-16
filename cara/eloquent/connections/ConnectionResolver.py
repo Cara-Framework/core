@@ -1,10 +1,3 @@
-from __future__ import annotations
-
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 """Connection / transaction resolution for the Cara ORM.
 
 **Thread-safety fix (2026-04-23):** ``_active_connections`` used to be a
@@ -27,8 +20,11 @@ Tests for concurrent begin/commit/rollback live alongside the rest of
 the ORM suite; see ``tests/cara/eloquent/test_concurrent_transactions.py``.
 """
 
+from __future__ import annotations
+
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
+from typing import Self
 
 from cara.exceptions import (
     ConfigurationException,
@@ -348,12 +344,8 @@ class ConnectionResolver:
         try:
             yield self
         except BaseException:
-            try:
+            with suppress(OSError, RuntimeError, AttributeError):
                 self.rollback(connection_name)
-            except (OSError, RuntimeError, AttributeError):
-                # Best-effort: surface the original exception, not the
-                # rollback failure (likely "no active transaction").
-                pass
             raise
 
         try:

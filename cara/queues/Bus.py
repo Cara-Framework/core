@@ -46,17 +46,15 @@ class Bus:
 
         Context-aware dispatch:
         - ExecutionContext.sync() → Run immediately with full tracking
-        - Default → Dispatch to queue (RabbitMQ/Redis/Database)
+        - Default → Dispatch through the signed AMQP queue rail
 
         Args:
             job: Job instance to dispatch.
             routing_key: Optional routing key for topic exchange (e.g. ``collection.high``).
             delay: Optional delay in seconds before the job becomes visible on the
                 queue. Ignored in sync mode (the delay of zero is immediate) and
-                forwarded to the driver via ``PendingDispatch.delay()`` in async
-                mode. Accepts any numeric value that the driver can interpret
-                (AMQP uses milliseconds internally, Redis/Database treat it as
-                seconds — ``PendingDispatch`` normalizes this).
+                forwarded through ``PendingDispatch.delay()`` to the durable AMQP
+                delayed-delivery store.
             queue: Optional queue name override.
 
         Returns:
@@ -111,8 +109,8 @@ class Bus:
                     pass
 
             # Dispatch to queue. Wrap in try/except so a failed
-            # ``push()`` (broker down, AMQP unroutable, Redis
-            # ConnectionError) releases the unique-job lock — without
+            # ``push()`` (broker down or AMQP unroutable) releases the
+            # unique-job lock — without
             # this release, the next legitimate dispatch for the same
             # ``unique_id`` is silently dropped for the full
             # ``unique_for`` window (default 1h) even though no job
@@ -126,19 +124,9 @@ class Bus:
                     dispatch_call.on_queue(queue)
                 if delay and hasattr(dispatch_call, "delay"):
                     dispatch_call.delay(delay)
-                # Trigger dispatch synchronously so failures (broker
-                # down, AMQP unroutable, exchange RoutingKey parse
-                # error, no-binding fail-loud, Redis ConnectionError)
-                # raise here and the caller can react.  Without this
-                # explicit call PendingDispatch only dispatches when
-                # the local goes out of scope and __del__ runs — at
-                # which point any exception is logged-and-swallowed
-                # by __del__'s safety net so the caller sees success
-                # while the message vanishes.  ``_dispatch_now`` is
-                # idempotent (PendingDispatch._dispatched guard) so
-                # the GC-time path becomes a cheap no-op.
-                if hasattr(dispatch_call, "_dispatch_now"):
-                    dispatch_call._dispatch_now()
+                # The terminal call is mandatory: builder destruction never
+                # queues work, and dispatch failures must reach the caller.
+                dispatch_call.dispatch()
             except Exception:
                 # Dispatch failed before the job was queued — release
                 # the unique lock so the caller can retry.
@@ -204,8 +192,12 @@ class Bus:
                 # Extract job parameters for payload
                 payload = Bus.get_dispatch_params(job)
 
-                job_id = tracker.create_sync_job_record(
-                    job_name=job_name, job_class=job_class, queue=queue, payload=payload
+                job_id = tracker.create_job_record(
+                    job_name=job_name,
+                    job_class=job_class,
+                    queue=queue,
+                    execution_mode="sync",
+                    payload=payload,
                 )
 
                 # Set job_id so Trackable can use it for unified job tracking
@@ -354,7 +346,12 @@ class Bus:
             # Runtime objects that should be reconstructed by the job
             "job_metadata",
             "job_context",
+            "job_tracking_id",
+            "is_cancelled",
             "repository",
+            # Runtime-only DB fencing value acquired inside handle(); never
+            # serialize it into the immutable broker envelope.
+            "claim_token",
         }
 
         params = {}

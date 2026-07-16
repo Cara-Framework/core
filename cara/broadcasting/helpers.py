@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Sequence
-from typing import Any, Union
+from typing import Any
 
 from cara.broadcasting.Channel import Channel
 from cara.broadcasting.contracts import ShouldBroadcast
 from cara.facades import Broadcast
 
-ChannelLike = Union[str, Channel]
+ChannelLike = str | Channel
 
 
 # ---------------------------------------------------------------------

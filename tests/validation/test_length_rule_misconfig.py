@@ -32,8 +32,7 @@ from __future__ import annotations
 
 import pytest
 
-from cara.validation.rules import MaxLengthRule
-from cara.validation.rules import MinLengthRule
+from cara.validation.rules import MaxLengthRule, MinLengthRule
 
 
 class TestMinLengthMisconfig:

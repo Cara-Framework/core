@@ -15,6 +15,7 @@ Features:
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import inspect
 import json
@@ -23,12 +24,7 @@ from collections.abc import Callable
 from datetime import date as datetimedate
 from datetime import datetime
 from datetime import time as datetimetime
-from typing import Any
-
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
+from typing import Any, Self
 
 import pendulum
 from inflection import tableize, underscore
@@ -36,11 +32,7 @@ from inflection import tableize, underscore
 from cara.exceptions import InvalidArgumentException, ModelNotFoundException
 from cara.support import Collection
 
-_logger = logging.getLogger("cara.eloquent.models")
-
 # Import cast system
-import contextlib
-
 from ..casts.Collections import ArrayCast, CollectionCast
 from ..casts.DateTime import DateCast, DateTimeCast, TimestampCast
 from ..casts.primitives import BoolCast, DecimalCast, FloatCast, IntCast, JsonCast
@@ -54,6 +46,8 @@ from ..concerns.HasTimestamps import HasTimestamps
 from ..observers import ObservesEvents
 from ..query import QueryBuilder
 from ..scopes import MakesTimestamps
+
+_logger = logging.getLogger("cara.eloquent.models")
 
 
 class ModelMeta(type):
@@ -622,7 +616,12 @@ class Model(
                     self.__dirty_attributes__.clear()
             else:
                 # Update existing record
-                updates = self.get_dirty_attributes()
+                # Snapshot before resolving the builder. ``get_builder()`` may
+                # rebuild its cache through ``self.builder = ...`` which is
+                # tracked as a dirty attribute by the model's magic setter.
+                # Passing the live dirty dict would then leak that QueryBuilder
+                # object into the SQL payload once guarded columns are allowed.
+                updates = dict(self.get_dirty_attributes())
                 if updates:
                     # ``__setattr__`` already applied the SET cast when it
                     # populated ``__dirty_attributes__`` (via
@@ -637,7 +636,11 @@ class Model(
                     result = (
                         self.get_builder()
                         .where(self.get_primary_key(), self.get_primary_key_value())
-                        .update(updates, **kwargs)
+                        .update(
+                            updates,
+                            ignore_mass_assignment=True,
+                            **kwargs,
+                        )
                     )
                     if result:
                         # Merge dirty attributes into main attributes
@@ -715,13 +718,16 @@ class Model(
         """Update the model's updated_at timestamp."""
         # Get the timestamp column name
         timestamp_col = "updated_at"
-        if hasattr(self, "__timestamps__") and self.__timestamps__:
-            if isinstance(self.__timestamps__, (list, tuple)):
-                timestamp_col = (
-                    self.__timestamps__[1]
-                    if len(self.__timestamps__) > 1
-                    else "updated_at"
-                )
+        if (
+            hasattr(self, "__timestamps__")
+            and self.__timestamps__
+            and isinstance(self.__timestamps__, (list, tuple))
+        ):
+            timestamp_col = (
+                self.__timestamps__[1]
+                if len(self.__timestamps__) > 1
+                else "updated_at"
+            )
 
         # Get the current datetime in the appropriate format
         current_time = self.get_new_datetime_string()
@@ -1070,16 +1076,12 @@ class Model(
 
         # Apply casts to all attributes that have them
         for key, value in data.items():
-            if value is not None:
-                # Check if this attribute has a cast defined
-                if key in self.__casts__:
-                    try:
-                        # Use the proper cast system
-                        data[key] = self._cast_attribute(key, value)
-                    except Exception:
-                        _logger.warning(
-                            "cast failed for attribute %s", key, exc_info=True
-                        )
+            if value is not None and key in self.__casts__:
+                try:
+                    # Use the proper cast system
+                    data[key] = self._cast_attribute(key, value)
+                except Exception:
+                    _logger.warning("cast failed for attribute %s", key, exc_info=True)
 
         # Handle remaining datetime and decimal types (including casted ones)
         # This runs AFTER casting to ensure ALL Decimals are JSON-serializable

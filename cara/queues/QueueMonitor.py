@@ -388,7 +388,7 @@ class QueueMonitor:
 
         # Calculate jobs per minute
         minutes_elapsed = max(window_minutes, 1)
-        for queue_name, q_throughput in throughput.items():
+        for q_throughput in throughput.values():
             q_throughput["jobs_per_minute"] = round(
                 q_throughput["jobs_processed"] / minutes_elapsed, 2
             )

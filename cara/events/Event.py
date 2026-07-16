@@ -223,12 +223,14 @@ class Event:
             dispatcher.subscribe(UserEventSubscriber)
         """
         # Handle EventSubscriber classes
-        if listener is None and isinstance(event_name, type):
-            # event_name is actually an EventSubscriber class
-            if issubclass(event_name, EventSubscriber):
-                subscriber_instance = event_name()
-                subscriber_instance.subscribe(self)
-                return
+        if (
+            listener is None
+            and isinstance(event_name, type)
+            and issubclass(event_name, EventSubscriber)
+        ):
+            subscriber_instance = event_name()
+            subscriber_instance.subscribe(self)
+            return
 
         # Handle wildcard patterns
         if "*" in event_name:
@@ -620,7 +622,7 @@ class Event:
 
             pending = PendingDispatch(job)
             pending.with_routing_key(routing_key)
-            pending._dispatch_now()
+            pending.dispatch()
             return True
 
         except Exception as e:

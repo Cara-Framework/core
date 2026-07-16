@@ -110,11 +110,14 @@ class HasAttributes:
         self._attributes[attribute] = value
 
         # Track changes
-        if hasattr(self, "_original") and attribute in self._original:
-            if self._original[attribute] != value:
-                if not hasattr(self, "_changes"):
-                    self.__dict__["_changes"] = {}
-                self._changes[attribute] = value
+        if (
+            hasattr(self, "_original")
+            and attribute in self._original
+            and self._original[attribute] != value
+        ):
+            if not hasattr(self, "_changes"):
+                self.__dict__["_changes"] = {}
+            self._changes[attribute] = value
 
     def get_raw_attribute(self, attribute: str) -> Any:
         """Get raw attribute value without casting."""

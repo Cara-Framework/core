@@ -74,8 +74,10 @@ class Queue:
         driver_name: str | None = None,
         **options: Any,
     ) -> None:
-        driver = self.driver(driver_name)
-        driver.chain(jobs, options=options)
+        raise QueueException(
+            "Queue chains are unsupported until durable JSON chain "
+            "descriptors are implemented."
+        )
 
     def batch(
         self,
@@ -83,8 +85,10 @@ class Queue:
         driver_name: str | None = None,
         **options: Any,
     ) -> None:
-        driver = self.driver(driver_name)
-        driver.batch(*jobs, options=options)
+        raise QueueException(
+            "Queue batches are unsupported until durable JSON batch "
+            "descriptors are implemented."
+        )
 
     def schedule(
         self,
@@ -92,51 +96,9 @@ class Queue:
         when: Any,
         driver_name: str | None = None,
         **options: Any,
-    ) -> None:
+    ):
         driver = self.driver(driver_name)
-        driver.schedule(job, when, options=options)
-
-    def cancel_job(self, job_id: str) -> bool:
-        """
-        Cancel a specific job by ID.
-
-        Args:
-            job_id: Job identifier to cancel
-
-        Returns:
-            bool: True if job was cancelled, False if not found
-        """
-        from cara.queues.JobStateManager import get_job_state_manager
-
-        return get_job_state_manager().cancel_job(job_id)
-
-    def cancel_jobs_by_context(
-        self, context_filter: callable, reason: str = "Job superseded"
-    ) -> int:
-        """
-        Cancel jobs based on context filter.
-
-        Args:
-            context_filter: Function that returns True for jobs to cancel
-            reason: Reason for cancellation
-
-        Returns:
-            int: Number of jobs cancelled
-        """
-        from cara.queues.JobStateManager import get_job_state_manager
-
-        return get_job_state_manager().cancel_jobs_by_context(context_filter, reason)
-
-    def get_active_jobs(self) -> dict[str, dict[str, Any]]:
-        """
-        Get all active jobs.
-
-        Returns:
-            dict: Active jobs with their states
-        """
-        from cara.queues.JobStateManager import get_job_state_manager
-
-        return get_job_state_manager().get_active_jobs()
+        return driver.schedule(job, when, options=options)
 
     def later(
         self,
@@ -177,7 +139,7 @@ class Queue:
          - Otherwise, instantiate (with args/kwargs) or use instance and call handle() synchronously.
         Usage:
             job_id = Queue.dispatch(SomeJobClass, payload)
-            job_id = Queue.dispatch(SomeJobClass, payload, driver_name="database")
+            job_id = Queue.dispatch(SomeJobClass, payload, driver_name="amqp")
         """
         app = self.application
 

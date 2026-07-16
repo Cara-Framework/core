@@ -13,9 +13,9 @@ import logging
 # notice runaway cache-as-blob patterns (e.g. caching a full search
 # response that ballooned past 1 MB). Configurable via the
 # ``cache.large_value_bytes`` config key; default 256 KB.
-import pickle
 from typing import Any
 
+from cara.cache.codecs import JsonCacheCodec
 from cara.cache.contracts import Cache
 from cara.cache.Observer import notify_cache_event
 from cara.exceptions import CacheConfigurationException
@@ -39,7 +39,7 @@ def _large_value_threshold() -> int:
             from cara.configuration import config
 
             _LARGE_VALUE_BYTES = int(config("cache.large_value_bytes", 262144))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             _LARGE_VALUE_BYTES = 262144
     return _LARGE_VALUE_BYTES
 
@@ -48,7 +48,11 @@ class RedisCacheDriver(Cache):
     """
     Stores cache entries in Redis.
 
-    Keys are prefixed for namespacing. Values are pickled; TTL is applied per entry.
+    Keys use codec-versioned, type-separated namespaces. Values are canonical
+    tagged JSON with HMAC integrity. Redis-native integer counters remain raw
+    for INCRBY, but live under a separate counter prefix so an attacker with
+    Redis write access cannot substitute an unsigned integer for an arbitrary
+    authenticated cache value.
     """
 
     driver_name = "redis"
@@ -74,9 +78,21 @@ class RedisCacheDriver(Cache):
         socket_keepalive: bool = True,
         health_check_interval: int = 30,
         max_connections: int | None = 32,
-        retry_on_timeout: bool = True,
+        ssl: bool = False,
+        ssl_ca_certs: str | None = None,
+        ssl_certfile: str | None = None,
+        ssl_keyfile: str | None = None,
+        ssl_cert_reqs: str = "required",
+        signing_key: str | bytes | None = None,
     ):
-        self._prefix = prefix or ""
+        self._base_prefix = prefix or ""
+        self._codec = JsonCacheCodec(self._resolve_signing_key(signing_key))
+        separator = (
+            "" if not self._base_prefix or self._base_prefix.endswith(":") else ":"
+        )
+        self._prefix = f"{self._base_prefix}{separator}{self._codec.NAMESPACE}:"
+        self._value_prefix = f"{self._prefix}v:"
+        self._counter_prefix = f"{self._prefix}c:"
         self._default_ttl = default_ttl
         self._validate_connection_params(host, port, db)
         try:
@@ -93,9 +109,9 @@ class RedisCacheDriver(Cache):
         # NAT timeout, k8s service rotation) keeps getting handed out to
         # request paths until the first command fails. ``max_connections``
         # caps growth so a burst of slow requests can't exhaust file
-        # descriptors. ``retry_on_timeout`` lets a single socket-timeout
-        # transparently retry once before bubbling — covers the most
-        # common transient network blip.
+        # descriptors. redis-py 6+ retries timeout errors through its built-in
+        # retry policy; the deprecated ``retry_on_timeout`` argument is
+        # intentionally not passed.
         redis_kwargs: dict = {
             "host": host,
             "port": port,
@@ -105,8 +121,17 @@ class RedisCacheDriver(Cache):
             "socket_timeout": socket_timeout,
             "socket_keepalive": socket_keepalive,
             "health_check_interval": health_check_interval,
-            "retry_on_timeout": retry_on_timeout,
+            "ssl": ssl,
         }
+        if ssl:
+            redis_kwargs.update(
+                {
+                    "ssl_ca_certs": ssl_ca_certs,
+                    "ssl_certfile": ssl_certfile,
+                    "ssl_keyfile": ssl_keyfile,
+                    "ssl_cert_reqs": ssl_cert_reqs,
+                }
+            )
         if max_connections is not None:
             redis_kwargs["max_connections"] = max_connections
         # Drop None entries so we don't override redis-py's own defaults
@@ -115,6 +140,14 @@ class RedisCacheDriver(Cache):
             k: v for k, v in redis_kwargs.items() if v is not None or k == "password"
         }
         self._client = redis.Redis(**redis_kwargs)
+
+    @staticmethod
+    def _resolve_signing_key(explicit: str | bytes | None) -> str | bytes:
+        if explicit:
+            return explicit
+        raise CacheConfigurationException(
+            "CACHE_SIGNING_KEY is required for the Redis cache driver."
+        )
 
     def _validate_connection_params(self, host: str, port: int, db: int) -> None:
         if not host or not isinstance(host, str):
@@ -130,8 +163,14 @@ class RedisCacheDriver(Cache):
                 "`cache.drivers.redis.db` must be a non‐negative integer."
             )
 
+    def _value_key(self, key: str) -> str:
+        return f"{self._value_prefix}{key}"
+
+    def _counter_key(self, key: str) -> str:
+        return f"{self._counter_prefix}{key}"
+
     def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
-        redis_key = f"{self._prefix}{key}"
+        redis_key = self._value_key(key)
         try:
             raw_data = self._client.get(redis_key)
         except Exception as exc:
@@ -148,32 +187,17 @@ class RedisCacheDriver(Cache):
             return default
 
         try:
-            value = pickle.loads(raw_data)
+            value = self._codec.decode(raw_data)
             notify_cache_event("get", "hit", key, len(raw_data))
             return value
-        except Exception as unpickle_error:
-            try:
-                value = raw_data.decode("utf-8")
-                notify_cache_event("get", "hit", key, len(raw_data))
-                return value
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
-                pass
-            if strict:
-                raise CacheConfigurationException(
-                    f"Corrupt cache value for security-sensitive key '{key}'"
-                ) from unpickle_error
-            # Self-heal a corrupt / pickle-incompatible entry instead of
-            # serving the default forever. Without the proactive DELETE
-            # every subsequent GET re-fetched, re-failed to unpickle,
-            # and re-warned — so the same poison key burned a syscall +
-            # log line on every request until the TTL expired (which,
-            # for ``BRAND_VERSION_TTL`` and friends, is 30 days). Drop
-            # it on first miss so the next caller's ``Cache.remember``
-            # repopulates with the current pickle protocol.
+        except CacheConfigurationException as decode_error:
+            # Old pickle/raw-string values and corrupt/tampered envelopes are
+            # never deserialized. Delete on first read so remember() can
+            # repopulate under the clean codec-versioned namespace.
             Log.warning(
-                "[RedisCacheDriver] unpickle failed for '%s' (corrupt entry, deleting): %s",
+                "[RedisCacheDriver] codec validation failed for '%s' (entry deleted): %s",
                 key,
-                unpickle_error,
+                decode_error,
                 category="cache",
             )
             try:
@@ -181,6 +205,10 @@ class RedisCacheDriver(Cache):
             except Exception:
                 _logger.warning("self-heal delete failed", exc_info=True)
             notify_cache_event("get", "error", key, None)
+            if strict:
+                raise CacheConfigurationException(
+                    f"Corrupt cache value for security-sensitive key '{key}'"
+                ) from decode_error
             return default
 
     def put(
@@ -191,19 +219,17 @@ class RedisCacheDriver(Cache):
         *,
         strict: bool = False,
     ) -> None:
-        redis_key = f"{self._prefix}{key}"
+        redis_key = self._value_key(key)
         try:
-            payload = pickle.dumps(value)
-        except Exception as e:
+            payload = self._codec.encode(value)
+        except CacheConfigurationException as e:
             # Silently swallowing serialisation failures was the
             # original bug — callers using ``Cache.add(key, True,
             # ttl)`` as a flight-claim got a silent False back, which
             # they (correctly) read as "another worker won the claim",
             # so the in-flight job never ran. Surface the real cause.
-            from cara.exceptions import CacheConfigurationException
-
             raise CacheConfigurationException(
-                f"Cannot pickle value for cache key '{key}' ({type(value).__name__}): {e}"
+                f"Cannot encode value for cache key '{key}' ({type(value).__name__}): {e}"
             ) from e
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
@@ -234,9 +260,9 @@ class RedisCacheDriver(Cache):
         self.put(key, value, ttl=0)
 
     def forget(self, key: str) -> bool:
-        redis_key = f"{self._prefix}{key}"
+        redis_keys = (self._value_key(key), self._counter_key(key))
         try:
-            deleted = self._client.delete(redis_key) > 0
+            deleted = self._client.delete(*redis_keys) > 0
             notify_cache_event("forget", "deleted" if deleted else "noop", key, None)
             return deleted
         except Exception as e:
@@ -254,7 +280,7 @@ class RedisCacheDriver(Cache):
 
     def pull(self, key: str, default: Any = None) -> Any:
         """Atomically return and delete ``key`` using Redis ``GETDEL``."""
-        redis_key = f"{self._prefix}{key}"
+        redis_key = self._value_key(key)
         try:
             raw_data = self._client.getdel(redis_key)
         except Exception as exc:
@@ -273,18 +299,15 @@ class RedisCacheDriver(Cache):
             return default
 
         try:
-            value = pickle.loads(raw_data)
-        except Exception:
-            try:
-                value = raw_data.decode("utf-8")
-            except (UnicodeDecodeError, AttributeError):
-                Log.warning(
-                    "[RedisCacheDriver] pulled corrupt value for '%s'",
-                    key,
-                    category="cache",
-                )
-                notify_cache_event("pull", "error", key, len(raw_data))
-                return default
+            value = self._codec.decode(raw_data)
+        except CacheConfigurationException:
+            Log.warning(
+                "[RedisCacheDriver] pulled corrupt/legacy value for '%s'",
+                key,
+                category="cache",
+            )
+            notify_cache_event("pull", "error", key, len(raw_data))
+            return default
 
         notify_cache_event("pull", "hit", key, len(raw_data))
         return value
@@ -299,17 +322,9 @@ class RedisCacheDriver(Cache):
         was wiping co-tenant data. We now SCAN+DEL only keys under
         our prefix.
 
-        When the prefix is empty (config bug), refuse to flush — that
-        prevents an accidental "flush all keys in this DB" outage.
+        The codec namespace is always non-empty, even when the configured base
+        prefix is empty, so the scan can never expand to every key in the DB.
         """
-        if not self._prefix:
-            Log.warning(
-                "[RedisCacheDriver] flush() refused: empty cache prefix "
-                "would wipe co-tenant Redis keys. Configure "
-                "cache.drivers.redis.prefix.",
-                category="cache",
-            )
-            return
         try:
             cursor = 0
             pattern = f"{self._prefix}*"
@@ -324,9 +339,8 @@ class RedisCacheDriver(Cache):
 
     def has(self, key: str) -> bool:
         """Check if a key exists in cache."""
-        redis_key = f"{self._prefix}{key}"
         try:
-            return self._client.exists(redis_key) > 0
+            return self._client.exists(self._value_key(key), self._counter_key(key)) > 0
         except Exception:
             _logger.warning("redis operation failed", exc_info=True)
             return False
@@ -353,18 +367,13 @@ class RedisCacheDriver(Cache):
         return here — the raising behaviour is intentional; don't "fix" it to
         return False without auditing every lock call site.)
         """
-        redis_key = f"{self._prefix}{key}"
-        if isinstance(value, str):
-            payload = value.encode("utf-8")
-        else:
-            try:
-                payload = pickle.dumps(value)
-            except Exception as e:
-                from cara.exceptions import CacheConfigurationException
-
-                raise CacheConfigurationException(
-                    f"Cannot pickle flight-claim value for key '{key}': {e}"
-                ) from e
+        redis_key = self._value_key(key)
+        try:
+            payload = self._codec.encode(value)
+        except CacheConfigurationException as e:
+            raise CacheConfigurationException(
+                f"Cannot encode flight-claim value for key '{key}': {e}"
+            ) from e
 
         ttl_seconds = ttl if (ttl is not None) else self._default_ttl
         payload_size = len(payload)
@@ -414,13 +423,8 @@ class RedisCacheDriver(Cache):
     # ``GET; DEL`` lets a different owner slip in between the two
     # calls and lose its lock.
     #
-    # NOTE — for ``forget_if`` we deliberately compare on the *raw*
-    # string-coerced expected value, not on the pickle bytes. Pickle
-    # output is not deterministic across runs/protocols, so the
-    # earlier "compare pickled bytes" approach failed the equality
-    # check whenever caller A wrote with one protocol and caller B
-    # released with another. Lock owners are already string-typed
-    # (``CacheLock.owner``) so plain string CAS is the correct shape.
+    # Canonical tagged JSON is byte-deterministic, so the release CAS compares
+    # the exact authenticated encoding written by add().
     _RELEASE_LOCK_LUA = (
         "if redis.call('get', KEYS[1]) == ARGV[1] then "
         "  return redis.call('del', KEYS[1]) "
@@ -430,21 +434,24 @@ class RedisCacheDriver(Cache):
     def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
         """Atomically increment via Redis INCRBY.
 
-        If the key holds a non-integer value (e.g. a pickled cache entry
-        that collided with a counter key), delete it first and start fresh.
+        Counters use their own codec-versioned namespace. If a counter key is
+        corrupt/non-integer, delete it first and start fresh.
         """
-        redis_key = f"{self._prefix}{key}"
+        redis_key = self._counter_key(key)
         amount = int(amount)
         ttl = int(ttl) if ttl is not None else None
         try:
             new_val = self._client.incrby(redis_key, amount)
-            if ttl and ttl > 0:
-                # Set TTL on first creation OR refresh TTL if the key
-                # previously lost its expiry (e.g. after WRONGTYPE
-                # recovery). Checking TTL(-1) avoids resetting the timer
-                # on every increment for keys that already have a TTL.
-                if new_val == amount or self._client.ttl(redis_key) == -1:
-                    self._client.expire(redis_key, ttl)
+            # Set TTL on first creation OR refresh TTL if the key
+            # previously lost its expiry (e.g. after WRONGTYPE
+            # recovery). Checking TTL(-1) avoids resetting the timer
+            # on every increment for keys that already have a TTL.
+            if (
+                ttl
+                and ttl > 0
+                and (new_val == amount or self._client.ttl(redis_key) == -1)
+            ):
+                self._client.expire(redis_key, ttl)
             return new_val
         except Exception as exc:
             import redis
@@ -458,10 +465,8 @@ class RedisCacheDriver(Cache):
                 # and the rate-store's fallback modes (closed/memory/
                 # open) never engaged because they key off this raise.
                 raise
-            # WRONGTYPE — the key holds non-integer data (e.g. a pickled
-            # cache entry collided with a counter key). Nuke and
-            # reinitialise; a failure here is an infra failure again and
-            # propagates.
+            # WRONGTYPE — the counter key holds non-integer data. Nuke and
+            # reinitialise; a failure here is an infra failure and propagates.
             Log.warning(
                 "[RedisCacheDriver] increment WRONGTYPE recovery for '%s'",
                 key,
@@ -477,8 +482,8 @@ class RedisCacheDriver(Cache):
             return amount
 
     def forget_if(self, key: str, expected_value: Any) -> bool:
-        redis_key = f"{self._prefix}{key}"
-        owner_token = str(expected_value).encode("utf-8")
+        redis_key = self._value_key(key)
+        owner_token = self._codec.encode(expected_value)
         try:
             result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, owner_token)
             return bool(result) and int(result) > 0
@@ -495,9 +500,12 @@ class RedisCacheDriver(Cache):
         of the full window. Wraps Redis ``TTL`` which returns -2 (no
         such key) and -1 (no expiry); both map to ``None`` here.
         """
-        redis_key = f"{self._prefix}{key}"
+        counter_key = self._counter_key(key)
+        value_key = self._value_key(key)
         try:
-            t = self._client.ttl(redis_key)
+            t = self._client.ttl(counter_key)
+            if t == -2:
+                t = self._client.ttl(value_key)
         except Exception:
             _logger.warning("redis operation failed", exc_info=True)
             return None
@@ -518,23 +526,23 @@ class RedisCacheDriver(Cache):
         Returns:
             Number of keys deleted
         """
-        prefixed_pattern = f"{self._prefix}{pattern}"
         deleted_count = 0
 
         try:
-            cursor = 0
-            while True:
-                cursor, keys = self._client.scan(
-                    cursor=cursor,
-                    match=prefixed_pattern,
-                    count=100,
-                )
+            for namespace_prefix in (self._value_prefix, self._counter_prefix):
+                cursor = 0
+                while True:
+                    cursor, keys = self._client.scan(
+                        cursor=cursor,
+                        match=f"{namespace_prefix}{pattern}",
+                        count=100,
+                    )
 
-                if keys:
-                    deleted_count += self._client.delete(*keys)
+                    if keys:
+                        deleted_count += self._client.delete(*keys)
 
-                if cursor == 0:
-                    break
+                    if cursor == 0:
+                        break
 
             return deleted_count
         except Exception:

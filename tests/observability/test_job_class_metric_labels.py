@@ -15,7 +15,6 @@ def test_queue_metrics_use_job_class_label() -> None:
         "queue_job_duration_seconds",
         "queue_jobs_in_flight",
         "queue_wait_seconds",
-        "queue_jobs_dead_lettered_total",
     )
 
     for name in metric_names:

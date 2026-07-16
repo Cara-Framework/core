@@ -31,6 +31,7 @@ so private/presence channels honour the channel-auth registry.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 from typing import Any
@@ -296,11 +297,8 @@ class Socket:
                 self._broadcast_touch_cache = "_no_touch"
                 cached = "_no_touch"
         if cached != "_no_touch":
-            try:
+            with contextlib.suppress(Exception):
                 cached(self._connection_id)
-            except Exception:
-                # Touching is purely informational — never fail receive over it.
-                pass
 
         msg_type = message.get("type")
         if msg_type == "websocket.disconnect":

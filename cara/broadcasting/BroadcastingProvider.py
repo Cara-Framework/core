@@ -100,11 +100,18 @@ class BroadcastingProvider(DeferredProvider):
         port = config("broadcasting.drivers.redis.connection.port", 6379)
         password = config("broadcasting.drivers.redis.connection.password", "")
         db = config("broadcasting.drivers.redis.connection.db", 0)
+        scheme = str(
+            config("broadcasting.drivers.redis.connection.scheme", "redis") or "redis"
+        ).lower()
+        if scheme not in {"redis", "rediss"}:
+            raise BroadcastingConfigurationException(
+                "Redis broadcasting scheme must be 'redis' or 'rediss'."
+            )
 
         if password:
-            redis_url = f"redis://:{password}@{host}:{port}/{db}"
+            redis_url = f"{scheme}://:{password}@{host}:{port}/{db}"
         else:
-            redis_url = f"redis://{host}:{port}/{db}"
+            redis_url = f"{scheme}://{host}:{port}/{db}"
 
         driver_config = config("broadcasting.drivers.redis", {})
         if isinstance(driver_config, dict):

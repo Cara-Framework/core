@@ -34,10 +34,13 @@ class MigrateCommand(CommandBase):
         self.info("Starting database migration...")
 
         # Check for production environment
-        if self._is_production() and not self.option("force"):
-            if not self._confirm_production():
-                self.info("× Migration aborted by user.")
-                return
+        if (
+            self._is_production()
+            and not self.option("force")
+            and not self._confirm_production()
+        ):
+            self.info("× Migration aborted by user.")
+            return
 
         try:
             # Get migration manager
@@ -329,4 +332,3 @@ class MigrateCommand(CommandBase):
 
         executor.execute_query = execute_query
         executor.get_query_result = get_query_result
-

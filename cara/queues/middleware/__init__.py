@@ -72,17 +72,39 @@ async def run_through_middleware_async(job, handler: Callable) -> Any:
     dispatch time. An inline (sync-mode) dispatch never sets the attr —
     the job simply inherits the caller's live context.
     """
-    tenant_marker = getattr(job, "_tenant_id", _TENANT_UNSET)
-    if tenant_marker is _TENANT_UNSET:
-        chain = _build_chain(job, handler)
-        result = chain(job)
-        if asyncio.iscoroutine(result):
-            return await result
-        return result
-
     from cara.context import Tenancy
 
-    with Tenancy.as_tenant(tenant_marker):
+    tenant_id = getattr(job, "_tenant_id", _TENANT_UNSET)
+    tenant_mode = getattr(job, "_tenant_mode", _TENANT_UNSET)
+    is_central_job = bool(getattr(job, "central_job", False))
+
+    if tenant_mode is _TENANT_UNSET and tenant_id is _TENANT_UNSET:
+        if is_central_job:
+            if not Tenancy.is_central():
+                raise RuntimeError(
+                    f"Central job {job.__class__.__name__} requires "
+                    "Tenancy.central()."
+                )
+            scope = Tenancy.central()
+        else:
+            if not Tenancy.is_tenant():
+                raise RuntimeError(
+                    f"Ordinary job {job.__class__.__name__} requires "
+                    "an active tenant."
+                )
+            scope = Tenancy.as_tenant(Tenancy.id())
+    elif tenant_mode == "central":
+        if not is_central_job or tenant_id is not None:
+            raise RuntimeError("Signed central queue mode does not match job marker.")
+        scope = Tenancy.central()
+    elif tenant_mode == "tenant":
+        if is_central_job or tenant_id is None or tenant_id is _TENANT_UNSET:
+            raise RuntimeError("Signed tenant queue mode does not match job marker.")
+        scope = Tenancy.as_tenant(tenant_id)
+    else:
+        raise RuntimeError("Queue job has incomplete or invalid tenant metadata.")
+
+    with scope:
         chain = _build_chain(job, handler)
         result = chain(job)
         if asyncio.iscoroutine(result):

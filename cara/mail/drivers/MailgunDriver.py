@@ -14,6 +14,7 @@ import requests
 
 from cara.exceptions import ConfigurationException
 from cara.mail.contracts import Mail
+from cara.mail.Mailable import validate_custom_header
 
 
 class MailgunDriver(Mail):
@@ -111,6 +112,10 @@ class MailgunDriver(Mail):
 
         if mailable_data.get("reply_to"):
             data["h:Reply-To"] = mailable_data.get("reply_to")
+
+        for name, value in (mailable_data.get("headers") or {}).items():
+            header_name, header_value = validate_custom_header(name, value)
+            data[f"h:{header_name}"] = header_value
 
         # Content
         if mailable_data.get("text"):

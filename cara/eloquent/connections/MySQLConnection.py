@@ -89,11 +89,9 @@ class MySQLConnection(BaseConnection):
                 if len(pool) < self.connection_pool_size:
                     pool.append(self._connection)
                 else:
-                    try:
+                    with contextlib.suppress(OSError, RuntimeError, AttributeError):
                         # Bypass any monkey-patch — we want the real driver close.
                         type(self._connection).close(self._connection)
-                    except (OSError, RuntimeError, AttributeError):
-                        pass
         else:
             with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 type(self._connection).close(self._connection)

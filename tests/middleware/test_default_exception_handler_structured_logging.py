@@ -14,10 +14,7 @@ from __future__ import annotations
 import importlib
 import sys
 import types
-from typing import Any
 from unittest.mock import MagicMock
-
-import pytest
 
 _handler_mod = importlib.import_module(
     "cara.exceptions.handlers.DefaultExceptionHandler"

@@ -429,7 +429,7 @@ class Shell:
 
     def clear_screen(self):
         """Clear the screen."""
-        os.system("cls" if os.name == "nt" else "clear")
+        self.console.clear()
 
     def exit_shell(self):
         """Exit the shell with Rich goodbye message."""

@@ -281,13 +281,9 @@ def callable_only(value: Any) -> bool:
         return False
     if not callable(value):
         return False
-    # An instance with a ``handle`` method is dispatched via ``handle``.
-    if hasattr(value, "handle") and not isinstance(value, type):
-        # But functions also have ``__call__`` and not ``handle`` — so
-        # only treat instances-with-handle as method-dispatched.
-        # Functions/lambdas don't have ``handle``.
-        return False
-    return True
+    # An instance with a ``handle`` method is dispatched via ``handle``;
+    # plain functions/lambdas do not expose that method.
+    return not hasattr(value, "handle")
 
 
 __all__ = ["Pipeline", "callable_only"]

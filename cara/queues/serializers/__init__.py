@@ -1,6 +1,5 @@
-"""Job Serializers - Pluggable serialization strategies."""
+"""Authenticated queue wire serializers."""
 
-from .JsonJobSerializer import JsonJobSerializer
-from .PickleJobSerializer import PickleJobSerializer, restricted_pickle_loads
+from .SignedJsonJobSerializer import SignedJsonJobSerializer
 
-__all__ = ["JsonJobSerializer", "PickleJobSerializer", "restricted_pickle_loads"]
+__all__ = ["SignedJsonJobSerializer"]

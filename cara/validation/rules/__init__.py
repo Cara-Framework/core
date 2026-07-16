@@ -42,6 +42,7 @@ from .MaxRule import MaxRule
 from .MaxLengthRule import MaxLengthRule
 from .MinRule import MinRule
 from .MinLengthRule import MinLengthRule
+from .MissingRule import MissingRule
 from .NotInRule import NotInRule
 from .NotRegexRule import NotRegexRule
 from .NumericRule import NumericRule
@@ -105,6 +106,7 @@ __all__ = [
     "MaxRule",
     "MinLengthRule",
     "MinRule",
+    "MissingRule",
     "NotInRule",
     "NotRegexRule",
     "NullableRule",

@@ -16,6 +16,7 @@ from .SecurityHeaders import SecurityHeaders
 from .ServeStaticFiles import ServeStaticFiles
 from .ShouldAuthenticate import ShouldAuthenticate
 from .ThrottleRequests import ThrottleRequests
+from .TraceRequests import TraceRequests
 from .TrimStrings import TrimStrings
 
 __all__ = [
@@ -37,5 +38,6 @@ __all__ = [
     "ServeStaticFiles",
     "ShouldAuthenticate",
     "ThrottleRequests",
+    "TraceRequests",
     "TrimStrings",
 ]

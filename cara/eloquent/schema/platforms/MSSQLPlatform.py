@@ -189,7 +189,7 @@ class MSSQLPlatform(Platform):
                 )
 
         if table.added_indexes:
-            for name, index in table.added_indexes.items():
+            for _name, index in table.added_indexes.items():
                 sql.append(
                     "CREATE INDEX {name} ON {table}({column})".format(
                         name=index.name,
@@ -213,7 +213,7 @@ class MSSQLPlatform(Platform):
 
         if table.added_constraints:
             for (
-                name,
+                _name,
                 constraint,
             ) in table.added_constraints.items():
                 if constraint.constraint_type == "unique":

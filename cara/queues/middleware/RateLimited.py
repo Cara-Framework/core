@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
 from collections.abc import Callable
@@ -163,11 +164,10 @@ class WithoutOverlapping:
             try:
                 return await _call_next(next_fn, job)
             finally:
-                try:
+                with contextlib.suppress(
+                    OSError, ConnectionError, TimeoutError, RuntimeError
+                ):
                     cache.forget_if(redis_key, owner)
-                except (OSError, ConnectionError, TimeoutError, RuntimeError):
-                    # TTL on the key still bounds the lock if release fails.
-                    pass
             return None  # unreachable, satisfies type-checkers
 
         # Cache facade isn't available — fall back to the process-local dict.

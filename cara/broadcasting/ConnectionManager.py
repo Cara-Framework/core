@@ -261,11 +261,13 @@ class ConnectionManager:
         self.connections.pop(connection_id, None)
         meta = self.connection_metadata.pop(connection_id, None)
         socket_id = self.socket_ids.pop(connection_id, None)
-        if socket_id:
-            # Only remove if it still points at this connection_id —
-            # defensive against a re-add that re-mapped the socket_id.
-            if self.connections_by_socket_id.get(socket_id) == connection_id:
-                self.connections_by_socket_id.pop(socket_id, None)
+        # Only remove if it still points at this connection_id —
+        # defensive against a re-add that re-mapped the socket_id.
+        if (
+            socket_id
+            and self.connections_by_socket_id.get(socket_id) == connection_id
+        ):
+            self.connections_by_socket_id.pop(socket_id, None)
 
         if meta and meta.get("user_id"):
             user_set = self.user_connections.get(meta["user_id"])

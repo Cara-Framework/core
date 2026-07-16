@@ -168,13 +168,11 @@ class ModuleManager:
 
             for _name, cls in inspect.getmembers(module, inspect.isclass):
                 # Include classes from this module or its submodules
-                if cls.__module__.startswith(module.__name__):
-                    if base_class is None or (
-                        base_class is not None
-                        and issubclass(cls, base_class)
-                        and cls != base_class
-                    ):
-                        classes.append(cls)
+                if cls.__module__.startswith(module.__name__) and (
+                    base_class is None
+                    or (issubclass(cls, base_class) and cls != base_class)
+                ):
+                    classes.append(cls)
 
             return classes
         except ImportError:

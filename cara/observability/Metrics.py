@@ -340,6 +340,16 @@ class MetricsBase:
         labelnames=("queue", "job_class"),
         registry=REGISTRY,
     )
+    queue_worker_ready = Gauge(
+        metric_name("queue_worker_ready"),
+        "1 only after the worker validates its queue driver and queue ownership.",
+        registry=REGISTRY,
+    )
+    queue_worker_configured_queues = Gauge(
+        metric_name("queue_worker_configured_queues"),
+        "Number of queues owned by this worker process.",
+        registry=REGISTRY,
+    )
     queue_wait_seconds = Histogram(
         metric_name("queue_wait_seconds"),
         "Time a message sat in the queue before being picked up.",
@@ -347,10 +357,77 @@ class MetricsBase:
         buckets=histogram_buckets_long(),
         registry=REGISTRY,
     )
-    queue_jobs_dead_lettered_total = Counter(
-        metric_name("queue_jobs_dead_lettered_total"),
-        "Jobs sent to the dead-letter queue after exhausting max_attempts.",
-        labelnames=("job_class",),
+    queue_delayed_transitions_total = Counter(
+        metric_name("queue_delayed_transitions_total"),
+        "Durable delayed-job outbox transitions.",
+        labelnames=("outcome",),
+        registry=REGISTRY,
+    )
+    queue_delayed_jobs = Gauge(
+        metric_name("queue_delayed_jobs"),
+        "Durable delayed-job rows by non-terminal status.",
+        labelnames=("status",),
+        registry=REGISTRY,
+    )
+    queue_delayed_oldest_due_age_seconds = Gauge(
+        metric_name("queue_delayed_oldest_due_age_seconds"),
+        "Age in seconds of the oldest due delayed-job row.",
+        registry=REGISTRY,
+    )
+    queue_delivery_ledger_jobs = Gauge(
+        metric_name("queue_delivery_ledger_jobs"),
+        "Durable delivery-ledger rows by status.",
+        labelnames=("status",),
+        registry=REGISTRY,
+    )
+    queue_delivery_stale_leases = Gauge(
+        metric_name("queue_delivery_stale_leases"),
+        "Expired durable delivery leases awaiting recovery.",
+        labelnames=("kind",),
+        registry=REGISTRY,
+    )
+    queue_delivery_priority_pending = Gauge(
+        metric_name("queue_delivery_priority_pending"),
+        "Due unpublished delivery-ledger rows by fixed priority.",
+        labelnames=("priority",),
+        registry=REGISTRY,
+    )
+    queue_delivery_priority_oldest_due_age_seconds = Gauge(
+        metric_name("queue_delivery_priority_oldest_due_age_seconds"),
+        "Age of the oldest due unpublished delivery by fixed priority.",
+        labelnames=("priority",),
+        registry=REGISTRY,
+    )
+    queue_delivery_priority_latency_budget_seconds = Gauge(
+        metric_name("queue_delivery_priority_latency_budget_seconds"),
+        "Configured aging/capacity latency budget by fixed priority.",
+        labelnames=("priority",),
+        registry=REGISTRY,
+    )
+    queue_delivery_broker_window_max_outstanding = Gauge(
+        metric_name("queue_delivery_broker_window_max_outstanding"),
+        "Largest active broker publication window across canonical queues.",
+        registry=REGISTRY,
+    )
+    queue_delivery_broker_window_limit = Gauge(
+        metric_name("queue_delivery_broker_window_limit"),
+        "Configured maximum active broker window per canonical queue.",
+        registry=REGISTRY,
+    )
+    queue_terminal_hooks = Gauge(
+        metric_name("queue_terminal_hooks"),
+        "Durable terminal-hook outbox rows by state.",
+        labelnames=("state",),
+        registry=REGISTRY,
+    )
+    queue_relay_ready = Gauge(
+        metric_name("queue_relay_ready"),
+        "1 while the broker-independent queue publication relay is healthy.",
+        registry=REGISTRY,
+    )
+    queue_hooks_ready = Gauge(
+        metric_name("queue_hooks_ready"),
+        "1 while the terminal-hook outbox relay is healthy.",
         registry=REGISTRY,
     )
     idempotency_total = Counter(
@@ -407,6 +484,16 @@ class MetricsBase:
     scheduler_last_tick_timestamp_seconds = Gauge(
         metric_name("scheduler_last_tick_timestamp_seconds"),
         "Unix timestamp when the scheduler most recently started a task tick.",
+        registry=REGISTRY,
+    )
+    scheduler_ready = Gauge(
+        metric_name("scheduler_ready"),
+        "1 only after every configured scheduled task registered successfully.",
+        registry=REGISTRY,
+    )
+    scheduler_registered_tasks = Gauge(
+        metric_name("scheduler_registered_tasks"),
+        "Number of scheduled tasks registered by this scheduler process.",
         registry=REGISTRY,
     )
     scheduled_task_last_run_timestamp_seconds = Gauge(

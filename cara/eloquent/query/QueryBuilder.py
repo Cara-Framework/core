@@ -2470,7 +2470,7 @@ class QueryBuilder(ObservesEvents):
             model.fill_original(materialized)
             return model
         # Laravel parity: a non-model (table-level) update returns the
-        # affected row count. The DatabaseDriver CAS claim depends on it —
+        # affected row count. Queue/outbox CAS transitions depend on it —
         # the old ``additional`` dict return was always truthy, so a losing
         # CAS (0 rows matched) still claimed the job.
         return result
@@ -3101,12 +3101,10 @@ class QueryBuilder(ObservesEvents):
                         callbacks[head] = value
                     elif isinstance(value, (list, tuple, set)):
                         for sub in value:
-                            if isinstance(sub, str) and sub:
-                                if sub not in bucket:
-                                    bucket.append(sub)
-                    elif isinstance(value, str) and value:
-                        if value not in bucket:
-                            bucket.append(value)
+                            if isinstance(sub, str) and sub and sub not in bucket:
+                                bucket.append(sub)
+                    elif isinstance(value, str) and value and value not in bucket:
+                        bucket.append(value)
             # other types are ignored (non-actionable specs)
 
         for entry in raw_list:
@@ -4236,7 +4234,15 @@ class QueryBuilder(ObservesEvents):
 
     # ===== CURSOR PAGINATE =====
     def cursor_paginate(
-        self, per_page: int, cursor=None, column: str = "id", direction: str = "asc"
+        self,
+        per_page: int,
+        *,
+        cursor=None,
+        column: str = "id",
+        primary_key: str = "id",
+        direction: str = "asc",
+        scope: str,
+        filter_fingerprint: str,
     ):
         """Laravel-style cursor pagination.
 
@@ -4253,16 +4259,57 @@ class QueryBuilder(ObservesEvents):
         Returns:
             CursorPaginator
         """
+        from cara.http.Cursor import decode_cursor, encode_cursor
+
         from ..pagination import CursorPaginator
+
+        if (
+            isinstance(per_page, bool)
+            or not isinstance(per_page, int)
+            or not 1 <= per_page <= 100
+        ):
+            raise ValueError("per_page must be an integer between 1 and 100")
+        if direction not in {"asc", "desc"}:
+            raise ValueError("direction must be 'asc' or 'desc'")
+        if not isinstance(column, str) or not column:
+            raise ValueError("column must be a non-empty string")
+        if not isinstance(primary_key, str) or not primary_key:
+            raise ValueError("primary_key must be a non-empty string")
+        if not isinstance(scope, str) or not scope or len(scope) > 160:
+            raise ValueError("scope must be a non-empty string of at most 160 characters")
+        if (
+            not isinstance(filter_fingerprint, str)
+            or len(filter_fingerprint) != 64
+            or any(char not in "0123456789abcdef" for char in filter_fingerprint)
+        ):
+            raise ValueError("filter_fingerprint must be lowercase SHA-256 hex")
 
         builder = self.clone()
         op = ">" if direction == "asc" else "<"
-        decoded = CursorPaginator.decode(cursor) if cursor else None
-        if decoded is not None:
-            builder = builder.where(column, op, decoded)
+        if cursor is not None:
+            decoded = decode_cursor(
+                cursor,
+                direction=direction,
+                fingerprint=filter_fingerprint,
+                scope=scope,
+            )
+            sort_value = decoded["v"]
+            row_id = decoded["id"]
+            builder = builder.where(
+                lambda outer: outer.where(column, op, sort_value).or_where(
+                    lambda tied: tied.where(column, "=", sort_value).where(
+                        primary_key, op, row_id
+                    )
+                )
+            )
 
         # Fetch one extra to know whether a next page exists.
-        results = builder.order_by(column, direction).limit(per_page + 1).get()
+        results = (
+            builder.order_by(column, direction)
+            .order_by(primary_key, direction)
+            .limit(per_page + 1)
+            .get()
+        )
 
         has_more = len(results) > per_page
         if has_more:
@@ -4276,6 +4323,17 @@ class QueryBuilder(ObservesEvents):
                 if not isinstance(last, dict)
                 else last.get(column)
             )
-            next_cursor = CursorPaginator.encode(value)
+            row_id = (
+                getattr(last, primary_key, None)
+                if not isinstance(last, dict)
+                else last.get(primary_key)
+            )
+            next_cursor = encode_cursor(
+                value,
+                row_id,
+                direction=direction,
+                fingerprint=filter_fingerprint,
+                scope=scope,
+            )
 
-        return CursorPaginator(results, per_page, next_cursor, cursor)
+        return CursorPaginator(results, per_page, next_cursor, None)

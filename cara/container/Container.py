@@ -656,11 +656,14 @@ class Container:
                 return provider_obj
 
         # Strategy 3: Try simple class name
-        if inspect.isclass(obj) and hasattr(obj, "__name__"):
-            if obj.__name__ in self.objects:
-                provider_obj = self.objects[obj.__name__]
-                self.fire_hook("resolve", obj, provider_obj)
-                return provider_obj
+        if (
+            inspect.isclass(obj)
+            and hasattr(obj, "__name__")
+            and obj.__name__ in self.objects
+        ):
+            provider_obj = self.objects[obj.__name__]
+            self.fire_hook("resolve", obj, provider_obj)
+            return provider_obj
 
         # Strategy 4: Match by type/instance/subclass (original logic)
         for provider_obj in self.objects.values():

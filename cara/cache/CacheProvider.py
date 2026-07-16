@@ -53,6 +53,7 @@ class CacheProvider(DeferredProvider):
             cache_directory=paths("base", raw_path),
             prefix=config("cache.drivers.file.prefix", ""),
             default_ttl=config("cache.drivers.file.ttl", 60),
+            signing_key=config("cache.drivers.file.signing_key", ""),
         )
         cache_manager.add_driver(FileCacheDriver.driver_name, driver)
 
@@ -81,6 +82,11 @@ class CacheProvider(DeferredProvider):
             socket_keepalive=config("cache.drivers.redis.socket_keepalive", True),
             health_check_interval=config("cache.drivers.redis.health_check_interval", 30),
             max_connections=config("cache.drivers.redis.max_connections", 32),
-            retry_on_timeout=config("cache.drivers.redis.retry_on_timeout", True),
+            ssl=config("cache.drivers.redis.ssl", False),
+            ssl_ca_certs=config("cache.drivers.redis.ssl_ca_certs"),
+            ssl_certfile=config("cache.drivers.redis.ssl_certfile"),
+            ssl_keyfile=config("cache.drivers.redis.ssl_keyfile"),
+            ssl_cert_reqs=config("cache.drivers.redis.ssl_cert_reqs", "required"),
+            signing_key=config("cache.drivers.redis.signing_key", ""),
         )
         cache_manager.add_driver(RedisCacheDriver.driver_name, driver)

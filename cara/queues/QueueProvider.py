@@ -1,18 +1,16 @@
 """
 Queue Provider for the Cara framework.
 
-This module provides the deferred service provider that configures and registers the queue
-subsystem, including various queue drivers.
+This module provides the deferred service provider that configures and registers the
+signed AMQP queue subsystem.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from cara.configuration import config
 from cara.exceptions import QueueConfigurationException
 from cara.foundation import DeferredProvider
-from cara.queues.drivers import AMQPDriver, AsyncDriver, DatabaseDriver, RedisDriver
+from cara.queues.drivers import AMQPDriver
 from cara.queues.Queue import Queue
 
 
@@ -26,51 +24,25 @@ class QueueProvider(DeferredProvider):
         default_driver = config("queue.default")
         drivers = config("queue.drivers", {}) or {}
 
-        if not default_driver or default_driver not in drivers:
+        if default_driver != "amqp":
             raise QueueConfigurationException(
-                "Missing or invalid 'queue.default' or 'queue.drivers' config."
+                "AMQP is the only supported queue execution driver."
             )
+        unsupported = set(drivers) - {"amqp"}
+        if unsupported:
+            raise QueueConfigurationException(
+                "Unsupported queue execution drivers configured: "
+                + ", ".join(sorted(unsupported))
+            )
+        if "amqp" not in drivers:
+            raise QueueConfigurationException("Missing queue.drivers.amqp config.")
 
         queue_manager = Queue(self.application, default_driver)
 
-        self._add_database_driver(queue_manager)
         self._add_amqp_driver(queue_manager)
-        self._add_async_driver(queue_manager)
-        # Redis driver expects an explicit settings dict; pull it from
-        # the same `queue.drivers` config block the other drivers use.
-        # Passing None makes _add_redis_driver early-return without
-        # touching Redis — that's the desired behaviour on dev boxes
-        # without REDIS_URL configured.
-        self._add_redis_driver(queue_manager, drivers.get("redis"))
 
         self.application.bind("queue", queue_manager)
         self._register_job_tracker()
-
-    def _add_database_driver(self, queue_manager: Queue) -> None:
-        """Register database queue driver with configuration."""
-        if not config("queue.drivers.database"):
-            return
-
-        connection = config("queue.drivers.database.connection")
-        table = config("queue.drivers.database.table")
-        if not connection or not table:
-            raise QueueConfigurationException(
-                "'queue.drivers.database.connection' and 'table' must be defined."
-            )
-
-        driver = DatabaseDriver(
-            application=self.application,
-            options={
-                "connection": connection,
-                "table": table,
-                "failed_table": config("queue.drivers.database.failed_table"),
-                "attempts": config("queue.drivers.database.attempts", 1),
-                "poll": config("queue.drivers.database.poll", 5),
-                "tz": config("queue.drivers.database.tz", "UTC"),
-                "queue": config("queue.drivers.database.queue", "default"),
-            },
-        )
-        queue_manager.add_driver(DatabaseDriver.driver_name, driver)
 
     def _add_amqp_driver(self, queue_manager: Queue) -> None:
         """Register AMQP queue driver with configuration."""
@@ -79,11 +51,14 @@ class QueueProvider(DeferredProvider):
 
         username = config("queue.drivers.amqp.username")
         password = config("queue.drivers.amqp.password")
-        queue_name = config("queue.drivers.amqp.queue")
+        canonical_queues = sorted(
+            str(queue_name)
+            for queue_name in (config("queue.canonical_queues", ()) or ())
+        )
 
-        if not username or not password or not queue_name:
+        if not username or not password or not canonical_queues:
             raise QueueConfigurationException(
-                "Missing required 'queue.drivers.amqp.username', 'password', or 'queue'."
+                "AMQP requires credentials and canonical topic bindings."
             )
 
         driver = AMQPDriver(
@@ -94,65 +69,91 @@ class QueueProvider(DeferredProvider):
                 "host": config("queue.drivers.amqp.host", "localhost"),
                 "port": config("queue.drivers.amqp.port", 5672),
                 "vhost": config("queue.drivers.amqp.vhost", "/"),
+                "scheme": config("queue.drivers.amqp.scheme", "amqp"),
+                "ssl_ca_certs": config("queue.drivers.amqp.ssl_ca_certs"),
+                "ssl_certfile": config("queue.drivers.amqp.ssl_certfile"),
+                "ssl_keyfile": config("queue.drivers.amqp.ssl_keyfile"),
                 "exchange": config("queue.drivers.amqp.exchange", ""),
-                "connection_options": config("queue.drivers.amqp.connection_options", {}),
-                "queue": queue_name,
+                "connection_options": config(
+                    "queue.drivers.amqp.connection_options", {}
+                ),
+                "canonical_queues": canonical_queues,
+                "topology_sentinel_exchange": config(
+                    "queue.topology_sentinel_exchange",
+                    "",
+                ),
                 "tz": config("queue.drivers.amqp.tz", "UTC"),
+                "allowed_job_prefixes": config(
+                    "queue.drivers.amqp.allowed_job_prefixes", ()
+                ),
+                "max_priority": config("queue.drivers.amqp.max_priority"),
+                "max_length": config(
+                    "queue.drivers.amqp.max_length",
+                    100000,
+                ),
+                "max_length_bytes": config(
+                    "queue.drivers.amqp.max_length_bytes",
+                    1073741824,
+                ),
+                "priority_levels": config(
+                    "queue.drivers.amqp.priority_levels", {}
+                ),
+                "signing_key_id": config(
+                    "queue.drivers.amqp.signing_key_id",
+                    "",
+                ),
+                "signing_keys": config("queue.drivers.amqp.signing_keys", {}),
+                "delivery_table": config(
+                    "queue.drivers.amqp.delivery_table",
+                    "queue_job_delivery",
+                ),
+                "delivery_claim_batch": config(
+                    "queue.drivers.amqp.delivery_claim_batch",
+                    100,
+                ),
+                "delivery_execution_lease_seconds": config(
+                    "queue.drivers.amqp.delivery_execution_lease_seconds",
+                    7200,
+                ),
+                "delivery_execution_lease_grace_seconds": config(
+                    "queue.drivers.amqp.delivery_execution_lease_grace_seconds",
+                    300,
+                ),
+                "delivery_default_job_timeout_seconds": config(
+                    "queue.drivers.amqp.delivery_default_job_timeout_seconds",
+                    300,
+                ),
+                "delivery_audit_retention_days": config(
+                    "queue.drivers.amqp.delivery_audit_retention_days",
+                    90,
+                ),
+                "delivery_audit_safety_days": config(
+                    "queue.drivers.amqp.delivery_audit_safety_days",
+                    7,
+                ),
+                "delivery_hook_timeout_seconds": config(
+                    "queue.drivers.amqp.delivery_hook_timeout_seconds",
+                    60,
+                ),
+                "delivery_publish_lease_seconds": config(
+                    "queue.drivers.amqp.delivery_publish_lease_seconds",
+                    300,
+                ),
+                "envelope_ttl_seconds": config(
+                    "queue.drivers.amqp.envelope_ttl_seconds",
+                    604800,
+                ),
+                "envelope_max_age_seconds": config(
+                    "queue.drivers.amqp.envelope_max_age_seconds",
+                    2678400,
+                ),
+                "clock_skew_seconds": config(
+                    "queue.drivers.amqp.clock_skew_seconds",
+                    30,
+                ),
             },
         )
         queue_manager.add_driver(AMQPDriver.driver_name, driver)
-
-        # Dead-letter infrastructure. Every pipeline queue is declared
-        # with ``x-dead-letter-exchange: dead.letter.dlx`` — if the DLX
-        # itself is never declared, the broker drops nacks/TTL-expired
-        # messages silently. Declare it here so the failure mode visible
-        # to operators is "DLQ filling up" (recoverable) rather than
-        # "messages vanish without trace" (forensically impossible).
-        try:
-            driver.declare_dead_letter_exchange()
-        except Exception as exc:
-            from cara.facades import Log
-
-            Log.warning("Failed to declare dead-letter exchange at boot: %s. Failed messages will be silently dropped until the DLX is created manually.", exc, category='cara.queue.amqp')
-
-    def _add_async_driver(self, queue_manager: Queue) -> None:
-        """Register async queue driver with configuration."""
-        if not config("queue.drivers.async"):
-            return
-
-        driver = AsyncDriver(
-            application=self.application,
-            options={
-                "blocking": config("queue.drivers.async.blocking", False),
-                "callback": config("queue.drivers.async.callback", "handle"),
-                "mode": config("queue.drivers.async.mode", "threading"),
-                "workers": config("queue.drivers.async.workers"),
-            },
-        )
-        queue_manager.add_driver(AsyncDriver.driver_name, driver)
-
-    def _add_redis_driver(
-        self,
-        queue_manager: Queue,
-        settings: dict[str, Any] | None,
-    ) -> None:
-        """Register Redis queue driver with configuration."""
-        if not settings:
-            return
-        try:
-            driver = RedisDriver(
-                application=self.application,
-                options=settings,
-            )
-            queue_manager.add_driver(RedisDriver.driver_name, driver)
-        except Exception as e:
-            # Don't fail entire queue registration if Redis is unavailable
-            # Redis driver is optional, only fail if explicitly required
-            from cara.facades import Log
-
-            Log.warning("Redis driver not available (Redis connection failed): %s. Skipping Redis driver registration.", e)
-            # Don't raise exception - allow queue system to work with other drivers
-            return
 
     def _register_job_tracker(self) -> None:
         """Register JobTracker singleton with unified Job model from container."""

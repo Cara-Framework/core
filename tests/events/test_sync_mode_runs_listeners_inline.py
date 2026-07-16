@@ -52,9 +52,11 @@ async def test_should_queue_listener_runs_inline_in_sync_mode():
     d.subscribe("user.registered", _QueuedListener(log))
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
 
-    with patch(_SYNC, return_value=True):
-        with patch.object(EventDispatcher, "_queue_listener") as mock_queue:
-            await d.dispatch(event)
+    with (
+        patch(_SYNC, return_value=True),
+        patch.object(EventDispatcher, "_queue_listener") as mock_queue,
+    ):
+        await d.dispatch(event)
 
     assert log == ["ran-inline"], "sync-mode ShouldQueue listener must run inline"
     mock_queue.assert_not_called()

@@ -10,6 +10,8 @@ from .Payload import (
     validated_query_int,
 )
 from .Cursor import (
+    InvalidCursor,
+    cursor_fingerprint,
     cursor_rules,
     decode_cursor,
     encode_cursor,
@@ -27,11 +29,13 @@ __all__ = [
     "apply_public_swr_cache",
     "assert_editable_fields",
     "Controller",
+    "cursor_fingerprint",
     "cursor_rules",
     "decode_cursor",
     "encode_cursor",
     "FormRequest",
     "JsonResource",
+    "InvalidCursor",
     "MissingValue",
     "Pagination",
     "paging_rules",

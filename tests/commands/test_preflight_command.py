@@ -161,16 +161,20 @@ def test_required_config_fails_on_missing_meili_url(monkeypatch):
     assert r.failed and "meilisearch url" in r.message
 
 
-def test_required_config_skips_hostless_non_network_driver(monkeypatch):
-    # A ``file`` cache driver / ``async`` queue driver carries no host — that's a
-    # legitimate non-network driver, not missing config.
+def test_required_config_fails_on_missing_redis_host(monkeypatch):
     cfg = _prodlike_ready()
-    cfg["cache.default"] = "file"
-    cfg["cache.drivers"] = {"file": {"path": "storage/cache"}}
-    cfg["queue.default"] = "async"
-    cfg["queue.drivers"] = {"async": {"blocking": True}}
+    cfg["cache.drivers"] = {"redis": {}}
     _install_config(monkeypatch, cfg)
-    assert check_required_config_present().status == OK
+    r = check_required_config_present()
+    assert r.failed and "redis cache host" in r.message
+
+
+def test_required_config_fails_on_missing_rabbitmq_host(monkeypatch):
+    cfg = _prodlike_ready()
+    cfg["queue.drivers"] = {"amqp": {}}
+    _install_config(monkeypatch, cfg)
+    r = check_required_config_present()
+    assert r.failed and "rabbitmq/queue host" in r.message
 
 
 # ── check_debug_off_in_prod ────────────────────────────────────────────────

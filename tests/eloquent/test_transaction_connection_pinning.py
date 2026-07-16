@@ -26,8 +26,8 @@ transaction pinned must be handed back, not an equal-looking fresh one.
 
 from __future__ import annotations
 
-from cara.eloquent.connections.ConnectionResolver import _get_registry
 from cara.eloquent import DatabaseManager
+from cara.eloquent.connections.ConnectionResolver import _get_registry
 
 
 def test_create_connection_instance_returns_the_pinned_transaction_connection():

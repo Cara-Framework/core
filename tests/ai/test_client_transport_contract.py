@@ -133,9 +133,11 @@ class TestRetrySeams:
         bad = MagicMock()
         bad.raise_for_status.side_effect = http_error
 
-        with patch("cara.ai.Client.requests.post", return_value=bad):
-            with pytest.raises(Exception, match="AI HTTP 503"):
-                client.chat("hi")
+        with (
+            patch("cara.ai.Client.requests.post", return_value=bad),
+            pytest.raises(Exception, match="AI HTTP 503"),
+        ):
+            client.chat("hi")
         assert seen == [503]
 
     def test_backoff_seconds_default_is_capped_exponential(self):

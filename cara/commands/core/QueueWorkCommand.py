@@ -12,21 +12,27 @@ import builtins
 import concurrent.futures
 import contextlib
 import inspect
-import json
 import logging
 import os
 import signal
 import sys
 import threading
 import time
+import traceback
+from collections import deque
 from typing import Any
 
 from cara.commands import CommandBase
 from cara.commands.MakesAutoReload import MakesAutoReload
 from cara.configuration import config
 from cara.decorators import command
-from cara.exceptions import ConfigurationException, InvalidArgumentException
-from cara.facades import Log
+from cara.exceptions import (
+    CaraException,
+    ConfigurationException,
+    InvalidArgumentException,
+    QueueException,
+)
+from cara.facades import Log, Queue
 
 # These live under ``cara.queues``. The package is import-safe WITHOUT the
 # optional 'queue' extra (pika) — ``AMQPDriver`` degrades its pika import to
@@ -34,14 +40,17 @@ from cara.facades import Log
 # no longer forces every service to install pika just to load the command
 # package. A worker that actually runs still needs pika and fails LOUD when it
 # opens a connection.
-from cara.queues.contracts import UniqueJob
+from cara.queues.JobInstantiation import instantiate_job
+from cara.queues.PayloadLimits import MAX_AMQP_JOB_PAYLOAD_BYTES
 from cara.queues.retry.Policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
 from cara.queues.retry.Policy import (
     DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS,
 )
-from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
+from cara.queues.serializers.SignedJsonJobSerializer import (
+    SignedJsonJobSerializer,
+)
 
 # Prometheus metrics — framework-owned MetricsBase carries the queue/worker
 # metrics. Guarded so a partial import never breaks the worker.
@@ -53,12 +62,16 @@ except (ImportError, RuntimeError):  # pragma: no cover
 _logger = logging.getLogger("cara.queue.worker")
 
 
+class DeliverySettlementError(RuntimeError):
+    """Execution finished but durable delivery settlement did not."""
+
+
 def _queue_label(
     msg: dict | None, instance: Any = None, queue_name: str | None = None
 ) -> str:
     """Best-effort queue label for the current message (bounded cardinality).
 
-    Priority order:
+    Resolution order:
       1. ``queue_name`` arg — the queue the worker just polled from
          (highest fidelity — this is exactly where the message was consumed).
       2. ``msg["queue"]`` / ``msg["routing_key"]`` — the producer-side hint.
@@ -109,8 +122,9 @@ for _pika_logger in (
 class AMQPConnectionManager:
     """Manages AMQP connections for queue workers (Single Responsibility)."""
 
-    def __init__(self, config_func):
+    def __init__(self, config_func, driver=None):
         self.config = config_func
+        self.driver = driver
         self.connection = None
 
     def ensure_connection(self) -> bool:
@@ -158,24 +172,45 @@ class AMQPConnectionManager:
         """Create new AMQP connection."""
         import pika
 
-        credentials = pika.PlainCredentials(
-            self.config("queue.drivers.amqp.username"),
-            self.config("queue.drivers.amqp.password"),
-        )
-        parameters = pika.ConnectionParameters(
-            host=self.config("queue.drivers.amqp.host"),
-            port=self.config("queue.drivers.amqp.port", 5672),
-            virtual_host=self.config("queue.drivers.amqp.vhost", "/"),
-            credentials=credentials,
-            # Long-running jobs (heavy external I/O — browser automation, proxy rotation ~30-120s)
-            # blocked pika's I/O thread past the default 60s heartbeat → broker
-            # closed the channel → basic_ack fails → RabbitMQ re-delivers →
-            # second worker picks up same job → idempotency lock collision.
-            # 600s gives plenty of headroom; prefetch=1 keeps fairness.
-            heartbeat=600,
-            blocked_connection_timeout=300,
-            socket_timeout=30,
-        )
+        if self.driver is not None and hasattr(
+            self.driver, "_connection_parameters"
+        ):
+            parameters = self.driver._connection_parameters(self.driver.options)
+        else:
+            credentials = pika.PlainCredentials(
+                self.config("queue.drivers.amqp.username"),
+                self.config("queue.drivers.amqp.password"),
+            )
+            parameters = pika.ConnectionParameters(
+                host=self.config("queue.drivers.amqp.host"),
+                port=self.config("queue.drivers.amqp.port", 5672),
+                virtual_host=self.config("queue.drivers.amqp.vhost", "/"),
+                credentials=credentials,
+                heartbeat=int(
+                    self.config(
+                        "queue.drivers.amqp.heartbeat_seconds",
+                        60,
+                    )
+                ),
+                blocked_connection_timeout=float(
+                    self.config(
+                        "queue.drivers.amqp.blocked_connection_timeout_seconds",
+                        10,
+                    )
+                ),
+                socket_timeout=float(
+                    self.config(
+                        "queue.drivers.amqp.socket_timeout_seconds",
+                        5,
+                    )
+                ),
+                stack_timeout=float(
+                    self.config(
+                        "queue.drivers.amqp.stack_timeout_seconds",
+                        10,
+                    )
+                ),
+            )
         return pika.BlockingConnection(parameters)
 
     def create_channel(self):
@@ -189,6 +224,72 @@ class AMQPConnectionManager:
         if self.connection and not self.connection.is_closed:
             with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
                 self.connection.close()
+
+
+class ThreadSafeAMQPAckChannel:
+    """Expose ACK/NACK to job threads without touching pika off its I/O thread."""
+
+    def __init__(
+        self,
+        connection,
+        channel,
+        timeout_seconds: int = 30,
+        on_settled=None,
+    ):
+        self._connection = connection
+        self._channel = channel
+        self._timeout_seconds = timeout_seconds
+        self._on_settled = on_settled
+        self._settled = False
+        self._settled_lock = threading.Lock()
+
+    def basic_ack(self, *, delivery_tag) -> None:
+        self._schedule(
+            lambda: self._channel.basic_ack(delivery_tag=delivery_tag),
+            operation="ACK",
+        )
+
+    def basic_nack(self, *, delivery_tag, requeue: bool) -> None:
+        self._schedule(
+            lambda: self._channel.basic_nack(
+                delivery_tag=delivery_tag,
+                requeue=requeue,
+            ),
+            operation="NACK",
+        )
+
+    def _schedule(self, callback, *, operation: str) -> None:
+        completed = threading.Event()
+        errors: list[BaseException] = []
+
+        def _run() -> None:
+            try:
+                callback()
+                with self._settled_lock:
+                    if self._settled:
+                        raise RuntimeError(
+                            "RabbitMQ delivery was settled more than once."
+                        )
+                    self._settled = True
+                if self._on_settled is not None:
+                    self._on_settled()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                completed.set()
+
+        if self._connection is None or self._connection.is_closed:
+            raise ConnectionError(
+                f"RabbitMQ connection closed before {operation}"
+            )
+        self._connection.add_callback_threadsafe(_run)
+        if not completed.wait(self._timeout_seconds):
+            raise TimeoutError(
+                f"RabbitMQ {operation} was not processed within "
+                f"{self._timeout_seconds} seconds"
+            )
+        if errors:
+            raise errors[0]
 
 
 class ActiveJobCancellationRegistry:
@@ -245,37 +346,49 @@ class JobProcessor:
     """Processes individual jobs from queue messages (Single Responsibility)."""
 
     # Class-level constants for job execution
-    DEFAULT_JOB_TIMEOUT = 3600  # 1 hour in seconds
-    MAX_PAYLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+    DEFAULT_JOB_TIMEOUT = 300
+    MAX_PAYLOAD_SIZE = MAX_AMQP_JOB_PAYLOAD_BYTES
+    _SETTLEMENT_BACKOFF_SECONDS = (0.05, 0.25, 1.0, 2.0, 5.0)
 
     @staticmethod
-    def _execute_job_with_timeout(method_to_call, init_args, timeout_seconds):
-        """Execute job with timeout enforcement using ThreadPoolExecutor.
-
-        On timeout the worker thread may still be holding DB connections
-        or UniqueJob locks. We give it a brief grace period (5s) to
-        finish cleanup before abandoning it. ``shutdown(wait=True)``
-        with a bounded join prevents the leak that ``wait=False``
-        caused — orphaned threads kept connections checked-out from
-        the pool until process restart.
-        """
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(method_to_call, *init_args)
+    def _broker_ack(channel, delivery_tag) -> None:
         try:
-            future.result(timeout=timeout_seconds)
-        except concurrent.futures.TimeoutError:
-            # Cancel the future (best-effort) and allow a short grace
-            # period for thread cleanup (DB rollback, lock release).
-            future.cancel()
-            raise TimeoutError(f"Job exceeded timeout of {timeout_seconds}s")
-        finally:
-            # Give the worker thread up to 5s to release resources
-            # (DB rollback, lock release), then abandon it.
-            # ``shutdown(wait=True)`` has NO timeout — on a truly hung
-            # job it would join forever and freeze the worker loop, so
-            # the bounded grace-wait has to happen on the future.
-            concurrent.futures.wait([future], timeout=5)
-            executor.shutdown(wait=False, cancel_futures=True)
+            channel.basic_ack(delivery_tag=delivery_tag)
+        except Exception as exc:
+            raise DeliverySettlementError("Broker ACK outcome is unknown.") from exc
+
+    @staticmethod
+    def _broker_nack(channel, delivery_tag, *, requeue: bool) -> None:
+        try:
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
+        except Exception as exc:
+            raise DeliverySettlementError("Broker NACK outcome is unknown.") from exc
+
+    @staticmethod
+    def _retry_settlement_step(description: str, callback) -> None:
+        last_error: Exception | None = None
+        for attempt, delay in enumerate(
+            (0.0, *JobProcessor._SETTLEMENT_BACKOFF_SECONDS),
+            start=1,
+        ):
+            if delay:
+                time.sleep(delay)
+            try:
+                callback()
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt <= len(JobProcessor._SETTLEMENT_BACKOFF_SECONDS):
+                    Log.warning(
+                        "%s failed on settlement attempt %s; retrying: %s",
+                        description,
+                        attempt,
+                        exc,
+                        category="cara.queue.delivery",
+                    )
+        raise DeliverySettlementError(
+            f"{description} remained unavailable."
+        ) from last_error
 
     def __init__(
         self,
@@ -318,10 +431,30 @@ class JobProcessor:
                 if token is not None:
                     cancellation_registry.unregister(token)
 
+        hard_kill = threading.Timer(
+            float(timeout_seconds) + 5.0,
+            JobProcessor._hard_kill_uncooperative_timeout,
+            kwargs={"timeout_seconds": timeout_seconds},
+        )
+        hard_kill.daemon = True
+        hard_kill.start()
         try:
             return asyncio.run(_run_registered())
         except TimeoutError as e:
             raise TimeoutError(f"Async job exceeded timeout of {timeout_seconds}s") from e
+        finally:
+            hard_kill.cancel()
+
+    @staticmethod
+    def _hard_kill_uncooperative_timeout(*, timeout_seconds: float) -> None:
+        """Kill the worker if coroutine cancellation cannot stop the handler."""
+        Log.error(
+            "Queue handler ignored cancellation after its %ss timeout; "
+            "terminating the worker before its DB lease can be recovered.",
+            timeout_seconds,
+            category="cara.queue.delivery",
+        )
+        os._exit(getattr(os, "EX_TEMPFAIL", 75))
 
     # Framework-default retry policy used when the failing job does not
     # declare its own ``max_attempts`` / ``retry_backoff``. SINGLE-SOURCED
@@ -343,9 +476,8 @@ class JobProcessor:
         Pre-fix this read ``msg["attempt"]`` (singular — a key nothing
         ever set) and compared it to ``msg["attempts"]`` as if that
         held the cap, so the comparison was always ``1 < 0`` → False
-        and every first failure was ACKed straight to the DLQ. The
-        whole ``AMQPDriver._handle_failed_message`` retry schedule was
-        dead code.
+        and every first failure was ACKed straight to the DLQ, bypassing
+        the worker's retry schedule.
         """
         if not msg:
             return False
@@ -371,26 +503,26 @@ class JobProcessor:
         instance,
         exc: Exception,
         queue_name: str | None,
+        delivery_lease_token: str | None,
+        tracker,
+        db_job_id: int,
     ) -> None:
-        """ACK the current delivery and republish with backoff.
+        """Atomically accept a new delayed delivery, then ACK the source.
 
         ``basic_nack(requeue=True)`` puts the message back on the queue
         head immediately. With ``prefetch=1`` the same worker thread
         re-claims it on the very next iteration — a poison message
         loops at 100% CPU. The Cara contract is ``republish-with-
         backoff`` (1s / 5s / 30s by default, jittered), which only
-        works when we re-publish through the AMQP delayed-message
-        path. We ACK the original delivery and stamp the new message
-        with ``attempts = attempts_done + 1`` so the next failure can
-        decide budget correctly.
+        works when we persist the retry in the durable delayed-job
+        outbox. We ACK the original delivery only after that database
+        commit and stamp the new message with
+        ``attempts = attempts_done + 1`` so the next failure can decide
+        budget correctly.
         """
-        # ACK ordering is load-bearing: we publish the retry FIRST and ACK the
-        # original only AFTER it is safely on the broker (below). The old order
-        # (ack here, then republish) LOST the job outright if the process died
-        # in the gap between the ack and the republish. Publishing first makes a
-        # crash-before-ack merely REDELIVER the original as a duplicate,
-        # idempotent retry — never a lost job (at-least-once, the correct choice
-        # for a retry path).
+        # The delivery ledger commits the new row and the source
+        # ``retry_scheduled`` terminal transition in ONE DB transaction. Only
+        # after that durable acceptance may the broker source be ACKed.
         attempts_done = int(
             msg.get("attempts", 0) if msg.get("attempts", 0) is not None else 0
         )
@@ -434,7 +566,16 @@ class JobProcessor:
             retry_options = {
                 "queue": queue_name or msg.get("queue") or "default",
                 "attempts": next_attempt,
+                "_otel": msg.get("_otel") or {},
+                "db_job_id": msg.get("db_job_id"),
+                "source_delivery_job_id": msg.get("job_id"),
+                "source_delivery_lease_token": delivery_lease_token,
+                "deduplication_key": (
+                    f"retry:{msg.get('job_id')}:{next_attempt}"
+                ),
             }
+            if msg.get("_tenant_mode") == "tenant":
+                retry_options["tenant_id"] = msg.get("_tenant")
             # Carry the original ``callback`` / ``args`` through to the
             # republished payload. Pre-fix the retry options ONLY held
             # ``queue`` and ``attempts``, so AMQPDriver.push fell back
@@ -448,96 +589,49 @@ class JobProcessor:
                 retry_options["callback"] = msg["callback"]
             if "args" in msg:
                 retry_options["args"] = msg["args"]
-            # ``later`` is the Laravel-compatible delay entry point.
-            # Falls back to ``schedule`` for drivers that don't expose
-            # one; ``Queue.later`` already handles that delegation.
-            _Queue.later(delay_seconds, instance, **retry_options)
+            if "created" in msg:
+                retry_options["created"] = msg["created"]
+            # ``later`` is the Laravel-compatible delay entry point. The AMQP
+            # driver commits a signed row to PostgreSQL; only then may this
+            # worker acknowledge the failed source delivery.
+            if msg.get("_tenant_mode") == "central":
+                from cara.context import Tenancy
+
+                with Tenancy.central():
+                    _Queue.later(delay_seconds, instance, **retry_options)
+            else:
+                from cara.context import Tenancy
+
+                with Tenancy.as_tenant(msg.get("_tenant")):
+                    _Queue.later(delay_seconds, instance, **retry_options)
             Log.info(
-                "↻ Retry queued for %s (attempt %s, +%ss, reason=%s)",
+                "↻ Durable retry scheduled for %s (attempt %s, +%ss, reason=%s)",
                 instance.__class__.__name__,
                 next_attempt,
                 delay_seconds,
                 type(exc).__name__,
             )
-            # Retry is safely on the broker — ACK the original now. A crash
-            # before this ack redelivers the original as a duplicate,
-            # idempotent retry, not a lost job.
-            try:
-                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-            except Exception as ack_err:
-                Log.error(
-                    "Failed to ACK after retry republish for %s; the original "
-                    "will redeliver as a duplicate (idempotent) retry: %s",
-                    instance.__class__.__name__,
-                    ack_err,
-                )
+            JobProcessor._retry_settlement_step(
+                f"Tracked queue job {db_job_id} retry settlement",
+                lambda: tracker.require_job_status_strict(
+                    db_job_id,
+                    "retrying",
+                ),
+            )
+            # Retry is durably accepted in the DB outbox and source settlement
+            # committed atomically — ACK the original now. Broker publication
+            # may happen later via the reconciler without changing semantics.
+            JobProcessor._broker_ack(channel, method_frame.delivery_tag)
         except Exception as republish_err:
             Log.error(
                 "Retry republish failed for %s: %s. "
-                "Routing to dead letter exchange to preserve payload.",
+                "Leaving the original delivery unacknowledged for broker "
+                "redelivery.",
                 instance.__class__.__name__,
                 republish_err,
                 exc_info=True,
             )
-            # The original message was already ACKed above — calling
-            # _ack_to_dlq here is a harmless no-op (basic_ack on an
-            # already-ACKed delivery) that only logs. The payload is
-            # lost from the broker's perspective. Pre-fix that was the
-            # only path: every retry-republish failure silently dropped
-            # the job with nothing but a log line as a trail.
-            #
-            # Explicitly publish to the DLX instead, mirroring the
-            # legacy AMQPDriver._handle_failed_message fallback, so
-            # the payload survives for ``replay_dead_letter`` /
-            # ``CleanDeadLetterJob`` triage.
-            try:
-                driver = _Queue.driver()
-                if hasattr(driver, "_send_to_dead_letter"):
-                    driver._send_to_dead_letter(
-                        job=instance,
-                        options={
-                            "queue": queue_name or msg.get("queue", "default"),
-                            "error": {
-                                "class": type(exc).__name__,
-                                "message": str(exc)[:500],
-                                "republish_error": str(republish_err)[:200],
-                            },
-                            "args": msg.get("args", ()),
-                            "callback": msg.get("callback", "handle"),
-                        },
-                        attempts=int(
-                            msg.get("attempts", 0)
-                            if msg.get("attempts", 0) is not None
-                            else 0
-                        ),
-                    )
-                else:
-                    Log.error(
-                        "DLX publish unavailable (driver: %s). "
-                        "Payload for manual recovery: %r",
-                        type(driver).__name__,
-                        msg,
-                    )
-            except Exception as dlx_err:
-                Log.error(
-                    "DLX publish also failed (%s). "
-                    "Payload for manual recovery: %r",
-                    dlx_err,
-                    msg,
-                    exc_info=True,
-                )
-            # The retry never reached the broker; the payload is now in the DLX
-            # (or logged above for manual recovery). ACK the original so it does
-            # not poison-loop under prefetch=1. This ack is the ONLY one on the
-            # publish-failure path — the payload's durable home is the DLX now.
-            try:
-                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-            except Exception as ack_err:
-                Log.error(
-                    "Failed to ACK after DLX fallback for %s: %s",
-                    instance.__class__.__name__,
-                    ack_err,
-                )
+            raise
 
     @staticmethod
     def _route_failed_message(
@@ -548,7 +642,11 @@ class JobProcessor:
         instance,
         exc: Exception,
         queue_name: str | None,
-    ) -> None:
+        delivery_store,
+        delivery_lease_token: str | None,
+        tracker,
+        db_job_id: int,
+    ) -> str:
         """Single failure router: retry-with-delay OR dead-letter.
 
         Centralises three rules that the two ``except`` branches
@@ -560,7 +658,7 @@ class JobProcessor:
           dispatch with the same ``unique_id`` doesn't slip in during
           the backoff window. The lock TTL (``unique_for``, default 1h)
           remains the safety cap.
-        * Terminal failure (budget exhausted, unpickleable instance,
+        * Terminal failure (budget exhausted, invalid signed payload,
           ``do_not_retry``) releases the lock so the next legitimate
           dispatch can proceed.
         """
@@ -573,6 +671,10 @@ class JobProcessor:
         )
 
         if can_retry:
+            if delivery_store is None or delivery_lease_token is None:
+                raise QueueException(
+                    "Cannot retry a queue delivery without a durable execution lease."
+                )
             JobProcessor._requeue_with_delay(
                 channel=channel,
                 method_frame=method_frame,
@@ -580,59 +682,71 @@ class JobProcessor:
                 instance=instance,
                 exc=exc,
                 queue_name=queue_name,
+                delivery_lease_token=delivery_lease_token,
+                tracker=tracker,
+                db_job_id=db_job_id,
             )
             # Intentional: DO NOT release the UniqueJob lock. The
             # retry is in flight (delayed publish); releasing now
             # would allow a duplicate dispatch to win the lock and
             # both copies would run when the delay expires.
-            return
+            return "retry_scheduled"
 
         # Terminal — give up the slot.
-        JobProcessor._ack_to_dlq(channel, method_frame, msg, str(exc))
-        if instance is not None and isinstance(instance, UniqueJob):
-            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
-                UniqueJob.release_unique_lock(instance.unique_id())
-
-        # Batch completion hook (terminal failure) — decrement the
-        # pending counter AND increment the failed counter so
-        # Batch.then() eventually fires with the correct failed tally.
-        # Only on terminal outcomes; retries (the ``can_retry`` branch
-        # above) must NOT decrement because the job will run again.
-        try:
-            from cara.queues.Batch import auto_dispatch_batch_completion
-
-            auto_dispatch_batch_completion(instance, exc)
-        except (ImportError, OSError, ConnectionError, RuntimeError):
-            pass
+        JobProcessor._ack_to_dlq(
+            channel,
+            method_frame,
+            msg,
+            str(exc),
+            instance=instance,
+            delivery_store=delivery_store,
+            delivery_lease_token=delivery_lease_token,
+            tracker=tracker,
+            db_job_id=db_job_id,
+        )
+        return "dead_lettered"
 
     @staticmethod
-    def _ack_to_dlq(channel, method_frame, msg, error_msg):
-        """ACK the poison message after logging its full payload to the DLQ
-        error log.
-
-        We ACK rather than ``basic_nack``:
-          * ``basic_nack(requeue=False)`` SILENTLY DISCARDS the message on any
-            queue without a configured dead-letter exchange — the payload is
-            then lost forever, with no forensic trail.
-          * ``basic_nack(requeue=True)`` loops the poison message back to the
-            queue head and re-delivers it at 100% CPU under prefetch=1.
-
-        ACK removes the message from the queue exactly once; the structured
-        ``Log.error`` below (with the full payload) IS the durable DLQ record.
-        """
-        try:
-            dlq_queue = f"{msg.get('queue', 'unknown')}.dlq" if msg else "unknown.dlq"
-            job_id = msg.get("job_id", "unknown") if msg else "unknown"
-            Log.error(
-                "Job moved to DLQ via ACK: %s | Queue: %s | Error: %s | Payload: %r",
-                job_id,
-                dlq_queue,
-                error_msg,
-                msg,
-            )
-            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-        except Exception as e:
-            Log.error("Failed to ACK message to DLQ: %s", e, exc_info=True)
+    def _ack_to_dlq(
+        channel,
+        method_frame,
+        msg,
+        error_msg,
+        *,
+        instance=None,
+        delivery_store=None,
+        delivery_lease_token: str | None = None,
+        tracker=None,
+        db_job_id: int | None = None,
+    ):
+        """Settle trusted failures in PostgreSQL; quarantine untrusted bytes."""
+        queue_name = msg.get("queue", "unknown") if msg else "unknown"
+        job_id = msg.get("job_id", "unknown") if msg else "unknown"
+        Log.error(
+            "Job dead-lettered: %s | Queue: %s | Error: %s",
+            job_id,
+            queue_name,
+            error_msg,
+        )
+        if delivery_store is not None and delivery_lease_token is not None:
+            if tracker is None or db_job_id is None:
+                raise DeliverySettlementError(
+                    "Terminal queue settlement requires a persistent tracker."
+                )
+            try:
+                delivery_store.dead_letter_with_tracker(
+                    str(job_id),
+                    delivery_lease_token,
+                    db_job_id=db_job_id,
+                    reason=str(error_msg),
+                )
+            except Exception as exc:
+                raise DeliverySettlementError(
+                    "Could not atomically persist terminal queue failure."
+                ) from exc
+            JobProcessor._broker_ack(channel, method_frame.delivery_tag)
+            return
+        JobProcessor._broker_nack(channel, method_frame.delivery_tag, requeue=False)
 
     @staticmethod
     def process_message(
@@ -646,8 +760,8 @@ class JobProcessor:
 
         ``queue_name`` is the queue the worker dequeued from. Used as
         the highest-fidelity label for Prometheus metrics — otherwise
-        we'd have to infer the queue from the pickled message
-        payload, which is lossy.
+        we'd have to infer the queue from producer payload metadata,
+        which is less reliable than the broker delivery source.
         """
         # Start of job window — used across all exit paths below.
         _mx_start = time.time()
@@ -684,14 +798,18 @@ class JobProcessor:
 
         _mx_recorded = False
 
-        # CRITICAL FIX #4: Validate payload size before unpickling
+        # Bound parser work before JSON/signature verification.
         if len(body) > JobProcessor.MAX_PAYLOAD_SIZE:
             Log.error(
                 "❌ Payload exceeds max size (%s > %s)",
                 len(body),
                 JobProcessor.MAX_PAYLOAD_SIZE,
             )
-            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+            JobProcessor._broker_nack(
+                channel,
+                method_frame.delivery_tag,
+                requeue=False,
+            )
             _mx_record("oversized")
             return False
 
@@ -704,69 +822,130 @@ class JobProcessor:
         msg = None
         instance = None
         db_job_id = None
+        delivery_store = None
+        delivery_lease_token = None
+        terminal_outcome = None
 
         try:
-            # Unpickle message. When a cross-service queue shares a
-            # RabbitMQ instance (e.g. the API publishes ``ai.*`` jobs
-            # whose classes only live in the api/ tree), pickle raises
-            # ``ModuleNotFoundError`` here because services/ doesn't
-            # have the module. We catch those specifically and ACK
-            # without a full traceback — the message isn't for us, and
-            # swamping logs with a stack trace per orphan message hides
-            # the real errors underneath.
-            try:
-                # Try JSON first (messages published with serializer="json"),
-                # then fall back to pickle (the default serializer).
-                if body and body[0:1] == b"{":
-                    import importlib
-
-                    msg = json.loads(body)
-                    # JSON-serialized jobs store the class as a dotted path
-                    # string instead of a live object. Reconstruct it.
-                    obj_ref = msg.get("obj")
-                    if isinstance(obj_ref, str) and "." in obj_ref:
-                        module_path, class_name = obj_ref.rsplit(".", 1)
-                        mod = importlib.import_module(module_path)
-                        cls = getattr(mod, class_name)
-                        # Reconstruct with init_kwargs if available, or
-                        # with individual known keys from the payload.
-                        init_kwargs = msg.get("init_kwargs", {})
-                        if not init_kwargs:
-                            # Derive constructor args from the job class's own
-                            # __init__ signature instead of a hard-coded domain
-                            # key list — keeps the framework worker agnostic to
-                            # any specific job's parameter vocabulary.
-                            try:
-                                sig_params = inspect.signature(cls.__init__).parameters
-                                for key, param in sig_params.items():
-                                    if key == "self" or param.kind in (
-                                        inspect.Parameter.VAR_POSITIONAL,
-                                        inspect.Parameter.VAR_KEYWORD,
-                                    ):
-                                        continue
-                                    if key in msg and key != "obj":
-                                        init_kwargs[key] = msg[key]
-                            except (TypeError, ValueError):
-                                pass
-                        try:
-                            msg["obj"] = cls(**init_kwargs)
-                        except TypeError:
-                            msg["obj"] = cls()
-                else:
-                    msg = restricted_pickle_loads(body)
-            except (ModuleNotFoundError, AttributeError, ImportError) as e:
-                Log.warning(
-                    "Dropping orphan message (class not importable in this service): "
-                    "%s: %s",
-                    e.__class__.__name__,
-                    e,
+            envelope = SignedJsonJobSerializer.inspect_envelope(
+                body,
+                signing_keys=config("queue.drivers.amqp.signing_keys", {}),
+                clock_skew_seconds=int(
+                    config("queue.drivers.amqp.clock_skew_seconds", 30)
+                ),
+                max_age_seconds=int(
+                    config(
+                        "queue.drivers.amqp.envelope_max_age_seconds",
+                        SignedJsonJobSerializer.DEFAULT_MAX_AGE_SECONDS,
+                    )
+                ),
+                allow_not_before=True,
+                allow_expired=True,
+            )
+            verified_payload = envelope["payload"]
+            queue_driver = Queue.driver("amqp")
+            delivery_store = queue_driver.delivery_store
+            claim = delivery_store.claim_execution(
+                body=body,
+                payload=verified_payload,
+            )
+            if claim.outcome == "retry_scheduled":
+                retry_db_job_id = verified_payload.get("db_job_id")
+                if tracker is None or retry_db_job_id is None:
+                    raise DeliverySettlementError(
+                        "Retry settlement requires a persistent JobTracker fence."
+                    )
+                JobProcessor._retry_settlement_step(
+                    f"Tracked queue job {retry_db_job_id} retry recovery",
+                    lambda: tracker.ensure_retry_progress_strict(
+                        retry_db_job_id
+                    ),
                 )
-                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-                _mx_queue = _queue_label(msg, queue_name=queue_name)
-                _mx_job = _job_label(None, msg)
-                _mx_record("orphan")
+                JobProcessor._broker_ack(channel, method_frame.delivery_tag)
+                _mx_record(claim.outcome)
                 return True
-            instance = msg.get("obj")
+            if claim.outcome in {"completed", "dead_lettered", "expired"}:
+                terminal_outcome = claim.outcome
+            elif claim.outcome in {"live_lease", "not_ready"}:
+                # PostgreSQL owns crash/early-publication recovery. Repeatedly
+                # closing a quorum-queue channel would burn RabbitMQ's delivery
+                # limit while the DB lease is still live, eventually DLQ'ing the
+                # only broker copy. ``live_lease`` is recovered and republished
+                # by the relay once stale; ``not_ready`` was reset to its DB
+                # outbox timestamp inside claim_execution().
+                JobProcessor._broker_ack(channel, method_frame.delivery_tag)
+                _mx_record(claim.outcome)
+                return True
+            elif claim.outcome in {"unknown", "mismatch"}:
+                JobProcessor._broker_nack(
+                    channel,
+                    method_frame.delivery_tag,
+                    requeue=False,
+                )
+                _mx_record(f"ledger_{claim.outcome}")
+                return False
+            elif claim.outcome == "claimed" and claim.lease_token:
+                delivery_lease_token = claim.lease_token
+            elif terminal_outcome is None:
+                raise QueueException(
+                    f"Unsupported delivery ledger claim outcome: {claim.outcome}."
+                )
+
+            # Keep the verified primitives available to the failure router if
+            # class resolution/constructor validation fails after the lease.
+            msg = dict(verified_payload)
+            if queue_name and verified_payload.get("queue") != queue_name:
+                if terminal_outcome is None:
+                    JobProcessor._ack_to_dlq(
+                        channel,
+                        method_frame,
+                        msg,
+                        (
+                            f"signed queue {verified_payload.get('queue')!r} "
+                            f"does not match delivery queue {queue_name!r}"
+                        ),
+                        delivery_store=delivery_store,
+                        delivery_lease_token=delivery_lease_token,
+                        tracker=tracker,
+                        db_job_id=verified_payload.get("db_job_id"),
+                    )
+                else:
+                    JobProcessor._broker_ack(channel, method_frame.delivery_tag)
+                _mx_record("queue_mismatch")
+                return False
+
+            if terminal_outcome is not None:
+                terminal_db_job_id = verified_payload.get("db_job_id")
+                if tracker is None or terminal_db_job_id is None:
+                    raise DeliverySettlementError(
+                        "Terminal queue recovery requires a persistent "
+                        "JobTracker fence."
+                    )
+                JobProcessor._retry_settlement_step(
+                    f"Tracked queue job {terminal_db_job_id} terminal recovery",
+                    lambda: delivery_store.reconcile_terminal_tracker(
+                        str(verified_payload["job_id"]),
+                        db_job_id=terminal_db_job_id,
+                        delivery_status=terminal_outcome,
+                    ),
+                )
+                JobProcessor._broker_ack(channel, method_frame.delivery_tag)
+                _mx_record(terminal_outcome)
+                return terminal_outcome == "completed"
+
+            msg = SignedJsonJobSerializer.deserialize_verified(
+                verified_payload,
+                allowed_prefixes=config(
+                    "queue.drivers.amqp.allowed_job_prefixes",
+                    (),
+                ),
+            )
+            instance = instantiate_job(
+                app_instance,
+                msg.get("obj"),
+                msg.get("args", ()),
+                msg.get("init_kwargs", {}),
+            )
             if instance is not None:
                 # Carry the dispatcher's trace context onto the job so
                 # BaseJob.handle re-parents its span (Obs-4 propagation).
@@ -774,10 +953,11 @@ class JobProcessor:
                 # Dispatcher's tenant scope — armed around the job body
                 # by run_through_middleware_async.
                 instance._tenant_id = msg.get("_tenant")
+                instance._tenant_mode = msg.get("_tenant_mode")
+                instance._dispatched_at = msg.get("dispatched_at")
             callback = msg.get("callback", "handle")
             init_args = msg.get("args", ())
             db_job_id = msg.get("db_job_id")
-            job_timeout = msg.get("timeout", JobProcessor.DEFAULT_JOB_TIMEOUT)
 
             # A payload with no ``obj`` (or ``obj=None``) is malformed —
             # the worker has no class to call, no UniqueJob lock to
@@ -798,12 +978,23 @@ class JobProcessor:
                     sorted(msg.keys()),
                 )
                 JobProcessor._ack_to_dlq(
-                    channel, method_frame, msg, "payload missing 'obj'"
+                    channel,
+                    method_frame,
+                    msg,
+                    "payload missing 'obj'",
+                    delivery_store=delivery_store,
+                    delivery_lease_token=delivery_lease_token,
+                    tracker=tracker,
+                    db_job_id=db_job_id,
                 )
                 _mx_queue = _queue_label(msg, queue_name=queue_name)
                 _mx_job = _job_label(None, msg)
                 _mx_record("malformed")
                 return "failure"
+
+            signed_timeout = int(msg["timeout_seconds"])
+            current_timeout = delivery_store.execution_timeout_for(type(instance))
+            job_timeout = min(signed_timeout, current_timeout)
 
             # Queue wait time — measure dispatched_at → now.
             _dispatched_at = getattr(instance, "_dispatched_at", None)
@@ -850,17 +1041,45 @@ class JobProcessor:
             if db_job_id and hasattr(instance, "__dict__"):
                 instance._db_job_id = db_job_id
 
-            # Start tracking (Trackable trait tracks entity_id)
-            if hasattr(instance, "_start_tracking"):
-                instance._start_tracking()
+            if tracker is None or db_job_id is None:
+                raise DeliverySettlementError(
+                    "Durable AMQP execution requires a persistent JobTracker fence."
+                )
+
+            if claim.reclaimed:
+                completed: list[bool] = []
+                JobProcessor._retry_settlement_step(
+                    f"Tracked queue job {db_job_id} completion lookup",
+                    lambda: completed.append(
+                        tracker.is_job_completed(db_job_id)
+                    ),
+                )
+                if completed[-1]:
+                    try:
+                        delivery_store.complete_with_tracker(
+                            str(msg["job_id"]),
+                            delivery_lease_token,
+                            db_job_id=db_job_id,
+                        )
+                    except Exception as exc:
+                        raise DeliverySettlementError(
+                            "Could not recover completed queue delivery state."
+                        ) from exc
+                    JobProcessor._broker_ack(
+                        channel,
+                        method_frame.delivery_tag,
+                    )
+                    _mx_record("tracker_completed")
+                    return True
 
             # Update job table status to processing
-            if tracker and db_job_id:
-                tracker.update_job_status(db_job_id, "processing")
-
-            # Mark as processing in unified job table
-            if hasattr(instance, "_mark_processing"):
-                instance._mark_processing()
+            JobProcessor._retry_settlement_step(
+                f"Tracked queue job {db_job_id} processing",
+                lambda: tracker.update_job_status_strict(
+                    db_job_id,
+                    "processing",
+                ),
+            )
 
             # Stamp container on job so BaseJob and method-level DI can use it.
             # Only set on the INSTANCE — never on type(instance) — to avoid
@@ -915,97 +1134,80 @@ class JobProcessor:
                             f"Job exceeded timeout of {job_timeout}s"
                         ) from e
                 else:
-
-                    async def _sync_handler(_job, _m=method_to_call, _args=init_args):
-                        if app_instance is not None:
-                            return app_instance.call(_m, *_args)
-                        return _m(*_args)
-
-                    def _call_with_middleware():
-                        coro = run_through_middleware_async(instance, _sync_handler)
-                        asyncio.run(coro)
-
-                    JobProcessor._execute_job_with_timeout(
-                        _call_with_middleware, (), job_timeout
+                    raise QueueException(
+                        f"AMQP job {instance.__class__.__name__}.handle must be async."
                     )
 
-            # Mark success in unified job table
-            if hasattr(instance, "_mark_success"):
-                instance._mark_success()
-
-            # Update job table status to completed
-            if tracker and db_job_id:
-                tracker.update_job_status(db_job_id, "completed")
-
-            # Batch completion hook — decrement the pending counter so
-            # Batch.then() fires when all jobs finish. Without this,
-            # batch-dispatched jobs processed through the production
-            # worker never decremented their counter, so then()
-            # callbacks never fired and orphan batch keys lived for
-            # the full 24h TTL.
+            # Durable terminal state MUST commit before the broker ACK. A crash
+            # in the gap redelivers, but the ledger answers ``completed`` and
+            # the worker ACK-skips without re-running side effects.
+            if delivery_store is None or delivery_lease_token is None:
+                raise DeliverySettlementError(
+                    "Queue delivery has no execution lease at completion."
+                )
             try:
-                from cara.queues.Batch import auto_dispatch_batch_completion
-
-                auto_dispatch_batch_completion(instance)
-            except (ImportError, OSError, ConnectionError, RuntimeError):
-                pass
-
-            # Acknowledge FIRST, then release the UniqueJob lock. Ordering is
-            # load-bearing for at-most-once side effects: releasing the lock
-            # BEFORE the ack and then crashing in the gap would let the broker
-            # redeliver the (unacked) completed message — and with the lock
-            # already gone, nothing dedups the re-run, so every side-effecting
-            # handler double-fires. Acking first means a crash before release
-            # just leaves the lock to expire on its TTL (``unique_for``,
-            # default 1h) — a delayed re-dispatch, never a double-run. The
-            # release is best-effort and must never raise past the ack.
-            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-
-            if isinstance(instance, UniqueJob):
-                try:
-                    UniqueJob.release_unique_lock(instance.unique_id())
-                except Exception as release_err:
-                    Log.warning(
-                        "UniqueJob lock release failed for %s: %s. "
-                        "Lock will expire on its TTL.",
-                        instance.__class__.__name__,
-                        release_err,
-                    )
+                delivery_store.complete_with_tracker(
+                    str(msg["job_id"]),
+                    delivery_lease_token,
+                    db_job_id=db_job_id,
+                )
+            except Exception as exc:
+                raise DeliverySettlementError(
+                    "Could not atomically persist completed queue delivery."
+                ) from exc
+            JobProcessor._broker_ack(channel, method_frame.delivery_tag)
 
             _mx_record("success")
             return "success"
 
+        except DeliverySettlementError:
+            # The handler may already have committed external side effects.
+            # Never reinterpret a ledger outage as a business failure/retry;
+            # leave the delivery unacknowledged and reconnect. The processing
+            # lease prevents concurrent execution until stale recovery.
+            _mx_record("settlement_error")
+            raise
+
         except asyncio.CancelledError:
             # Worker shutdown is not a job failure. Leave the AMQP delivery
             # UNACKNOWLEDGED so closing this consumer's own channel requeues it
-            # atomically. Reset the advisory DB tracker to pending when possible;
-            # never call ``failed()``, burn retry attempts or route to the DLQ.
+            # atomically. Release the exact durable execution lease first so
+            # the next consumer can claim immediately instead of waiting for
+            # timeout + grace. Never call ``failed()``, burn retry attempts or
+            # route to the DLQ.
             Log.info(
                 "Job %s interrupted by worker shutdown; delivery will redeliver",
                 _mx_job,
             )
-            if tracker and db_job_id:
-                try:
-                    tracker.update_job_status(db_job_id, "pending")
-                except Exception as tracking_error:
-                    Log.warning(
-                        "Could not reset interrupted job %s to pending: %s",
-                        db_job_id,
-                        tracking_error,
-                    )
+            if (
+                delivery_store is None
+                or delivery_lease_token is None
+                or msg is None
+                or tracker is None
+                or db_job_id is None
+            ):
+                raise DeliverySettlementError(
+                    "Interrupted queue job is missing its durable lease fence."
+                )
+            JobProcessor._retry_settlement_step(
+                f"Queue delivery {msg['job_id']} interruption release",
+                lambda: delivery_store.abandon_execution(
+                    str(msg["job_id"]),
+                    delivery_lease_token,
+                ),
+            )
+            JobProcessor._retry_settlement_step(
+                f"Tracked queue job {db_job_id} interruption reset",
+                lambda: tracker.update_job_status_strict(
+                    db_job_id,
+                    "pending",
+                ),
+            )
             _mx_record("interrupted")
             raise
 
         except TimeoutError as timeout_error:
             Log.error("Job timeout: %s", timeout_error, exc_info=True)
-
-            # Mark as failed in unified job table
-            if instance and hasattr(instance, "_mark_failed"):
-                instance._mark_failed(str(timeout_error), should_retry=True)
-
-            # Update job table status to failed
-            if tracker and db_job_id:
-                tracker.update_job_status(db_job_id, "failed")
 
             JobProcessor._route_failed_message(
                 channel=channel,
@@ -1014,32 +1216,17 @@ class JobProcessor:
                 instance=instance,
                 exc=timeout_error,
                 queue_name=queue_name,
+                delivery_store=delivery_store,
+                delivery_lease_token=delivery_lease_token,
+                tracker=tracker,
+                db_job_id=db_job_id or (msg or {}).get("db_job_id"),
             )
-
-            # Try to call failed method
-            try:
-                if instance and hasattr(instance, "failed"):
-                    failed_method = instance.failed
-                    if inspect.iscoroutinefunction(failed_method):
-                        asyncio.run(failed_method(msg, str(timeout_error)))
-                    else:
-                        failed_method(msg, str(timeout_error))
-            except (ImportError, RuntimeError, AttributeError, OSError):
-                pass
 
             _mx_record("timeout")
             return "failure"
 
         except Exception as job_error:
             Log.error("Job failed: %s", job_error, exc_info=True)
-
-            # Mark as failed in unified job table
-            if instance and hasattr(instance, "_mark_failed"):
-                instance._mark_failed(str(job_error), should_retry=False)
-
-            # Update job table status to failed
-            if tracker and db_job_id:
-                tracker.update_job_status(db_job_id, "failed")
 
             JobProcessor._route_failed_message(
                 channel=channel,
@@ -1048,18 +1235,11 @@ class JobProcessor:
                 instance=instance,
                 exc=job_error,
                 queue_name=queue_name,
+                delivery_store=delivery_store,
+                delivery_lease_token=delivery_lease_token,
+                tracker=tracker,
+                db_job_id=db_job_id or (msg or {}).get("db_job_id"),
             )
-
-            # Try to call failed method
-            try:
-                if instance and hasattr(instance, "failed"):
-                    failed_method = instance.failed
-                    if inspect.iscoroutinefunction(failed_method):
-                        asyncio.run(failed_method(msg, str(job_error)))
-                    else:
-                        failed_method(msg, str(job_error))
-            except (ImportError, RuntimeError, AttributeError, OSError):
-                pass
 
             _mx_record("failed")
             return "failure"  # Still processed (failed gracefully)
@@ -1070,9 +1250,9 @@ class JobProcessor:
     help="Run the queue worker to consume jobs with enhanced UX.",
     options={
         "--driver=?": "Queue driver to use (overrides default configuration)",
-        "--queue=?": "Queue name(s) to process (comma-separated for priority: high,default,low)",
+        "--queue=?": "Queue name(s) to process (comma-separated)",
         "--pool=?": "Worker pool name from config/queue.py WORKER_POOLS (e.g. pipeline, enrichment, background, realtime). Overrides --queue and --concurrency with pool config.",
-        "--timeout=?": "Poll timeout in seconds (default: 5)",
+        "--timeout=?": "Reconnect backoff in seconds after a broker disconnect (default: 5)",
         "--max-jobs=?": "Maximum number of jobs to process before stopping",
         "--max-time=?": "Maximum runtime in seconds before stopping",
         "--concurrency=?": "Number of parallel consumer threads inside this worker process (default: 1). Each thread keeps its own AMQP connection/channel, so --concurrency=5 is roughly equivalent to starting 5 worker processes but shares the Python heap, the Cara DB connection pool, and the HTTP clients — much lower memory and cleaner lifecycle.",
@@ -1104,17 +1284,12 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         # the deploy box.
         limit_mb = max(limit_mb, 2048)
         self.memory_limit_bytes = limit_mb * 1024 * 1024
-        # Queues that don't exist yet — skipped until the retry TTL expires.
-        # A passive queue_declare for a missing queue closes the channel
-        # (RabbitMQ returns 404) which triggers expensive reconnects every
-        # poll tick. Cache the miss to avoid the loop and retry periodically
-        # so newly-published queues are picked up.
-        self._missing_queues: dict[str, float] = {}
-        self._missing_queue_retry_s: float = 5.0
         self._signal_handlers_installed = False
         self._atexit_registered = False
         self._shutdown_signal: int | None = None
         self._consumer_threads: list[threading.Thread] = []
+        self._consumer_state_lock = threading.Lock()
+        self._active_consumer_slots = 0
         self._active_job_cancellations = ActiveJobCancellationRegistry()
         self._resource_shutdown_lock = threading.Lock()
         self._worker_resources_shutdown = False
@@ -1177,7 +1352,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         if pool:
             pool_cfg = self._resolve_pool(pool)
             if pool_cfg is None:
-                return
+                raise InvalidArgumentException(f"Invalid worker pool: {pool}")
             if not queue:
                 queue = ",".join(pool_cfg["queues"])
             if not concurrency:
@@ -1192,13 +1367,17 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         # Stand up /metrics on a side-thread HTTP server so Prometheus
         # can scrape the worker. Opt out with METRICS_PORT=0.
         try:
+            from cara.observability import MetricsBase as _Metrics
             from cara.observability import start_http_server as _start_metrics
 
+            _Metrics.queue_worker_ready.set(0)
+            _Metrics.queue_worker_configured_queues.set(0)
             _port = _start_metrics(role="worker")
             if _port:
                 Log.info("📈 Metrics server on :%s/metrics", _port)
         except Exception as e:
-            # Non-fatal: worker keeps running with no metrics exposure.
+            if str(config("app.env", "local")).lower() in {"production", "prod"}:
+                raise CaraException("Worker metrics server failed to start") from e
             Log.warning("metrics server startup failed: %s", e)
 
         # Worker-startup hooks — declared by the app in
@@ -1215,8 +1394,9 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             try:
                 concurrency_val = max(1, int(concurrency))
             except ValueError:
-                self.error(f"× Invalid --concurrency value: {concurrency!r}")
-                return
+                raise InvalidArgumentException(
+                    f"Invalid --concurrency value: {concurrency!r}"
+                )
         self._concurrency = concurrency_val
 
         # Store parameters for restart
@@ -1235,11 +1415,14 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         try:
             self._run_main_loop(driver, queue, timeout, max_jobs, max_time)
         except Exception as e:
-            import traceback
-
             self.error(f"× Worker error: {e}")
             self.error(f"× Stack trace: {traceback.format_exc()}")
+            raise
         finally:
+            with contextlib.suppress(Exception):
+                from cara.observability import MetricsBase as _Metrics
+
+                _Metrics.queue_worker_ready.set(0)
             self.cleanup_auto_reload()
             self._show_final_stats()
         if self._reload_requested:
@@ -1387,7 +1570,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             else:
                 expanded_queues.append(pattern)
 
-        # De-duplicate while preserving the priority-ordered sequence so a
+        # De-duplicate while preserving the operator/config sequence so a
         # queue named by two overlapping patterns (e.g. "discovery." and
         # "discovery.high") isn't polled twice per cycle.
         seen: set[str] = set()
@@ -1403,24 +1586,15 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
            match with fnmatch. This catches nested prefixes like
            ``notification.email.default`` when the user passes
            ``notification.*``.
-        2. Fallback: generate standard priority suffixes (the old
-           behaviour) so the worker starts even when RabbitMQ
-           management is unavailable.
+        2. Merge canonical queue names from configured bindings so the worker
+           starts correctly even when RabbitMQ management is unavailable.
         """
         import fnmatch as _fnmatch
 
-        # Always include standard priority levels so the worker
-        # subscribes even if some queues don't exist yet in RabbitMQ.
-        # Without this, a fresh broker only has queues that received
-        # messages before — the worker misses queues created later.
-        priority_levels = ["critical", "high", "default", "low"]
-
         if pattern.endswith(".*"):
-            prefix = pattern[:-2]
-            static = {f"{prefix}.{level}" for level in priority_levels}
+            static: set[str] = set()
         elif pattern.endswith("*"):
-            prefix = pattern[:-1]
-            static = {f"{prefix}.{level}" for level in priority_levels}
+            static = set()
         else:
             return [pattern]
 
@@ -1431,13 +1605,13 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             matched = {q for q in discovered if _fnmatch.fnmatch(q, pattern)}
             static |= matched
 
-        # Also merge canonical queue names declared in the topic-exchange
-        # bindings that match this pattern. Live RabbitMQ discovery only
+        # Also merge canonical queue names declared in the process-local
+        # routing rules that match this pattern. Live RabbitMQ discovery only
         # sees queues that ALREADY exist at worker startup; a queue first
         # created mid-run — e.g. ``notification.email`` the moment the first
         # email job is dispatched after the worker booted — would otherwise
         # never be polled, so those messages pile up with no consumer. The
-        # bindings are the declarative source of truth for canonical queue
+        # rules are the declarative source of truth for canonical queue
         # names (notification.email/sms/push, etc.), so consulting them makes
         # a ``notification.*`` worker pick up those channel queues regardless
         # of broker timing. Missing queues are handled gracefully by the
@@ -1445,7 +1619,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         try:
             from cara.configuration import config as _config
 
-            bindings = _config("queue.topic_exchange_bindings", []) or []
+            bindings = _config("queue.queue_routing_rules", []) or []
             bound = {
                 name for name, _routing in bindings if _fnmatch.fnmatch(name, pattern)
             }
@@ -1453,26 +1627,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         except (ImportError, RuntimeError, AttributeError, OSError):
             pass
 
-        # Sort by priority rank, NOT alphabetically. The worker polls this
-        # list head-first in ``_process_queue_cycle`` and only restarts
-        # from index 0 after a job runs, so alphabetical order
-        # (critical, default, high, low) starved high-priority jobs behind
-        # the default queue. Names that don't carry a known suffix sort
-        # alphabetically *after* the priority-bearing queues to preserve
-        # deterministic ordering.
-        return sorted(static, key=lambda q: self._priority_sort_key(q))
-
-    @staticmethod
-    def _priority_sort_key(queue_name: str) -> tuple[int, str]:
-        """Sort key that puts higher-priority queues first.
-
-        Rank is derived from the suffix after the final dot; unknown or
-        missing suffixes sort after every known priority and then
-        alphabetically so the order is stable across runs.
-        """
-        rank = {"critical": 0, "high": 1, "default": 2, "low": 3}
-        suffix = queue_name.rsplit(".", 1)[-1]
-        return (rank.get(suffix, 99), queue_name)
+        return sorted(static)
 
     def _discover_rabbitmq_queues(self) -> list:
         """Fetch existing queue names from RabbitMQ Management API.
@@ -1532,7 +1687,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         queue_names = config["queue_names"]
         if len(queue_names) > 1:
             self.console.print(
-                f"[#e5c07b]│[/#e5c07b] [white]Queues:[/white] [dim]{len(queue_names)} queues in priority order[/dim]"
+                f"[#e5c07b]│[/#e5c07b] [white]Queues:[/white] [dim]{len(queue_names)} canonical queues[/dim]"
             )
             for i, queue in enumerate(queue_names, 1):  # Show all queues
                 priority_color = (
@@ -1561,7 +1716,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
         # Timing and limits
         self.console.print(
-            f"[#e5c07b]│[/#e5c07b] [white]Poll Timeout:[/white] [dim]{config['timeout']}s[/dim]"
+            f"[#e5c07b]│[/#e5c07b] [white]Reconnect Backoff:[/white] [dim]{config['timeout']}s[/dim]"
         )
 
         if config.get("max_jobs"):
@@ -1584,10 +1739,10 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         self.console.print()
 
     def _run_worker(self, config: dict[str, Any]) -> None:
-        """Run the queue worker with multiple queue priority support.
+        """Run long-lived AMQP consumers with bounded parallelism.
 
         We spin up N independent consumer threads, including when N=1, each
-        with its own AMQP connection + channel. Keeping the command/signal
+        with its own AMQP connection + broker-side subscription. Keeping the command/signal
         loop on the main thread is what makes the bounded shutdown and async
         cancellation contract enforceable for every concurrency setting. pika's
         BlockingConnection is not thread-safe across threads, so each
@@ -1596,24 +1751,29 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         * The job processor (stateless, so safe to share).
         * The Cara DB connection pool + in-flight semaphore (module-level,
           built for multi-thread access from the start).
-        * The ``_missing_queues`` cache — this IS mutated by each thread
-          but only ever as ``dict[str]->float`` writes, which CPython's
-          GIL makes atomic. Worst case two threads race to re-probe a
-          recently-missed queue, which just costs one extra channel open.
         * ``jobs_processed`` / ``jobs_failed`` counters — incremented
           under a lock below (would otherwise race and undercount).
 
         The number of in-flight jobs is bounded by ``concurrency``; each
-        thread processes one job at a time in its own loop so we preserve
-        the at-most-once-per-thread semantics that JobProcessor assumes.
+        channel uses ``prefetch_count=1`` and handles one delivery at a time.
+        RabbitMQ pushes jobs immediately; there is no ``basic_get`` polling,
+        idle sleep, or per-cycle channel churn.
         """
         queue_names = config["queue_names"]
         concurrency = getattr(self, "_concurrency", 1)
+        if concurrency < len(queue_names):
+            raise ConfigurationException(
+                "Quorum queue workers require at least one consumer slot per "
+                f"configured queue ({concurrency} slots for "
+                f"{len(queue_names)} queues)."
+            )
 
         self._show_worker_startup_info(queue_names, concurrency)
         self.start_time = time.time()
         self._active_job_cancellations = ActiveJobCancellationRegistry()
         self._consumer_threads = []
+        self._consumer_state_lock = threading.Lock()
+        self._active_consumer_slots = 0
 
         # Lock protecting shared counters + shutdown flag read-modify-writes.
         # shutdown_requested itself is a bool (atomic) so we read it
@@ -1625,52 +1785,38 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         from cara.configuration import config as global_config
 
         job_processor = JobProcessor(self._active_job_cancellations)
+        queue_driver = Queue.driver(config["driver_name"])
+        if not hasattr(queue_driver, "_connection_parameters"):
+            raise ConfigurationException(
+                "queue:work requires the AMQP driver for durable subscriptions"
+            )
         threads: list[threading.Thread] = []
         self._consumer_threads = threads
 
         def _consumer_loop(slot_idx: int) -> None:
-            """One consumer slot. Owns its own AMQP connection."""
-            mgr = AMQPConnectionManager(global_config)
-            try:
-                while not self.shutdown_requested:
-                    try:
-                        outcome = self._process_queue_cycle(
-                            queue_names, mgr, job_processor, config
+            """One durable consumer slot with bounded reconnect backoff."""
+            reconnect_delay = min(max(int(config.get("timeout", 5)), 1), 10)
+            assigned_queue = queue_names[(slot_idx - 1) % len(queue_names)]
+            while not self.shutdown_requested:
+                mgr = AMQPConnectionManager(global_config, queue_driver)
+                try:
+                    self._consume_queue_stream(
+                        queue_names=[assigned_queue],
+                        connection_manager=mgr,
+                        job_processor=job_processor,
+                        config=config,
+                    )
+                except Exception as exc:
+                    if not self.shutdown_requested:
+                        Log.warning(
+                            "[worker-%s] AMQP consumer disconnected: %s",
+                            slot_idx,
+                            exc,
                         )
-                    except Exception as e:
-                        # Don't let a single thread's error kill the slot —
-                        # log it and keep polling. The original _run_worker
-                        # swallowed these via _handle_queue_error; we
-                        # mirror that behaviour.
-                        Log.warning("[worker-%s] cycle error: %s", slot_idx, e)
-                        outcome = False
-
-                    # Per-slot counter increments. ``_stats_lock`` (set
-                    # up just above before the consumer threads start)
-                    # guards concurrent increments so the cap stays
-                    # accurate under --concurrency>1.
-                    if outcome:
-                        with self._stats_lock:
-                            if outcome == "success":
-                                self.jobs_processed += 1
-                            elif outcome == "failure":
-                                self.jobs_failed += 1
-
-                    # Same enforcement as the single-threaded path.
-                    # Any consumer slot tripping the limit asks the
-                    # whole worker to drain — the main thread sees
-                    # ``shutdown_requested=True`` and joins.
-                    if self._should_stop(config):
-                        self.shutdown_requested = True
-                        break
-
-                    if not outcome:
-                        # Stagger sleeps a tiny bit so N threads don't wake
-                        # up in lockstep and hammer the broker simultaneously.
-                        jittered = config.get("timeout", 5) * (1.0 + (slot_idx % 4) * 0.1)
-                        time.sleep(jittered)
-            finally:
-                mgr.close()
+                finally:
+                    mgr.close()
+                if not self.shutdown_requested:
+                    time.sleep(reconnect_delay)
 
         try:
             for i in range(concurrency):
@@ -1690,7 +1836,29 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             # every consumer is blocked on a slow job (otherwise a
             # poison-message that hangs forever would never trip the
             # cap).
+            next_broker_probe_at = 0.0
             while not self.shutdown_requested:
+                now = time.monotonic()
+                if now >= next_broker_probe_at:
+                    from cara.observability import MetricsBase as _Metrics
+
+                    try:
+                        Queue.driver(
+                            config["driver_name"]
+                        ).verify_runtime_health(
+                            queue_names,
+                            force=True,
+                        )
+                    except Exception as exc:
+                        _Metrics.queue_worker_ready.set(0)
+                        Log.warning("Queue worker readiness probe failed: %s", exc)
+                    else:
+                        with self._consumer_state_lock:
+                            active_slots = self._active_consumer_slots
+                        _Metrics.queue_worker_ready.set(
+                            1 if active_slots == concurrency else 0
+                        )
+                    next_broker_probe_at = now + 10.0
                 if self._should_stop(config):
                     self.shutdown_requested = True
                     break
@@ -1947,7 +2115,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
         if len(queue_names) > 1:
             self.console.print(
-                f"[#e5c07b]│[/#e5c07b] [white]Processing:[/white] [dim]{len(queue_names)} queues in priority order[/dim]"
+                f"[#e5c07b]│[/#e5c07b] [white]Processing:[/white] [dim]{len(queue_names)} canonical queues[/dim]"
             )
         else:
             queue_color = (
@@ -1978,144 +2146,211 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         self.console.print("[dim]Press Ctrl+C to stop the worker[/dim]")
         self.console.print()
 
-    def _process_queue_cycle(
+    @staticmethod
+    def _verify_consumer_queue(
+        connection_manager: AMQPConnectionManager,
+        queue_name: str,
+    ) -> None:
+        """Passively require one deploy-reconciled canonical queue."""
+        channel = connection_manager.create_channel()
+        if channel is None:
+            raise ConnectionError("RabbitMQ channel could not be created")
+        try:
+            channel.queue_declare(
+                queue=queue_name,
+                passive=True,
+            )
+        finally:
+            with contextlib.suppress(
+                ImportError,
+                RuntimeError,
+                AttributeError,
+                OSError,
+            ):
+                channel.close()
+
+    def _record_worker_outcome(
         self,
-        queue_names: list,
+        outcome: bool | str,
+        config: dict[str, Any],
+    ) -> None:
+        if outcome:
+            with self._stats_lock:
+                if outcome == "success":
+                    self.jobs_processed += 1
+                elif outcome == "failure":
+                    self.jobs_failed += 1
+        if not self._check_memory_usage() or self._should_stop(config):
+            self.shutdown_requested = True
+
+    def _mark_consumer_slot(self, delta: int) -> None:
+        """Track subscriptions so readiness reflects actual consuming ability."""
+        state_lock = getattr(self, "_consumer_state_lock", None)
+        if state_lock is None:
+            state_lock = threading.Lock()
+            self._consumer_state_lock = state_lock
+        with state_lock:
+            current = int(getattr(self, "_active_consumer_slots", 0))
+            self._active_consumer_slots = max(0, current + delta)
+
+    def _consume_queue_stream(
+        self,
+        *,
+        queue_names: list[str],
         connection_manager: AMQPConnectionManager,
         job_processor: JobProcessor,
         config: dict[str, Any],
-    ) -> bool:
-        """Process one cycle through all queues in priority order."""
-        # CRITICAL FIX #3: Check memory usage after each job
-        if not self._check_memory_usage():
-            return False  # Memory limit exceeded, signal shutdown
-
+    ) -> None:
+        """Register durable subscriptions and service broker deliveries."""
+        if len(queue_names) != 1:
+            raise ConfigurationException(
+                "Each quorum-queue consumer channel must own exactly one queue."
+            )
         for queue_name in queue_names:
-            if self.shutdown_requested:
-                break
-
-            try:
-                outcome = self._process_single_queue(
-                    queue_name, connection_manager, job_processor
-                )
-                if outcome:
-                    # Memory check after successful job
-                    self._check_memory_usage()
-                    # Outcome is "success" / "failure" — propagate so
-                    # the caller can update jobs_processed / jobs_failed
-                    # counters that gate --max-jobs.
-                    return outcome  # Job processed, restart from highest priority
-
-            except Exception as e:
-                self._handle_queue_error(queue_name, e, connection_manager)
-                continue
-
-        return False  # No jobs processed
-
-    def _process_single_queue(
-        self,
-        queue_name: str,
-        connection_manager: AMQPConnectionManager,
-        job_processor: JobProcessor,
-    ) -> bool:
-        """Process a single queue and return True if job was processed."""
-        # Skip queues we've recently seen as missing. A failed passive
-        # declare closes the channel, so without this cache every poll
-        # tick triggers a reconnect storm.
-        now = time.time()
-        missed_at = self._missing_queues.get(queue_name)
-        if missed_at is not None and (now - missed_at) < self._missing_queue_retry_s:
-            return False
+            self._verify_consumer_queue(connection_manager, queue_name)
 
         channel = connection_manager.create_channel()
-        if not channel:
-            return False
+        if channel is None:
+            raise ConnectionError("RabbitMQ consumer channel could not be created")
+        # RabbitMQ quorum queues do not support global QoS. Each channel owns
+        # exactly one consumer, so per-consumer prefetch=1 is also the exact
+        # one-job-per-worker-slot bound.
+        channel.basic_qos(prefetch_count=1, global_qos=False)
 
+        consumer_tags: list[str] = []
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        in_flight: concurrent.futures.Future | None = None
+        settled_futures: deque[concurrent.futures.Future] = deque()
+        subscribed = False
         try:
-            # First try passive declare (cheap — no arg mismatch risk).
-            # If the queue doesn't exist yet, RabbitMQ returns 404 and
-            # closes the channel. In that case we open a fresh channel
-            # and create the queue with a normal declare so the worker
-            # doesn't have to wait for the publisher to go first.
-            try:
-                channel.queue_declare(queue=queue_name, durable=True, passive=True)
-            except Exception:
-                # Channel is dead after 404 — get a new one.
-                channel = connection_manager.create_channel()
-                if not channel:
-                    self._missing_queues[queue_name] = now
-                    return False
-                try:
-                    # Declare with the SAME args the publish path uses
-                    # (``AMQPDriver._connect_and_publish_locked``). Without
-                    # these args this worker poll path lazily creates the
-                    # queue as a plain ``durable=True`` queue with no DLX
-                    # binding — the very next publish then tries to
-                    # re-declare it with ``x-dead-letter-exchange`` /
-                    # ``x-dead-letter-routing-key`` and hits
-                    # ``PRECONDITION_FAILED - inequivalent arg``. The
-                    # publisher falls back to passive declare but loses
-                    # the DLX wiring, so failed jobs disappear instead of
-                    # routing to ``dead.letter.queue`` and the whole
-                    # pipeline stalls (validation/standardization/etc.
-                    # messages pile up on the unwired queue and never get
-                    # consumed). Mirror the publish-path arg set here so
-                    # whichever side wins the race creates the queue
-                    # with the same topology.
-                    channel.queue_declare(
-                        queue=queue_name,
-                        durable=True,
-                        arguments={
-                            "x-dead-letter-exchange": "dead.letter.dlx",
-                            "x-dead-letter-routing-key": f"dead.{queue_name}",
-                        },
-                    )
-                except Exception:
-                    # Truly cannot create — cache miss briefly.
-                    self._missing_queues[queue_name] = now
-                    return False
+            for queue_name in queue_names:
 
-            # Queue exists — drop from miss cache if we had marked it.
-            self._missing_queues.pop(queue_name, None)
-
-            # Non-blocking message retrieval
-            method_frame, header_frame, body = channel.basic_get(queue=queue_name)
-
-            if method_frame:
-                # Process the job — pass the real queue name through
-                # so metrics label it correctly instead of falling
-                # back to "unknown".
-                return job_processor.process_message(
-                    channel,
+                def _on_message(
+                    ch,
                     method_frame,
+                    _header_frame,
                     body,
-                    queue_name=queue_name,
-                    cancellation_registry=job_processor.cancellation_registry,
+                    *,
+                    consumed_queue: str = queue_name,
+                ) -> None:
+                    nonlocal in_flight
+                    if in_flight is not None:
+                        raise RuntimeError(
+                            "RabbitMQ delivered more than prefetch_count=1"
+                        )
+                    def _release_settled_slot() -> None:
+                        nonlocal in_flight
+                        if in_flight is None:
+                            raise RuntimeError(
+                                "RabbitMQ settled a delivery without an "
+                                "in-flight worker future."
+                            )
+                        settled_futures.append(in_flight)
+                        in_flight = None
+
+                    ack_channel = ThreadSafeAMQPAckChannel(
+                        connection_manager.connection,
+                        ch,
+                        on_settled=_release_settled_slot,
+                    )
+                    start_gate = threading.Event()
+
+                    def _process_delivery():
+                        start_gate.wait()
+                        return job_processor.process_message(
+                            ack_channel,
+                            method_frame,
+                            body,
+                            queue_name=consumed_queue,
+                            cancellation_registry=(
+                                job_processor.cancellation_registry
+                            ),
+                        )
+
+                    in_flight = executor.submit(_process_delivery)
+                    start_gate.set()
+
+                consumer_tags.append(
+                    channel.basic_consume(
+                        queue=queue_name,
+                        on_message_callback=_on_message,
+                        auto_ack=False,
+                    )
                 )
 
-            return False  # No message
-
+            self._mark_consumer_slot(1)
+            subscribed = True
+            Log.info(
+                "AMQP worker subscribed to %s",
+                ", ".join(queue_names),
+            )
+            while (
+                not self.shutdown_requested
+                or (in_flight is not None and not in_flight.done())
+                or any(not future.done() for future in settled_futures)
+            ):
+                connection = connection_manager.connection
+                if connection is None or connection.is_closed:
+                    pending = [
+                        future
+                        for future in (in_flight, *settled_futures)
+                        if future is not None and not future.done()
+                    ]
+                    if pending:
+                        self.shutdown_requested = True
+                        time.sleep(0.1)
+                        continue
+                    raise ConnectionError("RabbitMQ consumer connection closed")
+                try:
+                    connection.process_data_events(time_limit=0.25)
+                except Exception:
+                    pending = [
+                        future
+                        for future in (in_flight, *settled_futures)
+                        if future is not None and not future.done()
+                    ]
+                    if pending:
+                        self.shutdown_requested = True
+                        while any(not future.done() for future in pending):
+                            time.sleep(0.1)
+                    raise
+                pending_settlements = [
+                    future
+                    for future in (in_flight, *settled_futures)
+                    if future is not None and not future.done()
+                ]
+                if pending_settlements:
+                    # Real pika blocks for ``time_limit`` while servicing the
+                    # I/O loop. Test/fallback connections may return
+                    # immediately; yield briefly so a handler that just
+                    # settled can finish without a hot process_data_events
+                    # spin. The short timeout cannot deadlock a handler waiting
+                    # for its thread-safe ACK callback because the I/O loop is
+                    # serviced again on the next iteration.
+                    concurrent.futures.wait(
+                        pending_settlements,
+                        timeout=0.01,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                while settled_futures and settled_futures[0].done():
+                    outcome = settled_futures.popleft().result()
+                    self._record_worker_outcome(outcome, config)
+                if in_flight is not None and in_flight.done():
+                    outcome = in_flight.result()
+                    in_flight = None
+                    self._record_worker_outcome(outcome, config)
+                if not self.shutdown_requested and self._should_stop(config):
+                    self.shutdown_requested = True
         finally:
-            # Always close channel
-            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
-                channel.close()
-
-    def _handle_queue_error(
-        self,
-        queue_name: str,
-        error: Exception,
-        connection_manager: AMQPConnectionManager,
-    ) -> None:
-        """Handle queue processing errors."""
-        error_msg = str(error)
-
-        # Skip queues that don't exist
-        if "NOT_FOUND" not in error_msg:
-            if "connection" in error_msg.lower() or "closed" in error_msg.lower():
-                # Connection issue, reset connection
-                connection_manager.connection = None
-            else:
-                self.error(f"Error checking queue {queue_name}: {error_msg}")
+            executor.shutdown(wait=False, cancel_futures=True)
+            if subscribed:
+                self._mark_consumer_slot(-1)
+            if getattr(channel, "is_open", False):
+                for consumer_tag in consumer_tags:
+                    with contextlib.suppress(Exception):
+                        channel.basic_cancel(consumer_tag)
+                with contextlib.suppress(Exception):
+                    channel.close()
 
     def _should_stop(self, config: dict[str, Any]) -> bool:
         """Check if worker should stop due to configured limits.
@@ -2131,15 +2366,17 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         load-testing or running short triage workers.
         """
         terminal_jobs = self.jobs_processed + self.jobs_failed
-        if config["max_jobs"] and terminal_jobs >= config["max_jobs"]:
+        max_jobs = config.get("max_jobs")
+        if max_jobs and terminal_jobs >= max_jobs:
             self.info(
-                f"🎯 Reached maximum job limit ({config['max_jobs']}) "
+                f"🎯 Reached maximum job limit ({max_jobs}) "
                 f"[processed={self.jobs_processed} failed={self.jobs_failed}]"
             )
             return True
 
-        if config["max_time"] and (time.time() - self.start_time) >= config["max_time"]:
-            self.info(f"⏰ Reached maximum runtime ({config['max_time']} seconds)")
+        max_time = config.get("max_time")
+        if max_time and (time.time() - self.start_time) >= max_time:
+            self.info(f"⏰ Reached maximum runtime ({max_time} seconds)")
             return True
 
         return False
@@ -2211,7 +2448,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             )
         except Exception as e:
             self.error(f"❌ Configuration error: {e}")
-            return
+            raise
 
         # Show worker configuration
         self._show_config(worker_config)
@@ -2222,6 +2459,18 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         # Reset counters for fresh start
         self.jobs_processed = 0
         self.jobs_failed = 0
+
+        queue_driver = Queue.driver(worker_config["driver_name"])
+        queue_driver.verify_runtime_health(
+            worker_config["queue_names"],
+            force=True,
+        )
+        from cara.observability import MetricsBase as _Metrics
+
+        _Metrics.queue_worker_configured_queues.set(
+            len(worker_config["queue_names"])
+        )
+        _Metrics.queue_worker_ready.set(0)
 
         # Run the worker
         self._run_worker(worker_config)

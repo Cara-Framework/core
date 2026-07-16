@@ -540,16 +540,16 @@ class ModelDiscoverer:
                 if isinstance(stmt.value, ast.Dict):
                     self._parse_raw_sql_fields(stmt.value, model_info)
                 # Check if it's Schema.build(lambda field: (...))
-                elif isinstance(stmt.value, ast.Call) and (
-                    isinstance(stmt.value.func, ast.Attribute)
+                elif (
+                    isinstance(stmt.value, ast.Call)
+                    and isinstance(stmt.value.func, ast.Attribute)
                     and isinstance(stmt.value.func.value, ast.Name)
                     and stmt.value.func.value.id == "Schema"
                     and stmt.value.func.attr == "build"
+                    and stmt.value.args
+                    and isinstance(stmt.value.args[0], ast.Lambda)
                 ):
-                    # Extract lambda argument
-                    if stmt.value.args and isinstance(stmt.value.args[0], ast.Lambda):
-                        lambda_node = stmt.value.args[0]
-                        self._parse_lambda_fields(lambda_node, model_info)
+                    self._parse_lambda_fields(stmt.value.args[0], model_info)
 
     def _parse_lambda_fields(self, lambda_node: ast.Lambda, model_info: dict):
         """Parse lambda field: (...) body to extract field definitions."""
@@ -652,17 +652,19 @@ class ModelDiscoverer:
                                         params["precision"] = arg.value
                                     elif i == 2:  # Second arg after field name
                                         params["scale"] = arg.value
-                                elif field_type == "string":
-                                    if i == 1:  # Length parameter
-                                        params["length"] = arg.value
-                            elif field_type == "enum" and i == 1:
+                                elif field_type == "string" and i == 1:
+                                    params["length"] = arg.value
+                            elif (
+                                field_type == "enum"
+                                and i == 1
+                                and isinstance(arg, ast.List)
+                            ):
                                 # Handle enum options list
-                                if isinstance(arg, ast.List):
-                                    options = []
-                                    for opt in arg.elts:
-                                        if isinstance(opt, ast.Constant):
-                                            options.append(opt.value)
-                                    params["options"] = options
+                                options = []
+                                for opt in arg.elts:
+                                    if isinstance(opt, ast.Constant):
+                                        options.append(opt.value)
+                                params["options"] = options
 
                     elif method_name == "nullable":
                         params["nullable"] = True
@@ -977,13 +979,15 @@ class ModelDiscoverer:
         has_down_function = False
 
         for key, value in zip(dict_node.keys, dict_node.values, strict=False):
-            if isinstance(key, ast.Constant) and key.value in ["up", "down"]:
-                # Check if value is a function (ast.Name referring to a local function)
-                if isinstance(value, ast.Name):
-                    if key.value == "up":
-                        has_up_function = True
-                    elif key.value == "down":
-                        has_down_function = True
+            if (
+                isinstance(key, ast.Constant)
+                and key.value in ["up", "down"]
+                and isinstance(value, ast.Name)
+            ):
+                if key.value == "up":
+                    has_up_function = True
+                elif key.value == "down":
+                    has_down_function = True
 
         if has_up_function:
             model_info["has_raw_sql"] = True
@@ -1110,9 +1114,12 @@ class ModelDiscoverer:
                     elif method_name in ("on_delete", "onDelete") and current.args:
                         if isinstance(current.args[0], ast.Constant):
                             on_delete = current.args[0].value
-                    elif method_name in ("on_update", "onUpdate") and current.args:
-                        if isinstance(current.args[0], ast.Constant):
-                            on_update = current.args[0].value
+                    elif (
+                        method_name in ("on_update", "onUpdate")
+                        and current.args
+                        and isinstance(current.args[0], ast.Constant)
+                    ):
+                        on_update = current.args[0].value
 
                     # Move to next in chain
                     current = current.func.value
@@ -1199,17 +1206,16 @@ class ModelDiscoverer:
         sql_parts = []
 
         for node in ast.walk(function_node):
-            if isinstance(node, ast.Call):
-                # Look for DB.statement("SQL") calls
-                if (
-                    isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "statement"
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "DB"
-                ):
-                    # Extract string argument
-                    if node.args and isinstance(node.args[0], ast.Constant):
-                        sql_parts.append(node.args[0].value)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "statement"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "DB"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+            ):
+                sql_parts.append(node.args[0].value)
 
         return "\n".join(sql_parts)
 

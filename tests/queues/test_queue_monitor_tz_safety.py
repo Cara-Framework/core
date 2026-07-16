@@ -13,7 +13,7 @@ directly.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pendulum
 import pytest
@@ -24,7 +24,7 @@ class TestEvictionSortTzSafety:
 
     def _sort_key(self, kv):
         """Replica of the fixed lambda from QueueMonitor.job_completed."""
-        return kv[1].get("started_at") or datetime.min.replace(tzinfo=timezone.utc)
+        return kv[1].get("started_at") or datetime.min.replace(tzinfo=UTC)
 
     def test_sort_with_missing_started_at_no_crash(self):
         """Sorting must not raise TypeError when started_at is None."""
@@ -41,7 +41,7 @@ class TestEvictionSortTzSafety:
 
     def test_fallback_value_is_utc_aware(self):
         """The fallback datetime.min must be timezone-aware (UTC)."""
-        fallback = datetime.min.replace(tzinfo=timezone.utc)
+        fallback = datetime.min.replace(tzinfo=UTC)
         aware_dt = pendulum.now("UTC")
         # Must not raise — both are tz-aware
         assert fallback < aware_dt

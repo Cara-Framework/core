@@ -1,6 +1,4 @@
-from cara.validation.rules import BooleanRule
-from cara.validation.rules import EmailRule
-from cara.validation.rules import URLRule
+from cara.validation.rules import BooleanRule, EmailRule, URLRule
 
 
 def test_email_rule_valid():

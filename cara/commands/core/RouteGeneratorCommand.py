@@ -402,20 +402,16 @@ class RouteGeneratorCommand(CommandBase):
             raise CaraException(f"Python syntax error in file: {e}") from e
 
         for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                # Check if this is a controller class
-                if node.name.endswith("Controller"):
-                    docstring = ast.get_docstring(node)
-                    if docstring:
-                        route_info = self._parse_enhanced_docstring(
-                            docstring, node.name, file_path
-                        )
-                        if route_info:
-                            # Validate controller methods exist
-                            self._validate_controller_methods(
-                                route_info, content, file_path
-                            )
-                            return route_info
+            if isinstance(node, ast.ClassDef) and node.name.endswith("Controller"):
+                docstring = ast.get_docstring(node)
+                if docstring:
+                    route_info = self._parse_enhanced_docstring(
+                        docstring, node.name, file_path
+                    )
+                    if route_info:
+                        # Validate controller methods exist
+                        self._validate_controller_methods(route_info, content, file_path)
+                        return route_info
 
         return None
 

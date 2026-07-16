@@ -66,7 +66,7 @@ def test_select_many_releases_connection_when_consumer_raises():
     conn = _seeded_sqlite_connection(rows=200)
 
     with pytest.raises(RuntimeError, match="boom"):
-        for batch in conn.select_many("SELECT id FROM t WHERE id >= ?", (0,), 25):
+        for _batch in conn.select_many("SELECT id FROM t WHERE id >= ?", (0,), 25):
             raise RuntimeError("boom")
 
     assert conn.open == 0, (

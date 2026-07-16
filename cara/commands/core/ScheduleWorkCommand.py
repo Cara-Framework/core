@@ -58,8 +58,11 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         # scheduler share one host, so they must not race for one socket).
         # Opt out with a port of 0.
         try:
+            from cara.observability import MetricsBase as _Metrics
             from cara.observability import start_http_server as _start_metrics
 
+            _Metrics.scheduler_ready.set(0)
+            _Metrics.scheduler_registered_tasks.set(0)
             _port = _start_metrics(
                 port=int(config("metrics.scheduler_port", 0)),
                 role="scheduler",
@@ -67,7 +70,8 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             if _port:
                 Log.info("📈 Metrics server on :%s/metrics", _port)
         except Exception as e:
-            # Non-fatal: scheduler keeps running with no metrics exposure.
+            if str(config("app.env", "local")).lower() in {"production", "prod"}:
+                raise CaraException("Scheduler metrics server failed to start") from e
             Log.warning("metrics server startup failed: %s", e)
 
         # Setup auto-reload if enabled (default: true for development)
@@ -78,11 +82,14 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         try:
             self._run_main_loop(driver)
         except Exception as e:
-            import traceback
-
             self.error(f"× Scheduler error: {e}")
             self.error(f"× Stack trace: {traceback.format_exc()}")
+            raise
         finally:
+            with contextlib.suppress(Exception):
+                from cara.observability import MetricsBase as _Metrics
+
+                _Metrics.scheduler_ready.set(0)
             self.cleanup_auto_reload()
             self._show_final_stats()
 
@@ -99,7 +106,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             scheduler_config = self._prepare_config(driver)
         except Exception as e:
             self.error(f"× Configuration error: {e}")
-            return
+            raise
 
         # Show scheduler configuration
         self._show_config(scheduler_config)
@@ -108,10 +115,13 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         try:
             job_entries = self._register_jobs()
             if not job_entries:
-                self.warning("⚠️  No scheduled jobs found to register")
-                return
+                raise ConfigurationException("No scheduled jobs were registered")
 
             self._show_jobs(job_entries)
+            from cara.observability import MetricsBase as _Metrics
+
+            _Metrics.scheduler_registered_tasks.set(len(job_entries))
+            _Metrics.scheduler_ready.set(1)
             self._start_scheduler(scheduler_config)
 
         except KeyboardInterrupt:
@@ -120,6 +130,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             self.error(f"× Scheduler error: {e}")
             if config("app.debug", False):
                 self.error(f"Stack trace: {traceback.format_exc()}")
+            raise
 
     def _prepare_config(self, driver: str | None) -> dict[str, Any]:
         """Prepare and validate scheduler configuration."""
@@ -249,14 +260,21 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         # so an operator scanning boot logs sees exactly what was
         # silently dropped.
         registered_ids = {str(e.get("id")) for e in job_entries if e.get("id")}
+        missing_entries: list[str] = []
         for spec_id, spec_name in expected_dict_ids:
             if spec_id == "?" or spec_id in registered_ids:
                 continue
+            missing_entries.append(f"{spec_id} ({spec_name})")
             self.warning(
                 f"⚠️  Scheduled job '{spec_id}' ({spec_name}) was in "
                 f"config but never registered — check the cron/interval "
                 f"spec, the dotted import path, or APScheduler id "
                 f"conflicts. This job will NOT fire."
+            )
+        if missing_entries:
+            raise ConfigurationException(
+                "Configured scheduled jobs failed registration: "
+                + ", ".join(missing_entries)
             )
 
         return job_entries
@@ -269,7 +287,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             trigger  – "interval" | "cron"
             id       – unique job identifier
             name     – human label
-            + trigger-specific keys: hours/minutes/seconds (interval)  # gitleaks:allow
+            + interval fields: hours, minutes, seconds
               or hour/minute/day_of_week (cron)
             kwargs   – (optional) passed to handle()
         """
@@ -283,6 +301,17 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
         mod = importlib.import_module(module_path)
         job_cls = getattr(mod, class_name)
+        is_central_job = bool(getattr(job_cls, "central_job", False))
+        scheduled_tenant_id = spec.get("tenant_id")
+        if is_central_job:
+            if scheduled_tenant_id is not None:
+                raise ConfigurationException(
+                    f"Central scheduled job {job_path} cannot declare tenant_id."
+                )
+        elif scheduled_tenant_id is None:
+            raise ConfigurationException(
+                f"Ordinary scheduled job {job_path} requires explicit tenant_id."
+            )
 
         job_id = spec.get("id", class_name)
         job_name = spec.get("name", class_name)
@@ -294,7 +323,13 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         # If handle() needs DI-resolved arguments (contracts), resolve them
         # through the container; if handle() is a coroutine, run it via
         # asyncio so async jobs work transparently.
-        def _make_and_run(_cls=job_cls, _kw=job_kwargs, _app=self.application):
+        def _make_and_run(
+            _cls=job_cls,
+            _kw=job_kwargs,
+            _app=self.application,
+            _central=is_central_job,
+            _tenant_id=scheduled_tenant_id,
+        ):
             import asyncio
             import inspect
 
@@ -352,10 +387,11 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                 try:
                     if _app is not None and _app.has("JobTracker"):
                         tracker = _app.make("JobTracker")
-                        db_job_id = tracker.create_sync_job_record(
+                        db_job_id = tracker.create_job_record(
                             job_name=_cls.__name__,
                             job_class=f"{_cls.__module__}.{_cls.__name__}",
                             queue="scheduler",
+                            execution_mode="scheduler",
                             metadata={"scheduled_tick": True, "schedule_id": job_id},
                         )
                         if db_job_id is not None:
@@ -370,15 +406,26 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                     with contextlib.suppress(Exception):
                         _t.update_job_status(_id, status)
 
-            try:
+            async def _invoke(_job):
                 result = handle_method(**handle_kwargs)
-                # Support async handle() methods
                 if inspect.isawaitable(result):
-                    loop = asyncio.new_event_loop()
-                    try:
-                        loop.run_until_complete(result)
-                    finally:
-                        loop.close()
+                    return await result
+                return result
+
+            async def _run_scoped():
+                from cara.context import Tenancy
+                from cara.queues.middleware import run_through_middleware_async
+
+                scope = (
+                    Tenancy.central()
+                    if _central
+                    else Tenancy.as_tenant(_tenant_id)
+                )
+                with scope:
+                    return await run_through_middleware_async(instance, _invoke)
+
+            try:
+                asyncio.run(_run_scoped())
             except BaseException:
                 _finish_tick("failed")
                 raise
@@ -466,7 +513,14 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         if mode == "call":
             builder = Schedule.call(job_target)
         elif mode == "job":
-            builder = Schedule.call(lambda: self.application.make(job_target).handle())
+            if not bool(getattr(job_target, "central_job", False)):
+                raise ConfigurationException(
+                    f"Decorator-scheduled job {job_name} must explicitly declare "
+                    "central_job = True; tenant jobs need dict scheduling with tenant_id."
+                )
+            builder = Schedule.call(
+                lambda: self._run_decorated_central_job(job_target)
+            )
         elif mode == "command":
             driver_name = spec.get("driver_name")
             builder = Schedule.call(lambda: self._queue_command(job_target, driver_name))
@@ -517,6 +571,32 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
         except Exception as e:
             raise CaraException(f"Failed to configure schedule: {e}") from e
+
+    def _run_decorated_central_job(self, job_target: Any) -> None:
+        import asyncio
+        import inspect
+
+        from cara.context import Tenancy
+        from cara.queues.middleware import run_through_middleware_async
+
+        instance = self.application.make(job_target)
+        handle_method = getattr(instance, "handle", None)
+        if not callable(handle_method):
+            raise ConfigurationException(
+                f"Scheduled job {job_target.__name__} has no callable handle()."
+            )
+
+        async def _invoke(_job):
+            result = handle_method()
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        async def _run():
+            with Tenancy.central():
+                return await run_through_middleware_async(instance, _invoke)
+
+        asyncio.run(_run())
 
     def _queue_command(self, command_target: Any, driver_name: str | None = None):
         """Queue command for execution."""
@@ -626,6 +706,16 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                 # shutdown_requested.
                 driver.start()
                 while not self.shutdown_requested:
+                    scheduler = getattr(driver, "scheduler", None)
+                    if scheduler is None or not bool(
+                        getattr(scheduler, "running", False)
+                    ):
+                        from cara.observability import MetricsBase as _Metrics
+
+                        _Metrics.scheduler_ready.set(0)
+                        raise CaraException(
+                            "Scheduler engine stopped while the process remained alive"
+                        )
                     time.sleep(1)
 
         except Exception as e:

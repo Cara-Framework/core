@@ -6,6 +6,7 @@ Professional exception handler using proper exception hierarchy.
 
 from __future__ import annotations
 
+import contextlib
 import traceback
 from typing import Any
 
@@ -95,12 +96,8 @@ class DefaultExceptionHandler:
         # ``response`` here is the single fix needed for both paths.
         retry_after = getattr(exception, "retry_after", None)
         if retry_after is not None and "retry_after" not in response:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 response["retry_after"] = int(retry_after)
-            except (TypeError, ValueError):
-                # Non-int values shouldn't reach here, but if they do
-                # don't poison the response — drop silently.
-                pass
 
         # Propagate the per-route allow-list from
         # ``MethodNotAllowedException`` so ``send_response`` can emit
@@ -111,12 +108,8 @@ class DefaultExceptionHandler:
         # ``to_dict`` and don't include it — defensive against drift.
         allowed = getattr(exception, "allowed", None)
         if allowed is not None and "allowed" not in response:
-            try:
+            with contextlib.suppress(TypeError):
                 response["allowed"] = list(allowed)
-            except TypeError:
-                # Non-iterable — drop silently rather than crashing
-                # the error path.
-                pass
 
         if status_code >= 500 and not self.is_debug_mode():
             redacted: dict[str, Any] = {

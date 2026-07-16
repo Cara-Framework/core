@@ -32,10 +32,13 @@ class MigrateRollbackCommand(CommandBase):
         self.info("🔄 Starting migration rollback...")
 
         # Production safety check
-        if self._is_production() and not self.option("force"):
-            if not self._confirm_production():
-                self.info("❌ Rollback aborted by user.")
-                return
+        if (
+            self._is_production()
+            and not self.option("force")
+            and not self._confirm_production()
+        ):
+            self.info("❌ Rollback aborted by user.")
+            return
 
         # Build migration instance
         migrations_dir = self.option("directory") or paths("migrations")

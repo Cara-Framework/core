@@ -1,41 +1,24 @@
-"""
-File-based Cache Driver for the Cara framework.
+"""Authenticated, non-executable file cache driver.
 
-This module implements a cache driver that stores cache entries as files
-on disk, using pickle serialization with an HMAC integrity tag.
-
-The cache file format on disk is::
-
-    [32 bytes: HMAC-SHA256 of the pickle payload]
-    [variable: pickle payload of (expires_at, value)]
-
-``pickle.load`` is **not** safe to run on untrusted input — a crafted
-file can execute arbitrary code via ``__reduce__``. We never load a
-file whose HMAC doesn't validate, so an attacker who can drop a file
-into the cache directory (NFS volume, shared host, CI runner) can no
-longer pivot from filesystem write to code execution. The HMAC key is
-derived from the application secret (``config("app.key")`` or
-``APP_KEY`` env var); a missing key triggers an auto-generated
-per-process ephemeral key with a clear log warning so dev still works.
-
-Files with a missing or invalid HMAC tag are deleted on read and
-treated as cache misses.
+Values use the same canonical tagged-JSON codec as Redis. The payload is
+authenticated with the independent cache signing key, size/depth bounded,
+and decoded without importing classes or invoking object hooks. Legacy
+pickle files and malformed/tampered values are deleted as cache misses.
 """
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import hashlib
-import hmac
 import logging
 import os
-import pickle
 import re
 import threading
 import time
-import uuid
 from typing import Any
 
+from cara.cache.codecs import JsonCacheCodec
 from cara.cache.contracts import Cache
 from cara.exceptions import CacheConfigurationException, ConfigurationException
 from cara.facades import Log
@@ -59,74 +42,18 @@ _MAX_FILENAME_LEN = 200
 # scope for the file driver — distributed locks belong on Redis.
 _FILE_CAS_LOCK = threading.Lock()
 
-# HMAC tag length — SHA-256 = 32 bytes. Embedded as a fixed-width prefix
-# so we can split tag/payload without a length header.
-_HMAC_TAG_LEN = 32
-
-# Lazily-resolved HMAC key for cache integrity. One per process, derived
-# from the application secret on first use. Module-level so the
-# resolution cost (config / env lookup) only happens once.
-_HMAC_KEY_CACHE: bytes | None = None
-
-
-def _resolve_hmac_key() -> bytes:
-    """Return the HMAC-SHA256 key for cache integrity, loading once.
-
-    Resolution order:
-
-    1. ``config("app.key")`` — the canonical Laravel-style secret.
-    2. ``APP_KEY`` env var as a final fallback for boot scenarios
-       where the config layer isn't ready.
-    3. A per-process random key, with a loud warning. Dev works; a
-       production deploy missing APP_KEY now leaves a paper trail
-       instead of silently rotating the cache on every restart.
-    """
-    global _HMAC_KEY_CACHE
-    if _HMAC_KEY_CACHE is not None:
-        return _HMAC_KEY_CACHE
-
-    secret: str | None = None
-
-    try:
-        from cara.configuration import config
-
-        secret = config("app.key") or None
-    except Exception:
-        _logger.debug("config unavailable during boot", exc_info=True)
-        secret = None
-
-    if not secret:
-        secret = os.environ.get("APP_KEY")
-
-    if not secret:
-        secret = uuid.uuid4().hex
-        try:
-            Log.warning(
-                "FileCacheDriver: no app.key / APP_KEY configured; HMAC integrity key will be regenerated on every "
-                "process restart, which invalidates every cache file written "
-                "before this boot. Set APP_KEY to a stable secret in production.",
-                category="cache",
-            )
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
-            pass  # logging infra unavailable during early boot
-
-    # Domain-separated derivation so the cache integrity key isn't
-    # identical to the app secret on the wire (encryption / signed
-    # cookies use the same secret with different domains).
-    _HMAC_KEY_CACHE = hashlib.sha256(
-        b"cara.cache.file.integrity\x00" + secret.encode("utf-8")
-    ).digest()
-    return _HMAC_KEY_CACHE
+_MAX_FILE_BYTES = (
+    len(JsonCacheCodec.MAGIC)
+    + JsonCacheCodec.TAG_BYTES
+    + JsonCacheCodec.MAX_PAYLOAD_BYTES
+)
 
 
 class FileCacheDriver(Cache):
     """
     File-based Cache Driver for the Cara framework.
 
-    This module implements a cache driver that stores cache entries as files on disk,
-    using pickle serialization and handling expiration logic.
-
-    Stores each cache entry as a pickle file in `cache_directory`.
+    Stores authenticated tagged-JSON cache entries in `cache_directory`.
     Filenames are formed as: prefix + sanitized_key + ".cache".
     Expired entries are removed on access.
     """
@@ -138,9 +65,12 @@ class FileCacheDriver(Cache):
         cache_directory: str,
         prefix: str = "",
         default_ttl: int = 60,
+        *,
+        signing_key: str | bytes,
     ):
         self._prefix = prefix or ""
         self._default_ttl = default_ttl
+        self._codec = JsonCacheCodec(signing_key)
         self._validate_directory(cache_directory)
         self.cache_directory = os.path.abspath(cache_directory)
         os.makedirs(self.cache_directory, exist_ok=True)
@@ -158,7 +88,7 @@ class FileCacheDriver(Cache):
 
         ok, expires_at, stored_value = self._read_file(file_path)
         if not ok:
-            # Read/unpickle failed — treat as cache miss so remember()'s sentinel
+            # Decode failed — treat as cache miss so remember()'s sentinel
             # logic kicks in. Previously we returned `stored_value` (None) which
             # caused Cache.remember to return None even when the caller's
             # callback produced a real value, breaking tuple-unpacking sites.
@@ -267,7 +197,7 @@ class FileCacheDriver(Cache):
                 # gets FileExistsError.
                 fd = os.open(
                     file_path,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                     0o600,
                 )
             except FileExistsError:
@@ -288,18 +218,13 @@ class FileCacheDriver(Cache):
 
             try:
                 with os.fdopen(fd, "wb") as f:
-                    payload = pickle.dumps((expires_at, value))
-                    tag = hmac.new(_resolve_hmac_key(), payload, hashlib.sha256).digest()
-                    f.write(tag)
-                    f.write(payload)
+                    f.write(self._codec.encode((expires_at, value)))
                 return True
             except Exception as e:
                 Log.warning("[FileCacheDriver] add write failed: %s", e, category="cache")
                 # Roll back the empty/partial file we created.
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(file_path)
-                except OSError:
-                    pass  # best-effort cleanup of partial file
                 return False
 
         return False
@@ -359,37 +284,32 @@ class FileCacheDriver(Cache):
         return time.time() + self._default_ttl
 
     def _read_file(self, file_path: str) -> tuple[bool, float | None, Any]:
-        """Verify HMAC, then unpickle.
-
-        SECURITY — ``pickle.load`` on untrusted input is an arbitrary-
-        code-execution vector. We never invoke ``pickle.loads`` on a
-        payload whose HMAC tag doesn't match, so an attacker who
-        gains write access to the cache directory can't pivot to RCE.
-
-        Files with missing/invalid HMAC or corrupt payloads are deleted
-        and treated as cache misses.
-        """
+        """Read one bounded, authenticated, non-executable cache envelope."""
         try:
-            with open(file_path, "rb") as f:
-                blob = f.read()
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(file_path, flags)
+            with os.fdopen(fd, "rb") as f:
+                blob = f.read(_MAX_FILE_BYTES + 1)
         except Exception:
             return False, None, None
 
-        if len(blob) <= _HMAC_TAG_LEN:
-            self._delete_file(file_path)
-            return False, None, None
-
-        tag = blob[:_HMAC_TAG_LEN]
-        payload = blob[_HMAC_TAG_LEN:]
-        expected = hmac.new(_resolve_hmac_key(), payload, hashlib.sha256).digest()
-        if not hmac.compare_digest(tag, expected):
+        if len(blob) > _MAX_FILE_BYTES:
             self._delete_file(file_path)
             return False, None, None
 
         try:
-            expires_at, value = pickle.loads(payload)
+            decoded = self._codec.decode(blob)
+            if not isinstance(decoded, tuple) or len(decoded) != 2:
+                raise CacheConfigurationException(
+                    "File cache envelope must contain expiry and value."
+                )
+            expires_at, value = decoded
+            if expires_at is not None and not isinstance(expires_at, (int, float)):
+                raise CacheConfigurationException(
+                    "File cache expiry must be numeric or null."
+                )
             return True, expires_at, value
-        except Exception:
+        except CacheConfigurationException, TypeError, ValueError:
             self._delete_file(file_path)
             return False, None, None
 
@@ -401,31 +321,20 @@ class FileCacheDriver(Cache):
         *,
         strict: bool = False,
     ) -> None:
-        """Atomic, HMAC-tagged write.
-
-        Steps:
-          1. Pickle the (expires_at, value) tuple.
-          2. Compute HMAC-SHA256 over the pickle bytes using the
-             integrity key.
-          3. Write ``tag || pickle`` to a tmp file.
-          4. ``os.replace`` to the final path so concurrent readers
-             never see a torn pickle.
-        """
+        """Atomically write one authenticated tagged-JSON envelope."""
         tmp_path = f"{file_path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
         try:
-            payload = pickle.dumps((expires_at, value))
-            tag = hmac.new(_resolve_hmac_key(), payload, hashlib.sha256).digest()
-            with open(tmp_path, "wb") as f:
-                f.write(tag)
+            payload = self._codec.encode((expires_at, value))
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(tmp_path, flags, 0o600)
+            with os.fdopen(fd, "wb") as f:
                 f.write(payload)
             os.replace(tmp_path, file_path)
         except Exception as e:
             Log.warning("[FileCacheDriver] write failed: %s", e, category="cache")
             # Best-effort cleanup of the tmp file.
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(tmp_path)
-            except OSError:
-                pass  # best-effort cleanup of temp file
             if strict:
                 raise
 
@@ -455,7 +364,7 @@ class FileCacheDriver(Cache):
             is_new = current is sentinel
             try:
                 new_val = (0 if is_new else int(current)) + amount
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 is_new = True
                 new_val = amount
             # Redis INCRBY semantics: ``ttl`` applies on creation (or to

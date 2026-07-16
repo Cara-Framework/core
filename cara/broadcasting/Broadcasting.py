@@ -18,14 +18,14 @@ whether redis or memory is the active broadcaster).
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Union
+from typing import Any
 
 from cara.broadcasting.Channel import Channel, channel_name
 from cara.broadcasting.ChannelRegistry import ChannelAuthCallback, ChannelRegistry
 from cara.exceptions import BroadcastingConfigurationException
 from cara.facades import Log
 
-ChannelLike = Union[str, Channel]
+ChannelLike = str | Channel
 
 
 class Broadcasting:

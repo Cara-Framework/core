@@ -168,7 +168,7 @@ class SQLitePlatform(Platform):
                 sql.append(f"DROP INDEX {name}")
 
         if diff.added_columns:
-            for name, column in diff.added_columns.items():
+            for _name, column in diff.added_columns.items():
                 default = ""
                 if column.default_value in (0,):
                     default = f" DEFAULT {column.default_value}"
@@ -277,13 +277,13 @@ class SQLitePlatform(Platform):
             )
 
         if diff.added_indexes:
-            for name, index in diff.added_indexes.items():
+            for _name, index in diff.added_indexes.items():
                 sql.append(
                     f"CREATE INDEX {index.name} ON {self.wrap_table(diff.name)}({','.join(index.column)})"
                 )
         if diff.added_constraints:
             for (
-                name,
+                _name,
                 constraint,
             ) in diff.added_constraints.items():
                 if constraint.constraint_type == "unique":

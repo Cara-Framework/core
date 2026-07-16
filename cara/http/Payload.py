@@ -2,8 +2,8 @@
 
 Generic request-payload utilities every Cara app reuses:
 
-* ``strip_none_values`` — drop ``None`` entries a nullable-rule validator
-  echoes back, so partial-update audit rows don't log misleading nulls.
+* ``strip_none_values`` — opt out of explicit-null clearing for write
+  contracts where null deliberately means "leave unchanged".
 * ``validated_query_int`` — coerce a query param through ``integer|between``,
   clamping on failure.
 * ``assert_editable_fields`` — mass-assignment whitelist guard; keep only
@@ -28,9 +28,9 @@ from cara.http.request.Request import Request
 def strip_none_values(validated: dict | None) -> dict:
     """Drop ``None`` entries from a validated payload.
 
-    Cara's ``Validation.validated()`` returns every declared rule key,
-    with ``None`` for nullable fields the caller didn't send. Without
-    this strip, audit rows for partial updates log misleading nulls.
+    ``Validation.validated()`` omits fields the caller did not send and keeps
+    explicit nullable values. Use this helper only when a particular contract
+    intentionally treats explicit null as "leave unchanged".
     """
     return {k: v for k, v in (validated or {}).items() if v is not None}
 

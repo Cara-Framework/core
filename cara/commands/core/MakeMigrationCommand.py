@@ -5,6 +5,7 @@ Orchestrates model discovery, schema comparison, and migration generation.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
@@ -230,10 +231,8 @@ class MakeMigrationCommand(CommandBase):
             self.generator.finalize_counter()
         except BaseException:
             for path in generated:
-                try:
+                with contextlib.suppress(OSError):
                     path.unlink(missing_ok=True)
-                except OSError:
-                    pass
             for original, backup in reversed(moved):
                 if backup.exists():
                     os.replace(backup, original)

@@ -1,9 +1,4 @@
-"""
-RabbitMQ Topic Exchange System for Cara Framework.
-
-Implements domain.subtype.priority routing pattern with automatic
-queue binding and message routing via routing keys.
-"""
+"""Process-local routing-key validation for canonical queues."""
 
 from __future__ import annotations
 
@@ -38,75 +33,41 @@ class RoutingKey:
         return cls(domain=parts[0], subtype=parts[1], priority=parts[2])
 
 
-class TopicExchange:
+class QueueRouter:
     """
-    RabbitMQ Topic Exchange for Cara Framework.
+    Map product routing keys to one canonical direct-publish queue.
 
     Features:
-    - Automatic queue creation and binding
-    - Routing key pattern matching
-    - Domain-based job categorization
-    - Priority-based message routing
-    - Singleton pattern to prevent re-initialization
+    This class never declares or publishes to a broker exchange. It validates
+    a routing key locally, selects exactly one canonical queue, then delegates
+    to the durable delivery ledger.
 
     Usage:
-        exchange = TopicExchange()  # Reads name from config('queue.topic_exchange_name')
-
-        # Or explicit name
-        exchange = TopicExchange("my_app.events")
+        router = QueueRouter()
 
         # Define queue bindings
-        exchange.bind_queue("jobs.default", "jobs.*.default")
-        exchange.bind_queue("jobs.high", "jobs.*.high")
+        router.bind_queue("jobs", "jobs.*.*")
 
         # Dispatch with routing key
-        exchange.dispatch_job(
+        router.dispatch_job(
             routing_key="jobs.process.high",
             job_instance=my_job,
             payload={"id": 123},
         )
     """
 
-    _instances: dict[str, TopicExchange] = {}  # Class-level instances cache
+    _instance: QueueRouter | None = None
 
-    @staticmethod
-    def _resolve_exchange_name(exchange_name: str | None) -> str:
-        """Resolve exchange name from argument or config."""
-        if exchange_name:
-            return exchange_name
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
-        from cara.configuration import config
-
-        resolved = config("queue.topic_exchange_name", None)
-        if not resolved:
-            raise QueueException(
-                "TopicExchange requires an exchange name. Pass it explicitly or "
-                "set 'queue.topic_exchange_name' in your configuration."
-            )
-        return resolved
-
-    def __new__(cls, exchange_name: str | None = None):
-        """Singleton pattern per-exchange-name to prevent duplicate instances."""
-        name = cls._resolve_exchange_name(exchange_name)
-        if name not in cls._instances:
-            instance = super().__new__(cls)
-            cls._instances[name] = instance
-        return cls._instances[name]
-
-    def __init__(self, exchange_name: str | None = None):
-        """
-        Initialize TopicExchange.
-
-        Args:
-            exchange_name: Name of the RabbitMQ topic exchange. If omitted,
-                read from ``config('queue.topic_exchange_name')``.
-        """
-        exchange_name = self._resolve_exchange_name(exchange_name)
+    def __init__(self):
         # Prevent re-initialization
         if hasattr(self, "_initialized"):
             return
 
-        self.exchange_name = exchange_name
         self.queue_bindings: dict[str, list[str]] = {}
         self._queue_patterns: dict[str, list[str]] = {}
         self._logged_bindings = set()
@@ -122,12 +83,11 @@ class TopicExchange:
         # Load app-specific bindings from config (required)
         from cara.configuration import config
 
-        app_bindings = config("queue.topic_exchange_bindings", None)
+        app_bindings = config("queue.queue_routing_rules", None)
 
         if not app_bindings:
             raise QueueException(
-                "TOPIC_EXCHANGE_BINDINGS not found in queue config. "
-                "Please define your queue bindings in config/queue.py"
+                "QUEUE_ROUTING_RULES not found in queue config."
             )
 
         default_bindings = app_bindings
@@ -152,7 +112,12 @@ class TopicExchange:
             # Only log once when binding is first created
             binding_key = f"{queue_name}->{routing_pattern}"
             if binding_key not in self._logged_bindings:
-                Log.debug("Queue bound: %s -> %s", queue_name, routing_pattern, category='cara.queue.exchange')
+                Log.debug(
+                    "Queue routing rule: %s -> %s",
+                    queue_name,
+                    routing_pattern,
+                    category="cara.queue.routing",
+                )
                 self._logged_bindings.add(binding_key)
 
     def get_matching_queues(self, routing_key: str) -> list[str]:
@@ -195,9 +160,6 @@ class TopicExchange:
 
         return True
 
-    _DISPATCH_MAX_RETRIES = 3
-    _DISPATCH_BACKOFF_BASE = 0.5
-
     def dispatch_job(
         self,
         routing_key: str,
@@ -231,8 +193,8 @@ class TopicExchange:
             (FAIL LOUD on no matching queues, ValueError from a
             malformed routing key, exhausted publish retries) by
             converting every failure into a silent ``return None``.
-            Callers — notably ``PendingDispatch._dispatch_via_exchange``,
-            whose docstring already promised "NO FALLBACK - If exchange
+            Callers — notably ``PendingDispatch._dispatch_via_router``,
+            whose docstring already promised "NO FALLBACK - If routing
             dispatch fails, exception is raised" — would store
             ``str(None)`` as the tracking id and continue as if the
             publish had succeeded.  The scenario 2 (cycle 2) heavy
@@ -242,7 +204,7 @@ class TopicExchange:
             the broker received zero of them.  Removing the outer
             catch lets the caller observe the failure.
         """
-        parsed_key = RoutingKey.parse(routing_key)
+        RoutingKey.parse(routing_key)
         matching_queues = self.get_matching_queues(routing_key)
 
         if not matching_queues:
@@ -250,13 +212,18 @@ class TopicExchange:
             # immediately rather than letting work silently disappear.
             msg = (
                 f"No queues match routing key '{routing_key}'. "
-                f"Add a binding to TOPIC_EXCHANGE_BINDINGS or fix the "
+                f"Add a rule to QUEUE_ROUTING_RULES or fix the "
                 f"routing_key — refusing to dispatch into a black hole."
             )
-            Log.error(msg, category="cara.queue.exchange")
+            Log.error(msg, category="cara.queue.routing")
             raise QueueException(msg)
 
-        target_queue = self._select_best_queue(matching_queues, parsed_key.priority)
+        if len(matching_queues) != 1:
+            raise QueueException(
+                f"Routing key {routing_key!r} matched {len(matching_queues)} queues "
+                f"({matching_queues}); exactly one canonical stage queue is required."
+            )
+        target_queue = matching_queues[0]
 
         if hasattr(job_instance, "queue"):
             job_instance.queue = target_queue
@@ -265,88 +232,20 @@ class TopicExchange:
 
         from cara.facades import Queue
 
-        for attempt in range(self._DISPATCH_MAX_RETRIES):
-            try:
-                # Honor a requested delay via the delayed-message path
-                # (Queue.later → AMQPDriver.schedule sets the x-delay header).
-                # Queue.push ignores job.delay and would publish immediately,
-                # silently dropping the delay. job_instance.queue was pinned to
-                # target_queue above, so the delayed publish lands correctly.
-                if delay:
-                    job_id = Queue.later(delay, job_instance)
-                else:
-                    job_id = Queue.push(job_instance)
-                Log.debug("Job dispatched: %s -> %s [%s]", routing_key, target_queue, job_id, category='cara.queue.exchange')
-                return str(job_id)
-            except Exception as publish_err:
-                if attempt < self._DISPATCH_MAX_RETRIES - 1 and self._is_connection_error(
-                    publish_err
-                ):
-                    import time
-
-                    wait = self._DISPATCH_BACKOFF_BASE * (2**attempt)
-                    # Transient broker blips (idle connection dropped, broken
-                    # pipe) are recovered by the reconnect-and-retry below, so
-                    # an intermediate attempt is not operator-actionable. Only
-                    # the final give-up (Log.error) is. Keep retries at debug.
-                    Log.debug("Dispatch attempt %s failed for %s, retrying in %.1fs: %s", attempt + 1, routing_key, wait, publish_err, category='cara.queue.exchange')
-                    time.sleep(wait)
-                    continue
-                Log.error("Job dispatch failed: %s - %s", routing_key, publish_err, category='cara.queue.exchange')
-                raise
-
-        # Defensive — should not reach here because the loop either
-        # returns or raises; included so static analyzers see a
-        # terminal statement.
-        raise QueueException(
-            f"dispatch_job exhausted retries for routing_key={routing_key} "
-            f"without raising — this should not be reachable."
+        # Queue.push/later is now a PostgreSQL transaction, not broker I/O.
+        # Retrying an ambiguous DB commit would mint a second delivery ID.
+        if delay:
+            job_id = Queue.later(delay, job_instance)
+        else:
+            job_id = Queue.push(job_instance)
+        Log.debug(
+            "Job dispatched: %s -> %s [%s]",
+            routing_key,
+            target_queue,
+            job_id,
+            category="cara.queue.routing",
         )
-
-    @staticmethod
-    def _is_connection_error(exc: Exception) -> bool:
-        """Check if the exception is a recoverable AMQP connection error."""
-        err_str = str(exc).lower()
-        if any(
-            kw in err_str
-            for kw in (
-                "stream",
-                "broken pipe",
-                "connection",
-                "reset",
-                "refused",
-                "timeout",
-            )
-        ):
-            return True
-        try:
-            import pika.exceptions
-
-            return isinstance(
-                exc,
-                (pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError),
-            )
-        except ImportError:
-            return False
-
-    def _select_best_queue(self, matching_queues: list[str], priority: str) -> str:
-        """
-        Select the best queue from matching queues based on priority.
-
-        Args:
-            matching_queues: List of matching queue names
-            priority: Requested priority level
-
-        Returns:
-            Best matching queue name
-        """
-        # Prefer exact priority match
-        for queue in matching_queues:
-            if queue.endswith(f".{priority}"):
-                return queue
-
-        # Fallback to first available queue
-        return matching_queues[0]
+        return str(job_id)
 
     @staticmethod
     def _pattern_segments(pattern: str) -> tuple[str, str, str]:
@@ -376,7 +275,6 @@ class TopicExchange:
                 "routing_patterns": list(patterns),
                 "domain": domain,
                 "priority": priority,
-                "exchange": self.exchange_name,
             }
 
         return queue_info

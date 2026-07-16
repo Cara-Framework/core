@@ -21,7 +21,6 @@ class JobTracker:
 
     Features:
     - Smart retry with exponential backoff
-    - Job chaining and dependencies
     - Conflict resolution (prevent duplicate jobs)
     - Performance analytics
     - Dead letter queue management
@@ -419,23 +418,26 @@ class JobTracker:
         except Exception as e:
             Log.warning("Failed to move job to dead letter: %s", str(e))
 
-    def create_sync_job_record(
+    def create_job_record(
         self,
         job_name: str,
         job_class: str,
         queue: str,
+        *,
+        execution_mode: str,
         payload: dict | None = None,
         metadata: dict | None = None,
         job_uid: str | None = None,
         entity_id: str | None = None,
     ) -> int | None:
         """
-        Create unified job record with tracking fields.
+        Create a unified job record with an explicit execution mode.
 
         Args:
             job_name: Job class name
             job_class: Full job class path (module.ClassName)
             queue: Queue name
+            execution_mode: One of ``sync``, ``queued`` or ``scheduler``
             payload: Job parameters (for replay/debugging)
             metadata: Additional metadata
             job_uid: Unique job UUID (generated if not provided)
@@ -444,6 +446,13 @@ class JobTracker:
         Returns:
             int: job.id, or None if no Job model
         """
+        allowed_modes = {"sync", "queued", "scheduler"}
+        if execution_mode not in allowed_modes:
+            allowed = ", ".join(sorted(allowed_modes))
+            raise ValueError(
+                f"execution_mode must be one of {allowed}; "
+                f"got {execution_mode!r}."
+            )
         try:
             if not self.job_model:
                 return None
@@ -455,11 +464,11 @@ class JobTracker:
             # Enrich metadata with pipeline_id from ExecutionContext
             from cara.context import ExecutionContext
 
-            enriched_metadata = metadata or {}
+            enriched_metadata = dict(metadata or {})
             pipeline_id = ExecutionContext.get_job_id()
             if pipeline_id:
                 enriched_metadata["pipeline_id"] = pipeline_id
-            enriched_metadata["sync_execution"] = True
+            enriched_metadata["execution_mode"] = execution_mode
 
             job_record = self.job_model.create(
                 {
@@ -481,7 +490,7 @@ class JobTracker:
             return job_record.id
 
         except Exception as e:
-            Log.warning("Failed to create sync job record: %s", str(e))
+            Log.warning("Failed to create job record: %s", str(e))
             return None
 
     def update_job_status(self, job_id: int, status: str) -> None:
@@ -492,18 +501,99 @@ class JobTracker:
             job_id: Job ID to update
             status: New status (pending, processing, completed, failed)
         """
-        if not self.job_model:
-            return
+        self._update_job_status(job_id, status, strict=False)
 
-        # Get job instance and update directly (immediate persistence)
+    def update_job_status_strict(self, job_id: int, status: str) -> None:
+        """Persist an AMQP settlement fence or fail without ambiguity."""
+        self._update_job_status(job_id, status, strict=True)
+
+    def require_job_status_strict(self, job_id: int, status: str) -> None:
+        """Verify durable workflow state without mutating it."""
+        if not self.job_model:
+            raise RuntimeError(
+                "JobTracker requires an injected job model for AMQP settlement."
+            )
         job_record = self.job_model.find(job_id)
         if not job_record:
+            raise RuntimeError(f"Tracked queue job {job_id} does not exist.")
+        if str(job_record.status) != str(status):
+            raise RuntimeError(
+                f"Tracked queue job {job_id} is {job_record.status!r}; "
+                f"expected {status!r}."
+            )
+
+    def ensure_retry_progress_strict(self, job_id: int) -> None:
+        """Accept monotonic retry progress and repair only stale ``pending``.
+
+        The retry source is terminal once its child delivery commits. A source
+        redelivery may therefore observe the shared tracker after that child
+        already moved to processing or terminal state. Exact equality with the
+        intermediate ``retrying`` value would poison-loop the broker message.
+        """
+        if not self.job_model:
+            raise RuntimeError(
+                "JobTracker requires an injected job model for AMQP settlement."
+            )
+
+        accepted = {
+            str(getattr(self.job_model, "STATUS_RETRYING", "retrying")),
+            str(getattr(self.job_model, "STATUS_PROCESSING", "processing")),
+            str(getattr(self.job_model, "STATUS_COMPLETED", "completed")),
+            str(getattr(self.job_model, "STATUS_SUCCESS", "success")),
+            str(getattr(self.job_model, "STATUS_FAILED", "failed")),
+            str(getattr(self.job_model, "STATUS_CANCELLED", "cancelled")),
+        }
+        pending = str(getattr(self.job_model, "STATUS_PENDING", "pending"))
+        job_record = self.job_model.find(job_id)
+        if not job_record:
+            raise RuntimeError(f"Tracked queue job {job_id} does not exist.")
+        current = str(job_record.status)
+        if current in accepted:
+            return
+        if current != pending:
+            raise RuntimeError(
+                f"Tracked queue job {job_id} is {current!r}; "
+                "expected monotonic retry progress."
+            )
+
+        self.job_model.where("id", job_id).where("status", pending).update(
+            {
+                "status": getattr(
+                    self.job_model,
+                    "STATUS_RETRYING",
+                    "retrying",
+                ),
+                "updated_at": pendulum.now("UTC"),
+            }
+        )
+        persisted = self.job_model.find(job_id)
+        if not persisted or str(persisted.status) not in accepted:
+            raise RuntimeError(
+                f"Tracked queue job {job_id} did not converge to retry progress."
+            )
+
+    def _update_job_status(
+        self,
+        job_id: int,
+        status: str,
+        *,
+        strict: bool,
+    ) -> None:
+        if not self.job_model:
+            if strict:
+                raise RuntimeError(
+                    "JobTracker requires an injected job model for AMQP settlement."
+                )
             return
 
-        # Update job attributes
+        job_record = self.job_model.find(job_id)
+        if not job_record:
+            if strict:
+                raise RuntimeError(f"Tracked queue job {job_id} does not exist.")
+            return
+
         job_record.status = status
 
-        # Use model constants for conditional updates
         if status == self.job_model.STATUS_PROCESSING:
             job_record.started_at = pendulum.now("UTC")
         elif (
@@ -512,5 +602,25 @@ class JobTracker:
         ):
             job_record.completed_at = pendulum.now("UTC")
 
-        # Save immediately (persists to database)
         job_record.save()
+        if strict:
+            persisted = self.job_model.find(job_id)
+            if not persisted or getattr(persisted, "status", None) != status:
+                raise RuntimeError(
+                    f"Tracked queue job {job_id} did not persist {status!r} status."
+                )
+
+    def is_job_completed(self, job_id: int) -> bool:
+        """Return the durable completion fence for stale AMQP redelivery."""
+        if not self.job_model:
+            raise RuntimeError(
+                "JobTracker requires an injected job model for AMQP recovery."
+            )
+        job_record = self.job_model.find(job_id)
+        if not job_record:
+            raise RuntimeError(f"Tracked queue job {job_id} does not exist.")
+        completed = {
+            getattr(self.job_model, "STATUS_COMPLETED", "completed"),
+            getattr(self.job_model, "STATUS_SUCCESS", "success"),
+        }
+        return getattr(job_record, "status", None) in completed

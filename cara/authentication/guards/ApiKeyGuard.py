@@ -333,17 +333,11 @@ class ApiKeyGuard(Guard):
     def _check_rate_limit(self, api_key: str) -> bool:
         """Check if API key is within rate limits.
 
-        Counter is written via ``Cache.increment`` (Redis INCRBY), which
-        stores a raw integer string. Reading the same key via
-        ``Cache.get`` runs the pickle decoder against that raw string,
-        fails to unpickle, and the driver's corrupt-entry self-heal
-        deletes the key and returns the default. The result: every
-        rate-limit check observed 0 attempts and the limiter never
-        engaged — an attacker with one valid API key could exceed the
-        configured budget by an unbounded factor. The canonical "read
-        counter" idiom in this codebase is ``Cache.increment(key, 0,
-        ttl)``: an INCRBY by 0 returns the current value without
-        touching the pickle codec and materialises a missing key as 0.
+        Counter is written via ``Cache.increment`` (Redis INCRBY) in the
+        driver's dedicated counter namespace. The canonical read-counter
+        idiom is ``Cache.increment(key, 0, ttl)``: an INCRBY by 0 returns
+        the current value without crossing into the authenticated value
+        namespace and materialises a missing key as 0.
         Pass the same TTL as ``_record_usage`` so the read doesn't
         accidentally extend the window past its intended expiry.
         """

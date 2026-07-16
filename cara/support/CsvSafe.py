@@ -28,11 +28,9 @@ from __future__ import annotations
 from typing import Any
 
 # Excel / Sheets / Numbers all treat these as formula-start triggers
-# when they appear as the FIRST non-whitespace character of a cell.
-# Leading TAB / CR get stripped by the parser, so a cell beginning
-# with ``"\t=2+2"`` still resolves to a formula — the trigger set must
-# include the whitespace prefixes too. Other whitespace (space, LF)
-# does NOT lift the trigger, so we don't add them here.
+# when they appear as the first character of a cell. TAB and CR are
+# themselves OWASP-listed triggers; they are neutralized regardless of the
+# following byte because spreadsheet importers may discard them first.
 _FORMULA_TRIGGERS: tuple[str, ...] = ("=", "+", "-", "@")
 _WHITESPACE_TRIGGERS: tuple[str, ...] = ("\t", "\r")
 
@@ -58,17 +56,6 @@ def defuse_csv_cell(value: Any) -> Any:
     if not value:
         return value
 
-    # Strip ONLY the whitespace triggers (TAB / CR) so we can inspect
-    # the first non-trigger byte. Leading regular spaces / newlines
-    # are not formula triggers and stay in the value untouched.
-    probe = value
-    stripped = 0
-    while probe and probe[0] in _WHITESPACE_TRIGGERS:
-        probe = probe[1:]
-        stripped += 1
-
-    if probe and probe[0] in _FORMULA_TRIGGERS:
-        return f"'{value}"
-    if stripped > 0 and probe and probe[0] in _FORMULA_TRIGGERS:
+    if value[0] in _FORMULA_TRIGGERS + _WHITESPACE_TRIGGERS:
         return f"'{value}"
     return value

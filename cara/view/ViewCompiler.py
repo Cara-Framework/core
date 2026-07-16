@@ -407,28 +407,19 @@ class ViewCompiler:
 
     def compile_control_structure(self, directive: str, expression: str) -> str:
         """Compile control structure directive."""
-        if directive == "if":
-            return f"if {expression}:"
-        elif directive == "elseif":
-            return f"elif {expression}:"
-        elif directive == "else":
-            return "else:"
-        elif directive == "endif":
-            return "pass"
-        elif directive == "for":
-            return f"for {expression}:"
-        elif directive == "endfor":
-            return "pass"
-        elif directive == "foreach":
-            return f"for {expression}:"
-        elif directive == "endforeach":
-            return "pass"
-        elif directive == "while":
-            return f"while {expression}:"
-        elif directive == "endwhile":
-            return "pass"
-        else:
-            return f"# {directive} {expression}"
+        structures = {
+            "else": "else:",
+            "elseif": f"elif {expression}:",
+            "endfor": "pass",
+            "endforeach": "pass",
+            "endif": "pass",
+            "endwhile": "pass",
+            "for": f"for {expression}:",
+            "foreach": f"for {expression}:",
+            "if": f"if {expression}:",
+            "while": f"while {expression}:",
+        }
+        return structures.get(directive, f"# {directive} {expression}")
 
     def escape_string(self, value: str) -> str:
         """Escape string for Python code."""

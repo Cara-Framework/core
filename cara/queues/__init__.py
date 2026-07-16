@@ -1,7 +1,6 @@
-from .Batch import Batch, BatchAware
 from .Bus import Bus
-from .Chain import Chain
 from .helpers import safe_dispatch
+from .JobClassResolver import JobClassResolver
 from .JobContext import JobContext
 from .JobInstantiation import instantiate_job
 from .Queue import Queue
@@ -10,10 +9,8 @@ from .QueueProvider import QueueProvider
 from .retry import MakesRetryable
 
 __all__ = [
-    "Batch",
-    "BatchAware",
     "Bus",
-    "Chain",
+    "JobClassResolver",
     "JobContext",
     "MakesRetryable",
     "Queue",

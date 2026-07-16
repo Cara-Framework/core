@@ -179,7 +179,7 @@ class MySQLPlatform(Platform):
             add_columns = []
 
             for (
-                name,
+                _name,
                 column,
             ) in table.get_added_columns().items():
                 if column.length:
@@ -328,7 +328,7 @@ class MySQLPlatform(Platform):
                 )
 
         if table.added_indexes:
-            for name, index in table.added_indexes.items():
+            for _name, index in table.added_indexes.items():
                 sql.append(
                     "CREATE INDEX {name} ON {table}({column})".format(
                         name=index.name,
@@ -339,7 +339,7 @@ class MySQLPlatform(Platform):
 
         if table.added_constraints:
             for (
-                name,
+                _name,
                 constraint,
             ) in table.added_constraints.items():
                 if constraint.constraint_type == "unique":

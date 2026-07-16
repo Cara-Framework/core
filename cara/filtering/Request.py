@@ -65,8 +65,9 @@ concrete filters know how to read its fields.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterable, Mapping
-from typing import Any, ClassVar, Union
+from typing import Any, ClassVar
 
 from cara.http import FormRequest
 
@@ -78,7 +79,7 @@ from .Sorter import SortRegistry
 # Type alias — endpoint relations may be a canonical ``RelationSet``
 # (preferred) or a bare iterable of strings (back-compat for ad-hoc
 # inline tuples). ``Pipeline.with_`` accepts both.
-Relations = Union[RelationSet, Iterable[str]]
+Relations = RelationSet | Iterable[str]
 
 
 # Sensible default — every list endpoint we've ever shipped uses
@@ -280,12 +281,8 @@ class FilteredFormRequest(FormRequest):
         # Bind a pipeline factory so controllers can do
         # ``request.pipeline(Model.active()).paginate(...)``
         # without re-plumbing the filter set / sort registry / eager.
-        try:
+        with contextlib.suppress(AttributeError, TypeError):
             request.pipeline = self._pipeline_factory(parsed, sort_name)
-        except (AttributeError, TypeError):
-            # Frozen request — callers can build a pipeline manually
-            # using validated["_parsed_filters"] / _sort_name above.
-            pass
 
         return validated
 

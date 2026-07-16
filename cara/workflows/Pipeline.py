@@ -1,19 +1,20 @@
 """
 Unified Pipeline System for Cara Framework.
 
-Supports both command workflows and job chaining with topic exchange routing.
-Laravel-inspired pipeline pattern with async support and priority routing.
+Supports synchronous command workflows. The legacy async chain and parallel
+types fail closed until durable signed orchestration descriptors exist.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import uuid
 from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
-from cara.exceptions import InvalidArgumentException
+from cara.exceptions import InvalidArgumentException, QueueException
 from cara.facades import Log
 
 
@@ -30,8 +31,8 @@ class PipelineType(Enum):
     """Pipeline execution types."""
 
     SYNC = "sync"  # Execute immediately (commands)
-    ASYNC_CHAIN = "chain"  # Queue jobs in sequence
-    ASYNC_PARALLEL = "parallel"  # Queue jobs in parallel
+    ASYNC_CHAIN = "chain"  # Reserved; dispatch fails closed
+    ASYNC_PARALLEL = "parallel"  # Reserved; dispatch fails closed
 
 
 class PipelineStep:
@@ -84,11 +85,9 @@ class Pipeline:
 
     Features:
     - Command workflows (sync execution)
-    - Job chaining (async with routing keys)
     - Conditional steps
-    - Error handling and retries
+    - Error handling
     - Progress tracking
-    - Priority-based routing
 
     Usage:
         # Command workflow
@@ -97,18 +96,8 @@ class Pipeline:
             .add(SeedCategories)\
             .execute()
 
-        # Job chain
-        Pipeline.create(PipelineType.ASYNC_CHAIN)\
-            .add(CollectJob, "feed", priority="high")\
-            .add(EnrichJob, priority="high")\
-            .add(ValidateJob, priority="high")\
-            .dispatch()
-
-        # Parallel jobs
-        Pipeline.create(PipelineType.ASYNC_PARALLEL)\
-            .add(CollectJob, "feed", priority="high")\
-            .add(CollectJob, "query", "term", priority="high")\
-            .dispatch()
+    ``ASYNC_CHAIN`` and ``ASYNC_PARALLEL`` remain reserved enum values; using
+    either raises ``QueueException`` instead of silently dropping work.
     """
 
     def __init__(self, pipeline_type: PipelineType, name: str | None = None):
@@ -195,7 +184,7 @@ class Pipeline:
 
         Log.info("📡 Dispatching pipeline: %s Type: %s", self.name, self.pipeline_type.value, category='cara.pipeline')
 
-        # For async pipelines, we queue the first job and let it chain
+        # Reserved async modes fail closed in their dispatch helpers.
         if self.pipeline_type == PipelineType.ASYNC_CHAIN:
             return self._dispatch_chain()
         elif self.pipeline_type == PipelineType.ASYNC_PARALLEL:
@@ -305,13 +294,7 @@ class Pipeline:
         return result
 
     async def _execute_async_chain(self) -> dict[str, Any]:
-        """Execute pipeline as async chain (sequential job execution).
-
-        Delegates to :meth:`_dispatch_chain` — the previous implementation
-        pushed every step to the queue immediately in a loop, which is
-        parallel execution wearing a chain label: step N+1 could run before
-        (or during) step N.
-        """
+        """Validate a reserved async chain request before rejecting dispatch."""
         if not self.steps:
             return {"success": False, "error": "No steps to execute"}
 
@@ -341,85 +324,20 @@ class Pipeline:
         return self._dispatch_parallel()
 
     def _dispatch_chain(self, steps: list[PipelineStep] | None = None) -> dict[str, Any]:
-        """Dispatch the steps as a real sequential chain.
-
-        Uses ``cara.queues.Chain`` (ChainRunnerJob) — the framework's actual
-        chain mechanism. The previous implementation attached follow-ups via
-        ``pending.chain(...)``, a method PendingDispatch never had, so every
-        step after the first was silently dropped.
-        """
-        steps = self.steps if steps is None else steps
-        if not steps:
-            return {"success": False, "error": "No steps to dispatch"}
-
-        try:
-            jobs = []
-            for step in steps:
-                if not hasattr(step.step_class, "dispatch"):
-                    raise InvalidArgumentException(
-                        f"Step {step.step_class.__name__} is not a dispatchable job"
-                    )
-                jobs.append(step.step_class(*step.args, **step.kwargs))
-
-            from cara.queues.Chain import Chain
-
-            Chain(jobs).dispatch()
-
-            Log.info("Chain started: %s (%s follow-ups)", steps[0].step_class.__name__, len(steps) - 1, category='cara.pipeline')
-
-            return {
-                "success": True,
-                "chain_started": True,
-                "pipeline_name": self.name,
-                "total_steps": len(steps),
-                "chained_steps": len(steps) - 1,
-            }
-
-        except Exception as e:
-            Log.error("Chain dispatch failed: %s", str(e), category='cara.pipeline', exc_info=True)
-            return {"success": False, "error": str(e)}
+        raise QueueException(
+            "Async pipeline chains are unsupported until durable JSON "
+            "chain descriptors are implemented."
+        )
 
     def _dispatch_parallel(self) -> dict[str, Any]:
-        """Dispatch jobs in parallel."""
-        job_ids = []
-
-        for step in self.steps:
-            try:
-                if hasattr(step.step_class, "dispatch"):
-                    job_dispatch = step.step_class.dispatch(*step.args, **step.kwargs)
-
-                    if step.routing_key:
-                        job_id = job_dispatch.with_routing_key(step.routing_key)
-                    else:
-                        job_id = job_dispatch
-
-                    job_ids.append(
-                        {
-                            "job": step.step_class.__name__,
-                            "job_id": job_id,
-                            "routing_key": step.routing_key,
-                            "priority": step.priority,
-                        }
-                    )
-
-                    Log.info("📡 Dispatched: %s [%s]", step.step_class.__name__, job_id, category='cara.pipeline')
-
-            except Exception as e:
-                Log.error("❌ Failed to dispatch %s: %s", step.step_class.__name__, str(e), category='cara.pipeline')
-
-        Log.info("🚀 Parallel dispatch completed: %s jobs", len(job_ids), category='cara.pipeline')
-
-        return {
-            "success": len(job_ids) > 0,
-            "jobs_dispatched": len(job_ids),
-            "job_ids": job_ids,
-            "pipeline_name": self.name,
-            "pipeline_type": self.pipeline_type.value,
-        }
+        raise QueueException(
+            "Async parallel pipelines are unsupported until durable JSON "
+            "batch descriptors are implemented."
+        )
 
     async def _safe_call(self, func, *args, **kwargs):
         """Safely call a function (sync or async)."""
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return await func(*args, **kwargs)
         else:
             return func(*args, **kwargs)

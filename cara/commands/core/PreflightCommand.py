@@ -228,26 +228,13 @@ def _required_config_specs() -> list[tuple[str, Callable[[], object]]]:
 
 
 def check_required_config_present() -> CheckResult:
-    """Every REQUIRED infra config key must be present and non-empty.
-
-    The ``database`` driver always carries a host + name; the ``cache`` and
-    ``queue`` drivers only carry a ``host`` for network drivers (redis / amqp) —
-    a ``file`` / ``async`` / ``database`` driver legitimately has none, so a
-    missing host there is skipped rather than failed.
-    """
+    """Every required production infra config key must be present and non-empty."""
     missing: list[str] = []
     for label, resolver in _required_config_specs():
         try:
             value = resolver()
         except Exception:  # noqa: BLE001 — a resolver should never abort the gate
             value = None
-        # ``host``-bearing infra keys: a driver that genuinely has no host
-        # (file cache, async queue) returns None from ``.get("host")`` — that's
-        # a legitimate non-network driver, not a missing-config error. Only the
-        # network drivers (redis/amqp/postgres) and the always-present
-        # database/meilisearch keys are asserted.
-        if "host" in label and value is None:
-            continue
         if _is_blank(value):
             missing.append(label)
 

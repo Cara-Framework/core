@@ -66,6 +66,16 @@ class MailMessage:
         self.mailable.subject(subject)
         return self
 
+    def header(self, name, value):
+        """Set one validated custom message header."""
+        self.mailable.header(name, value)
+        return self
+
+    def headers(self, values):
+        """Set validated custom message headers."""
+        self.mailable.headers(values)
+        return self
+
     def view(self, template, data=None):
         """Set view template."""
         self.mailable.view(template, data)

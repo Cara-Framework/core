@@ -11,8 +11,8 @@ import json
 from functools import lru_cache
 from typing import Any
 
-from multipart import MultipartParser
-from multipart.multipart import parse_options_header
+from python_multipart import MultipartParser
+from python_multipart.multipart import parse_options_header
 
 from cara.exceptions import BadRequestException
 from cara.http.request import UploadedFile

@@ -27,10 +27,13 @@ class CacheClearCommand(CommandBase):
         self.info("🧹 Cache Clear Operation")
 
         # Production safety check
-        if self._is_production() and not self.option("force"):
-            if not self._confirm_production():
-                self.info("❌ Cache clear aborted by user.")
-                return
+        if (
+            self._is_production()
+            and not self.option("force")
+            and not self._confirm_production()
+        ):
+            self.info("❌ Cache clear aborted by user.")
+            return
 
         # Parse tags if provided
         tag_list = []

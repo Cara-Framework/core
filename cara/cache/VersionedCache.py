@@ -12,14 +12,11 @@ grows (brand/category caches, per-user notification/wishlist/history
 stamps, ...):
 
 * **read** — ``Cache.increment(key, 0, ttl)``. Counter keys are written
-  by Redis ``INCRBY`` (a raw integer string); reading them via
-  ``Cache.get`` runs the pickle decoder, fails, self-heals by deleting
-  the key, and returns the default — so the stamp never advances past 0
-  and every read collides on the ``v0`` key, serving stale data past
-  every mutation. ``increment(key, 0, ttl)`` is the canonical "read
-  counter" idiom: it doesn't touch the pickle codec and materialises a
-  missing key deterministically as 0 (with the TTL written on first
-  touch so a later bump can't orphan entries by resetting the TTL).
+  by Redis ``INCRBY`` under the driver's dedicated counter namespace.
+  ``increment(key, 0, ttl)`` is the canonical "read counter" idiom: it
+  preserves the atomic counter representation and materialises a missing
+  key deterministically as 0 (with the TTL written on first touch so a
+  later bump can't orphan entries by resetting the TTL).
 
 * **bump** — ``Cache.increment(key, 1, ttl)``. Atomic Redis ``INCRBY``,
   so two concurrent mutations can't lose a bump the way a ``Cache.get``
@@ -62,8 +59,8 @@ class VersionedCache:
     def read(self) -> int:
         """Current stamp. Materialises a missing key as 0.
 
-        ``Cache.increment(key, 0, ttl)`` — never ``Cache.get`` (which
-        can't decode an INCRBY-written counter under the Redis driver).
+        ``Cache.increment(key, 0, ttl)`` — never ``Cache.get`` (values and
+        counters intentionally occupy separate Redis namespaces).
         """
         return int(Cache.increment(self._key, 0, self._resolve_ttl()))
 

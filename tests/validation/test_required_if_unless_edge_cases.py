@@ -43,9 +43,8 @@ from __future__ import annotations
 
 import pytest
 
-from cara.validation.rules import RequiredIfRule
+from cara.validation.rules import RequiredIfRule, RequiredUnlessRule
 from cara.validation.rules.RequiredIfRule import _values_match
-from cara.validation.rules import RequiredUnlessRule
 
 # ── _values_match — the underlying comparison ───────────────────────
 

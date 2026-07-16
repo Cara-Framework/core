@@ -189,7 +189,10 @@ class MakeJobCommand(CommandBase):
             )
             self.info("")
             self.info("   Traditional queue dispatch:")
-            self.info(f"     {class_name}.dispatch().with_routing_key('processing.high')")
+            self.info(
+                f"     {class_name}.dispatch()"
+                ".with_routing_key('processing.high').send()"
+            )
             self.info("")
             self.info("   Explicit sync (testing/debugging):")
             self.info("     from cara.context import ExecutionContext")

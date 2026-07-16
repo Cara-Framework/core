@@ -170,23 +170,36 @@ class Response(BaseResponse):
     def paginated(
         self,
         data: Any,
-        total: int,
+        *,
         limit: int,
-        offset: int = 0,
+        has_more: bool,
+        next_cursor: str | None,
+        prev_cursor: str | None = None,
         status: int = 200,
         headers: dict[str, str] | None = None,
         **extra_meta: Any,
     ) -> Response:
-        """JSON response for paginated list endpoints.
-
-        Wraps ``data`` under ``"data"`` and emits the standard pagination
-        envelope under ``"meta"``. ``extra_meta`` is merged into the meta
-        object (e.g. ``response.paginated(items, total, limit, offset,
-        sort_by="recent")``).
-
-        Any resource collection exposing ``to_array()`` / ``to_list()`` is
-        serialized automatically.
-        """
+        """Cursor-paginated collection with ``LIMIT n+1`` lookahead metadata."""
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ValueError("cursor pagination limit must be between 1 and 100")
+        if not isinstance(has_more, bool):
+            raise TypeError("has_more must be boolean")
+        if next_cursor is not None and (
+            not isinstance(next_cursor, str) or not next_cursor
+        ):
+            raise TypeError("next_cursor must be a non-empty string or None")
+        if prev_cursor is not None and (
+            not isinstance(prev_cursor, str) or not prev_cursor
+        ):
+            raise TypeError("prev_cursor must be a non-empty string or None")
+        if has_more and not next_cursor:
+            raise ValueError("has_more=True requires next_cursor")
+        if not has_more and next_cursor is not None:
+            raise ValueError("next_cursor must be None on the final page")
         if hasattr(data, "to_array") and callable(data.to_array):
             serialized = data.to_array()
         elif hasattr(data, "to_list") and callable(data.to_list):
@@ -195,10 +208,12 @@ class Response(BaseResponse):
             serialized = data
 
         meta: dict[str, Any] = {
-            "total": int(total),
-            "limit": int(limit),
-            "offset": int(offset),
+            "limit": limit,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
         }
+        if prev_cursor is not None:
+            meta["prev_cursor"] = prev_cursor
         if extra_meta:
             meta.update(extra_meta)
 

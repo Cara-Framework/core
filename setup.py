@@ -30,7 +30,7 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: Internet :: WWW/HTTP :: ASGI :: Application",
     ],
-    python_requires=">=3.10",
+    python_requires=">=3.14",
     # CORE runtime deps — what the framework imports on every code path that a
     # service uses regardless of whether it talks to a DB or a queue: config /
     # env loading, the CLI, HTTP serving, templating, logging, metrics, crypto
@@ -55,7 +55,6 @@ setup(
         "requests>=2.31",  # http client (sync)
         "loguru>=0.7",  # logging sink
         "cryptography>=42.0",  # cara.encryption
-        "pycryptodome>=3.23",  # cara.encryption.Crypt
         "PyJWT>=2.13",  # cara.authentication JWT guard/token support
         "Pillow>=12.2",  # cara.support.Image
         "bcrypt>=4.0",  # cara.encryption.Hash
@@ -78,9 +77,11 @@ setup(
             "redis>=4.0",
         ],
         "dev": [
-            "pytest>=8.0",
-            "pytest-asyncio>=0.23",
-            "ruff>=0.6",
+            "bandit==1.9.4",
+            "pip-audit==2.10.1",
+            "pytest==9.1.1",
+            "pytest-asyncio==1.4.0",
+            "ruff==0.15.21",
         ],
         # Everything: a full backend service (services/api) wants db + queue.
         "all": [

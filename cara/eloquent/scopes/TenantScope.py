@@ -19,6 +19,16 @@ class TenantScope(BaseScope):
         builder.set_global_scope(
             "_tenant_filter", self._apply_tenant_filter, action="select"
         )
+        builder.set_global_scope(
+            "_tenant_filter_update",
+            self._apply_tenant_filter,
+            action="update",
+        )
+        builder.set_global_scope(
+            "_tenant_filter_delete",
+            self._apply_tenant_filter,
+            action="delete",
+        )
 
         # Apply tenant_id injection to create/insert queries
         builder.set_global_scope(
@@ -36,6 +46,8 @@ class TenantScope(BaseScope):
     def on_remove(self, builder):
         """Remove tenant scoping."""
         builder.remove_global_scope("_tenant_filter", action="select")
+        builder.remove_global_scope("_tenant_filter_update", action="update")
+        builder.remove_global_scope("_tenant_filter_delete", action="delete")
         builder.remove_global_scope("_tenant_injector", action="insert")
         builder.remove_global_scope("_tenant_injector_bulk", action="bulk_create")
 
@@ -48,13 +60,15 @@ class TenantScope(BaseScope):
         of skipping the filter was a data-leak vector.
         """
         try:
-            tenant_id = self._get_current_tenant_id()
+            from cara.context import Tenancy
 
-            if tenant_id is not None:
-                table_name = builder.get_table_name()
-                return builder.where(f"{table_name}.{self.tenant_column}", tenant_id)
-
-            return builder
+            state = Tenancy.state()
+            if state is Tenancy.UNSET:
+                return builder.where_raw("1 = 0")
+            if state is Tenancy.CENTRAL:
+                return builder
+            table_name = builder.get_table_name()
+            return builder.where(f"{table_name}.{self.tenant_column}", state)
 
         except Exception:
             _logger.error(
@@ -71,10 +85,29 @@ class TenantScope(BaseScope):
         subsequent scoped queries and constitute a data integrity failure).
         """
         try:
-            tenant_id = self._get_current_tenant_id()
+            from cara.context import Tenancy
 
-            if tenant_id is not None and self.tenant_column not in builder._creates:
-                builder._creates.update({self.tenant_column: tenant_id})
+            state = Tenancy.state()
+            creates = builder._creates
+            if state is Tenancy.UNSET:
+                raise RuntimeError(
+                    "Cannot insert a tenant-scoped model with UNSET tenancy."
+                )
+            if state is Tenancy.CENTRAL:
+                if self.tenant_column not in creates:
+                    raise RuntimeError(
+                        "Central tenant-scoped inserts must explicitly include "
+                        f"{self.tenant_column} (None is allowed)."
+                    )
+                return builder
+
+            explicit = creates.get(self.tenant_column)
+            if explicit is None:
+                creates[self.tenant_column] = state
+            elif explicit != state:
+                raise RuntimeError(
+                    "Tenant-scoped insert attempted a cross-tenant write."
+                )
 
             return builder
 
@@ -96,12 +129,28 @@ class TenantScope(BaseScope):
         resolution failure fails CLOSED.
         """
         try:
-            tenant_id = self._get_current_tenant_id()
+            from cara.context import Tenancy
 
-            if tenant_id is not None:
-                for row in builder._creates:
-                    if row.get(self.tenant_column) is None:
-                        row[self.tenant_column] = tenant_id
+            state = Tenancy.state()
+            if state is Tenancy.UNSET:
+                raise RuntimeError(
+                    "Cannot bulk-insert tenant-scoped models with UNSET tenancy."
+                )
+            for row in builder._creates:
+                if state is Tenancy.CENTRAL:
+                    if self.tenant_column not in row:
+                        raise RuntimeError(
+                            "Central tenant-scoped bulk inserts must explicitly "
+                            f"include {self.tenant_column} in every row."
+                        )
+                    continue
+                explicit = row.get(self.tenant_column)
+                if explicit is None:
+                    row[self.tenant_column] = state
+                elif explicit != state:
+                    raise RuntimeError(
+                        "Tenant-scoped bulk insert attempted a cross-tenant write."
+                    )
 
             return builder
 

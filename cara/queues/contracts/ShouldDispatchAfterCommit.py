@@ -10,8 +10,8 @@ class ShouldDispatchAfterCommit:
     pushed to the broker IMMEDIATELY — a worker can pick it up before the
     transaction commits (the row it needs doesn't exist yet), and if the
     transaction rolls back the job still runs against undone work
-    (a "ghost job"). Marking the job class with this contract (or calling
-    ``.after_commit()`` on the PendingDispatch) routes the actual push
+    (a "ghost job"). Marking the job class with this contract (or terminating a
+    PendingDispatch with ``.after_commit().send()``) routes the actual push
     through ``DB.after_commit``:
 
     * inside a transaction → pushed right after the OUTERMOST commit

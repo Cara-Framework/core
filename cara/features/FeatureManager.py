@@ -55,11 +55,11 @@ _DEFAULT_CACHE_TTL = 120  # seconds — flush() is the fast path, TTL the backst
 def bucket(key: str, identifier: str) -> int:
     """Deterministically bucket ``identifier`` into 0..99 for flag ``key``.
 
-    Stable across processes and runs (md5, not the salted built-in
+    Stable across processes and runs (SHA-256, not the salted built-in
     ``hash``) — a user inside the rollout stays inside as the percentage
     grows, and only flips out if it shrinks below their bucket.
     """
-    digest = hashlib.md5(f"{key}:{identifier}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{key}:{identifier}".encode()).hexdigest()
     return int(digest, 16) % 100
 
 

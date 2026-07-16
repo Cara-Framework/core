@@ -7,6 +7,7 @@ Users can easily register global middleware, groups, and aliases.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from cara.exceptions import ConfigurationException
@@ -130,10 +131,8 @@ class MiddlewareRegistry:
             Self for method chaining
         """
         if group_name in self.config["groups"]:
-            try:
+            with contextlib.suppress(ValueError):
                 self.config["groups"][group_name].remove(middleware)
-            except ValueError:
-                pass  # Middleware not in group
         return self
 
     def remove_alias(self, alias_name: str) -> MiddlewareRegistry:

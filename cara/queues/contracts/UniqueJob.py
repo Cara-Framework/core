@@ -102,11 +102,8 @@ class UniqueJob:
         try:
             from cara.facades import Cache
 
-            # Cache.add returns True if key was not set (= acquired lock)
-            if Cache.add(cache_key, "1", ttl):
-                return True
-            # Lock already exists in Cache
-            return False
+            # Cache.add returns True if key was not set (= acquired lock).
+            return Cache.add(cache_key, "1", ttl)
         except Exception:  # noqa: BLE001 — hot-path lock primitive must never raise
             # Cache-facade ImportError at boot OR a runtime Cache
             # failure (Redis ConnectionError, TimeoutError, misconfigured
@@ -151,6 +148,20 @@ class UniqueJob:
             pass
 
         # Also remove from in-memory fallback
+        with _unique_lock:
+            _unique_locks.pop(unique_id, None)
+
+    @classmethod
+    def release_unique_lock_strict(cls, unique_id: str) -> None:
+        """Release the distributed lock for terminal AMQP settlement.
+
+        Unlike the best-effort generic helper, this path surfaces a cache
+        outage so the worker can keep the broker delivery open and retry
+        before acknowledging a completed/dead delivery.
+        """
+        from cara.facades import Cache
+
+        Cache.forget(f"unique_job:{unique_id}")
         with _unique_lock:
             _unique_locks.pop(unique_id, None)
 

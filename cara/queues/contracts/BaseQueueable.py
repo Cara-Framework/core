@@ -24,8 +24,8 @@ class BaseQueueable(Queueable, ShouldQueue):
     - Automatic serialization handling
     """
 
-    # Default queue settings
-    default_queue: str = "default"
+    # Every executable job must opt into one canonical queue explicitly.
+    default_queue: str | None = None
     default_delay: int | None = None
     default_retry_attempts: int = 3
 
@@ -47,7 +47,7 @@ class BaseQueueable(Queueable, ShouldQueue):
         pass
 
     @property
-    def queue_name(self) -> str:
+    def queue_name(self) -> str | None:
         """Get the queue name for this job."""
         return self._queue_name
 
@@ -69,49 +69,10 @@ class BaseQueueable(Queueable, ShouldQueue):
         return self
 
     def on_queue(self, queue: str) -> BaseQueueable:
-        """
-        Set the queue for this job and auto-dispatch (Laravel pattern).
-
-        In Laravel, method chaining automatically queues the job.
-        This maintains the same behavior.
-        """
+        """Set the canonical queue without dispatching."""
         self.queue_name = queue
         self._chained = True
-
-        # Auto-dispatch when chaining is used (Laravel pattern)
-        self._auto_dispatch()
         return self
-
-    def _auto_dispatch(self):
-        """Auto-dispatch job when method chaining is used (Laravel pattern)."""
-        if not self._chained:
-            return
-
-        try:
-            from cara.facades import Queue
-
-            Queue.push(self)
-        except Exception as e:
-            # Fallback to sync execution if queue fails
-            try:
-                from cara.facades import Log
-
-                Log.warning("Queue failed, running synchronously: %s", str(e))
-            except ImportError:
-                pass
-
-            # Run synchronously as fallback
-            if hasattr(self, "handle"):
-                import asyncio
-
-                result = self.handle()
-                if asyncio.iscoroutine(result):
-                    # Async handle in sync fallback — run via event loop
-                    try:
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(result)
-                    except RuntimeError:
-                        asyncio.run(result)
 
     def display_name(self) -> str:
         """
@@ -154,18 +115,26 @@ class BaseQueueable(Queueable, ShouldQueue):
 
         return options
 
-    def failed(self, job_data: Any, error: Exception) -> None:
+    async def failed(
+        self,
+        job_data: Any,
+        error: Exception,
+        *,
+        idempotency_key: str,
+    ) -> None:
         """
         Handle job failure.
-        Override this in subclasses for custom failure handling.
+
+        Overrides must deduplicate external effects with ``idempotency_key``.
+        The terminal-hook outbox retries after crashes with the same key.
         """
+        if not isinstance(idempotency_key, str) or not idempotency_key:
+            raise ValueError("failed() requires a non-empty idempotency_key.")
         # Import here to avoid circular imports
         try:
             from cara.facades import Log
 
             Log.error("%s failed: %s", self.__class__.__name__, str(error))
-            if hasattr(self, "payload"):
-                Log.error("Job payload: %s", self.payload)
         except ImportError:
             # Silently fail if Log facade not available - this is a framework component
             pass

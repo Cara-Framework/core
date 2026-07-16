@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 from typing import Any
+from urllib.parse import urlencode
 
 from cara.notifications.channels.BaseChannel import BaseChannel
 
@@ -81,6 +82,9 @@ class MailChannel(BaseChannel):
                 message = self.mail_manager.to(recipient)
                 message.subject(f"Notification: {notification.__class__.__name__}")
                 message.text(mail_message)
+                view_data: dict[str, Any] = {}
+                self._inject_default_urls(view_data, notifiable)
+                self._apply_headers(message, {}, view_data)
 
                 # Apply default settings
                 if self.from_address:
@@ -93,6 +97,8 @@ class MailChannel(BaseChannel):
             # If mail_message is a dict, use it to build the email
             elif isinstance(mail_message, dict):
                 message = self.mail_manager.to(recipient)
+                view_data = dict(mail_message.get("data") or {})
+                self._inject_default_urls(view_data, notifiable)
 
                 if "subject" in mail_message:
                     message.subject(mail_message["subject"])
@@ -104,22 +110,13 @@ class MailChannel(BaseChannel):
                     message.html(mail_message["html"])
 
                 if "view" in mail_message:
-                    # Templates assume ``unsubscribe_url`` / ``preferences_url``
-                    # / ``frontend_url`` exist in the render context;
-                    # Jinja's ``{{ unsubscribe_url | default('#') }}``
-                    # fallback in the stock notification templates
-                    # paints a dead ``#`` link when the notification's
-                    # ``to_mail()`` payload forgets to set them, which
-                    # is a CAN-SPAM / GDPR liability (the law calls for
-                    # a working unsubscribe affordance, not a no-op
-                    # anchor). Enrich the data dict with sensible
-                    # defaults derived from the framework config +
-                    # notifiable before render. Existing keys win, so
-                    # notifications that DO supply their own URLs are
-                    # untouched.
-                    view_data = dict(mail_message.get("data") or {})
-                    self._inject_default_urls(view_data, notifiable)
                     message.view(mail_message["view"], view_data)
+
+                self._apply_headers(
+                    message,
+                    mail_message.get("headers") or {},
+                    view_data,
+                )
 
                 # Use message from or fallback to channel defaults
                 from_addr = mail_message.get("from", self.from_address)
@@ -142,6 +139,13 @@ class MailChannel(BaseChannel):
             elif hasattr(mail_message, "to_dict"):
                 message = self.mail_manager.to(recipient)
                 mail_data = mail_message.to_dict()
+                view_data = {}
+                self._inject_default_urls(view_data, notifiable)
+                self._apply_headers(
+                    message,
+                    mail_data.get("headers") or {},
+                    view_data,
+                )
 
                 if mail_data.get("subject"):
                     message.subject(mail_data["subject"])
@@ -232,13 +236,9 @@ class MailChannel(BaseChannel):
         Honors any value the notification already supplied in
         ``to_mail()['data']`` — those wins; we only fill in the gaps.
 
-        ``unsubscribe_url`` carries an HMAC token per
-        ``(user_id, email)`` matching the existing
-        ``EmailChannel.send`` token shape, so the unsubscribe handler
-        can verify both delivery paths with the same secret. When the
-        secret isn't configured we fall back to the user-facing
-        preferences page rather than emitting a token-less link, so
-        an unsubscribed user still has a working route.
+        ``unsubscribe_url`` points to the human confirmation page, while
+        ``unsubscribe_one_click_url`` points directly to the RFC 8058 POST
+        processor. Both carry an HMAC over the opaque user identity and email.
         """
         try:
             from cara.configuration import config
@@ -255,13 +255,10 @@ class MailChannel(BaseChannel):
         view_data.setdefault("frontend_url", frontend_url)
         view_data.setdefault(
             "preferences_url",
-            f"{frontend_url}/profile/preferences",
+            f"{frontend_url}/account#notifications",
         )
 
-        if "unsubscribe_url" in view_data and view_data["unsubscribe_url"]:
-            return
-
-        user_id = getattr(notifiable, "id", None)
+        user_public_id = getattr(notifiable, "public_id", None)
         email = getattr(notifiable, "email", None) or getattr(
             notifiable,
             "email_address",
@@ -272,17 +269,47 @@ class MailChannel(BaseChannel):
         except Exception:
             secret = ""
 
-        if user_id is not None and email and secret:
+        if user_public_id and email and secret:
             token = hmac.new(
                 secret.encode("utf-8"),
-                f"{user_id}:{email}".encode(),
+                f"{user_public_id}:{email}".encode(),
                 hashlib.sha256,
             ).hexdigest()
-            view_data["unsubscribe_url"] = (
-                f"{frontend_url}/unsubscribe?user={user_id}&token={token}"
+            query = urlencode({"user": user_public_id, "token": token})
+            view_data.setdefault(
+                "unsubscribe_url",
+                f"{frontend_url}/unsubscribe?{query}",
             )
+            try:
+                processor_url = (
+                    config("app.unsubscribe_url", "") or ""
+                ).rstrip("/")
+            except Exception:
+                processor_url = ""
+            if processor_url:
+                view_data["unsubscribe_one_click_url"] = (
+                    f"{processor_url}?{query}"
+                )
         else:
-            # No HMAC available — point at the manual preferences page
-            # rather than a token-less ``/unsubscribe`` URL the handler
-            # would reject. A real link beats a dead ``#`` either way.
-            view_data["unsubscribe_url"] = f"{frontend_url}/profile/preferences#email"
+            view_data.setdefault(
+                "unsubscribe_url",
+                f"{frontend_url}/account#notifications",
+            )
+
+    @staticmethod
+    def _apply_headers(
+        message: Any,
+        explicit_headers: dict[str, str],
+        view_data: dict[str, Any],
+    ) -> None:
+        """Apply caller headers plus RFC 8058 one-click unsubscribe metadata."""
+        headers = dict(explicit_headers)
+        one_click_url = view_data.get("unsubscribe_one_click_url")
+        if one_click_url:
+            headers.setdefault("List-Unsubscribe", f"<{one_click_url}>")
+            headers.setdefault(
+                "List-Unsubscribe-Post",
+                "List-Unsubscribe=One-Click",
+            )
+        if headers:
+            message.headers(headers)

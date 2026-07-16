@@ -1,138 +1,320 @@
-"""Cursor (keyset) pagination codec — generic, domain-free.
+"""Signed, context-bound keyset pagination cursors.
 
-Companion to ``paging_rules`` — the offset-based helper stays the
-supported pattern for shallow pagination. This module adds the cursor
-path for hot endpoints where deep offsets degrade (the DB has to skip N
-rows before returning the slice).
+Clients must treat cursors as opaque.  A cursor carries the last visible
+row's sort value plus canonical id, the sort direction, and a fingerprint of
+the filtered result set.  The whole payload is authenticated with HMAC-SHA256
+using ``APP_KEY``.
 
-Cursor format
--------------
-Opaque-to-the-client base64url-encoded JSON::
-
-    cursor := base64url(utf8(json.dumps({
-        "v": <sort-value>,    # value of the sort column on the last row
-        "id": <primary-key>,  # tiebreaker on the canonical pk
-    }, sort_keys=True, separators=(',', ':'))))
-
-The structure is deliberately tiny so a paginated URL stays small.
-``sort_keys=True`` + ``separators=(',', ':')`` make the token byte-stable
-across encodes of the same logical position — useful for cache keys.
-
-The SQL-building half (``build_keyset_where``) deliberately lives in the
-app, not here: it needs an app-supplied allow-list of sortable columns to
-guard against SQL injection, which is domain knowledge. This module ships
-only the column-agnostic codec.
+Unsigned base64 JSON is not an opaque cursor: callers can edit it, reuse it
+against another endpoint/tenant/filter set, or feed an invalid comparand into
+the database.  This codec therefore validates every claim and fails closed by
+raising :class:`InvalidCursor`.
 """
 
 from __future__ import annotations
 
 import base64
-import binascii
+import hashlib
+import hmac
 import json
+import math
+import os
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
-# Cursor "values" payload — small, JSON-safe, stable. Kept loose
-# (``dict[str, Any]``) because the sort_value type varies by sort
-# column: int for ids, float for prices/scores, str for ISO dates.
-CursorPayload = dict[str, Any]
 SortDirection = Literal["asc", "desc"]
+CursorPayload = dict[str, Any]
 
-# The two payload keys are intentionally short. A cursor that ships in
-# every paginated URL is part of the wire surface; "v" / "id" is 9 bytes
-# vs "sort_value" / "primary_key" at 23.
-_KEY_SORT_VALUE = "v"
-_KEY_ID = "id"
+_VERSION = 1
+_MAX_TOKEN_LENGTH = 4096
+_PAYLOAD_KEYS = frozenset({"ver", "v", "id", "dir", "fp", "scope"})
+_KEY_DERIVATION_LABEL = b"cara.cursor.v1"
+_BASE64URL_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+)
 
 
-def encode_cursor(sort_value: Any, primary_key: int) -> str:
-    """Build the opaque cursor token for the last row of a page.
+class InvalidCursor(ValueError):
+    """The cursor is malformed, tampered with, or belongs to another query."""
 
-    ``sort_value`` is whatever value the sort column held on that row
-    (int / float / str / None). ``primary_key`` is the canonical row id —
-    the tiebreaker so rows with equal ``sort_value`` are still totally
-    ordered. The returned token is base64url-encoded JSON; clients should
-    treat it as opaque.
+
+def cursor_fingerprint(filters: Any) -> str:
+    """Return a deterministic SHA-256 fingerprint for query context.
+
+    Callers should include every value that changes the visible result set,
+    including tenant/user/channel permission scope.  Collections are
+    normalized so semantically identical filter dictionaries produce the same
+    fingerprint regardless of insertion order.
     """
-    payload: CursorPayload = {_KEY_SORT_VALUE: sort_value, _KEY_ID: int(primary_key)}
-    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
+
+    blob = json.dumps(
+        _json_value(filters, nested=True),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
 
 
-def decode_cursor(token: str | None) -> CursorPayload | None:
-    """Parse an opaque cursor back into ``{v, id}``.
+def encode_cursor(
+    sort_value: Any,
+    primary_key: int | str,
+    *,
+    direction: SortDirection,
+    fingerprint: str,
+    scope: str,
+    secret: str | bytes | None = None,
+) -> str:
+    """Authenticate a stable composite cursor for the last visible row."""
 
-    Returns ``None`` for any malformed input — empty / non-base64 /
-    base64-but-not-JSON / JSON-but-missing-required-keys — so the caller
-    can branch on ``None`` to mean "no cursor, start from the beginning"
-    without a try/except. Silently falling back to page 1 is friendlier
-    than 422-ing on a stale URL.
-    """
-    if not token or not isinstance(token, str):
-        return None
-    # ``urlsafe_b64decode`` requires correct padding; the encoder strips it.
-    padded = token + "=" * (-len(token) % 4)
+    payload: CursorPayload = {
+        "ver": _VERSION,
+        "v": _json_value(sort_value),
+        "id": _primary_key(primary_key),
+        "dir": _direction(direction),
+        "fp": _fingerprint(fingerprint),
+        "scope": _scope(scope),
+    }
+    body = _b64encode(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+    signature = _b64encode(
+        hmac.new(_key(secret), body.encode("ascii"), hashlib.sha256).digest()
+    )
+    token = f"{body}.{signature}"
+    if len(token) > _MAX_TOKEN_LENGTH:
+        raise ValueError("Cursor payload exceeds the maximum token length.")
+    return token
+
+
+def decode_cursor(
+    token: str,
+    *,
+    direction: SortDirection,
+    fingerprint: str,
+    scope: str,
+    secret: str | bytes | None = None,
+) -> CursorPayload:
+    """Verify and decode a cursor, raising :class:`InvalidCursor` on failure."""
+
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > _MAX_TOKEN_LENGTH
+        or token.count(".") != 1
+    ):
+        raise InvalidCursor("Invalid cursor.")
+
+    body, supplied_signature = token.split(".", 1)
     try:
-        blob = base64.urlsafe_b64decode(padded.encode("ascii"))
-    except (binascii.Error, ValueError, UnicodeDecodeError):
-        return None
+        body_bytes = body.encode("ascii")
+        signature = _b64decode(supplied_signature)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise InvalidCursor("Invalid cursor.") from exc
+    expected = hmac.new(_key(secret), body_bytes, hashlib.sha256).digest()
+    if not hmac.compare_digest(signature, expected):
+        raise InvalidCursor("Invalid cursor.")
+
     try:
-        payload = json.loads(blob.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    if _KEY_SORT_VALUE not in payload or _KEY_ID not in payload:
-        return None
-    # ``id`` must be an int — anything else means a tampered cursor.
-    if not isinstance(payload[_KEY_ID], int) or isinstance(payload[_KEY_ID], bool):
-        return None
-    return payload
+        payload = json.loads(_b64decode(body).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise InvalidCursor("Invalid cursor.") from exc
+    if not isinstance(payload, dict) or set(payload) != _PAYLOAD_KEYS:
+        raise InvalidCursor("Invalid cursor.")
+
+    try:
+        payload_direction = _direction(payload.get("dir"))
+        payload_fingerprint = _fingerprint(payload.get("fp"))
+        payload_scope = _scope(payload.get("scope"))
+        payload_id = _primary_key(payload.get("id"))
+        payload_value = _json_value(payload.get("v"))
+    except (TypeError, ValueError) as exc:
+        raise InvalidCursor("Invalid cursor.") from exc
+
+    if payload.get("ver") != _VERSION:
+        raise InvalidCursor("Invalid cursor.")
+    if payload_direction != _direction(direction):
+        raise InvalidCursor("Cursor sort direction does not match this query.")
+    if not hmac.compare_digest(payload_fingerprint, _fingerprint(fingerprint)):
+        raise InvalidCursor("Cursor filters do not match this query.")
+    if not hmac.compare_digest(payload_scope, _scope(scope)):
+        raise InvalidCursor("Cursor does not belong to this endpoint.")
+
+    return {
+        "ver": _VERSION,
+        "v": payload_value,
+        "id": payload_id,
+        "dir": payload_direction,
+        "fp": payload_fingerprint,
+        "scope": payload_scope,
+    }
 
 
 def slice_page_with_lookahead(
-    rows: list[Any], limit: int, *, sort_field: str, primary_key: str = "id"
+    rows: list[Any],
+    limit: int,
+    *,
+    sort_field: str,
+    direction: SortDirection,
+    fingerprint: str,
+    scope: str,
+    primary_key: str = "id",
+    secret: str | bytes | None = None,
 ) -> tuple[list[Any], str | None, bool]:
-    """Given a query result fetched with ``LIMIT limit + 1``, return the
-    displayed page + next-cursor + has_more flag.
+    """Trim a ``LIMIT limit + 1`` result and mint the next signed cursor."""
 
-    Accepts dict rows (from ``DB.select``) or attribute-style row objects
-    (model instances) — falls back via ``getattr``. Returns
-    ``(visible_rows, next_cursor, has_more)``. When ``has_more`` is False,
-    ``next_cursor`` is ``None`` and the caller should NOT advertise a next
-    page.
-    """
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
     has_more = len(rows) > limit
     visible = rows[:limit]
     if not visible or not has_more:
         return visible, None, False
+
     last = visible[-1]
     sort_value = _extract_field(last, sort_field)
     pk_value = _extract_field(last, primary_key)
     if pk_value is None:
-        # Without a primary key on the last row we can't build a cursor —
-        # fall back to "no next page" rather than emit a broken token.
-        return visible, None, False
-    return visible, encode_cursor(sort_value, int(pk_value)), True
-
-
-def _extract_field(row: Any, field: str) -> Any:
-    """Dict-or-attribute access. ``row["created_at"]`` vs ``row.created_at``
-    — both shapes appear in practice."""
-    if isinstance(row, dict):
-        return row.get(field)
-    return getattr(row, field, None)
+        raise ValueError("Cursor page row is missing its canonical id.")
+    return (
+        visible,
+        encode_cursor(
+            sort_value,
+            pk_value,
+            direction=direction,
+            fingerprint=fingerprint,
+            scope=scope,
+            secret=secret,
+        ),
+        True,
+    )
 
 
 def cursor_rules(*, max_limit: int = 100, min_limit: int = 1) -> dict[str, str]:
-    """Validation rules for cursor-paginated endpoints.
+    """Strict request rules for cursor-paginated endpoints.
 
-    Mirrors ``paging_rules`` — the offset / page validator — but accepts
-    ``cursor`` instead of ``offset``. ``limit`` rules are identical so the
-    two helpers can compose if a single endpoint accepts both modes.
+    ``page`` and ``offset`` are prohibited deliberately: silently accepting an
+    obsolete deep-offset contract makes rollout bugs look like valid first-page
+    reads.
     """
+
+    if min_limit < 1 or max_limit > 100 or min_limit > max_limit:
+        raise ValueError("cursor pagination limits must satisfy 1 <= min <= max <= 100")
     return {
         "limit": f"nullable|integer|between:{min_limit},{max_limit}",
-        # ``cursor`` is an opaque token — length-cap at 4 KB to block
-        # obvious payload-stuffing without rejecting any legitimate token.
-        "cursor": "nullable|string|max:4096",
+        "cursor": f"bail|sometimes|required|string|max:{_MAX_TOKEN_LENGTH}",
+        "page": "missing",
+        "offset": "missing",
     }
+
+
+def _key(secret: str | bytes | None) -> bytes:
+    if secret is None:
+        try:
+            from cara.configuration import config
+
+            secret = config("app.key", "") or os.environ.get("APP_KEY", "")
+        except Exception:
+            secret = os.environ.get("APP_KEY", "")
+    raw = secret if isinstance(secret, bytes) else str(secret or "").encode("utf-8")
+    if len(raw) < 32:
+        raise RuntimeError("APP_KEY must contain at least 32 bytes for cursor signing.")
+    return hmac.new(raw, _KEY_DERIVATION_LABEL, hashlib.sha256).digest()
+
+
+def _b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _b64decode(value: str) -> bytes:
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(char not in _BASE64URL_CHARS for char in value)
+    ):
+        raise ValueError("invalid base64url")
+    try:
+        raw = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("invalid base64url") from exc
+    padded = raw + b"=" * (-len(raw) % 4)
+    decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+    if _b64encode(decoded) != value:
+        raise ValueError("non-canonical base64url")
+    return decoded
+
+
+def _direction(value: Any) -> SortDirection:
+    if value not in {"asc", "desc"}:
+        raise ValueError("direction must be 'asc' or 'desc'")
+    return value
+
+
+def _fingerprint(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        raise ValueError("fingerprint must be lowercase SHA-256 hex")
+    return value
+
+
+def _scope(value: Any) -> str:
+    if not isinstance(value, str) or not value or len(value) > 160:
+        raise ValueError("scope must be a non-empty string of at most 160 characters")
+    return value
+
+
+def _primary_key(value: Any) -> int | str:
+    if isinstance(value, bool):
+        raise ValueError("cursor id cannot be boolean")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value and len(value) <= 255:
+        return value
+    raise ValueError("cursor id must be an integer or non-empty string")
+
+
+def _json_value(value: Any, *, nested: bool = False) -> Any:
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        if nested:
+            return value
+        raise ValueError("cursor sort value cannot be boolean")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("cursor values must be finite")
+        return value
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if nested and isinstance(value, dict):
+        return {
+            str(key): _json_value(item, nested=True)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if nested and isinstance(value, (list, tuple)):
+        return [_json_value(item, nested=True) for item in value]
+    if nested and isinstance(value, (set, frozenset)):
+        normalized = [_json_value(item, nested=True) for item in value]
+        return sorted(
+            normalized,
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+        )
+    raise ValueError(f"Unsupported cursor value type: {type(value).__name__}")
+
+
+def _extract_field(row: Any, field: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(field)
+    return getattr(row, field, None)

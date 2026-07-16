@@ -130,9 +130,12 @@ class Loader:
         classes: dict[str, type] = {}
         for module in self.get_modules(paths, raise_exception).values():
             for obj_name, obj in inspect.getmembers(module):
-                if inspect.isclass(obj) and issubclass(obj, class_instance):
-                    if obj.__module__.startswith(module.__package__):
-                        classes[obj_name] = obj
+                if (
+                    inspect.isclass(obj)
+                    and issubclass(obj, class_instance)
+                    and obj.__module__.startswith(module.__package__)
+                ):
+                    classes[obj_name] = obj
         if not classes and raise_exception:
             raise LoaderNotFoundException(
                 f"No {class_instance} have been found in {paths}"

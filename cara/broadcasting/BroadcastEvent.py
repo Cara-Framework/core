@@ -13,12 +13,12 @@ so subclasses can declare channels however reads naturally.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Union
+from typing import Any
 
 from cara.broadcasting.Channel import Channel, channel_name
 from cara.broadcasting.contracts import ShouldBroadcast
 
-ChannelLike = Union[str, Channel]
+ChannelLike = str | Channel
 
 
 class BroadcastEvent(ShouldBroadcast):

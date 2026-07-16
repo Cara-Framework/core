@@ -23,8 +23,9 @@ class BaseJob(BaseQueueable):
     """
 
     # Job-specific queue settings
-    default_queue: str = "jobs"
+    default_queue: str | None = None
     default_retry_attempts: int = 3
+    central_job: bool = False
 
     def __init__(self, payload=None, **kwargs):
         """Initialize queueable job with payload."""
@@ -34,7 +35,7 @@ class BaseJob(BaseQueueable):
     def _initialize_data(self, **kwargs):
         """Job-specific initialization."""
         # Set job priority
-        self.job_priority = kwargs.get("priority", "normal")
+        self.job_priority = kwargs.get("priority", "default")
 
         # Set job timeout
         self.timeout = kwargs.get("timeout", 300)  # 5 minutes default
@@ -62,15 +63,7 @@ class BaseJob(BaseQueueable):
             self.with_tag(tag)
         return self
 
-    # Public contract: default four-tier priority→queue mapping.
-    # Override ``_PRIORITY_QUEUE_MAP`` in a subclass for a different
-    # queue layout.
-    _PRIORITY_QUEUE_MAP: dict[str, str] = {
-        "critical": "jobs-critical",
-        "high": "jobs-priority",
-        "default": "jobs",
-        "low": "jobs-low",
-    }
+    _PRIORITY_LEVELS = frozenset({"critical", "high", "default", "low"})
 
     def priority(self, level: str) -> BaseJob:
         """Set job priority level.
@@ -83,11 +76,10 @@ class BaseJob(BaseQueueable):
         raise ``ValueError`` so a typo can't disguise itself as
         ``default``.
         """
-        if level not in self._PRIORITY_QUEUE_MAP:
-            valid = ", ".join(sorted(self._PRIORITY_QUEUE_MAP.keys()))
+        if level not in self._PRIORITY_LEVELS:
+            valid = ", ".join(sorted(self._PRIORITY_LEVELS))
             raise InvalidArgumentException(f"Unknown priority level {level!r}. Valid: {valid}")
         self.job_priority = level
-        self.queue_name = self._PRIORITY_QUEUE_MAP[level]
         return self
 
     def critical_priority(self) -> BaseJob:
@@ -181,7 +173,13 @@ class BaseJob(BaseQueueable):
             self.payload = {}
         self.payload[key] = value
 
-    def failed(self, job_data: Any, error: Exception) -> None:
+    async def failed(
+        self,
+        job_data: Any,
+        error: Exception,
+        *,
+        idempotency_key: str,
+    ) -> None:
         """Handle job failure.
 
         The failure message and payload are logged by the parent
@@ -194,7 +192,11 @@ class BaseJob(BaseQueueable):
         the parent does not emit.
         """
         # Parent logs the failure message + payload exactly once.
-        super().failed(job_data, error)
+        await super().failed(
+            job_data,
+            error,
+            idempotency_key=idempotency_key,
+        )
 
         try:
             from cara.facades import Log

@@ -216,17 +216,13 @@ post = Post.create({"title": "Hello", "content": "World"})
 ```python
 # Dispatch jobs
 from app.jobs import ProcessData
-ProcessData(data_id=123).dispatch()
+ProcessData.dispatch(data_id=123).send()
 
 # Delayed execution
-ProcessData(data_id=123).delay(minutes=5).dispatch()
+ProcessData.dispatch(data_id=123).delay(300).send()
 
-# Job chaining
-from cara.queues import Chain
-Chain([
-    ProcessData(data_id=123),
-    SendNotification(user_id=456)
-]).dispatch()
+# Queue execution uses authenticated JSON envelopes over AMQP.
+# Durable job chains and batches are intentionally unsupported.
 ```
 
 #### Events & Listeners
@@ -243,8 +239,8 @@ Event.dispatch(UserRegistered(user))
 
 # Listen to events
 @Event.listen(UserRegistered)
-async def send_welcome_email(event):
-    await SendWelcomeEmail(event.user.id).dispatch()
+def send_welcome_email(event):
+    SendWelcomeEmail.dispatch(event.user.id).send()
 ```
 
 #### Authentication

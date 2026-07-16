@@ -346,6 +346,9 @@ class FilterPipeline:
         *,
         limit: int,
         sort_field: str,
+        direction: str,
+        fingerprint: str,
+        scope: str,
         order_by_sql: str,
         keyset_where: tuple[str, list[Any]] | None = None,
         primary_key: str = "id",
@@ -383,7 +386,13 @@ class FilterPipeline:
         rows = b.order_by_raw(order_by_sql).limit(int(limit) + 1).get()
 
         visible, next_cursor, has_more = slice_page_with_lookahead(
-            list(rows), int(limit), sort_field=sort_field, primary_key=primary_key
+            list(rows),
+            int(limit),
+            sort_field=sort_field,
+            primary_key=primary_key,
+            direction=direction,
+            fingerprint=fingerprint,
+            scope=scope,
         )
 
         # Mirror ``get()``'s contract: with no ``resource`` return RAW model rows
@@ -476,14 +485,14 @@ class _CachedPipeline:
     def _build_key(self, terminal: str, **terminal_args: Any) -> str:
         """Compose a stable cache key for a given terminal invocation.
 
-        Format: ``{prefix}:{terminal}:{sort_name}:{kw}:{md5(filter_cache_key)}``.
+        Format: ``{prefix}:{terminal}:{sort_name}:{kw}:{sha256(filter_cache_key)}``.
 
-        The MD5 of the filter fragment keeps long key fragments
+        The SHA-256 digest of the filter fragment keeps long key fragments
         bounded (Redis keys have practical length limits) while
         preserving the round-trip determinism contract.
         """
         kw = ":".join(f"{k}={v}" for k, v in sorted(terminal_args.items()))
-        digest = hashlib.md5(self._pipe.cache_key.encode()).hexdigest()
+        digest = hashlib.sha256(self._pipe.cache_key.encode()).hexdigest()
         sort = self._pipe.sort_name or "default"
         return f"{self._prefix}:{terminal}:{sort}:{kw}:{digest}"
 

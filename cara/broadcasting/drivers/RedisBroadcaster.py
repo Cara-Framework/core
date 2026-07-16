@@ -110,6 +110,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             self._redis_url = f"redis://{host}:{port}/{db}"
 
         self._prefix: str = config.get("connection", {}).get("prefix", "cara_broadcast:")
+        self._connection_config: dict[str, Any] = dict(config.get("connection", {}))
         # Identity for "did this message originate from us?" check.
         self._node_id: str = uuid.uuid4().hex
 
@@ -160,13 +161,30 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             # AWAITED against the hang → it stalls for the full TCP timeout. The
             # sibling Redis drivers (cache/queue) already set these; the
             # broadcaster was the one that was missed.
+            pool_kwargs: dict[str, Any] = {
+                "decode_responses": True,
+                "max_connections": 10,
+                "socket_connect_timeout": 5,
+                "socket_timeout": 5,
+                "health_check_interval": 30,
+            }
+            if self._redis_url.startswith("rediss://"):
+                pool_kwargs.update(
+                    {
+                        "ssl_ca_certs": self._connection_config.get("ssl_ca_certs")
+                        or None,
+                        "ssl_certfile": self._connection_config.get("ssl_certfile")
+                        or None,
+                        "ssl_keyfile": self._connection_config.get("ssl_keyfile")
+                        or None,
+                        "ssl_cert_reqs": self._connection_config.get(
+                            "ssl_cert_reqs", "required"
+                        ),
+                    }
+                )
             self._redis_pools[loop_id] = self._redis_async.ConnectionPool.from_url(
                 self._redis_url,
-                decode_responses=True,
-                max_connections=10,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-                health_check_interval=30,
+                **pool_kwargs,
             )
         client = self._redis_async.Redis(connection_pool=self._redis_pools[loop_id])
         await client.ping()

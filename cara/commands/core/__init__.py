@@ -21,7 +21,11 @@ from .MigrateRollbackCommand import MigrateRollbackCommand
 from .MigrateStatusCommand import MigrateStatusCommand
 from .ModelPruneCommand import ModelPruneCommand
 from .PreflightCommand import PreflightCommand
-from .QueueCancelCommand import QueueCancelCommand
+from .QueueRelayCommand import (
+    QueueHookCommand,
+    QueueHooksCommand,
+    QueueRelayCommand,
+)
 from .QueueStatsCommand import QueueStatsCommand
 from .QueueWorkCommand import QueueWorkCommand
 from .RouteGeneratorCommand import RouteGeneratorCommand
@@ -58,7 +62,9 @@ __all__ = [
     "MigrateStatusCommand",
     "ModelPruneCommand",
     "PreflightCommand",
-    "QueueCancelCommand",
+    "QueueHookCommand",
+    "QueueHooksCommand",
+    "QueueRelayCommand",
     "QueueStatsCommand",
     "QueueWorkCommand",
     "RouteGeneratorCommand",

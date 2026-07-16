@@ -85,11 +85,13 @@ class CircuitBreaker:
         transition if the window elapsed. MUST be called while holding
         ``self._lock`` so the transition and any subsequent probe-slot
         claim form a single atomic critical section."""
-        if self._state == CircuitState.OPEN:
-            if time.time() - self._last_failure_time >= self.recovery_timeout:
-                self._state = CircuitState.HALF_OPEN
-                self._half_open_calls = 0
-                Log.info("Circuit '%s' transitioning to HALF_OPEN", self.name)
+        if (
+            self._state == CircuitState.OPEN
+            and time.time() - self._last_failure_time >= self.recovery_timeout
+        ):
+            self._state = CircuitState.HALF_OPEN
+            self._half_open_calls = 0
+            Log.info("Circuit '%s' transitioning to HALF_OPEN", self.name)
         return self._state
 
     @property

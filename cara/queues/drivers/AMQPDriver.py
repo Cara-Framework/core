@@ -6,12 +6,11 @@ Modern, clean implementation for RabbitMQ-based job queue management.
 
 from __future__ import annotations
 
-import concurrent.futures
-import json
 import logging
-import pickle
 import random
+import ssl
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -37,7 +36,8 @@ from cara.exceptions import QueueDriverLibraryNotFoundException, QueueException
 from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
-from cara.queues.JobInstantiation import instantiate_job
+from cara.queues.delay import DurableDelayedJobStore
+from cara.queues.delivery import QueueJobDeliveryStore
 from cara.queues.retry.Policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
@@ -47,7 +47,9 @@ from cara.queues.retry.Policy import (
 from cara.queues.retry.Policy import (
     DEFAULT_RETRY_JITTER_FRACTION as _RETRY_DEFAULT_JITTER_FRACTION,
 )
-from cara.queues.serializers.PickleJobSerializer import restricted_pickle_loads
+from cara.queues.serializers.SignedJsonJobSerializer import (
+    SignedJsonJobSerializer,
+)
 from cara.support import HasColoredOutput
 
 # Connection/stream errors that warrant one publish retry. Built at module
@@ -73,14 +75,16 @@ class AMQPDriver(HasColoredOutput, Queue):
 
     Features:
     - Reliable message delivery with publisher confirms
+    - HMAC-authenticated JSON-only job envelopes
+    - Broker-native priority queues
     - Job tracking with unique IDs
     - Integration with JobTracker for status updates
     - Persistent messages and durable queues
-    - Bounded automatic retry on consumer-side failure (see
-      ``_handle_failed_message``)
+    - Bounded automatic retry in QueueWorkCommand
     """
 
     driver_name = "amqp"
+    durable_transactional_outbox = True
 
     # Framework-level default retry policy — SINGLE-SOURCED in
     # ``cara.queues.retry.Policy`` (the rationale for 1/5/30 + 25% jitter
@@ -96,6 +100,10 @@ class AMQPDriver(HasColoredOutput, Queue):
         super().__init__(module="queue.amqp")
         self.application = application
         self.options = options
+        canonical = options.get("canonical_queues") or ()
+        self._canonical_queues = frozenset(str(name) for name in canonical)
+        if not self._canonical_queues:
+            raise QueueException("AMQP canonical_queues must not be empty.")
         # ``connection`` / ``channel`` were instance attributes shared
         # across all threads. They're now thread-local so each thread
         # owns its own pika connection/channel — pika's BlockingConnection
@@ -106,17 +114,20 @@ class AMQPDriver(HasColoredOutput, Queue):
         # while a single thread's publishes stay ordered through its
         # own channel.
         self._tls = threading.local()
+        self._relay_wakeup = threading.Event()
+        self._runtime_health_cache: dict[tuple[str, tuple[str, ...]], float] = {}
 
-        # Connection pool: idle (host:port → list[connection]) so a
-        # thread that finished publishing can hand its connection
-        # back instead of dropping the TCP socket. The pool is
-        # process-global; thread-locals only point at a connection
-        # while that thread is using one. Bounded so we don't
-        # accumulate idle sockets on a load spike.
-        self._pool: dict[str, list[Any]] = {}
-        self._pool_lock = threading.Lock()
-        self._publish_lock = threading.Lock()
-        self._max_pool_per_url = int(options.get("amqp_pool_size", 8))
+        self._delivery_store = QueueJobDeliveryStore(
+            application=self.application,
+            driver=self,
+            options=self.options,
+        )
+        self._delayed_store = DurableDelayedJobStore(
+            application=self.application,
+            driver=self,
+            options=self.options,
+            delivery_store=self._delivery_store,
+        )
 
         # Suppress verbose pika logs
         logging.getLogger("pika").setLevel(logging.WARNING)
@@ -156,7 +167,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             )
 
         timeout_seconds = max(int(timeout_ms), 1) / 1000
-        parameters = pika.URLParameters(self._build_url(self.options))
+        parameters = self._connection_parameters(self.options)
         parameters.connection_attempts = 1
         parameters.retry_delay = 0
         parameters.socket_timeout = timeout_seconds
@@ -188,36 +199,160 @@ class AMQPDriver(HasColoredOutput, Queue):
                 ):
                     connection.close()
 
+    def open_topology_connection(self) -> tuple[Any, Any]:
+        """Open a dedicated, unpooled connection for broker topology changes.
+
+        Topology reconciliation is an operator/deploy operation, not a publish
+        hot path. Returning an isolated connection prevents queue/exchange
+        declarations (and broker-closed passive-declare channels) from
+        poisoning the driver's thread-local publisher pool. The caller owns
+        and must close both returned handles.
+        """
+        return self._open_new_connection(self.options)
+
+    def verify_runtime_health(
+        self,
+        queue_names: Any | None = None,
+        *,
+        force: bool = False,
+    ) -> None:
+        """Verify only the resources allowed by this process capability."""
+        access = str(self.options.get("broker_access") or "full").strip().lower()
+        if access not in {"none", "consume", "publish", "topology", "full"}:
+            raise QueueException(
+                f"Unsupported AMQP broker_access capability: {access!r}."
+            )
+        names = tuple(
+            sorted(
+                {
+                    self.require_canonical_queue(name)
+                    for name in (queue_names or self._canonical_queues)
+                }
+            )
+        )
+        cache_key = (access, names)
+        now = time.monotonic()
+        last_check = self._runtime_health_cache.get(cache_key, 0.0)
+        if not force and now - last_check < 10:
+            return
+        self._delivery_store.verify_schema()
+        if access == "none":
+            self._runtime_health_cache[cache_key] = now
+            return
+
+        connection, bootstrap = self.open_topology_connection()
+        with contextlib.suppress(Exception):
+            bootstrap.close()
+        try:
+            if access == "publish":
+                # Prove write authorization without leaving a message behind.
+                # The default exchange routes only to an exactly named queue;
+                # a random nonexistent route with mandatory confirms must
+                # therefore return UnroutableError after Rabbit accepts the
+                # publish. AccessRefused/Nack/transport errors still propagate.
+                channel = connection.channel()
+                try:
+                    channel.confirm_delivery()
+                    try:
+                        channel.basic_publish(
+                            exchange="",
+                            routing_key=(
+                                "__synkronus_write_probe__."
+                                f"{uuid.uuid4().hex}"
+                            ),
+                            body=b"",
+                            mandatory=True,
+                            properties=pika.BasicProperties(
+                                content_type="application/octet-stream",
+                                delivery_mode=1,
+                                expiration="1",
+                                type="synkronus.queue.write-probe",
+                            ),
+                        )
+                    except pika.exceptions.UnroutableError:
+                        pass
+                    else:
+                        raise QueueException(
+                            "RabbitMQ write probe unexpectedly routed; "
+                            "the reserved health queue namespace is occupied."
+                        )
+                finally:
+                    with contextlib.suppress(Exception):
+                        channel.close()
+                self._runtime_health_cache[cache_key] = now
+                return
+            if access == "consume":
+                resources = [("queue", name) for name in names]
+            else:
+                resources = [
+                    ("exchange", "dead.letter.dlx"),
+                    ("queue", "dead.letter.queue"),
+                    *(("queue", name) for name in names),
+                ]
+            for kind, name in resources:
+                channel = connection.channel()
+                try:
+                    if kind == "exchange":
+                        channel.exchange_declare(
+                            exchange=name,
+                            exchange_type="topic",
+                            passive=True,
+                        )
+                    else:
+                        channel.queue_declare(queue=name, passive=True)
+                finally:
+                    with contextlib.suppress(Exception):
+                        channel.close()
+        finally:
+            with contextlib.suppress(Exception):
+                connection.close()
+        self._runtime_health_cache[cache_key] = now
+
     def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
-        """Push jobs to queue and return job ID(s) for tracking."""
+        """Durably accept jobs, then publish only after the DB commit."""
         merged_opts = {**self.options, **options}
         job_ids = []
 
         for job in jobs:
-            # Per-job queue resolution: PendingDispatch stamps the target
-            # queue on the JOB INSTANCE (``job.queue``), but publish reads
-            # the queue from OPTIONS — without this bridge every direct
-            # dispatch silently landed on "default" regardless of the
-            # job's declared queue.
+            self._delivery_store.execution_timeout_for(job)
+            # Per-job queue resolution. Driver defaults must never override a
+            # queue selected by the job/local router: the old merged-options
+            # check always saw config's ``queue=default`` and silently routed
+            # every direct dispatch there.
             job_opts = dict(merged_opts)
-            if not job_opts.get("queue"):
+            if "queue" not in options:
                 job_queue = getattr(job, "queue", None)
                 if job_queue:
                     job_opts["queue"] = job_queue
+            job_opts["queue"] = self.require_canonical_queue(
+                job_opts.get("queue")
+            )
 
             # Generate unique job ID for tracking
             job_id = str(uuid.uuid4())
+            self._register_immediate_delivery(
+                job=job,
+                job_id=job_id,
+                merged_opts=merged_opts,
+                job_opts=job_opts,
+            )
             job_ids.append(job_id)
 
-            # Create job record in database via JobTracker
-            db_job_id = self._create_job_record(job, job_id, job_opts)
+        return job_ids[0] if len(job_ids) == 1 else job_ids
 
-            # Prepare payload. ``attempts`` is the retry counter that
-            # the consume() failure path increments and republishes;
-            # carrying it inside the payload (instead of an AMQP
-            # header) keeps the count alive across the delayed-retry
-            # republish without depending on header preservation
-            # through the delayed-plugin path.
+    def _register_immediate_delivery(
+        self,
+        *,
+        job: Any,
+        job_id: str,
+        merged_opts: dict[str, Any],
+        job_opts: dict[str, Any],
+    ) -> None:
+        """Atomically create the tracking fence and immutable delivery row."""
+        database = self._delivery_store._db()
+        with database.transaction():
+            db_job_id = self._create_job_record(job, job_id, job_opts)
+            timeout_seconds = self._delivery_store.execution_timeout_for(job)
             payload = {
                 "obj": job,
                 "args": merged_opts.get("args", ()),
@@ -225,85 +360,147 @@ class AMQPDriver(HasColoredOutput, Queue):
                 "created": pendulum.now(tz=merged_opts.get("tz", "UTC")),
                 "job_id": job_id,
                 "db_job_id": db_job_id,
+                "timeout_seconds": timeout_seconds,
                 "attempts": int(
                     merged_opts.get("attempts", 0)
                     if merged_opts.get("attempts", 0) is not None
                     else 0
                 ),
             }
-            # Stash the current trace context in the payload (same rail
-            # as ``attempts``) so the consumer re-parents the job's span
-            # → one product = one trace across workers. No-op when off.
-            payload["_otel"] = _Trace.inject({})
-            # Same rail for tenancy: a job dispatched from tenant scope
-            # runs UNDER that tenant in the worker — the consumer arms
-            # ``cara.context.Tenancy`` (and with it TenantScope's
-            # fail-closed query filter) around the job call. ``None``
-            # (scheduler/CLI dispatch) means "no tenant scope".
-            from cara.context import Tenancy as _Tenancy
+            payload["_otel"] = merged_opts.get("_otel") or _Trace.inject({})
+            payload.update(self._tenant_payload(job, merged_opts))
+            dispatched_at = pendulum.now("UTC").to_iso8601_string()
+            payload["dispatched_at"] = dispatched_at
+            payload["queue"] = self.require_canonical_queue(
+                job_opts.get("queue")
+            )
+            payload["priority"] = self._priority_name(job, job_opts)
+            payload["replay_of"] = None
+            if hasattr(job, "__dict__"):
+                job._dispatched_at = dispatched_at
 
-            payload["_tenant"] = _Tenancy.id()
+            body = self._serialize_payload(payload, job_opts)
+            envelope = SignedJsonJobSerializer.inspect_envelope(
+                body,
+                signing_keys=job_opts.get("signing_keys", {}),
+                clock_skew_seconds=int(job_opts.get("clock_skew_seconds", 30)),
+                max_age_seconds=int(
+                    job_opts.get(
+                        "envelope_max_age_seconds",
+                        SignedJsonJobSerializer.DEFAULT_MAX_AGE_SECONDS,
+                    )
+                ),
+                allow_not_before=True,
+            )
+            self._delivery_store.register(
+                body=body,
+                payload=envelope["payload"],
+                envelope=envelope,
+                db=database,
+            )
+            self._delivery_store.publish_after_commit(job_id)
 
-            try:
-                self._connect_and_publish(payload, job_opts)
-            except _RETRYABLE_PUBLISH_ERRORS:
-                # Retry once on connection/stream error — the pooled
-                # connection may have been dropped by the broker (idle
-                # timeout, restart, etc.). _connect_and_publish will
-                # _discard_thread_connection on failure, so the retry
-                # opens a fresh TCP socket.
-                self._connect_and_publish(payload, job_opts)
+    @property
+    def delivery_store(self) -> QueueJobDeliveryStore:
+        return self._delivery_store
 
-        return job_ids[0] if len(job_ids) == 1 else job_ids
+    def require_canonical_queue(self, queue_name: Any) -> str:
+        """Return a configured consumed queue or fail before persistence."""
+        if not isinstance(queue_name, str) or not queue_name:
+            raise QueueException(
+                "AMQP jobs must declare an explicit canonical queue."
+            )
+        if queue_name not in self._canonical_queues:
+            valid = ", ".join(sorted(self._canonical_queues))
+            raise QueueException(
+                f"AMQP queue {queue_name!r} is not consumed. Valid: {valid}."
+            )
+        return queue_name
 
-    def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
-        """Batch push: push all jobs at once."""
-        self.push(*jobs, options=options)
-
-    def chain(self, jobs: list, options: dict[str, Any]) -> None:
-        """Chain jobs: dispatch via ChainRunnerJob for true sequential execution.
-
-        Previous implementation pushed all jobs in parallel which violated
-        chain semantics (Job₂ should only run after Job₁ succeeds).
-        """
-        if not jobs:
-            return
-
-        from cara.queues.Chain import Chain
-
-        Chain(jobs).dispatch()
-
-    def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> str | list[str]:
-        """Schedule job for future execution using AMQP delayed plugin."""
-        merged_opts = {**self.options, **options}
-
-        # Calculate delay in milliseconds. ``float_timestamp`` is a pendulum
-        # *property*, not a method — calling it as a method raises
-        # TypeError: 'float' object is not callable. With the previous code
-        # every scheduled AMQP job blew up at enqueue time.
-        delay_ms = int(
-            pendulum.parse(str(when)).float_timestamp * 1000
-            - pendulum.now("UTC").float_timestamp * 1000
+    def _serialize_payload(
+        self,
+        payload: dict[str, Any],
+        opts: dict[str, Any],
+        *,
+        issued_at: Any | None = None,
+        not_before: Any | None = None,
+    ) -> bytes:
+        return SignedJsonJobSerializer.serialize(
+            payload,
+            signing_key_id=opts.get("signing_key_id", ""),
+            signing_keys=opts.get("signing_keys", {}),
+            allowed_prefixes=opts.get("allowed_job_prefixes"),
+            issued_at=issued_at,
+            not_before=not_before,
+            ttl_seconds=int(
+                opts.get(
+                    "envelope_ttl_seconds",
+                    SignedJsonJobSerializer.DEFAULT_TTL_SECONDS,
+                )
+            ),
+            max_age_seconds=int(
+                opts.get(
+                    "envelope_max_age_seconds",
+                    SignedJsonJobSerializer.DEFAULT_MAX_AGE_SECONDS,
+                )
+            ),
         )
 
-        # Per-MESSAGE header for the RabbitMQ delayed-message-exchange
-        # plugin. Pre-fix this was injected into ``connection_options``,
-        # which ``_build_url`` then appended as URL query params used
-        # as the connection-pool key. Result: every distinct
-        # ``delay_ms`` value produced a unique pool key, so the
-        # scheduled / retry hot path NEVER reused a pooled connection
-        # and paid the full 5-50ms TCP+TLS handshake per publish
-        # (defeating the explicit pool design — see
-        # ``_connect_and_publish``'s docstring). The fix routes the
-        # header through a dedicated ``message_headers`` opt key that
-        # ``_connect_and_publish_locked`` reads at publish time but
-        # ``_build_url`` ignores at connection time.
-        merged_opts["message_headers"] = {
-            **merged_opts.get("message_headers", {}),
-            "x-delay": max(delay_ms, 0),
-        }
+    @staticmethod
+    def _tenant_payload(job: Any, opts: dict[str, Any]) -> dict[str, Any]:
+        """Derive the signed tenant mode; callers cannot silently go central."""
+        from cara.context import Tenancy
 
-        return self.push(job, options=merged_opts)
+        is_central_job = bool(getattr(job, "central_job", False))
+        explicit_tenant = "tenant_id" in opts
+        if is_central_job:
+            if explicit_tenant:
+                raise QueueException("Central jobs cannot be dispatched with tenant_id.")
+            if not Tenancy.is_central():
+                raise QueueException(
+                    f"Central job {job.__class__.__name__} requires "
+                    "an explicit Tenancy.central() scope."
+                )
+            return {"_tenant_mode": "central", "_tenant": None}
+
+        if not Tenancy.is_tenant():
+            raise QueueException(
+                f"Ordinary job {job.__class__.__name__} requires an active tenant."
+            )
+        tenant_id = Tenancy.id()
+        if explicit_tenant and opts.get("tenant_id") != tenant_id:
+            raise QueueException(
+                "Explicit tenant_id must exactly match the active tenant scope."
+            )
+        return {"_tenant_mode": "tenant", "_tenant": tenant_id}
+
+    def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
+        raise QueueException(
+            "AMQP batches require a durable JSON batch descriptor."
+        )
+
+    def chain(self, jobs: list, options: dict[str, Any]) -> None:
+        raise QueueException(
+            "AMQP chains require a durable JSON chain descriptor."
+        )
+
+    def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> str | list[str]:
+        """Persist a future AMQP dispatch in the durable database outbox.
+
+        RabbitMQ itself is not a scheduler. The previous implementation merely
+        attached an ``x-delay`` header while publishing to the default direct
+        exchange; without the delayed-message exchange plugin that header is
+        inert and every retry ran immediately. PostgreSQL now owns the clock,
+        while a scheduler sweep publishes due signed envelopes with confirms.
+        """
+        target = DurableDelayedJobStore._as_utc_datetime(when)
+        is_source_retry = (
+            options.get("source_delivery_job_id") is not None
+            or options.get("source_delivery_lease_token") is not None
+        )
+        if target <= pendulum.now("UTC") and not is_source_retry:
+            return self.push(job, options=options)
+        return self._delayed_store.schedule(job, target, options)
 
     def later(
         self, delay: int | pendulum.Duration, job: Any, options: dict[str, Any] = None
@@ -311,8 +508,8 @@ class AMQPDriver(HasColoredOutput, Queue):
         """
         Schedule a job to be executed after a delay.
 
-        Uses AMQP message TTL and delayed plugin for scheduling.
-        Implements exponential backoff for retries.
+        Uses the durable database delay outbox; no RabbitMQ plugin or
+        TTL/dead-letter transfer is involved.
 
         Args:
             delay: Delay in seconds or pendulum Duration
@@ -335,20 +532,167 @@ class AMQPDriver(HasColoredOutput, Queue):
                 int(delay.total_seconds()) if hasattr(delay, "total_seconds") else delay
             )
 
-        # Merge options
-        merged_opts = {**self.options, **options}
-
         # Calculate when job should run
-        when = pendulum_module.now(tz=merged_opts.get("tz", "UTC")).add(
+        when = pendulum_module.now(
+            tz=options.get("tz", self.options.get("tz", "UTC"))
+        ).add(
             seconds=delay_seconds
         )
 
-        return self.schedule(job, when, merged_opts)
+        return self.schedule(job, when, options)
+
+    def dispatch_due_delayed_jobs(self) -> dict[str, int]:
+        """Publish one bounded batch from the unified delivery outbox."""
+        return self._delayed_store.dispatch_due()
+
+    def wake_outbox_relay(self) -> None:
+        """Best-effort in-process hint; durable polling remains authoritative."""
+        self._relay_wakeup.set()
+
+    def relay_publish_once(self) -> dict[str, int]:
+        """Run one bounded broker-publication relay iteration."""
+        self.verify_runtime_health()
+        result = self._delivery_store.publish_due()
+        if int(result.get("retried", 0) or 0) or int(
+            result.get("settle_lost", 0) or 0
+        ):
+            self.invalidate_runtime_health()
+        self.refresh_delivery_metrics()
+        return result
+
+    def invalidate_runtime_health(self) -> None:
+        """Force the next capability probe after a real relay failure."""
+        self._runtime_health_cache.clear()
+
+    def due_terminal_hook_ids(self) -> list[str]:
+        self.verify_runtime_health()
+        return self._delivery_store.due_terminal_hook_ids()
+
+    def process_terminal_hook(self, job_id: str) -> bool:
+        return self._delivery_store.process_terminal_hooks(job_id)
+
+    def defer_terminal_hook_process_failure(
+        self,
+        job_id: str,
+        *,
+        error: str,
+    ) -> str:
+        return self._delivery_store.defer_terminal_hook_process_failure(
+            job_id,
+            error=error,
+        )
+
+    def retry_quarantined_terminal_hooks(
+        self,
+        job_id: str,
+        *,
+        operator: str,
+        reason: str,
+    ) -> None:
+        self._delivery_store.retry_quarantined_terminal_hooks(
+            job_id,
+            operator=operator,
+            reason=reason,
+        )
+        self.refresh_delivery_metrics()
+
+    def refresh_delayed_job_metrics(self) -> None:
+        """Refresh scheduler-owned delayed-outbox gauges."""
+        self._delayed_store.refresh_metrics()
+
+    def refresh_delivery_metrics(self) -> dict[str, Any]:
+        """Refresh bounded ledger snapshots owned by relay processes."""
+        snapshot = self._delivery_store.delivery_metrics()
+        try:
+            from cara.observability.Metrics import MetricsBase
+
+            for status, count in snapshot["statuses"].items():
+                MetricsBase.queue_delivery_ledger_jobs.labels(
+                    status=status
+                ).set(count)
+            for kind, count in snapshot["stale_leases"].items():
+                MetricsBase.queue_delivery_stale_leases.labels(kind=kind).set(
+                    count
+                )
+            for priority, backlog in snapshot["priority_backlog"].items():
+                MetricsBase.queue_delivery_priority_pending.labels(
+                    priority=priority
+                ).set(backlog["pending"])
+                MetricsBase.queue_delivery_priority_oldest_due_age_seconds.labels(
+                    priority=priority
+                ).set(backlog["oldest_due_age"])
+                MetricsBase.queue_delivery_priority_latency_budget_seconds.labels(
+                    priority=priority
+                ).set(backlog["latency_budget"])
+            MetricsBase.queue_delivery_broker_window_max_outstanding.set(
+                snapshot["broker_window"]["max_outstanding"]
+            )
+            MetricsBase.queue_delivery_broker_window_limit.set(
+                snapshot["broker_window"]["limit"]
+            )
+            for state, count in snapshot["hooks"].items():
+                MetricsBase.queue_terminal_hooks.labels(state=state).set(count)
+            MetricsBase.queue_delayed_jobs.labels(status="pending").set(
+                snapshot["publish_pending"]
+            )
+            MetricsBase.queue_delayed_jobs.labels(status="processing").set(
+                snapshot["publish_processing"]
+            )
+            MetricsBase.queue_delayed_jobs.labels(status="failed").set(
+                snapshot["publish_quarantined"]
+            )
+            MetricsBase.queue_delayed_oldest_due_age_seconds.set(
+                snapshot["oldest_due_age"]
+            )
+        except Exception:
+            pass
+        return snapshot
+
+    def _publish_registered_envelope(
+        self,
+        body: bytes,
+        payload: dict[str, Any],
+        *,
+        capability: Any,
+    ) -> None:
+        if capability is not self._delivery_store:
+            raise QueueException(
+                "AMQP broker publication requires a claimed delivery-ledger row."
+            )
+        opts = self.options
+        url = self._build_url(opts)
+        self._acquire_thread_connection(url, opts)
+        try:
+            queue_name = str(payload["queue"])
+            self.require_canonical_queue(queue_name)
+            message_priority = self._message_priority(
+                None,
+                {**opts, "priority": payload["priority"]},
+            )
+            self.channel.basic_publish(
+                exchange=opts.get("exchange", ""),
+                routing_key=queue_name,
+                body=body,
+                properties=pika.BasicProperties(
+                    content_encoding="utf-8",
+                    content_type="application/json",
+                    delivery_mode=2,
+                    message_id=str(payload.get("job_id") or ""),
+                    priority=message_priority,
+                    type="cara.job.v2",
+                ),
+                mandatory=True,
+            )
+        except Exception:
+            self._discard_thread_connection()
+            raise
+        else:
+            self._return_thread_connection(url)
 
     def retry(self, options: dict[str, Any]) -> None:
         """Protocol stub — AMQP failed jobs live in the dead-letter queue.
 
-        The worker's failure path (``_handle_failed_message``) already
+        The worker's failure path
         republishes retryable jobs with backoff via ``later()`` and routes
         exhausted ones to the DLX. Requeuing FROM the DLX is a broker-side
         operation, not something this driver can do here. The previous
@@ -361,58 +705,6 @@ class AMQPDriver(HasColoredOutput, Queue):
             "the dead-letter exchange. Requeue them from the DLQ (broker "
             "shovel or the recovery cron) instead."
         )
-
-    @staticmethod
-    def _drive_to_completion(result: Any) -> Any:
-        """Run a coroutine return value to completion.
-
-        Pika's ``BlockingConnection`` callback (``on_message``) is
-        synchronous. When the job's ``handle`` is ``async def``,
-        ``Container.call`` returns a coroutine — we must drive it
-        here or it gets garbage-collected un-run and the broker is
-        told (by ``basic_ack``) that the work is done.
-
-        Non-coroutine return values pass through unchanged so this
-        helper is safe to call from the hot path regardless of
-        whether the bound callback is sync or async.
-        """
-        import asyncio
-        import inspect
-
-        if not inspect.iscoroutine(result):
-            return result
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # Normal path: pika's consumer thread has no asyncio
-            # loop. ``asyncio.run`` creates one for the duration of
-            # this single job (matches QueueWorkCommand).
-            return asyncio.run(result)
-
-        # An asyncio loop is already running on this thread, which
-        # means someone wired the AMQP consumer into an async
-        # context. We can't nest ``asyncio.run`` and the pika
-        # callback can't yield, so drive the coroutine on a fresh
-        # loop in a dedicated thread and block until it finishes —
-        # awkward, but the only correct option short of refusing
-        # the call entirely.
-        import threading
-
-        container: dict[str, Any] = {}
-
-        def _runner() -> None:
-            try:
-                container["value"] = asyncio.run(result)
-            except BaseException as exc:  # noqa: BLE001 — re-raised below
-                container["error"] = exc
-
-        worker = threading.Thread(target=_runner, daemon=True)
-        worker.start()
-        worker.join()
-        if "error" in container:
-            raise container["error"]
-        return container.get("value")
 
     def _apply_retry_jitter(self, base_delay: int, instance: Any) -> int:
         """Add full-jitter spread to a retry delay.
@@ -443,648 +735,57 @@ class AMQPDriver(HasColoredOutput, Queue):
         jitter = random.uniform(-swing, swing)
         return max(1, int(round(base_delay + jitter)))
 
-    def _handle_failed_message(
-        self,
-        instance: Any,
-        payload: dict[str, Any],
-        exc: Exception,
-        options: dict[str, Any],
-    ) -> bool:
-        """Route a failed in-flight message to retry or to DLX.
-
-        Returns:
-            ``True`` when a retry was scheduled (caller must NOT
-            release the ``UniqueJob`` lock — the retry is in flight
-            and needs the lock held until it actually runs).
-            ``False`` when the message was terminally dead-lettered
-            (caller MUST release the lock so the next legitimate
-            dispatch can proceed).
-
-        The decision is hard-bounded by the per-class ``max_attempts``
-        (instance class attribute; default
-        ``DEFAULT_MAX_ATTEMPTS``). A class can also override
-        ``retry_backoff`` with a tuple/list of per-attempt delays in
-        seconds (default ``DEFAULT_RETRY_BACKOFF_SECONDS = (1, 5,
-        30)``).
-
-        Conventions:
-
-        * The first delivery has ``attempts = 0`` in the payload. On
-          failure we count this as attempt #1 and republish with
-          ``attempts = 1`` after the configured delay.
-        * When ``attempts >= max_attempts`` we DLX immediately so the
-          DLQ recovery cron (``CleanDeadLetterJob``) can re-decide
-          whether to revive the job manually.
-        * ``do_not_retry`` on the exception (e.g. a permanent fetch error
-          flagged by upstream jobs) shortcuts straight to DLX —
-          no point burning the 1+5+30 seconds on a 404 that won't
-          come back. Subclassing ``Exception`` with
-          ``do_not_retry = True`` is the opt-in.
-        * If the message couldn't even be unpickled (``instance is
-          None``) we have no class to read ``max_attempts`` from, so
-          we DLX immediately. Re-running an unparseable message is
-          pointless and would just thrash.
-        """
-        # Carry the error class + message through to the DLX payload
-        # so the recovery cron (CleanDeadLetterJob) can classify
-        # transient vs permanent without re-running the job.
-        dlx_options = {
-            **options,
-            "error": {
-                "class": type(exc).__name__,
-                "message": str(exc)[:500],
-                "do_not_retry": bool(getattr(exc, "do_not_retry", False)),
-            },
-        }
-
-        if instance is None:
-            # Pickle/instantiate failure — nothing to retry against.
-            try:
-                self._send_to_dead_letter(
-                    job=None,
-                    options=dlx_options,
-                    attempts=int(payload.get("attempts", 0)),
-                )
-            except Exception as e:
-                Log.warning("_handle_failed_message: DLX after unpickle failure raised: %s", e)
-            return False
-
-        if getattr(exc, "do_not_retry", False):
-            Log.error("Job %s raised %s marked do_not_retry — sending straight to DLX", instance.__class__.__name__, type(exc).__name__)
-            self._send_to_dead_letter(
-                job=instance,
-                options=dlx_options,
-                attempts=int(payload.get("attempts", 0)),
-            )
-            return False
-
-        attempts_made = int(payload.get("attempts", 0)) + 1
-        max_attempts = int(
-            getattr(instance, "max_attempts", None) or self.DEFAULT_MAX_ATTEMPTS
-        )
-
-        if attempts_made >= max_attempts:
-            Log.error("Job %s exhausted %s attempts (last error: %s: %s). Routing to DLX.", instance.__class__.__name__, max_attempts, type(exc).__name__, exc)
-            self._send_to_dead_letter(
-                job=instance, options=dlx_options, attempts=attempts_made
-            )
-            return False
-
-        backoff_schedule = getattr(
-            instance,
-            "retry_backoff",
-            self.DEFAULT_RETRY_BACKOFF_SECONDS,
-        )
-        # Index by attempt count; clamp to the last entry so jobs
-        # with custom higher ``max_attempts`` than the schedule
-        # length still get a sane delay instead of an IndexError.
-        if not isinstance(backoff_schedule, (list, tuple)) or not backoff_schedule:
-            backoff_schedule = self.DEFAULT_RETRY_BACKOFF_SECONDS
-        idx = min(attempts_made - 1, len(backoff_schedule) - 1)
-        base_delay = int(backoff_schedule[idx])
-        delay_seconds = self._apply_retry_jitter(base_delay, instance)
-
-        Log.info("Job %s attempt %s/%s failed (%s: %s). Retrying in %ss (base %ss + jitter).", instance.__class__.__name__, attempts_made, max_attempts, type(exc).__name__, exc, delay_seconds, base_delay)
-
-        retry_options = {
-            **options,
-            "attempts": attempts_made,
-        }
-        try:
-            self.later(delay_seconds, instance, retry_options)
-            return True
-        except Exception as republish_exc:
-            # Republish failed — we've already acked the original
-            # delivery, so the job is lost unless we surface this.
-            # Best-effort DLX hop so the message at least survives
-            # in the dead-letter store for manual recovery.
-            Log.error("Job %s: retry republish failed (%s). Falling back to DLX so the payload isn't lost.", instance.__class__.__name__, republish_exc, exc_info=True)
-            try:
-                self._send_to_dead_letter(
-                    job=instance,
-                    options={**dlx_options, **retry_options},
-                    attempts=attempts_made,
-                )
-            except Exception:
-                Log.error("Job %s: DLX fallback also failed — payload IS lost", instance.__class__.__name__, exc_info=True)
-            return False
-
-    def _send_to_dead_letter(
-        self, job: Any, options: dict[str, Any], attempts: int
-    ) -> None:
-        """
-        Send a permanently failed job to dead letter queue.
-
-        Args:
-            job: Failed job instance
-            options: Queue options
-            attempts: Number of attempts made
-        """
-        # Same thread-safety rationale as _connect_and_publish: pika
-        # instance state (self.connection/self.channel) must not be
-        # mutated by concurrent threads.
-        with self._publish_lock:
-            try:
-                self._connect(self.options)
-
-                # Prepare dead letter message
-                payload = {
-                    "obj": job,
-                    "args": options.get("args", ()),
-                    "callback": options.get("callback", "handle"),
-                    "failed_at": pendulum.now(
-                        tz=options.get("tz", "UTC")
-                    ).to_datetime_string(),
-                    "attempts": attempts,
-                    "error": options.get("error"),
-                }
-
-                # Serialize
-                serializer = options.get("serializer", "pickle")
-                if serializer == "json":
-                    body = json.dumps(payload, default=str).encode("utf-8")
-                else:
-                    body = pickle.dumps(payload)
-
-                # Publish to dead letter exchange.
-                #
-                # MUST mirror the DLX name that queue declarations use
-                # (``_connect_and_publish_locked``):
-                #   exchange non-empty → ``{exchange}.dlx``
-                #   exchange empty/"" → ``dead.letter.dlx``
-                #
-                # Pre-fix this line was:
-                #   dlx_name = f'{options.get("exchange", "default")}.dlx'
-                # When the driver config has ``exchange: ""`` (the default
-                # exchange — every non-topic-routed job), the expression
-                # evaluated to ``".dlx"`` — an exchange that was never
-                # declared. The publish raised ``ChannelClosedByBroker``
-                # (404), the outer ``except Exception`` swallowed it, and
-                # the payload was silently lost instead of landing in the
-                # DLQ. The queue-side DLX wiring always pointed at
-                # ``dead.letter.dlx``, so the mismatch meant every
-                # default-exchange job that exhausted its retry budget
-                # vanished.
-                _dlx_exchange = options.get("exchange", "")
-                dlx_name = f"{_dlx_exchange}.dlx" if _dlx_exchange else "dead.letter.dlx"
-                dlq_routing_key = f"dead.{options.get('queue', 'default')}"
-
-                self.channel.basic_publish(
-                    exchange=dlx_name,
-                    routing_key=dlq_routing_key,
-                    body=body,
-                    properties=pika.BasicProperties(
-                        delivery_mode=2,  # Persistent
-                        headers={
-                            "x-death-count": attempts,
-                            "x-original-job": job.__class__.__name__,
-                        },
-                    ),
-                )
-
-                # Promote dead-letter to ERROR so log aggregators / Sentry
-                # surface it. Previously logged at INFO and silently filled
-                # the DLQ — ops only learned about job exhaustion by
-                # querying the DB after-the-fact.
-                # NOTE: cara's Log.error() does not accept an ``extra=``
-                # kwarg (TypeError on every call). The structured fields
-                # are folded into the message string instead.
-                Log.error("Job dead-lettered after %s attempts: %s → %s (job_class=%s, attempts=%s, dlq_routing_key=%s)", attempts, job.__class__.__name__, dlq_routing_key, job.__class__.__name__, attempts, dlq_routing_key)
-
-                # Best-effort metric increment so dashboards / Prometheus
-                # alerts can fire when DLQ rate spikes.
-                try:
-                    from cara.observability.Metrics import MetricsBase as Metrics
-
-                    Metrics.queue_jobs_dead_lettered_total.labels(
-                        job_class=job.__class__.__name__,
-                    ).inc()
-                except Exception:
-                    pass
-
-            except Exception:
-                Log.error(
-                    "Failed to send job to dead letter queue",
-                    exc_info=True,
-                )
-            finally:
-                # Pre-fix the close lines lived inside the try block
-                # *after* publish + Log.error. Any exception above
-                # (broker reset, serializer error, even the legacy
-                # ``Log.error(extra=...)`` TypeError) skipped them and
-                # left the thread-local channel/connection bound to a
-                # dead handle. The next call from this thread would
-                # reuse the stale state and either fail again or open
-                # a new connection without closing the old one,
-                # eventually exhausting the broker's connection limit.
-                try:
-                    if self.channel is not None:
-                        self.channel.close()
-                except (OSError, ConnectionError, RuntimeError, AttributeError):
-                    pass
-                try:
-                    if self.connection is not None:
-                        self.connection.close()
-                except (OSError, ConnectionError, RuntimeError, AttributeError):
-                    pass
-                self.channel = None
-                self.connection = None
-
     def consume(self, options: dict[str, Any]) -> None:
-        """Consume jobs from RabbitMQ. **DEPRECATED / legacy path.**
+        """Reject the removed duplicate consumer path.
 
-        The live production consumer is the ``queue:work`` command
-        (``QueueWorkCommand``); it spawns its own worker threads and does
-        NOT route through this method. This single-thread loop is kept
-        only for back-compat and the driver's unit tests — prefer
-        ``queue:work`` for all new code. Retry/DLX defaults are now
-        single-sourced from ``cara.queues.retry.Policy`` so this path and
-        the production worker cannot diverge.
-
-        Each invocation runs a single-thread blocking consume loop.
-        ``QueueWorkCommand`` typically spawns one worker thread per
-        ``--concurrency`` so a process with concurrency=8 has 8
-        independent consumers, each with its own connection.
-
-        Behaviour:
-          * Manual ack — message is only acked after the job
-            handler returns successfully. A worker crash mid-process
-            requeues the message via the broker's redelivery
-            machinery.
-          * Failed jobs nack with ``requeue=False`` so the broker's
-            DLX (configured on the queue) catches them. The driver
-            also calls ``failed()`` on the job instance for app-side
-            handling.
-          * Releases the UniqueJob lock and dispatches batch
-            completion lifecycle on every completion path
-            (success / failure / cancellation).
+        ``queue:work`` is the sole AMQP consumer implementation. Keeping two
+        loops caused acknowledgement, retry, tenancy and tracing semantics to
+        drift, so this driver-level entry point intentionally has no fallback.
         """
-        Log.warning(
-            "AMQPDriver.consume() is the legacy consumer loop and is not "
-            "used in production — the live worker is the 'queue:work' "
-            "command (QueueWorkCommand). Kept for back-compat/tests only."
+        _ = options
+        raise QueueException(
+            "Use `queue:work`; the duplicate AMQPDriver.consume() path was removed."
         )
-        merged_opts = {**self.options, **options}
-        queue_name = merged_opts.get("queue", "default")
 
-        try:
-            import pika
-        except ImportError:
-            raise QueueDriverLibraryNotFoundException(
-                "pika is required for AMQPDriver. Install with: pip install pika"
-            )
-
-        prefetch = int(merged_opts.get("prefetch", 1))
-
-        # Build a dedicated consumer connection. We don't pool
-        # consumers — they're long-lived and there's only one per
-        # worker thread.
-        connection, channel = self._open_new_connection(merged_opts)
-        # Idempotent declare — same logic as the publish path so
-        # consume against an existing TTL-mismatched queue still works.
-        exchange_name = merged_opts.get("exchange", "")
-        # Default switched to ``None`` (no per-queue TTL) to match the
-        # canonical queues declared by ``dev:reset --dlx``. The previous
-        # 86400000ms (24h) default produced
-        # ``PRECONDITION_FAILED - inequivalent arg 'x-message-ttl'``
-        # on every active declare against a queue that already existed
-        # without the TTL arg — the driver then dropped to passive
-        # declare and consumers silently failed to register against
-        # the queue, so the worker bound to ALL named queues but never
-        # received a single job event. Explicit ``message_ttl=N`` in
-        # caller opts still wins.
-        message_ttl = merged_opts.get("message_ttl")
-        queue_args: dict[str, object] = {
-            "x-dead-letter-exchange": (
-                f"{exchange_name}.dlx" if exchange_name else "dead.letter.dlx"
-            ),
-            "x-dead-letter-routing-key": f"dead.{queue_name}",
-        }
-        if message_ttl is not None:
-            queue_args["x-message-ttl"] = message_ttl
-        try:
-            channel.queue_declare(queue=queue_name, durable=True, arguments=queue_args)
-        except pika.exceptions.ChannelClosedByBroker as exc:
-            if getattr(exc, "reply_code", None) != 406:
-                raise
-            channel = connection.channel()
-            channel.confirm_delivery()
-            channel.queue_declare(queue=queue_name, durable=True, passive=True)
-
-        channel.basic_qos(prefetch_count=prefetch)
-
-        def on_message(ch, method, properties, body):
-            instance = None
-            try:
-                payload = restricted_pickle_loads(body)
-                raw = payload.get("obj")
-                callback_name = payload.get("callback", "handle")
-                args = payload.get("args", ())
-                instance = instantiate_job(self.application, raw, args)
-                if instance is not None:
-                    # Carry the dispatcher's trace context onto the job
-                    # so BaseJob.handle re-parents its span (Obs-4).
-                    instance._otel_carrier = payload.get("_otel")
-                    # Dispatcher's tenant scope — armed around the job
-                    # call in _run_job (and by run_through_middleware_async
-                    # on the queue:work path).
-                    instance._tenant_id = payload.get("_tenant")
-
-                # Propagate tracing context so logs show real IDs
-                # instead of [job_id=unknown].
-                from cara.context import ExecutionContext as _EC
-
-                _job_id = getattr(instance, "job_id", None)
-                _batch_id = getattr(instance, "batch_id", None)
-                _corr_id = getattr(instance, "correlation_id", None)
-                if _job_id and _job_id != "unknown":
-                    _EC.set_job_id(_job_id)
-                if _batch_id:
-                    _EC.set_batch_id(_batch_id)
-                if _corr_id:
-                    _EC.set_correlation_id(_corr_id)
-
-                method_to_call = getattr(instance, callback_name, None)
-                if not callable(method_to_call):
-                    raise AttributeError(
-                        f"Callback '{callback_name}' not found on {instance!r}"
-                    )
-
-                # Enforce job-level timeout — mirrors the timeout
-                # discipline in ``QueueWorkCommand.process_message``.
-                # Without this, a hung job (stuck HTTP call, dead DB
-                # pool) blocks the consumer thread indefinitely and
-                # no further messages are processed from this queue.
-                _job_timeout = (
-                    getattr(instance, "timeout", 300) if instance else 300
-                )
-
-                def _run_job():
-                    # Arm the dispatcher's tenant scope for the job body
-                    # (set INSIDE the executor thread — a fresh thread
-                    # starts with an empty contextvar context).
-                    from cara.context import Tenancy as _Tenancy
-
-                    with _Tenancy.as_tenant(getattr(instance, "_tenant_id", None)):
-                        if hasattr(self.application, "call"):
-                            r = self.application.call(method_to_call, *args)
-                        else:
-                            r = method_to_call(*args) if args else method_to_call()
-                        # ``BaseJob.handle`` is ``async def``.
-                        # Container.call returns the bare coroutine —
-                        # ``_drive_to_completion`` runs it to completion
-                        # (matches QueueWorkCommand.process_message).
-                        AMQPDriver._drive_to_completion(r)
-
-                _executor = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=1
-                )
-                _future = _executor.submit(_run_job)
-                try:
-                    _future.result(timeout=_job_timeout)
-                except concurrent.futures.TimeoutError:
-                    _future.cancel()
-                    _cls = (
-                        instance.__class__.__name__ if instance else "?"
-                    )
-                    raise TimeoutError(
-                        f"Job {_cls} exceeded timeout of {_job_timeout}s"
-                    )
-                finally:
-                    _executor.shutdown(wait=True, cancel_futures=True)
-
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                self._dispatch_batch_completion(instance, None)
-                # Success terminates the job's slot — release the
-                # UniqueJob lock so subsequent legitimate dispatches
-                # for the same ``unique_id`` can proceed. The failure
-                # branch handles its own release decision (held during
-                # retries, released on DLX).
-                self._release_unique_lock_if_any(instance)
-                self.info(f"AMQPDriver: job processed successfully, queue={queue_name}")
-            except Exception as exc:
-                self.danger(f"AMQPDriver: job processing failed: {exc}")
-                # Bounded automatic retry. Pre-fix the consumer nacked
-                # to DLX on first failure, so every transient outage
-                # (network blip, DB pool exhaustion, broker
-                # reconnect, upstream 5xx) lost the job permanently.
-                # The retry decision honours the job's own
-                # ``max_attempts`` knob (default 3), falls back to a
-                # per-class ``retry_backoff`` tuple, and only routes
-                # to DLX when the budget is exhausted. The ack-first
-                # discipline avoids a duplicate delivery if the
-                # republish raises.
-                with contextlib.suppress(OSError, ConnectionError, RuntimeError):
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                retry_scheduled = False
-                try:
-                    retry_scheduled = bool(
-                        self._handle_failed_message(
-                            instance=instance,
-                            payload=payload if "payload" in dir() else {},
-                            exc=exc,
-                            options=merged_opts,
-                        )
-                    )
-                except Exception as retry_exc:
-                    self.danger(f"AMQPDriver: retry/dead-letter path raised: {retry_exc}")
-                # Job-side ``failed`` hook for app-level cleanup —
-                # fires once per *attempt* (the framework already
-                # logs the retry separately), so listeners that care
-                # about every failure observe it. Hooks that should
-                # only fire on terminal failure can check the
-                # ``attempts`` field on the payload they receive.
-                if instance is not None and hasattr(instance, "failed"):
-                    try:
-                        instance.failed(payload if "payload" in dir() else {}, str(exc))
-                    except Exception as inner:
-                        self.danger(f"AMQPDriver: failed() raised: {inner}")
-                self._dispatch_batch_completion(instance, exc)
-                # Release the UniqueJob lock ONLY on terminal failure.
-                # If a retry was scheduled, the delayed-publish payload
-                # carries the same ``unique_id`` and the retry must
-                # observe the lock as still held — otherwise a
-                # concurrent dispatch in the backoff window wins the
-                # lock and we get a duplicate execution when the
-                # retry fires. The lock TTL (``unique_for``, default
-                # 3600s) caps the worst case.
-                if not retry_scheduled:
-                    self._release_unique_lock_if_any(instance)
-
-        channel.basic_consume(queue=queue_name, on_message_callback=on_message)
-        self.info(f"AMQPDriver: consuming from queue='{queue_name}'")
-
-        # Graceful shutdown: SIGTERM (container stop, deploy) and SIGINT
-        # (Ctrl-C) trigger stop_consuming(). The in-flight on_message
-        # callback finishes and acks before the channel closes — no
-        # message loss. Without this, SIGTERM kills the process mid-job
-        # and the message is nacked back to the queue (or lost if acked
-        # before completion).
-        import signal
-
-        def _graceful_stop(signum, frame):
-            sig_name = (
-                signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
-            )
-            self.info(f"AMQPDriver: received {sig_name}, stopping consumer gracefully…")
-            with contextlib.suppress(OSError, ConnectionError, RuntimeError):
-                channel.stop_consuming()
-
-        prev_term = signal.signal(signal.SIGTERM, _graceful_stop)
-        prev_int = signal.signal(signal.SIGINT, _graceful_stop)
-
-        try:
-            channel.start_consuming()
-        except KeyboardInterrupt:
-            channel.stop_consuming()
-        finally:
-            # Restore original handlers so nested consumers or
-            # post-shutdown code isn't affected.
-            signal.signal(signal.SIGTERM, prev_term)
-            signal.signal(signal.SIGINT, prev_int)
-            try:
-                channel.close()
-                connection.close()
-            except (OSError, ConnectionError, RuntimeError, AttributeError):
-                pass
-
-    @staticmethod
-    def _release_unique_lock_if_any(instance) -> None:
-        if instance is None:
-            return
-        try:
-            from cara.queues.contracts import UniqueJob
-
-            if isinstance(instance, UniqueJob):
-                UniqueJob.release_unique_lock(instance.unique_id())
-        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
-            pass
-
-    @staticmethod
-    def _dispatch_batch_completion(instance, exception=None) -> None:
-        if instance is None:
-            return
-        try:
-            from cara.queues.Batch import auto_dispatch_batch_completion
-
-            auto_dispatch_batch_completion(instance, exception)
-        except (ImportError, OSError, ConnectionError, RuntimeError):
-            pass
-
-    def _create_job_record(self, job, job_id: str, opts: dict[str, Any]) -> int | None:
+    def _create_job_record(self, job, job_id: str, opts: dict[str, Any]) -> int:
         """Create job record via JobTracker for consistent tracking."""
-        try:
-            tracker = self._resolve_job_tracker()
-            if not tracker:
-                return None
-
-            # Get job queue
-            queue_name = (
-                job.queue
-                if hasattr(job, "queue") and job.queue
-                else opts.get("queue", "default")
+        tracker = self._resolve_job_tracker()
+        if tracker is None or getattr(tracker, "job_model", None) is None:
+            raise QueueException(
+                "Durable AMQP dispatch requires a persistent JobTracker model."
             )
 
-            # Get job class info
-            job_name = job.__class__.__name__
-            job_class = f"{job.__class__.__module__}.{job.__class__.__name__}"
+        queue_name = (
+            job.queue
+            if hasattr(job, "queue") and job.queue
+            else opts.get("queue")
+        )
+        queue_name = self.require_canonical_queue(queue_name)
+        job_name = job.__class__.__name__
+        job_class = f"{job.__class__.__module__}.{job.__class__.__name__}"
 
-            # Extract job parameters for payload
-            from cara.queues import Bus
+        from cara.queues import Bus
 
-            payload = Bus.get_dispatch_params(job)
-
-            # Create job record
-            db_job_id = tracker.create_sync_job_record(
-                job_name=job_name,
-                job_class=job_class,
-                queue=queue_name,
-                payload=payload,
-                metadata={"job_id": job_id, "driver": "amqp"},
+        payload = Bus.get_dispatch_params(job)
+        db_job_id = tracker.create_job_record(
+            job_name=job_name,
+            job_class=job_class,
+            queue=queue_name,
+            execution_mode="queued",
+            payload=payload,
+            metadata={"job_id": job_id, "driver": "amqp"},
+        )
+        if isinstance(db_job_id, bool) or not isinstance(db_job_id, int) or db_job_id <= 0:
+            raise QueueException(
+                "JobTracker did not persist a positive AMQP db_job_id."
             )
-
-            return db_job_id
-
-        except Exception as e:
-            Log.warning("Failed to create job record: %s", e)
-            return None
+        return db_job_id
 
     def _resolve_job_tracker(self):
         """Resolve JobTracker from container."""
         if self.application and self.application.has("JobTracker"):
             return self.application.make("JobTracker")
         return None
-
-    def declare_dead_letter_exchange(self, exchange_name: str = "dead.letter") -> None:
-        """
-        Declare RabbitMQ dead letter exchange and queues.
-
-        Creates DLX exchange and binds dead letter queues for failed jobs.
-
-        Args:
-            exchange_name: Base exchange name (default: "dead.letter")
-        """
-        try:
-            # Use the driver's own credentials — ``_connect({})`` would
-            # build an unauthenticated URL (empty username/password) and
-            # the broker refuses with ACCESS_REFUSED, leaving the DLX
-            # undeclared and every nack/TTL-expiry silently dropped.
-            self._connect(self.options)
-
-            # Declare dead letter exchange
-            dlx_name = f"{exchange_name}.dlx"
-            self.channel.exchange_declare(
-                exchange=dlx_name, exchange_type="topic", durable=True
-            )
-
-            # Declare dead letter queue. Name MUST match every
-            # consumer-side reader (``replay_dead_letter`` /
-            # ``get_dead_letter_messages`` /
-            # ``services.app.support.QueueNames.DEAD_LETTER``) —
-            # pre-fix this declared ``{exchange_name}.queue`` so any
-            # deployment that called the method created a DLQ no
-            # reader looked at, and the canonical
-            # ``dead.letter.queue`` stayed empty while the broker
-            # filled up unread.
-            #
-            # NO message-TTL argument: the DLQ exists specifically
-            # to preserve failed messages for triage. A 24h ceiling
-            # would silently DROP every dead-lettered message older
-            # than 24h if ``CleanDeadLetterJob`` is paused, broken,
-            # or slower than the failure rate for one rotation —
-            # with no further DLX on the DLQ, expired messages just
-            # evaporate. If storage capping is ever needed it
-            # should be paired with another DLX and documented
-            # inline.
-            dlq_name = "dead.letter.queue"
-            self.channel.queue_declare(
-                queue=dlq_name,
-                durable=True,
-            )
-
-            # Bind queue to DLX
-            self.channel.queue_bind(
-                exchange=dlx_name, queue=dlq_name, routing_key="dead.*"
-            )
-
-            Log.info("Dead letter exchange configured: %s", dlx_name)
-
-            # Close connection and DROP the references. Leaving stale,
-            # already-closed handles on self.channel/self.connection poisons
-            # the thread-local publish path: the first dispatch's
-            # _discard_thread_connection then calls .close() on an
-            # already-closed channel. Nulling here fixes it at the source so
-            # the next publish opens a fresh connection.
-            try:
-                self.channel.close()
-                self.connection.close()
-            except (OSError, ConnectionError, RuntimeError, AttributeError):
-                pass
-            self.channel = None
-            self.connection = None
-
-        except Exception as e:
-            Log.error("Failed to declare dead letter exchange: %s", e, exc_info=True)
 
     def get_dead_letter_messages(
         self, queue_name: str = "dead.letter.queue", limit: int = 100
@@ -1112,14 +813,40 @@ class AMQPDriver(HasColoredOutput, Queue):
                 if method is None:
                     break
 
-                # Decode payload
+                # Verify the signed JSON envelope without importing the job
+                # class. A forged/corrupt DLQ record remains visible as raw
+                # metadata but is never dynamically imported.
                 try:
-                    payload = restricted_pickle_loads(body)
-                except (pickle.UnpicklingError, ImportError, AttributeError, EOFError, ValueError):
-                    try:
-                        payload = json.loads(body.decode("utf-8"))
-                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-                        payload = {"raw": body.decode("utf-8", errors="ignore")}
+                    envelope = SignedJsonJobSerializer.inspect_envelope(
+                        body,
+                        signing_keys=self.options.get("signing_keys", {}),
+                        clock_skew_seconds=int(
+                            self.options.get("clock_skew_seconds", 30)
+                        ),
+                        max_age_seconds=int(
+                            self.options.get(
+                                "envelope_max_age_seconds",
+                                SignedJsonJobSerializer.DEFAULT_MAX_AGE_SECONDS,
+                            )
+                        ),
+                        allow_not_before=True,
+                        allow_expired=True,
+                    )
+                    payload = envelope["payload"]
+                    signature_valid = True
+                    temporal_status = SignedJsonJobSerializer.temporal_status(
+                        envelope,
+                        clock_skew_seconds=int(
+                            self.options.get("clock_skew_seconds", 30)
+                        ),
+                    )
+                except QueueException as exc:
+                    payload = {
+                        "error": str(exc),
+                        "raw": body.decode("utf-8", errors="replace"),
+                    }
+                    signature_valid = False
+                    temporal_status = "invalid"
 
                 messages.append(
                     {
@@ -1128,6 +855,9 @@ class AMQPDriver(HasColoredOutput, Queue):
                         "redelivered": method.redelivered,
                         "exchange": method.exchange,
                         "headers": dict(properties.headers or {}),
+                        "priority": properties.priority,
+                        "signature_valid": signature_valid,
+                        "temporal_status": temporal_status,
                         "timestamp": properties.timestamp,
                         "payload": payload,
                     }
@@ -1136,93 +866,10 @@ class AMQPDriver(HasColoredOutput, Queue):
                 # Don't consume - requeue the message
                 self.channel.basic_nack(method.delivery_tag, requeue=True)
 
-            # Close connection
-            try:
-                self.channel.close()
-                self.connection.close()
-            except (OSError, ConnectionError, RuntimeError, AttributeError):
-                pass
-
         except Exception as e:
             Log.error("Failed to get dead letter messages: %s", e, exc_info=True)
-
-        return messages
-
-    def replay_dead_letter(self, queue_name: str, message_id: str | None = None) -> int:
-        """
-        Replay dead letter messages back to original queue.
-
-        Args:
-            queue_name: Original queue to replay to
-            message_id: Specific message ID to replay, or None for all
-
-        Returns:
-            Number of messages replayed
-        """
-        dlq_name = "dead.letter.queue"
-        replayed = 0
-
-        try:
-            self._connect(self.options)
-
-            while True:
-                method, properties, body = self.channel.basic_get(
-                    dlq_name, auto_ack=False
-                )
-
-                if method is None:
-                    break
-
-                # Check if this is the message to replay
-                headers = dict(properties.headers or {})
-                msg_id = headers.get("message_id")
-
-                if message_id is None or msg_id == message_id:
-                    # Republish to original queue
-                    self.channel.basic_publish(
-                        exchange="",
-                        routing_key=queue_name,
-                        body=body,
-                        properties=pika.BasicProperties(
-                            delivery_mode=2,
-                            headers=headers,
-                        ),
-                    )
-                    replayed += 1
-                    Log.info("Replayed message %s to %s", msg_id, queue_name)
-                    # ACK MUST happen here, before any ``break``.
-                    # Pre-fix the targeted-match branch broke out of
-                    # the loop and the trailing ``basic_ack`` below
-                    # never ran — pika treated the delivery as
-                    # in-flight, the broker redelivered on connection
-                    # close, and the job stayed in the DLQ for the
-                    # next ``CleanDeadLetterJob`` sweep to re-replay
-                    # forever.
-                    self.channel.basic_ack(method.delivery_tag)
-                    if message_id is not None:
-                        break
-                else:
-                    # Targeted scan, non-matching message. MUST NOT
-                    # ack — that removes the message from the DLQ
-                    # silently. Pre-fix the trailing
-                    # ``basic_ack(method.delivery_tag)`` ran on every
-                    # iteration regardless of match, so a targeted
-                    # replay for one stuck job silently discarded
-                    # every other DLQ message in the peek window
-                    # (pure data loss). Nack with requeue=True so
-                    # the broker keeps the message available for the
-                    # next ``CleanDeadLetterJob`` scan.
-                    self.channel.basic_nack(method.delivery_tag, requeue=True)
-
-        except Exception as e:
-            Log.error("Failed to replay dead letter messages: %s", e, exc_info=True)
+            raise
         finally:
-            # Pre-fix the close lines sat after the loop *inside* the
-            # try block: any exception mid-loop (broker hiccup during
-            # basic_publish / basic_ack) jumped past them and leaked
-            # the channel/connection bound to the thread-local. Drain
-            # the handles unconditionally and clear thread-local state
-            # so the next call opens fresh.
             try:
                 if self.channel is not None:
                     self.channel.close()
@@ -1236,197 +883,154 @@ class AMQPDriver(HasColoredOutput, Queue):
             self.channel = None
             self.connection = None
 
-        return replayed
+        return messages
 
-    def _connect_and_publish(self, payload: Any, opts: dict[str, Any]) -> None:
-        """Connect to RabbitMQ and publish message.
-
-        Connection management — was: open + publish + close. Every
-        publish was a fresh TCP+TLS handshake which dominated latency
-        (5-50ms for the round trip vs. <1ms for the actual publish),
-        and serialised every publish across the worker process behind
-        ``_publish_lock`` because pika's BlockingConnection isn't
-        thread-safe.
-
-        Now: each thread keeps its own pooled connection (pika's
-        BlockingConnection is fine when used from a single thread).
-        On publish we either reuse the thread-local connection (most
-        common), grab one from the cross-thread pool, or open a new
-        one. After publish the connection goes back to the pool for
-        reuse. Truly concurrent across threads, no global lock.
-        """
-        url = self._build_url(opts)
-        self._acquire_thread_connection(url, opts)
-        try:
-            self._connect_and_publish_locked(payload, opts)
-        except Exception:
-            # On error drop this connection — it may be in a bad
-            # state. The next publish opens a fresh one.
-            self._discard_thread_connection()
-            raise
-        else:
-            self._return_thread_connection(url)
-
-    def _connect_and_publish_locked(self, payload: Any, opts: dict[str, Any]) -> None:
-        """Inner publish path — assumes ``self.channel`` / ``self.connection``
-        are bound to this thread by the caller."""
-
-        # Get queue name from job or options
-        job = payload.get("obj")
-        queue_name = (
-            job.queue
-            if hasattr(job, "queue") and job.queue
-            else opts.get("queue", "default")
+    def replay_delivery(
+        self,
+        job_id: str,
+        *,
+        operator: str,
+        reason: str,
+    ) -> str:
+        """Replay one audited expired/dead delivery directly from PostgreSQL."""
+        return self._delivery_store.replay_from_ledger(
+            job_id,
+            operator=operator,
+            reason=reason,
         )
 
-        # Declare queue with dead letter exchange support.
-        #
-        # ``message_ttl`` default switched to ``None`` (no per-queue TTL)
-        # to match the canonical queues declared by ``dev:reset --dlx``.
-        # The 86400000ms (24h) default ran into
-        # ``PRECONDITION_FAILED - inequivalent arg 'x-message-ttl'``
-        # on every active declare against a queue that already existed
-        # without the TTL arg — passive declare succeeded but consumer
-        # binding silently failed, leaving the worker bound to every
-        # named queue while no job event ever reached it. Explicit
-        # ``message_ttl=N`` via caller opts still wins.
+    def canonical_queue_arguments(
+        self,
+        queue_name: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        """Return the one canonical declaration contract for AMQP queues."""
+        opts = {**self.options, **(options or {})}
         exchange_name = opts.get("exchange", "")
-        message_ttl = opts.get("message_ttl")
-
-        queue_args: dict[str, object] = {
-            "x-dead-letter-exchange": f"{exchange_name}.dlx"
-            if exchange_name
-            else "dead.letter.dlx",
+        arguments: dict[str, object] = {
+            "x-queue-type": "quorum",
+            "x-delivery-limit": self._bounded_queue_argument(
+                opts.get("delivery_limit", 20),
+                field="delivery_limit",
+                minimum=1,
+                maximum=1000,
+            ),
+            "x-dead-letter-exchange": (
+                f"{exchange_name}.dlx" if exchange_name else "dead.letter.dlx"
+            ),
             "x-dead-letter-routing-key": f"dead.{queue_name}",
+            "x-dead-letter-strategy": "at-least-once",
+            "x-overflow": "reject-publish",
         }
+
+        max_priority = opts.get("max_priority")
+        if isinstance(max_priority, bool) or not isinstance(max_priority, int):
+            raise QueueException("AMQP max_priority must be an integer.")
+        if not 1 <= max_priority <= 31:
+            raise QueueException("AMQP max_priority must be between 1 and 31.")
+        # RabbitMQ 4.3 quorum queues provide strict 0-31 priorities without
+        # x-max-priority (that argument applies only to classic queues).
+
+        for field, argument, default in (
+            ("max_length", "x-max-length", 100000),
+            ("max_length_bytes", "x-max-length-bytes", 1073741824),
+        ):
+            value = opts.get(field, default)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise QueueException(f"AMQP {field} must be an integer.")
+            if value <= 0:
+                raise QueueException(f"AMQP {field} must be positive.")
+            arguments[argument] = value
+
+        message_ttl = opts.get("message_ttl")
         if message_ttl is not None:
-            queue_args["x-message-ttl"] = message_ttl
+            if isinstance(message_ttl, bool) or not isinstance(message_ttl, int):
+                raise QueueException("AMQP message_ttl must be an integer.")
+            if message_ttl <= 0:
+                raise QueueException("AMQP message_ttl must be positive.")
+            arguments["x-message-ttl"] = message_ttl
+        return arguments
 
-        # Idempotent declare: if the queue was originally created with
-        # different args (e.g. older codebase or manual setup left it
-        # without x-message-ttl), an active declare raises
-        # PRECONDITION_FAILED (406) and kills the channel. We swallow
-        # that once, reopen the channel, and fall back to passive
-        # declare — the queue already exists so we can publish anyway.
-        # This prevents TTL-drift from wedging every dispatcher forever.
-        #
-        # Per-channel declare cache: the queue is declared at most
-        # ONCE per (channel, queue_name) pair. AMQP queue_declare is
-        # an idempotent no-op when args match, but it still costs a
-        # synchronous round-trip to the broker — and when args don't
-        # match it costs round-trip + channel-close + reopen + passive
-        # re-declare PER PUBLISH. Caching declared queues on the
-        # channel object cuts ~5 ms / publish under the TTL-drift
-        # case we observed against a 24h-TTL queue declared without
-        # args (every publish was burning ~9-10 ms vs. ~3-4 ms after
-        # this fix). Cache lives on the pika channel; if the channel
-        # is closed/recycled, the cache dies with it (correct
-        # invalidation for free).
-        declared = getattr(self.channel, "_cara_declared_queues", None)
-        if declared is None:
-            declared = set()
-            self.channel._cara_declared_queues = declared
+    def dead_letter_queue_arguments(
+        self,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        """Return the bounded quorum contract for untrusted broker quarantine."""
+        opts = {**self.options, **(options or {})}
+        return {
+            "x-queue-type": "quorum",
+            "x-delivery-limit": self._bounded_queue_argument(
+                opts.get("delivery_limit", 20),
+                field="delivery_limit",
+                minimum=1,
+                maximum=1000,
+            ),
+            "x-overflow": "reject-publish",
+            "x-max-length": self._bounded_queue_argument(
+                opts.get("max_length", 100000),
+                field="max_length",
+                minimum=1,
+                maximum=2_147_483_647,
+            ),
+            "x-max-length-bytes": self._bounded_queue_argument(
+                opts.get("max_length_bytes", 1073741824),
+                field="max_length_bytes",
+                minimum=1,
+                maximum=9_223_372_036_854_775_807,
+            ),
+        }
 
-        if queue_name not in declared:
-            try:
-                # PASSIVE-DECLARE FIRST. A passive declare only asserts the
-                # queue exists — it never compares arguments — so it
-                # succeeds against ANY pre-existing queue regardless of how
-                # it was originally declared. This is the key to not
-                # emitting ``PRECONDITION_FAILED - inequivalent arg
-                # 'x-dead-letter-exchange'`` on every first publish to a
-                # queue created by an older schema (the canonical priority
-                # queues in this deployment predate the DLX arg set). The
-                # previous active-declare-with-args path hit a 406, killed
-                # the channel, logged a WARNING, then fell back to passive
-                # anyway — so the publish still worked but spammed one
-                # warning per queue. Doing the passive declare up front gets
-                # the same result silently. This also mirrors the worker's
-                # _process_single_queue declare path (passive first, create
-                # on miss), so producer and consumer agree on topology.
-                self.channel.queue_declare(queue=queue_name, durable=True, passive=True)
-                declared.add(queue_name)
-            except pika.exceptions.ChannelClosedByBroker as exc:
-                if getattr(exc, "reply_code", None) != 404:
-                    raise
-                # 404 NOT_FOUND — the queue genuinely doesn't exist yet.
-                # The passive declare closed the channel, so reopen and
-                # actively create it with the canonical DLX argument set so
-                # failed jobs dead-letter correctly.
-                try:
-                    self.channel = self.connection.channel()
-                    self.channel.confirm_delivery()
-                except (OSError, ConnectionError, RuntimeError):
-                    self._connect(opts)
-                self.channel.queue_declare(
-                    queue=queue_name,
-                    durable=True,
-                    arguments=queue_args,
-                )
-                # New channel -> new cache; mark this queue as
-                # already-confirmed so subsequent publishes through
-                # the same channel don't re-declare it.
-                new_cache = {queue_name}
-                self.channel._cara_declared_queues = new_cache
-
-        # Serialize payload
-        serializer = opts.get("serializer", "pickle")
-        if serializer == "json":
-            # For JSON: convert job instance to string class path
-            if hasattr(job, "__class__"):
-                payload_copy = payload.copy()
-                payload_copy["obj"] = (
-                    f"{job.__class__.__module__}.{job.__class__.__name__}"
-                )
-                body = json.dumps(payload_copy, default=str).encode("utf-8")
-            else:
-                body = json.dumps(payload, default=str).encode("utf-8")
-        else:
-            body = pickle.dumps(payload)
-
-        # Publish with persistence + mandatory routing.
-        #
-        # ``mandatory=True`` makes the broker raise ``UnroutableError``
-        # (in concert with the publisher confirms enabled at channel
-        # setup) when no queue is bound for our routing key. Without
-        # this flag, a typo in the routing key, a wrong exchange, or
-        # a deleted queue silently swallowed the dispatch — the
-        # caller's job vanished with no signal anywhere. Now the
-        # caller gets a hard error and the orchestrator can retry or
-        # alert.
-        #
-        # Note: ``confirm_delivery()`` was previously called *after*
-        # every publish. That's a no-op on an already-confirms-mode
-        # channel — confirms are enabled once at channel construction
-        # (line 636 below). The actual broker ACK is awaited
-        # synchronously inside ``basic_publish`` because we use
-        # ``BlockingChannel`` with confirms on. Removing the redundant
-        # post-call.
-        # Per-publish message headers. ``message_headers`` is the
-        # dedicated key (used by ``schedule()`` for the delayed-plugin
-        # ``x-delay`` header). ``connection_options`` remains as a
-        # legacy fallback so any out-of-tree caller that still uses
-        # the old shape keeps working — but new code MUST use
-        # ``message_headers`` so the connection-pool key (built from
-        # ``connection_options``) stays stable across publishes.
-        publish_headers = opts.get("message_headers") or opts.get("connection_options")
-        try:
-            self.channel.basic_publish(
-                exchange=opts.get("exchange", ""),
-                routing_key=queue_name,
-                body=body,
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # Make message persistent
-                    headers=publish_headers,
-                ),
-                mandatory=True,
+    @staticmethod
+    def _bounded_queue_argument(
+        value: Any,
+        *,
+        field: str,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise QueueException(f"AMQP {field} must be an integer.")
+        if not minimum <= value <= maximum:
+            raise QueueException(
+                f"AMQP {field} must be between {minimum} and {maximum}."
             )
-        except pika.exceptions.UnroutableError as exc:
-            Log.error("AMQPDriver: message unroutable to queue='%s' exchange='%s': %s", queue_name, opts.get('exchange', ''), exc, category='cara.queue.amqp')
-            raise
+        return value
 
-        # No close — caller (``_connect_and_publish``) returns the
-        # connection to the pool for reuse.
+    def _priority_name(self, job: Any, options: dict[str, Any]) -> str:
+        explicit = options.get("priority")
+        job_priority = getattr(job, "priority", None)
+        if not isinstance(job_priority, (str, int)):
+            job_priority = getattr(job, "job_priority", None)
+        value = explicit if explicit is not None else job_priority
+        if value is None:
+            value = "default"
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise QueueException(f"Invalid AMQP job priority: {value!r}")
+        if isinstance(value, int):
+            return str(value)
+
+        levels = options.get("priority_levels") or {}
+        if value not in levels:
+            valid = ", ".join(sorted(str(level) for level in levels))
+            raise QueueException(
+                f"Unknown AMQP job priority {value!r}. Valid: {valid}"
+            )
+        return value
+
+    def _message_priority(self, job: Any, options: dict[str, Any]) -> int:
+        name = self._priority_name(job, options)
+        max_priority = int(options.get("max_priority"))
+        if name.isdigit():
+            value = int(name)
+        else:
+            value = (options.get("priority_levels") or {}).get(name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise QueueException(f"AMQP priority {name!r} has no integer mapping.")
+        if not 0 <= value <= max_priority:
+            raise QueueException(
+                f"AMQP priority {name!r}={value} exceeds queue max {max_priority}."
+            )
+        return value
 
     # ── Pool helpers ───────────────────────────────────────────────
     def _open_new_connection(self, opts: dict[str, Any]) -> tuple:
@@ -1438,8 +1042,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 "pika is required for AMQPDriver. Install with: pip install pika"
             )
 
-        connection_url = self._build_url(opts)
-        connection = pika.BlockingConnection(pika.URLParameters(connection_url))
+        connection = pika.BlockingConnection(self._connection_parameters(opts))
         channel = connection.channel()
         channel.confirm_delivery()
         return connection, channel
@@ -1447,7 +1050,9 @@ class AMQPDriver(HasColoredOutput, Queue):
     def _acquire_thread_connection(self, url: str, opts: dict[str, Any]) -> None:
         """Bind a connection + channel to this thread for the publish.
 
-        Reuse priority: existing thread-local → pool → open fresh.
+        Reuse only the current thread's own connection. Pika
+        BlockingConnection objects are owner-affine and must never cross
+        thread boundaries.
         """
         if self.connection is not None and self.channel is not None:
             # Already bound on this thread (typical case for hot
@@ -1460,58 +1065,12 @@ class AMQPDriver(HasColoredOutput, Queue):
             # Stale handle — drop it and fall through.
             self._discard_thread_connection()
 
-        # Try to grab a connection from the pool.
-        with self._pool_lock:
-            pool = self._pool.get(url, [])
-            while pool:
-                conn, chan = pool.pop()
-                try:
-                    if conn.is_open and chan.is_open:
-                        self.connection = conn
-                        self.channel = chan
-                        return
-                except (OSError, ConnectionError, RuntimeError, AttributeError):
-                    pass
-                # Stale entry — close and try the next.
-                with contextlib.suppress(OSError, ConnectionError, RuntimeError, AttributeError):
-                    conn.close()
-
-        # Pool empty / nothing healthy — open a fresh connection.
+        # No healthy owner-local handle — open a fresh connection.
         self.connection, self.channel = self._open_new_connection(opts)
 
     def _return_thread_connection(self, url: str) -> None:
-        """Return the thread's connection to the pool, capped at
-        ``_max_pool_per_url``. Excess connections are closed."""
-        conn, chan = self.connection, self.channel
-        # Always clear the thread-local first so a subsequent error
-        # path can't accidentally reuse a returned connection.
-        self.connection = None
-        self.channel = None
-        if conn is None or chan is None:
-            return
-        try:
-            if not (conn.is_open and chan.is_open):
-                conn.close()
-                return
-        except (
-            OSError,
-            ConnectionError,
-            RuntimeError,
-            AttributeError,
-            pika.exceptions.AMQPError,
-        ):
-            # A dead/closed connection that we're dropping must not turn its
-            # own ``close()`` (pika ``*WrongStateError`` on an already-closed
-            # handle) into a publish-time failure.
-            return
-
-        with self._pool_lock:
-            pool = self._pool.setdefault(url, [])
-            if len(pool) >= self._max_pool_per_url:
-                with contextlib.suppress(OSError, ConnectionError, RuntimeError, AttributeError, pika.exceptions.AMQPError):
-                    conn.close()
-                return
-            pool.append((conn, chan))
+        """Keep the healthy connection bound to its owner thread."""
+        return
 
     def _discard_thread_connection(self) -> None:
         """Drop the thread-local connection without returning it to
@@ -1540,9 +1099,8 @@ class AMQPDriver(HasColoredOutput, Queue):
     def _connect(self, opts: dict[str, Any]) -> None:
         """Bind a connection + channel to this thread.
 
-        Kept for callers that don't go through ``_connect_and_publish``
-        (e.g. ``declare_dead_letter_exchange``). New code should prefer
-        ``_acquire_thread_connection`` + ``_return_thread_connection``.
+        Kept for read-only DLQ inspection. Runtime topology mutation belongs
+        exclusively to the deploy-time ``queue:reconcile`` command.
         """
         if self.connection is not None and self.channel is not None:
             try:
@@ -1582,8 +1140,12 @@ class AMQPDriver(HasColoredOutput, Queue):
             else connection_params["vhost"].replace("/", "%2F")
         )
 
+        scheme = str(opts.get("scheme", "amqp") or "amqp").lower()
+        if scheme not in {"amqp", "amqps"}:
+            raise QueueException("AMQP scheme must be 'amqp' or 'amqps'.")
+
         base_url = (
-            f"amqp://{encoded_username}:{encoded_password}"
+            f"{scheme}://{encoded_username}:{encoded_password}"
             f"@{connection_params['host']}:{connection_params['port']}/{encoded_vhost}"
         )
 
@@ -1595,3 +1157,44 @@ class AMQPDriver(HasColoredOutput, Queue):
             return f"{base_url}?{urlencode(connection_options)}"
 
         return base_url
+
+    def _connection_parameters(self, opts: dict[str, Any]):
+        """Build pika parameters, including verified TLS and optional mTLS."""
+        if pika is None:
+            raise QueueDriverLibraryNotFoundException(
+                "pika is required for AMQPDriver. Install with: pip install pika"
+            )
+
+        parameters = pika.URLParameters(self._build_url(opts))
+        parameters.connection_attempts = 1
+        parameters.retry_delay = 0
+        parameters.socket_timeout = float(
+            opts.get("socket_timeout_seconds", 5)
+        )
+        parameters.stack_timeout = float(
+            opts.get("stack_timeout_seconds", 10)
+        )
+        parameters.blocked_connection_timeout = float(
+            opts.get("blocked_connection_timeout_seconds", 10)
+        )
+        parameters.heartbeat = int(opts.get("heartbeat_seconds", 60))
+        scheme = str(opts.get("scheme", "amqp") or "amqp").lower()
+        if scheme != "amqps":
+            return parameters
+
+        context = ssl.create_default_context(cafile=opts.get("ssl_ca_certs") or None)
+        certfile = opts.get("ssl_certfile")
+        keyfile = opts.get("ssl_keyfile")
+        if bool(certfile) != bool(keyfile):
+            raise QueueException(
+                "RABBIT_SSL_CERTFILE and RABBIT_SSL_KEYFILE must be configured together."
+            )
+        if certfile and keyfile:
+            context.load_cert_chain(certfile=certfile, keyfile=keyfile)
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        parameters.ssl_options = pika.SSLOptions(
+            context,
+            str(opts.get("host", "localhost")),
+        )
+        return parameters

@@ -257,7 +257,7 @@ class MigrationGenerator:
                     foreign_keys.append(f"            {fk_line}")
 
         # Handle standalone foreign key definitions
-        for field_name, field_info in model_info["fields"].items():
+        for _field_name, field_info in model_info["fields"].items():
             if field_info.get("type") == "foreign_key":
                 fk_line = self._generate_foreign_key_line(field_info)
                 if fk_line:
@@ -709,14 +709,15 @@ class {class_name}(Migration):
         field_method = field_info.get("type", "string")
         params = field_info.get("params", {})
 
-        # Handle special field types that don't take field names
-        if field_method == "timestamps":
-            return "table.timestamps()"
-        elif field_method == "soft_deletes":
-            return "table.soft_deletes()"
-        elif field_method == "foreign_key":
-            # Foreign key fields are handled separately, return empty string
-            return ""
+        # Handle special field types that don't take field names. Foreign-key
+        # fields are emitted separately.
+        special_fields = {
+            "foreign_key": "",
+            "soft_deletes": "table.soft_deletes()",
+            "timestamps": "table.timestamps()",
+        }
+        if field_method in special_fields:
+            return special_fields[field_method]
 
         # Build method call based on field type
         if field_method == "decimal":

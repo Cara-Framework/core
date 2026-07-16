@@ -18,8 +18,11 @@ from __future__ import annotations
 
 from email.utils import parseaddr
 
-from cara.mail import Mailable
-from cara.mail import MailMessage
+import pytest
+
+from cara.mail import Mailable, MailMessage
+from cara.mail.drivers.MailgunDriver import MailgunDriver
+from cara.mail.drivers.SmtpDriver import SmtpDriver
 
 
 class TestMailableSerialization:
@@ -39,6 +42,55 @@ class TestMailableSerialization:
         assert d["bcc"] == ["bcc@example.com"]
         assert d["priority"] == 1
 
+    def test_custom_headers_round_trip_to_smtp_and_mailgun(self) -> None:
+        headers = {
+            "List-Unsubscribe": "<https://example.com/api/unsubscribe?a=1>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        }
+        data = (
+            Mailable()
+            .to("user@example.com")
+            .from_("noreply@synkronus.io")
+            .subject("Inventory alert")
+            .headers(headers)
+            .to_dict()
+        )
+
+        smtp_message = SmtpDriver({})._create_message(data)
+        assert smtp_message["List-Unsubscribe"] == headers["List-Unsubscribe"]
+        assert (
+            smtp_message["List-Unsubscribe-Post"]
+            == headers["List-Unsubscribe-Post"]
+        )
+
+        mailgun_data = MailgunDriver(
+            {"secret": "secret", "domain": "mail.synkronus.io"}
+        )._prepare_data(data)
+        assert (
+            mailgun_data["h:List-Unsubscribe"]
+            == headers["List-Unsubscribe"]
+        )
+        assert (
+            mailgun_data["h:List-Unsubscribe-Post"]
+            == headers["List-Unsubscribe-Post"]
+        )
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("Subject", "Injected subject"),
+            ("Received", "forged transport trace"),
+            ("ARC-Seal", "forged auth chain"),
+            ("X-Safe", "ok\r\nBcc: victim@example.com"),
+            ("Bad Header", "value"),
+        ],
+    )
+    def test_custom_headers_reject_managed_and_injected_values(
+        self, name: str, value: str
+    ) -> None:
+        with pytest.raises(ValueError):
+            Mailable().header(name, value)
+
 
 class TestMailMessageFluentApi:
     def test_from_accepts_optional_display_name(self) -> None:
@@ -56,3 +108,9 @@ class TestMailMessageFluentApi:
     def test_reply_to_is_exposed_and_serialized(self) -> None:
         msg = MailMessage(manager=None).reply_to("support@cheapa.io")
         assert msg.mailable.to_dict()["reply_to"] == "support@cheapa.io"
+
+    def test_custom_headers_are_exposed_and_serialized(self) -> None:
+        msg = MailMessage(manager=None).header("X-Message-Class", "inventory")
+        assert msg.mailable.to_dict()["headers"] == {
+            "X-Message-Class": "inventory"
+        }

@@ -2,7 +2,7 @@
 Security Cast Types for Cara ORM.
 
 Provides hashing and encryption capabilities for sensitive data.
-Encryption delegates to the ``Crypt`` facade (AES-CBC) registered in the
+Encryption delegates to the ``Crypt`` facade (versioned AES-256-GCM) registered in the
 container by :class:`EncryptionProvider`.
 """
 
@@ -74,7 +74,7 @@ class EncryptedCast(BaseCast):
     Cast for encrypted field values.
 
     Uses the :class:`cara.facades.Crypt` facade, which is backed by the
-    framework's AES-CBC :class:`~cara.encryption.Crypt` implementation.
+    framework's versioned AES-256-GCM keyring.
     Values are encrypted on write and decrypted on read.
     """
 
@@ -111,10 +111,9 @@ class EncryptedJsonCast(EncryptedCast):
     """Encrypted-at-rest JSON for jsonb columns (credentials, secrets).
 
     The ciphertext rides a self-describing envelope ``{"$enc": token}``
-    so the column stays valid jsonb. The reader is tolerant on purpose:
-    a legacy plaintext dict (pre-encryption rows) is returned as-is and
-    becomes encrypted on its next save — migration by attrition, no
-    downtime re-encrypt pass required.
+    so the column stays valid jsonb. Plaintext or malformed envelopes are
+    rejected; release migrations must transform every existing row before the
+    new application image starts.
     """
 
     ENVELOPE_KEY = "$enc"
@@ -127,14 +126,13 @@ class EncryptedJsonCast(EncryptedCast):
         if isinstance(value, str):
             try:
                 value = json.loads(value)
-            except (ValueError, TypeError):
-                return None
-        if isinstance(value, dict) and self.ENVELOPE_KEY in value:
-            try:
-                return json.loads(self._cipher().decrypt(value[self.ENVELOPE_KEY]))
-            except Exception:
-                return None  # wrong APP_KEY / corrupt token — never leak the envelope
-        return value  # legacy plaintext row
+            except (ValueError, TypeError) as exc:
+                raise EncryptionException(
+                    "Encrypted JSON value is not a valid envelope"
+                ) from exc
+        if not isinstance(value, dict) or set(value) != {self.ENVELOPE_KEY}:
+            raise EncryptionException("Encrypted JSON envelope is missing")
+        return json.loads(self._cipher().decrypt(value[self.ENVELOPE_KEY]))
 
     def set(self, value: Any) -> str | None:
         import json

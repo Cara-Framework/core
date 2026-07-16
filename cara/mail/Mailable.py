@@ -9,9 +9,50 @@ Includes automatic serialization support for queue jobs.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from cara.queues.contracts import SerializesModels
+
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$")
+_PROTECTED_HEADERS = frozenset(
+    {
+        "authentication-results",
+        "bcc",
+        "cc",
+        "content-transfer-encoding",
+        "content-type",
+        "date",
+        "dkim-signature",
+        "from",
+        "message-id",
+        "mime-version",
+        "received",
+        "reply-to",
+        "return-path",
+        "sender",
+        "subject",
+        "to",
+    }
+)
+
+
+def validate_custom_header(name: str, value: str) -> tuple[str, str]:
+    """Validate an application-owned header without permitting injection."""
+    if not isinstance(name, str) or not _HEADER_NAME.fullmatch(name):
+        raise ValueError("Invalid mail header name")
+    normalized_name = name.strip()
+    lowered = normalized_name.lower()
+    if lowered in _PROTECTED_HEADERS or lowered.startswith("arc-"):
+        raise ValueError(f"Mail header is framework-managed: {normalized_name}")
+    if not isinstance(value, str):
+        raise TypeError("Mail header value must be a string")
+    normalized_value = value.strip()
+    if not normalized_value or any(char in normalized_value for char in "\r\n\x00"):
+        raise ValueError("Invalid mail header value")
+    if len(normalized_value) > 998:
+        raise ValueError("Mail header value exceeds RFC line length")
+    return normalized_name, normalized_value
 
 
 class Mailable(SerializesModels):
@@ -114,6 +155,18 @@ class Mailable(SerializesModels):
         Set the email priority.
         """
         self._priority = max(1, min(5, level))
+        return self
+
+    def header(self, name: str, value: str) -> Mailable:
+        """Set one validated custom message header."""
+        normalized_name, normalized_value = validate_custom_header(name, value)
+        self._headers[normalized_name] = normalized_value
+        return self
+
+    def headers(self, values: dict[str, str]) -> Mailable:
+        """Set validated custom message headers."""
+        for name, value in values.items():
+            self.header(name, value)
         return self
 
     def high_priority(self) -> Mailable:

@@ -1,15 +1,12 @@
-from __future__ import annotations
-
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 """
-JoinClause - Simple expression class for JOIN statements
+JoinClause - Simple expression class for JOIN statements.
 
 Handles JOIN clauses in a clean, simple way.
 """
+
+from __future__ import annotations
+
+from typing import Self
 
 from cara.exceptions import InvalidArgumentException
 

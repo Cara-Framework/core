@@ -10,7 +10,7 @@ without needing to know the canonical module path of each helper.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any
 
 from cara.configuration import config
 from cara.environment.Environment import env
@@ -74,10 +74,7 @@ def abort_unless(
         abort(status_code, message, **extra)
 
 
-T = TypeVar("T")
-
-
-def safe_call(
+def safe_call[T](
     fn: Callable[..., T],
     *args: Any,
     default: T | None = None,
@@ -129,7 +126,7 @@ def safe_call(
         return default
 
 
-def tap(value: T, callback: Callable[[T], Any] | None = None) -> T:
+def tap[T](value: T, callback: Callable[[T], Any] | None = None) -> T:
     """Pass ``value`` through ``callback`` then return ``value``.
 
     Mirrors Laravel's global ``tap()`` — useful for fluent chains
