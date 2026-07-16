@@ -393,6 +393,26 @@ class Cache:
         if stampede_lock_seconds <= 0 or not hasattr(driver, "add"):
             return driver.remember(key, ttl, callback)
 
+        def compute_without_stampede_lock() -> Any:
+            """Compute when the lock backend itself is unavailable.
+
+            A raised ``add`` is not lock contention. Waiting for a winner in
+            that state can never succeed and turns a cache outage into a
+            request-wide ``stampede_lock_seconds`` delay. Keep the application
+            available by computing once without the distributed lock; cache
+            writes remain best-effort because the same backend is already known
+            to be unhealthy.
+            """
+            value = callback()
+            try:
+                driver.put(key, value, ttl)
+            except Exception:
+                _logger.debug(
+                    "cache write after stampede lock failure failed",
+                    exc_info=True,
+                )
+            return value
+
         # Try to claim the regen slot. ``add`` is atomic on every
         # driver in this codebase (Redis SET NX, file driver O_EXCL).
         lock_key = f"stampede:remember:{key}"
@@ -400,7 +420,7 @@ class Cache:
             won = driver.add(lock_key, "1", stampede_lock_seconds)
         except Exception:
             _logger.debug("stampede lock acquisition failed", exc_info=True)
-            won = False
+            return compute_without_stampede_lock()
 
         if won:
             try:
@@ -451,7 +471,7 @@ class Cache:
                 re_won = driver.add(lock_key, "1", stampede_lock_seconds)
             except Exception:
                 _logger.debug("stampede lock acquisition failed", exc_info=True)
-                re_won = False
+                return compute_without_stampede_lock()
             if re_won:
                 try:
                     value = callback()
