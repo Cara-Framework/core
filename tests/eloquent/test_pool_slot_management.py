@@ -186,6 +186,85 @@ class TestCloseConnectionReleasesOrphanSlot:
         assert pc._pool_slot_acquired is False
 
 
+class TestConnectFailureReleasesSlot:
+    """DBAPI connection failures must not consume pool permits.
+
+    psycopg2's ``OperationalError`` is not an ``OSError``. A narrow cleanup
+    handler therefore leaked one permit for every refused/failed connection
+    until the pool exhausted and unrelated callers blocked for 30 seconds.
+    """
+
+    def test_operational_error_on_fresh_connect_releases_slot(self, monkeypatch):
+        sem = _fresh_pool(monkeypatch, size=3)
+        before = sem._value
+
+        fake = _install_fake_psycopg2(
+            monkeypatch, connect_factory=lambda **_kw: None
+        )
+
+        def _refused(**_kw):
+            raise fake.OperationalError("connection refused")
+
+        fake.connect = _refused
+        pc = _make_pc()
+
+        with pytest.raises(fake.OperationalError, match="connection refused"):
+            pc.create_connection()
+
+        assert sem._value == before, (
+            "a failed psycopg2.connect drained a pool permit; repeated DB "
+            "outages would exhaust the process-wide pool"
+        )
+        assert getattr(pc, "_pool_slot_acquired", False) is False
+
+    def test_probe_and_replacement_errors_release_slot(self, monkeypatch):
+        stale = _mock_pg_connection()
+        sem = _fresh_pool(monkeypatch, size=3, warm=[stale])
+        before = sem._value
+
+        fake = _install_fake_psycopg2(
+            monkeypatch, connect_factory=lambda **_kw: None
+        )
+        stale.cursor.return_value.execute.side_effect = fake.OperationalError(
+            "idle connection dropped"
+        )
+
+        def _replacement_refused(**_kw):
+            raise fake.OperationalError("replacement refused")
+
+        fake.connect = _replacement_refused
+        pc = _make_pc()
+
+        with pytest.raises(fake.OperationalError, match="replacement refused"):
+            pc.create_connection()
+
+        stale.cursor.return_value.close.assert_called_once_with()
+        stale.close.assert_called_once_with()
+        assert sem._value == before
+        assert getattr(pc, "_pool_slot_acquired", False) is False
+
+    def test_operational_error_while_returning_connection_releases_slot(
+        self, monkeypatch
+    ):
+        sem = _fresh_pool(monkeypatch, size=2)
+        sem.acquire()
+
+        fake = _install_fake_psycopg2(monkeypatch, _mock_pg_connection)
+        conn = _mock_pg_connection()
+        conn.info.transaction_status = 1
+        conn.rollback.side_effect = fake.OperationalError("connection reset")
+
+        pc = _make_pc()
+        pc._connection = conn
+        pc._pool_slot_acquired = True
+        pc.close_connection()
+
+        assert sem._value == 2
+        assert pc._pool_slot_acquired is False
+        assert pc._connection is None
+        conn.close.assert_called_once()
+
+
 # ── Slot leak on mid-life reconnect ─────────────────────────────
 
 
@@ -342,6 +421,30 @@ class TestMakeConnectionSetupFailureReleasesSlot:
         assert after == before, (
             f"autocommit-assign failure leaked a slot: {before} → {after}"
         )
+
+    def test_operational_error_during_setup_releases_slot(self, monkeypatch):
+        sem = _fresh_pool(monkeypatch, size=3)
+        before = sem._value
+
+        fake = _install_fake_psycopg2(
+            monkeypatch, connect_factory=lambda **_kw: None
+        )
+
+        def _connection_with_failed_setup(**_kw):
+            conn = _mock_pg_connection()
+            conn.cursor.return_value.execute.side_effect = fake.OperationalError(
+                "database restarted during setup"
+            )
+            return conn
+
+        fake.connect = _connection_with_failed_setup
+        pc = _make_pc(full_details={"foreign_keys": True})
+
+        with pytest.raises(fake.OperationalError, match="restarted during setup"):
+            pc.make_connection()
+
+        assert sem._value == before
+        assert getattr(pc, "_pool_slot_acquired", False) is False
 
     def test_repeated_setup_failures_do_not_drain_pool(self, monkeypatch):
         """Belt-and-braces: 10 consecutive setup failures must leave

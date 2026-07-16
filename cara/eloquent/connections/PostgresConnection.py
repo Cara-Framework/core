@@ -102,8 +102,8 @@ class PostgresConnection(BaseConnection):
         try:
             self._connection.autocommit = True
             self.enable_disable_foreign_keys()
-        except (OSError, RuntimeError, AttributeError):
-            with contextlib.suppress(OSError, RuntimeError, AttributeError):
+        except Exception:
+            with contextlib.suppress(Exception):
                 self.close_connection()
             raise
 
@@ -211,6 +211,16 @@ class PostgresConnection(BaseConnection):
 
     _POOL_ACQUIRE_TIMEOUT = 30
 
+    def _release_pool_slot(self) -> None:
+        """Release this wrapper's pool permit exactly once."""
+        global _pool_semaphore
+        if (
+            getattr(self, "_pool_slot_acquired", False)
+            and _pool_semaphore is not None
+        ):
+            _pool_semaphore.release()
+            self._pool_slot_acquired = False
+
     def create_connection(self):
         import psycopg2
 
@@ -230,9 +240,7 @@ class PostgresConnection(BaseConnection):
         # to zero and every subsequent caller hung on ``acquire()``
         # for the full timeout then 503'd. Releasing the orphan first
         # keeps the per-wrapper invariant at ≤1 slot.
-        if getattr(self, "_pool_slot_acquired", False) and _pool_semaphore is not None:
-            _pool_semaphore.release()
-            self._pool_slot_acquired = False
+        self._release_pool_slot()
 
         acquired = _pool_semaphore.acquire(timeout=self._POOL_ACQUIRE_TIMEOUT)
         if not acquired:
@@ -271,19 +279,18 @@ class PostgresConnection(BaseConnection):
                         # succeeds or blows up.
                         cursor.execute("SELECT 1")
                     finally:
-                        with contextlib.suppress(OSError, RuntimeError, AttributeError):
+                        with contextlib.suppress(Exception):
                             cursor.close()
-            except (OSError, RuntimeError, AttributeError):
-                with contextlib.suppress(OSError, RuntimeError, AttributeError):
+            except Exception:
+                with contextlib.suppress(Exception):
                     connection.close()
                 connection = None
 
         if not connection:
             try:
                 connection = self._connect_with_retry(psycopg2)
-            except (OSError, RuntimeError, AttributeError):
-                _pool_semaphore.release()
-                self._pool_slot_acquired = False
+            except Exception:
+                self._release_pool_slot()
                 raise
 
         return connection
@@ -347,39 +354,30 @@ class PostgresConnection(BaseConnection):
 
     def close_connection(self):
         if self._connection is None:
-            if (
-                getattr(self, "_pool_slot_acquired", False)
-                and _pool_semaphore is not None
-            ):
-                _pool_semaphore.release()
-                self._pool_slot_acquired = False
+            self._release_pool_slot()
             return
 
         if self.full_details.get("connection_pooling_enabled"):
-            with _pool_lock:
-                if len(CONNECTION_POOL) < self.connection_pool_size:
-                    try:
-                        if not self._connection.closed:
-                            if self._connection.info.transaction_status != 0:
-                                self._connection.rollback()
-                            self._connection.autocommit = True
-                            CONNECTION_POOL.append(self._connection)
-                        # else: already closed, discard
-                    except (OSError, RuntimeError, AttributeError):
-                        with contextlib.suppress(OSError, RuntimeError, AttributeError):
+            try:
+                with _pool_lock:
+                    if len(CONNECTION_POOL) < self.connection_pool_size:
+                        try:
+                            if not self._connection.closed:
+                                if self._connection.info.transaction_status != 0:
+                                    self._connection.rollback()
+                                self._connection.autocommit = True
+                                CONNECTION_POOL.append(self._connection)
+                            # else: already closed, discard
+                        except Exception:
+                            with contextlib.suppress(Exception):
+                                self._connection.close()
+                    else:
+                        with contextlib.suppress(Exception):
                             self._connection.close()
-                else:
-                    with contextlib.suppress(OSError, RuntimeError, AttributeError):
-                        self._connection.close()
-
-            if (
-                getattr(self, "_pool_slot_acquired", False)
-                and _pool_semaphore is not None
-            ):
-                _pool_semaphore.release()
-                self._pool_slot_acquired = False
+            finally:
+                self._release_pool_slot()
         else:
-            with contextlib.suppress(OSError, RuntimeError, AttributeError):
+            with contextlib.suppress(Exception):
                 self._connection.close()
 
         self._connection = None
