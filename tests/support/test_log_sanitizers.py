@@ -66,9 +66,9 @@ class TestEmailMask:
 
 class TestMaskToken:
     def test_long_token(self):
-        token = "sk_live_abc123xyz789"  # gitleaks:allow
+        token = "sample-token-value"
         result = mask_token(token)
-        assert result == "sk_l***z789"
+        assert result == "samp***alue"
         assert "abc123" not in result
 
     def test_short_token(self):

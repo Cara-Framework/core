@@ -212,8 +212,8 @@ def mask_token(token: str) -> str:
     ``"***"``.
 
     Examples:
-        >>> mask_token("sk_live_abc123xyz789")  # gitleaks:allow
-        'sk_l***z789'
+        >>> mask_token("sample-token-value")
+        'samp***alue'
         >>> mask_token("short")
         '*****'
         >>> mask_token("")
