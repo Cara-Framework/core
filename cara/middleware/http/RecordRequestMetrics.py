@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable
 
-from cara.eloquent import DatabaseManager
 from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
@@ -39,6 +38,8 @@ class RecordRequestMetrics(Middleware):
 
     def _get_query_count(self) -> int:
         try:
+            from cara.eloquent.DatabaseManager import DatabaseManager
+
             manager = DatabaseManager.get_instance()
             if manager and hasattr(manager, "_query_log"):
                 return len(getattr(manager, "_query_log", []) or [])
