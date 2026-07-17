@@ -13,6 +13,10 @@ from cara.support import paths
 
 _logger = logging.getLogger("cara.migrations.discoverer")
 
+# Sentinel: a ``self.CONSTANT`` default that has no resolvable class-level
+# literal (distinct from a legitimate ``None`` default value).
+_UNRESOLVED = object()
+
 
 class ModelDiscoverer:
     """Discover model files and extract Field.* definitions."""
@@ -404,6 +408,19 @@ class ModelDiscoverer:
             if isinstance(base, ast.Name) and base.id == "MakesSoftDeletes":
                 model_info["uses_soft_deletes"] = True
 
+        # Class-level literal constants (``STATUS_PENDING = "pending"``, …) so a
+        # ``field.string(...).default(self.STATUS_PENDING)`` schema default
+        # resolves to its LITERAL value in the generated migration. The
+        # migration is a standalone class with no such attribute, so emitting
+        # ``self.STATUS_PENDING`` verbatim raised AttributeError on up().
+        self._class_constants = {
+            target.id: node.value.value
+            for node in class_node.body
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+
         for node in class_node.body:
             if isinstance(node, ast.Assign):
                 self._parse_model_attribute(node, model_info)
@@ -625,6 +642,18 @@ class ModelDiscoverer:
                                 if field_type in ["timestamps", "soft_deletes"]:
                                     model_info["fields"][field_type] = field_def
 
+    def _resolve_self_constant(self, node: ast.AST):
+        """A ``self.CONSTANT`` default → its class-level literal value, else
+        ``_UNRESOLVED``. Lets a schema default reuse the model's own status/enum
+        constant (DRY) while the generated migration still carries the VALUE."""
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        ):
+            return getattr(self, "_class_constants", {}).get(node.attr, _UNRESOLVED)
+        return _UNRESOLVED
+
     def _extract_field_definition_new_syntax(self, call_node: ast.Call) -> dict | None:
         """Extract field definition from new syntax: field.string("name").nullable()"""
         field_type = None
@@ -685,13 +714,19 @@ class ModelDiscoverer:
                     elif method_name == "default":
                         if current.args:
                             arg = current.args[0]
+                            resolved = self._resolve_self_constant(arg)
                             if isinstance(arg, ast.Constant):
                                 params["default"] = arg.value
+                            elif resolved is not _UNRESOLVED:
+                                # ``self.CONSTANT`` → its class-level literal, so
+                                # the migration carries the VALUE (quoted like any
+                                # literal) instead of an unresolvable ``self.X``.
+                                params["default"] = resolved
                             else:
                                 # Expression default (DB.raw("now()"), an enum
-                                # member, a named constant) — keep the source
-                                # verbatim + flag it so the generator emits it
-                                # UNQUOTED instead of silently dropping it.
+                                # member) — keep the source verbatim + flag it so
+                                # the generator emits it UNQUOTED instead of
+                                # silently dropping it.
                                 params["default"] = ast.unparse(arg)
                                 params["default_is_raw"] = True
 

@@ -99,6 +99,39 @@ def test_chained_index_coexists_with_composite_index(discoverer, tmp_path):
     assert info["fields"]["queue"]["params"].get("default") == "default"
 
 
+def test_self_constant_default_resolves_to_literal(discoverer, tmp_path):
+    """A ``field.string(...).default(self.STATUS_PENDING)`` schema default must
+    resolve to the model's class-level literal, NOT be emitted verbatim: the
+    generated migration is a standalone class with no ``STATUS_PENDING`` attr, so
+    ``.default(self.STATUS_PENDING)`` raised AttributeError on up()."""
+    src = """
+        from cara.eloquent.schema import Schema
+
+        class Ticket(Model):
+            __table__ = "ticket"
+            STATUS_PENDING = "pending"
+            MAX_ATTEMPTS = 5
+
+            @property
+            def fields(self):
+                return Schema.build(
+                    lambda field: (
+                        field.big_increments("id"),
+                        field.string("status", 20).default(self.STATUS_PENDING),
+                        field.integer("attempts").default(self.MAX_ATTEMPTS),
+                    )
+                )
+    """
+    model_path = _write_model(tmp_path, "Ticket.py", src)
+    info = discoverer._parse_model_file(model_path)
+
+    status = info["fields"]["status"]["params"]
+    assert status.get("default") == "pending"
+    assert not status.get("default_is_raw")  # resolved literal, emitted quoted
+    # Non-string constants resolve too (rendered unquoted by the generator).
+    assert info["fields"]["attempts"]["params"].get("default") == 5
+
+
 # --------------------------------------------------------------------------
 # Fix 2: deterministic discovery + topological sort
 # --------------------------------------------------------------------------
