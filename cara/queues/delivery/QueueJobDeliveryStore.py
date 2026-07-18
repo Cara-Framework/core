@@ -2334,7 +2334,10 @@ class QueueJobDeliveryStore:
             "COUNT(*) FILTER (WHERE publish_status = %s) "
             "AS publish_processing, "
             "COUNT(*) FILTER (WHERE status = %s AND "
-            "terminal_reason LIKE 'publish_envelope_invalid:%') "
+            # psycopg2 interpolates every lone %, so the LIKE wildcard must be
+            # doubled — a bare % here is read as a placeholder and detonates
+            # with "IndexError: list index out of range" at execute time.
+            "terminal_reason LIKE 'publish_envelope_invalid:%%') "
             "AS publish_quarantined, "
             "COUNT(*) FILTER (WHERE publish_status = %s AND "
             "publish_lease_expires_at <= NOW()) AS stale_publish, "

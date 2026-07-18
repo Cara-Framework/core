@@ -66,6 +66,15 @@ class QueueProvider(DeferredProvider):
             options={
                 "username": username,
                 "password": password,
+                # Process capability (none/consume/publish/topology/full).
+                # verify_runtime_health() keys its probes off this value; if it
+                # is not forwarded, every process defaults to "full" and even a
+                # deliberately broker-less role (access "none" ships sentinel
+                # credentials) dials the broker and dies on a login 403.
+                "broker_access": config(
+                    "queue.drivers.amqp.broker_access",
+                    "full",
+                ),
                 "host": config("queue.drivers.amqp.host", "localhost"),
                 "port": config("queue.drivers.amqp.port", 5672),
                 "vhost": config("queue.drivers.amqp.vhost", "/"),
