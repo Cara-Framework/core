@@ -35,7 +35,13 @@ class JsonCacheCodec:
     _DOMAIN = b"cara.cache.redis.json.v1\x00"
     _RAW_INTEGER = re.compile(rb"-?(?:0|[1-9][0-9]*)\Z")
 
-    def __init__(self, signing_key: str | bytes):
+    def __init__(
+        self,
+        signing_key: str | bytes,
+        *,
+        max_nodes: int | None = None,
+        max_payload_bytes: int | None = None,
+    ):
         raw_key = (
             signing_key.encode("utf-8") if isinstance(signing_key, str) else signing_key
         )
@@ -44,6 +50,16 @@ class JsonCacheCodec:
                 "Redis cache signing key must contain at least 32 bytes."
             )
         self._key = hashlib.sha256(self._DOMAIN + raw_key).digest()
+        # Per-instance overrides of the structural safety caps. The class
+        # defaults stay conservative; a trusted first-party cache with
+        # legitimately large values (e.g. a catalog aggregate of enriched
+        # product cards, or a deep category tree) can raise the node budget
+        # via config. ``MAX_PAYLOAD_BYTES`` remains the hard byte bound, so
+        # a raised node budget can never admit an oversized payload.
+        if max_nodes is not None:
+            self.MAX_NODES = max_nodes
+        if max_payload_bytes is not None:
+            self.MAX_PAYLOAD_BYTES = max_payload_bytes
 
     def encode(self, value: Any) -> bytes:
         budget = [0]

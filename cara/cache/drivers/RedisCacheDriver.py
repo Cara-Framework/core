@@ -84,9 +84,12 @@ class RedisCacheDriver(Cache):
         ssl_keyfile: str | None = None,
         ssl_cert_reqs: str = "required",
         signing_key: str | bytes | None = None,
+        max_nodes: int | None = None,
     ):
         self._base_prefix = prefix or ""
-        self._codec = JsonCacheCodec(self._resolve_signing_key(signing_key))
+        self._codec = JsonCacheCodec(
+            self._resolve_signing_key(signing_key), max_nodes=max_nodes
+        )
         separator = (
             "" if not self._base_prefix or self._base_prefix.endswith(":") else ":"
         )
