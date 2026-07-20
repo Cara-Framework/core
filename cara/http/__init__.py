@@ -10,13 +10,22 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
+# EAGER — and it must stay eager. ``Pagination`` names BOTH this package's
+# submodule (cara/http/Pagination.py) and the class inside it. The moment any
+# code imports the submodule, Python binds it as an attribute of this package,
+# which shadows ``__getattr__`` and makes ``from cara.http import Pagination``
+# hand back the MODULE instead of the class — an import-order-dependent break
+# that surfaces as ``module has no attribute 'from_validated'``. Binding the
+# class here wins that race permanently; the dataclass is dependency-free, so
+# nothing is deferred by lazying it anyway.
+from cara.http.Pagination import Pagination as Pagination
+
 _EXPORTS = {
     "Controller": ("cara.http.controllers", "Controller"),
     "FormRequest": ("cara.http.requests", "FormRequest"),
     "InvalidCursor": ("cara.http.Cursor", "InvalidCursor"),
     "JsonResource": ("cara.http.resources", "JsonResource"),
     "MissingValue": ("cara.http.resources", "MissingValue"),
-    "Pagination": ("cara.http.Pagination", "Pagination"),
     "Request": ("cara.http.request.Request", "Request"),
     "ResourceCollection": ("cara.http.resources", "ResourceCollection"),
     "Response": ("cara.http.response.Response", "Response"),
@@ -40,7 +49,7 @@ _EXPORTS = {
     "validated_query_int": ("cara.http.Payload", "validated_query_int"),
 }
 
-__all__ = sorted(_EXPORTS)
+__all__ = sorted({*_EXPORTS, "Pagination"})
 
 
 def __getattr__(name: str) -> Any:
