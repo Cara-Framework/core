@@ -276,3 +276,90 @@ def test_uuid_and_double_field_types_are_captured(discoverer, tmp_path):
     info = discoverer._parse_model_file(model_path)
     assert info["fields"]["external_uuid"]["type"] == "uuid"
     assert info["fields"]["ratio"]["type"] == "double"
+
+
+# --------------------------------------------------------------------------
+# __indexes__ entries: f-string SQL must resolve, unresolvable SQL must RAISE
+# --------------------------------------------------------------------------
+
+
+def test_indexes_entry_with_module_constant_fstring_resolves(discoverer, tmp_path):
+    """An interpolated predicate used to be dropped SILENTLY.
+
+    ``_parse_indexes_attribute`` only accepted ``ast.Constant``, so an entry
+    written as an f-string produced no ``up`` and was skipped — the generator
+    emitted no DDL, schema:check had nothing to compare, and the index simply
+    never existed while every gate stayed green.
+    """
+    src = '''
+        from cara.schema import Schema
+
+        _LIVE_SQL = "'active', 'trialing'"
+
+
+        class Sub(Model):
+            __table__ = "sub"
+
+            __indexes__ = [
+                {
+                    "name": "sub_live_idx",
+                    "up": (
+                        "CREATE INDEX IF NOT EXISTS sub_live_idx "
+                        "ON sub (tenant_id, id) "
+                        f"WHERE status IN ({_LIVE_SQL})"
+                    ),
+                },
+            ]
+
+            @property
+            def fields(self):
+                return Schema.build(
+                    lambda field: (
+                        field.big_increments("id"),
+                    )
+                )
+    '''
+    info = discoverer._parse_model_file(_write_model(tmp_path, "Sub.py", src))
+
+    assert [index["name"] for index in info["indexes"]] == ["sub_live_idx"]
+    assert info["indexes"][0]["up"].endswith(
+        "WHERE status IN ('active', 'trialing')"
+    )
+    # An omitted "down" still defaults to the matching DROP.
+    assert info["indexes"][0]["down"] == "DROP INDEX IF EXISTS sub_live_idx"
+
+
+def test_indexes_entry_with_unresolvable_sql_raises(discoverer, tmp_path):
+    """Silently skipping is the dangerous outcome — fail loudly instead."""
+    src = '''
+        from cara.schema import Schema
+
+        _STATES = ("a", "b")
+        _COMPUTED = ", ".join(_STATES)
+
+
+        class Sub(Model):
+            __table__ = "sub"
+
+            __indexes__ = [
+                {
+                    "name": "sub_computed_idx",
+                    "up": (
+                        "CREATE INDEX IF NOT EXISTS sub_computed_idx ON sub (id) "
+                        f"WHERE status IN ({_COMPUTED})"
+                    ),
+                },
+            ]
+
+            @property
+            def fields(self):
+                return Schema.build(
+                    lambda field: (
+                        field.big_increments("id"),
+                    )
+                )
+    '''
+    model_path = _write_model(tmp_path, "Sub.py", src)
+
+    with pytest.raises(RuntimeError, match="sub_computed_idx"):
+        discoverer._parse_model_file(model_path)

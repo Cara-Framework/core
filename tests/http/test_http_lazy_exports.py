@@ -23,41 +23,60 @@ assert 'cara.http.request.mixins.MakesBodyParsing' not in sys.modules
     assert completed.returncode == 0, completed.stderr
 
 
-def test_lazy_barrel_symbols_never_collide_with_submodule_names() -> None:
-    """A lazy export whose name is also a submodule name is a live trap.
+def test_exported_symbols_never_collide_with_submodule_names() -> None:
+    """A public export whose name is also a submodule name is a live trap.
 
     Importing that submodule makes Python bind it as a package attribute,
-    which shadows ``__getattr__`` — so ``from cara.http import Pagination``
-    starts returning the MODULE instead of the class, but only for callers
-    unlucky enough to import in the wrong order. Colliding names must be
-    bound eagerly (see ``cara/http/__init__.py``), and this guard proves it
-    across every lazy barrel in the framework.
+    which shadows a lazy ``__getattr__`` — so ``from cara.http import
+    Pagination`` starts returning the MODULE instead of the class, but only
+    for callers unlucky enough to import in the wrong order. The failure
+    surfaces far from its cause, as ``module has no attribute ...`` or
+    ``module.__new__(X): X is not a type object``.
+
+    Colliding names must therefore be bound EAGERLY (see
+    ``cara/http/__init__.py``). This resolves each collision for real rather
+    than reading the source: it imports the package, then the submodule — the
+    order that springs the trap — and proves the exported name still hands
+    back the object. Source-scanning an ``_EXPORTS`` literal only ever saw
+    lazy barrels, and would miss an eager barrel that someone lazifies later.
+
+    Names a package does NOT export are out of scope: ``cara.commands.core``
+    deliberately exports nothing so that one command's optional runtime
+    dependencies cannot disable unrelated CLI commands, and its callers are
+    expected to import from the defining module.
     """
+    import importlib
     import pathlib
-    import re
+    import types
 
     root = pathlib.Path(__file__).resolve().parents[2] / "cara"
     offenders: list[str] = []
-    for init in root.rglob("__init__.py"):
-        source = init.read_text()
-        if "_EXPORTS = {" not in source:
-            continue
-        lazy = set(re.findall(r'^\s{4}"([^"]+)":', source, re.M))
-        package = init.parent
+    for init in sorted(root.rglob("__init__.py")):
+        directory = init.parent
+        if directory == root:
+            package_name = "cara"
+        else:
+            package_name = "cara." + str(
+                directory.relative_to(root)
+            ).replace("/", ".")
+        package = importlib.import_module(package_name)
+
+        exported = set(getattr(package, "__all__", ()) or ())
         submodules = {
-            path.stem for path in package.glob("*.py") if path.stem != "__init__"
+            path.stem for path in directory.glob("*.py") if path.stem != "__init__"
         } | {
             path.name
-            for path in package.iterdir()
+            for path in directory.iterdir()
             if path.is_dir() and (path / "__init__.py").exists()
         }
-        collisions = sorted(lazy & submodules)
-        if collisions:
-            offenders.append(f"{init.relative_to(root.parent)}: {collisions}")
+        for name in sorted(exported & submodules):
+            importlib.import_module(f"{package_name}.{name}")
+            if isinstance(getattr(package, name, None), types.ModuleType):
+                offenders.append(f"{package_name}.{name}")
 
     assert not offenders, (
-        "Lazy exports collide with submodule names — bind these eagerly:\n  "
-        + "\n  ".join(offenders)
+        "Exported names are shadowed by their own submodules — bind these "
+        "eagerly in the package __init__:\n  " + "\n  ".join(offenders)
     )
 
 

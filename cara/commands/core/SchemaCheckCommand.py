@@ -18,11 +18,19 @@ request.
   * conservative TYPE mismatches (only flagged when the declared and live types
     normalise to clearly different categories — avoids false positives on the
     many type aliases Postgres reports differently than we declare),
+  * TIMEZONE drift — a naive ``timestamp`` column where the model declares a
+    tz-aware ``datetime`` (or vice versa), reported with the exact repair
+    ``ALTER``; mixing the two in one expression needs a non-IMMUTABLE cast, so
+    an index over e.g. ``COALESCE(last_seen_at, created_at)`` cannot build,
   * CHECK constraints declared in a model's ``__indexes__`` but MISSING from
     live ``pg_constraint`` (a dropped CHECK otherwise passes silently),
-  * (partial-)UNIQUE indexes declared in ``__indexes__`` but MISSING from live
-    ``pg_indexes`` — e.g. a dropped ``listing_marketplace_external_unique`` (the
-    ON-CONFLICT upsert target).
+  * INDEX drift in BOTH directions — every index a model declares (``__indexes__``
+    raw SQL and ``field.index([...])``) diffed by name against live
+    ``pg_indexes``. Missing catches a dropped ON-CONFLICT upsert target; EXTRA
+    catches an index that lives only in a hand-written migration and would
+    vanish on the next regenerate-from-models. Indexes Postgres creates
+    implicitly to back a PK/UNIQUE/EXCLUDE constraint are excluded — no model
+    names those.
 
 It is strictly READ-ONLY: it never issues DDL. Exit code is non-zero when drift
 is found, so CI fails loudly. If no database is configured (or it's
@@ -60,16 +68,19 @@ _ADD_CHECK_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Harvest declared (partial-)UNIQUE indexes from ``__indexes__`` ``up`` SQL —
-# ``CREATE UNIQUE INDEX [IF NOT EXISTS] <name> ON <t> (...) [WHERE ...]``. The
-# index NAME is diffed against live ``pg_indexes``. This catches a dropped
-# ``listing_marketplace_external_unique`` (the ON CONFLICT target) that the
-# column-existence diff would happily ignore. Plain (non-unique) ``CREATE
-# INDEX`` is intentionally NOT harvested here — a missing performance index is a
-# perf regression, not a correctness/constraint one, and folding it in would
-# make the gate noisier without protecting an invariant.
-_CREATE_UNIQUE_INDEX_RE = re.compile(
-    r"CREATE\s+UNIQUE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?(?P<name>\w+)\"?",
+# Harvest EVERY declared index name — unique and plain — from ``__indexes__``
+# ``up`` SQL: ``CREATE [UNIQUE] INDEX [IF NOT EXISTS] <name> ON <t> (...)``. The
+# NAME is what we diff against live ``pg_indexes``; the definition is not
+# compared, because Postgres rewrites expressions (parens, casts, COALESCE
+# spelling) and an expression diff would cry wolf.
+#
+# Plain indexes used to be excluded here on the grounds that a missing perf
+# index is not a correctness bug. That reasoning was wrong in one direction: 37
+# synk indexes existed ONLY inside hand-written migrations, so nothing reported
+# them and a regenerate-from-models sweep would drop them silently.
+_CREATE_ANY_INDEX_RE = re.compile(
+    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?\"?(?P<name>\w+)\"?",
     re.IGNORECASE,
 )
 
@@ -119,8 +130,11 @@ _MODEL_TYPE_CATEGORY = {
     "macaddr": "macaddr",
     "date": "date",
     "time": "time",
-    "timestamp": "datetime",
-    "datetime": "datetime",
+    # Naive and aware are DELIBERATELY different categories: mixing them in one
+    # expression forces a session-timezone-dependent (non-IMMUTABLE) cast, so an
+    # index over e.g. COALESCE(aware_col, naive_col) cannot be built at all.
+    "timestamp": "datetime_naive",
+    "datetime": "datetime_aware",
     "point": "point",
     "geometry": "geometry",
 }
@@ -150,10 +164,14 @@ _DB_TYPE_CATEGORY = {
     "date": "date",
     "time without time zone": "time",
     "time with time zone": "time",
-    "timestamp without time zone": "datetime",
-    "timestamp with time zone": "datetime",
+    "timestamp without time zone": "datetime_naive",
+    "timestamp with time zone": "datetime_aware",
     "point": "point",
 }
+
+# The two datetime categories, so a naive↔aware mismatch can be reported with a
+# repair statement instead of the generic "type differs" line.
+_DATETIME_CATEGORIES = {"datetime_naive", "datetime_aware"}
 
 # Integer CAPACITY rank — the coarse "integer" category above blurs
 # smallint/integer/bigint into one bucket, so a column WIDENED in the model
@@ -247,6 +265,9 @@ class SchemaCheckCommand(CommandBase):
             # separately so we can diff declared ``__indexes__`` against them.
             live_checks = self._introspect_live_checks(live_schema, schema_name)
             live_indexes = self._introspect_live_indexes(live_schema, schema_name)
+            constraint_indexes = self._introspect_constraint_indexes(
+                live_schema, schema_name
+            )
         except Exception as exc:  # noqa: BLE001 — DB unreachable / introspection failed
             message = f"Could not introspect the live database: {exc}."
             if self.option("allow_unavailable"):
@@ -274,16 +295,20 @@ class SchemaCheckCommand(CommandBase):
                 tables_with_drift += 1
                 continue
 
-            drift = self._diff_table(declared, live_cols)
+            drift = self._diff_table(table, declared, live_cols)
             # Constraint + unique-index drift: a model that DECLARES a CHECK or
             # a (partial-)unique index in ``__indexes__`` but whose live table
             # is MISSING it. A dropped ON-CONFLICT target or a dropped CHECK
             # otherwise passes silently — caught here.
+            drift.extend(self._diff_checks(model, live_checks.get(table, set())))
+            # Full index diff (both directions, constraint-owned excluded): an
+            # index living only in a hand-written migration is invisible to the
+            # column diff and silently disappears on regenerate-from-models.
             drift.extend(
-                self._diff_constraints_and_indexes(
+                self._diff_indexes(
                     model,
-                    live_checks.get(table, set()),
                     live_indexes.get(table, set()),
+                    constraint_indexes.get(table, set()),
                 )
             )
             if drift:
@@ -383,6 +408,36 @@ class SchemaCheckCommand(CommandBase):
             indexes.setdefault(row["table_name"], set()).add(row["index_name"])
         return indexes
 
+    def _introspect_constraint_indexes(
+        self, live_schema, schema_name
+    ) -> dict[str, set[str]]:
+        """Index names Postgres created IMPLICITLY to back a constraint.
+
+        A PRIMARY KEY / UNIQUE / EXCLUDE constraint owns an index
+        (``pg_constraint.conindid``) that no model ever names. Excluding these
+        from the full index diff is what keeps "extra index in database"
+        reporting free of false positives. Returns ``{table_name: {name, ...}}``.
+        """
+        target_schema = schema_name or live_schema.get_schema() or "public"
+
+        sql = (
+            "SELECT c.relname AS table_name, i.relname AS index_name "
+            "FROM pg_constraint con "
+            "JOIN pg_class c ON c.oid = con.conrelid "
+            "JOIN pg_class i ON i.oid = con.conindid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname = '{self._sql_literal(target_schema)}' "
+            "AND con.conindid <> 0 "
+            "ORDER BY c.relname, i.relname"
+        )
+
+        rows = live_schema.query_executor.get_query_result(sql) or []
+
+        owned: dict[str, set[str]] = {}
+        for row in rows:
+            owned.setdefault(row["table_name"], set()).add(row["index_name"])
+        return owned
+
     # --- model side --------------------------------------------------------
 
     def _declared_columns(self, model: dict) -> dict[str, dict]:
@@ -463,42 +518,74 @@ class SchemaCheckCommand(CommandBase):
         return found
 
     @staticmethod
-    def _declared_unique_indexes(model: dict) -> set[str]:
-        """(Partial-)UNIQUE index names declared in ``__indexes__`` ``up`` SQL."""
+    def _declared_indexes(model: dict) -> set[str]:
+        """EVERY index name the model declares, by whichever route.
+
+        Two routes exist and both are the model's own declaration:
+          * ``__indexes__`` raw SQL — ``CREATE [UNIQUE] INDEX <name> ...``,
+          * ``fields()`` ``field.index([...])`` — collected by the discoverer as
+            ``composite_indexes``, whose live name is the entry's ``name`` or the
+            ConstraintManager default ``<table>_<cols joined by _>_index``.
+
+        ``composite_uniques`` are deliberately absent: those become table-level
+        UNIQUE CONSTRAINTS, whose backing index is filtered out on the live side
+        as constraint-owned.
+        """
         found: set[str] = set()
         for index in model.get("indexes", []) or []:
             up_sql = index.get("up") or ""
-            for match in _CREATE_UNIQUE_INDEX_RE.finditer(up_sql):
+            for match in _CREATE_ANY_INDEX_RE.finditer(up_sql):
                 found.add(match.group("name"))
+
+        table = model.get("table") or ""
+        for declaration in model.get("composite_indexes", []) or []:
+            columns = declaration.get("columns") or []
+            name = declaration.get("name") or f"{table}_{'_'.join(columns)}_index"
+            # Postgres truncates identifiers at 63 bytes, so the live name of a
+            # long auto-derived index differs from the one we just built.
+            found.add(name[:63])
         return found
 
-    def _diff_constraints_and_indexes(
-        self, model: dict, live_checks: set[str], live_indexes: set[str]
+    def _diff_indexes(
+        self, model: dict, live_indexes: set[str], constraint_indexes: set[str]
     ) -> list[str]:
-        """Report declared CHECK constraints / unique indexes MISSING from the DB.
+        """Report index drift in BOTH directions, by name.
 
-        Only flags drift in ONE direction — declared-but-absent — because a model
-        is the source of truth for the invariants it asserts. Extra live
-        constraints/indexes (hand-added perf indexes, system NOT-NULL checks) are
-        not the model's concern and would be noise.
+        Indexes backing a PK/UNIQUE/EXCLUDE constraint are excluded: Postgres
+        names those itself and no model declares them, so counting them would
+        make every table report phantom extras.
         """
+        declared = self._declared_indexes(model)
+        standalone = live_indexes - constraint_indexes
+
         issues: list[str] = []
-
-        for name in sorted(self._declared_check_constraints(model) - live_checks):
+        for name in sorted(declared - standalone):
+            issues.append(f"index '{name}' declared in model but MISSING in database")
+        for name in sorted(standalone - declared):
             issues.append(
-                f"CHECK constraint '{name}' declared in model but MISSING in database"
+                f"index '{name}' present in database but NOT declared in model "
+                f"— add it to __indexes__ or drop it; a regenerate-from-models "
+                f"sweep will not recreate it"
             )
-
-        for name in sorted(self._declared_unique_indexes(model) - live_indexes):
-            issues.append(
-                f"unique index '{name}' declared in model but MISSING in database"
-            )
-
         return issues
+
+    def _diff_checks(self, model: dict, live_checks: set[str]) -> list[str]:
+        """Report declared CHECK constraints MISSING from the DB.
+
+        One direction only — declared-but-absent — because a model is the source
+        of truth for the invariants it asserts, while extra live CHECKs (system
+        NOT-NULL constraints among them) are not the model's concern.
+        Index drift is handled by ``_diff_indexes``, which reports BOTH
+        directions.
+        """
+        return [
+            f"CHECK constraint '{name}' declared in model but MISSING in database"
+            for name in sorted(self._declared_check_constraints(model) - live_checks)
+        ]
 
     # --- diff --------------------------------------------------------------
 
-    def _diff_table(self, declared: dict, live: dict) -> list[str]:
+    def _diff_table(self, table: str, declared: dict, live: dict) -> list[str]:
         """Return human-readable drift issues for one table."""
         issues: list[str] = []
 
@@ -512,11 +599,11 @@ class SchemaCheckCommand(CommandBase):
             issues.append(f"column '{col}' present in database but NOT declared in model")
 
         for col in sorted(declared_names & live_names):
-            issues.extend(self._diff_column(col, declared[col], live[col]))
+            issues.extend(self._diff_column(table, col, declared[col], live[col]))
 
         return issues
 
-    def _diff_column(self, name: str, declared: dict, live: dict) -> list[str]:
+    def _diff_column(self, table: str, name: str, declared: dict, live: dict) -> list[str]:
         """Compare a single shared column: nullability + conservative type."""
         issues: list[str] = []
 
@@ -538,10 +625,13 @@ class SchemaCheckCommand(CommandBase):
         model_cat = _MODEL_TYPE_CATEGORY.get(declared["type"])
         db_cat = _DB_TYPE_CATEGORY.get(live["data_type"])
         if model_cat and db_cat and model_cat != db_cat:
-            issues.append(
-                f"column '{name}' type differs: model={declared['type']} "
-                f"(~{model_cat}), db={live['data_type']} (~{db_cat})"
-            )
+            if {model_cat, db_cat} <= _DATETIME_CATEGORIES:
+                issues.append(self._timezone_drift_message(table, name, model_cat))
+            else:
+                issues.append(
+                    f"column '{name}' type differs: model={declared['type']} "
+                    f"(~{model_cat}), db={live['data_type']} (~{db_cat})"
+                )
 
         # NARROWER INTEGER CAPACITY — both sides land in the coarse "integer"
         # bucket, so a model widened to big_integer while the live column is
@@ -591,6 +681,33 @@ class SchemaCheckCommand(CommandBase):
                 )
 
         return issues
+
+    @staticmethod
+    def _timezone_drift_message(table: str, column: str, model_category: str) -> str:
+        """Naive↔aware drift, reported with the exact repair statement.
+
+        Direction matters: the model is the source of truth, so a model that
+        declares ``datetime`` (aware) against a naive live column is repaired by
+        WIDENING the column to timestamptz, interpreting the stored wall-clock
+        values as UTC (the house rule). The reverse direction is a genuine
+        model/DB disagreement we can only report — narrowing to naive discards
+        the offset, so we refuse to hand out that statement casually.
+        """
+        if model_category == "datetime_aware":
+            return (
+                f"column '{column}' is timezone-NAIVE but the model declares a "
+                f"timezone-AWARE datetime — an index or expression mixing it "
+                f"with an aware column needs a non-IMMUTABLE cast and will fail "
+                f"to build. Fix: ALTER TABLE {table} ALTER COLUMN {column} TYPE "
+                f"timestamptz USING {column} AT TIME ZONE 'UTC';"
+            )
+        return (
+            f"column '{column}' is timezone-AWARE in the database but the model "
+            f"declares a naive timestamp. Either declare it as datetime (the "
+            f"framework default, UTC everywhere) or, if naive is truly intended, "
+            f"ALTER TABLE {table} ALTER COLUMN {column} TYPE timestamp USING "
+            f"{column} AT TIME ZONE 'UTC'; — note this DISCARDS the offset."
+        )
 
     # --- output ------------------------------------------------------------
 

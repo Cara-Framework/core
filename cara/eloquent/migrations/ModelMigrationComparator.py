@@ -362,8 +362,8 @@ class ModelMigrationComparator:
                 cols[col.name] = col
         self._apply_standalone_indexes(up, cols)
         if "table.timestamps()" in content:
-            cols.setdefault("created_at", Column("created_at", "timestamp"))
-            cols.setdefault("updated_at", Column("updated_at", "timestamp"))
+            cols.setdefault("created_at", Column("created_at", "datetime"))
+            cols.setdefault("updated_at", Column("updated_at", "datetime"))
 
     def _apply_update(self, content: str, cols: dict[str, Column]) -> None:
         up = self._method_body(content, "up")

@@ -119,23 +119,41 @@ class ColumnFactory:
         return self.create_column(column, "time", nullable=nullable)
 
     def datetime(self, column, nullable=False, now=False):
-        """Create datetime column"""
+        """Create a TIMEZONE-AWARE datetime column (Postgres TIMESTAMPTZ).
+
+        This is the framework default for every point in time: the house rule
+        is UTC everywhere, and a tz-aware column is the only representation
+        that survives a server/session timezone change intact.
+        """
         col = self.create_column(column, "datetime", nullable=nullable)
         if now:
             col.use_current()
         return col
 
     def timestamp(self, column, nullable=False, now=False):
-        """Create timestamp column"""
+        """Create a TIMEZONE-NAIVE timestamp column (Postgres TIMESTAMP).
+
+        Constraint: naive columns cannot be mixed with tz-aware ones inside a
+        single expression — Postgres inserts a session-timezone-dependent cast
+        which is NOT IMMUTABLE, so any index over such an expression (e.g.
+        ``COALESCE(last_seen_at, created_at)``) fails to build. Prefer
+        ``datetime()``; reach for this only when a naive wall-clock value is
+        genuinely what the column means.
+        """
         col = self.create_column(column, "timestamp", nullable=nullable)
         if now:
             col.use_current()
         return col
 
     def timestamps(self):
-        """Create created_at and updated_at columns"""
-        self.timestamp("created_at", nullable=True, now=True)
-        return self.timestamp("updated_at", nullable=True, now=True)
+        """Create tz-aware created_at and updated_at columns.
+
+        Constraint: these are ``datetime`` (TIMESTAMPTZ), not ``timestamp`` —
+        every table's audit stamps must be comparable with, and indexable
+        alongside, the hand-declared tz-aware columns around them.
+        """
+        self.datetime("created_at", nullable=True, now=True)
+        return self.datetime("updated_at", nullable=True, now=True)
 
     # === Numeric Columns ===
 

@@ -340,6 +340,18 @@ class ModelDiscoverer:
 
         tree = ast.parse(content)
 
+        # Module-level literal constants, so an ``__indexes__`` entry written as
+        # an f-string (``f"WHERE status IN ({_STATUS_SQL})"``) resolves to real
+        # SQL instead of being skipped. The model file is parsed, never
+        # imported, so nothing else can supply these values.
+        self._module_constants = {
+            target.id: node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and self._is_model_class(node):
                 return self._extract_model_structure(node, file_path.stem, str(file_path))
@@ -997,15 +1009,70 @@ class ModelDiscoverer:
                 continue
             entry: dict[str, str] = {}
             for key, value in zip(elt.keys, elt.values, strict=False):
-                if isinstance(key, ast.Constant) and isinstance(value, ast.Constant):
-                    entry[key.value] = value.value
+                if not isinstance(key, ast.Constant):
+                    continue
+                resolved = self._literal_sql(value)
+                if resolved is not _UNRESOLVED:
+                    entry[key.value] = resolved
             name = entry.get("name")
             up = entry.get("up")
-            if not name or not up:
+            if not name and not up:
                 continue
+            # A named entry whose SQL will not resolve is FATAL, never skipped:
+            # a silently dropped __indexes__ entry means the generator emits no
+            # DDL, schema:check has nothing to compare, and the index simply
+            # never exists while every gate stays green.
+            if not up:
+                raise RuntimeError(
+                    f"__indexes__ entry '{name}' has no resolvable 'up' SQL. "
+                    "Interpolations must be module- or class-level string "
+                    "constants — the model is parsed, never imported."
+                )
+            if not name:
+                raise RuntimeError(
+                    f"__indexes__ entry with SQL {up!r} has no resolvable 'name'."
+                )
             down = entry.get("down") or f"DROP INDEX IF EXISTS {name}"
             indexes.append({"name": name, "up": up, "down": down})
         return indexes
+
+    def _literal_sql(self, node: ast.AST):
+        """Resolve a string node to its literal value, or ``_UNRESOLVED``.
+
+        Handles plain constants and f-strings whose interpolations are names of
+        module- or class-level string constants. Implicitly-concatenated string
+        literals are already merged by the parser; a concatenation that mixes in
+        an f-string arrives here as a single ``JoinedStr``.
+        """
+        if isinstance(node, ast.Constant):
+            return node.value if isinstance(node.value, str) else _UNRESOLVED
+
+        if isinstance(node, ast.JoinedStr):
+            parts: list[str] = []
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    parts.append(value.value)
+                    continue
+                if not isinstance(value, ast.FormattedValue):
+                    return _UNRESOLVED
+                resolved = self._resolve_name(value.value)
+                if not isinstance(resolved, str):
+                    return _UNRESOLVED
+                parts.append(resolved)
+            return "".join(parts)
+
+        return _UNRESOLVED
+
+    def _resolve_name(self, node: ast.AST):
+        """Look a bare name or ``self.NAME`` up in the class/module constants."""
+        if isinstance(node, ast.Name):
+            constants = getattr(self, "_module_constants", {})
+            if node.id in constants:
+                return constants[node.id]
+            return getattr(self, "_class_constants", {}).get(node.id, _UNRESOLVED)
+        if isinstance(node, ast.Attribute):
+            return getattr(self, "_class_constants", {}).get(node.attr, _UNRESOLVED)
+        return _UNRESOLVED
 
     def _parse_raw_sql_fields(self, dict_node: ast.Dict, model_info: dict):
         """Parse fields() method that returns {'up': function, 'down': function}."""

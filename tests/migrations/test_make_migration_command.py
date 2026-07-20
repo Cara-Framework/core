@@ -1,10 +1,11 @@
-"""Tests for ``MakeMigrationCommand`` — focused on the --overwrite clobber
-safety guard, the hand-edit detector, and the run summary.
+"""Tests for ``MakeMigrationCommand`` — focused on the --overwrite purge
+contract (one generated file per table, ``MODEL_LESS = True`` the only
+exemption), the clobber safety guard, the hand-edit detector, and the summary.
 
 These exercise pure command logic with no live database: the model
 discoverer / comparator / generator are never invoked. The migrations
 directory is pointed at a tmp dir via ``PathManager.set_path_override`` so
-``_collect_clobber_targets`` resolves through the real ``paths()`` machinery
+``_partition_migrations`` resolves through the real ``paths()`` machinery
 without touching the consumer's real migrations.
 """
 
@@ -92,6 +93,39 @@ class CreateWidgetTable(Migration):
 '''
 
 
+# A hand-written incremental migration — the class --overwrite must now purge.
+_HAND_WRITTEN = '''"""BackfillWidgetSlugs Migration."""
+
+from cara.eloquent.migrations import Migration
+from cara.facades import DB
+
+
+class BackfillWidgetSlugs(Migration):
+    def up(self):
+        DB.statement("UPDATE widget SET slug = lower(name) WHERE slug IS NULL")
+
+    def down(self):
+        pass
+'''
+
+# A model-less object (materialized view) marked for preservation.
+_MODEL_LESS_FILE = '''"""CreatePriceViews Migration."""
+
+from cara.eloquent.migrations import Migration
+from cara.facades import DB
+
+MODEL_LESS = True
+
+
+class CreatePriceViews(Migration):
+    def up(self):
+        DB.statement("CREATE MATERIALIZED VIEW price_daily AS SELECT 1")
+
+    def down(self):
+        DB.statement("DROP MATERIALIZED VIEW IF EXISTS price_daily")
+'''
+
+
 def _write(d, name, content):
     p = d / name
     p.write_text(content, encoding="utf-8")
@@ -166,30 +200,72 @@ def test_unreadable_file_treated_as_hand_edited(migrations_dir):
     assert cmd._looks_hand_edited(missing) is True
 
 
-# --- _collect_clobber_targets -------------------------------------------------
+# --- _partition_migrations: the one-file-per-table contract -------------------
 
 
-def test_collect_targets_dedupes_and_matches_patterns(migrations_dir):
+def test_partition_dooms_every_unmarked_file_including_unrelated_tables(migrations_dir):
+    # The old rule ("does this file touch a model table?") let hand-written
+    # add_*/backfill_* migrations survive forever, so the directory stopped
+    # being a function of the models. EVERY unmarked .py is now doomed.
     cmd = _make_command()
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
     _write(
         migrations_dir, "0002_01_01_000000_add_note_to_widget_table.py", _GENERATED_CREATE
     )
-    # unrelated table — must be left alone
-    _write(
-        migrations_dir,
-        "0003_01_01_000000_create_gadget_table.py",
-        _GENERATED_CREATE.replace('create("widget")', 'create("gadget")').replace(
-            'drop("widget")', 'drop("gadget")'
-        ),
-    )
+    _write(migrations_dir, "0003_01_01_000000_backfill_widget_slugs.py", _HAND_WRITTEN)
+    _write(migrations_dir, "0004_01_01_000000_create_gadget_table.py", _GENERATED_CREATE)
 
-    targets = cmd._collect_clobber_targets([{"table": "widget"}])
-    names = sorted(p.name for p in targets)
-    assert names == [
+    doomed, preserved = cmd._partition_migrations()
+    assert sorted(p.name for p in doomed) == [
         "0001_01_01_000000_create_widget_table.py",
         "0002_01_01_000000_add_note_to_widget_table.py",
+        "0003_01_01_000000_backfill_widget_slugs.py",
+        "0004_01_01_000000_create_gadget_table.py",
     ]
+    assert preserved == []
+
+
+def test_partition_preserves_model_less_marked_files(migrations_dir):
+    cmd = _make_command()
+    _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
+    _write(migrations_dir, "9982_01_01_000000_create_price_views.py", _MODEL_LESS_FILE)
+
+    doomed, preserved = cmd._partition_migrations()
+    assert [p.name for p in doomed] == ["0001_01_01_000000_create_widget_table.py"]
+    assert [p.name for p in preserved] == ["9982_01_01_000000_create_price_views.py"]
+
+
+def test_partition_ignores_package_init(migrations_dir):
+    cmd = _make_command()
+    _write(migrations_dir, "__init__.py", "")
+    doomed, preserved = cmd._partition_migrations()
+    assert doomed == [] and preserved == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "MODEL_LESS = False",
+        "MODEL_LESS = 1",
+        "MODEL_LESS: bool = True",
+        "def f():\n    MODEL_LESS = True\n",
+        "class C:\n    MODEL_LESS = True\n",
+        "OTHER = True",
+        "",
+    ],
+)
+def test_model_less_marker_requires_module_level_literal_true(source, tmp_path):
+    expected = source == "MODEL_LESS: bool = True"
+    path = tmp_path / "m.py"
+    assert MakeMigrationCommand._declares_model_less(source, path) is expected
+
+
+def test_unparseable_file_is_not_treated_as_marked(tmp_path):
+    # A broken migration must not dodge the sweep by failing to parse.
+    assert (
+        MakeMigrationCommand._declares_model_less("def up(:\n", tmp_path / "m.py")
+        is False
+    )
 
 
 # --- _confirm_clobber gating --------------------------------------------------
@@ -197,7 +273,7 @@ def test_collect_targets_dedupes_and_matches_patterns(migrations_dir):
 
 def test_confirm_clobber_no_targets_proceeds(migrations_dir):
     cmd = _make_command()
-    assert cmd._confirm_clobber([{"table": "widget"}]) is True
+    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
 
 
 def test_confirm_clobber_clean_files_proceeds_without_prompt(migrations_dir):
@@ -206,7 +282,7 @@ def test_confirm_clobber_clean_files_proceeds_without_prompt(migrations_dir):
         side_effect=AssertionError("should not prompt for clean files")
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
-    assert cmd._confirm_clobber([{"table": "widget"}]) is True
+    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
 
 
 def test_confirm_clobber_hand_edited_prompts_and_respects_no(migrations_dir):
@@ -217,7 +293,7 @@ def test_confirm_clobber_hand_edited_prompts_and_respects_no(migrations_dir):
         "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
-    assert cmd._confirm_clobber([{"table": "widget"}]) is False
+    assert cmd._confirm_clobber(*cmd._partition_migrations()) is False
     cmd.confirm.assert_called_once()
 
 
@@ -229,7 +305,7 @@ def test_confirm_clobber_hand_edited_prompts_and_respects_yes(migrations_dir):
         "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
-    assert cmd._confirm_clobber([{"table": "widget"}]) is True
+    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
     cmd.confirm.assert_called_once()
 
 
@@ -241,7 +317,7 @@ def test_force_skips_prompt_even_when_hand_edited(migrations_dir):
         "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
-    assert cmd._confirm_clobber([{"table": "widget"}]) is True
+    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
 
 
 def test_dry_run_skips_prompt_even_when_hand_edited(migrations_dir):
@@ -252,28 +328,34 @@ def test_dry_run_skips_prompt_even_when_hand_edited(migrations_dir):
         "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
-    assert cmd._confirm_clobber([{"table": "widget"}]) is True
+    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
 
 
-# --- _clear_existing_migrations integration with the guard --------------------
+# --- the purge is honest: preserved files survive the atomic replace ----------
 
 
-def test_clear_deletes_files_when_not_dry_run(migrations_dir):
-    cmd = _make_command()
-    p = _write(
+def test_model_less_file_survives_and_is_announced(migrations_dir):
+    cmd = _make_command({"force": True})
+    doomed_file = _write(
         migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE
     )
-    cmd._clear_existing_migrations([{"table": "widget"}])
-    assert not p.exists()
-
-
-def test_clear_preserves_files_on_dry_run(migrations_dir):
-    cmd = _make_command({"dry_run": True})
-    p = _write(
-        migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE
+    kept = _write(
+        migrations_dir, "9982_01_01_000000_create_price_views.py", _MODEL_LESS_FILE
     )
-    cmd._clear_existing_migrations([{"table": "widget"}])
-    assert p.exists()
+    cmd.info = MagicMock()
+    cmd.warning = MagicMock()
+
+    doomed, preserved = cmd._partition_migrations()
+    assert cmd._confirm_clobber(doomed, preserved) is True
+
+    # Both lists are printed — the sweep is never silent about what it keeps.
+    announced = " ".join(str(c.args[0]) for c in cmd.info.call_args_list)
+    assert "9982_01_01_000000_create_price_views.py" in announced
+    assert "MODEL_LESS" in announced
+
+    cmd._replace_model_migrations_atomically(doomed, [])
+    assert kept.exists()
+    assert not doomed_file.exists()
 
 
 # --- _print_summary -----------------------------------------------------------

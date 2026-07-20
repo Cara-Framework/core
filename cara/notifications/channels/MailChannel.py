@@ -238,19 +238,34 @@ class MailChannel(BaseChannel):
         ``app.preferences_url``
             Human notification-preferences page.
         ``app.unsubscribe_confirm_url``
-            Human unsubscribe confirmation page; rendered as
-            ``unsubscribe_url`` with the signed query appended.
+            Human unsubscribe confirmation PAGE, if the product ships one.
         ``app.unsubscribe_url``
             RFC 8058 one-click POST processor (machine endpoint); rendered as
             ``unsubscribe_one_click_url``.
 
-        Both unsubscribe links carry an HMAC over the opaque user identity and
-        email. Honors any value the notification already supplied in
-        ``to_mail()['data']`` — those win; we only fill in the gaps.
+        The human-visible ``unsubscribe_url`` is resolved best-first:
 
-        Honest-null: a key whose config is unset is left OUT of ``view_data``
-        entirely (templates carry their own ``default('#')``). An unsubscribe
-        link that cannot be signed is therefore never emitted at all.
+        1. a non-blank value the notification supplied in ``to_mail()['data']``;
+        2. the signed confirmation page, when the product declares one;
+        3. the signed processor itself — a UI-less processor that answers GET
+           is a legitimate human destination, and a product whose opt-out is a
+           single HMAC-gated endpoint (no confirmation page) relies on exactly
+           this rather than shipping mail with no visible link at all;
+        4. the preferences page, which needs no signature and carries the real
+           opt-out controls.
+
+        Signed links carry an HMAC over the opaque user identity and email; a
+        link that cannot be signed is never emitted as a signed link. Because
+        an unsubscribe affordance is a legal requirement, an unmintable link is
+        reported to the operator rather than silently dropped: honest-null on
+        this particular key renders as ``href="#"`` in the shipped mail, which
+        is indistinguishable from a working opt-out during review.
+
+        Blank means "not supplied": a present-but-empty value from a caller is
+        replaced, not preserved, so ``{"unsubscribe_url": ""}`` cannot survive
+        into the template. Other keys (``frontend_url``, ``preferences_url``)
+        stay honest-null — unset config injects nothing and the templates carry
+        their own ``default('#')``.
         """
         try:
             from cara.configuration import config
@@ -263,13 +278,21 @@ class MailChannel(BaseChannel):
             except Exception:
                 return ""
 
-        frontend_url = setting("app.frontend_url")
-        if frontend_url:
-            view_data.setdefault("frontend_url", frontend_url)
+        def offer(key: str, value: str) -> None:
+            """Fill a gap without overwriting a real caller-supplied value."""
+            existing = view_data.get(key)
+            if isinstance(existing, str) and existing.strip():
+                return
+            if value:
+                view_data[key] = value
+
+        offer("frontend_url", setting("app.frontend_url"))
 
         preferences_url = setting("app.preferences_url")
-        if preferences_url:
-            view_data.setdefault("preferences_url", preferences_url)
+        offer("preferences_url", preferences_url)
+
+        confirm_url = setting("app.unsubscribe_confirm_url")
+        processor_url = setting("app.unsubscribe_url")
 
         user_public_id = getattr(notifiable, "public_id", None)
         email = getattr(notifiable, "email", None) or getattr(
@@ -281,22 +304,53 @@ class MailChannel(BaseChannel):
             secret = config("app.unsubscribe_secret", "") or ""
         except Exception:
             secret = ""
-        if not (user_public_id and email and secret):
-            return  # Unsignable — no unsubscribe link may be produced.
 
-        token = hmac.new(
-            secret.encode("utf-8"),
-            f"{user_public_id}:{email}".encode(),
-            hashlib.sha256,
-        ).hexdigest()
-        query = urlencode({"user": user_public_id, "token": token})
+        query = ""
+        if user_public_id and email and secret:
+            token = hmac.new(
+                secret.encode("utf-8"),
+                f"{user_public_id}:{email}".encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            query = urlencode({"user": user_public_id, "token": token})
+        elif confirm_url or processor_url:
+            # The product declared an unsubscribe endpoint, so a link was meant
+            # to be here and could not be minted. Reaching an operator matters
+            # more than a tidy log: the reader falls back to the preferences
+            # page below, which is a weaker opt-out than the one intended.
+            missing = [
+                name
+                for name, present in (
+                    ("app.unsubscribe_secret", secret),
+                    ("notifiable.public_id", user_public_id),
+                    ("notifiable.email", email),
+                )
+                if not present
+            ]
+            self._emit_error(
+                "Unsubscribe link could not be signed; missing "
+                + ", ".join(missing),
+                RuntimeError("unsubscribe link unsignable"),
+            )
 
-        confirm_url = setting("app.unsubscribe_confirm_url")
-        if confirm_url:
-            view_data.setdefault("unsubscribe_url", f"{confirm_url}?{query}")
+        if query and confirm_url:
+            composed = f"{confirm_url}?{query}"
+        elif query and processor_url:
+            composed = f"{processor_url}?{query}"
+        else:
+            composed = preferences_url
+        offer("unsubscribe_url", composed)
 
-        processor_url = setting("app.unsubscribe_url")
-        if processor_url:
+        if not (query and processor_url):
+            return  # No one-click endpoint to advertise.
+
+        # RFC 8058 headers are built from this value, so it must never point
+        # somewhere the reader cannot see. The framework's own confirm-page and
+        # processor are two faces of one config-declared endpoint, so pairing
+        # them is honest; but when the notification supplies its OWN visible
+        # link, a mail client would otherwise opt the user out via a URL that
+        # never appeared in the message.
+        if view_data.get("unsubscribe_url") == composed:
             view_data["unsubscribe_one_click_url"] = f"{processor_url}?{query}"
 
     @staticmethod

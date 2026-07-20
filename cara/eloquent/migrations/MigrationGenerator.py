@@ -73,8 +73,10 @@ _RENAME_SQL_TYPE = {
     "double": "double precision",
     "jsonb": "jsonb",
     "json": "json",
+    # ``datetime`` is tz-AWARE; rendering it as bare ``timestamp`` here silently
+    # downgraded a renamed/retyped column to naive.
     "timestamp": "timestamp",
-    "datetime": "timestamp",
+    "datetime": "timestamptz",
     "date": "date",
     "time": "time",
     "uuid": "uuid",

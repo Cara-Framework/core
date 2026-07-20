@@ -417,8 +417,13 @@ class Blueprint:
     # === Special Methods ===
 
     def soft_deletes(self, name="deleted_at"):
-        """Add soft delete column"""
-        return self.timestamp(name, nullable=True)
+        """Add soft delete column.
+
+        Constraint: tz-aware (``datetime``), matching ``timestamps()`` — a
+        naive deleted_at cannot be compared or co-indexed with the tz-aware
+        stamps it is queried beside.
+        """
+        return self.datetime(name, nullable=True)
 
     def table_comment(self, comment) -> Self:
         """Add table comment"""

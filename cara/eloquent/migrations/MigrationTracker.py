@@ -99,7 +99,7 @@ class MigrationTracker:
                 migration VARCHAR(255) NOT NULL,
                 batch INTEGER NOT NULL,
                 checksum VARCHAR(64) NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
         """
         connection.query(body.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1))

@@ -89,7 +89,7 @@ def test_declared_columns_harvests_raw_sql_added_columns():
         "title": {"data_type": "character varying", "is_nullable": False},
         "search_vector": {"data_type": "tsvector", "is_nullable": True},
     }
-    assert cmd._diff_table(cols, live) == []
+    assert cmd._diff_table("listing", cols, live) == []
 
 
 # --- _diff_table: missing / extra columns ------------------------------------
@@ -108,7 +108,7 @@ def test_diff_table_reports_missing_and_extra_columns():
         "legacy_col": {"data_type": "text", "is_nullable": True},  # in DB, not model
     }
 
-    issues = cmd._diff_table(declared, live)
+    issues = cmd._diff_table("listing", declared, live)
 
     assert any("new_col" in i and "MISSING in database" in i for i in issues)
     assert any("legacy_col" in i and "NOT declared in model" in i for i in issues)
@@ -120,6 +120,7 @@ def test_diff_table_reports_missing_and_extra_columns():
 def test_diff_column_flags_nullability_mismatch():
     cmd = _make_command()
     issues = cmd._diff_column(
+        "listing",
         "email",
         {"type": "string", "nullable": False},
         {"data_type": "character varying", "is_nullable": True},
@@ -131,6 +132,7 @@ def test_diff_column_flags_clear_type_mismatch():
     cmd = _make_command()
     # model says boolean, DB has an integer column -> clearly different category.
     issues = cmd._diff_column(
+        "listing",
         "is_active",
         {"type": "boolean", "nullable": False},
         {"data_type": "integer", "is_nullable": False},
@@ -142,6 +144,7 @@ def test_diff_column_does_not_flag_aliased_types():
     cmd = _make_command()
     # string <-> character varying are the SAME category; no false positive.
     issues = cmd._diff_column(
+        "listing",
         "name",
         {"type": "string", "nullable": False},
         {"data_type": "character varying", "is_nullable": False},
@@ -153,6 +156,7 @@ def test_diff_column_skips_unknown_types_to_avoid_false_positives():
     cmd = _make_command()
     # An un-catalogued DB type must NOT produce a spurious mismatch.
     issues = cmd._diff_column(
+        "listing",
         "geo",
         {"type": "string", "nullable": False},
         {"data_type": "some_exotic_pg_type", "is_nullable": False},
@@ -175,4 +179,4 @@ def test_diff_table_clean_when_in_sync():
         "name": {"data_type": "character varying", "is_nullable": False},
         "active": {"data_type": "boolean", "is_nullable": False},
     }
-    assert cmd._diff_table(declared, live) == []
+    assert cmd._diff_table("listing", declared, live) == []

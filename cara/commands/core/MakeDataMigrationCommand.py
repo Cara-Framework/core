@@ -88,6 +88,11 @@ class MakeDataMigrationCommand(CommandBase):
 from cara.eloquent.migrations import Migration
 from cara.facades import DB
 
+# No model owns a data change, so ``make:migration --overwrite`` (which rebuilds
+# the directory as exactly one generated file per table) would delete this file.
+# The marker exempts it. Remove it only if this migration becomes disposable.
+MODEL_LESS = True
+
 
 class {class_name}(Migration):
     def up(self):

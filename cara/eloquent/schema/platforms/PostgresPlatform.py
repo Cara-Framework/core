@@ -63,10 +63,16 @@ class PostgresPlatform(Platform):
         "unsigned": "INT",
     }
 
+    # Introspection: live ``information_schema.data_type`` -> cara field type.
+    # Constraint: the two TIMESTAMP variants must map to DIFFERENT cara types.
+    # Collapsing both onto ``datetime`` made naive-vs-aware drift structurally
+    # invisible to every consumer of ``get_current_schema`` (schema:check
+    # included), which is how a whole database of naive created_at/updated_at
+    # columns went unnoticed.
     table_info_map = {
         "CHARACTER VARYING": "string",
         "TIMESTAMP WITH TIME ZONE": "datetime",
-        "TIMESTAMP WITHOUT TIME ZONE": "datetime",
+        "TIMESTAMP WITHOUT TIME ZONE": "timestamp",
     }
 
     premapped_defaults = {

@@ -1,10 +1,22 @@
 """
 MakeMigrationCommand: Auto-generates migrations from models using stubs.
 Orchestrates model discovery, schema comparison, and migration generation.
+
+``--overwrite`` enforces ONE FILE PER TABLE: after regenerating, the migrations
+directory contains exactly the model-generated set and nothing else. It used to
+delete only the files it recognised as its own, so hand-written ``add_*`` /
+``backfill_*`` / ``fix_*`` migrations accumulated forever (synk: 123 generated +
+40 hand-written) and the directory stopped being a function of the models.
+
+The escape hatch is the module-level ``MODEL_LESS = True`` marker: a migration
+that creates a schema object NO model can own (a materialized view, an extension,
+a data backfill) declares it and ``--overwrite`` preserves the file. Unmarked
+files are deleted. Both lists are printed — the sweep is never silent.
 """
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import os
 import shutil
@@ -14,12 +26,27 @@ from pathlib import Path
 from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
 
+# Module-level marker that exempts a migration from the ``--overwrite`` purge.
+# Constraint: it must be a literal ``MODEL_LESS = True`` at module scope — the
+# file is parsed, never imported, so a computed or nested value is not honoured.
+MODEL_LESS_MARKER = "MODEL_LESS"
+
 
 @command(
     name="make:migration",
-    help="Auto-generate migrations from models using Laravel 11+ ordering system (no timestamps).",
+    help=(
+        "Auto-generate migrations from models using Laravel 11+ ordering system "
+        "(no timestamps). With --overwrite the migrations directory becomes "
+        "EXACTLY one generated file per model table; every other .py file is "
+        "deleted unless it declares a module-level 'MODEL_LESS = True' marker "
+        "(for materialized views, extensions, data backfills and other objects "
+        "no model owns). Preserved and deleted files are both printed."
+    ),
     options={
-        "--overwrite": "Recreate all migrations from scratch (DELETES existing migration files)",
+        "--overwrite": (
+            "Recreate all migrations from scratch: regenerate one file per table "
+            "and DELETE every other migration except those marked MODEL_LESS = True"
+        ),
         "--force": "Skip the hand-edit confirmation prompt when --overwrite clobbers files",
         "--style=blueprint": "Migration style (blueprint is the only supported SSOT)",
         "--dry_run": "Show what would be generated without creating files",
@@ -120,12 +147,12 @@ class MakeMigrationCommand(CommandBase):
     def _handle_overwrite_mode(self):
         """Handle --overwrite mode: recreate all migrations from scratch.
 
-        ``--overwrite`` DELETES every model-owned migration file on disk and
-        regenerates them. Before unlinking anything we surface exactly which
-        files will be destroyed and, if any of them look hand-edited (contain
-        markers the generator never authors), require an interactive confirm
-        (or ``--force``) so a regenerate sweep can't silently wipe handwritten
-        SQL / custom down() logic.
+        ``--overwrite`` DELETES every migration file that is not marked
+        ``MODEL_LESS = True`` and regenerates exactly one per model table.
+        Before unlinking anything we surface which files will be destroyed and
+        which are preserved, and if any doomed file looks hand-edited (contains
+        markers the generator never authors) we require an interactive confirm
+        (or ``--force``) so the sweep can't silently wipe handwritten SQL.
         """
         self.info("Overwrite mode: Recreating all migrations from scratch...")
 
@@ -146,9 +173,14 @@ class MakeMigrationCommand(CommandBase):
             self.error(f"Overwrite preflight failed; no files changed: {exc}")
             return 1
 
+        # Partition ONCE, before any disk write: after the replace the directory
+        # holds the freshly generated files, so re-partitioning would count them
+        # as deletions. This snapshot drives both the safety gate and the summary.
+        doomed, preserved = self._partition_migrations()
+
         # Safety gate: refuse to silently clobber hand-edited migrations.
         # Returns False (abort) only when the user declines the confirm.
-        if not self._confirm_clobber(ordered_models):
+        if not self._confirm_clobber(doomed, preserved):
             self.warning("Aborted: no files were changed.")
             return
 
@@ -172,18 +204,25 @@ class MakeMigrationCommand(CommandBase):
                 self.info(content)
             created_count = len(prepared)
         else:
-            created_count = self._replace_model_migrations_atomically(
-                ordered_models, prepared
-            )
+            created_count = self._replace_model_migrations_atomically(doomed, prepared)
 
-        # Summary message
-        if self.option("dry_run"):
-            self.success(
-                f"Would recreate {created_count} migration(s) with dependency-based ordering"
+        # Summary: state the resulting CONTRACT, not just the count, so a run
+        # that quietly removed 40 hand-written migrations says so.
+        removed, preserved_files = len(doomed), len(preserved)
+        verb = "Would recreate" if self.option("dry_run") else "Recreated"
+        self.success(
+            f"{verb} {created_count} migration(s) with dependency-based ordering "
+            f"— one file per table"
+        )
+        if removed:
+            self.warning(
+                f"{removed} non-generated migration(s) "
+                f"{'would be' if self.option('dry_run') else 'were'} deleted "
+                f"(listed above). Mark a file '{MODEL_LESS_MARKER} = True' to keep it."
             )
-        else:
-            self.success(
-                f"Recreated {created_count} migration(s) with dependency-based ordering"
+        if preserved_files:
+            self.info(
+                f"{preserved_files} {MODEL_LESS_MARKER} file(s) preserved untouched."
             )
 
     def _prepare_overwrite(self, ordered_models):
@@ -200,11 +239,10 @@ class MakeMigrationCommand(CommandBase):
             prepared.append((model_info, index, content))
         return prepared
 
-    def _replace_model_migrations_atomically(self, models, prepared) -> int:
-        """Move old model migrations aside; restore all of them on failure."""
+    def _replace_model_migrations_atomically(self, targets, prepared) -> int:
+        """Move the doomed migrations aside; restore all of them on failure."""
         migrations_dir = self._migrations_dir() or self.generator.migrations_dir
         migrations_dir.mkdir(parents=True, exist_ok=True)
-        targets = self._collect_clobber_targets(models)
         backup_dir = Path(
             tempfile.mkdtemp(prefix=".cara-overwrite-", dir=str(migrations_dir))
         )
@@ -258,35 +296,74 @@ class MakeMigrationCommand(CommandBase):
         migrations_dir = Path(paths("migrations"))
         return migrations_dir if migrations_dir.exists() else None
 
-    def _collect_clobber_targets(self, models):
-        """Return the de-duplicated list of migration files --overwrite deletes.
+    def _partition_migrations(self):
+        """Split the migrations directory into (deleted, preserved) file lists.
 
-        Mirrors the glob patterns used by ``_clear_existing_migrations`` so the
-        safety preview and the actual unlink can never drift apart.
+        ``--overwrite`` regenerates one file per model table, so ANY other .py
+        file left behind breaks the one-file-per-table contract: it either
+        duplicates a generated CREATE or applies an increment that the fresh
+        CREATE already contains. Selecting by "does this file touch a model
+        table" (the previous rule) let every hand-written ``add_*``/``backfill_*``
+        migration survive forever.
+
+        The single exemption is a module-level ``MODEL_LESS = True``, for schema
+        objects no model can own. ``__init__.py`` is package plumbing, never a
+        migration, and is left alone without needing the marker.
         """
         migrations_dir = self._migrations_dir()
         if migrations_dir is None:
-            return []
+            return [], []
 
-        from cara.eloquent.migrations.ModelMigrationComparator import (
-            migration_table_actions,
-        )
-
-        table_names = {model_info["table"] for model_info in models}
-        targets: list = []
+        deleted: list[Path] = []
+        preserved: list[Path] = []
         for file_path in sorted(migrations_dir.glob("*.py")):
+            if file_path.name == "__init__.py":
+                continue
             try:
                 content = file_path.read_text(encoding="utf-8")
             except OSError as exc:
                 raise RuntimeError(
                     f"Cannot safely inspect migration '{file_path.name}': {exc}"
                 ) from exc
-            if any(
-                any(migration_table_actions(content, table_name))
-                for table_name in table_names
+            if self._declares_model_less(content, file_path):
+                preserved.append(file_path)
+            else:
+                deleted.append(file_path)
+        return deleted, preserved
+
+    @staticmethod
+    def _declares_model_less(content: str, file_path) -> bool:
+        """Whether the file carries a module-level ``MODEL_LESS = True``.
+
+        Parsed, never imported — a migration must not execute to be classified,
+        and importing one could open a database connection. A file that does not
+        parse is NOT treated as marked: an unparseable migration is broken, and
+        defaulting to "preserve" would let it dodge the sweep forever.
+        """
+        try:
+            tree = ast.parse(content, filename=str(file_path))
+        except SyntaxError:
+            return False
+
+        for node in tree.body:
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            if node.value is None:
+                continue
+            if not (
+                isinstance(node.value, ast.Constant) and node.value.value is True
             ):
-                targets.append(file_path)
-        return targets
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == MODEL_LESS_MARKER:
+                    return True
+        return False
+
 
     # Comment fragments the generator DOES emit (inline annotations on the
     # drop/alter lines). Everything else after a ``#`` is a human comment.
@@ -357,15 +434,23 @@ class MakeMigrationCommand(CommandBase):
                 return True
         return False
 
-    def _confirm_clobber(self, models) -> bool:
+    def _confirm_clobber(self, targets, preserved) -> bool:
         """Preview + gate the destructive unlink. Returns True to proceed.
 
-        Always prints WHICH files --overwrite will delete. If any look
-        hand-edited, requires an interactive confirm unless ``--force`` (or
-        ``--dry_run``, which never touches disk). Returns False only when the
-        user explicitly declines — the caller then aborts without changes.
+        Always prints WHICH files --overwrite deletes and which it PRESERVES,
+        so the one-file-per-table sweep is auditable before it runs. If any
+        deleted file looks hand-edited, requires an interactive confirm unless
+        ``--force`` (or ``--dry_run``, which never touches disk). Returns False
+        only when the user explicitly declines — the caller then aborts.
         """
-        targets = self._collect_clobber_targets(models)
+        if preserved:
+            self.info(
+                f"--overwrite will PRESERVE {len(preserved)} file(s) marked "
+                f"{MODEL_LESS_MARKER} = True:"
+            )
+            for file_path in preserved:
+                self.info(f"   • {file_path.name}")
+
         if not targets:
             return True
 
@@ -391,25 +476,6 @@ class MakeMigrationCommand(CommandBase):
                 "Overwrite hand-edited migration(s) anyway?", default=False
             )
         return True
-
-    def _clear_existing_migrations(self, models):
-        """Delete the model-owned migration files (or preview them on dry-run).
-
-        File selection is delegated to ``_collect_clobber_targets`` so the
-        deleted set is identical to the set previewed by ``_confirm_clobber``.
-        """
-        for file_path in self._collect_clobber_targets(models):
-            if self.option("dry_run"):
-                self.info(f"Would remove: {file_path.name}")
-                continue
-            try:
-                file_path.unlink()
-                self.info(f"Removed: {file_path.name}")
-            except OSError as exc:
-                # Don't swallow: a file we meant to delete but couldn't would
-                # leave a stale CREATE behind that collides with the regenerated
-                # one on the next migrate. Surface it so the operator can act.
-                self.error(f"Could not remove {file_path.name}: {exc}")
 
     def _create_fresh_migration(self, model_info, dependency_order=0):
         """Create a fresh CREATE TABLE migration for a model."""
