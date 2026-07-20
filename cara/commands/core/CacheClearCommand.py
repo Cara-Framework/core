@@ -118,9 +118,24 @@ class CacheClearCommand(CommandBase):
             self.info("   Cache statistics not available")
 
     def _show_cleanup_suggestions(self) -> None:
-        """Show additional cleanup suggestions."""
-        self.info("\n💡 Additional cleanup suggestions:")
-        self.info("   • Consider clearing compiled views: php artisan view:clear")
-        self.info("   • Clear route cache: php artisan route:clear")
-        self.info("   • Clear config cache: php artisan config:clear")
-        self.info("   • Restart queue workers if using cached jobs")
+        """Point at the state this command did NOT clear.
+
+        Three of the four suggestions here were ``php artisan`` invocations
+        carried over from Laravel — for a view cache, a route cache and a
+        config cache that Cara does not have. A tool that hands the operator
+        commands from a different framework, for subsystems that do not
+        exist, teaches them to distrust everything else it says.
+
+        What genuinely survives a cache flush is the long-lived processes:
+        they hold their own imported job classes and an open broker
+        connection, so a flush alone does not reload them.
+        """
+        self.info("\n💡 Not cleared by this command:")
+        self.info(
+            "   • Long-lived processes keep imported job classes in memory — "
+            "restart queue:work, schedule:work and queue:relay to reload them"
+        )
+        self.info(
+            "   • Generated route files are build output, not cache — "
+            "re-run routes:generate if controller docstrings changed"
+        )
