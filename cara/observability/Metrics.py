@@ -452,6 +452,11 @@ class MetricsBase:
         labelnames=("state",),
         registry=REGISTRY,
     )
+    queue_delivery_metrics_timestamp_seconds = Gauge(
+        metric_name("queue_delivery_metrics_timestamp_seconds"),
+        "Unix time of the last COMPLETE delivery-ledger gauge refresh.",
+        registry=REGISTRY,
+    )
     queue_relay_ready = Gauge(
         metric_name("queue_relay_ready"),
         "1 while the broker-independent queue publication relay is healthy.",

@@ -644,6 +644,16 @@ class AMQPDriver(HasColoredOutput, Queue):
             MetricsBase.queue_delayed_oldest_due_age_seconds.set(
                 snapshot["oldest_due_age"]
             )
+            # LAST, and deliberately inside the try: every alert scoped to a
+            # relay-published gauge is blind without a freshness anchor.
+            # prometheus_client gauges are sticky — a wedged or half-failed
+            # refresh leaves the previous values exported verbatim, so a
+            # broken publisher is indistinguishable from a healthy queue and
+            # `absent()` never sees anything missing. Writing the timestamp
+            # only after every set above has succeeded means the swallowed
+            # exception below strands it, and QueueDeliveryMetricsStale fires
+            # instead of the whole family silently freezing.
+            MetricsBase.queue_delivery_metrics_timestamp_seconds.set(time.time())
         except Exception:
             pass
         return snapshot
