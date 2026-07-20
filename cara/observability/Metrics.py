@@ -258,33 +258,65 @@ class MetricsBase:
     """
 
     @staticmethod
-    def safe_inc(metric, labels: dict, amount: float = 1) -> None:
+    def _child(metric, labels: dict):
+        """Resolve the concrete metric child a write should land on.
+
+        ``prometheus_client`` REJECTS ``metric.labels()`` on a collector
+        declared without ``labelnames`` — it raises rather than returning
+        the metric itself. Every ``safe_*`` helper swallows exceptions, so
+        for years a call like ``safe_set(some_unlabelled_gauge, {}, v)``
+        was a silent no-op: the sampler looked correct, the exception was
+        caught, and the series never appeared in the scrape. The
+        ``sync_backlog_sample_timestamp_seconds`` freshness stamp was
+        never emitted for exactly this reason. An empty label dict on an
+        unlabelled metric is the correct, intended call — honour it.
+        """
+        if not labels:
+            return metric
+        return metric.labels(**labels)
+
+    @staticmethod
+    def safe_inc(metric, labels: dict, amount: float = 1) -> bool:
         """Increment a counter without raising on failure."""
         try:
-            metric.labels(**labels).inc(amount)
+            MetricsBase._child(metric, labels).inc(amount)
         except Exception:
             # Intentional: metrics emission must never crash production.
-            return
+            return False
+        return True
 
     @staticmethod
-    def safe_observe(metric, labels: dict, value: float) -> None:
+    def safe_observe(metric, labels: dict, value: float) -> bool:
         """Observe a histogram value without raising on failure."""
         try:
-            metric.labels(**labels).observe(value)
+            MetricsBase._child(metric, labels).observe(value)
         except Exception:
             # Intentional: see safe_inc above.
-            return
+            return False
+        return True
 
     @staticmethod
-    def safe_set(metric, labels: dict, value: float) -> None:
+    def safe_set(metric, labels: dict, value: float) -> bool:
         """Set a gauge value without raising on failure (mirrors safe_inc/
         safe_observe): a metric backend hiccup must never break the sampler
-        that feeds it."""
+        that feeds it.
+
+        Returns whether the write landed. The boolean is load-bearing:
+        samplers that publish a family of gauges plus a freshness
+        timestamp use it to stamp the timestamp ONLY after a fully
+        successful refresh, so alerting can tell "all clear" apart from
+        "the probe died halfway". This used to return ``None`` on both
+        paths, which made every such `... and complete` chain falsy — the
+        freshness timestamp was never written at all, and the unit test
+        missed it because its mock returned ``True`` where the real
+        function returned ``None``.
+        """
         try:
-            metric.labels(**labels).set(value)
+            MetricsBase._child(metric, labels).set(value)
         except Exception:
             # Intentional: see safe_inc above.
-            return
+            return False
+        return True
 
     # ─── Service-level info (static label) ──────────────────────────────
     build_info = Gauge(
