@@ -40,7 +40,9 @@ MODEL_LESS_MARKER = "MODEL_LESS"
         "EXACTLY one generated file per model table; every other .py file is "
         "deleted unless it declares a module-level 'MODEL_LESS = True' marker "
         "(for materialized views, extensions, data backfills and other objects "
-        "no model owns). Preserved and deleted files are both printed."
+        "no model owns). Preserved and deleted files are both printed. Run "
+        "'migrations:check' to audit the directory against that contract (it "
+        "also drives this command via --fix)."
     ),
     options={
         "--overwrite": (
