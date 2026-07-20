@@ -39,7 +39,7 @@ def _large_value_threshold() -> int:
             from cara.configuration import config
 
             _LARGE_VALUE_BYTES = int(config("cache.large_value_bytes", 262144))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             _LARGE_VALUE_BYTES = 262144
     return _LARGE_VALUE_BYTES
 
