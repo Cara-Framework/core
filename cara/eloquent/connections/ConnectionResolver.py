@@ -33,7 +33,7 @@ from cara.exceptions import (
 )
 
 # Per-context registry of "currently inside-transaction" connections.
-# Keyed by connection name (``"app"``, ``"mysql"``, …) so a single
+# Keyed by connection name (``"app"``, ``"analytics"``, …) so a single
 # context can hold transactions on multiple logical connections
 # simultaneously without them clobbering each other. The default is
 # ``None``; we lazily build the per-context dict on first write so
@@ -136,18 +136,11 @@ class ConnectionResolver:
 
     def _register_default_connections(self):
         """Register default connection types - Open/Closed principle"""
-        from ..connections import (
-            MSSQLConnection,
-            MySQLConnection,
-            PostgresConnection,
-            SQLiteConnection,
-        )
+        from ..connections import PostgresConnection, SQLiteConnection
 
         connection_types = [
             SQLiteConnection,
             PostgresConnection,
-            MySQLConnection,
-            MSSQLConnection,
         ]
         for connection_type in connection_types:
             self.connection_factory.register(connection_type.name, connection_type)

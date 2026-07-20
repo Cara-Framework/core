@@ -99,8 +99,18 @@ class Notification:
 
             job = SendNotificationJob(notifiable, notification)
 
-            # Dispatch to queue using facade
-            Queue.dispatch(job)
+            # Honor the notification's chainable queue/delay overrides
+            # (``on_queue()`` / ``delay()``) — Laravel parity: they must
+            # survive into the dispatched job, not just sit on the
+            # notification object.
+            queue_override = getattr(notification, "_queue", None)
+            if queue_override:
+                job.on_queue(queue_override)
+            delay_seconds = getattr(notification, "_delay", None) or 0
+            if delay_seconds:
+                Queue.dispatch_after(job, delay_seconds)
+            else:
+                Queue.dispatch(job)
             return True
 
         except Exception as e:
@@ -122,19 +132,25 @@ class Notification:
         # Get channels for this notification
         channels = self._get_channels(notifiable, notification)
 
-        # Check if notification should be sent
-        if not self._should_send(notifiable, notification):
-            return False
-
-        # Send to each channel
+        # Send to each channel — ``should_send`` is consulted PER CHANNEL
+        # (Laravel parity: shouldSend(notifiable, channel)), so a
+        # notification can, e.g., skip mail but still hit the database.
         results = []
         for channel_name in channels:
             channel = self._channels.get(channel_name)
-            if channel:
-                result = self._send_via_channel(
-                    channel, channel_name, notifiable, notification
+            if channel is None:
+                Log.warning(
+                    "Notification channel '%s' requested by %s is not registered — skipped.",
+                    channel_name,
+                    type(notification).__name__,
                 )
-                results.append(result)
+                continue
+            if not self._should_send(notifiable, notification, channel_name):
+                continue
+            result = self._send_via_channel(
+                channel, channel_name, notifiable, notification
+            )
+            results.append(result)
 
         # Return True if at least one channel succeeded
         return any(results) if results else False
@@ -216,19 +232,20 @@ class Notification:
             return notification.via(notifiable)
         return self._default_channels
 
-    def _should_send(self, notifiable, notification) -> bool:
+    def _should_send(self, notifiable, notification, channel_name: str) -> bool:
         """
-        Determine if a notification should be sent.
+        Determine if a notification should be sent on one channel.
 
         Args:
             notifiable: The notifiable entity
             notification: The notification instance
+            channel_name: The channel about to be used
 
         Returns:
             True if should send, False otherwise
         """
         if hasattr(notification, "should_send") and callable(notification.should_send):
-            return notification.should_send(notifiable, "all")
+            return notification.should_send(notifiable, channel_name)
         return True
 
     def extend(self, name: str, channel: NotificationChannel) -> None:

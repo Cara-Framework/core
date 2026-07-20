@@ -225,7 +225,7 @@ class QueryBuilder(ObservesEvents):
         Keyword Arguments:
             skip_locked -- emit ``FOR UPDATE SKIP LOCKED`` (rows currently
                 locked by another transaction are skipped instead of waited
-                on). Postgres / MySQL 8+.
+                on). Supported by PostgreSQL.
             nowait -- emit ``FOR UPDATE NOWAIT`` (fail immediately instead of
                 blocking if a row is already locked). Mutually exclusive with
                 ``skip_locked``.
@@ -2308,8 +2308,7 @@ class QueryBuilder(ObservesEvents):
 
         Arguments:
             amount {int} -- The number of rows to skip. ``None`` clears
-                the offset. Negative values are rejected (Postgres + MySQL
-                both raise on ``OFFSET -1``).
+                the offset. Negative values are rejected by supported drivers.
 
         Returns:
             self
@@ -2627,7 +2626,7 @@ class QueryBuilder(ObservesEvents):
         Specifies a column to order by.
 
         SECURITY — both ``column`` and ``direction`` are validated.
-        Postgres / MySQL grammars splice them in unparameterised, so
+        SQL grammars splice them in unparameterised, so
         any caller passing a request-supplied value here (sort=...)
         used to be a clean SQL injection sink. Names must look like
         ``foo`` or ``table.column``; direction must be ASC or DESC.
@@ -2984,7 +2983,7 @@ class QueryBuilder(ObservesEvents):
                 # ``{top_level_relation: [nested_path_strings...]}``. The
                 # nested paths are passed to each relationship's
                 # ``get_related(..., eagers=[...])`` so the chain continues
-                # recursively: BelongsTo/HasMany/HasOne/BelongsToMany all
+                # recursively: BelongsTo/HasMany/HasOne all
                 # call ``builder.with_(eagers)`` internally, which rebuilds
                 # the same EagerRelations → QueryBuilder pipeline for the
                 # next level. Laravel parity: eager-load `author.profile`

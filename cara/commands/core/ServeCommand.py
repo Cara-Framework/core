@@ -42,6 +42,8 @@ class ServeCommand(CommandBase):
     """Start development server with enhanced configuration and monitoring."""
 
     _RELOAD_IGNORED_DIRECTORIES = (
+        ".claude",
+        ".codex",
         ".git",
         ".mypy_cache",
         ".pytest_cache",

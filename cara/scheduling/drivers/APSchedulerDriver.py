@@ -252,11 +252,16 @@ class APSchedulerDriver(Scheduling):
             instrumented = _wrap_without_overlapping(
                 identifier, instrumented, lock_timeout
             )
-        job_opts = (
+        job_opts = dict(
             options.get("apscheduler_job_options", {})
             if isinstance(options, dict)
             else {}
         )
+        # The operator-facing label from the schedule config. Explicit
+        # apscheduler_job_options win — this is a default, not an override.
+        display_name = options.get("display_name") if isinstance(options, dict) else None
+        if display_name:
+            job_opts.setdefault("name", str(display_name))
 
         # Remove any previous entry with the same id.
         self._job_registry = [

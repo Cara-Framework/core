@@ -587,11 +587,9 @@ class BaseGrammar:
     def _lock_modifier_sql(self, base_lock: str) -> str:
         """Render SKIP LOCKED / NOWAIT / OF modifiers for a row lock.
 
-        Only applies to ``FOR UPDATE`` / ``FOR SHARE`` style locks (the
-        Postgres / MySQL family). Grammars whose base lock string is empty
-        (SQLite) or not a ``FOR ...`` clause (MSSQL hints) return nothing, so
-        the modifiers degrade to a plain lock there rather than emitting
-        invalid SQL. Subclasses may override for dialect-specific syntax.
+        Only applies to ``FOR UPDATE`` / ``FOR SHARE`` style locks. SQLite's
+        base lock string is empty, so modifiers degrade to no lock instead of
+        emitting invalid SQL. Subclasses may override dialect syntax.
         """
         modifier = getattr(
             self, "_lock_modifier", {"skip_locked": False, "nowait": False, "of": []}
@@ -684,10 +682,8 @@ class BaseGrammar:
                 and isinstance(where.keyword, str)
                 and where.keyword.lower() == "or"
             ):
-                # Case-insensitive: WhereBuilder emits "OR" while QueryBuilder
-                # emits "or". Both must route to the OR branch — a strict
-                # ``== "or"`` check silently downgraded every WhereBuilder
-                # ``or_where`` to AND, producing wrong result sets.
+                # Normalize custom where objects too: a strict ``== "or"``
+                # check can silently downgrade uppercase OR to AND.
                 keyword = " " + self.or_where_string()
             else:
                 keyword = " " + self.additional_where_string()

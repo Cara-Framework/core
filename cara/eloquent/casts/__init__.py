@@ -164,6 +164,7 @@ __all__ = [
     "DecimalCast",
     "EmailCast",
     "EncryptedCast",
+    "EncryptedJsonCast",
     "EnhancedCastRegistry",
     "FloatCast",
     "HashCast",

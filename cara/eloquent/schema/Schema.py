@@ -134,7 +134,7 @@ class Schema:
         Change the connection - delegates to connection manager
 
         Arguments:
-            connection {string} -- A connection string like 'mysql' or 'postgres'.
+            connection {string} -- A configured connection name.
 
         Returns:
             self
@@ -371,7 +371,7 @@ class Schema:
         )
 
         result = self.query_executor.get_query_result(sql)
-        return list(map(lambda t: list(t.values())[0], result)) if result else []  # noqa: safe — platform SQL always returns single-column rows
+        return list(map(lambda t: list(t.values())[0], result)) if result else []
 
     # === Class Methods - Configuration ===
 

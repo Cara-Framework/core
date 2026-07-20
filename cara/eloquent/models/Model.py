@@ -1323,13 +1323,12 @@ class Model(
 
     @staticmethod
     def _is_unique_violation(exc: Exception) -> bool:
-        """Detect a UNIQUE constraint violation across psycopg2 /
-        psycopg3 / sqlalchemy / mysql drivers.
+        """Detect a UNIQUE constraint violation across psycopg2,
+        psycopg3, and wrapped database exceptions.
 
         psycopg surfaces SQLSTATE ``23505`` on the exception (and on
-        ``exc.orig.pgcode`` when wrapped); MySQL raises
-        ``IntegrityError`` with ``"duplicate"`` in the message; most
-        ORMs preserve one of those signals in the message string.
+        ``exc.orig.pgcode`` when wrapped); most database layers preserve
+        one of those signals in the message string.
         """
         sqlstate = getattr(exc, "sqlstate", None) or getattr(
             getattr(exc, "orig", None), "pgcode", None

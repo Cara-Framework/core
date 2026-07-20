@@ -102,34 +102,6 @@ class TestUpsertCompile:
             )
 
 
-class TestMySQLUpsertCompile:
-    def _compile(self, update):
-        from cara.eloquent.query.grammars import MySQLGrammar
-
-        builder = QueryBuilder(
-            grammar=MySQLGrammar, connection="test_upsert", table="receipt"
-        )
-        builder.dry = True
-        builder.upsert(
-            [{"receipt_id": "1", "status": "a"}],
-            unique_by=["receipt_id"],
-            update=update,
-        )
-        return builder.get_grammar().compile("upsert").to_sql()
-
-    def test_compiles_on_duplicate_key_update(self):
-        sql = self._compile(update=["status"])
-
-        assert "ON DUPLICATE KEY UPDATE" in sql
-        assert "`status` = VALUES(`status`)" in sql
-
-    def test_empty_update_compiles_insert_ignore(self):
-        sql = self._compile(update=[])
-
-        assert sql.startswith("INSERT IGNORE INTO")
-        assert "ON DUPLICATE KEY" not in sql
-
-
 class TestUpsertEndToEnd:
     @pytest.fixture
     def conn(self):

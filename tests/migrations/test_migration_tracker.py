@@ -166,17 +166,6 @@ def test_tracker_does_not_close_executor_owned_transaction_connection():
     connection.close_connection.assert_not_called()
 
 
-def test_mssql_tracker_uses_native_datetime_and_top_syntax():
-    manager, _connection, queries = _fake_db_manager(driver="mssql")
-    MigrationTracker(manager).ensure_migrations_table()
-
-    sql = "\n".join(queries).upper()
-    assert "DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()" in sql
-    assert "SELECT TOP 1 ID, MIGRATION, BATCH" in sql
-    assert " LIMIT 1" not in sql
-    assert "ADD COLUMN CHECKSUM" not in sql
-
-
 def test_migration_lock_rejects_invalid_timeout():
     manager, _connection, _queries = _fake_db_manager(driver="sqlite")
     tracker = MigrationTracker(manager)

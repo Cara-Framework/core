@@ -71,6 +71,8 @@ def test_notification_mail_adds_confirmation_link_and_rfc8058_headers(
     configuration = importlib.import_module("cara.configuration")
     values = {
         "app.frontend_url": "https://app.example",
+        "app.preferences_url": "https://app.example/notifications/preferences",
+        "app.unsubscribe_confirm_url": "https://app.example/unsubscribe",
         "app.unsubscribe_url": "https://app.example/api/unsubscribe",
         "app.unsubscribe_secret": SECRET,
     }
@@ -96,7 +98,7 @@ def test_notification_mail_adds_confirmation_link_and_rfc8058_headers(
     query = urlencode({"user": USER_PUBLIC_ID, "token": token})
     assert manager.message.view_data == {
         "frontend_url": "https://app.example",
-        "preferences_url": "https://app.example/account#notifications",
+        "preferences_url": "https://app.example/notifications/preferences",
         "unsubscribe_url": f"https://app.example/unsubscribe?{query}",
         "unsubscribe_one_click_url": (
             f"https://app.example/api/unsubscribe?{query}"
@@ -117,6 +119,8 @@ def test_notification_mail_never_falls_back_to_internal_numeric_user_id(
     configuration = importlib.import_module("cara.configuration")
     values = {
         "app.frontend_url": "https://app.example",
+        "app.preferences_url": "https://app.example/notifications/preferences",
+        "app.unsubscribe_confirm_url": "https://app.example/unsubscribe",
         "app.unsubscribe_url": "https://app.example/api/unsubscribe",
         "app.unsubscribe_secret": SECRET,
     }
@@ -129,7 +133,6 @@ def test_notification_mail_never_falls_back_to_internal_numeric_user_id(
     notifiable = SimpleNamespace(id=41, email="user@example.com")
 
     assert MailChannel(manager).send(notifiable, _Notification()) is True
-    assert manager.message.view_data["unsubscribe_url"] == (
-        "https://app.example/account#notifications"
-    )
+    # Unsignable recipient — no unsubscribe link of any kind is emitted.
+    assert "unsubscribe_url" not in manager.message.view_data
     assert "List-Unsubscribe" not in manager.message.headers_value

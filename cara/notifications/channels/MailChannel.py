@@ -230,33 +230,46 @@ class MailChannel(BaseChannel):
     def _inject_default_urls(self, view_data: dict[str, Any], notifiable: Any) -> None:
         """Stamp the mail-template render context with default URLs.
 
-        Reads ``app.frontend_url`` / ``app.unsubscribe_secret`` from
-        the framework config so the host application can centralise
-        the values without every notification class repeating them.
-        Honors any value the notification already supplied in
-        ``to_mail()['data']`` — those wins; we only fill in the gaps.
+        Every link comes from host-application config — the framework owns no
+        product route. Keys read:
 
-        ``unsubscribe_url`` points to the human confirmation page, while
-        ``unsubscribe_one_click_url`` points directly to the RFC 8058 POST
-        processor. Both carry an HMAC over the opaque user identity and email.
+        ``app.frontend_url``
+            Brand root, framework-neutral.
+        ``app.preferences_url``
+            Human notification-preferences page.
+        ``app.unsubscribe_confirm_url``
+            Human unsubscribe confirmation page; rendered as
+            ``unsubscribe_url`` with the signed query appended.
+        ``app.unsubscribe_url``
+            RFC 8058 one-click POST processor (machine endpoint); rendered as
+            ``unsubscribe_one_click_url``.
+
+        Both unsubscribe links carry an HMAC over the opaque user identity and
+        email. Honors any value the notification already supplied in
+        ``to_mail()['data']`` — those win; we only fill in the gaps.
+
+        Honest-null: a key whose config is unset is left OUT of ``view_data``
+        entirely (templates carry their own ``default('#')``). An unsubscribe
+        link that cannot be signed is therefore never emitted at all.
         """
         try:
             from cara.configuration import config
         except Exception:
             return
 
-        try:
-            frontend_url = (config("app.frontend_url", "") or "").rstrip("/")
-        except Exception:
-            frontend_url = ""
-        if not frontend_url:
-            return  # No base URL configured — leave templates to their own defaults.
+        def setting(key: str) -> str:
+            try:
+                return (config(key, "") or "").rstrip("/")
+            except Exception:
+                return ""
 
-        view_data.setdefault("frontend_url", frontend_url)
-        view_data.setdefault(
-            "preferences_url",
-            f"{frontend_url}/account#notifications",
-        )
+        frontend_url = setting("app.frontend_url")
+        if frontend_url:
+            view_data.setdefault("frontend_url", frontend_url)
+
+        preferences_url = setting("app.preferences_url")
+        if preferences_url:
+            view_data.setdefault("preferences_url", preferences_url)
 
         user_public_id = getattr(notifiable, "public_id", None)
         email = getattr(notifiable, "email", None) or getattr(
@@ -268,33 +281,23 @@ class MailChannel(BaseChannel):
             secret = config("app.unsubscribe_secret", "") or ""
         except Exception:
             secret = ""
+        if not (user_public_id and email and secret):
+            return  # Unsignable — no unsubscribe link may be produced.
 
-        if user_public_id and email and secret:
-            token = hmac.new(
-                secret.encode("utf-8"),
-                f"{user_public_id}:{email}".encode(),
-                hashlib.sha256,
-            ).hexdigest()
-            query = urlencode({"user": user_public_id, "token": token})
-            view_data.setdefault(
-                "unsubscribe_url",
-                f"{frontend_url}/unsubscribe?{query}",
-            )
-            try:
-                processor_url = (
-                    config("app.unsubscribe_url", "") or ""
-                ).rstrip("/")
-            except Exception:
-                processor_url = ""
-            if processor_url:
-                view_data["unsubscribe_one_click_url"] = (
-                    f"{processor_url}?{query}"
-                )
-        else:
-            view_data.setdefault(
-                "unsubscribe_url",
-                f"{frontend_url}/account#notifications",
-            )
+        token = hmac.new(
+            secret.encode("utf-8"),
+            f"{user_public_id}:{email}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        query = urlencode({"user": user_public_id, "token": token})
+
+        confirm_url = setting("app.unsubscribe_confirm_url")
+        if confirm_url:
+            view_data.setdefault("unsubscribe_url", f"{confirm_url}?{query}")
+
+        processor_url = setting("app.unsubscribe_url")
+        if processor_url:
+            view_data["unsubscribe_one_click_url"] = f"{processor_url}?{query}"
 
     @staticmethod
     def _apply_headers(

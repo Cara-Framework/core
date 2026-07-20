@@ -1917,8 +1917,7 @@ class QueueJobDeliveryStore:
                         )
                     tracker_affected = database.statement(
                         "UPDATE job SET status = %s, started_at = NULL, "
-                        "processed_at = NULL, completed_at = NULL, "
-                        "finished_at = NULL, updated_at = %s WHERE id = %s "
+                        "completed_at = NULL, updated_at = %s WHERE id = %s "
                         "AND status = ANY(%s)",
                         [
                             "pending",

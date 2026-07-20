@@ -36,7 +36,7 @@ class ConnectionFactory:
         Makes connection class by driver name.
 
         Arguments:
-            driver_name {string} -- The driver name (sqlite, mysql, postgres, etc.)
+            driver_name {string} -- The driver name (sqlite or postgres).
 
         Raises:
             DriverNotFoundException: Raises exception if driver not found

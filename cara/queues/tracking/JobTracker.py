@@ -138,8 +138,7 @@ class JobTracker:
         if self.job_model:
             job_record = self.job_model.where("job_uid", job_uid).first()
             if job_record:
-                job_record.status = self.job_model.STATUS_PROCESSING
-                job_record.processed_at = pendulum.now("UTC")
+                self._transition(job_record, self.job_model.STATUS_PROCESSING)
                 job_record.save()
 
     def track_job_success(self, job_uid: str, result_data: dict | None = None) -> None:
@@ -149,8 +148,7 @@ class JobTracker:
 
         job_record = self.job_model.where("job_uid", job_uid).first()
         if job_record:
-            job_record.status = self.job_model.STATUS_SUCCESS
-            job_record.finished_at = pendulum.now("UTC")
+            self._transition(job_record, self.job_model.STATUS_SUCCESS)
 
             # Store result metadata if provided
             if result_data:
@@ -186,9 +184,8 @@ class JobTracker:
                 return None
 
             # Mark current attempt as failed
-            job_record.status = self.job_model.STATUS_FAILED
+            self._transition(job_record, self.job_model.STATUS_FAILED)
             job_record.error = error
-            job_record.finished_at = pendulum.now("UTC")
             job_record.save()
 
             # Check if we should retry
@@ -293,28 +290,32 @@ class JobTracker:
                 status = getattr(job, "status", "unknown")
                 status_counts[status] = status_counts.get(status, 0) + 1
 
-            # Average processing time for successful jobs
+            # Average processing time over the ONE lifecycle contract
+            # (started_at → completed_at) that ``_transition`` owns.
+            succeeded = self._success_statuses()
             successful_jobs = [
                 j
                 for j in jobs
-                if getattr(j, "status", None) == "success"
-                and hasattr(j, "finished_at")
-                and hasattr(j, "processed_at")
-                and j.finished_at
-                and j.processed_at
+                if getattr(j, "status", None) in succeeded
+                and getattr(j, "completed_at", None)
+                and getattr(j, "started_at", None)
             ]
 
             avg_processing_time = 0
             if successful_jobs:
                 total_time = sum(
                     [
-                        (j.finished_at - j.processed_at).total_seconds()
+                        (j.completed_at - j.started_at).total_seconds()
                         for j in successful_jobs
                     ]
                 )
                 avg_processing_time = total_time / len(successful_jobs)
 
-            success_count = status_counts.get("success", 0)
+            success_count = sum(
+                count
+                for status, count in status_counts.items()
+                if status in succeeded
+            )
 
             return {
                 "total_jobs": total_jobs,
@@ -572,6 +573,46 @@ class JobTracker:
                 f"Tracked queue job {job_id} did not converge to retry progress."
             )
 
+    def _success_statuses(self) -> set[str]:
+        """Statuses that mean "the job finished its work".
+
+        ``completed`` (worker settlement) and ``success`` (Trackable hook) are
+        the same outcome under two names — collapsing that duality is a
+        separate change, so read BOTH here rather than silently under-counting
+        one of the two writers.
+        """
+        return {
+            str(getattr(self.job_model, "STATUS_COMPLETED", "completed")),
+            str(getattr(self.job_model, "STATUS_SUCCESS", "success")),
+        }
+
+    def _transition(self, job_record, status: str, *, now=None) -> None:
+        """Apply a lifecycle status and stamp its timestamp.
+
+        SINGLE OWNER of the status → timestamp mapping for the ``job`` table.
+        The lifecycle vocabulary is ``started_at`` / ``completed_at``; no other
+        code path may write those columns. Callers still ``save()`` so they can
+        batch other field writes into the same round-trip.
+
+        Args:
+            job_record: Job model instance to mutate (NOT persisted here)
+            status: New status value
+            now: Override the stamped instant (tests / replay)
+        """
+        moment = now or pendulum.now("UTC")
+        job_record.status = status
+
+        if status == str(getattr(self.job_model, "STATUS_PROCESSING", "processing")):
+            job_record.started_at = moment
+        elif status in self._terminal_statuses():
+            job_record.completed_at = moment
+
+    def _terminal_statuses(self) -> set[str]:
+        """Statuses that end the job's run and therefore stamp ``completed_at``."""
+        return self._success_statuses() | {
+            str(getattr(self.job_model, "STATUS_FAILED", "failed")),
+        }
+
     def _update_job_status(
         self,
         job_id: int,
@@ -592,16 +633,7 @@ class JobTracker:
                 raise RuntimeError(f"Tracked queue job {job_id} does not exist.")
             return
 
-        job_record.status = status
-
-        if status == self.job_model.STATUS_PROCESSING:
-            job_record.started_at = pendulum.now("UTC")
-        elif (
-            status == self.job_model.STATUS_COMPLETED
-            or status == self.job_model.STATUS_FAILED
-        ):
-            job_record.completed_at = pendulum.now("UTC")
-
+        self._transition(job_record, status)
         job_record.save()
         if strict:
             persisted = self.job_model.find(job_id)
@@ -619,8 +651,4 @@ class JobTracker:
         job_record = self.job_model.find(job_id)
         if not job_record:
             raise RuntimeError(f"Tracked queue job {job_id} does not exist.")
-        completed = {
-            getattr(self.job_model, "STATUS_COMPLETED", "completed"),
-            getattr(self.job_model, "STATUS_SUCCESS", "success"),
-        }
-        return getattr(job_record, "status", None) in completed
+        return str(getattr(job_record, "status", None)) in self._success_statuses()

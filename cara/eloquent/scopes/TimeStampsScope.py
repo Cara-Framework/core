@@ -15,9 +15,8 @@ class TimeStampsScope(BaseScope):
             action="insert",
         )
 
-        # bulk_create runs its own scope action (same registration split
-        # UUIDPrimaryKeyScope uses) — without it, bulk-inserted rows never
-        # got created_at/updated_at auto-filled.
+        # bulk_create runs its own scope action; without it, bulk-inserted
+        # rows never get created_at/updated_at auto-filled.
         builder.set_global_scope(
             "_timestamps_bulk",
             self.set_timestamp_bulk_create,

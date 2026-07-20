@@ -1,19 +1,16 @@
 """Lazy optional-dependency loading for CLI command groups.
 
 cara's command groups for DB migrations (``cara.eloquent`` → ``psycopg2`` /
-``faker``) and queues (``cara.queues`` → ``pika``) depend on heavy,
-OPTIONAL third-party packages. Importing those at command-MODULE load time
-forced every service to install them just to have a working CLI — and because
-``cara.commands.core.__init__`` imports every command eagerly, ONE missing dep
-made the whole package import abort partway and SILENTLY drop every command
-registered after it (this is what made ``serve`` / ``routes:*`` vanish on the
-DB-less ``studio`` service).
+``faker``) and queues (``cara.queues`` → ``pika``) depend on heavy, optional
+third-party packages. Importing those at command-module load time used to force
+every service to install them just to have a working CLI. Core command exports
+are now lazy, and each command group also defers optional imports to call time.
 
-Root fix: command groups defer their heavy imports to CALL time and, when the
-optional group isn't installed, fail LOUD with an actionable message naming the
+When the optional group isn't installed, the requested command fails loudly at
+call time with an actionable message naming the
 ``cara[<extra>]`` to install — affecting only that one command, never its
-siblings. Module import stays dependency-free, so the command package always
-imports cleanly and every unrelated command (serve, routes, make:*) registers.
+siblings. Package import stays dependency-free, so unrelated commands remain
+available.
 """
 
 from __future__ import annotations

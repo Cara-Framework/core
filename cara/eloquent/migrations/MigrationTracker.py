@@ -55,18 +55,18 @@ class MigrationTracker:
 
     def _get_driver_type(self) -> str:
         info = self.db_manager.get_connection_info() or {}
-        return str(info.get("driver", "sqlite")).lower()
+        driver = str(info.get("driver", "sqlite")).lower()
+        if driver not in {"postgres", "postgresql", "sqlite"}:
+            raise ORMException(
+                f"Unsupported migration driver: {driver}. "
+                "Cara supports PostgreSQL and SQLite."
+            )
+        return driver
 
     def _get_placeholder(self) -> str:
-        return (
-            "%s"
-            if self._get_driver_type() in {"postgres", "postgresql", "mysql"}
-            else "?"
-        )
+        return "%s" if self._get_driver_type() in {"postgres", "postgresql"} else "?"
 
     def _select_one(self, columns: str) -> str:
-        if self._get_driver_type() in {"mssql", "sqlserver"}:
-            return f"SELECT TOP 1 {columns} FROM {self.table_name}"
         return f"SELECT {columns} FROM {self.table_name} LIMIT 1"
 
     # ── Schema bootstrap ──────────────────────────────────────────────
@@ -91,34 +91,18 @@ class MigrationTracker:
         driver = self._get_driver_type()
         if driver in {"postgres", "postgresql"}:
             identity = "BIGSERIAL PRIMARY KEY"
-        elif driver == "mysql":
-            identity = "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY"
-        elif driver in {"mssql", "sqlserver"}:
-            identity = "BIGINT IDENTITY(1,1) PRIMARY KEY"
         else:
             identity = "INTEGER PRIMARY KEY AUTOINCREMENT"
-        created_at = (
-            "DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()"
-            if driver in {"mssql", "sqlserver"}
-            else "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-        )
         body = f"""
             CREATE TABLE {self.table_name} (
                 id {identity},
                 migration VARCHAR(255) NOT NULL,
                 batch INTEGER NOT NULL,
                 checksum VARCHAR(64) NULL,
-                created_at {created_at}
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """
-        if driver in {"mssql", "sqlserver"}:
-            connection.query(
-                f"IF OBJECT_ID(N'{self.table_name}', N'U') IS NULL BEGIN {body} END"
-            )
-        else:
-            connection.query(
-                body.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
-            )
+        connection.query(body.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1))
 
     def _assert_base_structure(self, connection) -> None:
         try:
@@ -136,13 +120,8 @@ class MigrationTracker:
         except Exception:
             pass
         try:
-            add = (
-                "ADD"
-                if self._get_driver_type() in {"mssql", "sqlserver"}
-                else "ADD COLUMN"
-            )
             connection.query(
-                f"ALTER TABLE {self.table_name} {add} checksum VARCHAR(64) NULL"
+                f"ALTER TABLE {self.table_name} ADD COLUMN checksum VARCHAR(64) NULL"
             )
             connection.query(self._select_one("checksum"))
         except Exception as exc:
@@ -152,30 +131,11 @@ class MigrationTracker:
 
     def _ensure_unique_migration_index(self, connection) -> None:
         index_name = f"{self.table_name}_migration_unique"
-        driver = self._get_driver_type()
         try:
-            if driver == "mysql":
-                rows = connection.query(
-                    f"SHOW INDEX FROM {self.table_name} WHERE Key_name = %s",
-                    (index_name,),
-                )
-                if not rows:
-                    connection.query(
-                        f"CREATE UNIQUE INDEX {index_name} "
-                        f"ON {self.table_name} (migration)"
-                    )
-            elif driver in {"mssql", "sqlserver"}:
-                connection.query(
-                    f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = ?) "
-                    f"CREATE UNIQUE INDEX {index_name} "
-                    f"ON {self.table_name} (migration)",
-                    (index_name,),
-                )
-            else:
-                connection.query(
-                    f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
-                    f"ON {self.table_name} (migration)"
-                )
+            connection.query(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
+                f"ON {self.table_name} (migration)"
+            )
         except Exception as exc:
             raise ORMException(
                 f"Could not enforce unique migration names in '{self.table_name}'. "
@@ -201,48 +161,21 @@ class MigrationTracker:
         connection = self._get_connection()
         lock_key = self._migration_lock_key()
         began = False
-        mysql_locked = False
         try:
             begin = getattr(connection, "begin", None)
             if callable(begin):
                 begin()
                 began = True
 
-            if driver in {"postgres", "postgresql"}:
-                connection.query(
-                    f"SET LOCAL lock_timeout = '{int(timeout_seconds) * 1000}ms'"
-                )
-                connection.query(
-                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
-                    (lock_key,),
-                )
-            elif driver == "mysql":
-                rows = connection.query(
-                    "SELECT GET_LOCK(%s, %s) AS acquired",
-                    (lock_key, int(timeout_seconds)),
-                )
-                acquired = _row_value(rows[0], "acquired") if rows else 0
-                if int(acquired or 0) != 1:
-                    raise ORMException("Timed out waiting for the migration lock.")
-                mysql_locked = True
-            elif driver in {"mssql", "sqlserver"}:
-                rows = connection.query(
-                    "DECLARE @result int; "
-                    "EXEC @result = sp_getapplock @Resource=?, "
-                    "@LockMode='Exclusive', @LockOwner='Session', @LockTimeout=?; "
-                    "SELECT @result AS lock_result",
-                    (lock_key, int(timeout_seconds) * 1000),
-                )
-                result = _row_value(rows[0], "lock_result") if rows else -999
-                if int(result) < 0:
-                    raise ORMException("Timed out waiting for the migration lock.")
+            connection.query(
+                f"SET LOCAL lock_timeout = '{int(timeout_seconds) * 1000}ms'"
+            )
+            connection.query(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                (lock_key,),
+            )
             yield
         finally:
-            if mysql_locked:
-                try:
-                    connection.query("SELECT RELEASE_LOCK(%s)", (lock_key,))
-                except Exception:
-                    _logger.error("failed to release migration lock", exc_info=True)
             if began:
                 try:
                     connection.rollback()

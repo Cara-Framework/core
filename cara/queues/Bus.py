@@ -208,11 +208,13 @@ class Bus:
             if hasattr(job, "_start_tracking"):
                 job._start_tracking()
 
-            # Update job status to processing
-            if tracker and job_id:
-                tracker.update_job_status(job_id, "processing")
-
-            # Mark as processing in unified job table
+            # Mark as processing in unified job table.
+            #
+            # The Trackable ``_mark_*`` hooks delegate straight to the same
+            # JobTracker, so an extra ``tracker.update_job_status`` call here
+            # would write the SAME row twice with a different vocabulary —
+            # and on the terminal transition the second write clobbered
+            # ``success`` with ``completed``. One writer per transition.
             if hasattr(job, "_mark_processing"):
                 job._mark_processing()
 
@@ -263,13 +265,10 @@ class Bus:
             # None via its own sentinel rather than treating it as "did
             # nothing"; mirror that here and record completion unconditionally.
 
-            # Mark as success in unified job table
+            # Mark as success in unified job table (single writer — see
+            # the ``_mark_processing`` note above).
             if has_tracking and hasattr(job, "_mark_success"):
                 job._mark_success()
-
-            # Update job record status
-            if tracker and job_id:
-                tracker.update_job_status(job_id, "completed")
 
             return result
 
@@ -279,13 +278,11 @@ class Bus:
             return None
 
         except Exception as e:
-            # Mark as failed in unified job table
+            # Mark as failed in unified job table (single writer — the hook
+            # also owns retry / dead-letter routing, which the plain status
+            # update did not).
             if has_tracking and hasattr(job, "_mark_failed"):
                 job._mark_failed(str(e), should_retry=False)
-
-            # Update job record status
-            if tracker and job_id:
-                tracker.update_job_status(job_id, "failed")
 
             raise
 

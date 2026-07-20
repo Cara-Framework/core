@@ -5,8 +5,8 @@ from .CacheProvider import CacheProvider
 
 __all__ = [
     "Cache",
-    "VersionedCache",
     "CacheProvider",
+    "VersionedCache",
     "notify_cache_event",
     "set_cache_observer",
 ]

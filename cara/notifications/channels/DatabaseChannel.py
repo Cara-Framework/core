@@ -76,7 +76,11 @@ class DatabaseChannel(BaseChannel):
         # Map to the application's ``notification`` table schema.
         # The table uses ``user_id`` (not ``notifiable_id``) and stores
         # structured fields (``title``, ``body``, ``channel``) instead
-        # of a single ``data`` JSON blob.
+        # of a single ``data`` JSON blob. The notification's own
+        # ``to_database()`` dict is AUTHORITATIVE: app-specific columns it
+        # carries (``tenant_id``, ``type`` from the app's registry, …)
+        # pass through and override these defaults, so the channel works
+        # against tenant-scoped schemas instead of fighting them.
         now = pendulum.now("UTC")
         record = {
             "user_id": self._get_notifiable_id(notifiable),
@@ -95,12 +99,33 @@ class DatabaseChannel(BaseChannel):
             "created_at": now,
             "updated_at": now,
         }
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key in ("title", "body", "action_url"):
+                    continue  # already mapped above
+                record[key] = value
 
         # Add notification ID if set
         if hasattr(original_notification, "get_id") and original_notification.get_id():
             record["id"] = original_notification.get_id()
 
-        # Store in database
+        # Prefer the app-registered notification MODEL when one exists —
+        # model creation runs the app's hooks (public ids, casts,
+        # tenant scoping) that a raw table insert would silently skip.
+        from cara.notifications.Notifiable import Notifiable
+
+        model = Notifiable._notification_model
+        if model is not None:
+            payload = {
+                key: value
+                for key, value in record.items()
+                if key not in ("id", "created_at", "updated_at", "metadata")
+            }
+            payload["metadata"] = data if isinstance(data, dict) else {"value": str(data)}
+            model.create(payload)
+            return True
+
+        # Store in database (raw-table fallback for model-less apps)
         return self._store_notification(record)
 
     def _get_notifiable_id(self, notifiable) -> Any:

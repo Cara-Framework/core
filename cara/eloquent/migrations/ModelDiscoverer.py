@@ -579,15 +579,17 @@ class ModelDiscoverer:
                     # ``.unique()`` modifier on a single column.
                     cu = self._extract_composite_call(field_call, "unique")
                     if cu is not None:
-                        if cu and cu not in model_info["composite_uniques"]:
-                            model_info["composite_uniques"].append(cu)
+                        self._record_composite(
+                            model_info["composite_uniques"], cu[0], cu[1]
+                        )
                         continue
                     # Composite ``field.index([...])`` or
                     # ``field.index("col")`` — emit ``table.index(...)``.
                     ci = self._extract_composite_call(field_call, "index")
                     if ci is not None:
-                        if ci and ci not in model_info["composite_indexes"]:
-                            model_info["composite_indexes"].append(ci)
+                        self._record_composite(
+                            model_info["composite_indexes"], ci[0], ci[1]
+                        )
                         continue
                     # Check if this is a separate foreign key definition
                     if self._is_separate_foreign_key_call(field_call):
@@ -628,14 +630,11 @@ class ModelDiscoverer:
                                 # ``table.index(["<field_name>"])``. Without this
                                 # the index was parsed but never emitted.
                                 if field_def.get("params", {}).get("index"):
-                                    single_col_index = [field_name]
-                                    if (
-                                        single_col_index
-                                        not in model_info["composite_indexes"]
-                                    ):
-                                        model_info["composite_indexes"].append(
-                                            single_col_index
-                                        )
+                                    self._record_composite(
+                                        model_info["composite_indexes"],
+                                        [field_name],
+                                        None,
+                                    )
                             else:
                                 # Handle special fields without names (timestamps, soft_deletes)
                                 field_type = field_def.get("type")
@@ -1032,15 +1031,39 @@ class ModelDiscoverer:
             # Extract SQL dependencies from the up() function (will be called later with all_known_tables)
             model_info["needs_sql_dependency_resolution"] = True
 
+    @staticmethod
+    def _record_composite(entries: list, columns: list, name: str | None) -> None:
+        """Append a ``{"columns": [...], "name": ...}`` constraint declaration.
+
+        Deduped on the column tuple — the same columns must never yield two
+        objects. When the columns are already recorded, a declared ``name``
+        still wins over a previously recorded ``None`` (the chained
+        ``.index()`` modifier carries no name, the standalone
+        ``field.index([...], name=...)`` call does).
+        """
+        if not columns:
+            return
+        for entry in entries:
+            if entry["columns"] == columns:
+                if name and not entry["name"]:
+                    entry["name"] = name
+                return
+        entries.append({"columns": columns, "name": name})
+
     def _extract_composite_call(self, call_node: ast.Call, method_name: str):
-        """Match top-level ``field.<method_name>(...)`` and pull the column list.
+        """Match top-level ``field.<method_name>(...)`` and pull columns + name.
 
         Returns:
             * ``None`` when the call is not ``field.<method_name>(...)``
               (so the caller knows to keep trying other handlers).
-            * ``[]`` when it is the right call but no string columns
+            * ``([], None)`` when it is the right call but no string columns
               were extractable (still consumed; no constraint added).
-            * ``[col, col, ...]`` on success.
+            * ``([col, col, ...], name_or_None)`` on success, where ``name`` is
+              the ``name=`` keyword the model declared. The model owns the
+              object name — dropping it here made the generated migration fall
+              back to an auto-derived name, so a later hand-written migration
+              had to create/rename the declared one and the table ended up with
+              two indexes on the same columns.
 
         Accepts both ``field.unique(["a", "b"])`` (list arg) and
         ``field.index("a")`` (single string), since the legacy schema
@@ -1056,18 +1079,28 @@ class ModelDiscoverer:
             return None
         if call_node.func.value.id != "field":
             return None
+        name = next(
+            (
+                kw.value.value
+                for kw in call_node.keywords
+                if kw.arg == "name"
+                and isinstance(kw.value, ast.Constant)
+                and isinstance(kw.value.value, str)
+            ),
+            None,
+        )
         if not call_node.args:
-            return []
+            return [], None
         first = call_node.args[0]
         if isinstance(first, ast.List):
             cols = []
             for elt in first.elts:
                 if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
                     cols.append(elt.value)
-            return cols
+            return cols, name
         if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            return [first.value]
-        return []
+            return [first.value], name
+        return [], None
 
     def _is_separate_foreign_key_call(self, call_node: ast.Call) -> bool:
         """Check if this is a separate foreign key call: field.foreign("field_name").references("id").on("table")"""

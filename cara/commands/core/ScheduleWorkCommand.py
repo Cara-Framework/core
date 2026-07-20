@@ -23,6 +23,11 @@ from cara.exceptions import (
 )
 from cara.facades import Log, Queue, Schedule
 from cara.scheduling.contracts import ShouldSchedule
+from cara.scheduling.Snapshot import (
+    SCHEDULE_SNAPSHOT_CACHE_KEY,
+    SCHEDULE_SNAPSHOT_EVERY_SECONDS,
+    SCHEDULE_SNAPSHOT_TTL_SECONDS,
+)
 
 
 @command(
@@ -434,7 +439,11 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
         builder = Schedule.call(_make_and_run)
         builder.identifier = job_id
-        builder.options.update({"silent": True})
+        # ``display_name`` rides options into the driver, which forwards it
+        # as APScheduler's ``name`` — otherwise every job introspects as the
+        # wrapper's function name and the published snapshot (plus
+        # APScheduler's own logs) reads ``_sync_wrapped`` 58 times.
+        builder.options.update({"silent": True, "display_name": job_name})
 
         # ROOT-CAUSE: pre-fix the dict-job registration silently dropped
         # any ``without_overlapping`` flag in the spec, so every entry in
@@ -716,6 +725,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                         raise CaraException(
                             "Scheduler engine stopped while the process remained alive"
                         )
+                    self._publish_schedule_snapshot(driver)
                     time.sleep(1)
 
         except Exception as e:
@@ -726,6 +736,51 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             if driver is not None:
                 with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
                     driver.shutdown(wait=False)
+
+    def _publish_schedule_snapshot(self, driver) -> None:
+        """Publish the live schedule to the shared cache, rate-limited.
+
+        Runs on the 1-second keep-alive tick, so it rate-limits itself
+        instead of asking the loop to count. Publishing must never take the
+        scheduler down — the schedule executing matters more than it being
+        observable — so every failure is swallowed into a debug line.
+        """
+        now = time.time()
+        if now - getattr(self, "_snapshot_at", 0.0) < SCHEDULE_SNAPSHOT_EVERY_SECONDS:
+            return
+        self._snapshot_at = now
+        try:
+            import json
+            from datetime import UTC, datetime
+
+            from cara.facades import Cache
+
+            jobs = []
+            for job in driver.list_jobs():
+                next_run = getattr(job, "next_run_time", None)
+                jobs.append(
+                    {
+                        "id": str(getattr(job, "id", "") or ""),
+                        "name": str(getattr(job, "name", "") or getattr(job, "id", "")),
+                        # None while a job is paused — readers must not
+                        # invent a time for it.
+                        "next_run_at": next_run.isoformat() if next_run else None,
+                    }
+                )
+            Cache.put(
+                SCHEDULE_SNAPSHOT_CACHE_KEY,
+                json.dumps(
+                    {
+                        "published_at": datetime.now(UTC).isoformat(),
+                        "jobs": jobs,
+                    }
+                ),
+                SCHEDULE_SNAPSHOT_TTL_SECONDS,
+            )
+        except Exception as e:
+            Log.debug(
+                "schedule snapshot publish failed: %s", e, category="cara.scheduling"
+            )
 
     def _show_final_stats(self):
         """Show final scheduler statistics."""

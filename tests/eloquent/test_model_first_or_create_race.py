@@ -94,8 +94,8 @@ def _make_other_integrity_error() -> Exception:
 
 
 class TestIsUniqueViolation:
-    """The detector must catch every shape Postgres / SQLAlchemy /
-    MySQL surface. Order of precedence: SQLSTATE attribute → wrapped
+    """The detector must catch every shape Postgres / SQLAlchemy
+    surface. Order of precedence: SQLSTATE attribute → wrapped
     ``orig.pgcode`` → message-substring fallback. Each tested
     independently so a driver change that drops one signal still
     leaves the others working."""
@@ -114,9 +114,9 @@ class TestIsUniqueViolation:
         assert Model._is_unique_violation(exc) is True
 
     def test_unique_constraint_message_detected(self) -> None:
-        # MySQL flavour.
+        # Wrapped drivers may only preserve a generic message.
         exc = Exception(
-            "1062 (23000): Duplicate entry for key 'PRIMARY' — unique constraint"
+            'duplicate value violates unique constraint "foo_pkey"'
         )
         assert Model._is_unique_violation(exc) is True
 

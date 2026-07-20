@@ -65,9 +65,9 @@ def test_chained_single_column_index_is_captured(discoverer, tmp_path):
     assert info["fields"]["name"]["params"].get("index") is True
     # And it is recorded as a single-column composite index so the
     # (shared) emitter renders table.index(["name"]).
-    assert ["name"] in info["composite_indexes"]
+    assert {"columns": ["name"], "name": None} in info["composite_indexes"]
     # Non-indexed column must NOT produce an index entry.
-    assert ["plain"] not in info["composite_indexes"]
+    assert ["plain"] not in [d["columns"] for d in info["composite_indexes"]]
     assert "index" not in info["fields"]["plain"]["params"]
 
 
@@ -92,9 +92,10 @@ def test_chained_index_coexists_with_composite_index(discoverer, tmp_path):
     model_path = _write_model(tmp_path, "Combo.py", src)
     info = discoverer._parse_model_file(model_path)
 
-    assert ["queue"] in info["composite_indexes"]
-    assert ["status"] in info["composite_indexes"]
-    assert ["queue", "status"] in info["composite_indexes"]
+    declared = [d["columns"] for d in info["composite_indexes"]]
+    assert ["queue"] in declared
+    assert ["status"] in declared
+    assert ["queue", "status"] in declared
     # default("default") still captured alongside the chained index.
     assert info["fields"]["queue"]["params"].get("default") == "default"
 

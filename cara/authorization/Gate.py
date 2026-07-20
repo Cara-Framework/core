@@ -175,9 +175,18 @@ class Gate(GateContract):
         for callback in self._before_callbacks:
             try:
                 decision = callback(user, ability, *args)
-            except Exception as exc:  # noqa: BLE001 — log and skip a bad guard
+            except Exception as exc:  # noqa: BLE001 — fail closed
+                # A before-hook may be DENY-FIRST (see the API-token ability
+                # cap in GuardProvider). Skipping a crashed guard would hand
+                # the decision to the next hook — the root bypass — and WIDEN
+                # access. Deny instead.
                 self._log(f"before-callback failed for ability='{ability}': {exc}")
-                continue
+                return self._run_after(
+                    user,
+                    ability,
+                    AuthorizationResponse(False, "Authorization check failed."),
+                    *args,
+                )
             if decision is not None:
                 return self._run_after(user, ability, self._normalize(decision), *args)
 
@@ -209,7 +218,9 @@ class Gate(GateContract):
         for callback in self._after_callbacks:
             try:
                 override = callback(user, ability, response.allowed(), *args)
-            except Exception as exc:  # noqa: BLE001 — log and skip a bad guard
+            except Exception as exc:  # noqa: BLE001 — override hook: keep the
+                # prior verdict. Do NOT register a deny-only after-hook — a
+                # crash would drop the denial; deny belongs in `before`.
                 self._log(f"after-callback failed for ability='{ability}': {exc}")
                 continue
             if override is not None:

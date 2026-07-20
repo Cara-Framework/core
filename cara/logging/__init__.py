@@ -1,6 +1,5 @@
 from .CategoryFilter import CategoryFilter
 from .ChannelConfigurator import ChannelConfigurator
-from .InterceptHandler import InterceptHandler
 from .Logger import ContextualLogger, Logger
 from .HttpColorizer import HttpColorizer
 from .PythonLoggerAdapter import (
@@ -17,7 +16,6 @@ __all__ = [
     "ChannelConfigurator",
     "ContextualLogger",
     "HttpColorizer",
-    "InterceptHandler",
     "Logger",
     "LoggerProvider",
     "install_cara_loggers",

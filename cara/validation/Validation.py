@@ -41,6 +41,36 @@ class Validation(ValidationContract):
 
     _WILDCARD = "*"
 
+    # Laravel's "implicit" rules — the ones that still run when the key is
+    # ABSENT from the payload, because absence is exactly what they judge
+    # (Laravel: ``Validator::$implicitRules`` consulted by
+    # ``presentOrRuleIsImplicit``). Every other rule describes the SHAPE of a
+    # value, so it has nothing to say about a key that was never sent and is
+    # skipped — absence is an error only when one of these asks for it.
+    #
+    # Both spellings are listed because ``_discover_rules`` registers each
+    # class under its camel-concat name AND its snake_case name
+    # (``requiredif`` / ``required_if``), and the chain is matched by the
+    # literal token the caller wrote.
+    _IMPLICIT_RULES = frozenset(
+        {
+            "required",
+            "requiredif",
+            "required_if",
+            "requiredunless",
+            "required_unless",
+            "requiredwith",
+            "required_with",
+            "requiredwithout",
+            "required_without",
+            "present",
+            "filled",
+            "accepted",
+            "missing",
+            "prohibited",
+        }
+    )
+
     # Class-level registry of user-supplied custom rules (Laravel parity).
     # Mapping: rule_name (lowercase) → Rule class.
     _custom_rules: dict[str, type[Rule]] = {}
@@ -243,6 +273,28 @@ class Validation(ValidationContract):
                 rule_name, params = instance._split_token(token)
                 # ``bail`` and ``sometimes`` are modifiers, not real rules.
                 if rule_name in {"bail", "sometimes"}:
+                    continue
+
+                # Laravel parity: an ABSENT key is judged only by the implicit
+                # (presence-family) rules. Shape rules — string, integer, in,
+                # max … — describe a value, so they have nothing to say about a
+                # key that was never sent.
+                #
+                # Pre-fix, absence was fed to every rule as ``None`` and any
+                # non-nullable type rule rejected it, so a bare
+                # ``"title": "string|max:512"`` made ``title`` *de facto
+                # required*: `PATCH /products/{id}` with `{"description": "x"}`
+                # answered 422 "The title field must be a string." for a title
+                # the caller never mentioned — no partial update could reach a
+                # controller. `required` is what makes absence an error;
+                # `nullable` governs an explicitly-sent null, not absence.
+                #
+                # Scoped deliberately to ABSENCE. Laravel additionally routes
+                # whitespace-only strings down this same path; cara does not,
+                # and that is left alone — it is a separate semantic with a far
+                # wider blast radius (``in:``/enum chains would start accepting
+                # ``""``), not part of this defect.
+                if not was_provided and rule_name not in instance._IMPLICIT_RULES:
                     continue
                 params["_rules"] = _chain
                 rule_cls = instance._Validation__rule_classes.get(rule_name)

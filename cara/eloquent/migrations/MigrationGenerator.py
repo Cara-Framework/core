@@ -290,13 +290,19 @@ class MigrationGenerator:
             if fk_line:
                 foreign_keys.append(f"            {fk_line}")
 
+        # A model-declared ``name=`` is carried through verbatim so the object
+        # in Postgres matches the model. Without it the Blueprint auto-derives a
+        # name that Postgres then truncates at 63 chars, which is what forced
+        # hand-written rename migrations.
         composite_lines = []
-        for cols in model_info.get("composite_uniques", []):
-            cols_str = ", ".join(f'"{c}"' for c in cols)
-            composite_lines.append(f"            table.unique([{cols_str}])")
-        for cols in model_info.get("composite_indexes", []):
-            cols_str = ", ".join(f'"{c}"' for c in cols)
-            composite_lines.append(f"            table.index([{cols_str}])")
+        for declaration in model_info.get("composite_uniques", []):
+            composite_lines.append(
+                f"            table.unique({self._composite_args(declaration)})"
+            )
+        for declaration in model_info.get("composite_indexes", []):
+            composite_lines.append(
+                f"            table.index({self._composite_args(declaration)})"
+            )
 
         # Combine: regular fields → foreign keys → composite constraints
         all_lines = fields_code + foreign_keys + composite_lines
@@ -785,6 +791,16 @@ class {class_name}(Migration):
             blueprint_call += ".unique()"
 
         return blueprint_call
+
+    @staticmethod
+    def _composite_args(declaration: dict) -> str:
+        """Render the argument list for ``table.index(...)``/``table.unique(...)``
+        from a ``{"columns": [...], "name": str | None}`` declaration."""
+        cols_str = ", ".join(f'"{c}"' for c in declaration["columns"])
+        name = declaration.get("name")
+        if name:
+            return f'[{cols_str}], name="{name}"'
+        return f"[{cols_str}]"
 
     def _generate_foreign_key_line(self, foreign_key_info: dict) -> str:
         """Generate foreign key constraint line from foreign key info.

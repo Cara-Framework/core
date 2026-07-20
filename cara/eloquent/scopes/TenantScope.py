@@ -35,10 +35,8 @@ class TenantScope(BaseScope):
             "_tenant_injector", self._inject_tenant_id, action="insert"
         )
 
-        # bulk_create runs its own scope action (same registration split
-        # UUIDPrimaryKeyScope / TimeStampsScope use) — without it, bulk
-        # inserts silently skipped tenant injection and produced rows
-        # invisible to every scoped query.
+        # bulk_create runs its own scope action; without it, bulk inserts
+        # silently skip tenant injection and produce invisible rows.
         builder.set_global_scope(
             "_tenant_injector_bulk", self._inject_tenant_id_bulk, action="bulk_create"
         )

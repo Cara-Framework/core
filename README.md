@@ -1,85 +1,58 @@
 # Cara Framework
 
-A Laravel-inspired Python framework for rapid application development.
+Cara is the Python application framework shared by Synkronus API and worker
+services. It provides the boot container, CLI, Eloquent-style ORM, queues,
+HTTP middleware, authentication, mail, events, validation, caching,
+broadcasting, observability, and storage abstractions used by the products.
 
-## Features
+## Supported runtime
 
-- 🚀 **Laravel-inspired Architecture**: Familiar patterns for PHP developers
-- 🔧 **Artisan-style CLI**: Powerful command-line interface with `craft` commands
-- 🗄️ **Eloquent ORM**: Database abstraction layer inspired by Laravel's Eloquent
-- 🔐 **Authentication & Authorization**: Built-in JWT authentication and policy-based authorization
-- 📧 **Mail System**: Queue-based email system with multiple drivers
-- 🔄 **Event System**: Event-driven architecture with listeners and subscribers
-- 📝 **Validation**: Comprehensive request validation system
-- 🎯 **Middleware**: HTTP middleware pipeline
-- 📊 **Caching**: Multi-driver caching system (Redis, Memory, etc.)
-- 🔔 **Notifications**: Multi-channel notification system
-- ⚡ **Queue System**: Background job processing with RabbitMQ (AMQP via pika)
-- 🌐 **Broadcasting**: Real-time event broadcasting
-- 📁 **Storage**: File storage abstraction layer
+- Python 3.14+
+- PostgreSQL in production
+- SQLite for tests and local isolated workflows
+- RabbitMQ for durable queues
+- Redis for cache, locks, rate limits, and broadcasting
+
+MySQL and MSSQL are not supported. Keeping one production database contract
+lets migrations, locking, SQL compilation, and operations fail closed instead
+of advertising untested dialects.
 
 ## Installation
 
-```bash
-pip install cara-framework
-```
-
-For development with additional tools:
-```bash
-pip install cara-framework[dev]
-```
-
-For database-specific drivers:
-```bash
-# MySQL
-pip install cara-framework[mysql]
-
-# PostgreSQL  
-pip install cara-framework[postgresql]
-
-# SQLite
-pip install cara-framework[sqlite]
-```
-
-## Quick Start
-
-### 1. Create a new project
+Install the features the consumer actually boots:
 
 ```bash
-cara new my-project
-cd my-project
+pip install "cara-framework[db]"       # ORM + PostgreSQL
+pip install "cara-framework[queue]"    # RabbitMQ + Redis
+pip install "cara-framework[all]"      # full API/worker runtime
+pip install "cara-framework[dev]"      # test and lint tools
 ```
 
-### 2. Configure your environment
+The Synkronus repositories consume Cara from the shared `commons/cara/cara`
+checkout and pin their own complete runtime dependency locks.
 
-Copy `.env.example` to `.env` and configure your settings:
+## Commands
 
-```env
-APP_NAME=MyApp
-APP_ENV=local
-APP_DEBUG=True
-APP_KEY=your-secret-key
-
-DB_CONNECTION=mysql
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_DATABASE=my_database
-DB_USERNAME=root
-DB_PASSWORD=
-```
-
-### 3. Run migrations
+Applications expose registered commands through their `craft` entry point:
 
 ```bash
+python craft list
 python craft migrate
-```
-
-### 4. Start the development server
-
-```bash
+python craft queue:work
+python craft schedule:work
 python craft serve
 ```
 
-## License
+Command availability follows installed feature groups. Database and queue
+commands raise a clear optional-dependency error when their feature is absent.
 
-The Cara Framework is open-sourced software licensed under the [MIT license](LICENSE). 
+## Development
+
+```bash
+python -m pytest
+python -m ruff check cara tests
+python -m ruff format --check cara tests
+```
+
+`setup.py` is the packaging source of truth; `pyproject.toml` contains tool
+configuration only.

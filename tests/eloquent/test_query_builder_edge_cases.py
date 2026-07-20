@@ -1,9 +1,8 @@
 """Regression tests for the public ``QueryBuilder`` API.
 
-The earlier ``test_query_builder_where`` file covers the lower-level
-``WhereBuilder`` component. This file pins behavior of the *user-facing*
-``QueryBuilder`` (the one Models reach through ``Model.where_in`` etc.)
-where several silent foot-guns were discovered:
+This file pins behavior of the user-facing ``QueryBuilder`` (the one Models
+reach through ``Model.where_in`` etc.) where several silent foot-guns were
+discovered:
 
 * ``where_not_in([])`` used to ``return self`` and silently drop the
   exclusion clause — a ``Model.where_not_in('id', external_ids).update(
@@ -18,8 +17,8 @@ where several silent foot-guns were discovered:
 * ``limit(0)`` silently rendered as "no LIMIT" because the grammar's
   ``if not self._limit`` check treated ``0`` and the False sentinel
   identically.
-* ``offset(-1)`` rendered ``OFFSET -1`` (a hard SQL error on Postgres
-  and MySQL) instead of being rejected at the builder.
+* ``offset(-1)`` rendered ``OFFSET -1`` (a hard SQL error) instead of
+  being rejected at the builder.
 """
 
 from __future__ import annotations
@@ -199,7 +198,7 @@ def test_limit_bool_rejected():
 
 
 def test_offset_negative_raises():
-    """``OFFSET -1`` is a hard SQL error on Postgres and MySQL — fail
+    """``OFFSET -1`` is a hard SQL error — fail
     fast at the builder rather than waiting for the DB round-trip."""
     with pytest.raises(ValueError, match=">= 0"):
         _qb().offset(-1)

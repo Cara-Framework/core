@@ -129,8 +129,6 @@ class MigrateResetCommand(CommandBase):
 
         if "postgres" in db_type.lower():
             self._reset_postgresql(connection, config["schema"])
-        elif "mysql" in db_type.lower():
-            self._reset_mysql(connection)
         elif "sqlite" in db_type.lower():
             self._reset_sqlite(connection)
         else:
@@ -147,12 +145,9 @@ class MigrateResetCommand(CommandBase):
 
         if "postgres" in connection_type.lower():
             return "PostgreSQL"
-        elif "mysql" in connection_type.lower():
-            return "MySQL"
-        elif "sqlite" in connection_type.lower():
+        if "sqlite" in connection_type.lower():
             return "SQLite"
-        else:
-            return connection_type
+        return connection_type
 
     def _reset_postgresql(self, connection, schema: str = "public") -> None:
         """Reset PostgreSQL database by dropping all objects with CASCADE.
@@ -235,27 +230,6 @@ END $do$;"""
 
         connection.query(reset_sql)
 
-    def _reset_mysql(self, connection) -> None:
-        """Reset MySQL database by dropping all tables."""
-        tables = self._get_mysql_tables(connection)
-        if not tables:
-            return
-
-        # Disable foreign key checks
-        connection.query("SET FOREIGN_KEY_CHECKS = 0")
-
-        # Drop all tables
-        for table in tables:
-            connection.query(f"DROP TABLE IF EXISTS `{table}`")
-
-        # Re-enable foreign key checks
-        connection.query("SET FOREIGN_KEY_CHECKS = 1")
-
-    def _get_mysql_tables(self, connection) -> list[str]:
-        """Get all table names from MySQL."""
-        result = connection.query("SHOW TABLES")
-        return [list(row.values())[0] for row in result]
-
     def _reset_sqlite(self, connection) -> None:
         """Reset SQLite database by dropping all tables."""
         tables = self._get_sqlite_tables(connection)
@@ -282,4 +256,3 @@ END $do$;"""
         """Handle errors."""
         self.error(f"❌ Reset failed: {str(error)}")
         raise
-

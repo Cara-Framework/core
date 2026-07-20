@@ -31,10 +31,8 @@ from .Events import (
 from .Mutator import mutator
 from .route import route
 from .Schedule import scheduled
-from .Scope import ScopeProxy, enhance_model_with_scopes, scope
 
 __all__ = [
-    "ScopeProxy",
     "accessor",
     "admin_only",
     "after_command",
@@ -48,7 +46,6 @@ __all__ = [
     "creating",
     "deleted",
     "deleting",
-    "enhance_model_with_scopes",
     "get_model_events",
     "get_registered_commands",
     "guest_only",
@@ -58,7 +55,6 @@ __all__ = [
     "saved",
     "saving",
     "scheduled",
-    "scope",
     "updated",
     "updating",
 ]

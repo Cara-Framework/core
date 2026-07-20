@@ -17,6 +17,8 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -118,10 +120,6 @@ def stub_modules(*dotted_names: str) -> None:
         if name in sys.modules:
             continue
         sys.modules[name] = types.ModuleType(name)
-
-
-from collections.abc import Iterator  # noqa: E402
-from contextlib import contextmanager  # noqa: E402
 
 
 @contextmanager

@@ -142,8 +142,8 @@ def test_scalar_standalone_constraints_round_trip_without_diff(tmp_path):
             "email": {"type": "string", "params": {"length": 255}},
             "sid": {"type": "string", "params": {"length": 64}},
         },
-        "composite_indexes": [["email"]],
-        "composite_uniques": [["sid"]],
+        "composite_indexes": [{"columns": ["email"], "name": None}],
+        "composite_uniques": [{"columns": ["sid"], "name": None}],
     }
 
     assert comparator.compare_model_with_migrations(model_info) == []

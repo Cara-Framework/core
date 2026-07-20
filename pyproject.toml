@@ -64,10 +64,6 @@ known-first-party = ["cara"]
 # Test fixtures legitimately use ``Exception`` as catch-all to assert
 # error surfaces; bugbear B017/B018 fire on intentional patterns.
 "tests/**/*.py" = ["B017", "B018"]
-# ``cara/eloquent/query/QueryBuilder.py`` is one of the framework's
-# two intentional circular-dependency unwinds (the other lives in
-# ``builders/SelectBuilder.py``). The late-imports are documented
-# inline; turning the lints on here would force a multi-day refactor
-# of the entire eloquent module.
+# ``cara/eloquent/query/QueryBuilder.py`` contains documented late imports
+# used to unwind the ORM's model/query cycle.
 "cara/eloquent/query/QueryBuilder.py" = ["E402", "F401", "F403", "F405"]
-"cara/eloquent/query/builders/SelectBuilder.py" = ["F821", "F401"]

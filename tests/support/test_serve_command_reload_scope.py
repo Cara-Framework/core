@@ -3,11 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from cara.commands.core import ServeCommand
+from cara.commands.core.ServeCommand import ServeCommand
 
 
 def _runtime_tree(root: Path) -> Path:
     for name in (
+        ".claude",
+        ".codex",
         "app",
         "config",
         "database",
@@ -47,6 +49,8 @@ def test_reload_scope_uses_event_driven_root_and_resolved_shared_source(tmp_path
     assert str((project / "venv").resolve()) in excluded
     assert str((project / "tests").resolve()) in excluded
     assert str((project / "database").resolve()) in excluded
+    assert str((project / ".claude").resolve()) in excluded
+    assert str((project / ".codex").resolve()) in excluded
     assert str((shared / "cara" / "tests").resolve()) in excluded
     assert str((shared / "cara" / ".venv").resolve()) in excluded
 
