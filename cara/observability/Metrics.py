@@ -758,9 +758,27 @@ def start_http_server(
                 _prom_start_http_server(effective_port, addr=host, registry=REGISTRY)
                 break
             except OSError as e:
-                if e.errno != errno.EADDRINUSE or attempt == 4:
+                if e.errno != errno.EADDRINUSE:
                     raise
-                _time.sleep(2)
+                if attempt < 4:
+                    _time.sleep(2)
+                    continue
+                # Ten seconds in, this is no longer a restart race — another
+                # ROLE holds the port (one METRICS_PORT, several long-lived
+                # processes: worker, scheduler, relay). Raising here kills a
+                # process whose actual job is fine, which is how the queue
+                # relay became unstartable and 1250 jobs sat unpublished with
+                # nothing running to move them. Observability must never be
+                # the reason work stops: warn loudly, run without /metrics.
+                from cara.facades import Log
+
+                Log.warning(
+                    f"metrics: port {effective_port} is held by another "
+                    f"process — continuing WITHOUT /metrics for role "
+                    f"{role or 'unknown'}. Give each role its own METRICS_PORT "
+                    f"to restore scraping."
+                )
+                return None
         # Config is guaranteed loaded here (the port above came from it) —
         # re-stamp build_info so service/role reflect the real values instead
         # of the import-time "unknown" defaults.
