@@ -1,5 +1,6 @@
 """Durable AMQP delivery ledger."""
 
+from .PublicationBacklogProbe import PublicationBacklogProbe
 from .QueueJobDeliveryStore import (
     DeliveryClaim,
     DeliveryEnvelopeExpired,
@@ -14,6 +15,7 @@ __all__ = [
     "DeliveryEnvelopeExpired",
     "DeliveryEnvelopeMismatch",
     "DeliveryLeaseLost",
+    "PublicationBacklogProbe",
     "QueueJobDeliveryStore",
     "ReplayDelivery",
 ]

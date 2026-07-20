@@ -32,7 +32,13 @@ from cara.scheduling.Snapshot import (
 
 @command(
     name="schedule:work",
-    help="Run the schedule worker to register and execute scheduled tasks.",
+    help=(
+        "SCHEDULER: fire scheduled tasks on their cadence.\n"
+        "\n"
+        "Third of the three background processes. Tasks that dispatch jobs "
+        "still need `craft queue:relay` to publish them and `craft "
+        "queue:work` to run them."
+    ),
     options={
         "--driver=?": "Scheduler driver to use (overrides default)",
         "--once": "Run scheduled tasks once and exit",

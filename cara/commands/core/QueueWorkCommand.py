@@ -1247,7 +1247,23 @@ class JobProcessor:
 
 @command(
     name="queue:work",
-    help="Run the queue worker to consume jobs with enhanced UX.",
+    help=(
+        "CONSUMER: take jobs off RabbitMQ and run them. "
+        "Not sufficient on its own — see below.\n"
+        "\n"
+        "This process only CONSUMES. It never publishes. `Bus.dispatch` does "
+        "not write to RabbitMQ either: it commits a row to the "
+        "`queue_job_delivery` outbox, and `craft queue:relay` is the ONLY "
+        "thing that turns those rows into broker messages.\n"
+        "\n"
+        "So `queue:work` alone gets you a worker listening to an empty "
+        "broker: every dispatch reports success, nothing ever runs, and "
+        "nothing else complains. Run `craft queue:relay` alongside it. Add "
+        "`craft schedule:work` if you also want scheduled jobs to fire.\n"
+        "\n"
+        "This command warns at startup if it finds an aged, undrained "
+        "outbox — but it will still start, so read the banner."
+    ),
     options={
         "--driver=?": "Queue driver to use (overrides default configuration)",
         "--queue=?": "Queue name(s) to process (comma-separated)",
@@ -1380,6 +1396,15 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                 raise CaraException("Worker metrics server failed to start") from e
             Log.warning("metrics server startup failed: %s", e)
 
+        # Is anything actually PUBLISHING the work this worker consumes?
+        # ``queue:work`` and ``queue:relay`` read like a matched pair but
+        # only one of them is a consumer; starting this one alone leaves a
+        # worker listening to an empty broker while dispatches pile up in
+        # the outbox (2026-07-20: 1250 jobs, zero complaints). Advisory
+        # only — see PublicationBacklogProbe on why this must never be
+        # able to stop a worker from starting.
+        self._warn_when_nothing_is_publishing()
+
         # Worker-startup hooks — declared by the app in
         # config/queue.py::WORKER_STARTUP_HOOKS (dotted paths to sync
         # callables, e.g. a domain metrics sampler). Kept out of the
@@ -1427,6 +1452,32 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             self._show_final_stats()
         if self._reload_requested:
             self._restart_worker_process()
+
+    def _warn_when_nothing_is_publishing(self) -> str | None:
+        """Print a loud banner when the outbox is aged and undrained.
+
+        Returns the advisory text (for tests), or ``None`` when there is
+        nothing to say. NEVER raises and NEVER exits: an operator whose
+        relay is down still needs their worker to come up, and a
+        diagnostic that kills its host process is worse than the silence
+        it replaces.
+        """
+        from cara.queues.delivery import PublicationBacklogProbe
+
+        def _emit(message: str) -> None:
+            self.console.print()
+            self.console.print(
+                "[bold #e06c75]⚠ NOTHING IS PUBLISHING TO THE BROKER[/bold "
+                "#e06c75]"
+            )
+            for line in message.splitlines():
+                self.console.print(f"[#e5c07b]  {line}[/#e5c07b]")
+            self.console.print()
+
+        try:
+            return PublicationBacklogProbe.announce(emit=_emit)
+        except Exception:  # noqa: BLE001 — belt and braces; see docstring
+            return None
 
     def _trigger_auto_reload(self) -> None:
         """Drain the worker, then replace the process for code reload.

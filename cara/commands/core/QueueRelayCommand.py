@@ -120,7 +120,20 @@ class _RelayLoop(CommandBase):
 
 @command(
     name="queue:relay",
-    help="Publish durable queue outbox rows with confirms.",
+    help=(
+        "PUBLISHER: the ONLY process that puts dispatched jobs on RabbitMQ. "
+        "Not sufficient on its own — see below.\n"
+        "\n"
+        "`Bus.dispatch` does not talk to RabbitMQ. It commits a row to the "
+        "`queue_job_delivery` outbox; this relay claims those rows and "
+        "publishes them with confirms. Without it, dispatch still reports "
+        "success and the work simply accumulates as `pending` forever.\n"
+        "\n"
+        "It publishes but never executes. Run `craft queue:work` alongside "
+        "it to actually consume and run the jobs, and `craft schedule:work` "
+        "if you want scheduled jobs to fire. Rule of thumb: a system that "
+        "runs background work needs all three."
+    ),
     options={
         "--once": "Run one bounded relay iteration and exit.",
         "--poll-interval=?": "Idle poll interval in seconds (default: 0.25).",
@@ -165,7 +178,13 @@ class QueueRelayCommand(_RelayLoop):
 
 @command(
     name="queue:hooks",
-    help="Process durable queue terminal-hook outbox rows.",
+    help=(
+        "Process durable queue terminal-hook outbox rows.\n"
+        "\n"
+        "Sibling of `queue:relay` — same outbox-draining shape, different "
+        "outbox. Handles post-completion hooks; it is not a substitute for "
+        "`queue:relay` (job publication) or `queue:work` (job execution)."
+    ),
     options={
         "--once": "Run one bounded hook iteration and exit.",
         "--poll-interval=?": "Idle poll interval in seconds (default: 0.25).",

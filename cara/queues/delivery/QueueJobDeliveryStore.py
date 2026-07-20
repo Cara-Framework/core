@@ -125,6 +125,8 @@ class QueueJobDeliveryStore:
             raise QueueException(
                 "AMQP delivery_table must be the canonical 'queue_job_delivery'."
             )
+        # One-shot latch for _require_ledger_schema — see that method.
+        self._ledger_schema_verified = False
         canonical_queues = getattr(driver, "_canonical_queues", None) or options.get(
             "canonical_queues"
         )
@@ -250,6 +252,7 @@ class QueueJobDeliveryStore:
     ) -> bool:
         """Insert an immutable delivery row before any broker publication."""
         database = db or self._db()
+        self._require_ledger_schema(database)
         canonical = SignedJsonJobSerializer.canonical_envelope_bytes(body)
         digest = SignedJsonJobSerializer.canonical_envelope_sha256(canonical)
         job_id = str(payload["job_id"])
@@ -2133,6 +2136,30 @@ class QueueJobDeliveryStore:
             category="cara.queue.delivery",
         )
 
+    def backlog_metrics_if_installed(self) -> dict[str, int | float] | None:
+        """``backlog_metrics`` for callers that may run without the ledger.
+
+        Returns ``None`` when this database carries no delivery ledger at
+        all. Cara is shared by products that do not deploy the outbox, so
+        a diagnostic caller (see ``PublicationBacklogProbe``) must be able
+        to tell "no ledger here" apart from "ledger is fine" — and must
+        not explode on the former. ``to_regclass`` answers NULL for a
+        missing relation instead of raising, which additionally leaves any
+        surrounding PostgreSQL transaction usable; a bare ``SELECT`` on a
+        missing table would abort it.
+
+        The relay's own :meth:`backlog_metrics` deliberately does NOT get
+        this treatment: if the ledger vanishes underneath the publisher,
+        that must fail loud.
+        """
+        row = self._db().select_one(
+            "SELECT to_regclass(%s) IS NOT NULL AS present",
+            [self.table],
+        )
+        if not self._row_value(row, "present"):
+            return None
+        return self.backlog_metrics()
+
     def backlog_metrics(self) -> dict[str, int | float]:
         row = self._db().select_one(
             f"SELECT COUNT(*) AS count, COALESCE(EXTRACT(EPOCH FROM "
@@ -2531,6 +2558,42 @@ class QueueJobDeliveryStore:
                 "Durable AMQP delivery requires the application DB binding."
             )
         return self.application.make("DB")
+
+    def _require_ledger_schema(self, database: Any) -> None:
+        """Fail with an actionable message when the outbox table is absent.
+
+        Since the direct-to-broker path was removed, ``AMQPDriver.push`` ALWAYS
+        writes here first, so this table is a hard runtime dependency of the
+        amqp driver rather than an optional feature. An app that upgrades cara
+        without running the ledger migration otherwise learns this as a raw
+        ``UndefinedTable`` surfacing from inside a dispatch transaction — which
+        reads like an app bug and, where the caller logs-and-continues, is
+        invisible until someone notices the jobs never ran.
+
+        Checked lazily on first register() rather than at driver registration:
+        the driver is built during provider boot, where an api process may have
+        no DB yet (or none at all), and refusing to boot there would be a
+        regression for a process that never dispatches. The flag makes it one
+        probe per store instance, off the per-dispatch path.
+        """
+        if self._ledger_schema_verified:
+            return
+        present = database.select_one(
+            "SELECT to_regclass(%s) AS table_name", [f"public.{self.table}"]
+        )
+        name = (present or {}).get("table_name") if isinstance(present, dict) else None
+        if not name:
+            raise QueueException(
+                f"The queue delivery ledger table {self.table!r} does not "
+                "exist, so no job can be dispatched: since cara's durable-queue "
+                "cutover the amqp driver has no direct-to-broker path and every "
+                "dispatch is written to this outbox first (`craft queue:relay` "
+                "is what publishes it). Run `craft migrate` to apply the "
+                "delivery-ledger migration. If the app has no such migration, "
+                "it never adopted the durable-queue contract — port the "
+                "MODEL_LESS `create_queue_job_delivery_ledger` migration."
+            )
+        self._ledger_schema_verified = True
 
     @staticmethod
     def _tenant_scope(payload: Mapping[str, Any]) -> tuple[str, int | None]:
