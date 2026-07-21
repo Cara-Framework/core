@@ -112,7 +112,7 @@ def test_the_budget_is_reported_so_the_number_can_be_argued_with() -> None:
 def test_thresholds_come_from_the_same_config_keys_as_the_watchdog() -> None:
     """One definition of "stalled" for the startup and continuous surfaces.
 
-    ``app.support.QueueOutboxHealth`` reads these exact keys. If this
+    The app-side outbox health probe reads these exact keys. If this
     probe grew its own knobs the two surfaces could disagree about
     whether the system is healthy, which is its own kind of silence.
     """
