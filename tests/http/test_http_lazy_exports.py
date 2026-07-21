@@ -80,6 +80,48 @@ def test_exported_symbols_never_collide_with_submodule_names() -> None:
     )
 
 
+def test_body_parsing_binds_uploaded_file_class_not_submodule() -> None:
+    """Circular-init regression guard for the multipart body parser.
+
+    ``MakesBodyParsing`` used to do ``from cara.http.request import UploadedFile``.
+    The ``cara.http.request`` barrel imports ``.Request`` on its FIRST line, and
+    ``Request`` pulls in this very mixin — so when the mixin's import runs the
+    package namespace is only half-initialised and ``UploadedFile`` (bound on a
+    later ``__init__`` line) is not yet a package attribute. Python then falls back
+    to binding the SUBMODULE, and every ``UploadedFile(...)`` call raised
+    "'module' object is not callable" — silently aborting each multipart parse, so
+    uploads failed with a misdirected "client_slug is required" 422.
+
+    ``test_exported_symbols_never_collide_with_submodule_names`` cannot see this:
+    the submodule is already in ``sys.modules`` from the circular import, so its
+    "import the submodule, then re-check the package attribute" step is a no-op and
+    the package attribute stays the eagerly-bound class. The circular import that
+    causes the bug is exactly what defeats that guard. So assert the CONSUMER's
+    captured binding directly, in a fresh interpreter that springs the trap order.
+    The fix is a direct submodule import in the mixin
+    (``from cara.http.request.UploadedFile import UploadedFile``).
+    """
+    code = """
+import inspect
+import sys
+
+import cara.http.request.mixins.MakesBodyParsing  # noqa: F401 — triggers the chain
+
+mod = sys.modules["cara.http.request.mixins.MakesBodyParsing"]
+uf = mod.UploadedFile
+assert inspect.isclass(uf), f"UploadedFile bound as {type(uf).__name__}, expected class"
+# Must be callable as the dataclass, not a module.
+uf(name="f", filename="a.jpg", content_type="image/jpeg", content=b"x")
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_pagination_stays_the_class_even_after_the_submodule_is_imported() -> None:
     code = """
 import cara.http.Pagination  # binds the submodule onto the package

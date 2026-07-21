@@ -15,7 +15,15 @@ from python_multipart import MultipartParser
 from python_multipart.multipart import parse_options_header
 
 from cara.exceptions import BadRequestException
-from cara.http.request import UploadedFile
+# Import the class directly from its submodule, NOT via the ``cara.http.request``
+# package barrel. The barrel's ``__init__`` imports ``.Request`` first, which pulls
+# in this very mixin — so at the moment this line runs the package namespace is only
+# partially initialised and ``UploadedFile`` (bound on a later ``__init__`` line) is
+# not yet an attribute. ``from cara.http.request import UploadedFile`` then falls back
+# to binding the SUBMODULE, and ``UploadedFile(...)`` below raises "'module' object is
+# not callable" — aborting every multipart parse. The direct submodule import is
+# immune to that load order.
+from cara.http.request.UploadedFile import UploadedFile
 
 
 # ---------------------------------------------------------------------
