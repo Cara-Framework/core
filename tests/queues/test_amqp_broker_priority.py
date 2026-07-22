@@ -137,7 +137,7 @@ def test_publish_uses_reconciled_quorum_queue_and_high_message_priority():
     assert publish["routing_key"] == "sync"
     assert publish["properties"].content_type == "application/json"
     assert publish["properties"].priority == 3
-    assert publish["properties"].type == "cara.job.v2"
+    assert publish["properties"].type == "cara.job.v3"
 
 
 def test_quorum_priority_configuration_rejects_values_above_native_limit():
