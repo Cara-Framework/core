@@ -31,7 +31,10 @@ class ShouldAuthenticate(Middleware):
             auth_manager = application.make("auth")
             self.guards = [auth_manager.get_default_guard()]
         except Exception as e:
-            Log.warning("ShouldAuthenticate: failed to resolve default guard, falling back to jwt: %s", e)
+            Log.warning(
+                "ShouldAuthenticate: failed to resolve default guard, falling back to jwt: %s",
+                e,
+            )
             self.guards = ["jwt"]
 
     async def handle(
@@ -87,16 +90,6 @@ class ShouldAuthenticate(Middleware):
         # Canonical error shape: ``{error, type, ...}`` (see
         # ``HttpException.to_dict``). Pre-fix this middleware used
         # ``{error: "Unauthorized", message: "..."}`` which broke the
-        # ``response.type`` switch every other framework path uses;
-        # clients had to special-case 401 responses by looking at a
-        # different key than every other error. ``type`` carries the
-        # specific guard exception class name so consumers can tell
-        # ``TokenInvalidException`` apart from ``TokenExpiredException``
-        # without inspecting the human-readable detail string.
-        guard_type = (
-            last_error.__class__.__name__ if last_error is not None else "Unauthorized"
-        )
-
         if (
             last_error
             and hasattr(last_error, "message")
@@ -106,7 +99,7 @@ class ShouldAuthenticate(Middleware):
             return response.json(
                 {
                     "error": last_error.message,
-                    "type": guard_type,
+                    "type": "authentication_error",
                 },
                 last_error.status_code,
             )
@@ -115,7 +108,7 @@ class ShouldAuthenticate(Middleware):
             return response.json(
                 {
                     "error": str(last_error) or "Unauthorized",
-                    "type": guard_type,
+                    "type": "authentication_error",
                 },
                 401,
             )
@@ -124,7 +117,7 @@ class ShouldAuthenticate(Middleware):
             return response.json(
                 {
                     "error": "Authentication required",
-                    "type": "Unauthorized",
+                    "type": "authentication_error",
                 },
                 401,
             )

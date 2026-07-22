@@ -46,7 +46,7 @@ class CanPerform(Middleware):
             return response.json(
                 {
                     "error": str(e) if str(e) else "This action is unauthorized",
-                    "type": "authorization_failed",
+                    "type": "authorization_error",
                 },
                 403,
             )

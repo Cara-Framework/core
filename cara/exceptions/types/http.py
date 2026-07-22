@@ -34,6 +34,7 @@ class HttpException(CaraException):
 
     is_http_exception = True
     status_code = 500
+    error_type = "http_error"
 
     def __init__(
         self, message: str = "An error occurred", status_code: int | None = None, **kwargs
@@ -63,7 +64,7 @@ class HttpException(CaraException):
         """
         result: dict[str, Any] = {
             "error": str(self),
-            "type": self.__class__.__name__,
+            "type": self.error_type,
         }
 
         # Add any extra attributes that don't start with underscore.
@@ -85,12 +86,14 @@ class BadRequestException(HttpException):
     """Thrown when the request is malformed (HTTP 400)."""
 
     status_code = 400
+    error_type = "bad_request"
 
 
 class RouteNotFoundException(HttpException):
     """Thrown when no route matches a request path."""
 
     status_code = 404
+    error_type = "not_found"
 
 
 class MethodNotAllowedException(HttpException):
@@ -110,6 +113,7 @@ class MethodNotAllowedException(HttpException):
     """
 
     status_code = 405
+    error_type = "method_not_allowed"
 
 
 class RouteMiddlewareNotFoundException(CaraException):
@@ -134,6 +138,7 @@ class ServiceUnavailableException(HttpException):
     """
 
     status_code = 503
+    error_type = "service_unavailable"
 
     def __init__(
         self,

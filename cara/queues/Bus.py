@@ -58,7 +58,10 @@ class Bus:
             queue: Optional queue name override.
 
         Returns:
-            Job result if sync mode, None if queued.
+            Job result in sync mode. Queued dispatches return the durable
+            queue-delivery UUID written by the queue driver. A coalesced
+            :class:`UniqueJob` returns the UUID of the already-open delivery
+            when one is known.
 
         Example:
             >>> # Context-aware (recommended)
@@ -100,7 +103,21 @@ class Bus:
                         ).inc()
                     except Exception:
                         pass
-                    return None
+                    current_job_id = UniqueJob.current_unique_job_id(uid)
+                    if current_job_id is None:
+                        # The winning dispatcher acquires the lock immediately
+                        # before the driver mints its durable UUID. Give that
+                        # tiny bind window a bounded chance to close so a
+                        # concurrent HTTP trigger can return the existing
+                        # pollable operation instead of ambiguous ``None``.
+                        import asyncio
+
+                        for _ in range(20):
+                            await asyncio.sleep(0.005)
+                            current_job_id = UniqueJob.current_unique_job_id(uid)
+                            if current_job_id is not None:
+                                break
+                    return current_job_id
                 try:
                     from cara.observability.Metrics import MetricsBase as _M
 
@@ -126,12 +143,16 @@ class Bus:
                     dispatch_call.delay(delay)
                 # The terminal call is mandatory: builder destruction never
                 # queues work, and dispatch failures must reach the caller.
-                dispatch_call.dispatch()
+                job_id = dispatch_call.dispatch()
+                if isinstance(job, UniqueJob) and job_id is not None:
+                    UniqueJob.bind_unique_job_id(uid, str(job_id), job.unique_for)
             except Exception:
                 # Dispatch failed before the job was queued — release
                 # the unique lock so the caller can retry.
                 if isinstance(job, UniqueJob):
-                    with contextlib.suppress(ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
+                    with contextlib.suppress(
+                        ImportError, ConnectionError, TimeoutError, OSError, RuntimeError
+                    ):
                         UniqueJob.release_unique_lock(job.unique_id())
                 raise
 
@@ -151,7 +172,7 @@ class Bus:
                 ).inc()
             except Exception:
                 pass
-            return None
+            return job_id
 
     @staticmethod
     async def _run_sync_with_tracking(job: Queueable) -> Any:

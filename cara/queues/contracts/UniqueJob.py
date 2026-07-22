@@ -27,7 +27,10 @@ import time
 
 # Fallback in-memory lock store (for single-process or boot scenarios)
 _unique_locks = {}
+_unique_job_ids: dict[str, str] = {}
 _unique_lock = threading.Lock()
+
+_UNBOUND_LOCK = "__pending__"
 
 
 class UniqueJob:
@@ -103,7 +106,7 @@ class UniqueJob:
             from cara.facades import Cache
 
             # Cache.add returns True if key was not set (= acquired lock).
-            return Cache.add(cache_key, "1", ttl)
+            return Cache.add(cache_key, _UNBOUND_LOCK, ttl)
         except Exception:  # noqa: BLE001 — hot-path lock primitive must never raise
             # Cache-facade ImportError at boot OR a runtime Cache
             # failure (Redis ConnectionError, TimeoutError, misconfigured
@@ -120,6 +123,41 @@ class UniqueJob:
                 # Expired lock, replace it
             _unique_locks[unique_id] = (time.time(), ttl)
             return True
+
+    @classmethod
+    def bind_unique_job_id(cls, unique_id: str, job_id: str, ttl: int = 3600) -> None:
+        """Attach the durable queue UUID to an acquired uniqueness lock.
+
+        The lock is acquired before the queue driver can mint its UUID. Keeping
+        that UUID on the same distributed key lets a duplicate trigger return
+        the already-open operation instead of the old ambiguous ``None``.
+        """
+        if not unique_id or not job_id:
+            raise ValueError("unique_id and job_id are required")
+        cache_key = f"unique_job:{unique_id}"
+        try:
+            from cara.facades import Cache
+
+            Cache.put(cache_key, str(job_id), int(ttl))
+        except Exception:  # noqa: BLE001 — mirror the lock's boot fallback
+            pass
+        with _unique_lock:
+            _unique_job_ids[unique_id] = str(job_id)
+
+    @classmethod
+    def current_unique_job_id(cls, unique_id: str) -> str | None:
+        """Return the durable delivery UUID bound to an open unique lock."""
+        cache_key = f"unique_job:{unique_id}"
+        try:
+            from cara.facades import Cache
+
+            value = Cache.get(cache_key)
+            if value not in (None, "1", _UNBOUND_LOCK):
+                return str(value)
+        except Exception:  # noqa: BLE001 — in-memory fallback remains useful
+            pass
+        with _unique_lock:
+            return _unique_job_ids.get(unique_id)
 
     @classmethod
     def release_unique_lock(cls, unique_id: str) -> None:
@@ -150,6 +188,7 @@ class UniqueJob:
         # Also remove from in-memory fallback
         with _unique_lock:
             _unique_locks.pop(unique_id, None)
+            _unique_job_ids.pop(unique_id, None)
 
     @classmethod
     def release_unique_lock_strict(cls, unique_id: str) -> None:
@@ -164,6 +203,7 @@ class UniqueJob:
         Cache.forget(f"unique_job:{unique_id}")
         with _unique_lock:
             _unique_locks.pop(unique_id, None)
+            _unique_job_ids.pop(unique_id, None)
 
     @classmethod
     def cleanup_expired_locks(cls) -> int:
@@ -181,5 +221,6 @@ class UniqueJob:
             ]
             for uid in expired:
                 del _unique_locks[uid]
+                _unique_job_ids.pop(uid, None)
                 removed += 1
         return removed
