@@ -149,7 +149,9 @@ class AMQPConnectionManager:
                     # than much later in the consumer loop.
                     self.connection.process_data_events(time_limit=0)
                 except Exception:
-                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+                    with contextlib.suppress(
+                        OSError, RuntimeError, AttributeError, ConnectionError
+                    ):
                         self.connection.close()
                     self.connection = None
 
@@ -164,7 +166,10 @@ class AMQPConnectionManager:
             except (ImportError, RuntimeError):
                 import sys
 
-                print(f"[QueueWorkCommand] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
+                print(
+                    f"[QueueWorkCommand] Failed to connect to RabbitMQ: {e}",
+                    file=sys.stderr,
+                )
             self.connection = None
             return False
 
@@ -172,9 +177,7 @@ class AMQPConnectionManager:
         """Create new AMQP connection."""
         import pika
 
-        if self.driver is not None and hasattr(
-            self.driver, "_connection_parameters"
-        ):
+        if self.driver is not None and hasattr(self.driver, "_connection_parameters"):
             parameters = self.driver._connection_parameters(self.driver.options)
         else:
             credentials = pika.PlainCredentials(
@@ -279,9 +282,7 @@ class ThreadSafeAMQPAckChannel:
                 completed.set()
 
         if self._connection is None or self._connection.is_closed:
-            raise ConnectionError(
-                f"RabbitMQ connection closed before {operation}"
-            )
+            raise ConnectionError(f"RabbitMQ connection closed before {operation}")
         self._connection.add_callback_threadsafe(_run)
         if not completed.wait(self._timeout_seconds):
             raise TimeoutError(
@@ -417,6 +418,7 @@ class JobProcessor:
         is here so anyone reaching for it (debug shim, alternative
         worker mode, unit test) gets the same contract.
         """
+
         async def _run_registered():
             token = (
                 cancellation_registry.register_current()
@@ -570,9 +572,8 @@ class JobProcessor:
                 "db_job_id": msg.get("db_job_id"),
                 "source_delivery_job_id": msg.get("job_id"),
                 "source_delivery_lease_token": delivery_lease_token,
-                "deduplication_key": (
-                    f"retry:{msg.get('job_id')}:{next_attempt}"
-                ),
+                "deduplication_key": (f"retry:{msg.get('job_id')}:{next_attempt}"),
+                "unique_key": msg.get("unique_key"),
             }
             if msg.get("_tenant_mode") == "tenant":
                 retry_options["tenant_id"] = msg.get("_tenant")
@@ -654,13 +655,10 @@ class JobProcessor:
 
         * ``do_not_retry`` exceptions skip straight to DLQ — no point
           burning the backoff budget on a 404 that won't come back.
-        * Retries leave the ``UniqueJob`` lock in place so a concurrent
-          dispatch with the same ``unique_id`` doesn't slip in during
-          the backoff window. The lock TTL (``unique_for``, default 1h)
-          remains the safety cap.
-        * Terminal failure (budget exhausted, invalid signed payload,
-          ``do_not_retry``) releases the lock so the next legitimate
-          dispatch can proceed.
+        * Retry settlement transactionally transfers the database uniqueness
+          fence from the processing source to its delayed child.
+        * Terminal failure removes the row from the open-delivery index, so a
+          later legitimate dispatch can proceed.
         """
         do_not_retry = bool(getattr(exc, "do_not_retry", False))
         can_retry = (
@@ -686,10 +684,8 @@ class JobProcessor:
                 tracker=tracker,
                 db_job_id=db_job_id,
             )
-            # Intentional: DO NOT release the UniqueJob lock. The
-            # retry is in flight (delayed publish); releasing now
-            # would allow a duplicate dispatch to win the lock and
-            # both copies would run when the delay expires.
+            # The ledger transaction moved the uniqueness fence from the
+            # processing source to the delayed retry child.
             return "retry_scheduled"
 
         # Terminal — give up the slot.
@@ -857,9 +853,7 @@ class JobProcessor:
                     )
                 JobProcessor._retry_settlement_step(
                     f"Tracked queue job {retry_db_job_id} retry recovery",
-                    lambda: tracker.ensure_retry_progress_strict(
-                        retry_db_job_id
-                    ),
+                    lambda: tracker.ensure_retry_progress_strict(retry_db_job_id),
                 )
                 JobProcessor._broker_ack(channel, method_frame.delivery_tag)
                 _mx_record(claim.outcome)
@@ -918,8 +912,7 @@ class JobProcessor:
                 terminal_db_job_id = verified_payload.get("db_job_id")
                 if tracker is None or terminal_db_job_id is None:
                     raise DeliverySettlementError(
-                        "Terminal queue recovery requires a persistent "
-                        "JobTracker fence."
+                        "Terminal queue recovery requires a persistent JobTracker fence."
                     )
                 JobProcessor._retry_settlement_step(
                     f"Tracked queue job {terminal_db_job_id} terminal recovery",
@@ -960,8 +953,8 @@ class JobProcessor:
             db_job_id = msg.get("db_job_id")
 
             # A payload with no ``obj`` (or ``obj=None``) is malformed —
-            # the worker has no class to call, no UniqueJob lock to
-            # release, no failed() hook to invoke. Pre-fix the
+            # the worker has no class to call and no failed() hook to
+            # invoke. Pre-fix the
             # ``callable(getattr(None, callback))`` check below was
             # False, the block was skipped, and the success branch
             # ACKed the message + emitted ``outcome="success"``
@@ -1027,7 +1020,9 @@ class JobProcessor:
                 except (ImportError, RuntimeError, AttributeError, OSError):
                     pass
                 if wait_secs is not None:
-                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+                    with contextlib.suppress(
+                        OSError, RuntimeError, AttributeError, ConnectionError
+                    ):
                         _M.queue_wait_seconds.labels(
                             queue=_mx_queue,
                             job_class=_mx_job,
@@ -1050,9 +1045,7 @@ class JobProcessor:
                 completed: list[bool] = []
                 JobProcessor._retry_settlement_step(
                     f"Tracked queue job {db_job_id} completion lookup",
-                    lambda: completed.append(
-                        tracker.is_job_completed(db_job_id)
-                    ),
+                    lambda: completed.append(tracker.is_job_completed(db_job_id)),
                 )
                 if completed[-1]:
                     try:
@@ -1118,6 +1111,7 @@ class JobProcessor:
                         return await _m(*_args)
 
                     try:
+
                         async def _call_with_middleware():
                             return await run_through_middleware_async(
                                 instance, _async_handler
@@ -1321,6 +1315,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         still run interpreter teardown.
         """
         if not self._signal_handlers_installed:
+
             def _graceful_stop(signum, _frame):
                 # First signal requests a bounded graceful drain. A second
                 # signal is an explicit operator request to stop immediately;
@@ -1337,9 +1332,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                 self.shutdown_requested = True
                 Log.info(
                     "Queue worker received %s — draining current job then exiting",
-                    signal.Signals(signum).name
-                    if hasattr(signal, "Signals")
-                    else signum,
+                    signal.Signals(signum).name if hasattr(signal, "Signals") else signum,
                 )
 
             signal.signal(signal.SIGINT, _graceful_stop)
@@ -1467,8 +1460,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         def _emit(message: str) -> None:
             self.console.print()
             self.console.print(
-                "[bold #e06c75]⚠ NOTHING IS PUBLISHING TO THE BROKER[/bold "
-                "#e06c75]"
+                "[bold #e06c75]⚠ NOTHING IS PUBLISHING TO THE BROKER[/bold #e06c75]"
             )
             for line in message.splitlines():
                 self.console.print(f"[#e5c07b]  {line}[/#e5c07b]")
@@ -1894,9 +1886,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                     from cara.observability import MetricsBase as _Metrics
 
                     try:
-                        Queue.driver(
-                            config["driver_name"]
-                        ).verify_runtime_health(
+                        Queue.driver(config["driver_name"]).verify_runtime_health(
                             queue_names,
                             force=True,
                         )
@@ -1964,15 +1954,11 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         return False
 
     @staticmethod
-    def _join_threads_until(
-        threads: list[threading.Thread], deadline: float
-    ) -> None:
+    def _join_threads_until(threads: list[threading.Thread], deadline: float) -> None:
         """Join multiple threads against one shared deadline."""
         for thread in threads:
             remaining = max(0.0, deadline - time.monotonic())
-            with contextlib.suppress(
-                ImportError, RuntimeError, AttributeError, OSError
-            ):
+            with contextlib.suppress(ImportError, RuntimeError, AttributeError, OSError):
                 thread.join(timeout=remaining)
 
     @staticmethod
@@ -2289,6 +2275,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                         raise RuntimeError(
                             "RabbitMQ delivered more than prefetch_count=1"
                         )
+
                     def _release_settled_slot() -> None:
                         nonlocal in_flight
                         if in_flight is None:
@@ -2313,9 +2300,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                             method_frame,
                             body,
                             queue_name=consumed_queue,
-                            cancellation_registry=(
-                                job_processor.cancellation_registry
-                            ),
+                            cancellation_registry=(job_processor.cancellation_registry),
                         )
 
                     in_flight = executor.submit(_process_delivery)
@@ -2518,9 +2503,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         )
         from cara.observability import MetricsBase as _Metrics
 
-        _Metrics.queue_worker_configured_queues.set(
-            len(worker_config["queue_names"])
-        )
+        _Metrics.queue_worker_configured_queues.set(len(worker_config["queue_names"]))
         _Metrics.queue_worker_ready.set(0)
 
         # Run the worker

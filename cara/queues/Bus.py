@@ -7,7 +7,7 @@ based on execution context. Inspired by Laravel's Bus facade.
 
 from __future__ import annotations
 
-import contextlib
+import uuid
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -84,77 +84,41 @@ class Bus:
             # ignored in sync mode — the caller asked for immediate execution.
             return await Bus._run_sync_with_tracking(job)
         else:
-            # Check if job is UniqueJob — use a single atomic acquire
-            # instead of check-then-acquire (TOCTOU race).
+            # PostgreSQL's delivery ledger is the uniqueness authority. The
+            # queue driver inserts the delivery and its unique key in one
+            # transaction, so a duplicate can return the already-pollable id
+            # without a Redis→database crash window.
             from cara.queues.contracts import UniqueJob
 
+            reserved_job_id: str | None = None
+            unique_key: str | None = None
             if isinstance(job, UniqueJob):
-                uid = job.unique_id()
-                if not UniqueJob.acquire_unique_lock(uid, job.unique_for):
-                    # Lock already held — another instance is pending/processing.
-                    from cara.facades import Log
+                reserved_job_id = str(uuid.uuid4())
+                unique_key = job.unique_id()
 
-                    Log.debug("UniqueJob skipped (lock held): %s", uid)
-                    try:
-                        from cara.observability.Metrics import MetricsBase as _M
+            params = Bus.get_dispatch_params(job)
+            dispatch_call = job.__class__.dispatch(**params)
+            if routing_key:
+                dispatch_call.with_routing_key(routing_key)
+            if queue:
+                dispatch_call.on_queue(queue)
+            if delay and hasattr(dispatch_call, "delay"):
+                dispatch_call.delay(delay)
+            if reserved_job_id is not None:
+                dispatch_call.with_job_id(reserved_job_id)
+                dispatch_call.with_unique_key(unique_key)
+            # The terminal call is mandatory: builder destruction never
+            # queues work, and dispatch failures must reach the caller.
+            job_id = dispatch_call.dispatch()
 
-                        _M.idempotency_total.labels(
-                            scope="unique_job", outcome="collision"
-                        ).inc()
-                    except Exception:
-                        pass
-                    current_job_id = UniqueJob.current_unique_job_id(uid)
-                    if current_job_id is None:
-                        # The winning dispatcher acquires the lock immediately
-                        # before the driver mints its durable UUID. Give that
-                        # tiny bind window a bounded chance to close so a
-                        # concurrent HTTP trigger can return the existing
-                        # pollable operation instead of ambiguous ``None``.
-                        import asyncio
-
-                        for _ in range(20):
-                            await asyncio.sleep(0.005)
-                            current_job_id = UniqueJob.current_unique_job_id(uid)
-                            if current_job_id is not None:
-                                break
-                    return current_job_id
+            if reserved_job_id is not None:
                 try:
                     from cara.observability.Metrics import MetricsBase as _M
 
-                    _M.idempotency_total.labels(scope="unique_job", outcome="fresh").inc()
+                    outcome = "fresh" if str(job_id) == reserved_job_id else "collision"
+                    _M.idempotency_total.labels(scope="unique_job", outcome=outcome).inc()
                 except Exception:
                     pass
-
-            # Dispatch to queue. Wrap in try/except so a failed
-            # ``push()`` (broker down or AMQP unroutable) releases the
-            # unique-job lock — without
-            # this release, the next legitimate dispatch for the same
-            # ``unique_id`` is silently dropped for the full
-            # ``unique_for`` window (default 1h) even though no job
-            # ever ran.
-            try:
-                params = Bus.get_dispatch_params(job)
-                dispatch_call = job.__class__.dispatch(**params)
-                if routing_key:
-                    dispatch_call.with_routing_key(routing_key)
-                if queue:
-                    dispatch_call.on_queue(queue)
-                if delay and hasattr(dispatch_call, "delay"):
-                    dispatch_call.delay(delay)
-                # The terminal call is mandatory: builder destruction never
-                # queues work, and dispatch failures must reach the caller.
-                job_id = dispatch_call.dispatch()
-                if isinstance(job, UniqueJob) and job_id is not None:
-                    UniqueJob.bind_unique_job_id(uid, str(job_id), job.unique_for)
-            except Exception:
-                # Dispatch failed before the job was queued — release
-                # the unique lock so the caller can retry.
-                if isinstance(job, UniqueJob):
-                    with contextlib.suppress(
-                        ImportError, ConnectionError, TimeoutError, OSError, RuntimeError
-                    ):
-                        UniqueJob.release_unique_lock(job.unique_id())
-                raise
 
             # Prometheus dispatch counter — bounded by the (queue, job)
             # label pair; "unknown" covers jobs that don't carry an

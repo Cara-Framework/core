@@ -8,6 +8,7 @@ from .QueueJobDeliveryStore import (
     DeliveryLeaseLost,
     QueueJobDeliveryStore,
     ReplayDelivery,
+    UniqueDeliveryConflict,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "PublicationBacklogProbe",
     "QueueJobDeliveryStore",
     "ReplayDelivery",
+    "UniqueDeliveryConflict",
 ]

@@ -37,7 +37,7 @@ from cara.facades import Log
 from cara.observability import Trace as _Trace
 from cara.queues.contracts.Queue import Queue
 from cara.queues.delay import DurableDelayedJobStore
-from cara.queues.delivery import QueueJobDeliveryStore
+from cara.queues.delivery import QueueJobDeliveryStore, UniqueDeliveryConflict
 from cara.queues.retry.Policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
@@ -256,10 +256,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     try:
                         channel.basic_publish(
                             exchange="",
-                            routing_key=(
-                                "__cara_write_probe__."
-                                f"{uuid.uuid4().hex}"
-                            ),
+                            routing_key=(f"__cara_write_probe__.{uuid.uuid4().hex}"),
                             body=b"",
                             mandatory=True,
                             properties=pika.BasicProperties(
@@ -324,19 +321,26 @@ class AMQPDriver(HasColoredOutput, Queue):
                 job_queue = getattr(job, "queue", None)
                 if job_queue:
                     job_opts["queue"] = job_queue
-            job_opts["queue"] = self.require_canonical_queue(
-                job_opts.get("queue")
-            )
+            job_opts["queue"] = self.require_canonical_queue(job_opts.get("queue"))
 
-            # Generate unique job ID for tracking
-            job_id = str(uuid.uuid4())
-            self._register_immediate_delivery(
+            explicit_job_id = options.get("job_id")
+            from cara.queues.contracts import UniqueJob
+
+            if isinstance(job, UniqueJob) and explicit_job_id is None:
+                raise QueueException("UniqueJob dispatch must go through Bus.dispatch().")
+            if explicit_job_id is not None and len(jobs) != 1:
+                raise QueueException("An explicit job_id requires exactly one job.")
+            try:
+                job_id = str(uuid.UUID(str(explicit_job_id or uuid.uuid4())))
+            except (ValueError, AttributeError, TypeError) as exc:
+                raise QueueException("AMQP job_id must be a valid UUID.") from exc
+            accepted_job_id = self._register_immediate_delivery(
                 job=job,
                 job_id=job_id,
                 merged_opts=merged_opts,
                 job_opts=job_opts,
             )
-            job_ids.append(job_id)
+            job_ids.append(accepted_job_id)
 
         return job_ids[0] if len(job_ids) == 1 else job_ids
 
@@ -347,58 +351,73 @@ class AMQPDriver(HasColoredOutput, Queue):
         job_id: str,
         merged_opts: dict[str, Any],
         job_opts: dict[str, Any],
-    ) -> None:
+    ) -> str:
         """Atomically create the tracking fence and immutable delivery row."""
-        database = self._delivery_store._db()
-        with database.transaction():
-            db_job_id = self._create_job_record(job, job_id, job_opts)
-            timeout_seconds = self._delivery_store.execution_timeout_for(job)
-            payload = {
-                "obj": job,
-                "args": merged_opts.get("args", ()),
-                "callback": merged_opts.get("callback", "handle"),
-                "created": pendulum.now(tz=merged_opts.get("tz", "UTC")),
-                "job_id": job_id,
-                "db_job_id": db_job_id,
-                "timeout_seconds": timeout_seconds,
-                "attempts": int(
-                    merged_opts.get("attempts", 0)
-                    if merged_opts.get("attempts", 0) is not None
-                    else 0
-                ),
-            }
-            payload["_otel"] = merged_opts.get("_otel") or _Trace.inject({})
-            payload.update(self._tenant_payload(job, merged_opts))
-            dispatched_at = pendulum.now("UTC").to_iso8601_string()
-            payload["dispatched_at"] = dispatched_at
-            payload["queue"] = self.require_canonical_queue(
-                job_opts.get("queue")
-            )
-            payload["priority"] = self._priority_name(job, job_opts)
-            payload["replay_of"] = None
-            if hasattr(job, "__dict__"):
-                job._dispatched_at = dispatched_at
+        from cara.queues.contracts import UniqueJob
 
-            body = self._serialize_payload(payload, job_opts)
-            envelope = SignedJsonJobSerializer.inspect_envelope(
-                body,
-                signing_keys=job_opts.get("signing_keys", {}),
-                clock_skew_seconds=int(job_opts.get("clock_skew_seconds", 30)),
-                max_age_seconds=int(
-                    job_opts.get(
-                        "envelope_max_age_seconds",
-                        SignedJsonJobSerializer.DEFAULT_MAX_AGE_SECONDS,
+        database = self._delivery_store._db()
+        try:
+            with database.transaction():
+                db_job_id = self._create_job_record(job, job_id, job_opts)
+                timeout_seconds = self._delivery_store.execution_timeout_for(job)
+                payload = {
+                    "obj": job,
+                    "args": merged_opts.get("args", ()),
+                    "callback": merged_opts.get("callback", "handle"),
+                    "created": pendulum.now(tz=merged_opts.get("tz", "UTC")),
+                    "job_id": job_id,
+                    "db_job_id": db_job_id,
+                    "timeout_seconds": timeout_seconds,
+                    "attempts": int(
+                        merged_opts.get("attempts", 0)
+                        if merged_opts.get("attempts", 0) is not None
+                        else 0
+                    ),
+                }
+                is_unique = isinstance(job, UniqueJob)
+                unique_key = merged_opts.get("unique_key")
+                if is_unique and unique_key is None:
+                    raise QueueException(
+                        "UniqueJob dispatch requires originating uniqueness metadata."
                     )
-                ),
-                allow_not_before=True,
-            )
-            self._delivery_store.register(
-                body=body,
-                payload=envelope["payload"],
-                envelope=envelope,
-                db=database,
-            )
-            self._delivery_store.publish_after_commit(job_id)
+                if not is_unique and unique_key is not None:
+                    raise QueueException(
+                        "Non-unique jobs cannot carry uniqueness metadata."
+                    )
+                payload["unique_key"] = unique_key
+                payload["_otel"] = merged_opts.get("_otel") or _Trace.inject({})
+                payload.update(self._tenant_payload(job, merged_opts))
+                dispatched_at = pendulum.now("UTC").to_iso8601_string()
+                payload["dispatched_at"] = dispatched_at
+                payload["queue"] = self.require_canonical_queue(job_opts.get("queue"))
+                payload["priority"] = self._priority_name(job, job_opts)
+                payload["replay_of"] = None
+                if hasattr(job, "__dict__"):
+                    job._dispatched_at = dispatched_at
+
+                body = self._serialize_payload(payload, job_opts)
+                envelope = SignedJsonJobSerializer.inspect_envelope(
+                    body,
+                    signing_keys=job_opts.get("signing_keys", {}),
+                    clock_skew_seconds=int(job_opts.get("clock_skew_seconds", 30)),
+                    max_age_seconds=int(
+                        job_opts.get(
+                            "envelope_max_age_seconds",
+                            SignedJsonJobSerializer.DEFAULT_MAX_AGE_SECONDS,
+                        )
+                    ),
+                    allow_not_before=True,
+                )
+                self._delivery_store.register(
+                    body=body,
+                    payload=envelope["payload"],
+                    envelope=envelope,
+                    db=database,
+                )
+                self._delivery_store.publish_after_commit(job_id)
+        except UniqueDeliveryConflict as conflict:
+            return conflict.job_id
+        return job_id
 
     @property
     def delivery_store(self) -> QueueJobDeliveryStore:
@@ -407,9 +426,7 @@ class AMQPDriver(HasColoredOutput, Queue):
     def require_canonical_queue(self, queue_name: Any) -> str:
         """Return a configured consumed queue or fail before persistence."""
         if not isinstance(queue_name, str) or not queue_name:
-            raise QueueException(
-                "AMQP jobs must declare an explicit canonical queue."
-            )
+            raise QueueException("AMQP jobs must declare an explicit canonical queue.")
         if queue_name not in self._canonical_queues:
             valid = ", ".join(sorted(self._canonical_queues))
             raise QueueException(
@@ -475,14 +492,10 @@ class AMQPDriver(HasColoredOutput, Queue):
         return {"_tenant_mode": "tenant", "_tenant": tenant_id}
 
     def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
-        raise QueueException(
-            "AMQP batches require a durable JSON batch descriptor."
-        )
+        raise QueueException("AMQP batches require a durable JSON batch descriptor.")
 
     def chain(self, jobs: list, options: dict[str, Any]) -> None:
-        raise QueueException(
-            "AMQP chains require a durable JSON chain descriptor."
-        )
+        raise QueueException("AMQP chains require a durable JSON chain descriptor.")
 
     def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> str | list[str]:
         """Persist a future AMQP dispatch in the durable database outbox.
@@ -500,7 +513,12 @@ class AMQPDriver(HasColoredOutput, Queue):
         )
         if target <= pendulum.now("UTC") and not is_source_retry:
             return self.push(job, options=options)
-        return self._delayed_store.schedule(job, target, options)
+        try:
+            return self._delayed_store.schedule(job, target, options)
+        except UniqueDeliveryConflict as conflict:
+            if is_source_retry:
+                raise
+            return conflict.job_id
 
     def later(
         self, delay: int | pendulum.Duration, job: Any, options: dict[str, Any] = None
@@ -535,9 +553,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         # Calculate when job should run
         when = pendulum_module.now(
             tz=options.get("tz", self.options.get("tz", "UTC"))
-        ).add(
-            seconds=delay_seconds
-        )
+        ).add(seconds=delay_seconds)
 
         return self.schedule(job, when, options)
 
@@ -553,9 +569,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         """Run one bounded broker-publication relay iteration."""
         self.verify_runtime_health()
         result = self._delivery_store.publish_due()
-        if int(result.get("retried", 0) or 0) or int(
-            result.get("settle_lost", 0) or 0
-        ):
+        if int(result.get("retried", 0) or 0) or int(result.get("settle_lost", 0) or 0):
             self.invalidate_runtime_health()
         self.refresh_delivery_metrics()
         return result
@@ -607,17 +621,13 @@ class AMQPDriver(HasColoredOutput, Queue):
             from cara.observability.Metrics import MetricsBase
 
             for status, count in snapshot["statuses"].items():
-                MetricsBase.queue_delivery_ledger_jobs.labels(
-                    status=status
-                ).set(count)
+                MetricsBase.queue_delivery_ledger_jobs.labels(status=status).set(count)
             for kind, count in snapshot["stale_leases"].items():
-                MetricsBase.queue_delivery_stale_leases.labels(kind=kind).set(
-                    count
-                )
+                MetricsBase.queue_delivery_stale_leases.labels(kind=kind).set(count)
             for priority, backlog in snapshot["priority_backlog"].items():
-                MetricsBase.queue_delivery_priority_pending.labels(
-                    priority=priority
-                ).set(backlog["pending"])
+                MetricsBase.queue_delivery_priority_pending.labels(priority=priority).set(
+                    backlog["pending"]
+                )
                 MetricsBase.queue_delivery_priority_oldest_due_age_seconds.labels(
                     priority=priority
                 ).set(backlog["oldest_due_age"])
@@ -689,7 +699,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                     delivery_mode=2,
                     message_id=str(payload.get("job_id") or ""),
                     priority=message_priority,
-                    type="cara.job.v2",
+                    type=f"cara.job.v{SignedJsonJobSerializer.VERSION}",
                 ),
                 mandatory=True,
             )
@@ -766,9 +776,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             )
 
         queue_name = (
-            job.queue
-            if hasattr(job, "queue") and job.queue
-            else opts.get("queue")
+            job.queue if hasattr(job, "queue") and job.queue else opts.get("queue")
         )
         queue_name = self.require_canonical_queue(queue_name)
         job_name = job.__class__.__name__
@@ -785,10 +793,12 @@ class AMQPDriver(HasColoredOutput, Queue):
             payload=payload,
             metadata={"job_id": job_id, "driver": "amqp"},
         )
-        if isinstance(db_job_id, bool) or not isinstance(db_job_id, int) or db_job_id <= 0:
-            raise QueueException(
-                "JobTracker did not persist a positive AMQP db_job_id."
-            )
+        if (
+            isinstance(db_job_id, bool)
+            or not isinstance(db_job_id, int)
+            or db_job_id <= 0
+        ):
+            raise QueueException("JobTracker did not persist a positive AMQP db_job_id.")
         return db_job_id
 
     def _resolve_job_tracker(self):
@@ -1001,9 +1011,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         if isinstance(value, bool) or not isinstance(value, int):
             raise QueueException(f"AMQP {field} must be an integer.")
         if not minimum <= value <= maximum:
-            raise QueueException(
-                f"AMQP {field} must be between {minimum} and {maximum}."
-            )
+            raise QueueException(f"AMQP {field} must be between {minimum} and {maximum}.")
         return value
 
     def _priority_name(self, job: Any, options: dict[str, Any]) -> str:
@@ -1022,9 +1030,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         levels = options.get("priority_levels") or {}
         if value not in levels:
             valid = ", ".join(sorted(str(level) for level in levels))
-            raise QueueException(
-                f"Unknown AMQP job priority {value!r}. Valid: {valid}"
-            )
+            raise QueueException(f"Unknown AMQP job priority {value!r}. Valid: {valid}")
         return value
 
     def _message_priority(self, job: Any, options: dict[str, Any]) -> int:
@@ -1178,12 +1184,8 @@ class AMQPDriver(HasColoredOutput, Queue):
         parameters = pika.URLParameters(self._build_url(opts))
         parameters.connection_attempts = 1
         parameters.retry_delay = 0
-        parameters.socket_timeout = float(
-            opts.get("socket_timeout_seconds", 5)
-        )
-        parameters.stack_timeout = float(
-            opts.get("stack_timeout_seconds", 10)
-        )
+        parameters.socket_timeout = float(opts.get("socket_timeout_seconds", 5))
+        parameters.stack_timeout = float(opts.get("stack_timeout_seconds", 10))
         parameters.blocked_connection_timeout = float(
             opts.get("blocked_connection_timeout_seconds", 10)
         )

@@ -198,7 +198,7 @@ def slice_page_with_lookahead(
 def cursor_rules(*, max_limit: int = 100, min_limit: int = 1) -> dict[str, str]:
     """Strict request rules for cursor-paginated endpoints.
 
-    ``page`` and ``offset`` are prohibited deliberately: silently accepting an
+    ``page``, ``per_page`` and ``offset`` are prohibited deliberately: silently accepting an
     obsolete deep-offset contract makes rollout bugs look like valid first-page
     reads.
     """
@@ -209,6 +209,7 @@ def cursor_rules(*, max_limit: int = 100, min_limit: int = 1) -> dict[str, str]:
         "limit": f"nullable|integer|between:{min_limit},{max_limit}",
         "cursor": f"bail|sometimes|required|string|max:{_MAX_TOKEN_LENGTH}",
         "page": "missing",
+        "per_page": "missing",
         "offset": "missing",
     }
 

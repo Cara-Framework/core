@@ -155,7 +155,9 @@ class DatabaseManager:
         """Get connection config"""
         connection_name = self._resolve_connection_name(connection)
         if connection_name not in self._connections:
-            raise ConnectionNotRegisteredException(f"Connection '{connection_name}' not found")
+            raise ConnectionNotRegisteredException(
+                f"Connection '{connection_name}' not found"
+            )
         return self._connections[connection_name]
 
     def connection(self, connection=None):
@@ -197,6 +199,16 @@ class DatabaseManager:
         connection_name = self._resolve_connection_name(connection)
         resolver = self._ensure_resolver()
         return resolver.after_commit(connection_name, callback)
+
+    def after_rollback(self, callback, connection=None) -> bool:
+        """Register a callback for rollback of the current transaction level.
+
+        Returns ``False`` when no transaction is active; unlike after-commit,
+        rollback callbacks must never run eagerly.
+        """
+        connection_name = self._resolve_connection_name(connection)
+        resolver = self._ensure_resolver()
+        return resolver.after_rollback(connection_name, callback)
 
     def commit_open_transactions(self, connection=None) -> None:
         """Commit every open transaction level on the context-pinned connection.
@@ -277,9 +289,7 @@ class DatabaseManager:
                     conn.open = 0
                     conn.close_connection()
                 except Exception:
-                    _logger.debug(
-                        "connection close failed in select()", exc_info=True
-                    )
+                    _logger.debug("connection close failed in select()", exc_info=True)
 
     def select_one(self, query, bindings=(), connection=None):
         """Execute a raw SELECT and return the first row as a dict, or None.
@@ -354,7 +364,9 @@ class DatabaseManager:
         driver = config.get("driver")
 
         if not driver:
-            raise ConfigurationException(f"No driver specified for connection '{connection_name}'")
+            raise ConfigurationException(
+                f"No driver specified for connection '{connection_name}'"
+            )
 
         resolver = self._ensure_resolver()
         return resolver.connection_factory.make(driver)

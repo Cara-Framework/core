@@ -86,9 +86,7 @@ class QueueRouter:
         app_bindings = config("queue.queue_routing_rules", None)
 
         if not app_bindings:
-            raise QueueException(
-                "QUEUE_ROUTING_RULES not found in queue config."
-            )
+            raise QueueException("QUEUE_ROUTING_RULES not found in queue config.")
 
         default_bindings = app_bindings
 
@@ -166,6 +164,8 @@ class QueueRouter:
         job_instance,
         payload: dict | None = None,
         delay: float | None = None,
+        job_id: str | None = None,
+        unique_key: str | None = None,
     ) -> str:
         """
         Dispatch job to appropriate queue based on routing key.
@@ -234,18 +234,21 @@ class QueueRouter:
 
         # Queue.push/later is now a PostgreSQL transaction, not broker I/O.
         # Retrying an ambiguous DB commit would mint a second delivery ID.
+        options = {"job_id": job_id}
+        if unique_key is not None:
+            options["unique_key"] = unique_key
         if delay:
-            job_id = Queue.later(delay, job_instance)
+            dispatched_job_id = Queue.later(delay, job_instance, **options)
         else:
-            job_id = Queue.push(job_instance)
+            dispatched_job_id = Queue.push(job_instance, **options)
         Log.debug(
             "Job dispatched: %s -> %s [%s]",
             routing_key,
             target_queue,
-            job_id,
+            dispatched_job_id,
             category="cara.queue.routing",
         )
-        return str(job_id)
+        return str(dispatched_job_id)
 
     @staticmethod
     def _pattern_segments(pattern: str) -> tuple[str, str, str]:

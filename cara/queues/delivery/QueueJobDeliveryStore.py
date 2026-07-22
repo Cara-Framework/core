@@ -73,6 +73,14 @@ class DeliveryLeaseLost(QueueException):
     """Execution settlement no longer owns the delivery lease."""
 
 
+class UniqueDeliveryConflict(QueueException):
+    """A different open delivery already owns the unique job key."""
+
+    def __init__(self, job_id: str):
+        self.job_id = str(job_id)
+        super().__init__(f"Unique job already has open delivery {self.job_id}.")
+
+
 class QueueJobDeliveryStore:
     """Single source of truth for queue publication and execution state."""
 
@@ -140,9 +148,7 @@ class QueueJobDeliveryStore:
             )
         )
         if not self.canonical_queues:
-            raise QueueException(
-                "AMQP delivery ledger requires canonical_queues."
-            )
+            raise QueueException("AMQP delivery ledger requires canonical_queues.")
         self.claim_batch = self._bounded_int(
             options.get("delivery_claim_batch", 100),
             minimum=1,
@@ -189,8 +195,7 @@ class QueueJobDeliveryStore:
             field="delivery_default_job_timeout_seconds",
         )
         if (
-            self.default_job_timeout_seconds
-            + self.execution_lease_grace_seconds
+            self.default_job_timeout_seconds + self.execution_lease_grace_seconds
             > self.execution_lease_seconds
         ):
             raise QueueException(
@@ -263,6 +268,13 @@ class QueueJobDeliveryStore:
             field="db_job_id",
         )
         tenant_mode, tenant_id = self._tenant_scope(payload)
+        unique_key = payload.get("unique_key")
+        if unique_key is not None:
+            unique_key = self._bounded_text(
+                unique_key,
+                "unique_key",
+                500,
+            )
         now = pendulum.now("UTC")
         available_at = pendulum.from_timestamp(
             int(envelope["not_before"]),
@@ -272,11 +284,11 @@ class QueueJobDeliveryStore:
             int(envelope["expires_at"]),
             tz="UTC",
         )
-        row = database.select_one(
+        insert_sql = (
             f"INSERT INTO {self.table} ("
             "job_id, db_job_id, replay_of, replay_requested_by, replay_reason, "
             "payload_sha256, signed_envelope, "
-            "tenant_mode, tenant_id, "
+            "tenant_mode, tenant_id, unique_key, "
             "queue, priority, status, attempts, lease_token, lease_expires_at, "
             "completed_at, terminal_reason, post_hooks_completed_at, "
             "expires_at, available_at, publish_status, "
@@ -285,42 +297,32 @@ class QueueJobDeliveryStore:
             "created_at, updated_at"
             ") VALUES ("
             "%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, "
-            "%s, %s, %s, 0, NULL, NULL, "
+            "%s, %s, %s, %s, 0, NULL, NULL, "
             "NULL, NULL, NULL, "
             "%s, %s, %s, 0, %s, NULL, NULL, NULL, NULL, %s, %s"
-            ") ON CONFLICT (job_id) DO NOTHING RETURNING job_id",
-            [
-                job_id,
-                db_job_id,
-                replay_of,
-                replay_requested_by,
-                replay_reason,
-                digest,
-                canonical.decode("utf-8"),
-                tenant_mode,
-                tenant_id,
-                payload["queue"],
-                payload["priority"],
-                self.STATUS_PENDING,
-                expires_at,
-                available_at,
-                self.PUBLISH_PENDING,
-                available_at,
-                now,
-                now,
-            ],
+            ") ON CONFLICT DO NOTHING RETURNING job_id"
         )
-        if row is not None:
-            return True
-
-        existing = database.select_one(
-            f"SELECT job_id, db_job_id, replay_of, replay_requested_by, "
-            f"replay_reason, payload_sha256, queue, priority, "
-            f"expires_at, available_at FROM {self.table} WHERE job_id = %s",
-            [job_id],
-        )
-        if existing is None:
-            raise QueueException("Queue delivery ledger insert was not persisted.")
+        insert_bindings = [
+            job_id,
+            db_job_id,
+            replay_of,
+            replay_requested_by,
+            replay_reason,
+            digest,
+            canonical.decode("utf-8"),
+            tenant_mode,
+            tenant_id,
+            unique_key,
+            payload["queue"],
+            payload["priority"],
+            self.STATUS_PENDING,
+            expires_at,
+            available_at,
+            self.PUBLISH_PENDING,
+            available_at,
+            now,
+            now,
+        ]
         expected = {
             "payload_sha256": digest,
             "db_job_id": db_job_id,
@@ -330,15 +332,48 @@ class QueueJobDeliveryStore:
             "queue": payload["queue"],
             "priority": payload["priority"],
         }
-        for field, value in expected.items():
-            if self._row_value(existing, field) != value:
-                raise QueueException(
-                    f"Queue delivery id {job_id} conflicts on immutable {field}."
+        for attempt in range(3):
+            row = database.select_one(insert_sql, insert_bindings)
+            if row is not None:
+                return True
+
+            existing = database.select_one(
+                f"SELECT job_id, db_job_id, replay_of, replay_requested_by, "
+                f"replay_reason, payload_sha256, queue, priority, "
+                f"expires_at, available_at FROM {self.table} WHERE job_id = %s",
+                [job_id],
+            )
+            if existing is not None:
+                for field, value in expected.items():
+                    if self._row_value(existing, field) != value:
+                        raise QueueException(
+                            f"Queue delivery id {job_id} conflicts on immutable {field}."
+                        )
+                return False
+
+            if unique_key is not None:
+                owner = database.select_one(
+                    f"SELECT job_id FROM {self.table} WHERE tenant_mode = %s "
+                    "AND tenant_id IS NOT DISTINCT FROM %s AND unique_key = %s "
+                    "AND status IN (%s, %s) ORDER BY created_at ASC LIMIT 1",
+                    [
+                        tenant_mode,
+                        tenant_id,
+                        unique_key,
+                        self.STATUS_PENDING,
+                        self.STATUS_PROCESSING,
+                    ],
                 )
-        return False
+                if owner is not None:
+                    raise UniqueDeliveryConflict(str(self._row_value(owner, "job_id")))
+                if attempt < 2:
+                    continue
+            break
+        raise QueueException("Queue delivery ledger insert was not persisted.")
 
     def publish_after_commit(self, job_id: str) -> None:
         """Wake the broker-independent relay after commit without doing I/O."""
+
         def _wake_hint() -> None:
             wake = getattr(self.driver, "wake_outbox_relay", None)
             if not callable(wake):
@@ -397,9 +432,7 @@ class QueueJobDeliveryStore:
                 existing = ReplayDelivery(
                     job_id=str(self._row_value(existing_row, "job_id")),
                     status=str(self._row_value(existing_row, "status")),
-                    publish_status=str(
-                        self._row_value(existing_row, "publish_status")
-                    ),
+                    publish_status=str(self._row_value(existing_row, "publish_status")),
                     expires_at=self._as_datetime(
                         self._row_value(existing_row, "expires_at")
                     ),
@@ -411,15 +444,11 @@ class QueueJobDeliveryStore:
                     f"({existing.status}); replay that child delivery instead."
                 )
 
-            source_body = self._envelope_bytes(
-                self._row_value(source, "signed_envelope")
-            )
+            source_body = self._envelope_bytes(self._row_value(source, "signed_envelope"))
             source_envelope = SignedJsonJobSerializer.inspect_envelope(
                 source_body,
                 signing_keys=self.options.get("signing_keys", {}),
-                clock_skew_seconds=int(
-                    self.options.get("clock_skew_seconds", 30)
-                ),
+                clock_skew_seconds=int(self.options.get("clock_skew_seconds", 30)),
                 max_age_seconds=int(
                     self.options.get(
                         "envelope_max_age_seconds",
@@ -430,14 +459,11 @@ class QueueJobDeliveryStore:
                 allow_expired=True,
             )
             source_payload = source_envelope["payload"]
-            source_digest = SignedJsonJobSerializer.canonical_envelope_sha256(
-                source_body
-            )
+            source_digest = SignedJsonJobSerializer.canonical_envelope_sha256(source_body)
             if (
                 str(source_payload["job_id"]) != str(source_job_id)
                 or source_digest != self._row_value(source, "payload_sha256")
-                or source_payload.get("db_job_id")
-                != self._row_value(source, "db_job_id")
+                or source_payload.get("db_job_id") != self._row_value(source, "db_job_id")
             ):
                 raise DeliveryEnvelopeMismatch(
                     "Ledger replay source does not match its signed envelope."
@@ -446,8 +472,7 @@ class QueueJobDeliveryStore:
             replay_job_id = str(uuid.uuid4())
             tracker = (
                 self.application.make("JobTracker")
-                if self.application is not None
-                and self.application.has("JobTracker")
+                if self.application is not None and self.application.has("JobTracker")
                 else None
             )
             if tracker is None or getattr(tracker, "job_model", None) is None:
@@ -457,9 +482,7 @@ class QueueJobDeliveryStore:
             descriptor = source_payload["job"]
             replay_db_job_id = tracker.create_job_record(
                 job_name=str(descriptor["class"]),
-                job_class=(
-                    f"{descriptor['module']}.{descriptor['class']}"
-                ),
+                job_class=(f"{descriptor['module']}.{descriptor['class']}"),
                 queue=str(source_payload["queue"]),
                 execution_mode="queued",
                 payload=dict(descriptor["kwargs"]),
@@ -500,9 +523,7 @@ class QueueJobDeliveryStore:
             replay_envelope = SignedJsonJobSerializer.inspect_envelope(
                 replay_body,
                 signing_keys=self.options.get("signing_keys", {}),
-                clock_skew_seconds=int(
-                    self.options.get("clock_skew_seconds", 30)
-                ),
+                clock_skew_seconds=int(self.options.get("clock_skew_seconds", 30)),
                 max_age_seconds=int(
                     self.options.get(
                         "envelope_max_age_seconds",
@@ -723,11 +744,7 @@ class QueueJobDeliveryStore:
                 Log.warning(
                     "Queue outbox publish failed for %s%s: %s",
                     self._row_value(row, "job_id"),
-                    (
-                        ""
-                        if released
-                        else " and its retry lease was concurrently lost"
-                    ),
+                    ("" if released else " and its retry lease was concurrently lost"),
                     exc,
                     category="cara.queue.delivery",
                 )
@@ -808,13 +825,11 @@ class QueueJobDeliveryStore:
         if self._affected(affected):
             return True
         current = self._db().select_one(
-            f"SELECT publish_status, published_at FROM {self.table} "
-            "WHERE job_id = %s",
+            f"SELECT publish_status, published_at FROM {self.table} WHERE job_id = %s",
             [str(payload["job_id"])],
         )
         return (
-            self._row_value(current, "publish_status")
-            == self.PUBLISH_PUBLISHED
+            self._row_value(current, "publish_status") == self.PUBLISH_PUBLISHED
             and self._row_value(current, "published_at") is not None
         )
 
@@ -865,9 +880,7 @@ class QueueJobDeliveryStore:
                 [
                     self.STATUS_DEAD_LETTERED,
                     now,
-                    self._safe_error(
-                        f"publish_envelope_invalid:{safe_error}"
-                    ),
+                    self._safe_error(f"publish_envelope_invalid:{safe_error}"),
                     self.PUBLISH_FAILED,
                     safe_error,
                     now,
@@ -900,8 +913,7 @@ class QueueJobDeliveryStore:
         timeout_seconds = self._bounded_int(
             payload.get("timeout_seconds"),
             minimum=1,
-            maximum=self.execution_lease_seconds
-            - self.execution_lease_grace_seconds,
+            maximum=self.execution_lease_seconds - self.execution_lease_grace_seconds,
             field="timeout_seconds",
         )
         lease_seconds = timeout_seconds + self.execution_lease_grace_seconds
@@ -922,8 +934,7 @@ class QueueJobDeliveryStore:
             if (
                 self._row_value(row, "payload_sha256") != digest
                 or self._row_value(row, "db_job_id") != payload.get("db_job_id")
-                or self._row_value(row, "tenant_mode")
-                != payload.get("_tenant_mode")
+                or self._row_value(row, "tenant_mode") != payload.get("_tenant_mode")
                 or self._row_value(row, "tenant_id") != payload.get("_tenant")
             ):
                 return DeliveryClaim("mismatch")
@@ -949,8 +960,7 @@ class QueueJobDeliveryStore:
                 )
                 if not self._affected(affected):
                     raise QueueException(
-                        f"Queue delivery {job_id} early-publication recovery "
-                        "was lost."
+                        f"Queue delivery {job_id} early-publication recovery was lost."
                     )
                 return DeliveryClaim("not_ready")
 
@@ -962,9 +972,7 @@ class QueueJobDeliveryStore:
                 )
             reclaimed = False
             if status == self.STATUS_PROCESSING:
-                lease_expiry = self._as_datetime(
-                    self._row_value(row, "lease_expires_at")
-                )
+                lease_expiry = self._as_datetime(self._row_value(row, "lease_expires_at"))
                 if lease_expiry is not None and lease_expiry > now:
                     return DeliveryClaim("live_lease")
                 reclaimed = True
@@ -992,9 +1000,7 @@ class QueueJobDeliveryStore:
                     ],
                 )
                 if not self._affected(affected):
-                    raise QueueException(
-                        "Queue delivery expiry settlement was lost."
-                    )
+                    raise QueueException("Queue delivery expiry settlement was lost.")
                 self._mark_tracker_failed(
                     database,
                     int(payload["db_job_id"]),
@@ -1152,8 +1158,7 @@ class QueueJobDeliveryStore:
                         category="cara.queue.delivery",
                     )
         raise QueueException(
-            f"Queue delivery {job_id} atomic terminal settlement remained "
-            "unavailable."
+            f"Queue delivery {job_id} atomic terminal settlement remained unavailable."
         ) from last_error
 
     def reconcile_terminal_tracker(
@@ -1164,9 +1169,7 @@ class QueueJobDeliveryStore:
         delivery_status: str,
     ) -> None:
         tracker_status = (
-            "completed"
-            if delivery_status == self.STATUS_COMPLETED
-            else "failed"
+            "completed" if delivery_status == self.STATUS_COMPLETED else "failed"
         )
         database = self._db()
         with database.transaction():
@@ -1233,8 +1236,7 @@ class QueueJobDeliveryStore:
         )
         if not self._affected(affected):
             row = self._db().select_one(
-                f"SELECT status, lease_token FROM {self.table} "
-                "WHERE job_id = %s",
+                f"SELECT status, lease_token FROM {self.table} WHERE job_id = %s",
                 [job_id],
             )
             if (
@@ -1265,9 +1267,7 @@ class QueueJobDeliveryStore:
                 )
             status = str(self._row_value(row, "status"))
             if status not in self.HOOK_TERMINAL_STATUSES:
-                raise QueueException(
-                    f"Queue delivery {job_id} is not hook-eligible."
-                )
+                raise QueueException(f"Queue delivery {job_id} is not hook-eligible.")
             if self._row_value(row, "post_hooks_completed_at") is not None:
                 return TerminalHookClaim("completed", status=status)
             if self._row_value(row, "post_hooks_quarantined_at") is not None:
@@ -1341,9 +1341,7 @@ class QueueJobDeliveryStore:
                 envelope = SignedJsonJobSerializer.inspect_envelope(
                     claim.signed_envelope,
                     signing_keys=self.options.get("signing_keys", {}),
-                    clock_skew_seconds=int(
-                        self.options.get("clock_skew_seconds", 30)
-                    ),
+                    clock_skew_seconds=int(self.options.get("clock_skew_seconds", 30)),
                     max_age_seconds=int(
                         self.options.get(
                             "envelope_max_age_seconds",
@@ -1378,12 +1376,9 @@ class QueueJobDeliveryStore:
             elif mode == "tenant" and payload.get("_tenant") is not None:
                 tenant_scope = Tenancy.as_tenant(payload["_tenant"])
             else:
-                raise QueueException(
-                    "Terminal hooks require verified tenant mode."
-                )
+                raise QueueException("Terminal hooks require verified tenant mode.")
 
             with tenant_scope:
-                from cara.queues.contracts import UniqueJob
 
                 async def _run_hooks() -> None:
                     if claim.status in {
@@ -1402,15 +1397,7 @@ class QueueJobDeliveryStore:
                         await failed_hook(
                             payload,
                             str(hook_error),
-                            idempotency_key=(
-                                f"queue-delivery:{job_id}:failed"
-                            ),
-                        )
-
-                    if isinstance(job_instance, UniqueJob):
-                        await asyncio.to_thread(
-                            UniqueJob.release_unique_lock_strict,
-                            job_instance.unique_id(),
+                            idempotency_key=(f"queue-delivery:{job_id}:failed"),
                         )
 
                 asyncio.run(
@@ -1443,8 +1430,7 @@ class QueueJobDeliveryStore:
         )
         if not self._affected(affected):
             row = self._db().select_one(
-                f"SELECT post_hooks_completed_at FROM {self.table} "
-                "WHERE job_id = %s",
+                f"SELECT post_hooks_completed_at FROM {self.table} WHERE job_id = %s",
                 [job_id],
             )
             if self._row_value(row, "post_hooks_completed_at") is not None:
@@ -1509,8 +1495,7 @@ class QueueJobDeliveryStore:
                 return "quarantined"
             current_token = self._row_value(row, "post_hooks_lease_token")
             if current_token is None or (
-                expected_lease_token is not None
-                and current_token != expected_lease_token
+                expected_lease_token is not None and current_token != expected_lease_token
             ):
                 raise DeliveryLeaseLost(
                     f"Queue delivery {job_id} lost its terminal-hook retry lease."
@@ -1521,9 +1506,7 @@ class QueueJobDeliveryStore:
             ):
                 return "already_deferred"
 
-            attempts = int(
-                self._row_value(row, "post_hooks_attempts") or 0
-            ) + 1
+            attempts = int(self._row_value(row, "post_hooks_attempts") or 0) + 1
             safe_error = self._safe_error(error)
             if attempts >= self.hook_max_attempts:
                 affected = database.statement(
@@ -1580,16 +1563,19 @@ class QueueJobDeliveryStore:
             field="delivery_hook_batch",
         )
         now = pendulum.now("UTC")
-        rows = self._db().select(
-            f"SELECT job_id FROM {self.table} "
-            "WHERE status = ANY(%s) AND post_hooks_completed_at IS NULL "
-            "AND post_hooks_quarantined_at IS NULL "
-            "AND (post_hooks_lease_token IS NULL OR "
-            "post_hooks_lease_expires_at IS NULL OR "
-            "post_hooks_lease_expires_at <= %s) "
-            "ORDER BY completed_at, created_at LIMIT %s",
-            [list(self.HOOK_TERMINAL_STATUSES), now, limit],
-        ) or []
+        rows = (
+            self._db().select(
+                f"SELECT job_id FROM {self.table} "
+                "WHERE status = ANY(%s) AND post_hooks_completed_at IS NULL "
+                "AND post_hooks_quarantined_at IS NULL "
+                "AND (post_hooks_lease_token IS NULL OR "
+                "post_hooks_lease_expires_at IS NULL OR "
+                "post_hooks_lease_expires_at <= %s) "
+                "ORDER BY completed_at, created_at LIMIT %s",
+                [list(self.HOOK_TERMINAL_STATUSES), now, limit],
+            )
+            or []
+        )
         return [str(self._row_value(row, "job_id")) for row in rows]
 
     def retry_quarantined_terminal_hooks(
@@ -1616,12 +1602,8 @@ class QueueJobDeliveryStore:
                 [job_id],
             )
             if row is None:
-                raise QueueException(
-                    f"Queue delivery {job_id} does not exist."
-                )
-            if str(self._row_value(row, "status")) not in (
-                self.HOOK_TERMINAL_STATUSES
-            ):
+                raise QueueException(f"Queue delivery {job_id} does not exist.")
+            if str(self._row_value(row, "status")) not in (self.HOOK_TERMINAL_STATUSES):
                 raise QueueException(
                     f"Queue delivery {job_id} is not terminal-hook eligible."
                 )
@@ -1637,9 +1619,9 @@ class QueueJobDeliveryStore:
                 raise QueueException(
                     f"Queue delivery {job_id} terminal hooks are not quarantined."
                 )
-            if str(
-                self._row_value(row, "terminal_reason") or ""
-            ).startswith("publish_envelope_invalid:"):
+            if str(self._row_value(row, "terminal_reason") or "").startswith(
+                "publish_envelope_invalid:"
+            ):
                 raise QueueException(
                     "Invalid signed envelopes cannot execute terminal hooks; "
                     "replay a verified delivery instead."
@@ -1653,9 +1635,7 @@ class QueueJobDeliveryStore:
                     actor,
                     audit_reason,
                     int(self._row_value(row, "post_hooks_attempts") or 0),
-                    self._safe_error(
-                        self._row_value(row, "post_hooks_last_error") or ""
-                    ),
+                    self._safe_error(self._row_value(row, "post_hooks_last_error") or ""),
                     now,
                 ],
             )
@@ -1764,25 +1744,28 @@ class QueueJobDeliveryStore:
         now = pendulum.now("UTC")
         database = self._db()
         with database.transaction():
-            rows = database.select(
-                f"SELECT delivery.job_id, delivery.db_job_id, "
-                "tracked.status AS tracker_status "
-                f"FROM {self.table} AS delivery "
-                "JOIN job AS tracked ON tracked.id = delivery.db_job_id "
-                "WHERE delivery.expires_at <= %s AND ("
-                "delivery.status = %s OR (delivery.status = %s "
-                "AND (delivery.lease_expires_at IS NULL OR "
-                "delivery.lease_expires_at <= %s))) "
-                "ORDER BY delivery.expires_at LIMIT %s "
-                "FOR UPDATE OF delivery, tracked SKIP LOCKED",
-                [
-                    now,
-                    self.STATUS_PENDING,
-                    self.STATUS_PROCESSING,
-                    now,
-                    limit,
-                ],
-            ) or []
+            rows = (
+                database.select(
+                    f"SELECT delivery.job_id, delivery.db_job_id, "
+                    "tracked.status AS tracker_status "
+                    f"FROM {self.table} AS delivery "
+                    "JOIN job AS tracked ON tracked.id = delivery.db_job_id "
+                    "WHERE delivery.expires_at <= %s AND ("
+                    "delivery.status = %s OR (delivery.status = %s "
+                    "AND (delivery.lease_expires_at IS NULL OR "
+                    "delivery.lease_expires_at <= %s))) "
+                    "ORDER BY delivery.expires_at LIMIT %s "
+                    "FOR UPDATE OF delivery, tracked SKIP LOCKED",
+                    [
+                        now,
+                        self.STATUS_PENDING,
+                        self.STATUS_PROCESSING,
+                        now,
+                        limit,
+                    ],
+                )
+                or []
+            )
             for row in rows:
                 job_id = str(self._row_value(row, "job_id"))
                 db_job_id = int(self._row_value(row, "db_job_id"))
@@ -1792,9 +1775,7 @@ class QueueJobDeliveryStore:
                     "success",
                 }
                 target = (
-                    self.STATUS_COMPLETED
-                    if recovered_completion
-                    else self.STATUS_EXPIRED
+                    self.STATUS_COMPLETED if recovered_completion else self.STATUS_EXPIRED
                 )
                 reason = (
                     "tracker_completion_recovered_after_stale_lease"
@@ -1862,24 +1843,27 @@ class QueueJobDeliveryStore:
         database = self._db()
         result = {"requeued": 0, "reconciled": 0}
         with database.transaction():
-            rows = database.select(
-                f"SELECT delivery.job_id, delivery.db_job_id, "
-                "delivery.lease_token, tracked.status AS tracker_status "
-                f"FROM {self.table} AS delivery "
-                "JOIN job AS tracked ON tracked.id = delivery.db_job_id "
-                "WHERE delivery.status = %s "
-                "AND delivery.lease_expires_at IS NOT NULL "
-                "AND delivery.lease_expires_at <= %s "
-                "AND delivery.expires_at > %s "
-                "ORDER BY delivery.lease_expires_at LIMIT %s "
-                "FOR UPDATE OF delivery, tracked SKIP LOCKED",
-                [
-                    self.STATUS_PROCESSING,
-                    now,
-                    now,
-                    limit,
-                ],
-            ) or []
+            rows = (
+                database.select(
+                    f"SELECT delivery.job_id, delivery.db_job_id, "
+                    "delivery.lease_token, tracked.status AS tracker_status "
+                    f"FROM {self.table} AS delivery "
+                    "JOIN job AS tracked ON tracked.id = delivery.db_job_id "
+                    "WHERE delivery.status = %s "
+                    "AND delivery.lease_expires_at IS NOT NULL "
+                    "AND delivery.lease_expires_at <= %s "
+                    "AND delivery.expires_at > %s "
+                    "ORDER BY delivery.lease_expires_at LIMIT %s "
+                    "FOR UPDATE OF delivery, tracked SKIP LOCKED",
+                    [
+                        self.STATUS_PROCESSING,
+                        now,
+                        now,
+                        limit,
+                    ],
+                )
+                or []
+            )
             for row in rows:
                 job_id = str(self._row_value(row, "job_id"))
                 db_job_id = int(self._row_value(row, "db_job_id"))
@@ -1938,9 +1922,7 @@ class QueueJobDeliveryStore:
                     continue
                 else:
                     target_status = self.STATUS_DEAD_LETTERED
-                    reason = (
-                        "unsupported_tracker_status_after_worker_crash"
-                    )
+                    reason = "unsupported_tracker_status_after_worker_crash"
                     tracker_affected = database.statement(
                         "UPDATE job SET status = %s, completed_at = COALESCE("
                         "completed_at, %s), updated_at = %s WHERE id = %s "
@@ -1983,8 +1965,7 @@ class QueueJobDeliveryStore:
                 )
                 if not self._affected(affected):
                     raise DeliveryLeaseLost(
-                        f"Queue delivery {job_id} lost its terminal crash "
-                        "recovery lease."
+                        f"Queue delivery {job_id} lost its terminal crash recovery lease."
                     )
                 result["reconciled"] += 1
 
@@ -2044,8 +2025,7 @@ class QueueJobDeliveryStore:
         timeout = int(raw)
         if (
             timeout <= 0
-            or timeout + self.execution_lease_grace_seconds
-            > self.execution_lease_seconds
+            or timeout + self.execution_lease_grace_seconds > self.execution_lease_seconds
         ):
             raise QueueException(
                 f"{job_class.__name__}.timeout must be positive and timeout + "
@@ -2297,10 +2277,7 @@ class QueueJobDeliveryStore:
             },
             "due_unpublished": value(active, "due_unpublished"),
             "oldest_due_age": max(
-                float(
-                    self._row_value(active, "oldest_due_age")
-                    or 0
-                ),
+                float(self._row_value(active, "oldest_due_age") or 0),
                 0.0,
             ),
             "publish_processing": value(active, "publish_processing"),
@@ -2329,8 +2306,7 @@ class QueueJobDeliveryStore:
             )
             priority_columns.extend(
                 (
-                    f"COUNT(*) FILTER (WHERE {due_filter}) "
-                    f"AS priority_{alias}_pending",
+                    f"COUNT(*) FILTER (WHERE {due_filter}) AS priority_{alias}_pending",
                     "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
                     f"(MIN(available_at) FILTER (WHERE {due_filter})))), 0) "
                     f"AS priority_{alias}_oldest_due_age",
@@ -2462,9 +2438,7 @@ class QueueJobDeliveryStore:
                         ),
                         0.0,
                     ),
-                    "latency_budget": (
-                        self._PRIORITY_RANKS[priority] + 1
-                    )
+                    "latency_budget": (self._PRIORITY_RANKS[priority] + 1)
                     * self.priority_aging_seconds,
                 }
                 for priority in self._PRIORITY_RANKS
@@ -2495,9 +2469,7 @@ class QueueJobDeliveryStore:
             "post_hooks_lease_expires_at, post_hooks_quarantined_at "
             f"FROM {self.table} LIMIT 0"
         )
-        self._db().select_one(
-            "SELECT id, status FROM job LIMIT 0"
-        )
+        self._db().select_one("SELECT id, status FROM job LIMIT 0")
         self._db().select_one(
             "SELECT id, job_id, requested_by, requested_at "
             "FROM queue_job_delivery_hook_retry_audit LIMIT 0"
@@ -2530,9 +2502,7 @@ class QueueJobDeliveryStore:
         elif status == "failed":
             allowed = ("pending", "retrying", "processing", "failed")
         else:
-            raise QueueException(
-                f"Unsupported atomic tracker terminal status: {status}."
-            )
+            raise QueueException(f"Unsupported atomic tracker terminal status: {status}.")
         affected = database.statement(
             "UPDATE job SET status = %s, completed_at = COALESCE("
             "completed_at, %s), updated_at = %s WHERE id = %s "
@@ -2548,8 +2518,7 @@ class QueueJobDeliveryStore:
         if QueueJobDeliveryStore._row_value(row, "status") == status:
             return
         raise QueueException(
-            f"Tracked queue job {db_job_id} contradicts terminal "
-            f"status {status!r}."
+            f"Tracked queue job {db_job_id} contradicts terminal status {status!r}."
         )
 
     def _db(self) -> Any:
@@ -2593,6 +2562,27 @@ class QueueJobDeliveryStore:
                 "it never adopted the durable-queue contract — port the "
                 "MODEL_LESS `create_queue_job_delivery_ledger` migration."
             )
+        unique_schema = database.select_one(
+            "SELECT "
+            "EXISTS (SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s "
+            "AND column_name = 'unique_key') AS has_unique_key, "
+            "EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' "
+            "AND tablename = %s AND indexname = %s) AS has_unique_index",
+            [
+                self.table,
+                self.table,
+                "queue_job_delivery_open_unique_key_idx",
+            ],
+        )
+        if not bool(self._row_value(unique_schema, "has_unique_key")) or not bool(
+            self._row_value(unique_schema, "has_unique_index")
+        ):
+            raise QueueException(
+                "Queue delivery ledger is missing its unique_key column or "
+                "open-delivery unique index. Rebuild the database from the "
+                "current model-less ledger migration before dispatching jobs."
+            )
         self._ledger_schema_verified = True
 
     @staticmethod
@@ -2608,9 +2598,7 @@ class QueueJobDeliveryStore:
             and tenant_id > 0
         ):
             return "tenant", tenant_id
-        raise QueueException(
-            "Queue delivery requires a canonical signed tenant scope."
-        )
+        raise QueueException("Queue delivery requires a canonical signed tenant scope.")
 
     @staticmethod
     def _safe_error(error: Any) -> str:

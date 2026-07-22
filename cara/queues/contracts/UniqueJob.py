@@ -1,11 +1,8 @@
 """UniqueJob contract — prevents duplicate job dispatches.
 
-Jobs implementing this contract will be deduplicated based on their unique_id().
-If a job with the same unique_id is already pending or processing, the new dispatch
-is silently dropped.
-
-Locks are Cache-backed (Redis/distributed) for multi-worker support, with an
-in-memory fallback for single-process or early-boot scenarios.
+Jobs implementing this contract are deduplicated by ``unique_id()`` in the
+transactional queue-delivery ledger. PostgreSQL owns both the delivery and its
+uniqueness fence, so duplicates return the existing pollable delivery UUID.
 
 Usage:
     class RefreshProductJob(ShouldQueue, Queueable, UniqueJob):
@@ -15,22 +12,9 @@ Usage:
         def unique_id(self) -> str:
             return f"refresh_product_{self.product_id}"
 
-        @property
-        def unique_for(self) -> int:
-            return 3600  # seconds — lock expires after 1 hour
 """
 
 from __future__ import annotations
-
-import threading
-import time
-
-# Fallback in-memory lock store (for single-process or boot scenarios)
-_unique_locks = {}
-_unique_job_ids: dict[str, str] = {}
-_unique_lock = threading.Lock()
-
-_UNBOUND_LOCK = "__pending__"
 
 
 class UniqueJob:
@@ -41,186 +25,3 @@ class UniqueJob:
         Must be overridden by subclasses.
         """
         raise NotImplementedError("UniqueJob must implement unique_id()")
-
-    @property
-    def unique_for(self) -> int:
-        """How long the uniqueness lock should be held (seconds). Default: 3600."""
-        return 3600
-
-    @classmethod
-    def is_unique_locked(cls, unique_id: str) -> bool:
-        """Check if a job with this unique_id is already locked.
-
-        Tries Cache-backed lock first, falls back to in-memory for boot
-        scenarios AND for transient Cache outages (Redis down, network
-        flap). Pre-fix only ``ImportError`` triggered the fallback —
-        any other Cache exception (``redis.ConnectionError``,
-        ``TimeoutError``) propagated and crashed every UniqueJob
-        dispatch for the duration of the outage. Falling back is best-
-        effort (the in-memory dict isn't shared across worker
-        processes) but strictly better than crashing the pipeline.
-        """
-        cache_key = f"unique_job:{unique_id}"
-
-        # Try Cache first (distributed)
-        try:
-            from cara.facades import Cache
-
-            if Cache.get(cache_key) is not None:
-                return True
-        except Exception:  # noqa: BLE001 — hot-path lock primitive must never raise
-            # ImportError (boot) OR any runtime Cache failure (Redis
-            # down, timeout, misconfigured facade). Fall through to the
-            # in-memory check below — we cannot afford to raise out of
-            # a lock primitive that's on the hot dispatch path.
-            pass
-
-        # Fallback: in-memory lock
-        with _unique_lock:
-            if unique_id in _unique_locks:
-                lock_time, ttl = _unique_locks[unique_id]
-                if time.time() - lock_time < ttl:
-                    return True
-                # Lock expired, remove it
-                del _unique_locks[unique_id]
-            return False
-
-    @classmethod
-    def acquire_unique_lock(cls, unique_id: str, ttl: int = 3600) -> bool:
-        """Try to acquire a uniqueness lock. Returns True if acquired.
-
-        Uses Cache.add() for atomic distributed locking, falls back to
-        in-memory threading lock when Cache is unavailable — both at
-        boot (``ImportError``) AND during a runtime outage (Redis
-        ConnectionError, TimeoutError). Pre-fix only ImportError
-        triggered the fallback; a transient Redis blip turned every
-        UniqueJob dispatch into an unhandled exception. The in-memory
-        fallback is best-effort across multi-worker deployments — the
-        occasional double-execution is bounded by each job's own
-        idempotency guards downstream.
-        """
-        cache_key = f"unique_job:{unique_id}"
-
-        # Try Cache first (atomic add = acquire if not exists)
-        try:
-            from cara.facades import Cache
-
-            # Cache.add returns True if key was not set (= acquired lock).
-            return Cache.add(cache_key, _UNBOUND_LOCK, ttl)
-        except Exception:  # noqa: BLE001 — hot-path lock primitive must never raise
-            # Cache-facade ImportError at boot OR a runtime Cache
-            # failure (Redis ConnectionError, TimeoutError, misconfigured
-            # binding). Fall through to the in-memory branch — see
-            # ``is_unique_locked`` for the same rationale.
-            pass
-
-        # Fallback: in-memory lock
-        with _unique_lock:
-            if unique_id in _unique_locks:
-                lock_time, lock_ttl = _unique_locks[unique_id]
-                if time.time() - lock_time < lock_ttl:
-                    return False  # Already locked
-                # Expired lock, replace it
-            _unique_locks[unique_id] = (time.time(), ttl)
-            return True
-
-    @classmethod
-    def bind_unique_job_id(cls, unique_id: str, job_id: str, ttl: int = 3600) -> None:
-        """Attach the durable queue UUID to an acquired uniqueness lock.
-
-        The lock is acquired before the queue driver can mint its UUID. Keeping
-        that UUID on the same distributed key lets a duplicate trigger return
-        the already-open operation instead of the old ambiguous ``None``.
-        """
-        if not unique_id or not job_id:
-            raise ValueError("unique_id and job_id are required")
-        cache_key = f"unique_job:{unique_id}"
-        try:
-            from cara.facades import Cache
-
-            Cache.put(cache_key, str(job_id), int(ttl))
-        except Exception:  # noqa: BLE001 — mirror the lock's boot fallback
-            pass
-        with _unique_lock:
-            _unique_job_ids[unique_id] = str(job_id)
-
-    @classmethod
-    def current_unique_job_id(cls, unique_id: str) -> str | None:
-        """Return the durable delivery UUID bound to an open unique lock."""
-        cache_key = f"unique_job:{unique_id}"
-        try:
-            from cara.facades import Cache
-
-            value = Cache.get(cache_key)
-            if value not in (None, "1", _UNBOUND_LOCK):
-                return str(value)
-        except Exception:  # noqa: BLE001 — in-memory fallback remains useful
-            pass
-        with _unique_lock:
-            return _unique_job_ids.get(unique_id)
-
-    @classmethod
-    def release_unique_lock(cls, unique_id: str) -> None:
-        """Release a uniqueness lock.
-
-        Removes from Cache (distributed) and in-memory fallback.
-        Cache failures during release are swallowed — the in-memory
-        clear below is the load-bearing step for single-process
-        retries, and a Cache outage shouldn't prevent the caller from
-        moving on. Pre-fix only ImportError was caught; a Redis
-        ConnectionError during ``release_unique_lock`` would propagate
-        and the Bus's error path would silently double-release on the
-        outer try/except.
-        """
-        cache_key = f"unique_job:{unique_id}"
-
-        # Try Cache first
-        try:
-            from cara.facades import Cache
-
-            Cache.forget(cache_key)
-        except Exception:  # noqa: BLE001 — hot-path lock primitive must never raise
-            # Cache unavailable (boot) OR runtime failure — see acquire
-            # for the same rationale. Releasing is best-effort; the
-            # in-memory clear below still runs.
-            pass
-
-        # Also remove from in-memory fallback
-        with _unique_lock:
-            _unique_locks.pop(unique_id, None)
-            _unique_job_ids.pop(unique_id, None)
-
-    @classmethod
-    def release_unique_lock_strict(cls, unique_id: str) -> None:
-        """Release the distributed lock for terminal AMQP settlement.
-
-        Unlike the best-effort generic helper, this path surfaces a cache
-        outage so the worker can keep the broker delivery open and retry
-        before acknowledging a completed/dead delivery.
-        """
-        from cara.facades import Cache
-
-        Cache.forget(f"unique_job:{unique_id}")
-        with _unique_lock:
-            _unique_locks.pop(unique_id, None)
-            _unique_job_ids.pop(unique_id, None)
-
-    @classmethod
-    def cleanup_expired_locks(cls) -> int:
-        """Remove expired locks from in-memory store. Returns count removed.
-
-        Note: Cache-backed locks are auto-expired by TTL, no cleanup needed.
-        """
-        now = time.time()
-        removed = 0
-        with _unique_lock:
-            expired = [
-                uid
-                for uid, (lock_time, ttl) in _unique_locks.items()
-                if now - lock_time >= ttl
-            ]
-            for uid in expired:
-                del _unique_locks[uid]
-                _unique_job_ids.pop(uid, None)
-                removed += 1
-        return removed

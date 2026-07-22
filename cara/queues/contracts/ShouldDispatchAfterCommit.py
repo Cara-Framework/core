@@ -25,11 +25,10 @@ class ShouldDispatchAfterCommit:
 
     * Sync execution mode (``ExecutionContext.sync()``) runs the job
       inline and ignores this marker — same as it ignores ``delay``.
-    * A deferred dispatch returns no job id (the push hasn't happened
-      yet when the dispatch call returns).
-    * ``UniqueJob`` + rollback: the unique lock was acquired at dispatch
-      time and is only released when the job runs — a rolled-back
-      transaction leaves it held until the ``unique_for`` TTL expires.
+    * Durable outbox drivers register inside the domain transaction and defer
+      only broker publication, so they return the persisted delivery id.
+    * ``UniqueJob`` shares that same transaction; rollback discards both the
+      delivery and its database uniqueness fence.
     """
 
     __slots__ = ()

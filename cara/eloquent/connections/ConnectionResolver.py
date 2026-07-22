@@ -54,6 +54,9 @@ _ACTIVE_CONNECTIONS: ContextVar[dict[str, object] | None] = ContextVar(
 _AFTER_COMMIT_CALLBACKS: ContextVar[dict[str, list] | None] = ContextVar(
     "cara.eloquent.connection_resolver.after_commit_callbacks", default=None
 )
+_AFTER_ROLLBACK_CALLBACKS: ContextVar[dict[str, list] | None] = ContextVar(
+    "cara.eloquent.connection_resolver.after_rollback_callbacks", default=None
+)
 
 
 def _get_registry() -> dict[str, object]:
@@ -84,6 +87,15 @@ def _get_after_commit_registry() -> dict[str, list]:
     return registry
 
 
+def _get_after_rollback_registry() -> dict[str, list]:
+    """Return this context's owner-fenced rollback callback map."""
+    registry = _AFTER_ROLLBACK_CALLBACKS.get()
+    if registry is None:
+        registry = {}
+        _AFTER_ROLLBACK_CALLBACKS.set(registry)
+    return registry
+
+
 def reset_registry() -> None:
     """Bind a FRESH, empty active-transaction registry to the current context.
 
@@ -108,6 +120,7 @@ def reset_registry() -> None:
     # reference would otherwise fire (or leak) the parent's deferred
     # callbacks. Each job gets its own isolated after-commit list.
     _AFTER_COMMIT_CALLBACKS.set({})
+    _AFTER_ROLLBACK_CALLBACKS.set({})
 
 
 class ConnectionResolver:
@@ -177,7 +190,9 @@ class ConnectionResolver:
         driver = connection_info.get("driver")
 
         if not driver:
-            raise DriverNotFoundException(f"Driver not found for connection: {connection_name}")
+            raise DriverNotFoundException(
+                f"Driver not found for connection: {connection_name}"
+            )
 
         connection_class = self.connection_factory.make(driver)
 
@@ -238,6 +253,7 @@ class ConnectionResolver:
         connection dangling.
         """
         connection = self._get_active_connection(connection_name)
+        level_before = int(getattr(connection, "transaction_level", 0) or 0)
         connection.commit()
         # Only unpin + return the connection to the pool once the OUTERMOST
         # transaction has committed. ``db.transaction()`` nests (a job's
@@ -254,7 +270,14 @@ class ConnectionResolver:
             # them AFTER unpin/close so a callback that opens its own
             # ``db.transaction()`` (or dispatches a job) starts from a
             # clean, transaction-free state (Laravel parity).
+            _get_after_rollback_registry().pop(connection_name, None)
             self._run_after_commit_callbacks(connection_name)
+        else:
+            self._reparent_callbacks_after_nested_commit(
+                connection_name,
+                level_before,
+                int(getattr(connection, "transaction_level", 0) or 0),
+            )
 
     def after_commit(self, connection_name, callback):
         """Defer ``callback`` until the outermost transaction commits.
@@ -271,7 +294,22 @@ class ConnectionResolver:
             # No open transaction on this connection in this context.
             callback()
             return
-        _get_after_commit_registry().setdefault(connection_name, []).append(callback)
+        connection = _get_registry()[connection_name]
+        level = int(getattr(connection, "transaction_level", 0) or 0)
+        _get_after_commit_registry().setdefault(connection_name, []).append(
+            (level, callback)
+        )
+
+    def after_rollback(self, connection_name, callback) -> bool:
+        """Run ``callback`` iff the transaction level that registered it rolls back."""
+        connection = _get_registry().get(connection_name)
+        if connection is None:
+            return False
+        level = int(getattr(connection, "transaction_level", 0) or 0)
+        _get_after_rollback_registry().setdefault(connection_name, []).append(
+            (level, callback)
+        )
+        return True
 
     def _run_after_commit_callbacks(self, connection_name):
         """Drain and invoke the after-commit callbacks for ``connection_name``.
@@ -283,21 +321,70 @@ class ConnectionResolver:
         callbacks = _get_after_commit_registry().pop(connection_name, None)
         if not callbacks:
             return
-        for callback in callbacks:
+        for _level, callback in callbacks:
             callback()
+
+    @staticmethod
+    def _reparent_callbacks_after_nested_commit(
+        connection_name: str,
+        old_level: int,
+        new_level: int,
+    ) -> None:
+        """Attach callbacks from a committed savepoint to its parent level."""
+        for registry in (
+            _get_after_commit_registry(),
+            _get_after_rollback_registry(),
+        ):
+            callbacks = registry.get(connection_name)
+            if callbacks:
+                registry[connection_name] = [
+                    (new_level if level >= old_level else level, callback)
+                    for level, callback in callbacks
+                ]
+
+    @staticmethod
+    def _discard_callbacks_from_level(
+        registry: dict[str, list],
+        connection_name: str,
+        rolled_back_level: int,
+    ) -> list:
+        callbacks = registry.get(connection_name, [])
+        selected = [
+            callback for level, callback in callbacks if level >= rolled_back_level
+        ]
+        remaining = [
+            (level, callback)
+            for level, callback in callbacks
+            if level < rolled_back_level
+        ]
+        if remaining:
+            registry[connection_name] = remaining
+        else:
+            registry.pop(connection_name, None)
+        return selected
 
     def rollback(self, connection_name):
         """Rollback the transaction opened in this context on ``connection_name``."""
         connection = self._get_active_connection(connection_name)
+        level_before = int(getattr(connection, "transaction_level", 0) or 0)
         connection.rollback()
         # Mirror ``commit``: a nested rollback only unwinds its SAVEPOINT, so
         # keep the connection pinned for the still-open enclosing transaction.
         if getattr(connection, "transaction_level", 0) <= 0:
             self._remove_active_connection(connection_name)
             self._safe_close(connection)
-            # Outermost transaction rolled back → DISCARD every deferred
-            # after-commit callback so nothing fires for undone work.
-            _get_after_commit_registry().pop(connection_name, None)
+        callbacks = self._discard_callbacks_from_level(
+            _get_after_rollback_registry(),
+            connection_name,
+            level_before,
+        )
+        self._discard_callbacks_from_level(
+            _get_after_commit_registry(),
+            connection_name,
+            level_before,
+        )
+        for callback in callbacks:
+            callback()
 
     @staticmethod
     def _safe_close(connection) -> None:

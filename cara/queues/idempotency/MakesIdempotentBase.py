@@ -141,7 +141,9 @@ class MakesIdempotentBase:
             return await callback()
 
         self._idempotency_key = self.generate_idempotency_key()
-        Log.debug("Job idempotency key: %s", self._idempotency_key, category='idempotency')
+        Log.debug(
+            "Job idempotency key: %s", self._idempotency_key, category="idempotency"
+        )
 
         job_force = getattr(self, "force", False)
         is_forced = force_execution or job_force
@@ -158,24 +160,27 @@ class MakesIdempotentBase:
         # Cross-process envelopes may explicitly bypass only the completed
         # result cache. That is distinct from operator recovery: lifecycle
         # policy still applies and the active owner lock is always respected.
-        if (
-            not bypass_result_cache
-            and getattr(self, "idempotency_cache_results", True)
-        ):
+        if not bypass_result_cache and getattr(self, "idempotency_cache_results", True):
             cache_key = f"job_result:{self._idempotency_key}"
             if Cache.has(cache_key):
                 cached_raw = Cache.get(cache_key)
-                cached_result = (
-                    None if cached_raw == self._NONE_SENTINEL else cached_raw
+                cached_result = None if cached_raw == self._NONE_SENTINEL else cached_raw
+                Log.debug(
+                    "Job already completed (cached): %s",
+                    self.get_job_identifier(),
+                    category="idempotency",
                 )
-                Log.debug("Job already completed (cached): %s", self.get_job_identifier(), category='idempotency')
                 self._emit_cache_op_metric("get", "hit")
                 self._emit_idempotency_metric("collision")
                 return cached_result
             self._emit_cache_op_metric("get", "miss")
 
         if not is_forced and not self.should_execute_based_on_lifecycle():
-            Log.debug("Job skipped (already processed): %s", self.get_job_identifier(), category='idempotency')
+            Log.debug(
+                "Job skipped (already processed): %s",
+                self.get_job_identifier(),
+                category="idempotency",
+            )
             self._emit_idempotency_metric("lifecycle_skip")
             return None
 
@@ -305,11 +310,7 @@ class MakesIdempotentBase:
         story this prevents)."""
         cache_key = f"job_result:{self._idempotency_key}"
         stored = self._NONE_SENTINEL if result is None else result
-        ttl = (
-            self.IDEMPOTENCY_NONE_TTL
-            if result is None
-            else self.IDEMPOTENCY_CACHE_TTL
-        )
+        ttl = self.IDEMPOTENCY_NONE_TTL if result is None else self.IDEMPOTENCY_CACHE_TTL
         Cache.put(cache_key, stored, ttl)
 
     def is_job_locked(self) -> bool:
@@ -364,9 +365,8 @@ class MakesIdempotentBase:
         cached, but the caller sees the cache-forget exception
         instead of the return value.
 
-        Mirrors the existing defensive shape on
-        ``UniqueJob.release_unique_lock`` — best-effort release, log
-        on failure, never bubble. The lock leaks for at most
+        This is a best-effort release: log on failure and never bubble. The
+        lock leaks for at most
         ``JOB_LOCK_TTL`` (30m) on the unlikely path where Cache is
         still down when the TTL expires.
         """
@@ -377,7 +377,12 @@ class MakesIdempotentBase:
         try:
             Cache.forget_if(lock_key, expected)
         except Exception as exc:
-            Log.warning("Failed to release idempotency lock %s: %s", lock_key, exc, category='idempotency')
+            Log.warning(
+                "Failed to release idempotency lock %s: %s",
+                lock_key,
+                exc,
+                category="idempotency",
+            )
         finally:
             self._idempotency_lock_value = None
 
@@ -416,9 +421,7 @@ class MakesIdempotentBase:
 
     # ── Execution + waiter ─────────────────────────────────────────
 
-    async def _execute_with_lock(
-        self, callback: Callable[[], Awaitable[Any]]
-    ) -> Any:
+    async def _execute_with_lock(self, callback: Callable[[], Awaitable[Any]]) -> Any:
         """Acquire lock, run callback, cache result, release lock.
 
         Lock-acquisition failure now falls through to
@@ -432,19 +435,36 @@ class MakesIdempotentBase:
         and returns B's cached result.
         """
         if not self.acquire_job_lock():
-            Log.debug("Lock acquire lost race for %s; waiting on the in-flight run", self.get_job_identifier(), category='idempotency')
+            Log.debug(
+                "Lock acquire lost race for %s; waiting on the in-flight run",
+                self.get_job_identifier(),
+                category="idempotency",
+            )
             self._emit_idempotency_metric("locked")
             return await self.wait_for_completion()
 
         try:
-            Log.debug("Executing job with idempotency: %s", self.get_job_identifier(), category='idempotency')
+            Log.debug(
+                "Executing job with idempotency: %s",
+                self.get_job_identifier(),
+                category="idempotency",
+            )
             result = await callback()
             if getattr(self, "idempotency_cache_results", True):
                 self.cache_result(result)
-            Log.debug("Job completed successfully: %s", self.get_job_identifier(), category='idempotency')
+            Log.debug(
+                "Job completed successfully: %s",
+                self.get_job_identifier(),
+                category="idempotency",
+            )
             return result
         except Exception as e:
-            Log.error("Job failed: %s - %s", self.get_job_identifier(), e, category='idempotency')
+            Log.error(
+                "Job failed: %s - %s",
+                self.get_job_identifier(),
+                e,
+                category="idempotency",
+            )
             raise
         finally:
             self.release_job_lock()
@@ -474,14 +494,26 @@ class MakesIdempotentBase:
             if Cache.has(cache_key):
                 cached_raw = Cache.get(cache_key)
                 cached_result = None if cached_raw == self._NONE_SENTINEL else cached_raw
-                Log.debug("Waited job completed: %s", self.get_job_identifier(), category='idempotency')
+                Log.debug(
+                    "Waited job completed: %s",
+                    self.get_job_identifier(),
+                    category="idempotency",
+                )
                 return cached_result
 
             if not self.is_job_locked():
-                Log.debug("Job lock released without cached result: %s", self.get_job_identifier(), category='idempotency')
+                Log.debug(
+                    "Job lock released without cached result: %s",
+                    self.get_job_identifier(),
+                    category="idempotency",
+                )
                 break
 
-        Log.debug("Timeout waiting for job: %s", self.get_job_identifier(), category='idempotency')
+        Log.debug(
+            "Timeout waiting for job: %s",
+            self.get_job_identifier(),
+            category="idempotency",
+        )
         return None
 
     # ── Identity / debug ───────────────────────────────────────────

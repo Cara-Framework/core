@@ -23,13 +23,13 @@ from cara.queues.PayloadLimits import MAX_AMQP_JOB_PAYLOAD_BYTES
 class SignedJsonJobSerializer:
     """Serialize jobs as canonical, expiring, rotatable signed envelopes."""
 
-    VERSION = 2
+    VERSION = 3
     MAX_PAYLOAD_BYTES = MAX_AMQP_JOB_PAYLOAD_BYTES
     DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60
     DEFAULT_MAX_AGE_SECONDS = 31 * 24 * 60 * 60
     DEFAULT_CLOCK_SKEW_SECONDS = 30
     MAX_JSON_DEPTH = 32
-    _DOMAIN = b"cara.queue.job.v2\x00"
+    _DOMAIN = b"cara.queue.job.v3\x00"
     _KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     _FORBIDDEN_PAYLOAD_KEY_PATTERN = re.compile(
         r"(?:^|_)(?:password|passwd|secret|token|access_token|refresh_token|"
@@ -65,6 +65,7 @@ class SignedJsonJobSerializer:
             "queue",
             "replay_of",
             "timeout_seconds",
+            "unique_key",
             "version",
         }
     )
@@ -93,9 +94,7 @@ class SignedJsonJobSerializer:
                 "must implement ShouldQueue."
             )
         if not inspect.iscoroutinefunction(getattr(job_class, "handle", None)):
-            raise QueueException(
-                f"AMQP job {job_class.__name__}.handle must be async."
-            )
+            raise QueueException(f"AMQP job {job_class.__name__}.handle must be async.")
         JobClassResolver.resolve(
             job_class.__module__,
             job_class.__name__,
@@ -221,9 +220,7 @@ class SignedJsonJobSerializer:
             allowed_prefixes=allowed_prefixes,
         )
         if not inspect.iscoroutinefunction(getattr(job_class, "handle", None)):
-            raise QueueException(
-                f"AMQP job {job_class.__name__}.handle must be async."
-            )
+            raise QueueException(f"AMQP job {job_class.__name__}.handle must be async.")
         cls._validate_job_tenancy(job_class, primitive)
         return {
             "obj": job_class,
@@ -242,6 +239,7 @@ class SignedJsonJobSerializer:
             "priority": primitive["priority"],
             "dispatched_at": primitive["dispatched_at"],
             "replay_of": primitive["replay_of"],
+            "unique_key": primitive["unique_key"],
         }
 
     @classmethod
@@ -416,6 +414,15 @@ class SignedJsonJobSerializer:
                 "dispatched_at",
             ),
             "replay_of": cls._optional_uuid(payload.get("replay_of"), "replay_of"),
+            "unique_key": (
+                cls._bounded_string(
+                    payload.get("unique_key"),
+                    "unique_key",
+                    500,
+                )
+                if payload.get("unique_key") is not None
+                else None
+            ),
         }
 
     @classmethod
@@ -596,13 +603,31 @@ class SignedJsonJobSerializer:
             raise QueueException("AMQP job tenant mode must be tenant or central.")
         cls._required_uuid(payload.get("job_id"), "job_id")
         cls._optional_uuid(payload.get("replay_of"), "replay_of")
+        if payload.get("unique_key") is not None:
+            cls._bounded_string(
+                payload.get("unique_key"),
+                "unique_key",
+                500,
+            )
         cls._json_value(job["kwargs"], path="job.kwargs")
         cls._json_value(payload["args"], path="args")
         cls._json_value(payload.get("_otel"), path="_otel")
 
     @staticmethod
     def _validate_job_tenancy(job_class: type, payload: Mapping[str, Any]) -> None:
+        from cara.queues.contracts import UniqueJob
+
         is_central_job = bool(getattr(job_class, "central_job", False))
+        unique_key = payload.get("unique_key")
+        if issubclass(job_class, UniqueJob):
+            if unique_key is None:
+                raise QueueException(
+                    f"Unique job {job_class.__name__} requires a signed unique key."
+                )
+        elif unique_key is not None:
+            raise QueueException(
+                f"Non-unique job {job_class.__name__} cannot carry a unique key."
+            )
         mode = payload.get("_tenant_mode")
         if is_central_job and mode != "central":
             raise QueueException(
@@ -624,7 +649,9 @@ class SignedJsonJobSerializer:
                 sort_keys=True,
             ).encode("utf-8")
         except (TypeError, ValueError) as exc:
-            raise QueueException(f"AMQP job payload is not canonical JSON: {exc}") from exc
+            raise QueueException(
+                f"AMQP job payload is not canonical JSON: {exc}"
+            ) from exc
 
     @classmethod
     def _json_value(
@@ -710,9 +737,7 @@ class SignedJsonJobSerializer:
                 f"AMQP job field {field!r} must be a canonical UUID."
             ) from exc
         if text != normalized:
-            raise QueueException(
-                f"AMQP job field {field!r} must be a canonical UUID."
-            )
+            raise QueueException(f"AMQP job field {field!r} must be a canonical UUID.")
         return text
 
     @classmethod
@@ -752,9 +777,7 @@ class SignedJsonJobSerializer:
     @staticmethod
     def _required_positive_int(value: Any, field: str) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise QueueException(
-                f"AMQP job field {field!r} must be a positive integer."
-            )
+            raise QueueException(f"AMQP job field {field!r} must be a positive integer.")
         return value
 
     @staticmethod

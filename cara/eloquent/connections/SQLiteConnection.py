@@ -102,33 +102,46 @@ class SQLiteConnection(BaseConnection):
         """No-op — SQLite connections are file-backed and always available."""
 
     def commit(self) -> Self:
-        """Transaction."""
-
-        if self.get_transaction_level() == 1:
+        """Commit the current transaction level or release its savepoint."""
+        if self.transaction_level <= 0:
+            return self
+        if self.transaction_level > 1:
+            self._connection.execute(f"RELEASE SAVEPOINT sp_{self.transaction_level - 1}")
+            self.transaction_level -= 1
+            return self
+        if self.transaction_level == 1:
             self._connection.commit()
-            self._connection.isolation_level = None
             with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 self._connection.close()
             self.open = 0
-
-        self.transaction_level -= 1
+            self.transaction_level -= 1
         return self
 
     def begin(self) -> Self:
-        """Sqlite Transaction."""
-        self._connection.isolation_level = "DEFERRED"
+        """Begin an outer transaction or a real nested savepoint."""
+        if self.transaction_level > 0:
+            self._connection.execute(f"SAVEPOINT sp_{self.transaction_level}")
+        else:
+            self._connection.execute("BEGIN DEFERRED")
         self.transaction_level += 1
         return self
 
     def rollback(self) -> Self:
-        """Transaction."""
+        """Rollback the current transaction level or its savepoint."""
+        if self.transaction_level <= 0:
+            return self
+        if self.transaction_level > 1:
+            name = f"sp_{self.transaction_level - 1}"
+            self._connection.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            self._connection.execute(f"RELEASE SAVEPOINT {name}")
+            self.transaction_level -= 1
+            return self
         if self.get_transaction_level() == 1:
             self._connection.rollback()
             with contextlib.suppress(OSError, RuntimeError, AttributeError):
                 self._connection.close()
             self.open = 0
-
-        self.transaction_level -= 1
+            self.transaction_level -= 1
         return self
 
     def get_cursor(self):

@@ -28,6 +28,8 @@ class PendingDispatch:
         self._delay = None
         self._connection = None
         self._routing_key = None
+        self._job_id = None
+        self._unique_key = None
         # Defer the push until the enclosing DB transaction commits —
         # set by .after_commit() or the ShouldDispatchAfterCommit marker.
         self._after_commit = False
@@ -55,6 +57,22 @@ class PendingDispatch:
     def with_routing_key(self, routing_key: str) -> PendingDispatch:
         """Select a canonical queue through local routing rules."""
         self._routing_key = routing_key
+        return self
+
+    def with_job_id(self, job_id: str) -> PendingDispatch:
+        """Reserve the durable delivery UUID before queue registration."""
+        if not isinstance(job_id, str) or not job_id:
+            raise ValueError("job_id must be a non-empty string")
+        self._job_id = job_id
+        if hasattr(self.job, "set_tracking_id"):
+            self.job.set_tracking_id(job_id)
+        return self
+
+    def with_unique_key(self, unique_key: str) -> PendingDispatch:
+        """Carry the originating instance's uniqueness metadata to storage."""
+        if not isinstance(unique_key, str) or not unique_key.strip():
+            raise ValueError("unique_key must be a non-empty string")
+        self._unique_key = unique_key.strip()
         return self
 
     def after_commit(self) -> PendingDispatch:
@@ -103,9 +121,15 @@ class PendingDispatch:
             # Mark dispatched before callback registration so repeated terminal
             # calls cannot double-register the same after-commit callback.
             self._dispatched = True
+            self._dispatch_result = self._job_id
 
             def _push_after_commit() -> None:
-                self._dispatch_result = self._push()
+                pushed_job_id = self._push()
+                if self._job_id is not None and str(pushed_job_id) != self._job_id:
+                    raise RuntimeError(
+                        "Queue driver did not honor the reserved delivery UUID."
+                    )
+                self._dispatch_result = pushed_job_id
 
             DatabaseManager.get_instance().after_commit(_push_after_commit)
             # Immediate mode (no open transaction) ran the push
@@ -142,10 +166,13 @@ class PendingDispatch:
         # MUST route through Queue.later. For AMQP this commits a signed
         # delayed-job outbox row; Queue.push would fire immediately and
         # silently drop the requested clock.
+        options = {"job_id": self._job_id}
+        if self._unique_key is not None:
+            options["unique_key"] = self._unique_key
         if self._delay:
-            job_id = Queue.later(self._delay, self.job)
+            job_id = Queue.later(self._delay, self.job, **options)
         else:
-            job_id = Queue.push(self.job)
+            job_id = Queue.push(self.job, **options)
 
         # Set tracking ID
         if hasattr(self.job, "set_tracking_id"):
@@ -171,6 +198,8 @@ class PendingDispatch:
             routing_key=self._routing_key,
             job_instance=self.job,
             delay=self._delay,
+            job_id=self._job_id,
+            unique_key=self._unique_key,
         )
 
         # Set tracking ID

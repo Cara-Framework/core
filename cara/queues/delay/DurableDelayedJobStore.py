@@ -50,23 +50,41 @@ class DurableDelayedJobStore:
         queue_name = self.driver.require_canonical_queue(queue_name)
 
         priority = self.driver._priority_name(job, merged)
-        dedup_source = options.get("deduplication_key") or uuid.uuid4().hex
-        if not isinstance(dedup_source, str) or not dedup_source.strip():
-            raise QueueException("Delayed AMQP deduplication_key must be a string.")
-        digest = hashlib.sha256(
-            b"cara.queue.delivery.retry.v2\x00"
-            + dedup_source.strip().encode("utf-8")
-        ).hexdigest()
-        job_id = str(uuid.UUID(digest[:32]))
+        explicit_job_id = options.get("job_id")
+        if explicit_job_id is not None:
+            try:
+                job_id = str(uuid.UUID(str(explicit_job_id)))
+            except (ValueError, AttributeError, TypeError) as exc:
+                raise QueueException("Delayed AMQP job_id must be a valid UUID.") from exc
+        else:
+            dedup_source = options.get("deduplication_key") or uuid.uuid4().hex
+            if not isinstance(dedup_source, str) or not dedup_source.strip():
+                raise QueueException("Delayed AMQP deduplication_key must be a string.")
+            digest = hashlib.sha256(
+                b"cara.queue.delivery.retry.v2\x00" + dedup_source.strip().encode("utf-8")
+            ).hexdigest()
+            job_id = str(uuid.UUID(digest[:32]))
         attempts = self._non_negative_int(options.get("attempts", 0), "attempts")
         dispatched_at = now.to_iso8601_string()
         tenant_fields = self.driver._tenant_payload(job, merged)
+        from cara.queues.contracts import UniqueJob
+
+        unique_key = options.get("unique_key")
+        is_source_retry = (
+            options.get("source_delivery_job_id") is not None
+            or options.get("source_delivery_lease_token") is not None
+        )
+        if isinstance(job, UniqueJob):
+            if explicit_job_id is None and not is_source_retry:
+                raise QueueException("UniqueJob dispatch must go through Bus.dispatch().")
+            if unique_key is None:
+                raise QueueException(
+                    "UniqueJob dispatch requires originating uniqueness metadata."
+                )
 
         database = self._db()
         with database.transaction():
-            explicit_db_job_id = self._optional_positive_int(
-                options.get("db_job_id")
-            )
+            explicit_db_job_id = self._optional_positive_int(options.get("db_job_id"))
             db_job_id = explicit_db_job_id or self.driver._create_job_record(
                 job,
                 job_id,
@@ -87,6 +105,7 @@ class DurableDelayedJobStore:
                 "priority": priority,
                 "dispatched_at": dispatched_at,
                 "replay_of": None,
+                "unique_key": unique_key,
             }
             body = SignedJsonJobSerializer.serialize(
                 payload,
@@ -121,12 +140,6 @@ class DurableDelayedJobStore:
                 ),
                 allow_not_before=True,
             )
-            self.delivery_store.register(
-                body=body,
-                payload=envelope["payload"],
-                envelope=envelope,
-                db=database,
-            )
             source_id = options.get("source_delivery_job_id")
             source_token = options.get("source_delivery_lease_token")
             if source_id is not None or source_token is not None:
@@ -139,6 +152,12 @@ class DurableDelayedJobStore:
                     source_token,
                     db=database,
                 )
+            self.delivery_store.register(
+                body=body,
+                payload=envelope["payload"],
+                envelope=envelope,
+                db=database,
+            )
             database.statement(
                 "UPDATE job SET status = %s, available_at = %s, attempts = %s, "
                 "updated_at = %s WHERE id = %s",
@@ -161,9 +180,7 @@ class DurableDelayedJobStore:
             backlog = self.delivery_store.backlog_metrics()
             from cara.observability.Metrics import MetricsBase
 
-            MetricsBase.queue_delayed_jobs.labels(status="pending").set(
-                backlog["count"]
-            )
+            MetricsBase.queue_delayed_jobs.labels(status="pending").set(backlog["count"])
             MetricsBase.queue_delayed_jobs.labels(status="processing").set(0)
             MetricsBase.queue_delayed_jobs.labels(status="failed").set(0)
             MetricsBase.queue_delayed_oldest_due_age_seconds.set(backlog["age"])
@@ -186,7 +203,9 @@ class DurableDelayedJobStore:
             try:
                 parsed = pendulum.parse(str(value))
             except (TypeError, ValueError) as exc:
-                raise QueueException(f"Invalid delayed AMQP timestamp: {value!r}") from exc
+                raise QueueException(
+                    f"Invalid delayed AMQP timestamp: {value!r}"
+                ) from exc
         if parsed.tzinfo is None:
             raise QueueException("Delayed AMQP timestamps must include a timezone.")
         return parsed.in_timezone("UTC")
@@ -200,9 +219,7 @@ class DurableDelayedJobStore:
         try:
             parsed = int(value)
         except (TypeError, ValueError) as exc:
-            raise QueueException(
-                "db_job_id must be a positive integer or null."
-            ) from exc
+            raise QueueException("db_job_id must be a positive integer or null.") from exc
         if parsed <= 0:
             raise QueueException("db_job_id must be a positive integer or null.")
         return parsed
@@ -224,8 +241,6 @@ class DurableDelayedJobStore:
         try:
             from cara.observability.Metrics import MetricsBase
 
-            MetricsBase.queue_delayed_transitions_total.labels(
-                outcome=outcome
-            ).inc(count)
+            MetricsBase.queue_delayed_transitions_total.labels(outcome=outcome).inc(count)
         except Exception:
             return
