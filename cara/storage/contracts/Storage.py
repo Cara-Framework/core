@@ -32,3 +32,6 @@ class Storage(Protocol):
 
     def exists(self, key: str) -> bool:
         """Return True if `key` exists, False otherwise."""
+
+    def delete_directory(self, key: str) -> bool:
+        """Delete one logical directory and all objects below it."""

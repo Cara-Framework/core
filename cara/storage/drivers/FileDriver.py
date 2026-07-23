@@ -8,6 +8,8 @@ directory.
 from __future__ import annotations
 
 import os
+import shutil
+from pathlib import Path, PurePosixPath
 
 from cara.exceptions import (
     KeyNotFoundException,
@@ -46,6 +48,7 @@ class FileDriver(Storage):
     def put(self, key: str, data: bytes) -> None:
         file_path = self._file_path(key)
         try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, "wb") as f:
                 f.write(data)
         except Exception as e:
@@ -67,6 +70,7 @@ class FileDriver(Storage):
             return False
         try:
             os.remove(file_path)
+            self._prune_empty_parents(os.path.dirname(file_path))
             return True
         except Exception as e:
             raise StorageException(f"Failed to delete key '{key}': {e}") from e
@@ -74,6 +78,49 @@ class FileDriver(Storage):
     def exists(self, key: str) -> bool:
         return os.path.exists(self._file_path(key))
 
+    def delete_directory(self, key: str) -> bool:
+        """Delete one logical directory without allowing storage-root escape."""
+        directory = self._file_path(key)
+        if not os.path.exists(directory):
+            return False
+        if not os.path.isdir(directory):
+            raise StorageException(f"Storage key '{key}' is not a directory.")
+        try:
+            shutil.rmtree(directory)
+            self._prune_empty_parents(os.path.dirname(directory))
+            return True
+        except Exception as e:
+            raise StorageException(
+                f"Failed to delete storage directory '{key}': {e}"
+            ) from e
+
     def _file_path(self, key: str) -> str:
-        sanitized = key.replace("/", "_").replace("\\", "_")
-        return os.path.join(self.base_dir, f"{sanitized}.bin")
+        """Resolve a logical key to its exact, hierarchy-preserving path."""
+        if not isinstance(key, str) or not key.strip() or "\x00" in key:
+            raise StorageException("Storage keys must be non-empty strings.")
+
+        normalized = key.replace("\\", "/")
+        logical = PurePosixPath(normalized)
+        if logical.is_absolute() or any(part in {".", ".."} for part in logical.parts):
+            raise StorageException(f"Unsafe storage key '{key}'.")
+
+        candidate = Path(self.base_dir, *logical.parts).resolve()
+        root = Path(self.base_dir).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise StorageException(f"Storage key '{key}' escapes its root.") from exc
+        if candidate == root:
+            raise StorageException("A storage key cannot address the storage root.")
+        return str(candidate)
+
+    def _prune_empty_parents(self, directory: str) -> None:
+        root = Path(self.base_dir).resolve()
+        current = Path(directory).resolve()
+        while current != root:
+            try:
+                current.relative_to(root)
+                current.rmdir()
+            except (OSError, ValueError):
+                return
+            current = current.parent
