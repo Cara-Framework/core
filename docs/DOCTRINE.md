@@ -1,6 +1,6 @@
 # The Cara Product Doctrine
 
-**Version 1.2 — 2026-07-23.** This document is LAW for every product built on
+**Version 1.3 — 2026-07-23.** This document is LAW for every product built on
 Cara. It travels with the framework: cloning `cara` into a product delivers the
 doctrine with it. A product's `CLAUDE.md` is its atlas (ports, quirks, domain
 registry); *this* file is the invariant architecture. Where the two disagree,
@@ -40,7 +40,9 @@ A product is **two deployables + a dev-only kernel + surfaces**:
 - The two deployables share **one PostgreSQL database** and speak to each
   other through the queue (RabbitMQ), the shared tables, and — for payloads
   too large for either — **durable object storage** whose keys are a
-  ``contracts`` vocabulary (never ad-hoc strings). Direct imports
+  ``contracts`` vocabulary — carried as a typed reference (an ``ObjectRef``
+  value object: tenant, key, checksum, size, content type; absolute paths and
+  ``..`` rejected at construction), never ad-hoc strings. Direct imports
   between `api/` and `services/` are physically impossible and must stay so.
   *(Why: this is a modular monolith with CQRS-ish separation — the cheapest
   architecture that scales to this product class. Microservices are refused.)*
@@ -87,6 +89,13 @@ into a junk drawer; these four names ARE the criteria.)*
 kernel. `contracts` may import `models` for typing only. `gates` and `shared`
 may import `models` and `contracts`. The kernel NEVER imports an app tree.
 App trees import the kernel only through the barrels below.
+
+**Ports have a membership rule — `app/ports` must not become the next junk
+drawer.** A port exists only when it is (a) a real boundary the consumer owns,
+(b) an implementation that can plausibly be swapped or an external-system
+edge, or (c) a stable capability used by more than one use-case. Auto-minting
+an `XDataContract` per repository is forbidden. Ports prefer typed DTOs and
+value objects over `Any`, bare `dict` and shapeless `list`.
 
 **Local DI interfaces are NOT kernel contracts.** A deployable's own
 dependency-inversion interfaces (connector contracts, data contracts,
@@ -289,7 +298,11 @@ toast is a bug. Queue ownership is a single topology SSOT
 The relay publishes; workers never replace it; the health probe for the
 relay runs in the scheduler *(the observer must not be the observed)*.
 Envelope bodies import app code function-locally so shells parse without the
-app installed.
+app installed. **Transaction ownership:** the use-case service owns the
+business transaction; repositories JOIN the ambient transaction and never
+commit/rollback on their own — the one exception is a single atomic
+persistence primitive (a CAS/lease) fully contained in a repository method.
+The outbox record is written in the SAME transaction as the business write.
 
 ## 9. Errors and events
 
@@ -337,6 +350,12 @@ gain product prefixes, semantics may not):
 Weakening a guard IS a doctrine amendment. An agent that makes a red guard
 green by deleting its assertion has failed the task.
 
+**The pack converges on ONE implementation.** Guard logic (the AST scanners)
+belongs in the framework; products supply only their manifests (domains,
+flows, ownership, sunset lists). Until that extraction lands, per-product
+guard copies must stay semantically identical — divergence is drift, and
+drift in a guard is a doctrine bug.
+
 **Allowlists are sunset debts, not exceptions.** A guard may carry a pinned
 allowlist ONLY for violations that predate the rule; every allowlist is
 shrink-only (adding an entry is a doctrine amendment), and its size is part
@@ -383,3 +402,8 @@ domain count as review threshold + sanctioned transport/flow-stage
 groupings; §5 job flow via validated envelope payload (never FormRequest);
 §6 422 wording; §7 pre-launch vs applied-immutable migration modes; §11
 allowlists as shrink-only sunset debts. Review credit: external 5.6 audit.*
+
+*Changelog — 1.3 (2026-07-23): §2 ports membership rule + typed DTOs; §3
+flows.py beside domains.py; §7 write-ownership manifest; §8 transaction
+ownership; §1 typed ObjectRef storage references; §11 single-implementation
+guard pack intent. Review credit: external GPT audit.*
