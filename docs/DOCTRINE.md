@@ -155,9 +155,15 @@ services/config/providers.py            ← the composition root
   (identity/account), `platform` (admin/ops), `billing` (if monetized),
   `shared` (cross-domain plumbing — business logic forbidden there, guarded).
   Product domains beyond these are free but must pass the domain tests:
-  nameable aggregates, self-explanatory folder name, members in ≥2 layers,
-  6–14 domains per deployable. `misc`, `utils`, `helpers` are forbidden names
-  forever.
+  nameable aggregates, a self-explanatory folder name, members in ≥2 layers
+  (a single-layer domain triggers review, not auto-rejection). Domain COUNT
+  is a REVIEW THRESHOLD, not a hard law — beyond ~14 per deployable review
+  for fragmentation; merging names to satisfy a number makes the
+  architecture worse. `misc`, `utils`, `helpers` are forbidden names
+  forever. Two sanctioned NON-domain groupings exist, declared as such in
+  the registries: **transport namespaces** (`ws/`) and **flow stages** (a
+  worker's `jobs/pipeline/` stage tree, declared in `app/flows.py` beside
+  `app/domains.py`) — they group by mechanics, not business capability.
 - Layer barrels re-export their domains; intra-layer imports use the direct
   submodule path, never the barrel *(why: barrel-mid-load self-import is a
   boot-order footgun)*.
@@ -284,8 +290,15 @@ is a lie that averages into reports)*. Every timestamp is `TIMESTAMPTZ` in
 UTC. Multi-tenant tables carry `tenant_id` with a fail-closed scope; raw SQL
 binds `tenant_id` explicitly, every time. **Migrations are generated from
 models** — one file per table, no incremental `add_/alter_/fix_` files; the
-flow is model → dev-DB ALTER → regenerate → check. SQL a model cannot express
-is marked `MODEL_LESS = True` with the reason in its docstring.
+flow is model → dev-DB ALTER → regenerate → check. This regenerate-freely
+mode is **pre-launch only**: once a migration has been APPLIED to an
+environment you cannot reset, it is immutable (the executor's checksum guard
+enforces this) — schema changes become forward migrations, and a squashed
+baseline may periodically replace history for fresh installs. SQL a model
+cannot express is marked `MODEL_LESS = True` with the reason in its
+docstring. **Write ownership:** a shared table is not a shared pen — each
+table is declared `api-owned`, `services-owned` or `shared-gate-owned` in a
+write-ownership manifest, and a guard checks repository writes against it.
 
 ## 8. Async law
 
@@ -299,6 +312,10 @@ The relay publishes; workers never replace it; the health probe for the
 relay runs in the scheduler *(the observer must not be the observed)*.
 Envelope bodies import app code function-locally so shells parse without the
 app installed. **Transaction ownership:** the use-case service owns the
+business transaction; repositories JOIN the ambient transaction and never
+commit/rollback on their own — the sole exception is a single atomic
+persistence primitive (CAS/lease) fully contained in a repository method.
+The outbox record is written in the SAME transaction as the business write. **Transaction ownership:** the use-case service owns the
 business transaction; repositories JOIN the ambient transaction and never
 commit/rollback on their own — the one exception is a single atomic
 persistence primitive (a CAS/lease) fully contained in a repository method.
@@ -407,3 +424,9 @@ allowlists as shrink-only sunset debts. Review credit: external 5.6 audit.*
 flows.py beside domains.py; §7 write-ownership manifest; §8 transaction
 ownership; §1 typed ObjectRef storage references; §11 single-implementation
 guard pack intent. Review credit: external GPT audit.*
+
+*Errata — 1.3.1 (2026-07-23): five 1.2/1.3 body amendments had silently
+failed to apply (only their changelog entries landed): §3 review-threshold +
+transport/flow groupings, §7 migration modes + write-ownership, §8
+transaction ownership. Body and changelog are now consistent. Found by an
+external audit — the lesson is §11's own rule: verify the BODY, not the log.*
