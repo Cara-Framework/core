@@ -74,9 +74,16 @@ class InlineImports:
                 resolved = path.resolve()
                 in_envelopes = any(d.resolve() in resolved.parents for d in envelope_dirs)
                 for node in function_local_imports(tree):
-                    line = lines[node.lineno - 1] if node.lineno - 1 < len(lines) else ""
+                    start = max(node.lineno - 1, 0)
+                    end = min(node.end_lineno or node.lineno, len(lines))
+                    import_lines = lines[start:end]
+                    line = import_lines[0] if import_lines else ""
+                    tagged_line = next(
+                        (candidate for candidate in import_lines if TAG in candidate),
+                        None,
+                    )
                     where_key = (rel, _first_imported_name(node))
-                    if TAG not in line:
+                    if tagged_line is None:
                         if where_key in manifest.inline_import_exemptions:
                             continue
                         findings.append(
@@ -88,7 +95,7 @@ class InlineImports:
                             )
                         )
                         continue
-                    reason = line.split(TAG, 1)[1].strip()
+                    reason = tagged_line.split(TAG, 1)[1].strip()
                     if not reason.startswith(LEGAL_PREFIXES):
                         findings.append(
                             Finding(

@@ -49,6 +49,19 @@ def test_cycle_tag_naming_a_module_passes(tmp_path):
     assert InlineImports.scan(manifest) == []
 
 
+def test_cycle_tag_on_multiline_import_closing_line_passes(tmp_path):
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "app" / "services" / "Cyclic.py",
+        "def do_work():\n"
+        "    from app.services import (\n"
+        "        Other,\n"
+        "    )  # local: cycle with app.services.Other\n"
+        "    return Other\n",
+    )
+    assert InlineImports.scan(manifest) == []
+
+
 def test_envelope_body_tag_outside_envelopes_dir_fails(tmp_path):
     manifest = make_manifest(tmp_path)
     write(
