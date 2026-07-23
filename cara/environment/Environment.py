@@ -22,7 +22,13 @@ class LoadEnvironment:
     # Track loaded environment files
     loaded_files = []
 
-    def __init__(self, environment=None, override=True, only=None):
+    def __init__(
+        self,
+        environment=None,
+        override=True,
+        only=None,
+        base_path: str | Path | None = None,
+    ):
         """
         LoadEnvironment constructor.
 
@@ -34,15 +40,16 @@ class LoadEnvironment:
         from dotenv import load_dotenv
 
         self.env = load_dotenv
+        self.base_path = Path(base_path or ".").resolve()
 
         if only:
             self._load_environment(only, override=override)
             return
 
-        env_path = str(Path(".") / ".env")
-        if Path(env_path).exists():
+        env_path = self.base_path / ".env"
+        if env_path.exists():
             self.env(env_path, override=override)
-            LoadEnvironment.loaded_files.append(env_path)
+            LoadEnvironment.loaded_files.append(str(env_path))
 
         if os.environ.get("APP_ENV"):
             self._load_environment(os.environ.get("APP_ENV"), override=override)
@@ -62,10 +69,10 @@ class LoadEnvironment:
         Keyword Arguments:
             override {bool} -- Whether the environment file should overwrite existing environment keys. (default: {False})
         """
-        env_path = str(Path(".") / f".env.{environment}")
-        if Path(env_path).exists():
+        env_path = self.base_path / f".env.{environment}"
+        if env_path.exists():
             self.env(dotenv_path=env_path, override=override)
-            LoadEnvironment.loaded_files.append(env_path)
+            LoadEnvironment.loaded_files.append(str(env_path))
 
 
 _BOOL_TRUTHY = ("true", "yes", "on", "1")

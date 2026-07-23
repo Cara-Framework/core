@@ -64,3 +64,11 @@ class Storage:
     def exists(self, key: str, driver_name: str | None = None) -> bool:
         """Return True if `key` exists in selected driver."""
         return self.driver(driver_name).exists(key)
+
+    def delete_directory(
+        self,
+        key: str,
+        driver_name: str | None = None,
+    ) -> bool:
+        """Delete one logical directory via the selected driver."""
+        return self.driver(driver_name).delete_directory(key)

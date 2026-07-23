@@ -46,7 +46,7 @@ class Application(Container):
         super().__init__()  # Initialize Container internals
 
         # Load environment variables early, before any providers
-        LoadEnvironment()
+        LoadEnvironment(base_path=base_path)
 
         self.base_path = base_path
         self.storage_path = None
