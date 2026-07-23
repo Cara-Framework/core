@@ -315,10 +315,6 @@ app installed. **Transaction ownership:** the use-case service owns the
 business transaction; repositories JOIN the ambient transaction and never
 commit/rollback on their own — the sole exception is a single atomic
 persistence primitive (CAS/lease) fully contained in a repository method.
-The outbox record is written in the SAME transaction as the business write. **Transaction ownership:** the use-case service owns the
-business transaction; repositories JOIN the ambient transaction and never
-commit/rollback on their own — the one exception is a single atomic
-persistence primitive (a CAS/lease) fully contained in a repository method.
 The outbox record is written in the SAME transaction as the business write.
 
 ## 9. Errors and events
@@ -425,8 +421,10 @@ flows.py beside domains.py; §7 write-ownership manifest; §8 transaction
 ownership; §1 typed ObjectRef storage references; §11 single-implementation
 guard pack intent. Review credit: external GPT audit.*
 
-*Errata — 1.3.1 (2026-07-23): five 1.2/1.3 body amendments had silently
-failed to apply (only their changelog entries landed): §3 review-threshold +
-transport/flow groupings, §7 migration modes + write-ownership, §8
-transaction ownership. Body and changelog are now consistent. Found by an
-external audit — the lesson is §11's own rule: verify the BODY, not the log.*
+*Errata — 1.3.1 (2026-07-23): three 1.2/1.3 body amendments had silently
+failed to apply (unasserted replacements; only their changelog entries
+landed): §3 review-threshold + transport/flow groupings and §7 migration
+modes. Applied now; a §8 duplication introduced while fixing was removed in
+the same pass. Body and changelog are consistent — every normative topic
+appears exactly once. Found by an external audit; the lesson is §11's own
+rule: verify the BODY (whitespace-collapsed), not the changelog.*
