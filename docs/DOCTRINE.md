@@ -1,6 +1,6 @@
 # The Cara Product Doctrine
 
-**Version 1.0 — 2026-07-23.** This document is LAW for every product built on
+**Version 1.2 — 2026-07-23.** This document is LAW for every product built on
 Cara. It travels with the framework: cloning `cara` into a product delivers the
 doctrine with it. A product's `CLAUDE.md` is its atlas (ports, quirks, domain
 registry); *this* file is the invariant architecture. Where the two disagree,
@@ -33,8 +33,14 @@ A product is **two deployables + a dev-only kernel + surfaces**:
 - Each child is an **independent nested git repository**. Stage only files that
   belong to the repo you are committing to. `git add -A` at a workspace root is
   forbidden. *(Why: cross-repo bleed is unrecoverable at review time.)*
-- The two deployables share **one PostgreSQL database** and speak to each other
-  **only through the queue** (RabbitMQ) and the shared tables. Direct imports
+- **Scope.** This doctrine governs the backend: the two deployables and the
+  kernel. Frontend surfaces follow their own conventions (React Server
+  Components, React Query for server state, Zustand UI-only) and are bound
+  only by the API contract; a surface doctrine may join later.
+- The two deployables share **one PostgreSQL database** and speak to each
+  other through the queue (RabbitMQ), the shared tables, and — for payloads
+  too large for either — **durable object storage** whose keys are a
+  ``contracts`` vocabulary (never ad-hoc strings). Direct imports
   between `api/` and `services/` are physically impossible and must stay so.
   *(Why: this is a modular monolith with CQRS-ish separation — the cheapest
   architecture that scales to this product class. Microservices are refused.)*
@@ -82,6 +88,13 @@ kernel. `contracts` may import `models` for typing only. `gates` and `shared`
 may import `models` and `contracts`. The kernel NEVER imports an app tree.
 App trees import the kernel only through the barrels below.
 
+**Local DI interfaces are NOT kernel contracts.** A deployable's own
+dependency-inversion interfaces (connector contracts, data contracts,
+service seams) live in **`app/ports/<domain>/`** — never in `app/contracts`,
+which is exclusively the kernel-contracts barrel. This kills the name
+collision by construction: the vendor step never merges barrels, it fails
+fast if `app/<kernel-pkg>` carries local members.
+
 **The single runtime namespace.** Application code — dev and prod alike —
 imports kernel code as **`app.*`**: `from app.models import Listing`,
 `from app.gates import ListingWriter`, `from app.contracts import CAP_ADS`,
@@ -110,10 +123,10 @@ api/app/                                services/app/
   controllers/<domain>/                   jobs/<domain>/          ← the worker's "controllers"
   requests/<domain>/                      services/<domain>/
   resources/<domain>/                     repositories/<domain>/
-  services/<domain>/                      contracts/ (local DI contracts)
+  services/<domain>/                      ports/<domain>/  (local DI interfaces)
   repositories/<domain>/                  commands/<area>/
   policies/  events/  listeners/          providers/
-  jobs/  providers/                       support/<theme>/
+  jobs/  ports/<domain>/  providers/      support/<theme>/
   support/<theme>/                        models|contracts|gates|shared  (kernel barrels)
   models|contracts|gates|shared (barrels)
 services/packages/<plugin>/             ← vertical slices (§4)
@@ -175,7 +188,9 @@ leaking and the leak is the bug.
 ## 5. Code law
 
 - **The flow, one direction only:**
-  `controller | job → FormRequest → service (use-case) → repository → model`.
+  `controller → FormRequest → service (use-case) → repository → model`;
+  `job → validated envelope payload → service (use-case) → repository → model`.
+  (Jobs never touch FormRequest — their input contract is the envelope.)
   Controllers and jobs are thin: validate, call one use-case, shape the
   response — zero business branching. Services orchestrate. Repositories own
   ALL SQL/ORM queries. Models carry only their own intrinsic state
@@ -239,7 +254,7 @@ leaking and the leak is the bug.
 | Pattern | Where | Why |
 |---|---|---|
 | Repository | all persistence | one door per table |
-| FormRequest + response envelope | every input/output | validation & shape in one place; errors are always 422 |
+| FormRequest + response envelope | every input/output | validation & shape in one place; validation errors are always 422 |
 | Envelope/Body | every cross-process job | serialization shell ≠ work; shells stay importable app-free |
 | Outbox + Relay | queue publishing | dispatch survives broker loss; the relay is the only publisher |
 | State machine + CAS lease | long-running sync (plan→push→verify) | crash-safe progress, no double work |
@@ -322,6 +337,13 @@ gain product prefixes, semantics may not):
 Weakening a guard IS a doctrine amendment. An agent that makes a red guard
 green by deleting its assertion has failed the task.
 
+**Allowlists are sunset debts, not exceptions.** A guard may carry a pinned
+allowlist ONLY for violations that predate the rule; every allowlist is
+shrink-only (adding an entry is a doctrine amendment), and its size is part
+of the guard's output. "Local exceptions do not exist" (§13) refers to
+UNTRACKED deviations — a dated, counted, shrink-only allowlist is the
+tracked path to zero.
+
 ## 12. New product bootstrap
 
 1. Create the workspace: `api/ services/ commons/ frontend/ docs/
@@ -353,3 +375,11 @@ Seams + rm-rf test, size budgets, mandated/banned patterns, guard pack.*
 *Changelog — 1.1 (2026-07-23): §5.1 The Import Law — top-placement with the
 three tagged exceptions, graph-decided hoisting, barrel form for consumers /
 direct path for siblings, generated barrels; three new guards in §11.*
+
+*Changelog — 1.2 (2026-07-23): §1 backend scope + durable object-storage
+seam; §2 `app/ports` for local DI interfaces (kernel `app/contracts` is
+collision-free by construction, vendor fails fast instead of merging); §3
+domain count as review threshold + sanctioned transport/flow-stage
+groupings; §5 job flow via validated envelope payload (never FormRequest);
+§6 422 wording; §7 pre-launch vs applied-immutable migration modes; §11
+allowlists as shrink-only sunset debts. Review credit: external 5.6 audit.*
