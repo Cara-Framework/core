@@ -196,13 +196,41 @@ leaking and the leak is the bug.
   `XResource`, `VerbNounJob`, events past-tense with no suffix). Functions
   snake_case, constants UPPER_SNAKE, routes kebab-case, domain folders
   lowercase English.
-- **Imports** at file top, four tiers in order: stdlib → third-party →
-  framework/kernel (`cara`, `app.models`, `app.contracts`, …) → app locals.
-  Function-local imports only for documented cycle-breaking and inside
-  envelope bodies (§8).
+- **Imports** follow the Import Law (§5.1).
 - **No backward-compat shims, ever.** Movers migrate every caller in the
   same change. **Fix root causes** — a workaround that "works" is debt with
   interest.
+
+### 5.1 The Import Law
+
+- **Placement.** Every import lives at the top of the file, in four tiers:
+  stdlib → third-party → framework/kernel (`cara`, `app.models`,
+  `app.contracts`, …) → app locals. A function-local import is legal in
+  exactly three cases, and MUST carry a `# local:` reason tag naming which:
+  1. **envelope bodies** (§8 — shells must parse without the app installed),
+  2. **proven cycle-breakers** (`# local: cycle with <module>`),
+  3. **heavy/optional dependencies** (browser engines, connector SDKs —
+     boot speed and optionality).
+  An untagged function-local import is a guard failure. *(Why: lazy imports
+  hide dependency direction and rot into superstition.)*
+- **Hoisting is decided by the import graph, not by feel.** A local import
+  may move to the top iff adding that edge to the module-level import graph
+  (barrels included as nodes) creates no cycle. Tooling computes this; a
+  cold-import sweep of every module verifies it. Nobody argues about
+  circularity from memory.
+- **Form.** Consumers import through the barrel: `from app.services import
+  ProductService`, `from app.gates import ListingWriter` — never a deep path
+  from outside the owning layer. **Siblings inside a layer/package import by
+  direct submodule path** (`from app.services.catalog.ProductService import
+  ProductService`) — during barrel `__init__` execution the package is only
+  partially initialized, and a sibling reaching through the barrel is a
+  boot-order crash. The kernel is consumed only through the `app.*` barrels
+  (§2).
+- **Barrels are generated and verified, never hand-curated.** Every public
+  name is re-exported (domain `__init__` AND layer barrel), `__all__`
+  alphabetical, completeness guard-enforced. A public name missing from its
+  barrel is a bug even before anyone imports it — name/submodule shadowing
+  taught us this the hard way.
 
 ## 6. Patterns — mandated and banned
 
@@ -281,6 +309,9 @@ gain product prefixes, semantics may not):
 | `test_layering_guards` | flow direction, raw-SQL home, model-import ban, purity allowlist, kernel-membership counts (single-consumer eviction), app↛gates/persistence |
 | `test_import_wiring` | core↛packages, composition-root mounting, barrel-mid-load ban |
 | `test_import_ordering_convention` | the four import tiers |
+| `test_import_form` | barrel form for consumers, direct path for siblings, no deep paths from outside a layer (§5.1) |
+| `test_inline_imports` | every function-local import carries a legal `# local:` reason tag (§5.1) |
+| barrel completeness | every public name re-exported, `__all__` alphabetical (§5.1) |
 | `test_domain_registry` | mirror rule + registry membership (§3) |
 | `test_vertical_slice_seams` | plugin names only at the Four Seams; brand-blind contracts; rm-rf simulation |
 | `test_queue_topology` / deploy topology | queue ownership, worker/image pairing, relay/scheduler separation |
@@ -318,3 +349,7 @@ for everyone or the code is wrong.
 synkronus/cheapa architecture program: kernel membership + dev-only vendor
 story, single runtime namespace, mirror rule + domain registry, Four Legal
 Seams + rm-rf test, size budgets, mandated/banned patterns, guard pack.*
+
+*Changelog — 1.1 (2026-07-23): §5.1 The Import Law — top-placement with the
+three tagged exceptions, graph-decided hoisting, barrel form for consumers /
+direct path for siblings, generated barrels; three new guards in §11.*
