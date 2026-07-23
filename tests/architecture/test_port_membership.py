@@ -74,3 +74,14 @@ def test_supporting_value_class_in_port_module_is_not_itself_a_port(tmp_path):
         "class AccessContract:\n    pass\n",
     )
     assert PortMembership.scan(manifest) == []
+
+
+def test_file_level_boundary_reason_applies_to_its_contract(tmp_path):
+    manifest = make_manifest(tmp_path, layers=("ports", "services"))
+    write(
+        tmp_path / "app" / "ports" / "catalog" / "AccessContract.py",
+        "# port: consumer-owned persistence boundary\n"
+        '"""Access boundary."""\n\n\n'
+        "class AccessContract:\n    pass\n",
+    )
+    assert PortMembership.scan(manifest) == []

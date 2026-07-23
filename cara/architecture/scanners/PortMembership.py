@@ -30,17 +30,8 @@ from cara.architecture.Manifest import Manifest
 PORTS_LAYER = "ports"
 
 
-def _leading_comment_block(lines: list[str], lineno: int) -> str:
-    """The class def line plus any contiguous comment lines directly above it."""
-    start = lineno - 1
-    i = start - 1
-    while i >= 0 and lines[i].strip().startswith("#"):
-        i -= 1
-    return "\n".join(lines[i + 1 : lineno])
-
-
 def _port_classes(manifest: Manifest) -> list[tuple[str, str, int, str]]:
-    """(class name, repo-relative file, lineno, leading-comment-block) for
+    """(class name, repo-relative file, lineno, source) for
     every top-level ``*Contract`` class declared under the ports layer."""
     ports_dir = manifest.roots.app / PORTS_LAYER
     out: list[tuple[str, str, int, str]] = []
@@ -51,12 +42,10 @@ def _port_classes(manifest: Manifest) -> list[tuple[str, str, int, str]]:
         if tree is None:
             continue
         source = path.read_text(encoding="utf-8")
-        lines = source.splitlines()
         rel = relpath(path, manifest.roots.deployable)
         for node in tree.body:
             if isinstance(node, ast.ClassDef) and node.name.endswith("Contract"):
-                block = _leading_comment_block(lines, node.lineno)
-                out.append((node.name, rel, node.lineno, block))
+                out.append((node.name, rel, node.lineno, source))
     return out
 
 
