@@ -25,7 +25,11 @@ def _write_manifest(tmp_path, **fields) -> str:
         "    deployable='api',\n"
         "    roots=ManifestRoots(deployable=ROOT, app=ROOT / 'app'),\n"
         "    layers=('services',),\n"
+        "    domain_layers=('services',),\n"
         "    domains={'catalog': 'Catalog domain.'},\n"
+        "    scan_plugin_string_literals=True,\n"
+        "    kernel_barrel_packages=frozenset(),\n"
+        "    seam_kernel_packages=frozenset(),\n"
         f"{extra}"
         ")\n",
     )

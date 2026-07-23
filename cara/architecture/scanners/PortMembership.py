@@ -70,20 +70,21 @@ def _base_names(node: ast.ClassDef) -> set[str]:
     return names
 
 
-def _implementor_count(manifest: Manifest, port_name: str, port_file: str) -> int:
-    files_implementing: set[str] = set()
-    for base in manifest.roots.scan_dirs():
+def _implementor_index(manifest: Manifest) -> dict[str, set[str]]:
+    """Base class name -> distinct implementation files, in one tree walk."""
+    implementations: dict[str, set[str]] = {}
+    for base in manifest.roots.scan_dirs("port_membership"):
         for path in python_files(base):
             rel = relpath(path, manifest.roots.deployable)
-            if rel == port_file:
-                continue
             tree = parse(path)
             if tree is None:
                 continue
             for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef) and port_name in _base_names(node):
-                    files_implementing.add(rel)
-    return len(files_implementing)
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                for base_name in _base_names(node):
+                    implementations.setdefault(base_name, set()).add(rel)
+    return implementations
 
 
 class PortMembership:
@@ -94,10 +95,11 @@ class PortMembership:
         if PORTS_LAYER not in manifest.layers:
             return []
         findings: list[Finding] = []
+        implementations = _implementor_index(manifest)
         for name, rel, lineno, block in _port_classes(manifest):
             if manifest.port_membership_tags in block:
                 continue
-            count = _implementor_count(manifest, name, rel)
+            count = len(implementations.get(name, set()) - {rel})
             if count < 2:
                 findings.append(
                     Finding(

@@ -38,6 +38,13 @@ def python_files(base: Path) -> list[Path]:
 
 def relpath(path: Path, root: Path) -> str:
     """POSIX-style path relative to ``root`` (falls back to the name)."""
+    # Preserve the logical path through a deployable's symlinked dev kernel.
+    # Resolving first turns ``api/commons/models/Foo.py`` into a sibling path
+    # outside ``api/`` and collapses every finding to the basename.
+    try:
+        return path.absolute().relative_to(root.absolute()).as_posix()
+    except ValueError:
+        pass
     try:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
@@ -49,7 +56,7 @@ def parse(path: Path) -> ast.Module | None:
     py_compile / the test suite catches genuine syntax breakage)."""
     try:
         return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (SyntaxError, UnicodeDecodeError):
+    except SyntaxError, UnicodeDecodeError:
         return None
 
 

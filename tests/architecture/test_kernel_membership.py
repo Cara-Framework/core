@@ -87,6 +87,20 @@ def test_pure_module_without_facade_import_passes(tmp_path):
     assert KernelMembership.scan(manifest) == []
 
 
+def test_pure_module_may_import_non_stateful_name_from_facade_module(tmp_path):
+    manifest = make_manifest(
+        tmp_path,
+        pure_modules=frozenset({"ProfitMath"}),
+        side_effect_facade_roots=frozenset({"cara.facades"}),
+        side_effect_facade_names=frozenset({"DB", "Cache", "Bus"}),
+    )
+    write(
+        tmp_path / "commons" / "shared" / "ProfitMath.py",
+        "from cara.facades import Config\n\n\ndef margin():\n    return Config\n",
+    )
+    assert KernelMembership.scan(manifest) == []
+
+
 def test_single_consumer_shared_module_is_a_finding(tmp_path):
     consumer_a = tmp_path / "deployable_a" / "app"
     consumer_b = tmp_path / "deployable_b" / "app"
@@ -97,7 +111,10 @@ def test_single_consumer_shared_module_is_a_finding(tmp_path):
     manifest = make_manifest(tmp_path)
     manifest = replace(
         manifest,
-        roots=replace(manifest.roots, consumer_app_roots=(consumer_a, consumer_b)),
+        roots=replace(
+            manifest.roots,
+            consumer_roots={"a": (consumer_a,), "b": (consumer_b,)},
+        ),
     )
     write(tmp_path / "commons" / "shared" / "Fx.py", "def convert():\n    return 1\n")
     findings = KernelMembership.scan(manifest)
@@ -114,9 +131,35 @@ def test_single_consumer_allowlist_suppresses_the_finding(tmp_path):
     manifest = make_manifest(tmp_path, single_consumer_allowlist=frozenset({"Fx"}))
     manifest = replace(
         manifest,
-        roots=replace(manifest.roots, consumer_app_roots=(consumer_a, consumer_b)),
+        roots=replace(
+            manifest.roots,
+            consumer_roots={"a": (consumer_a,), "b": (consumer_b,)},
+        ),
     )
     write(tmp_path / "commons" / "shared" / "Fx.py", "def convert():\n    return 1\n")
+    assert KernelMembership.scan(manifest) == []
+
+
+def test_kernel_internal_consumer_makes_shared_module_cross_process(tmp_path):
+    from dataclasses import replace
+
+    consumer_a = tmp_path / "deployable_a" / "app"
+    consumer_b = tmp_path / "deployable_b" / "app"
+    write(consumer_a / "services" / "Uses.py", "from app.shared import Fx\n")
+    write(consumer_b / "services" / "Other.py", "X = 1\n")
+    manifest = make_manifest(tmp_path)
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            consumer_roots={"a": (consumer_a,), "b": (consumer_b,)},
+        ),
+    )
+    write(tmp_path / "commons" / "shared" / "Fx.py", "def convert():\n    return 1\n")
+    write(
+        tmp_path / "commons" / "gates" / "UsesFx.py",
+        "from commons.shared import Fx\n",
+    )
     assert KernelMembership.scan(manifest) == []
 
 

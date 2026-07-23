@@ -161,18 +161,21 @@ def _seam_filter(manifest: Manifest, rel: str, hits: list[str]) -> list[str]:
 def _scan(manifest: Manifest) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     token_re = _token_re(manifest)
-    scan_bases = [manifest.roots.app, manifest.roots.config, manifest.roots.routes]
-    scan_bases = [b for b in scan_bases if b is not None]
-    scan_bases.extend(manifest.roots.kernel.values())
+    scan_bases = list(manifest.roots.scan_dirs("vertical_slice_seams"))
+    scan_bases.extend(
+        pkg_dir
+        for pkg, pkg_dir in manifest.roots.kernel.items()
+        if pkg in manifest.seam_kernel_packages
+    )
     for base in scan_bases:
         for path in python_files(base):
             tree = parse(path)
             if tree is None:
                 continue
             rel = relpath(path, manifest.roots.deployable)
-            hits = _identifier_hits(rel, tree, token_re) + _string_literal_hits(
-                tree, token_re
-            )
+            hits = _identifier_hits(rel, tree, token_re)
+            if manifest.scan_plugin_string_literals:
+                hits += _string_literal_hits(tree, token_re)
             hits = _seam_filter(manifest, rel, hits)
             if hits:
                 found[rel] = hits

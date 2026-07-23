@@ -7,6 +7,25 @@ from cara.architecture.scanners import BarrelCompleteness
 from ._fixtures import make_manifest, write
 
 
+def test_kernel_barrels_can_be_outside_product_barrel_scope(tmp_path):
+    manifest = make_manifest(tmp_path, kernel_barrel_packages=frozenset())
+    write(
+        tmp_path / "commons" / "shared" / "Helper.py",
+        "def helper():\n    return 1\n",
+    )
+    assert BarrelCompleteness.scan(manifest) == []
+
+
+def test_declared_but_unbound_export_is_a_finding(tmp_path):
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '__all__ = ["Ghost"]\n',
+    )
+    findings = BarrelCompleteness.scan(manifest)
+    assert any("never bound" in finding.message for finding in findings)
+
+
 def test_missing_dunder_all_is_a_finding(tmp_path):
     manifest = make_manifest(tmp_path, layers=("services",))
     write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")

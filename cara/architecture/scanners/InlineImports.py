@@ -60,7 +60,7 @@ class InlineImports:
     def scan(manifest: Manifest) -> list[Finding]:
         findings: list[Finding] = []
         envelope_dirs = _envelope_dirs(manifest)
-        scan_bases = list(manifest.roots.scan_dirs()) + list(
+        scan_bases = list(manifest.roots.scan_dirs("inline_imports")) + list(
             manifest.roots.kernel.values()
         )
         for base in scan_bases:

@@ -127,3 +127,21 @@ def test_clean_registry_passes(tmp_path):
     )
     write(tmp_path / "app" / "services" / "user" / "Thing.py", "class Thing:\n    pass\n")
     assert DomainRegistry.scan(manifest) == []
+
+
+def test_cross_cutting_layer_is_not_treated_as_a_domain_layer(tmp_path):
+    manifest = make_manifest(
+        tmp_path,
+        layers=("services", "support"),
+        domain_layers=("services",),
+        domains={"catalog": "Catalog domain."},
+    )
+    write(
+        tmp_path / "app" / "services" / "catalog" / "Thing.py",
+        "class Thing:\n    pass\n",
+    )
+    write(
+        tmp_path / "app" / "support" / "http" / "Client.py",
+        "class Client:\n    pass\n",
+    )
+    assert DomainRegistry.scan(manifest) == []

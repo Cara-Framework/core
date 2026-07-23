@@ -40,12 +40,34 @@ def make_manifest(root: Path, **overrides) -> Manifest:
             )
         kernel[pkg] = pkg_dir
 
+    scanner_roots = {
+        scanner: (app, config)
+        for scanner in (
+            "import_form",
+            "import_tiers",
+            "inline_imports",
+            "port_membership",
+            "vertical_slice_seams",
+        )
+    }
+
+    layers = overrides.get("layers", ())
     defaults: dict = dict(
         product="acme",
         deployable="api",
-        roots=ManifestRoots(deployable=root, app=app, config=config, kernel=kernel),
-        layers=(),
+        roots=ManifestRoots(
+            deployable=root,
+            app=app,
+            config=config,
+            scanner_roots=scanner_roots,
+            kernel=kernel,
+        ),
+        layers=layers,
+        domain_layers=overrides.pop("domain_layers", layers),
         domains={},
+        scan_plugin_string_literals=True,
+        kernel_barrel_packages=frozenset(kernel),
+        seam_kernel_packages=frozenset(kernel),
     )
     defaults.update(overrides)
     return Manifest(**defaults)

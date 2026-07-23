@@ -51,10 +51,11 @@ class ImportForm:
     @staticmethod
     def _no_deep_imports_from_outside_a_layer(manifest: Manifest) -> list[Finding]:
         findings: list[Finding] = []
+        exercised_allowlist: set[tuple[str, str]] = set()
         app = manifest.roots.app
         layers = manifest.layers
         deep_prefixes = tuple(f"app.{layer}." for layer in layers)
-        for base in manifest.roots.scan_dirs():
+        for base in manifest.roots.scan_dirs("import_form"):
             for path in python_files(base):
                 if path.name == "__init__.py":
                     continue
@@ -82,6 +83,12 @@ class ImportForm:
                         continue
                     if rel.startswith(f"app/{matched_layer}/"):
                         continue  # sibling — direct path is the rule there
+                    if all(alias.name.startswith("_") for alias in node.names):
+                        continue  # private symbols deliberately have no barrel home
+                    allowlist_key = (rel, module)
+                    if allowlist_key in manifest.deep_import_allowlist:
+                        exercised_allowlist.add(allowlist_key)
+                        continue
                     target = app / Path(*module.split(".")[1:])
                     if target.is_dir():
                         continue  # domain/package barrel import — legal
@@ -96,6 +103,14 @@ class ImportForm:
                             f"app.{matched_layer} barrel",
                         )
                     )
+        for rel, module in sorted(manifest.deep_import_allowlist - exercised_allowlist):
+            findings.append(
+                Finding(
+                    rel,
+                    0,
+                    f"stale deep-import allowlist entry for {module!r} — delete it",
+                )
+            )
         return findings
 
     @staticmethod
@@ -131,7 +146,7 @@ class ImportForm:
         findings: list[Finding] = []
         kernel_root = manifest.roots.kernel_dev_root_name
         kernel_barrels = _kernel_barrel_files(manifest)
-        for base in manifest.roots.scan_dirs():
+        for base in manifest.roots.scan_dirs("import_form"):
             for path in python_files(base):
                 rel = relpath(path, manifest.roots.deployable)
                 if rel in kernel_barrels:

@@ -32,6 +32,19 @@ def test_evasion_via_compare_literal_is_caught(tmp_path):
     assert findings and "compare-literal" in findings[0].message
 
 
+def test_product_can_preserve_identifier_only_legacy_census(tmp_path):
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=TOKENS,
+        scan_plugin_string_literals=False,
+    )
+    write(
+        tmp_path / "app" / "services" / "Check.py",
+        "def check(slug):\n    return slug == 'ebay'\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
+
+
 def test_evasion_via_dict_key_literal_is_caught(tmp_path):
     manifest = make_manifest(tmp_path, plugin_tokens=TOKENS)
     write(tmp_path / "app" / "services" / "Table.py", "LANES = {\n    'ebay': 1,\n}\n")
@@ -97,6 +110,71 @@ def test_manifest_data_seam_is_exempt(tmp_path):
         "class EbayMarketplace:\n    pass\n",
     )
     assert VerticalSliceSeams.scan(manifest) == []
+
+
+def test_product_owned_extra_core_tree_is_scanned(tmp_path):
+    from dataclasses import replace
+
+    manifest = make_manifest(tmp_path, plugin_tokens=TOKENS)
+    extra = tmp_path / "discovery"
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            scanner_roots={
+                **manifest.roots.scanner_roots,
+                "vertical_slice_seams": (
+                    *manifest.roots.scan_dirs("vertical_slice_seams"),
+                    extra,
+                ),
+            },
+        ),
+    )
+    write(extra / "EbayDiscovery.py", "class EbayDiscovery:\n    pass\n")
+    findings = VerticalSliceSeams.scan(manifest)
+    assert any(finding.path == "discovery/EbayDiscovery.py" for finding in findings)
+
+
+def test_kernel_can_be_scanned_by_only_one_deployable_twin(tmp_path):
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=TOKENS,
+        seam_kernel_packages=frozenset(),
+    )
+    write(
+        tmp_path / "commons" / "models" / "EbayModel.py",
+        "class EbayModel:\n    pass\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
+
+
+def test_symlinked_kernel_keeps_deployable_relative_path(tmp_path):
+    from dataclasses import replace
+
+    shared_kernel = tmp_path / "shared-kernel"
+    write(
+        shared_kernel / "models" / "EbayModel.py",
+        "class EbayModel:\n    pass\n",
+    )
+    deployable = tmp_path / "api"
+    (deployable / "app").mkdir(parents=True)
+    (deployable / "commons").symlink_to(shared_kernel, target_is_directory=True)
+    manifest = make_manifest(tmp_path, plugin_tokens=TOKENS)
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            deployable=deployable,
+            app=deployable / "app",
+            scanner_roots={
+                **manifest.roots.scanner_roots,
+                "vertical_slice_seams": (deployable / "app",),
+            },
+            kernel={"models": deployable / "commons" / "models"},
+        ),
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert findings[0].path == "commons/models/EbayModel.py"
 
 
 def test_data_vocabulary_seam_exempts_upper_snake_slug_constants(tmp_path):

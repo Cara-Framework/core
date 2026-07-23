@@ -63,6 +63,57 @@ def test_module_object_contract_exempts_deep_import(tmp_path):
     assert ImportForm.scan(manifest) == []
 
 
+def test_private_symbol_deep_import_has_no_barrel_home(tmp_path):
+    manifest = _layered_manifest(tmp_path)
+    write(
+        tmp_path / "app" / "services" / "channels" / "Internal.py",
+        "_PRIVATE = object()\n",
+    )
+    write(
+        tmp_path / "app" / "controllers" / "Consumer.py",
+        "from app.services.channels.Internal import _PRIVATE\n",
+    )
+    assert ImportForm.scan(manifest) == []
+
+
+def test_documented_deep_import_cycle_breaker_passes(tmp_path):
+    key = (
+        "app/controllers/Consumer.py",
+        "app.services.channels.ChannelService",
+    )
+    manifest = make_manifest(
+        tmp_path,
+        layers=("controllers", "services"),
+        deep_import_allowlist=frozenset({key}),
+    )
+    write(
+        tmp_path / "app" / "services" / "channels" / "ChannelService.py",
+        "class ChannelService:\n    pass\n",
+    )
+    write(
+        tmp_path / "app" / "controllers" / "Consumer.py",
+        "from app.services.channels.ChannelService import ChannelService\n",
+    )
+    assert ImportForm.scan(manifest) == []
+
+
+def test_stale_deep_import_cycle_breaker_is_a_finding(tmp_path):
+    manifest = make_manifest(
+        tmp_path,
+        layers=("controllers", "services"),
+        deep_import_allowlist=frozenset(
+            {
+                (
+                    "app/controllers/Consumer.py",
+                    "app.services.channels.ChannelService",
+                )
+            }
+        ),
+    )
+    findings = ImportForm.scan(manifest)
+    assert any("stale deep-import allowlist" in finding.message for finding in findings)
+
+
 def test_sibling_importing_own_layer_barrel_fails(tmp_path):
     manifest = _layered_manifest(tmp_path)
     write(

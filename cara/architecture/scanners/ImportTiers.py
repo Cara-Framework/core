@@ -86,7 +86,7 @@ class ImportTiers:
     @staticmethod
     def scan(manifest: Manifest) -> list[Finding]:
         findings: list[Finding] = []
-        for base in manifest.roots.scan_dirs():
+        for base in manifest.roots.scan_dirs("import_tiers"):
             for path in python_files(base):
                 tree = parse(path)
                 if tree is None:

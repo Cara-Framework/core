@@ -12,9 +12,10 @@ A Manifest is scoped to ONE deployable (api, or services): the two
 deployables of a product each get their own ``architecture_manifest.py``,
 because their layer names, domain sets and root paths genuinely differ.
 Kernel-membership questions that span BOTH deployables (the single-consumer
-counter) are answered by pointing ``roots.consumer_app_roots`` at every
-sibling deployable's ``app/`` — a tree that isn't checked out is simply
-absent from that tuple and the corresponding check no-ops, mirroring the
+counter) are answered by grouping every process tree in
+``roots.consumer_roots`` — a process may own more than one root (for example
+``services/app`` plus ``services/packages``). A group with no checked-out
+root is ignored and the corresponding check no-ops, mirroring the
 "whole repo fact, per-service CI" contract the product guards already used.
 """
 
@@ -34,6 +35,10 @@ class ManifestRoots:
     products) and ``packages`` (plugin-shaped products, DOCTRINE §4) are
     each optional — a deployable declares only the ones it has.
 
+    ``scanner_roots`` maps each scanner id to its exact product-owned trees;
+    this is deliberately scanner-specific because import tiers, deep-import
+    form, plugin seams and port implementors do not share one honest scope.
+
     ``kernel`` maps each dev-only kernel package name (``models`` /
     ``contracts`` / ``gates`` / ``shared`` — see ``Manifest.kernel_packages``)
     to its directory. In a vendored production tree ``commons/`` no longer
@@ -46,19 +51,25 @@ class ManifestRoots:
     config: Path | None = None
     routes: Path | None = None
     packages: Path | None = None
+    scanner_roots: dict[str, tuple[Path, ...]] = field(default_factory=dict)
     kernel: dict[str, Path] = field(default_factory=dict)
-    consumer_app_roots: tuple[Path, ...] = ()
+    consumer_roots: dict[str, tuple[Path, ...]] = field(default_factory=dict)
     framework_root_name: str = "cara"
     kernel_dev_root_name: str = "commons"
     local_root_names: tuple[str, ...] = ("app", "config", "routes", "packages")
 
-    def scan_dirs(self) -> tuple[Path, ...]:
-        """Every top-level tree a consumer-facing scanner should walk."""
-        return tuple(
-            p
-            for p in (self.app, self.config, self.routes, self.packages)
-            if p is not None
-        )
+    def scan_dirs(self, scanner: str) -> tuple[Path, ...]:
+        """Exact product-owned trees governed by ``scanner``.
+
+        Import-tier, import-form, inline-import, port-membership and plugin-seam
+        guards intentionally have different scopes. Requiring an explicit map
+        prevents a scanner from silently skipping a product-owned top-level
+        tree or accidentally treating plugin packages as core.
+        """
+        try:
+            return self.scanner_roots[scanner]
+        except KeyError as exc:
+            raise ValueError(f"scanner roots are not declared for {scanner!r}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,8 +96,11 @@ class Manifest:
     Field-by-field mapping to what scanners used to hardcode:
 
     * ``roots`` — every path a scanner walks (see :class:`ManifestRoots`).
-    * ``layers`` — this deployable's domain-partitioned layer names,
-      ports included (``("controllers", "ports", "repositories", ...)``).
+    * ``layers`` — every barrel/import-governed layer, ports included
+      (``("controllers", "ports", "repositories", ...)``).
+    * ``domain_layers`` — the subset partitioned by ``domains`` / ``flows``.
+      Cross-cutting ``support`` trees remain governed by import and barrel
+      rules without being misclassified as business domains.
     * ``domains`` / ``flows`` — the ``app/domains.py`` / ``app/flows.py``
       registries (DOCTRINE §3): domain name → charter, flow-stage name →
       charter. A layer folder must be a key of one or the other.
@@ -94,6 +108,9 @@ class Manifest:
       (``user``, ``platform``, ``billing``, ``shared``); each must be a
       ``domains`` key.
     * ``kernel_packages`` — the exactly-four kernel package names (§2).
+      ``kernel_barrel_packages`` and ``seam_kernel_packages`` select which of
+      them participate in those scanners; API/worker twins can split a
+      whole-product guard without duplicating findings.
     * ``plugin_tokens`` — the brand/vendor slugs the seam scanner polices.
     * ``seam_allowlists`` — dated, shrink-only sunset debts, keyed by
       scanner id (``"vertical_slice_seams"``, ``"kernel_direction"``, ...),
@@ -117,7 +134,11 @@ class Manifest:
     deployable: str
     roots: ManifestRoots
     layers: tuple[str, ...]
+    domain_layers: tuple[str, ...]
     domains: dict[str, str]
+    scan_plugin_string_literals: bool
+    kernel_barrel_packages: frozenset[str]
+    seam_kernel_packages: frozenset[str]
     flows: dict[str, str] = field(default_factory=dict)
     universal_domains: frozenset[str] = frozenset()
     kernel_packages: frozenset[str] = frozenset(
@@ -140,7 +161,13 @@ class Manifest:
     job_roots: tuple[str, ...] = ("jobs",)
     idempotency_field_name: str = "idempotency_params"
     side_effect_facade_roots: frozenset[str] = frozenset()
+    # Imported names to police within those facade modules. Empty means every
+    # imported name, for products whose facade module is itself the boundary.
+    side_effect_facade_names: frozenset[str] = frozenset()
     third_party_packages: frozenset[str] = frozenset()
+    # Dated cycle-breakers where a consumer must import a concrete module
+    # instead of its layer/domain barrel. Entries are (consumer path, module).
+    deep_import_allowlist: frozenset[tuple[str, str]] = frozenset()
 
     @classmethod
     def load(cls, path: Path) -> Manifest:

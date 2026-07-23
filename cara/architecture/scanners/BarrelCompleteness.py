@@ -24,6 +24,7 @@ itself a Finding (nothing generated it, or generation was hand-reverted).
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from cara.architecture._ast_utils import (
@@ -66,6 +67,26 @@ def _expected_exports(pkg_dir: Path, module_objects: set[str]) -> set[str]:
     return expected
 
 
+def _bound_names(tree: ast.Module) -> set[str]:
+    bound: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            bound.update(alias.asname or alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            bound.update(
+                (alias.asname or alias.name).split(".")[0] for alias in node.names
+            )
+        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.Assign):
+            bound.update(
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            )
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            bound.add(node.target.id)
+    return bound
+
+
 def _check_package(pkg_dir: Path, manifest: Manifest) -> list[Finding]:
     init = pkg_dir / "__init__.py"
     tree = parse(init)
@@ -100,6 +121,16 @@ def _check_package(pkg_dir: Path, manifest: Manifest) -> list[Finding]:
         )
     if declared != sorted(declared):
         findings.append(Finding(rel, 0, "__all__ is not alphabetically sorted"))
+    unbound = sorted(set(declared) - _bound_names(tree))
+    if unbound:
+        findings.append(
+            Finding(
+                rel,
+                0,
+                "__all__ contains name(s) never bound by the barrel: "
+                + ", ".join(unbound),
+            )
+        )
     return findings
 
 
@@ -110,7 +141,11 @@ class BarrelCompleteness:
     def scan(manifest: Manifest) -> list[Finding]:
         findings: list[Finding] = []
         roots: list[Path] = [manifest.roots.app / layer for layer in manifest.layers]
-        roots.extend(manifest.roots.kernel.values())
+        roots.extend(
+            pkg_dir
+            for pkg, pkg_dir in manifest.roots.kernel.items()
+            if pkg in manifest.kernel_barrel_packages
+        )
         for root in roots:
             for pkg_dir in _walk_barrel_dirs(root):
                 findings.extend(_check_package(pkg_dir, manifest))

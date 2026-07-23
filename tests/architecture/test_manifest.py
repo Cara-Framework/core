@@ -22,7 +22,11 @@ def test_load_reads_the_module_level_manifest(tmp_path):
         "    deployable='api',\n"
         "    roots=ManifestRoots(deployable=ROOT, app=ROOT / 'app'),\n"
         "    layers=('services',),\n"
+        "    domain_layers=('services',),\n"
         "    domains={'catalog': 'Catalog domain.'},\n"
+        "    scan_plugin_string_literals=True,\n"
+        "    kernel_barrel_packages=frozenset(),\n"
+        "    seam_kernel_packages=frozenset(),\n"
         ")\n",
     )
     loaded = Manifest.load(manifest_file)
@@ -48,7 +52,10 @@ def test_load_is_boot_free_no_app_config_required(tmp_path):
         "MANIFEST = Manifest(\n"
         "    product='acme', deployable='api',\n"
         "    roots=ManifestRoots(deployable=Path('.'), app=Path('./app')),\n"
-        "    layers=(), domains={},\n"
+        "    layers=(), domain_layers=(), domains={},\n"
+        "    scan_plugin_string_literals=True,\n"
+        "    kernel_barrel_packages=frozenset(),\n"
+        "    seam_kernel_packages=frozenset(),\n"
         ")\n",
     )
     # No environment variables, no config/.env, no DB — must not raise.

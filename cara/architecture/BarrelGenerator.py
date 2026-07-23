@@ -466,6 +466,8 @@ class BarrelGenerator:
             )
 
         for pkg_name, pkg_dir in manifest.roots.kernel.items():
+            if pkg_name not in manifest.kernel_barrel_packages:
+                continue
             if not pkg_dir.is_dir():
                 continue
             prefix = f"{manifest.roots.kernel_dev_root_name}.{pkg_name}"

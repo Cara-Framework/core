@@ -57,7 +57,7 @@ class DomainRegistry:
     def _unregistered_layer_folders(manifest: Manifest) -> list[Finding]:
         findings: list[Finding] = []
         known = set(manifest.domains) | set(manifest.flows)
-        for layer in manifest.layers:
+        for layer in manifest.domain_layers:
             for folder in _layer_domain_dirs(manifest, layer):
                 if folder.name not in known:
                     findings.append(
@@ -79,7 +79,7 @@ class DomainRegistry:
                     child.suffix == ".py" and child.stem != "__init__"
                     for child in (manifest.roots.app / layer / name).rglob("*.py")
                 )
-                for layer in manifest.layers
+                for layer in manifest.domain_layers
                 if (manifest.roots.app / layer / name).is_dir()
             )
             if not has_member:
@@ -116,7 +116,7 @@ class DomainRegistry:
     @staticmethod
     def _loose_layer_root_files(manifest: Manifest) -> list[Finding]:
         findings: list[Finding] = []
-        for layer in manifest.layers:
+        for layer in manifest.domain_layers:
             base = manifest.roots.app / layer
             if not base.is_dir():
                 continue
