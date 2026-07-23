@@ -18,11 +18,25 @@ class ModuleManager:
     _app_module_base: str = "app"
     _routes_module_base: str = "routes"
     _config_module_base: str = "config"
+    # Models live in the shared ``commons.models`` package so both deployables
+    # (api/, services/) import IDENTICAL classes. This is therefore configured
+    # independently of the (per-deployable) app base. Config-overridable.
+    _models_module_base: str = "commons.models"
 
     @staticmethod
     def set_app_module_base(module_path: str) -> None:
         """Set the base module path for app components (default: 'app')."""
         ModuleManager._app_module_base = module_path
+
+    @staticmethod
+    def set_models_module_base(module_path: str) -> None:
+        """Set the base module path for models (default: 'commons.models').
+
+        The shared models package is not derived from the app base — product
+        Kernels may point this elsewhere, but the framework default is the
+        cross-deployable ``commons.models``.
+        """
+        ModuleManager._models_module_base = module_path
 
     @staticmethod
     def set_routes_module_base(module_path: str) -> None:
@@ -53,8 +67,13 @@ class ModuleManager:
 
     @staticmethod
     def models_module() -> str:
-        """Return models module path (e.g., 'app.models')."""
-        return ModuleManager.app_module("models")
+        """Return the models module path (default: 'commons.models').
+
+        Deliberately NOT derived from the app base: models are shared across
+        the api and services deployables via ``commons.models`` so both import
+        identical classes. Config-overridable via ``set_models_module_base``.
+        """
+        return ModuleManager._models_module_base
 
     @staticmethod
     def commands_module() -> str:

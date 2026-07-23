@@ -51,6 +51,14 @@ class MigrateCommand(CommandBase):
             # Ensure migrations table exists
             migration_manager.create_table_if_not_exists()
 
+            # Integrity gate — ALWAYS, before the early return below. The
+            # executor only validates applied checksums on the run/rollback
+            # path, so a plain ``migrate`` with nothing pending used to report
+            # "up to date" WITHOUT ever checking that the applied migrations
+            # still match disk. A mutated or deleted applied migration must be
+            # rejected even when there is nothing new to run.
+            self._validate_applied_migrations(migration_manager)
+
             # Check for pending migrations
             pending = migration_manager.get_unran_migrations()
             if not pending:
@@ -81,6 +89,20 @@ class MigrateCommand(CommandBase):
             # ``typer.Exit(code=1)``; the previous bare fall-through returned
             # None → exit 0, which silently masked a mid-migration failure.
             return 1
+
+    def _validate_applied_migrations(self, migration_manager: Migration) -> None:
+        """Verify every applied migration still matches disk, unconditionally.
+
+        Mirrors the guard the executor already runs on the run/rollback path
+        (``MigrationExecutor._validate_applied_checksums``) so it also fires
+        when there is nothing pending. A checksum drift or a deleted applied
+        migration file must be rejected on a plain ``migrate`` run — not
+        silently reported as "up to date". The read-only check needs no
+        migration lock; it raises ``ORMException`` (fail loud) which
+        ``handle`` maps to a non-zero exit.
+        """
+        migration_files = sorted(migration_manager.file_manager.get_migration_files())
+        migration_manager.executor._validate_applied_checksums(migration_files)
 
     def _confirm_production(self) -> bool:
         """Confirm migration in production environment."""

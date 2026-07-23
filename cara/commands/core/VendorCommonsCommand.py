@@ -75,14 +75,23 @@ class VendorCommonsCommand(CommandBase):
         self._rewrite_barrel(app_models / "__init__.py")
 
         # 3) rewrite every remaining commons.models reference across the shipped tree.
-        #    commons/support + commons/jobs stay in the image (imported as
-        #    commons.support / commons.jobs) but reference models, so scan them too.
+        #    EVERY commons subpackage that ships (support, jobs, repositories, and
+        #    whatever gets added next) is auto-discovered — a hardcoded list here
+        #    once missed commons/repositories and produced call-time
+        #    ModuleNotFoundError in the vendored image. Only ``models`` (deleted
+        #    below) and ``cara`` (the framework clone, project-agnostic — never
+        #    imports commons.models) are excluded.
         scan = [
             root / "app",
             root / "database" / "migrations",
             root / "packages",
-            commons / "support",
-            commons / "jobs",
+            *sorted(
+                child
+                for child in commons.iterdir()
+                if child.is_dir()
+                and not child.name.startswith((".", "_"))
+                and child.name not in {"models", "cara"}
+            ),
         ]
         changed = 0
         for scan_dir in scan:

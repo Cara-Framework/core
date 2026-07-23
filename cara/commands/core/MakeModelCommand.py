@@ -215,8 +215,14 @@ class {class_name}(Model):
         """Show helpful usage tips after model creation."""
         class_name = model_info["class_name"]
 
+        # Models are written to the configured models package (commons.models
+        # by default), not app.models — surface the accurate import path.
+        from cara.support import ModuleManager
+
+        models_mod = ModuleManager.models_module()
+
         self.info("\n💡 Usage Tips:")
-        self.info(f"   • Import: from app.models.{class_name} import {class_name}")
+        self.info(f"   • Import: from {models_mod}.{class_name} import {class_name}")
         self.info(f"   • Create: {class_name}.create({{'name': 'value'}})")
         self.info(f"   • Find: {class_name}.find(1)")
         self.info(f"   • All: {class_name}.all()")

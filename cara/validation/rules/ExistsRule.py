@@ -125,6 +125,35 @@ class ExistsRule(BaseRule):
         except ImportError:
             pass
 
+    @staticmethod
+    def _log_missing_model(
+        table_name: str, module_bases: list[str], candidates: set[str]
+    ) -> None:
+        """LOUD warning: model discovery failed → caller uses UNSCOPED raw SQL.
+
+        A missed model is SECURITY-relevant: the ExistsRule then runs a raw
+        SELECT with NO ``TenantScope`` applied, so an existence check can leak
+        across tenants. This must never be silent — log via the cara ``Log``
+        facade at WARNING, and if the facade isn't booted (or anything else
+        goes wrong) fall back to stderr rather than swallowing the signal.
+        """
+        names = ", ".join(sorted(n for n in candidates if n)) or "<none>"
+        pkgs = ", ".join(module_bases) or "<none>"
+        msg = (
+            f"ExistsRule: no model resolved for table '{table_name}' "
+            f"(tried classes [{names}] in packages [{pkgs}]); falling back to "
+            f"UNSCOPED raw SQL — TenantScope will NOT be applied to this "
+            f"existence check."
+        )
+        try:
+            from cara.facades import Log
+
+            Log.warning(msg, category="cara.validation.exists")
+        except Exception:
+            import sys
+
+            print(f"WARNING: {msg}", file=sys.stderr)
+
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default exists validation message."""
         exists_params = params.get("exists", "")
@@ -160,42 +189,71 @@ class ExistsRule(BaseRule):
         Auto-discover model class based on table name.
         Converts table_name to model class name using Laravel conventions.
 
-        Tries both the per-file module layout (``app.models.<Name>``) and the
-        aggregated package layout (``app.models`` re-exports). Also tries
-        both singular- and plural-derived model names so tables like
-        ``product`` (no trailing "s") and ``users`` both resolve.
+        Resolution order, per candidate model name (both singular- and
+        plural-derived so ``product`` and ``users`` both resolve):
+
+          1. the CONFIGURED models package first — ``ModuleManager.
+             models_module()`` (defaults to ``commons.models``) — tried both
+             per-file (``<pkg>.<Name>``) and aggregated (``<pkg>`` barrel
+             re-export);
+          2. ``app.models`` as a backward-compatible fallback (same layouts).
+
+        Returns ``None`` only when nothing resolves in ANY package. That is a
+        security-relevant outcome — the caller then drops to UNSCOPED raw SQL
+        (no ``TenantScope``) — so the None path emits a LOUD warning naming the
+        table via :meth:`_log_missing_model`. A silent scope-drop is forbidden.
         """
+        # Configured package first (commons.models by default), then the legacy
+        # app.models location. De-duplicated, order preserved.
         try:
-            candidates = {
-                self._table_to_model_name(table_name),
-                self._table_to_model_name_plural(table_name),
-            }
+            from cara.support import ModuleManager
 
-            for model_name in candidates:
-                if not model_name:
-                    continue
+            configured = ModuleManager.models_module()
+        except Exception:
+            configured = "commons.models"
 
-                # 1. per-file layout: app.models.<Name>
-                try:
-                    module = __import__(f"app.models.{model_name}", fromlist=[model_name])
-                    cls = getattr(module, model_name, None)
-                    if cls is not None:
-                        return cls
-                except (ImportError, AttributeError):
-                    pass
+        module_bases: list[str] = []
+        for base in (configured, "commons.models", "app.models"):
+            if base and base not in module_bases:
+                module_bases.append(base)
 
-                # 2. aggregated layout: app.models re-exports
-                try:
-                    pkg = __import__("app.models", fromlist=[model_name])
-                    cls = getattr(pkg, model_name, None)
-                    if cls is not None:
-                        return cls
-                except (ImportError, AttributeError):
-                    pass
+        candidates = {
+            self._table_to_model_name(table_name),
+            self._table_to_model_name_plural(table_name),
+        }
 
-            return None
+        try:
+            for base in module_bases:
+                for model_name in candidates:
+                    if not model_name:
+                        continue
+
+                    # 1. per-file layout: <base>.<Name>
+                    try:
+                        module = __import__(
+                            f"{base}.{model_name}", fromlist=[model_name]
+                        )
+                        cls = getattr(module, model_name, None)
+                        if cls is not None:
+                            return cls
+                    except (ImportError, AttributeError):
+                        pass
+
+                    # 2. aggregated layout: <base> barrel re-exports
+                    try:
+                        pkg = __import__(base, fromlist=[model_name])
+                        cls = getattr(pkg, model_name, None)
+                        if cls is not None:
+                            return cls
+                    except (ImportError, AttributeError):
+                        pass
         except (ImportError, AttributeError, TypeError, RuntimeError):
-            return None
+            pass
+
+        # Reached only when no model resolved in ANY package → caller falls to
+        # UNSCOPED raw SQL. Announce loudly; never a silent TenantScope bypass.
+        self._log_missing_model(table_name, module_bases, candidates)
+        return None
 
     def _table_to_model_name_plural(self, table_name: str) -> str:
         """Treat table as already-singular (no trailing 's' strip)."""

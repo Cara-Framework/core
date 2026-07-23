@@ -123,16 +123,23 @@ class Shell:
         """Load all models from app/models directory."""
         from pathlib import Path
 
-        from cara.support import paths
+        from cara.support import ModuleManager, paths
 
         loaded_models = []
 
-        # Try different model locations
+        # Try different model locations. The configured models package
+        # (``commons.models`` by default) comes FIRST so tinker preloads the
+        # shared model surface; ``app.models`` stays as a back-compat fallback.
         model_paths = [
+            ModuleManager.models_module(),  # commons.models by default
+            "commons.models",
             "app.models",
             paths("models"),  # Use paths() helper instead of hardcoded path
             "models",
         ]
+        # De-duplicate while preserving order (models_module() may equal a literal).
+        _seen: set[str] = set()
+        model_paths = [p for p in model_paths if not (p in _seen or _seen.add(p))]
 
         for model_path in model_paths:
             try:

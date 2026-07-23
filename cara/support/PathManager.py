@@ -89,9 +89,22 @@ class PathManager:
 
     @staticmethod
     def models_path(relative: str = "") -> str:
-        """Return <base>/app/models[/relative]."""
-        return PathManager.app_path(
-            os.path.join("models", relative) if relative else "models"
+        """Return the models directory, defaulting to <base>/commons/models.
+
+        Honors ``set_path_override("models", ...)`` first — monorepo Kernels
+        point this at the shared ``commons/models`` directory, which lives
+        outside the per-deployable ``app`` subtree (mirrors how ``migrations``
+        is wired). Absent an override it defaults to ``<base>/commons/models``.
+        (Pre-W2 this returned ``<base>/app/models``.)
+        """
+        override = PathManager.get_path_override("models")
+        if override:
+            return os.path.join(override, relative) if relative else override
+        base = PathManager.base_path()
+        return (
+            os.path.join(base, "commons", "models", relative)
+            if relative
+            else os.path.join(base, "commons", "models")
         )
 
     @staticmethod
