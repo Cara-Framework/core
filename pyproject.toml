@@ -32,7 +32,7 @@ docstring-code-format = true
 # I (isort), B (bugbear), UP (pyupgrade), SIM (simplify). Framework-level
 # code should be EXEMPLARY — running the same rule set keeps the
 # foundation honest.
-select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "N"]
 
 # Per-rule carve-outs match the consumer trees so the framework
 # doesn't accidentally enforce stricter or looser policy than its
@@ -48,7 +48,12 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM"]
 #   UP015  — redundant ``open(file, "r")`` mode; stylistic.
 #   SIM108 — ternary-vs-if-else; multi-line forms preferred in
 #            framework code for readability.
-ignore = ["E501", "B008", "B027", "B904", "UP015", "SIM108"]
+ignore = [
+    "E501", "B008", "B027", "B904", "UP015", "SIM108",
+    "N999", # PascalCase module names follow the Laravel-style class convention.
+    "N818", # Framework exceptions intentionally omit the redundant Error suffix.
+    "N812", # Type-like imports retain their class-oriented names.
+]
 
 [tool.ruff.lint.isort]
 # Framework code only depends on stdlib + third-party — there is no
@@ -63,7 +68,16 @@ known-first-party = ["cara"]
 "__init__.py" = ["F401", "F403", "I001", "I002"]
 # Test fixtures legitimately use ``Exception`` as catch-all to assert
 # error surfaces; bugbear B017/B018 fire on intentional patterns.
-"tests/**/*.py" = ["B017", "B018"]
+"tests/**/*.py" = ["B017", "B018", "N"]
 # ``cara/eloquent/query/QueryBuilder.py`` contains documented late imports
 # used to unwind the ORM's model/query cycle.
 "cara/eloquent/query/QueryBuilder.py" = ["E402", "F401", "F403", "F405"]
+# These names are runtime conventions or class-valued bindings, not ordinary locals.
+"cara/container/Container.py" = ["N806"]
+"cara/eloquent/concerns/MakesPrunable.py" = ["N802"]
+"cara/eloquent/concerns/MakesPublicId.py" = ["N802"]
+"cara/eloquent/scopes/MakesSoftDeletes.py" = ["N802"]
+"cara/eloquent/scopes/MakesTenantScope.py" = ["N802"]
+"cara/eloquent/scopes/MakesTimestamps.py" = ["N802"]
+"cara/eloquent/relationships/__init__.py" = ["N813"]
+"cara/testing/__init__.py" = ["N813"]

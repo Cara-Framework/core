@@ -1,18 +1,4 @@
-"""Regression: the Cara ``Logger`` must interpolate printf-style ``*args``.
-
-The public logging API (``Log.error("failed: %s", exc)``) and the
-contract (``*args`` = "format arguments for the message") promise that
-positional args are interpolated into the message template. The test
-double ``LogFake`` already implements this. The real ``Logger``, however,
-accepted ``*args`` on every public method and then **dropped them** —
-``_log`` never received or applied them. Result: every
-``Log.x("...%s...", val)`` call across the codebase logged the literal
-template and silently lost ``val`` (worst on failure paths feeding
-Sentry / AlertSink / ``report()``).
-
-This locks in the fix: ``Logger`` now mirrors ``LogFake`` — ``message %
-args`` with a lossless append fallback on mismatch.
-"""
+"""Logger message formatting and caller-label contracts."""
 
 from __future__ import annotations
 
@@ -52,6 +38,20 @@ class TestInterpolateHelper:
         out = Logger._interpolate("failed", ({"user_id": 7},))
         assert "failed" in out
         assert "user_id" in out
+
+
+class TestModuleDisplayName:
+    """Caller labels preserve class-style capitals and normalize snake case."""
+
+    def test_preserves_camel_case(self) -> None:
+        assert Logger._module_display_name("app.support.MarketplaceRegistry") == (
+            "MarketplaceRegistry"
+        )
+
+    def test_normalizes_snake_case(self) -> None:
+        assert Logger._module_display_name("app.support.marketplace_registry") == (
+            "MarketplaceRegistry"
+        )
 
 
 class TestPublicMethodsForwardArgs:

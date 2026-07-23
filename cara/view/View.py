@@ -118,13 +118,11 @@ class View:
         return self.flush_state()
 
     def add_namespace(self, namespace: str, hints: list[str]) -> View:
-        """Add namespace for view location."""
-        # TODO: Implementation for view namespaces
+        """Reserved fluent API; namespaced view lookup is not supported."""
         return self
 
     def replace_namespace(self, namespace: str, hints: list[str]) -> View:
-        """Replace namespace hints."""
-        # TODO: Implementation for replacing view namespaces
+        """Reserved fluent API; namespaced view lookup is not supported."""
         return self
 
     # Private helper methods

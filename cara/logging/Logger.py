@@ -142,6 +142,18 @@ class Logger(Logger):
         }
     )
 
+    @staticmethod
+    def _module_display_name(module_name: str) -> str:
+        """Return a readable module label without damaging existing capitals."""
+        leaf = module_name.rsplit(".", 1)[-1]
+        if not leaf:
+            return "App"
+        if "_" in leaf:
+            return "".join(
+                part[:1].upper() + part[1:] for part in leaf.split("_") if part
+            )
+        return leaf[:1].upper() + leaf[1:]
+
     def _get_caller_info(self) -> tuple[str, str]:
         """Get caller module and line info efficiently."""
         frame = inspect.currentframe()
@@ -162,9 +174,7 @@ class Logger(Logger):
                     module_name = frame.f_globals.get("__name__", "")
                     # Skip frames from cara.logging.* modules
                     if not module_name.startswith("cara.logging"):
-                        simple_name = (
-                            module_name.split(".")[-1].replace("_", "").capitalize()
-                        )
+                        simple_name = self._module_display_name(module_name)
                         return simple_name, str(frame.f_lineno)
 
                 # Move up one frame
@@ -175,7 +185,7 @@ class Logger(Logger):
 
             # Fallback: use whatever we landed on
             module_name = frame.f_globals.get("__name__", "App")
-            simple_name = module_name.split(".")[-1].replace("_", "").capitalize()
+            simple_name = self._module_display_name(module_name)
             return simple_name, str(frame.f_lineno)
         except Exception:
             return "App", "0"

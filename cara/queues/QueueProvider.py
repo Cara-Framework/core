@@ -169,7 +169,7 @@ class QueueProvider(DeferredProvider):
         from cara.queues.tracking import JobTracker
 
         def create_job_tracker():
-            Job = self.application.make("Job") if self.application.has("Job") else None
-            return JobTracker(job_model=Job)
+            job_model = self.application.make("Job") if self.application.has("Job") else None
+            return JobTracker(job_model=job_model)
 
         self.application.singleton("JobTracker", create_job_tracker)

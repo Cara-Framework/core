@@ -411,9 +411,9 @@ class RedisCacheDriver(Cache):
         If the key exists and hasn't expired, return the cached value.
         Otherwise, execute the callback, cache its result, and return it.
         """
-        _MISSING = object()
-        cached = self.get(key, _MISSING)
-        if cached is not _MISSING:
+        _missing = object()
+        cached = self.get(key, _missing)
+        if cached is not _missing:
             return cached
 
         value = callback()

@@ -19,7 +19,7 @@ class HttpException(CaraException):
 
     Usage:
         # Basic usage
-        raise HttpException("Something went wrong")
+        raise HttpException("The request could not be completed")
 
         # With status code
         raise HttpException("Not found", status_code=404)
@@ -52,15 +52,9 @@ class HttpException(CaraException):
 
         Canonical error shape: ``{error, type, ...optional context}``.
 
-        ``type`` is the machine-readable discriminator clients branch
-        on. Pre-fix, ``to_dict`` emitted only ``{error}`` for plain
-        HTTP exceptions while validation errors emitted
-        ``{error, type, errors, meta}`` and the auth middleware emitted
-        ``{error, message}`` — same status code returned two or three
-        different shapes from different framework paths, and clients
-        had to substring-match the human-readable error to tell them
-        apart. Homogenising on ``type`` makes a single client switch
-        work for every framework-raised error.
+        ``type`` is the machine-readable discriminator clients branch on.
+        Every framework-raised error includes it so clients never need to
+        classify human-readable copy.
         """
         result: dict[str, Any] = {
             "error": str(self),

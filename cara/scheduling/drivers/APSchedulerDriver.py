@@ -32,27 +32,29 @@ _logger = logging.getLogger("cara.scheduling")
 def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
     """Wrap a scheduled callback with Prometheus counter + histogram."""
     try:
-        from cara.observability.Metrics import MetricsBase as _M
+        from cara.observability.Metrics import MetricsBase
+
+        metrics = MetricsBase
     except ImportError:
-        _M = None  # type: ignore[assignment]
+        metrics = None
 
     def _observe(outcome: str, duration: float) -> None:
-        if _M is None:
+        if metrics is None:
             return
         try:
-            _M.scheduled_tasks_total.labels(task=identifier, outcome=outcome).inc()
-            _M.scheduled_task_duration_seconds.labels(task=identifier).observe(duration)
-            _M.scheduled_task_last_run_timestamp_seconds.labels(task=identifier).set(
+            metrics.scheduled_tasks_total.labels(task=identifier, outcome=outcome).inc()
+            metrics.scheduled_task_duration_seconds.labels(task=identifier).observe(duration)
+            metrics.scheduled_task_last_run_timestamp_seconds.labels(task=identifier).set(
                 _time.time()
             )
         except (AttributeError, TypeError):
             pass
 
     def _mark_tick() -> None:
-        if _M is None:
+        if metrics is None:
             return
         with contextlib.suppress(AttributeError, TypeError):
-            _M.scheduler_last_tick_timestamp_seconds.set(_time.time())
+            metrics.scheduler_last_tick_timestamp_seconds.set(_time.time())
 
     if inspect.iscoroutinefunction(callback):
 

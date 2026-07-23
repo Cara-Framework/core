@@ -486,9 +486,11 @@ class Event:
             import time as _t
 
             try:
-                from cara.observability.Metrics import MetricsBase as _M
+                from cara.observability.Metrics import MetricsBase
+
+                metrics = MetricsBase
             except (ImportError, RuntimeError):
-                _M = None  # type: ignore[assignment]
+                metrics = None
 
             _lst_name = listener.__class__.__name__
             _lst_start = _t.time()
@@ -525,13 +527,13 @@ class Event:
                 if _lst_propagate:
                     raise
             finally:
-                if _M is not None:
+                if metrics is not None:
                     try:
-                        _M.listener_invocations_total.labels(
+                        metrics.listener_invocations_total.labels(
                             listener=_lst_name,
                             outcome=_lst_outcome,
                         ).inc()
-                        _M.listener_duration_seconds.labels(
+                        metrics.listener_duration_seconds.labels(
                             listener=_lst_name,
                         ).observe(_t.time() - _lst_start)
                     except (ImportError, AttributeError):

@@ -15,6 +15,7 @@ from python_multipart import MultipartParser
 from python_multipart.multipart import parse_options_header
 
 from cara.exceptions import BadRequestException
+
 # Import the class directly from its submodule, NOT via the ``cara.http.request``
 # package barrel. The barrel's ``__init__`` imports ``.Request`` first, which pulls
 # in this very mixin — so at the moment this line runs the package namespace is only

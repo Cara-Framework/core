@@ -14,7 +14,7 @@ class Event(Protocol):
     """Protocol that every Event class must fulfill."""
 
     @classmethod
-    def name(self) -> str:
+    def name(cls) -> str:
         """Return a unique string name for this event."""
 
     def payload(self) -> dict[str, Any]:

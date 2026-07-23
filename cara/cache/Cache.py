@@ -382,9 +382,9 @@ class Cache:
         driver = self.driver(driver_name)
 
         # Fast path — hit. No lock needed when we have a value already.
-        _MISSING = object()
-        cached = driver.get(key, _MISSING)
-        if cached is not _MISSING:
+        _missing = object()
+        cached = driver.get(key, _missing)
+        if cached is not _missing:
             return cached
 
         # Drivers without ``add`` can't gate the regen with a lock.
@@ -456,8 +456,8 @@ class Cache:
 
         deadline = _time.time() + stampede_lock_seconds
         while _time.time() < deadline:
-            cached = driver.get(key, _MISSING)
-            if cached is not _MISSING:
+            cached = driver.get(key, _missing)
+            if cached is not _missing:
                 return cached
             # Lock state probe. ``add`` is the canonical atomic
             # primitive — using ``get`` then ``add`` here would race
@@ -509,9 +509,9 @@ class Cache:
         """
         driver = self.driver(driver_name)
 
-        _MISSING = object()
-        cached = driver.get(key, _MISSING)
-        if cached is not _MISSING:
+        _missing = object()
+        cached = driver.get(key, _missing)
+        if cached is not _missing:
             return None if cached == sentinel else cached
 
         result = callback()

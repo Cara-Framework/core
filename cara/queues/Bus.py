@@ -113,10 +113,10 @@ class Bus:
 
             if reserved_job_id is not None:
                 try:
-                    from cara.observability.Metrics import MetricsBase as _M
+                    from cara.observability.Metrics import MetricsBase
 
                     outcome = "fresh" if str(job_id) == reserved_job_id else "collision"
-                    _M.idempotency_total.labels(scope="unique_job", outcome=outcome).inc()
+                    MetricsBase.idempotency_total.labels(scope="unique_job", outcome=outcome).inc()
                 except Exception:
                     pass
 
@@ -125,12 +125,12 @@ class Bus:
             # explicit queue attribute. Guarded so a metrics hiccup never
             # breaks dispatch.
             try:
-                from cara.observability.Metrics import MetricsBase as _M
+                from cara.observability.Metrics import MetricsBase
 
                 _queue_lbl = (
                     queue or routing_key or getattr(job, "queue", None) or "unknown"
                 )
-                _M.queue_dispatches_total.labels(
+                MetricsBase.queue_dispatches_total.labels(
                     queue=str(_queue_lbl),
                     job_class=job.__class__.__name__,
                 ).inc()

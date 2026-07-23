@@ -253,7 +253,6 @@ class BaseGrammar:
 
         return self
 
-    # TODO: Columnize?
     def _get_multiple_columns(self, columns):
         """
         Compiles a string or a list of strings into the grammars column syntax.
@@ -319,7 +318,6 @@ class BaseGrammar:
 
         return sql
 
-    # TODO: Clean
     def _compile_key_value_equals(self, qmark=False):
         """
         Compiles key value pairs.
@@ -941,7 +939,6 @@ class BaseGrammar:
         """Clean up and return the compiled SQL string (qmark variant)."""
         return _MULTI_SPACE_RE.sub(" ", self._sql.strip())
 
-    # TODO: Inspect this can't just be used by another method. seems duplicative
     def process_columns(self, separator="", action="select", qmark=False):
         """
         Specifies the columns in a selection expression.
@@ -983,7 +980,6 @@ class BaseGrammar:
 
         return sql.rstrip(",").rstrip(", ")
 
-    # TODO: Duplicative?
     def process_values(self, separator="", qmark=False):
         """
         Compiles column values for insert expressions.

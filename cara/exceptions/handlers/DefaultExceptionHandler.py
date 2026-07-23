@@ -382,9 +382,9 @@ class DefaultExceptionHandler:
             # baseline default (defence-in-depth) AND explicit None
             # strips (operator's documented opt-out path). Mirrors the
             # config-loader-shaped semantics across both code paths.
-            _UNSET = object()
-            custom_hsts = config("security.security.hsts", _UNSET)
-            if custom_hsts is _UNSET:
+            _unset = object()
+            custom_hsts = config("security.security.hsts", _unset)
+            if custom_hsts is _unset:
                 # Unconfigured — keep ``_SH_DEFAULT_HSTS`` already set above.
                 pass
             elif custom_hsts is None:

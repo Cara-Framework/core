@@ -21,8 +21,14 @@ from cara.decorators import _run_after, _run_before, _run_on_error
 class CommandRunner:
     """Handles Typer command registration and execution, including hooks and full-traceback on errors."""
 
-    def __init__(self, application: Any):
+    def __init__(
+        self,
+        application: Any,
+        *,
+        instrument_commands: bool = True,
+    ):
         self.application = application
+        self.instrument_commands = instrument_commands
         self.console_app = typer.Typer(help="Cara CLI")
 
     def run(self):
@@ -183,7 +189,7 @@ class CommandRunner:
 
         # Map ``"integer"``/``"string"``/``"bool"`` to real types so the
         # legacy string spellings still work alongside ``type=int``.
-        _TYPE_ALIASES: dict[str, type] = {
+        type_aliases: dict[str, type] = {
             "int": int,
             "integer": int,
             "str": str,
@@ -197,15 +203,15 @@ class CommandRunner:
             "flag": bool,
         }
 
-        _SENTINEL = object()
+        sentinel = object()
         parsed: list[tuple[str, list[str], Any, str, type]] = []
         for item in items:
             key = item.get("name", "")
             desc = item.get("help", "") or ""
             explicit_type = item.get("type")
             if isinstance(explicit_type, str):
-                explicit_type = _TYPE_ALIASES.get(explicit_type.strip().lower(), str)
-            explicit_default = item.get("default", _SENTINEL)
+                explicit_type = type_aliases.get(explicit_type.strip().lower(), str)
+            explicit_default = item.get("default", sentinel)
             is_flag = bool(item.get("is_flag", False))
 
             if "=" in key:
@@ -225,13 +231,13 @@ class CommandRunner:
             # legacy dict-format keys.
             if is_flag:
                 ann: type = bool
-                if explicit_default is not _SENTINEL:
+                if explicit_default is not sentinel:
                     final_default: Any = bool(explicit_default)
                 else:
                     final_default = False
             elif explicit_type is not None:
                 ann = explicit_type
-                if explicit_default is not _SENTINEL:
+                if explicit_default is not sentinel:
                     final_default = explicit_default
                 elif has_inline:
                     try:
@@ -245,7 +251,7 @@ class CommandRunner:
                     # ``Optional[T]`` (None) so the CLI accepts a value
                     # and the command can detect "not provided" cleanly.
                     final_default = None
-            elif explicit_default is not _SENTINEL:
+            elif explicit_default is not sentinel:
                 ann = type(explicit_default) if explicit_default is not None else str
                 final_default = explicit_default
             elif has_inline:
@@ -402,16 +408,20 @@ class CommandRunner:
                 k: v for k, v in cli_kwargs.items() if k in handle_sig.parameters
             }
 
-            # Prometheus command-invocation instrumentation. Wraps
-            # handle() so every CLI call is counted + timed by name,
-            # regardless of whether it runs sync or async. Bounded
-            # cardinality (``name`` is a static registered command).
+            # Full application runners instrument command invocations by
+            # default. Bootless runners disable this dependency so pure
+            # filesystem commands remain independent of observability setup.
+            # Cardinality stays bounded by the static command name.
             import time as _t
 
-            try:
-                from cara.observability.Metrics import MetricsBase as _M
-            except (ImportError, RuntimeError):
-                _M = None  # type: ignore[assignment]
+            metrics = None
+            if self.instrument_commands:
+                try:
+                    from cara.observability.Metrics import MetricsBase
+
+                    metrics = MetricsBase
+                except (ImportError, RuntimeError):
+                    pass
 
             _cmd_start = _t.time()
             _cmd_outcome = "success"
@@ -425,26 +435,26 @@ class CommandRunner:
                 traceback.print_exc()
                 _run_on_error(name, e)
                 rprint(f"[red]Error in {name}: {e}[/red]")
-                if _M is not None:
+                if metrics is not None:
                     try:
-                        _M.command_invocations_total.labels(
+                        metrics.command_invocations_total.labels(
                             command=name,
                             outcome=_cmd_outcome,
                         ).inc()
-                        _M.command_duration_seconds.labels(
+                        metrics.command_duration_seconds.labels(
                             command=name,
                         ).observe(_t.time() - _cmd_start)
                     except (OSError, RuntimeError, AttributeError, ConnectionError):
                         pass
                 raise typer.Exit(code=1)
 
-            if _M is not None:
+            if metrics is not None:
                 try:
-                    _M.command_invocations_total.labels(
+                    metrics.command_invocations_total.labels(
                         command=name,
                         outcome=_cmd_outcome,
                     ).inc()
-                    _M.command_duration_seconds.labels(
+                    metrics.command_duration_seconds.labels(
                         command=name,
                     ).observe(_t.time() - _cmd_start)
                 except (OSError, RuntimeError, AttributeError, ConnectionError):

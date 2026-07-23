@@ -55,9 +55,9 @@ from cara.queues.serializers.SignedJsonJobSerializer import (
 # Prometheus metrics — framework-owned MetricsBase carries the queue/worker
 # metrics. Guarded so a partial import never breaks the worker.
 try:
-    from cara.observability.Metrics import MetricsBase as _M
+    from cara.observability.Metrics import MetricsBase
 except (ImportError, RuntimeError):  # pragma: no cover
-    _M = None  # type: ignore[assignment]
+    MetricsBase = None  # type: ignore[assignment]
 
 _logger = logging.getLogger("cara.queue.worker")
 
@@ -768,24 +768,24 @@ class JobProcessor:
         def _mx_record(outcome: str) -> None:
             """Emit metrics for this job exit. Safe to call multiple times
             (we only set ``_mx_recorded`` once inside the closure)."""
-            if _M is None:
+            if MetricsBase is None:
                 return
             nonlocal _mx_recorded
             if _mx_recorded:
                 return
             _mx_recorded = True
             try:
-                _M.queue_jobs_consumed_total.labels(
+                MetricsBase.queue_jobs_consumed_total.labels(
                     queue=_mx_queue,
                     job_class=_mx_job,
                     outcome=outcome,
                 ).inc()
-                _M.queue_job_duration_seconds.labels(
+                MetricsBase.queue_job_duration_seconds.labels(
                     queue=_mx_queue,
                     job_class=_mx_job,
                 ).observe(time.time() - _mx_start)
                 if _mx_inflight_entered:
-                    _M.queue_jobs_in_flight.labels(
+                    MetricsBase.queue_jobs_in_flight.labels(
                         queue=_mx_queue,
                         job_class=_mx_job,
                     ).dec()
@@ -1010,9 +1010,9 @@ class JobProcessor:
             # consumed jobs onto the producer-side hint or "unknown".
             _mx_queue = _queue_label(msg, instance, queue_name=queue_name)
             _mx_job = _job_label(instance, msg)
-            if _M is not None:
+            if MetricsBase is not None:
                 try:
-                    _M.queue_jobs_in_flight.labels(
+                    MetricsBase.queue_jobs_in_flight.labels(
                         queue=_mx_queue,
                         job_class=_mx_job,
                     ).inc()
@@ -1023,7 +1023,7 @@ class JobProcessor:
                     with contextlib.suppress(
                         OSError, RuntimeError, AttributeError, ConnectionError
                     ):
-                        _M.queue_wait_seconds.labels(
+                        MetricsBase.queue_wait_seconds.labels(
                             queue=_mx_queue,
                             job_class=_mx_job,
                         ).observe(wait_secs)

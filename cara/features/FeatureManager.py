@@ -125,9 +125,9 @@ class FeatureManager:
         def _resolver(key: str) -> Any:
             from cara.configuration import config
 
-            _MISSING = object()
-            raw = config(f"{config_key}.{key}", _MISSING)
-            if raw is _MISSING or raw is None:
+            _missing = object()
+            raw = config(f"{config_key}.{key}", _missing)
+            if raw is _missing or raw is None:
                 return ABSENT
             if isinstance(raw, bool):
                 return {"value": raw}
@@ -204,9 +204,9 @@ class FeatureManager:
 
         cache_key = f"{self._cache_prefix}{key}"
 
-        _MISSING = object()
-        cached = Cache.get(cache_key, _MISSING)
-        if cached is not _MISSING:
+        _missing = object()
+        cached = Cache.get(cache_key, _missing)
+        if cached is not _missing:
             return cached
 
         state = self._resolver(key)

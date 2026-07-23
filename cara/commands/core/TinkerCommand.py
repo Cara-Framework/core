@@ -200,10 +200,10 @@ class TinkerCommand(CommandBase):
         def db_info():
             """Show database information."""
             try:
-                # Test connection using User model from container
-                User = self._resolve_user_model()
-                if User:
-                    user_count = User.count()
+                # Test the connection through the registered user model.
+                user_model = self._resolve_user_model()
+                if user_model:
+                    user_count = user_model.count()
                     connection_status = f"✅ Connected ({user_count} users)"
                 else:
                     connection_status = "⚠️ User model not registered"

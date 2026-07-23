@@ -131,25 +131,25 @@ class JWTGenerateCommand(CommandBase):
     def _find_user(self, identifier: str):
         """Find user by ID or email."""
         try:
-            User = self._resolve_user_model()
-            if not User:
+            user_model = self._resolve_user_model()
+            if not user_model:
                 self.error("User model not available.")
                 return None
 
             # Try to find by email first (if it looks like an email)
             if "@" in identifier:
-                user = User.where("email", identifier).first()
+                user = user_model.where("email", identifier).first()
                 if user:
                     return user
 
             # Try to find by user_id
-            user = User.where("user_id", identifier).first()
+            user = user_model.where("user_id", identifier).first()
             if user:
                 return user
 
             # Try to find by primary key
             try:
-                user = User.find(identifier)
+                user = user_model.find(identifier)
                 if user:
                     return user
             except (OSError, RuntimeError, AttributeError, ConnectionError):
