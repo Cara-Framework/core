@@ -6,7 +6,7 @@ may appear outside ``packages/<plugin>/`` in exactly FOUR places:
 
 1. data vocabulary — slug constants under ``manifest.seam_locations
    .data_vocabulary_prefixes`` (a kernel models package);
-2. the composition root — ``manifest.seam_locations.composition_root``;
+2. composition roots — ``manifest.seam_locations.composition_roots``;
 3. generic ingress — parameterized route strings never touch an
    identifier or the four literal positions this scanner checks, so no
    location is needed for it;
@@ -142,7 +142,7 @@ def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[st
 
 def _seam_filter(manifest: Manifest, rel: str, hits: list[str]) -> list[str]:
     seams = manifest.seam_locations
-    if seams.composition_root is not None and rel == seams.composition_root:
+    if rel in seams.composition_roots:
         return []
     if rel in seams.manifest_files:
         return []

@@ -88,7 +88,9 @@ def test_composition_root_seam_is_exempt(tmp_path):
     manifest = make_manifest(
         tmp_path,
         plugin_tokens=TOKENS,
-        seam_locations=SeamLocations(composition_root="config/providers.py"),
+        seam_locations=SeamLocations(
+            composition_roots=frozenset({"config/providers.py"})
+        ),
     )
     write(
         tmp_path / "config" / "providers.py",

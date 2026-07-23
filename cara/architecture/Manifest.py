@@ -76,7 +76,7 @@ class ManifestRoots:
 class SeamLocations:
     """DOCTRINE §4 — the Four Legal Seams a plugin token may appear at.
 
-    ``composition_root`` (Seam 2) and ``manifest_files`` (Seam 4) are
+    ``composition_roots`` (Seam 2) and ``manifest_files`` (Seam 4) are
     deployable-relative paths; ``data_vocabulary_prefixes`` (Seam 1) are
     deployable-relative directory prefixes (typically a kernel models
     package) whose UPPER_SNAKE constants are exempt. Seam 3 (generic,
@@ -84,7 +84,7 @@ class SeamLocations:
     scanned string-literal position, so it needs no location here.
     """
 
-    composition_root: str | None = None
+    composition_roots: frozenset[str] = frozenset()
     manifest_files: frozenset[str] = frozenset()
     data_vocabulary_prefixes: tuple[str, ...] = ()
 
