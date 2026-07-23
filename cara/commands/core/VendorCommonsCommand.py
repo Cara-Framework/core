@@ -120,31 +120,27 @@ class VendorCommonsCommand(CommandBase):
                     return 1
                 stems[py.name] = py
 
-        # pre-flight 3: in a collision package (app/<pkg> with local members),
-        # a kernel file sharing a LOCAL file's name would silently overwrite it.
+        # pre-flight 3: a kernel package's app/<pkg> target must be a PURE dev
+        # barrel (only __init__.py). Local members there are a doctrine §2
+        # violation — local DI interfaces live in app/ports, and vendoring
+        # NEVER merges barrels (a heuristic merge once nearly shipped; the
+        # doctrine v1.2 answer is fail-fast).
         for name in kernel:
             if name == "models":
                 continue
             target = root / "app" / name
             if not target.exists():
                 continue
-            local_files = {
-                p.relative_to(target)
+            locals_found = sorted(
+                str(p.relative_to(target))
                 for p in target.rglob("*.py")
                 if "__pycache__" not in p.parts and p.name != "__init__.py"
-            }
-            if not local_files:
-                continue
-            kernel_files = {
-                p.relative_to(commons / name)
-                for p in (commons / name).rglob("*.py")
-                if "__pycache__" not in p.parts and p.name != "__init__.py"
-            }
-            overlap = sorted(str(p) for p in local_files & kernel_files)
-            if overlap:
+            )
+            if locals_found:
                 self.error(
-                    f"app/{name} and commons/{name} both own: {', '.join(overlap)} — "
-                    "rename the local file(s); vendoring must never silently overwrite local code"
+                    f"app/{name} carries local members ({', '.join(locals_found[:5])}"
+                    f"{'…' if len(locals_found) > 5 else ''}) — doctrine §2: app/{name} is "
+                    "exclusively the kernel barrel; move local DI interfaces to app/ports"
                 )
                 return 1
 
@@ -163,33 +159,14 @@ class VendorCommonsCommand(CommandBase):
             self._rewrite_barrel(app_models / "__init__.py")
 
         # 3) every other kernel package ships verbatim: copy the whole tree
-        #    into app/<pkg>/. A PURE dev barrel (the target package holds only
-        #    an __init__.py) is simply overwritten by the package's real
-        #    __init__.py. A COLLISION package (the app tree has local members
-        #    of its own — e.g. an app/contracts holding local DI contracts) is
-        #    MERGED instead: kernel contents are copied in, the local
-        #    __init__.py keeps its local statements, loses every dev-only
-        #    ``commons.``-referencing statement (dead once commons/ is gone),
-        #    gains the kernel __init__'s (relative) statements, and the two
-        #    ``__all__`` lists are unioned. Overwriting a collision barrel once
-        #    shipped an image whose request path lost its local contracts.
+        #    into app/<pkg>/, the package's real __init__.py replacing the pure
+        #    dev barrel (pre-flight 3 already guaranteed purity — local DI
+        #    interfaces live in app/ports, never here).
         for name in kernel:
             if name == "models":
                 continue
-            target = root / "app" / name
-            local_init = target / "__init__.py"
-            collision = target.exists() and any(
-                p.suffix == ".py" and p.name != "__init__.py"
-                for p in target.rglob("*.py")
-                if "__pycache__" not in p.parts
-            )
-            local_source = local_init.read_text() if (collision and local_init.exists()) else None
-            shutil.copytree(commons / name, target, dirs_exist_ok=True, ignore=_IGNORE)
-            if local_source is not None:
-                self._merge_collision_barrel(local_init, local_source, (commons / name / "__init__.py"))
-                self.info(f"copied commons/{name} → app/{name} (merged collision barrel)")
-            else:
-                self.info(f"copied commons/{name} → app/{name}")
+            shutil.copytree(commons / name, root / "app" / name, dirs_exist_ok=True, ignore=_IGNORE)
+            self.info(f"copied commons/{name} → app/{name}")
 
         # 4) rewrite every remaining commons.<pkg> reference — dotted, from-,
         #    plain-import or string — across the shipped tree to app.<pkg>.
@@ -232,76 +209,6 @@ class VendorCommonsCommand(CommandBase):
         shutil.rmtree(commons)
         self.info("removed commons/ (kernel vendored into app/)")
         return 0
-
-    def _merge_collision_barrel(self, init_file: Path, local_source: str, kernel_init: Path) -> None:
-        """Merge a collision package's local ``__init__`` with the kernel's.
-
-        Keeps every local top-level statement that does not reference the
-        (about to vanish) ``commons.`` namespace and is not ``__all__``;
-        appends the kernel ``__init__``'s statements (already package-relative)
-        minus its docstring and ``__all__``; then emits one unioned,
-        alphabetical ``__all__``. Pure AST slicing — no semantic rewrites.
-        """
-        import ast
-
-        def strip_dev_blocks(source: str) -> str:
-            """Remove ``# --- dev-only kernel wiring`` … ``# --- end dev-only`` blocks."""
-            lines: list[str] = []
-            in_block = False
-            for line in source.splitlines(keepends=True):
-                stripped = line.strip()
-                if stripped.startswith("# --- dev-only kernel wiring"):
-                    in_block = True
-                    continue
-                if stripped.startswith("# --- end dev-only kernel wiring"):
-                    in_block = False
-                    continue
-                if not in_block:
-                    lines.append(line)
-            return "".join(lines)
-
-        def parts(source: str) -> tuple[list[str], list[str]]:
-            source = strip_dev_blocks(source)
-            tree = ast.parse(source)
-            kept: list[str] = []
-            names: list[str] = []
-            for node in tree.body:
-                segment = ast.get_source_segment(source, node) or ""
-                is_all = (
-                    isinstance(node, ast.Assign)
-                    and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets)
-                )
-                if is_all:
-                    try:
-                        names.extend(str(x) for x in ast.literal_eval(node.value))
-                    except Exception:
-                        pass
-                    continue
-                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-                    continue  # docstrings handled separately
-                if "commons." in segment or "commons import" in segment:
-                    continue  # dev-only wiring; commons/ is deleted below
-                kept.append(segment)
-            return kept, names
-
-        local_kept, local_names = parts(local_source)
-        kernel_source = kernel_init.read_text() if kernel_init.exists() else ""
-        kernel_kept, kernel_names = parts(kernel_source)
-
-        docstring = ""
-        try:
-            doc = ast.get_docstring(ast.parse(local_source))
-            if doc:
-                docstring = f'"""{doc}"""\n\n'
-        except SyntaxError:
-            pass
-
-        merged_names = sorted(set(local_names) | set(kernel_names))
-        # kernel statements FIRST: any surviving local statement may lean on
-        # kernel-bound names (e.g. ``envelopes``), never the other way around.
-        body = "\n".join([*kernel_kept, "", *local_kept]).strip("\n")
-        all_block = "\n\n__all__ = [\n" + "".join(f'    "{n}",\n' for n in merged_names) + "]\n"
-        init_file.write_text(docstring + body + "\n" + all_block)
 
     def _rewrite_barrel(self, init_file: Path) -> None:
         """Convert ``from commons.models[...] import (...)`` in the app/models

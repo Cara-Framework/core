@@ -36,27 +36,7 @@ def _make_tree(root: Path) -> None:
     (root / "app" / "models" / "__init__.py").write_text(
         'from commons.models import (\n    User,\n)\n\n__all__ = [\n    "User",\n]\n'
     )
-    # COLLISION package: app/contracts has LOCAL members of its own, so its
-    # dev barrel MERGES local exports with kernel wiring inside a marked
-    # dev-only block. Vendor must strip the block, keep the local statements,
-    # append the kernel __init__'s (relative) statements and union __all__ —
-    # overwriting this barrel once shipped an image that lost AccessContract.
-    (root / "app" / "contracts").mkdir()
-    (root / "app" / "contracts" / "AccessContract.py").write_text(
-        "class AccessContract:\n    pass\n"
-    )
-    (root / "app" / "contracts" / "__init__.py").write_text(
-        '"""Local DI contracts + kernel contract re-exports."""\n'
-        "# --- dev-only kernel wiring (build:vendor-commons strips this block) ---\n"
-        "import sys as _sys\n\n"
-        "from commons.contracts import SyncEnvelope\n"
-        "from commons.contracts import envelopes\n"
-        "_sys.modules.setdefault(f'{__name__}.envelopes', envelopes)\n"
-        "# --- end dev-only kernel wiring ---\n\n"
-        "from .AccessContract import AccessContract\n\n"
-        '__all__ = [\n    "AccessContract",\n    "SyncEnvelope",\n]\n'
-    )
-    for pkg in ("gates", "shared"):
+    for pkg in ("contracts", "gates", "shared"):
         (root / "app" / pkg).mkdir()
         (root / "app" / pkg / "__init__.py").write_text(f"from commons.{pkg} import *  # dev barrel\n")
     (root / "app" / "jobs").mkdir()
@@ -139,14 +119,10 @@ def test_vendor_ships_the_full_kernel(tmp_path, monkeypatch):
     assert "from .Permissions import PERMISSIONS" in gates_init
     assert "dev barrel" not in gates_init
     assert (tmp_path / "app" / "contracts" / "envelopes" / "SyncEnvelope.py").exists()
-    # collision merge: local member kept, kernel wiring appended, dev block gone
+    # contracts is a pure kernel barrel: real __init__ replaced the dev one
     merged = (tmp_path / "app" / "contracts" / "__init__.py").read_text()
-    assert "from .AccessContract import AccessContract" in merged
     assert "from .envelopes.SyncEnvelope import SyncEnvelope" in merged
-    assert "dev-only kernel wiring" not in merged and "_sys.modules" not in merged
-    assert "commons" not in merged
-    assert '"AccessContract",' in merged and '"SyncEnvelope",' in merged
-    assert (tmp_path / "app" / "contracts" / "AccessContract.py").exists()
+    assert "dev barrel" not in merged and "commons" not in merged
     assert (tmp_path / "app" / "gates" / "persistence" / "LedgerRepository.py").exists()
     assert (tmp_path / "app" / "shared" / "catalog" / "Slug.py").exists()
 
@@ -208,11 +184,13 @@ def test_vendor_fails_fast_on_unknown_commons_dir(tmp_path, monkeypatch):
     assert "commons.models" in (tmp_path / "app" / "models" / "__init__.py").read_text()
 
 
-def test_vendor_fails_fast_on_local_file_overlap(tmp_path, monkeypatch):
+def test_vendor_fails_fast_on_local_members_in_kernel_barrel(tmp_path, monkeypatch):
+    """Doctrine §2: app/<kernel-pkg> is exclusively the kernel barrel — local DI
+    interfaces live in app/ports; the vendor never merges, it fails fast."""
     _make_tree(tmp_path)
-    # a LOCAL file in the collision package shares a kernel file's name
-    (tmp_path / "app" / "contracts" / "envelopes").mkdir()
-    (tmp_path / "app" / "contracts" / "envelopes" / "SyncEnvelope.py").write_text("LOCAL = 1\n")
+    (tmp_path / "app" / "contracts" / "AccessContract.py").write_text("class AccessContract:\n    pass\n")
     monkeypatch.chdir(tmp_path)
     assert VendorCommonsCommand(application=None).handle() == 1
-    assert (tmp_path / "app" / "contracts" / "envelopes" / "SyncEnvelope.py").read_text() == "LOCAL = 1\n"
+    # nothing was mutated
+    assert (tmp_path / "commons" / "models").exists()
+    assert (tmp_path / "app" / "contracts" / "AccessContract.py").exists()
