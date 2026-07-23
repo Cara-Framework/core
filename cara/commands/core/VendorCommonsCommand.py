@@ -86,22 +86,25 @@ class VendorCommonsCommand(CommandBase):
         #    that never ship. Anything else under commons/ is a doctrine
         #    violation and fails the build loudly — a permissive scan once
         #    shipped commons/tests into a production image's app tree.
-        _KERNEL = {"models", "contracts", "gates", "shared"}
-        _DEV_ONLY = {"cara", "tests", "docs"}
+        kernel_packages = {"models", "contracts", "gates", "shared"}
+        development_only = {"cara", "tests", "docs"}
         found = sorted(
             child.name
             for child in commons.iterdir()
             if child.is_dir() and not child.name.startswith((".", "_"))
         )
-        unknown = [name for name in found if name not in _KERNEL | _DEV_ONLY]
+        unknown = [
+            name for name in found if name not in kernel_packages | development_only
+        ]
         if unknown:
             self.error(
                 f"unknown commons subdirectory(ies): {', '.join(unknown)} — doctrine §2 "
-                f"allows exactly {sorted(_KERNEL)} (+ dev-only {sorted(_DEV_ONLY)}); "
+                f"allows exactly {sorted(kernel_packages)} "
+                f"(+ dev-only {sorted(development_only)}); "
                 "move the content into a kernel package or delete it"
             )
             return 1
-        kernel = [name for name in found if name in _KERNEL]
+        kernel = [name for name in found if name in kernel_packages]
         self.info(f"kernel packages: {', '.join(kernel) or '(none)'}")
 
         # pre-flight 2: duplicate model stems would silently clobber each other
@@ -165,7 +168,9 @@ class VendorCommonsCommand(CommandBase):
         for name in kernel:
             if name == "models":
                 continue
-            shutil.copytree(commons / name, root / "app" / name, dirs_exist_ok=True, ignore=_IGNORE)
+            shutil.copytree(
+                commons / name, root / "app" / name, dirs_exist_ok=True, ignore=_IGNORE
+            )
             self.info(f"copied commons/{name} → app/{name}")
 
         # 4) rewrite every remaining commons.<pkg> reference — dotted, from-,
@@ -174,7 +179,9 @@ class VendorCommonsCommand(CommandBase):
         #    are not touched. The models collapse regexes run first (flat copy),
         #    the generic prefix-preserving rewrite covers everything else.
         generic = (
-            re.compile(r"\bcommons\.(" + "|".join(re.escape(name) for name in kernel) + r")\b")
+            re.compile(
+                r"\bcommons\.(" + "|".join(re.escape(name) for name in kernel) + r")\b"
+            )
             if kernel
             else None
         )
@@ -187,7 +194,9 @@ class VendorCommonsCommand(CommandBase):
                 if "__pycache__" in str(py) or py.name.startswith("."):
                     continue
                 text = py.read_text()
-                new = _DOTTED_PREFIX.sub("app.models.", _FROM_IMPORT.sub("from app.models import", text))
+                new = _DOTTED_PREFIX.sub(
+                    "app.models.", _FROM_IMPORT.sub("from app.models import", text)
+                )
                 if generic is not None:
                     new = generic.sub(r"app.\1", new)
                 if new != text:
@@ -218,10 +227,19 @@ class VendorCommonsCommand(CommandBase):
         content = init_file.read_text()
 
         def repl(match: re.Match[str]) -> str:
-            return "\n".join(f"from .{n} import {n}" for n in _split_import_names(match.group(1)))
+            return "\n".join(
+                f"from .{n} import {n}" for n in _split_import_names(match.group(1))
+            )
 
         # multi-line ``import (...)`` FIRST (more specific), then single-line
-        content = re.sub(r"from commons\.models(?:\.\w+)* import \((.*?)\)", repl, content, flags=re.DOTALL)
-        content = re.sub(r"from commons\.models(?:\.\w+)* import ([^\n(]+)", repl, content)
+        content = re.sub(
+            r"from commons\.models(?:\.\w+)* import \((.*?)\)",
+            repl,
+            content,
+            flags=re.DOTALL,
+        )
+        content = re.sub(
+            r"from commons\.models(?:\.\w+)* import ([^\n(]+)", repl, content
+        )
         init_file.write_text(content)
         self.info(f"rewrote {init_file.name} to relative imports")
