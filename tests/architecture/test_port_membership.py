@@ -63,3 +63,14 @@ def test_absent_ports_layer_noops(tmp_path):
         "class Thing:\n    pass\n",
     )
     assert PortMembership.scan(manifest) == []
+
+
+def test_supporting_value_class_in_port_module_is_not_itself_a_port(tmp_path):
+    manifest = make_manifest(tmp_path, layers=("ports", "services"))
+    write(
+        tmp_path / "app" / "ports" / "catalog" / "AccessContract.py",
+        "class AccessResult:\n    pass\n\n\n"
+        "# port: consumer-owned persistence boundary\n"
+        "class AccessContract:\n    pass\n",
+    )
+    assert PortMembership.scan(manifest) == []

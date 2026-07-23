@@ -4,7 +4,7 @@
 when it is (a) a real boundary the consumer owns, (b) an implementation
 that can plausibly be swapped or an external-system edge, or (c) a stable
 capability used by more than one use-case." This scanner makes (b)/(c)
-mechanical: every class declared in the manifest's ``ports`` layer
+mechanical: every ``*Contract`` class declared in the manifest's ``ports`` layer
 (``manifest.layers`` must include a layer literally named ``"ports"`` —
 absent that, the check no-ops) needs EITHER
 
@@ -41,7 +41,7 @@ def _leading_comment_block(lines: list[str], lineno: int) -> str:
 
 def _port_classes(manifest: Manifest) -> list[tuple[str, str, int, str]]:
     """(class name, repo-relative file, lineno, leading-comment-block) for
-    every top-level class declared under the ports layer."""
+    every top-level ``*Contract`` class declared under the ports layer."""
     ports_dir = manifest.roots.app / PORTS_LAYER
     out: list[tuple[str, str, int, str]] = []
     for path in python_files(ports_dir):
@@ -54,7 +54,7 @@ def _port_classes(manifest: Manifest) -> list[tuple[str, str, int, str]]:
         lines = source.splitlines()
         rel = relpath(path, manifest.roots.deployable)
         for node in tree.body:
-            if isinstance(node, ast.ClassDef):
+            if isinstance(node, ast.ClassDef) and node.name.endswith("Contract"):
                 block = _leading_comment_block(lines, node.lineno)
                 out.append((node.name, rel, node.lineno, block))
     return out
