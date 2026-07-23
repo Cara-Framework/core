@@ -33,9 +33,10 @@ class LoadEnvironment:
         LoadEnvironment constructor.
 
         Keyword Arguments:
-            env {string} -- An additional environment file that you want to load. (default: {None})
+            environment {string} -- An additional environment file to load. (default: {None})
             override {bool} -- Whether or not the environment variables found should overwrite existing ones. (default: {False})
             only {string} -- If this is set then it will only load that environment. (default: {None})
+            base_path {string|Path} -- Directory that owns the environment files. (default: cwd)
         """
         from dotenv import load_dotenv
 
