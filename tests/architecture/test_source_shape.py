@@ -69,14 +69,14 @@ def test_edge_method_limit_is_exact_debt(tmp_path):
         "        return first + second\n",
     )
     findings = SourceShape.scan(manifest)
-    assert any(
-        "edge method exceeds 3-line limit" in finding.message for finding in findings
-    )
+    assert any("edge method exceeds 3-line limit" in finding.message for finding in findings)
 
     pinned = replace(
         manifest,
         seam_allowlists={
-            "source_shape_edge_methods": {"app/jobs/LargeJob.py::LargeJob.execute": 4}
+            "source_shape_edge_methods": {
+                "app/jobs/LargeJob.py::LargeJob.execute": 4
+            }
         },
     )
     assert SourceShape.scan(pinned) == []

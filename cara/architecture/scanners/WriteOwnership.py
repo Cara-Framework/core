@@ -315,7 +315,8 @@ class WriteOwnership:
                     Finding(
                         path,
                         0,
-                        f"write-ownership debt grew for {identity}: {pinned} -> {count}",
+                        f"write-ownership debt grew for {identity}: "
+                        f"{pinned} -> {count}",
                     )
                 )
             elif count < pinned:

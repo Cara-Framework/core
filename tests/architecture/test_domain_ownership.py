@@ -10,11 +10,13 @@ from ._fixtures import make_manifest, write
 def _repositories(tmp_path) -> None:
     write(
         tmp_path / "app" / "repositories" / "catalog" / "ProductRepository.py",
-        "class ProductRepository:\n    pass\n",
+        "class ProductRepository:\n"
+        "    pass\n",
     )
     write(
         tmp_path / "app" / "repositories" / "pricing" / "PriceRepository.py",
-        "class PriceRepository:\n    pass\n",
+        "class PriceRepository:\n"
+        "    pass\n",
     )
 
 
@@ -33,7 +35,9 @@ def test_service_cannot_import_another_domain_repository_from_barrel(tmp_path):
     _repositories(tmp_path)
     write(
         tmp_path / "app" / "services" / "catalog" / "ProductService.py",
-        "from app.repositories import PriceRepository\nclass ProductService:\n    pass\n",
+        "from app.repositories import PriceRepository\n"
+        "class ProductService:\n"
+        "    pass\n",
     )
     findings = DomainOwnership.scan(make_manifest(tmp_path))
     assert len(findings) == 1
@@ -78,7 +82,9 @@ def test_domain_ownership_debt_is_exact_and_shrink_only(tmp_path):
     path = tmp_path / "app" / "services" / "catalog" / "ProductService.py"
     write(
         path,
-        "from app.repositories import PriceRepository\nclass ProductService:\n    pass\n",
+        "from app.repositories import PriceRepository\n"
+        "class ProductService:\n"
+        "    pass\n",
     )
     manifest = make_manifest(
         tmp_path,

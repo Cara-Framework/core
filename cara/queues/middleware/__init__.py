@@ -63,11 +63,9 @@ async def run_middleware_chain_async(job, handler: Callable) -> Any:
     """Run one job through its middleware inside an established scope.
 
     Queue consumers normally use :func:`run_through_middleware_async`, which
-    also restores the serialized tenancy boundary. Envelope handlers already
-    run inside that boundary; when they construct the concrete worker job they
-    use this narrower entry point so the inner job's locks, rate limits and
-    provider concurrency controls are not skipped or applied under a second
-    tenancy transition.
+    also restores the serialized tenancy boundary. Nested worker adapters may
+    use this narrower entry point when the outer queue job already established
+    tenancy, without bypassing the concrete job's middleware.
     """
     chain = _build_chain(job, handler)
     result = chain(job)

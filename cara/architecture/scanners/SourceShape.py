@@ -145,7 +145,9 @@ class SourceShape:
                     )
 
                 relative_path = Path(rel)
-                if not _is_edge_path(relative_path, manifest.source_shape_edge_layers):
+                if not _is_edge_path(
+                    relative_path, manifest.source_shape_edge_layers
+                ):
                     continue
                 for class_node in public_classes:
                     for node in class_node.body:

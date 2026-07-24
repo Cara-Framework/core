@@ -170,7 +170,9 @@ def _seam_filter(
         allowed = {token.casefold() for token in owned_tokens}
         remaining: list[str] = []
         for hit in hits:
-            present = {match.group(0).casefold() for match in token_re.finditer(hit)}
+            present = {
+                match.group(0).casefold() for match in token_re.finditer(hit)
+            }
             if present and present <= allowed:
                 continue
             remaining.append(hit)

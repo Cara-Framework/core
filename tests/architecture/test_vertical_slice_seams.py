@@ -163,7 +163,8 @@ def test_owned_non_marketplace_integration_lane_allows_only_its_provider(tmp_pat
     )
     findings = VerticalSliceSeams.scan(manifest)
     assert any(
-        finding.path == "discovery/price_feeds/GooglePriceFeed.py" for finding in findings
+        finding.path == "discovery/price_feeds/GooglePriceFeed.py"
+        for finding in findings
     )
 
     write(

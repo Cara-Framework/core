@@ -92,7 +92,9 @@ class SeamLocations:
     composition_roots: frozenset[str] = frozenset()
     manifest_files: frozenset[str] = frozenset()
     data_vocabulary_prefixes: tuple[str, ...] = ()
-    owned_integration_prefixes: dict[str, frozenset[str]] = field(default_factory=dict)
+    owned_integration_prefixes: dict[str, frozenset[str]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True, slots=True)

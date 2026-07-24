@@ -91,6 +91,17 @@ _ALTER_TABLE_RENAME_RE = re.compile(
     r"RENAME\s+TO\s+\"?(?P<new>[a-z0-9_]+)\"?",
     re.IGNORECASE,
 )
+_ALTER_INDEX_RENAME_RE = re.compile(
+    r"ALTER\s+INDEX\s+(?:IF\s+EXISTS\s+)?"
+    r"(?:\"?[a-z0-9_]+\"?\.)?\"?(?P<old>[a-z0-9_]+)\"?\s+"
+    r"RENAME\s+TO\s+\"?(?P<new>[a-z0-9_]+)\"?",
+    re.IGNORECASE,
+)
+_DROP_INDEX_RE = re.compile(
+    r"DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?"
+    r"(?:\"?[a-z0-9_]+\"?\.)?\"?(?P<name>[a-z0-9_]+)\"?",
+    re.IGNORECASE,
+)
 
 # A naive TIMESTAMP. ``CURRENT_TIMESTAMP`` / ``LOCALTIMESTAMP`` / ``to_timestamp``
 # are excluded by the lookbehind (they are preceded by a word character),
@@ -132,6 +143,14 @@ class MigrationFile:
     docstring: str | None
     sql_constants: tuple[tuple[int, str], ...]
     syntax_error: str | None
+
+
+@dataclass(frozen=True)
+class _IndexTransition:
+    """One proven retirement of a historical index in a later migration."""
+
+    migration_name: str
+    replacement: str | None
 
 
 def _string_constants(tree: ast.AST) -> list[tuple[int, str]]:
@@ -358,7 +377,6 @@ def audit_migrations(
                 )
             )
 
-        violations.extend(_audit_indexes(entry, model_indexes))
         for table in _created_tables(entry):
             creators.setdefault(table, set()).add(name)
 
@@ -373,6 +391,18 @@ def audit_migrations(
     for _chain, tables, root_creator in valid_transitions:
         retired_tables.update(tables[:-1])
         creators.setdefault(tables[-1], set()).add(root_creator)
+
+    index_transition_violations, index_transitions = _audit_index_transitions(
+        valid_transitions,
+        model_indexes,
+    )
+    violations.extend(index_transition_violations)
+    for entry in files:
+        if entry.syntax_error:
+            continue
+        violations.extend(
+            _audit_indexes(entry, model_indexes, index_transitions)
+        )
 
     violations.extend(_audit_table_coverage(creators, generated_files, model_indexes))
     violations = [
@@ -626,7 +656,9 @@ def _audit_model_less(entry: MigrationFile) -> list[Violation]:
 
 
 def _audit_indexes(
-    entry: MigrationFile, model_indexes: dict[str, set[str]]
+    entry: MigrationFile,
+    model_indexes: dict[str, set[str]],
+    index_transitions: dict[str, tuple[_IndexTransition, ...]],
 ) -> list[Violation]:
     """Rule 7: an index on a MODEL table must be declared by that model.
 
@@ -644,6 +676,11 @@ def _audit_indexes(
             if table not in model_indexes or index_name in seen:
                 continue
             if index_name in model_indexes[table]:
+                continue
+            if any(
+                transition.migration_name > entry.path.name
+                for transition in index_transitions.get(index_name.lower(), ())
+            ):
                 continue
             seen.add(index_name)
             violations.append(
@@ -663,6 +700,74 @@ def _audit_indexes(
                 )
             )
     return violations
+
+
+def _audit_index_transitions(
+    valid_transitions: list[
+        tuple[list[MigrationFile], list[str], str]
+    ],
+    model_indexes: dict[str, set[str]],
+) -> tuple[
+    list[Violation],
+    dict[str, tuple[_IndexTransition, ...]],
+]:
+    """Prove index retirements owned by valid, later model transitions.
+
+    A historical creator remains immutable, so its old raw index declaration
+    is legitimate only when a validated MODEL_TRANSITION later renames that
+    index to a name declared by a current model, or explicitly drops it.
+    SQL in an invalid/unmarked migration is deliberately invisible here.
+    """
+
+    declared = {
+        name.lower()
+        for names in model_indexes.values()
+        for name in names
+    }
+    violations: list[Violation] = []
+    found: dict[str, list[_IndexTransition]] = {}
+
+    for chain, _tables, _root_creator in valid_transitions:
+        for entry in chain:
+            for _, text in entry.sql_constants:
+                for match in _ALTER_INDEX_RENAME_RE.finditer(text):
+                    old = match.group("old").lower()
+                    new = match.group("new").lower()
+                    if new not in declared:
+                        violations.append(
+                            Violation(
+                                rule="invalid-index-transition",
+                                path=entry.path.name,
+                                message=(
+                                    f"index rename target {new!r} is not "
+                                    "declared by a current model"
+                                ),
+                                remedy=(
+                                    "rename to an index declared by the current "
+                                    "model, or drop the retired index explicitly"
+                                ),
+                                human_only=True,
+                                blocks_fix=True,
+                            )
+                        )
+                        continue
+                    found.setdefault(old, []).append(
+                        _IndexTransition(entry.path.name, new)
+                    )
+
+                for match in _DROP_INDEX_RE.finditer(text):
+                    old = match.group("name").lower()
+                    found.setdefault(old, []).append(
+                        _IndexTransition(entry.path.name, None)
+                    )
+
+    return (
+        violations,
+        {
+            old: tuple(transitions)
+            for old, transitions in found.items()
+        },
+    )
 
 
 def _created_tables(entry: MigrationFile) -> set[str]:

@@ -75,7 +75,9 @@ def test_tag_after_contract_does_not_exempt_it(tmp_path):
     manifest = make_manifest(tmp_path, layers=("ports", "services"))
     write(
         tmp_path / "app" / "ports" / "catalog" / "AccessContract.py",
-        "class AccessContract:\n    pass\n# port: real but misplaced boundary reason\n",
+        "class AccessContract:\n"
+        "    pass\n"
+        "# port: real but misplaced boundary reason\n",
     )
 
     assert len(PortMembership.scan(manifest)) == 1

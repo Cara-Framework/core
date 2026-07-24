@@ -44,9 +44,12 @@ def _generated(directory, table, order=1, extra=""):
     return path
 
 
-def _transition(directory, old_table, new_table, order):
+def _transition(directory, old_table, new_table, order, statements=()):
     path = directory / (
         f"{order:04d}_01_01_{order:06d}_rename_{old_table}_to_{new_table}.py"
+    )
+    transition_sql = "".join(
+        f'        DB.statement("{statement}")\n' for statement in statements
     )
     path.write_text(
         f'"""Preserve the applied {old_table} table while its model is renamed."""\n\n'
@@ -54,7 +57,8 @@ def _transition(directory, old_table, new_table, order):
         f'MODEL_TRANSITION = ("{old_table}", "{new_table}")\n\n'
         "class RenameAppliedTable:\n"
         "    def up(self):\n"
-        f'        DB.statement("ALTER TABLE {old_table} RENAME TO {new_table}")\n',
+        f'        DB.statement("ALTER TABLE {old_table} RENAME TO {new_table}")\n'
+        f"{transition_sql}",
         encoding="utf-8",
     )
     return path
@@ -328,6 +332,113 @@ def test_index_declared_by_the_model_is_accepted(tmp_path):
     _generated(tmp_path, "product", extra=_INDEX_SQL)
 
     assert audit_migrations(tmp_path, {"product": {"product_sku_idx"}}) == []
+
+
+def test_later_valid_transition_may_rename_historical_index(tmp_path):
+    historical_index = _INDEX_SQL.replace(
+        "product_sku_idx",
+        "legacy_product_sku_idx",
+    )
+    _generated(tmp_path, "product", extra=historical_index)
+    _generated(tmp_path, "legacy_state", order=2)
+    _transition(
+        tmp_path,
+        "legacy_state",
+        "state",
+        order=3,
+        statements=(
+            "ALTER INDEX legacy_product_sku_idx RENAME TO product_sku_idx",
+        ),
+    )
+
+    assert (
+        audit_migrations(
+            tmp_path,
+            {"product": {"product_sku_idx"}, "state": set()},
+        )
+        == []
+    )
+
+
+def test_later_valid_transition_may_drop_historical_index(tmp_path):
+    historical_index = _INDEX_SQL.replace(
+        "product_sku_idx",
+        "legacy_product_sku_idx",
+    )
+    _generated(tmp_path, "product", extra=historical_index)
+    _generated(tmp_path, "legacy_state", order=2)
+    _transition(
+        tmp_path,
+        "legacy_state",
+        "state",
+        order=3,
+        statements=("DROP INDEX legacy_product_sku_idx",),
+    )
+
+    assert audit_migrations(
+        tmp_path,
+        {"product": set(), "state": set()},
+    ) == []
+
+
+def test_index_transition_rejects_rename_to_undeclared_target(tmp_path):
+    historical_index = _INDEX_SQL.replace(
+        "product_sku_idx",
+        "legacy_product_sku_idx",
+    )
+    _generated(tmp_path, "product", extra=historical_index)
+    _generated(tmp_path, "legacy_state", order=2)
+    _transition(
+        tmp_path,
+        "legacy_state",
+        "state",
+        order=3,
+        statements=(
+            "ALTER INDEX legacy_product_sku_idx RENAME TO stale_product_sku_idx",
+        ),
+    )
+
+    violations = audit_migrations(
+        tmp_path,
+        {"product": {"product_sku_idx"}, "state": set()},
+    )
+
+    assert _rules(violations) == [
+        "invalid-index-transition",
+        "undeclared-index",
+    ]
+
+
+def test_sql_outside_valid_transition_cannot_mask_historical_index(tmp_path):
+    _generated(tmp_path, "product", extra=_INDEX_SQL)
+    _model_less_with_sql(tmp_path, "DROP INDEX product_sku_idx")
+
+    violations = audit_migrations(tmp_path, {"product": set()})
+
+    assert _rules(violations) == ["undeclared-index"]
+
+
+def test_index_transition_must_sort_after_historical_creator(tmp_path):
+    _generated(tmp_path, "legacy_widget")
+    _transition(
+        tmp_path,
+        "legacy_widget",
+        "widget",
+        order=2,
+        statements=("DROP INDEX IF EXISTS future_product_sku_idx",),
+    )
+    future_index = _INDEX_SQL.replace(
+        "product_sku_idx",
+        "future_product_sku_idx",
+    )
+    _generated(tmp_path, "product", order=3, extra=future_index)
+
+    violations = audit_migrations(
+        tmp_path,
+        {"widget": set(), "product": set()},
+    )
+
+    assert _rules(violations) == ["undeclared-index"]
 
 
 def test_index_on_a_non_model_table_is_out_of_scope(tmp_path):

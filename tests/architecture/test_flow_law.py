@@ -94,7 +94,9 @@ def test_counted_flow_debt_is_shrink_only(tmp_path):
     path = tmp_path / "app" / "jobs" / "RefreshJob.py"
     write(
         path,
-        "from app.repositories import ProductRepository\nclass RefreshJob:\n    pass\n",
+        "from app.repositories import ProductRepository\n"
+        "class RefreshJob:\n"
+        "    pass\n",
     )
     manifest = make_manifest(
         tmp_path,

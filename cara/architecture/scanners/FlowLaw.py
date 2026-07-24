@@ -69,7 +69,8 @@ def _hits(tree: ast.Module) -> list[tuple[int, str]]:
             if _forbidden_import(module):
                 hits.append((node.lineno, f"imports forbidden edge dependency {module}"))
             elif module in _FORBIDDEN_BARREL_MEMBERS and any(
-                alias.name in _FORBIDDEN_BARREL_MEMBERS[module] for alias in node.names
+                alias.name in _FORBIDDEN_BARREL_MEMBERS[module]
+                for alias in node.names
             ):
                 hits.append(
                     (
