@@ -240,8 +240,23 @@ class Bus:
                     return await out
                 return out
 
-            with fresh_dispatch_scope():
-                result = await run_through_middleware_async(job, job_handler)
+            # A synchronous dispatch is the framework-owned transaction
+            # boundary for one queued unit of work. Nested sync dispatches
+            # share the caller's asyncio task and therefore its
+            # ContextVar-pinned connection registry; finalize every open
+            # transaction level before control returns to the parent stage,
+            # rolling back the whole unit when execution fails or is cancelled.
+            # Keeping this here prevents product jobs from owning DB commits.
+            from cara.facades import DB
+
+            try:
+                with fresh_dispatch_scope():
+                    result = await run_through_middleware_async(job, job_handler)
+            except BaseException:
+                DB.rollback_open_transactions()
+                raise
+            else:
+                DB.commit_open_transactions()
 
             # ``None`` is a legitimate successful return: every pipeline
             # stage routes its work through wrap_with_idempotency(_do_work) and

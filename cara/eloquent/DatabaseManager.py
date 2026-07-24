@@ -250,6 +250,40 @@ class DatabaseManager:
                     exc_info=True,
                 )
 
+    def rollback_open_transactions(self, connection=None) -> None:
+        """Roll back every open level on the context-pinned connection.
+
+        This is the failure-side counterpart of
+        :meth:`commit_open_transactions`. Framework execution boundaries use
+        it before propagating a failed or cancelled unit of work so a caught
+        exception cannot leak a live transaction into the next sync job.
+        """
+        from .connections.ConnectionResolver import _get_registry
+
+        connection_name = self._resolve_connection_name(connection)
+        registry = _get_registry()
+        if connection_name not in registry:
+            return
+
+        resolver = self._ensure_resolver()
+        conn = registry.get(connection_name)
+        for _ in range(64):
+            level = getattr(conn, "transaction_level", 0) if conn is not None else 0
+            if level <= 0:
+                break
+            resolver.rollback(connection_name)
+
+        registry.pop(connection_name, None)
+        if conn is not None and getattr(conn, "transaction_level", 0) <= 0:
+            try:
+                conn.open = 0
+                conn.close_connection()
+            except Exception:
+                _logger.debug(
+                    "rollback_open_transactions: connection close failed",
+                    exc_info=True,
+                )
+
     @contextmanager
     def transaction(self, connection=None):
         """Context manager for transaction handling"""
