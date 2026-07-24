@@ -22,12 +22,18 @@ A port satisfying neither is auto-minted ceremony, not a boundary.
 from __future__ import annotations
 
 import ast
+import re
 
 from cara.architecture._ast_utils import parse, python_files, relpath
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
 PORTS_LAYER = "ports"
+_BOILERPLATE_REASONS = (
+    re.compile(r"database boundary for the .+ capability$", re.IGNORECASE),
+    re.compile(r"swappable .+ use-case strategy boundary$", re.IGNORECASE),
+    re.compile(r"external-system or algorithm strategy boundary$", re.IGNORECASE),
+)
 
 
 def _port_classes(manifest: Manifest) -> list[tuple[str, str, int, str]]:
@@ -59,6 +65,22 @@ def _base_names(node: ast.ClassDef) -> set[str]:
     return names
 
 
+def _boundary_reason(source: str, lineno: int, tag: str) -> str | None:
+    """Return the last module/class-leading tag reason, never a later comment."""
+    reasons: list[str] = []
+    for line in source.splitlines()[: lineno - 1]:
+        comment = line.strip()
+        if comment.startswith(tag):
+            reasons.append(comment.removeprefix(tag).strip())
+    return reasons[-1] if reasons else None
+
+
+def _is_specific_reason(reason: str | None) -> bool:
+    if not reason:
+        return False
+    return not any(pattern.fullmatch(reason) for pattern in _BOILERPLATE_REASONS)
+
+
 def _implementor_index(manifest: Manifest) -> dict[str, set[str]]:
     """Base class name -> distinct implementation files, in one tree walk."""
     implementations: dict[str, set[str]] = {}
@@ -86,16 +108,23 @@ class PortMembership:
         findings: list[Finding] = []
         implementations = _implementor_index(manifest)
         for name, rel, lineno, block in _port_classes(manifest):
-            if manifest.port_membership_tags in block:
-                continue
             count = len(implementations.get(name, set()) - {rel})
-            if count < 2:
+            if count >= 2:
+                continue
+            reason = _boundary_reason(
+                block,
+                lineno,
+                manifest.port_membership_tags,
+            )
+            if not _is_specific_reason(reason):
                 findings.append(
                     Finding(
                         rel,
                         lineno,
                         f"port {name!r} has {count} implementor(s) — needs >=2, or a "
-                        f"documented {manifest.port_membership_tags} <reason> tag",
+                        f"specific {manifest.port_membership_tags} <reason> tag; "
+                        "generic database/swappable boilerplate does not prove "
+                        "a real boundary",
                     )
                 )
         return findings

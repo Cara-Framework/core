@@ -6,7 +6,7 @@ state comes from differs per app. Apps plug that in once at boot::
 
     from cara.facades import Feature
 
-    Feature.resolve_using(read_my_flag_row)   # (key) -> dict | ABSENT
+    Feature.resolve_using(read_my_flag_row)  # (key) -> dict | ABSENT
 
     if Feature.active("new-checkout", identifier=str(user.id)):
         ...

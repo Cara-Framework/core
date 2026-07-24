@@ -34,7 +34,9 @@ class DatabaseChannel(BaseChannel):
             table_name: Name of the notifications table
         """
         if database_manager is None:
-            raise ConfigurationException("Database manager is required for DatabaseChannel")
+            raise ConfigurationException(
+                "Database manager is required for DatabaseChannel"
+            )
 
         self.database_manager = database_manager
         self.table_name = table_name
@@ -50,82 +52,33 @@ class DatabaseChannel(BaseChannel):
         Returns:
             True if stored successfully, False otherwise
         """
-        # Check if this is a wrapper notification (from Laravel-style routing)
-        if hasattr(notification, "data") and hasattr(notification, "original"):
-            # Use the wrapper's data directly
-            data = notification.data
-            notification_type = notification.original.__class__.__name__
-            original_notification = notification.original
-        else:
-            # Regular notification - try to get database representation
-            data = None
-            if hasattr(notification, "to_database"):
-                data = notification.to_database(notifiable)
+        data = notification.to_database(notifiable)
+        if data is None:
+            data = notification.to_array(notifiable)
+        if data is None:
+            data = {}
 
-            if data is None and hasattr(notification, "to_array"):
-                # Fall back to array representation
-                data = notification.to_array(notifiable)
+        notification_type = notification.__class__.__name__
 
-            if data is None:
-                # Fallback to empty dict
-                data = {}
-
-            notification_type = notification.__class__.__name__
-            original_notification = notification
-
-        # Map to the application's ``notification`` table schema.
-        # The table uses ``user_id`` (not ``notifiable_id``) and stores
-        # structured fields (``title``, ``body``, ``channel``) instead
-        # of a single ``data`` JSON blob. The notification's own
-        # ``to_database()`` dict is AUTHORITATIVE: app-specific columns it
-        # carries (``tenant_id``, ``type`` from the app's registry, …)
-        # pass through and override these defaults, so the channel works
-        # against tenant-scoped schemas instead of fighting them.
+        # Cara owns only the conventional polymorphic database-notification
+        # shape. Products with a different schema register their own channel;
+        # app-specific tenant/user/status columns must never leak into the
+        # framework.
         now = pendulum.now("UTC")
         record = {
-            "user_id": self._get_notifiable_id(notifiable),
             "type": notification_type,
-            "channel": "database",
-            "title": data.get("title", notification_type)
-            if isinstance(data, dict)
-            else notification_type,
-            "body": data.get("body", "") if isinstance(data, dict) else "",
-            "action_url": data.get("action_url") if isinstance(data, dict) else None,
-            "status": "delivered",
-            "sent_at": now,
-            "delivered_at": now,
+            "notifiable_type": self._get_notifiable_type(notifiable),
+            "notifiable_id": self._get_notifiable_id(notifiable),
+            "data": self._serialize_data(data if isinstance(data, dict) else {}),
             "read_at": None,
-            "metadata": self._serialize_data(data),
             "created_at": now,
             "updated_at": now,
         }
-        if isinstance(data, dict):
-            for key, value in data.items():
-                if key in ("title", "body", "action_url"):
-                    continue  # already mapped above
-                record[key] = value
 
         # Add notification ID if set
-        if hasattr(original_notification, "get_id") and original_notification.get_id():
-            record["id"] = original_notification.get_id()
+        if notification.get_id():
+            record["id"] = notification.get_id()
 
-        # Prefer the app-registered notification MODEL when one exists —
-        # model creation runs the app's hooks (public ids, casts,
-        # tenant scoping) that a raw table insert would silently skip.
-        from cara.notifications.Notifiable import Notifiable
-
-        model = Notifiable._notification_model
-        if model is not None:
-            payload = {
-                key: value
-                for key, value in record.items()
-                if key not in ("id", "created_at", "updated_at", "metadata")
-            }
-            payload["metadata"] = data if isinstance(data, dict) else {"value": str(data)}
-            model.create(payload)
-            return True
-
-        # Store in database (raw-table fallback for model-less apps)
         return self._store_notification(record)
 
     def _get_notifiable_id(self, notifiable) -> Any:
@@ -164,6 +117,12 @@ class DatabaseChannel(BaseChannel):
         except Exception:
             return str(data)
 
+    def _get_notifiable_type(self, notifiable) -> str:
+        """Get the framework-level polymorphic recipient type."""
+        if hasattr(notifiable, "get_notification_type"):
+            return str(notifiable.get_notification_type())
+        return notifiable.__class__.__name__
+
     def _store_notification(self, record: dict[str, Any]) -> bool:
         """
         Store notification record in database.
@@ -190,9 +149,11 @@ class DatabaseChannel(BaseChannel):
         Returns:
             True if updated successfully, False otherwise
         """
-        user_id = self._get_notifiable_id(notifiable)
-
-        query = self.database_manager.table(self.table_name).where("user_id", user_id)
+        query = (
+            self.database_manager.table(self.table_name)
+            .where("notifiable_type", self._get_notifiable_type(notifiable))
+            .where("notifiable_id", self._get_notifiable_id(notifiable))
+        )
 
         if notification_ids:
             query = query.where_in("id", notification_ids)
@@ -211,9 +172,11 @@ class DatabaseChannel(BaseChannel):
         Returns:
             List of notifications
         """
-        user_id = self._get_notifiable_id(notifiable)
-
-        query = self.database_manager.table(self.table_name).where("user_id", user_id)
+        query = (
+            self.database_manager.table(self.table_name)
+            .where("notifiable_type", self._get_notifiable_type(notifiable))
+            .where("notifiable_id", self._get_notifiable_id(notifiable))
+        )
 
         if read is True:
             query = query.where_not_null("read_at")
@@ -221,3 +184,15 @@ class DatabaseChannel(BaseChannel):
             query = query.where_null("read_at")
 
         return query.order_by("created_at", "desc").get()
+
+    def mark_as_unread(self, notifiable, notification_ids: list | None = None) -> bool:
+        """Mark notifications as unread for one polymorphic recipient."""
+        query = (
+            self.database_manager.table(self.table_name)
+            .where("notifiable_type", self._get_notifiable_type(notifiable))
+            .where("notifiable_id", self._get_notifiable_id(notifiable))
+        )
+        if notification_ids:
+            query = query.where_in("id", notification_ids)
+        query.update({"read_at": None})
+        return True

@@ -96,7 +96,7 @@ class CompressResponses(Middleware):
                     lvl = int(cfg_level)
                     if 1 <= lvl <= 9:
                         level = lvl
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     pass
             cfg_types = config("compression.compression.content_types", None)
             if isinstance(cfg_types, (list, tuple)) and cfg_types:
@@ -109,7 +109,9 @@ class CompressResponses(Middleware):
             )
         return enabled, min_size, level, prefixes
 
-    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[..., Awaitable[Any]]
+    ) -> Response:
         response = await next_fn(request)
 
         if not self._enabled:
@@ -189,7 +191,7 @@ class CompressResponses(Middleware):
                             existing = v
                             break
             return bool(existing) and str(existing).strip().lower() != "identity"
-        except (AttributeError, TypeError, RuntimeError):
+        except AttributeError, TypeError, RuntimeError:
             return False
 
     @staticmethod
@@ -200,7 +202,7 @@ class CompressResponses(Middleware):
                 ct = headers.get("Content-Type")
                 if ct:
                     return str(ct).split(";", 1)[0].strip().lower()
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
+        except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
         return ""
 
@@ -224,7 +226,7 @@ class CompressResponses(Middleware):
             # defeats the streaming and risks OOM on large feeds.
             if isinstance(content, (Iterable,)) and not isinstance(content, (bytes, str)):
                 return None
-        except (AttributeError, TypeError, RuntimeError):
+        except AttributeError, TypeError, RuntimeError:
             return None
         return None
 

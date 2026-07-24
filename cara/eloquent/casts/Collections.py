@@ -31,7 +31,7 @@ class ArrayCast(BaseCast):
                 if not isinstance(parsed, list):
                     return []
                 return parsed
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 return []
 
         return []
@@ -69,7 +69,12 @@ class ArrayCast(BaseCast):
             try:
                 from cara.facades import Log
 
-                Log.warning("ArrayCast: dropped %s input (repr=%s); expected list — storing as '[]'", type(value).__name__, value, category='cast.array')
+                Log.warning(
+                    "ArrayCast: dropped %s input (repr=%s); expected list — storing as '[]'",
+                    type(value).__name__,
+                    value,
+                    category="cast.array",
+                )
             except Exception:
                 # Facade not bound (unit-test boot order, etc.) —
                 # fall back to stdlib logging so the warning still
@@ -113,7 +118,7 @@ class CollectionCast(BaseCast):
                 parsed = json.loads(value)
                 if isinstance(parsed, list):
                     return Collection(parsed)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
 
         return Collection([])
@@ -131,7 +136,7 @@ class CollectionCast(BaseCast):
                 parsed = json.loads(value)
                 if isinstance(parsed, list):
                     return parsed
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
 
         return []

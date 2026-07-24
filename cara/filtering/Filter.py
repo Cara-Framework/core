@@ -291,7 +291,7 @@ class Filter(ABC):
                         cleaned = [str(x).strip() for x in parsed if str(x).strip()]
                     else:
                         cleaned = []
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     cleaned = []
             else:
                 cleaned = [x.strip() for x in text.split(",") if x.strip()]
@@ -353,7 +353,7 @@ class Filter(ABC):
             return None
         try:
             value = float(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         # ``math.isfinite`` rejects ``inf``, ``-inf``, and ``NaN``.
         # ROOT-CAUSE NOTE (stress-test scenario 2, cycle 1):
@@ -379,7 +379,7 @@ class Filter(ABC):
             return None
         try:
             value = int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         if min_val is not None and value < min_val:
             return None

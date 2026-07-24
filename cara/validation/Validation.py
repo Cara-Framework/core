@@ -48,20 +48,12 @@ class Validation(ValidationContract):
     # value, so it has nothing to say about a key that was never sent and is
     # skipped — absence is an error only when one of these asks for it.
     #
-    # Both spellings are listed because ``_discover_rules`` registers each
-    # class under its camel-concat name AND its snake_case name
-    # (``requiredif`` / ``required_if``), and the chain is matched by the
-    # literal token the caller wrote.
     _IMPLICIT_RULES = frozenset(
         {
             "required",
-            "requiredif",
             "required_if",
-            "requiredunless",
             "required_unless",
-            "requiredwith",
             "required_with",
-            "requiredwithout",
             "required_without",
             "present",
             "filled",
@@ -111,20 +103,13 @@ class Validation(ValidationContract):
                         and obj is not Rule
                         and obj.__module__ == qualified
                     ):
-                        # Register under both camel-concat form (backwards
-                        # compatibility: "dateformat") and the Laravel
-                        # snake_case form ("date_format") so both strings
-                        # resolve to the same rule class.
                         base = module_name[:-4]  # strip "Rule" suffix
-                        classes[base.lower()] = obj
-                        snake = self._camel_to_snake(base)
-                        if snake != base.lower():
-                            classes[snake] = obj
-        # Laravel parity aliases that CamelCase→snake does not produce
-        # (``AlphanumRule`` → ``alphanum``, but Laravel expects ``alpha_num``).
-        for alias, canonical in (("alpha_num", "alphanum"),):
-            if canonical in classes and alias not in classes:
-                classes[alias] = classes[canonical]
+                        canonical = (
+                            "alpha_num"
+                            if base == "Alphanum"
+                            else self._camel_to_snake(base)
+                        )
+                        classes[canonical] = obj
         return classes
 
     @staticmethod
@@ -448,7 +433,7 @@ class Validation(ValidationContract):
         elif isinstance(current, list):
             try:
                 child = current[int(head)]
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 return
         else:
             return

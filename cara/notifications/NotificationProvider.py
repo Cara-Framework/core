@@ -32,8 +32,7 @@ class NotificationProvider(DeferredProvider):
 
     def register(self) -> None:
         """Register notification services with configuration."""
-        default_channels = config("notifications.default", ["mail", "database"])
-        notification_manager = Notification(self.application, default_channels)
+        notification_manager = Notification()
 
         self._add_mail_channel(notification_manager)
         self._add_database_channel(notification_manager)
@@ -79,12 +78,14 @@ class NotificationProvider(DeferredProvider):
                 database_manager=query_builder,
                 table_name=config(
                     "notifications.channels.database.table",
-                    "notification",
+                    "notifications",
                 ),
             )
             notification_manager.add_channel(DatabaseChannel.channel_name, channel)
         except Exception as e:
-            Log.warning("[NotificationProvider] Database channel registration failed: %s", e)
+            Log.warning(
+                "[NotificationProvider] Database channel registration failed: %s", e
+            )
 
     def _add_slack_channel(self, notification_manager: Notification) -> None:
         """Register Slack notification channel with configuration.

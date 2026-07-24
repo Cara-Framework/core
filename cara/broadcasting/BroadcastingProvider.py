@@ -87,7 +87,12 @@ class BroadcastingProvider(DeferredProvider):
         except Exception as e:
             # Real syntax/import error — surface it so apps don't ship
             # broken auth silently.
-            Log.error("Failed to import routes.broadcasting: %s", e, category='cara.broadcasting', exc_info=True)
+            Log.error(
+                "Failed to import routes.broadcasting: %s",
+                e,
+                category="cara.broadcasting",
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Driver registration helpers

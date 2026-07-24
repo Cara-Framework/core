@@ -111,7 +111,7 @@ def safe_call[T](
                     else f"{log_message}: {error}"
                 )
                 Log.warning(msg)
-            except (ImportError, RuntimeError, AttributeError):
+            except ImportError, RuntimeError, AttributeError:
                 # The Log facade itself failed — re-invoking it (the old
                 # "fallback") just re-raised the same failure. Fall back
                 # to stderr so the swallow is still visible somewhere.
@@ -186,7 +186,7 @@ class _OptionalProxy:
             return _OptionalProxy(None)
         try:
             return wrapped[key]
-        except (KeyError, IndexError, TypeError):
+        except KeyError, IndexError, TypeError:
             return _OptionalProxy(None)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -312,7 +312,7 @@ def blank(value: Any) -> bool:
         return len(value) == 0
     try:
         return not bool(value)
-    except (TypeError, ValueError, RuntimeError):
+    except TypeError, ValueError, RuntimeError:
         return False
 
 
@@ -335,7 +335,7 @@ def head(items: Any) -> Any:
         return items[0] if items else None
     try:
         return next(iter(items))
-    except (StopIteration, TypeError):
+    except StopIteration, TypeError:
         return None
 
 
@@ -356,7 +356,7 @@ def last(items: Any) -> Any:
         return items[-1] if items else None
     try:
         return list(items)[-1]
-    except (TypeError, IndexError):
+    except TypeError, IndexError:
         return None
 
 

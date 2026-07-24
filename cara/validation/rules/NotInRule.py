@@ -10,7 +10,7 @@ from cara.validation.rules.BaseRule import BaseRule
 
 class NotInRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        raw = params.get("not_in") or params.get("notin")
+        raw = params.get("not_in")
         if raw is None:
             return True
         forbidden = [v.strip() for v in raw.split(",")]

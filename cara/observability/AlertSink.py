@@ -62,13 +62,15 @@ class AlertSink:
             if cls._post_pagerduty(severity, title, body, dedup_key, context):
                 delivered = True
         except Exception as exc:
-            Log.warning("AlertSink: PagerDuty post failed: %s", exc, category='alert.sink')
+            Log.warning(
+                "AlertSink: PagerDuty post failed: %s", exc, category="alert.sink"
+            )
 
         try:
             if cls._post_slack(severity, title, body, context):
                 delivered = True
         except Exception as exc:
-            Log.warning("AlertSink: Slack post failed: %s", exc, category='alert.sink')
+            Log.warning("AlertSink: Slack post failed: %s", exc, category="alert.sink")
 
         if not delivered:
             _sev = str(severity or "").lower()
@@ -119,9 +121,7 @@ class AlertSink:
             "event_action": event_action,
             "payload": {
                 "summary": title[:1024],
-                "source": config(
-                    "notifications.alerts_source_hostname", "app"
-                ),
+                "source": config("notifications.alerts_source_hostname", "app"),
                 "severity": pd_severity,
                 "custom_details": {
                     "body": body[:4096] if body else "",
@@ -141,7 +141,12 @@ class AlertSink:
             with urlopen(req, timeout=cls.HTTP_TIMEOUT_SECONDS) as resp:
                 return 200 <= resp.status < 300
         except (HTTPError, URLError, TimeoutError) as exc:
-            Log.warning("PagerDuty enqueue failed (severity=%s): %s", severity, exc, category='alert.sink')
+            Log.warning(
+                "PagerDuty enqueue failed (severity=%s): %s",
+                severity,
+                exc,
+                category="alert.sink",
+            )
             return False
 
     @classmethod
@@ -166,7 +171,7 @@ class AlertSink:
         if context:
             try:
                 ctx_str = f"\n```\n{json.dumps(context, indent=2, sort_keys=True, default=str)[:1800]}\n```"
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 ctx_str = ""
         text = f"{emoji} *{title}*\n{body}{ctx_str}"
         try:
@@ -178,7 +183,7 @@ class AlertSink:
             with urlopen(req, timeout=cls.HTTP_TIMEOUT_SECONDS) as resp:
                 return 200 <= resp.status < 300
         except (HTTPError, URLError, TimeoutError) as exc:
-            Log.warning("Slack webhook failed: %s", exc, category='alert.sink')
+            Log.warning("Slack webhook failed: %s", exc, category="alert.sink")
             return False
 
 

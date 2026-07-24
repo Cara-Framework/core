@@ -25,6 +25,7 @@ class EloquentProvider(Provider):
         from cara.configuration import (
             config,  # lazy import: avoid circular import at boot
         )
+
         # Read database config explicitly (single responsibility)
         default_connection = config("database.default", "app")
         connection_details = config("database.drivers", {})

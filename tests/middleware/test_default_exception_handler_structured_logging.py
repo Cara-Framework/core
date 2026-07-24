@@ -16,9 +16,7 @@ import sys
 import types
 from unittest.mock import MagicMock
 
-_handler_mod = importlib.import_module(
-    "cara.exceptions.handlers.DefaultExceptionHandler"
-)
+_handler_mod = importlib.import_module("cara.exceptions.handlers.DefaultExceptionHandler")
 DefaultExceptionHandler = _handler_mod.DefaultExceptionHandler
 
 

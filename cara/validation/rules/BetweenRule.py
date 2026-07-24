@@ -30,7 +30,7 @@ class BetweenRule(BaseRule):
             min_val, max_val = between_param.split(",", 1)
             min_val = float(min_val.strip())
             max_val = float(max_val.strip())
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             return False
 
         if isinstance(value, bool):
@@ -45,8 +45,13 @@ class BetweenRule(BaseRule):
             try:
                 from cara.facades import Log
 
-                Log.warning("BetweenRule misconfig: field=%s has inverted bounds (min=%s > max=%s) — every input fails by design. Check the rule spec.", field, min_val, max_val)
-            except (ImportError, RuntimeError):
+                Log.warning(
+                    "BetweenRule misconfig: field=%s has inverted bounds (min=%s > max=%s) — every input fails by design. Check the rule spec.",
+                    field,
+                    min_val,
+                    max_val,
+                )
+            except ImportError, RuntimeError:
                 pass
 
         chain = params.get("_rules") or ()

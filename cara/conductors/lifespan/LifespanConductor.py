@@ -80,7 +80,12 @@ class LifespanConductor:
                 else:
                     cb()
             except Exception as e:
-                Log.error("Startup callback error: %s", e, category='cara.lifespan', exc_info=True)
+                Log.error(
+                    "Startup callback error: %s",
+                    e,
+                    category="cara.lifespan",
+                    exc_info=True,
+                )
                 raise
 
     async def _handle_shutdown(self) -> None:
@@ -100,7 +105,12 @@ class LifespanConductor:
                 else:
                     cb()
             except Exception as e:
-                Log.error("Shutdown callback error: %s", e, category='cara.lifespan', exc_info=True)
+                Log.error(
+                    "Shutdown callback error: %s",
+                    e,
+                    category="cara.lifespan",
+                    exc_info=True,
+                )
                 if first_exc is None:
                     first_exc = e
         if first_exc is not None:

@@ -24,7 +24,7 @@ class TimezoneRule(BaseRule):
         try:
             ZoneInfo(value)
             return True
-        except (KeyError, ValueError, TypeError):
+        except KeyError, ValueError, TypeError:
             return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:

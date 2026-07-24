@@ -51,6 +51,6 @@ class SchemaQueryExecutor:
             close = getattr(connection, "close_connection", None)
             if callable(close):
                 close()
-        except (OSError, RuntimeError, AttributeError):
+        except OSError, RuntimeError, AttributeError:
             # A failed release should never mask the real query result.
             pass

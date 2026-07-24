@@ -21,9 +21,6 @@ class SendNotificationJob(BaseJob):
     BaseJob already includes SerializesModels for proper serialization.
     """
 
-    # Notification-specific queue settings
-    default_queue = "notifications"
-
     def __init__(self, notifiable, notification):
         """
         Initialize the notification job.

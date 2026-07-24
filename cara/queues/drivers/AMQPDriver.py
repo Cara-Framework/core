@@ -634,6 +634,22 @@ class AMQPDriver(HasColoredOutput, Queue):
                 MetricsBase.queue_delivery_priority_latency_budget_seconds.labels(
                     priority=priority
                 ).set(backlog["latency_budget"])
+            for queue, backlog in snapshot["lane_backlog"].items():
+                MetricsBase.queue_delivery_lane_pending.labels(queue=queue).set(
+                    backlog["pending"]
+                )
+                MetricsBase.queue_delivery_lane_processing.labels(queue=queue).set(
+                    backlog["processing"]
+                )
+                MetricsBase.queue_delivery_lane_broker_outstanding.labels(
+                    queue=queue
+                ).set(backlog["broker_outstanding"])
+                MetricsBase.queue_delivery_lane_oldest_due_age_seconds.labels(
+                    queue=queue
+                ).set(backlog["oldest_due_age"])
+                MetricsBase.queue_delivery_lane_throughput_per_second.labels(
+                    queue=queue
+                ).set(backlog["throughput_per_second"])
             MetricsBase.queue_delivery_broker_window_max_outstanding.set(
                 snapshot["broker_window"]["max_outstanding"]
             )
@@ -744,7 +760,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         )
         try:
             fraction = float(fraction)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             fraction = self.DEFAULT_RETRY_JITTER_FRACTION
         if fraction <= 0:
             return base_delay
@@ -893,12 +909,12 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 if self.channel is not None:
                     self.channel.close()
-            except (OSError, ConnectionError, RuntimeError, AttributeError):
+            except OSError, ConnectionError, RuntimeError, AttributeError:
                 pass
             try:
                 if self.connection is not None:
                     self.connection.close()
-            except (OSError, ConnectionError, RuntimeError, AttributeError):
+            except OSError, ConnectionError, RuntimeError, AttributeError:
                 pass
             self.channel = None
             self.connection = None
@@ -1076,7 +1092,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 if self.connection.is_open and self.channel.is_open:
                     return
-            except (OSError, ConnectionError, RuntimeError, AttributeError):
+            except OSError, ConnectionError, RuntimeError, AttributeError:
                 pass
             # Stale handle — drop it and fall through.
             self._discard_thread_connection()
@@ -1122,7 +1138,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             try:
                 if self.connection.is_open and self.channel.is_open:
                     return
-            except (OSError, ConnectionError, RuntimeError, AttributeError):
+            except OSError, ConnectionError, RuntimeError, AttributeError:
                 pass
         self.connection, self.channel = self._open_new_connection(opts)
 

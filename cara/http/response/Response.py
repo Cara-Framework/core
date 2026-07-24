@@ -42,12 +42,15 @@ class Response(BaseResponse):
         self.headers = HeaderManager(self.header_bag)
         self.factory = ResponseFactory(self)
         self.streaming = StreamingResponse(self)
-        self._stream_spec: tuple[
-            AsyncGenerator[bytes],
-            int,
-            str,
-            dict[str, str] | None,
-        ] | None = None
+        self._stream_spec: (
+            tuple[
+                AsyncGenerator[bytes],
+                int,
+                str,
+                dict[str, str] | None,
+            ]
+            | None
+        ) = None
 
     def clone_from(self, other: Response) -> None:
         """
@@ -180,11 +183,7 @@ class Response(BaseResponse):
         **extra_meta: Any,
     ) -> Response:
         """Cursor-paginated collection with ``LIMIT n+1`` lookahead metadata."""
-        if (
-            isinstance(limit, bool)
-            or not isinstance(limit, int)
-            or not 1 <= limit <= 100
-        ):
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("cursor pagination limit must be between 1 and 100")
         if not isinstance(has_more, bool):
             raise TypeError("has_more must be boolean")
@@ -509,9 +508,9 @@ class Response(BaseResponse):
 
         async def chunks() -> AsyncGenerator[bytes]:
             async for data in data_generator:
-                yield (
-                    json.dumps(data, ensure_ascii=False, default=str) + "\n"
-                ).encode("utf-8")
+                yield (json.dumps(data, ensure_ascii=False, default=str) + "\n").encode(
+                    "utf-8"
+                )
 
         return self.stream(
             chunks(),
@@ -527,6 +526,7 @@ class Response(BaseResponse):
         headers: dict[str, str] | None = None,
     ) -> Response:
         """Stream Server-Sent Events."""
+
         async def chunks() -> AsyncGenerator[bytes]:
             async for event in event_generator:
                 yield self.streaming._format_sse_event(event).encode("utf-8")

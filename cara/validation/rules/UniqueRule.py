@@ -59,8 +59,16 @@ class UniqueRule(BaseRule):
             try:
                 from cara.facades import Log
 
-                Log.error("UniqueRule: DB query failed for %s.%s: %s: %s", table, column, exc.__class__.__name__, exc, category='cara.validation.unique', exc_info=True)
-            except (ImportError, RuntimeError):
+                Log.error(
+                    "UniqueRule: DB query failed for %s.%s: %s: %s",
+                    table,
+                    column,
+                    exc.__class__.__name__,
+                    exc,
+                    category="cara.validation.unique",
+                    exc_info=True,
+                )
+            except ImportError, RuntimeError:
                 pass
             return False
 

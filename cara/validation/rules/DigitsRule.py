@@ -18,7 +18,7 @@ class DigitsRule(BaseRule):
         s = str(value)
         try:
             expected = int(length)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return False
         return bool(re.fullmatch(r"[0-9]+", s)) and len(s) == expected
 

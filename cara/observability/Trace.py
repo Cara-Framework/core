@@ -123,7 +123,7 @@ def record_exception(exc: BaseException) -> None:
     try:
         s.record_exception(exc)
         s.set_status(_trace.Status(_trace.StatusCode.ERROR, str(exc)))
-    except (OSError, RuntimeError, AttributeError, ConnectionError):
+    except OSError, RuntimeError, AttributeError, ConnectionError:
         pass
 
 
@@ -138,7 +138,7 @@ def current_trace_id() -> str:
         ctx = _trace.get_current_span().get_span_context()
         if getattr(ctx, "is_valid", False) and ctx.trace_id:
             return format(ctx.trace_id, "032x")
-    except (OSError, RuntimeError, AttributeError, ConnectionError):
+    except OSError, RuntimeError, AttributeError, ConnectionError:
         pass
     return ""
 
@@ -155,7 +155,7 @@ def current_span_id() -> str:
         ctx = _trace.get_current_span().get_span_context()
         if getattr(ctx, "is_valid", False) and ctx.span_id:
             return format(ctx.span_id, "016x")
-    except (OSError, RuntimeError, AttributeError, ConnectionError):
+    except OSError, RuntimeError, AttributeError, ConnectionError:
         pass
     return ""
 

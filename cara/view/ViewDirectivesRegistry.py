@@ -4,7 +4,6 @@ ViewDirectivesRegistry - Default directive registration for Cara framework
 This file provides default directive registration functionality.
 """
 
-
 from __future__ import annotations
 
 

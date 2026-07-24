@@ -132,8 +132,16 @@ class ValidationException(CaraException):
                     self._extract_first_error_from_dict(all_errors)
             except Exception as exc:
                 if logger is not None:
-                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
-                        logger.debug("ValidationException: errors() method on %s raised %s: %s — falling back to generic envelope", type(self.validation_errors).__name__, type(exc).__name__, exc, category='validation')
+                    with contextlib.suppress(
+                        OSError, RuntimeError, AttributeError, ConnectionError
+                    ):
+                        logger.debug(
+                            "ValidationException: errors() method on %s raised %s: %s — falling back to generic envelope",
+                            type(self.validation_errors).__name__,
+                            type(exc).__name__,
+                            exc,
+                            category="validation",
+                        )
 
         # Try first_error() method for main message
         if hasattr(self.validation_errors, "first_error"):
@@ -143,8 +151,16 @@ class ValidationException(CaraException):
                     self._extracted_message = first_error
             except Exception as exc:
                 if logger is not None:
-                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
-                        logger.debug("ValidationException: first_error() method on %s raised %s: %s — falling back to generic envelope", type(self.validation_errors).__name__, type(exc).__name__, exc, category='validation')
+                    with contextlib.suppress(
+                        OSError, RuntimeError, AttributeError, ConnectionError
+                    ):
+                        logger.debug(
+                            "ValidationException: first_error() method on %s raised %s: %s — falling back to generic envelope",
+                            type(self.validation_errors).__name__,
+                            type(exc).__name__,
+                            exc,
+                            category="validation",
+                        )
 
     def _extract_first_error_from_dict(self, errors_dict: dict[str, Any]) -> None:
         """Extract first error message from errors dictionary."""

@@ -310,7 +310,7 @@ class Queueable(SerializesModels):
         """Safely serialize job data for database storage."""
         try:
             return self.serialize()
-        except (TypeError, ValueError, AttributeError, RuntimeError):
+        except TypeError, ValueError, AttributeError, RuntimeError:
             # Fallback to basic info if serialize fails
             return {
                 "job_class": self.__class__.__name__,

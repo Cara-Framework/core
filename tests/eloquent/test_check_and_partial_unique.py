@@ -196,6 +196,4 @@ def test_plain_unique_alter_is_byte_identical(platform):
     blueprint.unique("email")
 
     sql = blueprint.to_sql()
-    assert sql == [
-        'ALTER TABLE "users" ADD CONSTRAINT users_email_unique UNIQUE(email)'
-    ]
+    assert sql == ['ALTER TABLE "users" ADD CONSTRAINT users_email_unique UNIQUE(email)']

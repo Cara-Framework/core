@@ -5,7 +5,6 @@ This module defines a marker interface that indicates a class should be processe
 system rather than synchronously.
 """
 
-
 from __future__ import annotations
 
 

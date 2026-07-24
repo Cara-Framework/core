@@ -189,9 +189,7 @@ class Atomic:
                 if not retriable:
                     raise
                 # Brief escalating backoff before re-running the closure.
-                delay = min(
-                    _RETRY_BACKOFF_SECONDS * attempt, _RETRY_BACKOFF_CAP_SECONDS
-                )
+                delay = min(_RETRY_BACKOFF_SECONDS * attempt, _RETRY_BACKOFF_CAP_SECONDS)
                 if delay > 0:
                     time.sleep(delay)
 
@@ -228,6 +226,7 @@ class Atomic:
         attempts = self.attempts
 
         if inspect.iscoroutinefunction(func):
+
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
                 return await _run_async_atomic(
@@ -305,8 +304,7 @@ def atomic(connection=None, attempts: int = 1):
     Usage as a retrying decorator::
 
         @atomic(attempts=3)
-        def transfer():
-            ...  # re-run up to 3× on deadlock / serialization failure
+        def transfer(): ...  # re-run up to 3× on deadlock / serialization failure
 
     Nested usage (inner becomes savepoint)::
 

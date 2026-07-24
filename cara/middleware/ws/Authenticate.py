@@ -129,7 +129,7 @@ class Authenticate(Middleware):
             for k, v in socket.scope.get("headers", []):
                 if k == b"origin":
                     return v.decode("latin-1", errors="replace")
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
+        except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
         return ""
 

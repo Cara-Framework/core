@@ -17,7 +17,9 @@ from cara.middleware import Middleware
 
 
 class AttachRequestID(Middleware):
-    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[..., Awaitable[Any]]
+    ) -> Response:
         # Honour a caller-supplied ``X-Request-ID`` so multi-hop traces
         # (load balancer → API → background job) share one ID instead
         # of starting a fresh UUID at each tier. Falls through to the
@@ -27,7 +29,7 @@ class AttachRequestID(Middleware):
             incoming = headers.get("X-Request-ID") or headers.get("x-request-id")
             if incoming:
                 request.request_id = str(incoming)[:64]
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             pass
 
         with contextlib.suppress(AttributeError, TypeError):
@@ -39,7 +41,7 @@ class AttachRequestID(Middleware):
             set_request_tag("request_id", request.request_id)
         except ImportError:
             pass
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             pass
 
         response = await next_fn(request)

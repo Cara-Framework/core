@@ -68,10 +68,9 @@ class _CrashDB:
 
     def select(self, sql, params):
         if "WHERE delivery.status = %s" in sql:
-            if (
-                self.row["status"] == "processing"
-                and self.row["lease_expires_at"] <= pendulum.now("UTC")
-            ):
+            if self.row["status"] == "processing" and self.row[
+                "lease_expires_at"
+            ] <= pendulum.now("UTC"):
                 return [
                     {
                         "job_id": self.row["job_id"],
@@ -105,9 +104,7 @@ class _CrashDB:
                 self.row["publish_lease_expires_at"] = params[5]
                 return dict(self.row)
             return None
-        if sql.startswith(
-            "UPDATE queue_job_delivery SET publish_status = %s"
-        ):
+        if sql.startswith("UPDATE queue_job_delivery SET publish_status = %s"):
             if (
                 self.row["status"] == "pending"
                 and self.row["publish_status"] == "pending"
@@ -118,9 +115,7 @@ class _CrashDB:
             return None
         if "WHERE job_id = %s FOR UPDATE" in sql:
             return dict(self.row)
-        if sql.startswith(
-            "SELECT publish_status, published_at FROM queue_job_delivery"
-        ):
+        if sql.startswith("SELECT publish_status, published_at FROM queue_job_delivery"):
             return {
                 "publish_status": self.row["publish_status"],
                 "published_at": self.row.get("published_at"),
@@ -249,8 +244,7 @@ class _RetryTrackerModel:
 
     def update(self, values: dict):
         matches = all(
-            getattr(self.record, field) == value
-            for field, value in self.filters
+            getattr(self.record, field) == value for field, value in self.filters
         )
         self.filters.clear()
         if not matches:
@@ -352,9 +346,7 @@ def test_durable_recovery_outcomes_are_acked_without_quorum_redelivery_loop(
     monkeypatch,
     claim_outcome,
 ):
-    module = importlib.import_module(
-        "cara.commands.core.QueueWorkCommand"
-    )
+    module = importlib.import_module("cara.commands.core.QueueWorkCommand")
     payload = {
         "job_id": _JOB_ID,
         "db_job_id": 91,
@@ -369,16 +361,12 @@ def test_durable_recovery_outcomes_are_acked_without_quorum_redelivery_loop(
         lambda *_args, **_kwargs: {"payload": payload},
     )
     queue_service = SimpleNamespace(
-        driver=lambda *_args, **_kwargs: SimpleNamespace(
-            delivery_store=delivery_store
-        )
+        driver=lambda *_args, **_kwargs: SimpleNamespace(delivery_store=delivery_store)
     )
     application = SimpleNamespace(
         has=lambda _key: False,
         make=lambda key: (
-            queue_service
-            if key == "queue"
-            else (_ for _ in ()).throw(KeyError(key))
+            queue_service if key == "queue" else (_ for _ in ()).throw(KeyError(key))
         ),
     )
     monkeypatch.setattr(
@@ -388,9 +376,7 @@ def test_durable_recovery_outcomes_are_acked_without_quorum_redelivery_loop(
         raising=False,
     )
     acks: list[int] = []
-    channel = SimpleNamespace(
-        basic_ack=lambda *, delivery_tag: acks.append(delivery_tag)
-    )
+    channel = SimpleNamespace(basic_ack=lambda *, delivery_tag: acks.append(delivery_tag))
 
     result = module.JobProcessor.process_message(
         channel,
@@ -450,9 +436,7 @@ def test_retry_source_redelivery_repairs_tracker_and_acks_without_deserializing(
         ),
     )
     queue_service = SimpleNamespace(
-        driver=lambda *_args, **_kwargs: SimpleNamespace(
-            delivery_store=delivery_store
-        )
+        driver=lambda *_args, **_kwargs: SimpleNamespace(delivery_store=delivery_store)
     )
     application = SimpleNamespace(
         has=lambda key: key == "JobTracker",
@@ -460,9 +444,7 @@ def test_retry_source_redelivery_repairs_tracker_and_acks_without_deserializing(
             tracker
             if key == "JobTracker"
             else (
-                queue_service
-                if key == "queue"
-                else (_ for _ in ()).throw(KeyError(key))
+                queue_service if key == "queue" else (_ for _ in ()).throw(KeyError(key))
             )
         ),
     )
@@ -473,9 +455,7 @@ def test_retry_source_redelivery_repairs_tracker_and_acks_without_deserializing(
         raising=False,
     )
     acks: list[int] = []
-    channel = SimpleNamespace(
-        basic_ack=lambda *, delivery_tag: acks.append(delivery_tag)
-    )
+    channel = SimpleNamespace(basic_ack=lambda *, delivery_tag: acks.append(delivery_tag))
 
     result = module.JobProcessor.process_message(
         channel,

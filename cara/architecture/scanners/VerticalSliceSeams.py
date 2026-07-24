@@ -12,6 +12,13 @@ may appear outside ``packages/<plugin>/`` in exactly FOUR places:
    location is needed for it;
 4. manifest data — ``manifest.seam_locations.manifest_files``.
 
+Non-marketplace provider capabilities are not marketplace plug-ins. A product
+may declare an owned integration lane (for example
+``discovery/google_shopping``) and the exact token vocabulary that lane owns.
+The lane remains scanned; only its declared tokens are legal there. Core code
+still reaches the lane through a generic registry/port rather than importing a
+provider implementation.
+
 What counts as a token appearance:
 
 * **identifier surfaces** — module-path parts, class/function/async-def
@@ -140,12 +147,34 @@ def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[st
     return hits
 
 
-def _seam_filter(manifest: Manifest, rel: str, hits: list[str]) -> list[str]:
+def _seam_filter(
+    manifest: Manifest,
+    rel: str,
+    hits: list[str],
+    token_re: re.Pattern[str],
+) -> list[str]:
     seams = manifest.seam_locations
+    # The architecture manifest is itself machine-readable manifest data. Its
+    # token inventory and counted sunset paths must not become self-findings
+    # when literal scanning is enabled.
+    if rel == "app/architecture_manifest.py":
+        return []
     if rel in seams.composition_roots:
         return []
     if rel in seams.manifest_files:
         return []
+    for prefix, owned_tokens in seams.owned_integration_prefixes.items():
+        normalized = prefix.rstrip("/")
+        if rel != normalized and not rel.startswith(f"{normalized}/"):
+            continue
+        allowed = {token.casefold() for token in owned_tokens}
+        remaining: list[str] = []
+        for hit in hits:
+            present = {match.group(0).casefold() for match in token_re.finditer(hit)}
+            if present and present <= allowed:
+                continue
+            remaining.append(hit)
+        return remaining
     if any(rel.startswith(prefix) for prefix in seams.data_vocabulary_prefixes):
         remaining = []
         for hit in hits:
@@ -176,7 +205,7 @@ def _scan(manifest: Manifest) -> dict[str, list[str]]:
             hits = _identifier_hits(rel, tree, token_re)
             if manifest.scan_plugin_string_literals:
                 hits += _string_literal_hits(tree, token_re)
-            hits = _seam_filter(manifest, rel, hits)
+            hits = _seam_filter(manifest, rel, hits, token_re)
             if hits:
                 found[rel] = hits
     return found
@@ -189,6 +218,16 @@ class VerticalSliceSeams:
     def scan(manifest: Manifest) -> list[Finding]:
         if not manifest.plugin_tokens:
             return []
+        if not manifest.scan_plugin_string_literals:
+            return [
+                Finding(
+                    "app/architecture_manifest.py",
+                    0,
+                    "scan_plugin_string_literals must be true when plugin_tokens "
+                    "are declared — identifier-only scanning leaves branch and "
+                    "lookup coupling invisible",
+                )
+            ]
         found = _scan(manifest)
         allowlist = manifest.seam_allowlists.get(SEAM_KEY, {})
         findings: list[Finding] = []

@@ -126,7 +126,13 @@ class JobTracker:
                     job_record.metadata = enriched_metadata
                     job_record.save()
 
-            Log.debug("🚀 Job started: %s[%s] for entity %s", job_name, job_uid, entity_id, category='cara.queue.jobs')
+            Log.debug(
+                "🚀 Job started: %s[%s] for entity %s",
+                job_name,
+                job_uid,
+                entity_id,
+                category="cara.queue.jobs",
+            )
             return job_uid
 
         except Exception as e:
@@ -174,13 +180,15 @@ class JobTracker:
         """
         try:
             if not self.job_model:
-                Log.error("💥 Job failed: %s - %s", job_uid, error, category='cara.queue.jobs')
+                Log.error(
+                    "💥 Job failed: %s - %s", job_uid, error, category="cara.queue.jobs"
+                )
                 return None
 
             # Get current job info
             job_record = self.job_model.where("job_uid", job_uid).first()
             if not job_record:
-                Log.error("Job not found for %s", job_uid, category='cara.queue.jobs')
+                Log.error("Job not found for %s", job_uid, category="cara.queue.jobs")
                 return None
 
             # Mark current attempt as failed
@@ -197,7 +205,12 @@ class JobTracker:
                 return self._schedule_retry(job_record, error)
             else:
                 self._move_to_dead_letter(job_record, error)
-                Log.error("💀 Job failed permanently: %s after %s attempts", job_uid, job_record.attempt, category='cara.queue.jobs')
+                Log.error(
+                    "💀 Job failed permanently: %s after %s attempts",
+                    job_uid,
+                    job_record.attempt,
+                    category="cara.queue.jobs",
+                )
                 return None
 
         except Exception as e:
@@ -312,9 +325,7 @@ class JobTracker:
                 avg_processing_time = total_time / len(successful_jobs)
 
             success_count = sum(
-                count
-                for status, count in status_counts.items()
-                if status in succeeded
+                count for status, count in status_counts.items() if status in succeeded
             )
 
             return {
@@ -365,7 +376,11 @@ class JobTracker:
                 job_record.cancelled_at = pendulum.now("UTC")
                 job_record.save()
                 cancelled_count += 1
-                Log.debug("Cancelled conflicting job: %s for entity %s", job_record.job_uid, entity_id)
+                Log.debug(
+                    "Cancelled conflicting job: %s for entity %s",
+                    job_record.job_uid,
+                    entity_id,
+                )
 
             return cancelled_count
 
@@ -398,7 +413,13 @@ class JobTracker:
             job_record.metadata = metadata
             job_record.save()
 
-            Log.debug("🔄 Retry scheduled: %s[%s] attempt %s in %ss", job_record.name, retry_job_uid, next_attempt, delay_seconds)
+            Log.debug(
+                "🔄 Retry scheduled: %s[%s] attempt %s in %ss",
+                job_record.name,
+                retry_job_uid,
+                next_attempt,
+                delay_seconds,
+            )
             return retry_job_uid
 
         except Exception as e:
@@ -414,7 +435,12 @@ class JobTracker:
             job_record.metadata = metadata
             job_record.save()
 
-            Log.error("💀 Job moved to dead letter: %s[%s] - %s", job_record.name, job_record.job_uid, final_error)
+            Log.error(
+                "💀 Job moved to dead letter: %s[%s] - %s",
+                job_record.name,
+                job_record.job_uid,
+                final_error,
+            )
 
         except Exception as e:
             Log.warning("Failed to move job to dead letter: %s", str(e))
@@ -451,8 +477,7 @@ class JobTracker:
         if execution_mode not in allowed_modes:
             allowed = ", ".join(sorted(allowed_modes))
             raise ValueError(
-                f"execution_mode must be one of {allowed}; "
-                f"got {execution_mode!r}."
+                f"execution_mode must be one of {allowed}; got {execution_mode!r}."
             )
         try:
             if not self.job_model:

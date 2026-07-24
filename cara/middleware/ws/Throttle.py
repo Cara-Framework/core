@@ -25,10 +25,9 @@ The implementation mirrors ``ThrottleRequests`` for parity:
     starve each other.
   * Per-bucket limits come from ``rate.<name>`` config keys
     (e.g. ``rate.ws_connect``) so ops can tune without a code change.
-  * Cache failure defaults to fail-CLOSED (reject the handshake) —
-    mirrors the HTTP throttle's ``_DEFAULT_FAIL_OPEN = False``
-    contract in ``ThrottleRequests``. Operators who want the legacy
-    fail-open posture can flip ``rate.fail_open`` in config.
+  * Cache failure defaults to fail-CLOSED (reject the handshake).
+    Operators can explicitly select ``rate.fallback_mode = "open"``
+    when availability outweighs abuse protection.
   * Limit-exceeded rejects with WebSocket close code 4008, which
     the framework already documents in
     :class:`cara.exceptions.types.websocket.WebSocketException` as
@@ -54,7 +53,6 @@ from cara.support import mask_ip
 from cara.websocket import Socket
 
 _RATE_LIMIT_CLOSE_CODE = 4008  # WebSocketException docs: "Rate limit exceeded"
-_DEFAULT_FAIL_OPEN = False
 _DEFAULT_LIMIT_PER_MINUTE = 30
 _DEFAULT_WINDOW_SECONDS = 60
 
@@ -77,7 +75,7 @@ class Throttle(Middleware):
 
         # Shared counting + Redis-down fallback via the same helper the
         # HTTP throttle uses so both transports honour
-        # ``rate.fallback_mode`` / ``rate.fail_open`` uniformly.
+        # the canonical ``rate.fallback_mode`` uniformly.
         from cara.exceptions import ServiceUnavailableException
         from cara.rates.MemoryRateStore import attempt_with_fallback
 
@@ -88,8 +86,15 @@ class Throttle(Middleware):
                 max_attempts=limit,
             )
         except ServiceUnavailableException as e:
-            Log.warning("WebSocket throttle cache failure for key %s; failing closed. %s", key, e, category='cara.websocket')
-            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+            Log.warning(
+                "WebSocket throttle cache failure for key %s; failing closed. %s",
+                key,
+                e,
+                category="cara.websocket",
+            )
+            with contextlib.suppress(
+                OSError, RuntimeError, AttributeError, ConnectionError
+            ):
                 await socket.send(
                     {
                         "type": "websocket.close",
@@ -102,8 +107,17 @@ class Throttle(Middleware):
             ) from e
 
         if not allowed:
-            Log.warning("WebSocket throttle exceeded: ip=%s path=%s name=%s limit=%s", mask_ip(ip), path, self.name, limit, category='cara.websocket')
-            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+            Log.warning(
+                "WebSocket throttle exceeded: ip=%s path=%s name=%s limit=%s",
+                mask_ip(ip),
+                path,
+                self.name,
+                limit,
+                category="cara.websocket",
+            )
+            with contextlib.suppress(
+                OSError, RuntimeError, AttributeError, ConnectionError
+            ):
                 await socket.send(
                     {
                         "type": "websocket.close",
@@ -117,20 +131,6 @@ class Throttle(Middleware):
 
         return await next_fn(socket)
 
-    def _fail_open_mode(self) -> bool:
-        """Whether to allow handshakes when the cache backend is down.
-
-        Default False (fail-closed). Mirrors ``ThrottleRequests`` so
-        operators flip ``rate.fail_open`` in config when availability
-        outweighs abuse protection.
-        """
-        try:
-            from cara.facades import Config
-
-            return bool(Config.get("rate.fail_open", _DEFAULT_FAIL_OPEN))
-        except Exception:
-            return _DEFAULT_FAIL_OPEN
-
     def _limits(self) -> tuple[int, int]:
         """Read per-named-throttle limit + window from config.
 
@@ -141,11 +141,11 @@ class Throttle(Middleware):
         """
         try:
             limit = int(config(f"rate.{self.name}.limit", _DEFAULT_LIMIT_PER_MINUTE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             limit = _DEFAULT_LIMIT_PER_MINUTE
         try:
             window = int(config(f"rate.{self.name}.window", _DEFAULT_WINDOW_SECONDS))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             window = _DEFAULT_WINDOW_SECONDS
         return max(1, limit), max(1, window)
 

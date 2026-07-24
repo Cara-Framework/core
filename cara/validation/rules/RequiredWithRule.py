@@ -21,7 +21,7 @@ def _is_present(v) -> bool:
 
 class RequiredWithRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        raw = params.get("required_with") or params.get("requiredwith")
+        raw = params.get("required_with")
         if not raw:
             return True
         others = [p.strip() for p in raw.split(",")]
@@ -32,5 +32,5 @@ class RequiredWithRule(BaseRule):
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
-        raw = params.get("required_with") or params.get("requiredwith", "")
+        raw = params.get("required_with", "")
         return f"The {attr.lower()} field is required when {raw} is present."

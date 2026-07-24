@@ -31,7 +31,9 @@ def test_alphanum_rule_message():
 
 def test_alpha_num_laravel_alias_resolves():
     """Laravel uses ``alpha_num``; ``AlphanumRule`` auto-registers as ``alphanum``."""
-    validator = Validation.make({"asin": "B012345678"}, {"asin": "required|size:10|alpha_num"})
+    validator = Validation.make(
+        {"asin": "B012345678"}, {"asin": "required|size:10|alpha_num"}
+    )
     assert validator.passes()
 
 

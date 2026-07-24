@@ -389,7 +389,12 @@ class Socket:
         try:
             allowed = await Broadcast.authorize_subscription(channel, self._user)
         except Exception as e:
-            Log.warning("Channel auth callback raised for %s: %s", channel, e, category='cara.websocket')
+            Log.warning(
+                "Channel auth callback raised for %s: %s",
+                channel,
+                e,
+                category="cara.websocket",
+            )
             allowed = False
 
         if not allowed:
@@ -416,7 +421,12 @@ class Socket:
                         channel, "presence.joined", {"user": allowed}
                     )
                 except Exception as e:
-                    Log.debug("Presence join broadcast failed on %s: %s", channel, e, category='cara.websocket')
+                    Log.debug(
+                        "Presence join broadcast failed on %s: %s",
+                        channel,
+                        e,
+                        category="cara.websocket",
+                    )
         return success
 
     async def _broadcast_presence_left(self, channel: str) -> None:
@@ -430,7 +440,12 @@ class Socket:
         try:
             await Broadcast.broadcast(channel, "presence.left", {"user": member})
         except Exception as e:
-            Log.debug("Presence leave broadcast failed on %s: %s", channel, e, category='cara.websocket')
+            Log.debug(
+                "Presence leave broadcast failed on %s: %s",
+                channel,
+                e,
+                category="cara.websocket",
+            )
 
     async def unsubscribe_channel(self, channel: str) -> bool:
         success = await Broadcast.unsubscribe(self._connection_id, channel)
@@ -490,7 +505,12 @@ class Socket:
                     # roster fix) — best-effort, never block the tear-down.
                     await self._broadcast_presence_left(channel)
                 except Exception as e:
-                    Log.debug("unsubscribe(%s) during cleanup raised: %s", channel, e, category='cara.websocket')
+                    Log.debug(
+                        "unsubscribe(%s) during cleanup raised: %s",
+                        channel,
+                        e,
+                        category="cara.websocket",
+                    )
             self._subscribed_channels.clear()
             self._presence_members.clear()
 
@@ -498,10 +518,20 @@ class Socket:
                 try:
                     await Broadcast.remove_connection(self._connection_id)
                 except Exception as e:
-                    Log.debug("remove_connection during cleanup raised: %s", e, category='cara.websocket')
+                    Log.debug(
+                        "remove_connection during cleanup raised: %s",
+                        e,
+                        category="cara.websocket",
+                    )
                 self._connection_registered = False
         except Exception as e:
-            Log.error("Broadcasting cleanup for %s failed: %s", self._connection_id, e, category='cara.websocket', exc_info=True)
+            Log.error(
+                "Broadcasting cleanup for %s failed: %s",
+                self._connection_id,
+                e,
+                category="cara.websocket",
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Helpers.

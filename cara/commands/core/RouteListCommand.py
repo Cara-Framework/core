@@ -139,7 +139,7 @@ class RouteListCommand(CommandBase):
                 route_middlewares = route.get_middleware()
                 if route_middlewares:
                     middlewares.extend(route_middlewares)
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
+            except OSError, RuntimeError, AttributeError, ConnectionError:
                 pass
 
         # Fallback: Check for route-specific middleware attribute

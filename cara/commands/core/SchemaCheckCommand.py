@@ -603,7 +603,9 @@ class SchemaCheckCommand(CommandBase):
 
         return issues
 
-    def _diff_column(self, table: str, name: str, declared: dict, live: dict) -> list[str]:
+    def _diff_column(
+        self, table: str, name: str, declared: dict, live: dict
+    ) -> list[str]:
         """Compare a single shared column: nullability + conservative type."""
         issues: list[str] = []
 

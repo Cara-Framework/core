@@ -69,10 +69,26 @@ _CURRENCY_SYMBOLS = {
 # (no "cents"), so displaying "¥1500.00" or "₩25000.00" is wrong.
 # ``format_money`` auto-detects these when ``decimals`` is not explicitly
 # overridden so callers don't have to remember per-currency precision.
-_ZERO_DECIMAL_CURRENCIES = frozenset({
-    "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW",
-    "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
-})
+_ZERO_DECIMAL_CURRENCIES = frozenset(
+    {
+        "BIF",
+        "CLP",
+        "DJF",
+        "GNF",
+        "ISK",
+        "JPY",
+        "KMF",
+        "KRW",
+        "PYG",
+        "RWF",
+        "UGX",
+        "VND",
+        "VUV",
+        "XAF",
+        "XOF",
+        "XPF",
+    }
+)
 
 
 def default_currency() -> str:
@@ -150,7 +166,7 @@ def format_money(
     else:
         try:
             value = Decimal(str(amount))
-        except (InvalidOperation, TypeError, ValueError):
+        except InvalidOperation, TypeError, ValueError:
             value = Decimal("0")
     if decimals is None:
         code = (currency or default_currency() or "").strip().upper()

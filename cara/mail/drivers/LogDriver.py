@@ -48,8 +48,14 @@ class LogDriver(Mail):
 
             to_raw = mailable_data.get("to")
             to_masked = email_mask(to_raw) if isinstance(to_raw, str) else str(to_raw)
-            from_masked = email_mask(from_address) if isinstance(from_address, str) else str(from_address)
-            content_preview = (mailable_data.get("text") or mailable_data.get("html") or "")[:80]
+            from_masked = (
+                email_mask(from_address)
+                if isinstance(from_address, str)
+                else str(from_address)
+            )
+            content_preview = (
+                mailable_data.get("text") or mailable_data.get("html") or ""
+            )[:80]
 
             Logger.debug("=== EMAIL LOG ===")
             Logger.debug("To: %s", to_masked)

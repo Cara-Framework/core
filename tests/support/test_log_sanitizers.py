@@ -194,7 +194,7 @@ class TestLogSecretRedaction:
         secret = "scrape-provider-secret-value"
         message = (
             "HTTP Request: GET https://api.example.test/?token="
-            f"{secret}&url=https%3A%2F%2Fshop.example%2Fitem \"HTTP/2 200 OK\""
+            f'{secret}&url=https%3A%2F%2Fshop.example%2Fitem "HTTP/2 200 OK"'
         )
 
         redacted = redact_log_secrets(message)
@@ -204,10 +204,7 @@ class TestLogSecretRedaction:
         assert "url=https%3A%2F%2Fshop.example%2Fitem" in redacted
 
     def test_json_and_header_credentials_are_redacted(self):
-        message = (
-            "payload={'api_key': 'key-secret'} "
-            "Authorization: Bearer bearer-secret"
-        )
+        message = "payload={'api_key': 'key-secret'} Authorization: Bearer bearer-secret"
 
         redacted = redact_log_secrets(message)
 

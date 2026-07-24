@@ -58,22 +58,13 @@ class TestMailableSerialization:
 
         smtp_message = SmtpDriver({})._create_message(data)
         assert smtp_message["List-Unsubscribe"] == headers["List-Unsubscribe"]
-        assert (
-            smtp_message["List-Unsubscribe-Post"]
-            == headers["List-Unsubscribe-Post"]
-        )
+        assert smtp_message["List-Unsubscribe-Post"] == headers["List-Unsubscribe-Post"]
 
         mailgun_data = MailgunDriver(
             {"secret": "secret", "domain": "mail.app.example"}
         )._prepare_data(data)
-        assert (
-            mailgun_data["h:List-Unsubscribe"]
-            == headers["List-Unsubscribe"]
-        )
-        assert (
-            mailgun_data["h:List-Unsubscribe-Post"]
-            == headers["List-Unsubscribe-Post"]
-        )
+        assert mailgun_data["h:List-Unsubscribe"] == headers["List-Unsubscribe"]
+        assert mailgun_data["h:List-Unsubscribe-Post"] == headers["List-Unsubscribe-Post"]
 
     @pytest.mark.parametrize(
         ("name", "value"),
@@ -111,6 +102,4 @@ class TestMailMessageFluentApi:
 
     def test_custom_headers_are_exposed_and_serialized(self) -> None:
         msg = MailMessage(manager=None).header("X-Message-Class", "inventory")
-        assert msg.mailable.to_dict()["headers"] == {
-            "X-Message-Class": "inventory"
-        }
+        assert msg.mailable.to_dict()["headers"] == {"X-Message-Class": "inventory"}

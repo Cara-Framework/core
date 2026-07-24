@@ -49,7 +49,7 @@ def test_change_on_varchar_keeps_length():
 
 def test_mixed_add_and_change_split_correctly():
     bp = _alter_blueprint()
-    bp.integer("new_col").nullable()          # plain ADD
-    bp.text("old_col").nullable().change()    # MODIFY
+    bp.integer("new_col").nullable()  # plain ADD
+    bp.text("old_col").nullable().change()  # MODIFY
     assert "new_col" in bp.table.added_columns
     assert "old_col" in bp.table.changed_columns

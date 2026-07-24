@@ -17,7 +17,9 @@ from cara.support import paths
 
 
 class CheckMaintenanceMode(Middleware):
-    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[..., Awaitable[Any]]
+    ) -> Response:
         # Use paths() helper to get base path with MAINTENANCE file
         maintenance_path = paths("base", "MAINTENANCE")
 

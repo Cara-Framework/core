@@ -56,7 +56,7 @@ from cara.queues.serializers.SignedJsonJobSerializer import (
 # metrics. Guarded so a partial import never breaks the worker.
 try:
     from cara.observability.Metrics import MetricsBase
-except (ImportError, RuntimeError):  # pragma: no cover
+except ImportError, RuntimeError:  # pragma: no cover
     MetricsBase = None  # type: ignore[assignment]
 
 _logger = logging.getLogger("cara.queue.worker")
@@ -163,7 +163,7 @@ class AMQPConnectionManager:
                 from cara.facades import Log
 
                 Log.error("Failed to connect to RabbitMQ: %s", e, exc_info=True)
-            except (ImportError, RuntimeError):
+            except ImportError, RuntimeError:
                 import sys
 
                 print(
@@ -487,7 +487,7 @@ class JobProcessor:
             attempts_done = int(
                 msg.get("attempts", 0) if msg.get("attempts", 0) is not None else 0
             )
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             attempts_done = 0
         max_attempts = int(
             getattr(instance, "max_attempts", None) or JobProcessor.DEFAULT_MAX_ATTEMPTS
@@ -789,7 +789,7 @@ class JobProcessor:
                         queue=_mx_queue,
                         job_class=_mx_job,
                     ).dec()
-            except (ImportError, RuntimeError, AttributeError, OSError):
+            except ImportError, RuntimeError, AttributeError, OSError:
                 pass
 
         _mx_recorded = False
@@ -1017,7 +1017,7 @@ class JobProcessor:
                         job_class=_mx_job,
                     ).inc()
                     _mx_inflight_entered = True
-                except (ImportError, RuntimeError, AttributeError, OSError):
+                except ImportError, RuntimeError, AttributeError, OSError:
                     pass
                 if wait_secs is not None:
                     with contextlib.suppress(
@@ -1667,7 +1667,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                 name for name, _routing in bindings if _fnmatch.fnmatch(name, pattern)
             }
             static |= bound
-        except (ImportError, RuntimeError, AttributeError, OSError):
+        except ImportError, RuntimeError, AttributeError, OSError:
             pass
 
         return sorted(static)
@@ -1993,7 +1993,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         """
         try:
             return max(0.0, float(config("queue.shutdown_drain_seconds", 120.0)))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 120.0
 
     @staticmethod
@@ -2001,7 +2001,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         """Grace after async cancellation before forced process exit."""
         try:
             return max(0.0, float(config("queue.shutdown_cancel_seconds", 5.0)))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 5.0
 
     @staticmethod
@@ -2141,7 +2141,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                                 self.shutdown_requested = True
                                 return False
                             break
-            except (ImportError, RuntimeError, AttributeError, OSError):
+            except ImportError, RuntimeError, AttributeError, OSError:
                 pass
 
             return True
@@ -2539,7 +2539,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
             time.sleep(0.1)
 
-        except (ImportError, RuntimeError, AttributeError, OSError):
+        except ImportError, RuntimeError, AttributeError, OSError:
             pass
 
     def _cleanup_watching(self):

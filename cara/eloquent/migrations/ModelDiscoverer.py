@@ -154,84 +154,6 @@ class ModelDiscoverer:
 
         return models
 
-    def _discover_models_from_imports(self, init_file: Path) -> list[dict]:
-        """Discover models by parsing imports from __init__.py"""
-        models = []
-
-        try:
-            with open(init_file, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            tree = ast.parse(content)
-
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom):
-                    # Handle: from commons.models.core import User, Category
-                    if node.module:
-                        models.extend(
-                            self._resolve_import_models(node.module, node.names)
-                        )
-                elif isinstance(node, ast.Import):
-                    # Handle: import commons.models.core.User
-                    for alias in node.names:
-                        if "models" in alias.name:
-                            models.extend(self._resolve_direct_import_models(alias.name))
-
-        except Exception as e:
-            try:
-                from cara.facades import Log
-
-                Log.warning(
-                    "Could not parse %s: %s",
-                    init_file,
-                    e,
-                    category="cara.eloquent.migrations",
-                )
-            except Exception:
-                _logger.warning("model discovery logging failed", exc_info=True)
-
-        return models
-
-    def _resolve_import_models(
-        self, module_path: str, names: list[ast.alias]
-    ) -> list[dict]:
-        """Resolve model files from import statements - generic implementation"""
-        # Skip import resolution - rely on directory scanning instead
-        # This keeps the framework completely app-agnostic
-        return []
-
-    def _resolve_direct_import_models(self, import_path: str) -> list[dict]:
-        """Handle direct imports - generic implementation"""
-        # Skip import resolution - rely on directory scanning instead
-        # This keeps the framework completely app-agnostic
-        return []
-
-    def _discover_models_from_packages(self, packages_dir: Path) -> list[dict]:
-        """Discover models from packages directory structure - generic implementation"""
-        # Skip packages-specific discovery - rely on general directory scanning
-        # This keeps the framework completely app-agnostic
-        return []
-
-    def _scan_directory_for_models(self, directory: Path) -> list[dict]:
-        """Scan a directory for model files."""
-        models = []
-
-        for py_file in directory.glob("*.py"):
-            if py_file.name.startswith("__"):
-                continue
-
-            try:
-                model_info = self._parse_model_file(py_file)
-                if model_info:
-                    models.append(model_info)
-            except Exception as e:
-                # Skip files that can't be parsed, but surface the failure
-                # so a broken model isn't silently dropped from generation.
-                self._warn_unparseable_model(py_file, e)
-                continue
-
-        return models
-
     def _warn_unparseable_model(self, file_path: Path, error: Exception) -> None:
         """Log (don't swallow) a model file that failed to parse.
 
@@ -824,7 +746,7 @@ class ModelDiscoverer:
         self,
         field_name: str,
         field_info: dict,
-        all_table_names: list[str] | None = None,
+        all_table_names: list[str],
     ) -> bool:
         """Check if field is a foreign key.
 
@@ -832,28 +754,23 @@ class ModelDiscoverer:
         target resolves to an ACTUAL known table (so ``public_id`` /
         ``external_id`` / ``correlation_id`` stay plain columns instead of
         inventing phantom FKs). The explicit ``params['foreign_key']`` flag
-        is always honoured. When ``all_table_names`` is omitted the legacy
-        suffix-only heuristic is used (no known-table set to gate against).
+        is always honoured.
         """
         if field_info.get("params", {}).get("foreign_key", False):
             return True
         if not field_name.endswith("_id"):
             return False
-        if all_table_names is None:
-            return True
         return self._resolve_id_column_to_table(field_name, all_table_names) is not None
 
     def _extract_referenced_table(
         self,
         field_name: str,
         field_info: dict,
-        all_table_names: list[str] | None = None,
+        all_table_names: list[str],
     ) -> str | None:
         """Extract referenced table name from foreign key field."""
         # For fields ending with _id, resolve the prefix to a real table.
         if field_name.endswith("_id"):
-            if all_table_names is None:
-                return field_name[:-3]  # legacy: blind strip
             return self._resolve_id_column_to_table(field_name, all_table_names)
 
         # Check for explicit references parameter

@@ -11,7 +11,7 @@ from cara.validation.rules.BaseRule import BaseRule
 
 class NotRegexRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        raw = params.get("not_regex") or params.get("notregex")
+        raw = params.get("not_regex")
         if not raw or value is None:
             return True
         try:

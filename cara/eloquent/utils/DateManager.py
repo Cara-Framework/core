@@ -291,7 +291,7 @@ class DateManager:
         # Try pendulum's built-in parsing first
         try:
             return pendulum.parse(date_string, tz=timezone_str)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             pass
 
         # Try each supported format

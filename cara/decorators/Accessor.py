@@ -20,7 +20,6 @@ Example:
     print(user.full_name)   # "John Doe" (virtual attribute)
 """
 
-
 from __future__ import annotations
 
 

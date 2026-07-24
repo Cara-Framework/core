@@ -52,33 +52,43 @@ def _client(provider="openrouter"):
 class TestResponseFormatPassthrough:
     def test_openai_payload_carries_response_format(self):
         client = _client()
-        with patch("cara.ai.Client.requests.post", return_value=_openai_response()) as post:
+        with patch(
+            "cara.ai.Client.requests.post", return_value=_openai_response()
+        ) as post:
             client.chat("hi", response_format={"type": "json_object"})
         payload = post.call_args.kwargs["json"]
         assert payload["response_format"] == {"type": "json_object"}
 
     def test_json_mode_sugar_sets_json_object(self):
         client = _client()
-        with patch("cara.ai.Client.requests.post", return_value=_openai_response()) as post:
+        with patch(
+            "cara.ai.Client.requests.post", return_value=_openai_response()
+        ) as post:
             client.chat("hi", json_mode=True)
         assert post.call_args.kwargs["json"]["response_format"] == {"type": "json_object"}
 
     def test_explicit_response_format_beats_json_mode(self):
         client = _client()
         explicit = {"type": "json_schema", "json_schema": {"name": "x"}}
-        with patch("cara.ai.Client.requests.post", return_value=_openai_response()) as post:
+        with patch(
+            "cara.ai.Client.requests.post", return_value=_openai_response()
+        ) as post:
             client.chat("hi", response_format=explicit, json_mode=True)
         assert post.call_args.kwargs["json"]["response_format"] == explicit
 
     def test_no_format_by_default(self):
         client = _client()
-        with patch("cara.ai.Client.requests.post", return_value=_openai_response()) as post:
+        with patch(
+            "cara.ai.Client.requests.post", return_value=_openai_response()
+        ) as post:
             client.chat("hi")
         assert "response_format" not in post.call_args.kwargs["json"]
 
     def test_ollama_maps_to_format_json(self):
         client = _client(provider="ollama")
-        with patch("cara.ai.Client.requests.post", return_value=_ollama_response()) as post:
+        with patch(
+            "cara.ai.Client.requests.post", return_value=_ollama_response()
+        ) as post:
             client.chat("hi", json_mode=True)
         assert post.call_args.kwargs["json"]["format"] == "json"
 
@@ -115,7 +125,9 @@ class TestRetrySeams:
     def test_success_hook_fires_with_response(self):
         client = _client()
         seen = []
-        client._on_attempt_success = lambda model, resp: seen.append((model, resp.content))
+        client._on_attempt_success = lambda model, resp: seen.append(
+            (model, resp.content)
+        )
         with patch("cara.ai.Client.requests.post", return_value=_openai_response("ok")):
             client.chat("hi")
         assert seen == [("m", "ok")]

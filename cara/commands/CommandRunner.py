@@ -126,7 +126,7 @@ class CommandRunner:
                     non_none = [a for a in get_args(ann) if a is not type(None)]
                     if len(non_none) == 1:
                         ann = non_none[0]
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
+            except OSError, RuntimeError, AttributeError, ConnectionError:
                 pass
             if ann is inspect.Parameter.empty or ann in primitive_types:
                 # Replace the parameter's raw (PEP 563 string) annotation
@@ -420,7 +420,7 @@ class CommandRunner:
                     from cara.observability.Metrics import MetricsBase
 
                     metrics = MetricsBase
-                except (ImportError, RuntimeError):
+                except ImportError, RuntimeError:
                     pass
 
             _cmd_start = _t.time()
@@ -444,7 +444,7 @@ class CommandRunner:
                         metrics.command_duration_seconds.labels(
                             command=name,
                         ).observe(_t.time() - _cmd_start)
-                    except (OSError, RuntimeError, AttributeError, ConnectionError):
+                    except OSError, RuntimeError, AttributeError, ConnectionError:
                         pass
                 raise typer.Exit(code=1)
 
@@ -457,7 +457,7 @@ class CommandRunner:
                     metrics.command_duration_seconds.labels(
                         command=name,
                     ).observe(_t.time() - _cmd_start)
-                except (OSError, RuntimeError, AttributeError, ConnectionError):
+                except OSError, RuntimeError, AttributeError, ConnectionError:
                     pass
 
             if isinstance(result, int):

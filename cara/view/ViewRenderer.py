@@ -191,7 +191,3 @@ class ViewRenderer:
     def get_engine(self) -> ViewEngine:
         """Get the view engine instance."""
         return self.engine
-
-    def get_renderer(self) -> ViewRenderer:
-        """Get the renderer instance (for compatibility)."""
-        return self

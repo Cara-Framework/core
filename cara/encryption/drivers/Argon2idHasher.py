@@ -25,11 +25,11 @@ class Argon2idHasher:
     def check(self, value: str, hashed: str) -> bool:
         try:
             return bool(self._hasher.verify(hashed, value))
-        except (VerifyMismatchError, VerificationError, InvalidHashError, TypeError):
+        except VerifyMismatchError, VerificationError, InvalidHashError, TypeError:
             return False
 
     def needs_rehash(self, hashed: str) -> bool:
         try:
             return self._hasher.check_needs_rehash(hashed)
-        except (InvalidHashError, TypeError):
+        except InvalidHashError, TypeError:
             return True

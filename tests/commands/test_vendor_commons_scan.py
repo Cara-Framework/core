@@ -26,7 +26,9 @@ from pathlib import Path
 
 from cara.commands.core.VendorCommonsCommand import VendorCommonsCommand
 
-_BOUNDARY_FIXTURE = 'NEIGHBOR = "mycommons.gates.Thing"\nNOT_A_PKG = "commons.gateskeeper.Thing"\n'
+_BOUNDARY_FIXTURE = (
+    'NEIGHBOR = "mycommons.gates.Thing"\nNOT_A_PKG = "commons.gateskeeper.Thing"\n'
+)
 
 
 def _make_tree(root: Path) -> None:
@@ -38,7 +40,9 @@ def _make_tree(root: Path) -> None:
     )
     for pkg in ("contracts", "gates", "shared"):
         (root / "app" / pkg).mkdir()
-        (root / "app" / pkg / "__init__.py").write_text(f"from commons.{pkg} import *  # dev barrel\n")
+        (root / "app" / pkg / "__init__.py").write_text(
+            f"from commons.{pkg} import *  # dev barrel\n"
+        )
     (root / "app" / "jobs").mkdir()
     (root / "app" / "jobs" / "SomeJob.py").write_text(
         "from commons.models import User\n"
@@ -52,18 +56,24 @@ def _make_tree(root: Path) -> None:
         'TABLE = "users"\nSOURCE = "commons.models.core.User"\n'
     )
     (root / "packages" / "acme").mkdir(parents=True)
-    (root / "packages" / "acme" / "Connector.py").write_text("from commons.gates import PERMISSIONS\n")
+    (root / "packages" / "acme" / "Connector.py").write_text(
+        "from commons.gates import PERMISSIONS\n"
+    )
 
     # --- the kernel
     commons = root / "commons"
     (commons / "models" / "core").mkdir(parents=True)
-    (commons / "models" / "__init__.py").write_text('from .core.User import User\n\n__all__ = ["User"]\n')
+    (commons / "models" / "__init__.py").write_text(
+        'from .core.User import User\n\n__all__ = ["User"]\n'
+    )
     (commons / "models" / "core" / "__init__.py").write_text("")
     (commons / "models" / "core" / "User.py").write_text("class User:\n    pass\n")
 
     # contracts: nested subpackage, function-local model import (envelope shape)
     (commons / "contracts" / "envelopes").mkdir(parents=True)
-    (commons / "contracts" / "__init__.py").write_text("from .envelopes.SyncEnvelope import SyncEnvelope\n")
+    (commons / "contracts" / "__init__.py").write_text(
+        "from .envelopes.SyncEnvelope import SyncEnvelope\n"
+    )
     (commons / "contracts" / "envelopes" / "__init__.py").write_text("")
     (commons / "contracts" / "envelopes" / "SyncEnvelope.py").write_text(
         "class SyncEnvelope:\n    def body(self):\n        from commons.models import User\n        return User\n"
@@ -72,7 +82,9 @@ def _make_tree(root: Path) -> None:
     # gates: real __init__ (must replace the dev barrel) + nested persistence
     # with cross-refs to models AND contracts
     (commons / "gates" / "persistence").mkdir(parents=True)
-    (commons / "gates" / "__init__.py").write_text("from .Permissions import PERMISSIONS\n")
+    (commons / "gates" / "__init__.py").write_text(
+        "from .Permissions import PERMISSIONS\n"
+    )
     (commons / "gates" / "Permissions.py").write_text("PERMISSIONS = {}\n")
     (commons / "gates" / "persistence" / "__init__.py").write_text("")
     (commons / "gates" / "persistence" / "LedgerRepository.py").write_text(
@@ -83,7 +95,9 @@ def _make_tree(root: Path) -> None:
     # collapse shape: flat copy means commons.models.core.User → app.models.User)
     (commons / "shared" / "catalog").mkdir(parents=True)
     (commons / "shared" / "__init__.py").write_text("")
-    (commons / "shared" / "catalog" / "__init__.py").write_text("from .Slug import slugify\n")
+    (commons / "shared" / "catalog" / "__init__.py").write_text(
+        "from .Slug import slugify\n"
+    )
     (commons / "shared" / "catalog" / "Slug.py").write_text(
         "import commons.models.core.User as user_mod\n\n\ndef slugify(value):\n    return value\n"
     )
@@ -95,7 +109,9 @@ def _make_tree(root: Path) -> None:
     # the framework clone: never rewritten, materialised into ./cara
     (commons / "cara" / "cara").mkdir(parents=True)
     (commons / "cara" / "cara" / "__init__.py").write_text("")
-    (commons / "cara" / "cara" / "untouched.py").write_text('TEXT = "from commons.models import User"\n')
+    (commons / "cara" / "cara" / "untouched.py").write_text(
+        'TEXT = "from commons.models import User"\n'
+    )
     (root / "cara").symlink_to(commons / "cara" / "cara", target_is_directory=True)
 
 
@@ -130,7 +146,9 @@ def test_vendor_ships_the_full_kernel(tmp_path, monkeypatch):
     kernel_ref = re.compile(r"\bcommons\.(models|contracts|gates|shared)\b")
     for scan_dir in ("app", "database/migrations", "packages"):
         for py in (tmp_path / scan_dir).rglob("*.py"):
-            assert not kernel_ref.search(py.read_text()), f"{py} still references commons.*"
+            assert not kernel_ref.search(py.read_text()), (
+                f"{py} still references commons.*"
+            )
 
     # cross-references landed on app.* with sub-paths preserved (non-models) …
     job = (tmp_path / "app" / "jobs" / "SomeJob.py").read_text()
@@ -138,16 +156,29 @@ def test_vendor_ships_the_full_kernel(tmp_path, monkeypatch):
     assert "from app.contracts.envelopes.SyncEnvelope import SyncEnvelope" in job
     assert "from app.shared.catalog import slugify" in job
     assert "import app.gates.persistence.LedgerRepository as ledger" in job
-    ledger = (tmp_path / "app" / "gates" / "persistence" / "LedgerRepository.py").read_text()
+    ledger = (
+        tmp_path / "app" / "gates" / "persistence" / "LedgerRepository.py"
+    ).read_text()
     assert "from app.models import User" in ledger
     assert "from app.contracts import SyncEnvelope" in ledger
-    envelope = (tmp_path / "app" / "contracts" / "envelopes" / "SyncEnvelope.py").read_text()
+    envelope = (
+        tmp_path / "app" / "contracts" / "envelopes" / "SyncEnvelope.py"
+    ).read_text()
     assert "from app.models import User" in envelope
-    assert "from app.gates import PERMISSIONS" in (tmp_path / "packages" / "acme" / "Connector.py").read_text()
+    assert (
+        "from app.gates import PERMISSIONS"
+        in (tmp_path / "packages" / "acme" / "Connector.py").read_text()
+    )
 
     # … while models references collapse to the flat layout, strings included
-    assert "import app.models.User as user_mod" in (tmp_path / "app" / "shared" / "catalog" / "Slug.py").read_text()
-    assert 'SOURCE = "app.models.User"' in (tmp_path / "database" / "migrations" / "create_users_table.py").read_text()
+    assert (
+        "import app.models.User as user_mod"
+        in (tmp_path / "app" / "shared" / "catalog" / "Slug.py").read_text()
+    )
+    assert (
+        'SOURCE = "app.models.User"'
+        in (tmp_path / "database" / "migrations" / "create_users_table.py").read_text()
+    )
 
     # word-boundary safety: near-miss names are untouched
     assert (tmp_path / "app" / "jobs" / "Boundary.py").read_text() == _BOUNDARY_FIXTURE
@@ -188,7 +219,9 @@ def test_vendor_fails_fast_on_local_members_in_kernel_barrel(tmp_path, monkeypat
     """Doctrine §2: app/<kernel-pkg> is exclusively the kernel barrel — local DI
     interfaces live in app/ports; the vendor never merges, it fails fast."""
     _make_tree(tmp_path)
-    (tmp_path / "app" / "contracts" / "AccessContract.py").write_text("class AccessContract:\n    pass\n")
+    (tmp_path / "app" / "contracts" / "AccessContract.py").write_text(
+        "class AccessContract:\n    pass\n"
+    )
     monkeypatch.chdir(tmp_path)
     assert VendorCommonsCommand(application=None).handle() == 1
     # nothing was mutated

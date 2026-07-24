@@ -57,15 +57,7 @@ class MailChannel(BaseChannel):
             True if sent successfully, False otherwise
         """
         try:
-            # Check if this is a wrapper notification (from Laravel-style routing)
-            if hasattr(notification, "data") and hasattr(notification, "original"):
-                # Use the wrapper's data directly
-                mail_message = notification.data
-            else:
-                # Regular notification - try to get mail representation
-                mail_message = None
-                if hasattr(notification, "to_mail"):
-                    mail_message = notification.to_mail(notifiable)
+            mail_message = notification.to_mail(notifiable)
 
             if mail_message is None:
                 return False
@@ -196,8 +188,14 @@ class MailChannel(BaseChannel):
         try:
             from cara.facades import Log
 
-            Log.error("%s: %s", message, error, category='cara.notifications.mail', exc_info=True)
-        except (ImportError, RuntimeError):
+            Log.error(
+                "%s: %s",
+                message,
+                error,
+                category="cara.notifications.mail",
+                exc_info=True,
+            )
+        except ImportError, RuntimeError:
             import sys
 
             print(f"[MailChannel] {message}: {error}", file=sys.stderr)
@@ -328,8 +326,7 @@ class MailChannel(BaseChannel):
                 if not present
             ]
             self._emit_error(
-                "Unsubscribe link could not be signed; missing "
-                + ", ".join(missing),
+                "Unsubscribe link could not be signed; missing " + ", ".join(missing),
                 RuntimeError("unsubscribe link unsignable"),
             )
 

@@ -333,7 +333,7 @@ class Shell:
                     return Cache.get(key)
                 else:
                     return Cache
-            except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
+            except ImportError, ConnectionError, TimeoutError, OSError, RuntimeError:
                 return None
 
         def route(name, parameters=None):
@@ -876,7 +876,7 @@ class Shell:
         # Start interactive session
         try:
             console.interact()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             print("\n👋 Goodbye!")
 
     def execute_command(self, command: str):

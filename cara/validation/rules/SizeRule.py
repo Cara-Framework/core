@@ -18,7 +18,7 @@ class SizeRule(BaseRule):
             return False
         try:
             target = int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
         chain = params.get("_rules", ())
@@ -26,7 +26,7 @@ class SizeRule(BaseRule):
         if "integer" in chain or "numeric" in chain:
             try:
                 return float(value) == target
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return False
         # Length-based for strings, lists, dicts.
         if hasattr(value, "__len__"):
@@ -34,7 +34,7 @@ class SizeRule(BaseRule):
         # Default to numeric comparison.
         try:
             return float(value) == target
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:

@@ -15,7 +15,7 @@ from cara.validation.rules.BaseRule import BaseRule
 
 class RequiredIfRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        raw = params.get("required_if") or params.get("requiredif")
+        raw = params.get("required_if")
         if not raw:
             return True
         parts = [p.strip() for p in raw.split(",")]
@@ -32,7 +32,7 @@ class RequiredIfRule(BaseRule):
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
-        raw = params.get("required_if") or params.get("requiredif", "")
+        raw = params.get("required_if", "")
         parts = [p.strip() for p in raw.split(",")]
         other = parts[0] if parts else ""
         expected = parts[1] if len(parts) > 1 else ""

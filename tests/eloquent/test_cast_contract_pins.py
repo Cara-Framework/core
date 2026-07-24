@@ -347,7 +347,7 @@ class TestArrayCastNullPreservation:
             if args:
                 try:
                     rendered = rendered % args
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     rendered = f"{rendered} {args!r}"
             warnings.append((rendered, kwargs))
 

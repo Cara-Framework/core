@@ -46,8 +46,13 @@ def make_manifest(root: Path, **overrides) -> Manifest:
             "import_form",
             "import_tiers",
             "inline_imports",
+            "domain_ownership",
+            "flow_law",
             "port_membership",
+            "source_shape",
+            "transaction_ownership",
             "vertical_slice_seams",
+            "write_ownership",
         )
     }
 

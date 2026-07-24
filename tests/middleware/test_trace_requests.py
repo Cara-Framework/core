@@ -6,9 +6,7 @@ import pytest
 
 from cara.middleware.http.TraceRequests import TraceRequests
 
-trace_requests_module = importlib.import_module(
-    "cara.middleware.http.TraceRequests"
-)
+trace_requests_module = importlib.import_module("cara.middleware.http.TraceRequests")
 
 
 class _Response:

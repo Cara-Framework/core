@@ -43,7 +43,7 @@ class LogFake:
         if args:
             try:
                 text = text % args
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 text = f"{text} {' '.join(str(a) for a in args)}"
         self.records.append(
             LogRecord(level=level, message=text, category=category, extra=kwargs)

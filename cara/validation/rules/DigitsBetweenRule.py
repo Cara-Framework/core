@@ -20,7 +20,7 @@ class DigitsBetweenRule(BaseRule):
             return False
         try:
             lo, hi = int(parts[0].strip()), int(parts[1].strip())
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return False
         s = str(value)
         if not re.fullmatch(r"[0-9]+", s):

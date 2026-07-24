@@ -34,9 +34,7 @@ class _RelayLoop(CommandBase):
     @staticmethod
     def _has_activity(result: dict[str, int]) -> bool:
         return any(
-            int(value or 0)
-            for key, value in result.items()
-            if not key.startswith("_")
+            int(value or 0) for key, value in result.items() if not key.startswith("_")
         )
 
     def _handle_loop(
@@ -91,13 +89,11 @@ class _RelayLoop(CommandBase):
 
             if once and self._iteration_has_failures(result):
                 raise QueueException(
-                    f"{self.operation_name} iteration left failed work: "
-                    f"{result}"
+                    f"{self.operation_name} iteration left failed work: {result}"
                 )
             if not healthy:
                 message = (
-                    f"{self.operation_name} iteration lost runtime capability: "
-                    f"{result}"
+                    f"{self.operation_name} iteration lost runtime capability: {result}"
                 )
                 Log.error(
                     message,
@@ -208,10 +204,7 @@ class QueueHooksCommand(_RelayLoop):
         return True
 
     def _iteration_has_failures(self, result: dict[str, int]) -> bool:
-        return any(
-            int(result.get(key, 0) or 0)
-            for key in ("failed", "quarantined")
-        )
+        return any(int(result.get(key, 0) or 0) for key in ("failed", "quarantined"))
 
     def handle(
         self,
@@ -305,8 +298,6 @@ class QueueHookCommand(CommandBase):
         try:
             canonical = str(uuid.UUID(str(job_id)))
         except (TypeError, ValueError, AttributeError) as exc:
-            raise InvalidArgumentException(
-                "--job-id must be a valid UUID."
-            ) from exc
+            raise InvalidArgumentException("--job-id must be a valid UUID.") from exc
         processed = Queue.driver("amqp").process_terminal_hook(canonical)
         return 0 if processed else getattr(os, "EX_TEMPFAIL", 75)

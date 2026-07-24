@@ -84,9 +84,7 @@ class ConditionalGet(Middleware):
         except Exception as e:
             # A conditional-GET optimisation must never break the actual
             # response. Fall through with whatever we have.
-            self._log_debug(
-                f"ConditionalGet: failed ({e.__class__.__name__}: {e})"
-            )
+            self._log_debug(f"ConditionalGet: failed ({e.__class__.__name__}: {e})")
 
         return response
 
@@ -99,7 +97,7 @@ class ConditionalGet(Middleware):
             if not isinstance(method, str):
                 return False
             return method.upper() in _SAFE_METHODS
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             return False
 
     @staticmethod
@@ -109,7 +107,7 @@ class ConditionalGet(Middleware):
             if code is None and hasattr(response, "get_status_code"):
                 code = response.get_status_code()
             return isinstance(code, int) and 200 <= code < 300
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             return False
 
     # ── Body access ──────────────────────────────────────────────────
@@ -134,7 +132,7 @@ class ConditionalGet(Middleware):
             # Streaming / iterable body — refuse.
             if isinstance(content, Iterable):
                 return None
-        except (AttributeError, TypeError, RuntimeError):
+        except AttributeError, TypeError, RuntimeError:
             return None
         return None
 

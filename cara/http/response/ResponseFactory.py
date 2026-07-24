@@ -428,11 +428,7 @@ class ResponseFactory:
         **extra_meta,
     ) -> BaseResponse:
         """Create a cursor-paginated collection response."""
-        if (
-            isinstance(limit, bool)
-            or not isinstance(limit, int)
-            or not 1 <= limit <= 100
-        ):
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("cursor pagination limit must be between 1 and 100")
         if not isinstance(has_more, bool):
             raise TypeError("has_more must be boolean")

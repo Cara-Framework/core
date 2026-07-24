@@ -86,9 +86,7 @@ def _runtime_health_driver(access: str):
     channel = MagicMock()
     connection = MagicMock()
     connection.channel.return_value = channel
-    driver.open_topology_connection = MagicMock(
-        return_value=(connection, bootstrap)
-    )
+    driver.open_topology_connection = MagicMock(return_value=(connection, bootstrap))
     return driver, connection, channel
 
 

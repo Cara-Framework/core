@@ -116,7 +116,9 @@ class Bus:
                     from cara.observability.Metrics import MetricsBase
 
                     outcome = "fresh" if str(job_id) == reserved_job_id else "collision"
-                    MetricsBase.idempotency_total.labels(scope="unique_job", outcome=outcome).inc()
+                    MetricsBase.idempotency_total.labels(
+                        scope="unique_job", outcome=outcome
+                    ).inc()
                 except Exception:
                     pass
 
@@ -280,7 +282,7 @@ class Bus:
             return None
         try:
             return builtins.app()
-        except (TypeError, AttributeError, RuntimeError):
+        except TypeError, AttributeError, RuntimeError:
             return None
 
     @staticmethod

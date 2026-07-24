@@ -436,6 +436,36 @@ class MetricsBase:
         labelnames=("priority",),
         registry=REGISTRY,
     )
+    queue_delivery_lane_pending = Gauge(
+        metric_name("queue_delivery_lane_pending"),
+        "Due unpublished delivery-ledger rows by canonical workload lane.",
+        labelnames=("queue",),
+        registry=REGISTRY,
+    )
+    queue_delivery_lane_processing = Gauge(
+        metric_name("queue_delivery_lane_processing"),
+        "Actively executing delivery-ledger rows by canonical workload lane.",
+        labelnames=("queue",),
+        registry=REGISTRY,
+    )
+    queue_delivery_lane_broker_outstanding = Gauge(
+        metric_name("queue_delivery_lane_broker_outstanding"),
+        "Published pending or processing deliveries by canonical workload lane.",
+        labelnames=("queue",),
+        registry=REGISTRY,
+    )
+    queue_delivery_lane_oldest_due_age_seconds = Gauge(
+        metric_name("queue_delivery_lane_oldest_due_age_seconds"),
+        "Age of the oldest due unpublished delivery by workload lane.",
+        labelnames=("queue",),
+        registry=REGISTRY,
+    )
+    queue_delivery_lane_throughput_per_second = Gauge(
+        metric_name("queue_delivery_lane_throughput_per_second"),
+        "Five-minute completion rate by canonical workload lane.",
+        labelnames=("queue",),
+        registry=REGISTRY,
+    )
     queue_delivery_broker_window_max_outstanding = Gauge(
         metric_name("queue_delivery_broker_window_max_outstanding"),
         "Largest active broker publication window across canonical queues.",
@@ -615,9 +645,7 @@ def _read_db_pool_stats() -> dict[str, int] | None:
         # ``_pool_initialized``).
         import importlib
 
-        _pg = importlib.import_module(
-            "cara.eloquent.connections.PostgresConnection"
-        )
+        _pg = importlib.import_module("cara.eloquent.connections.PostgresConnection")
     except Exception:
         return None
 
@@ -731,7 +759,7 @@ def status_class(code: int | None) -> str:
     """Bucket an HTTP/upstream status code into 2xx/3xx/4xx/5xx/error."""
     try:
         c = int(code) if code is not None else 0
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return "error"
     if 200 <= c < 300:
         return "2xx"

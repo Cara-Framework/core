@@ -198,9 +198,7 @@ class TestConnectFailureReleasesSlot:
         sem = _fresh_pool(monkeypatch, size=3)
         before = sem._value
 
-        fake = _install_fake_psycopg2(
-            monkeypatch, connect_factory=lambda **_kw: None
-        )
+        fake = _install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
 
         def _refused(**_kw):
             raise fake.OperationalError("connection refused")
@@ -222,9 +220,7 @@ class TestConnectFailureReleasesSlot:
         sem = _fresh_pool(monkeypatch, size=3, warm=[stale])
         before = sem._value
 
-        fake = _install_fake_psycopg2(
-            monkeypatch, connect_factory=lambda **_kw: None
-        )
+        fake = _install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
         stale.cursor.return_value.execute.side_effect = fake.OperationalError(
             "idle connection dropped"
         )
@@ -426,9 +422,7 @@ class TestMakeConnectionSetupFailureReleasesSlot:
         sem = _fresh_pool(monkeypatch, size=3)
         before = sem._value
 
-        fake = _install_fake_psycopg2(
-            monkeypatch, connect_factory=lambda **_kw: None
-        )
+        fake = _install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
 
         def _connection_with_failed_setup(**_kw):
             conn = _mock_pg_connection()
@@ -455,9 +449,7 @@ class TestMakeConnectionSetupFailureReleasesSlot:
 
         def _broken_mock_pg_connection(**_kw):
             conn = _mock_pg_connection()
-            conn.cursor.return_value.execute.side_effect = RuntimeError(
-                "repeat failure"
-            )
+            conn.cursor.return_value.execute.side_effect = RuntimeError("repeat failure")
             return conn
 
         _install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)

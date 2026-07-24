@@ -58,5 +58,7 @@ class FunctionRouteLoader:
             name = route.get_name()
             if name:
                 if name in seen_names:
-                    Log.warning("Duplicate route name detected: '%s', overriding previous", name)
+                    Log.warning(
+                        "Duplicate route name detected: '%s', overriding previous", name
+                    )
                 seen_names.add(name)

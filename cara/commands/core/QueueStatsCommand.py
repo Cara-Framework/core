@@ -38,9 +38,7 @@ class QueueStatsCommand(CommandBase):
                 "--recent must be an integer number of hours."
             ) from exc
         if not 1 <= recent_hours <= 8760:
-            raise InvalidArgumentException(
-                "--recent must be between 1 and 8760 hours."
-            )
+            raise InvalidArgumentException("--recent must be between 1 and 8760 hours.")
 
         if watch_mode:
             self._watch_mode(queue_name, recent_hours)
@@ -85,16 +83,11 @@ class QueueStatsCommand(CommandBase):
         )
         self.info("-" * 60)
         self.info(f"   Active rows (all ages): {stats['active_total']}")
-        self.info(
-            "   Terminal rows in window: "
-            f"{stats['terminal_recent_total']}"
-        )
+        self.info(f"   Terminal rows in window: {stats['terminal_recent_total']}")
         for status, count in stats["statuses"].items():
             self.info(f"   {status}: {count}")
         self.info(f"   Due unpublished: {stats['due_unpublished']}")
-        self.info(
-            f"   Oldest due unpublished: {stats['oldest_due_age']:.1f}s"
-        )
+        self.info(f"   Oldest due unpublished: {stats['oldest_due_age']:.1f}s")
         self.info(f"   Publish processing: {stats['publish_processing']}")
         self.info(
             "   Stale leases: "

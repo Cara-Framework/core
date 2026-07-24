@@ -152,7 +152,9 @@ class HttpConductor:
                 )
             except Exception as term_exc:
                 # Never let a terminate failure mask the real exception.
-                Log.error("Terminable middleware sweep failed: %s", term_exc, exc_info=True)
+                Log.error(
+                    "Terminable middleware sweep failed: %s", term_exc, exc_info=True
+                )
 
         # Send response via ASGI
         resp = final_response or response

@@ -129,7 +129,7 @@ class Pagination:
             return default
         try:
             return int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return default
 
 

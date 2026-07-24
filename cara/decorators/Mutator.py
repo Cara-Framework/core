@@ -19,7 +19,6 @@ Example:
     user.email = "  JOHN@EXAMPLE.COM  "  # Stored as "john@example.com"
 """
 
-
 from __future__ import annotations
 
 

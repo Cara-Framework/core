@@ -27,9 +27,7 @@ class _FakeBuilder:
         self._store = store
         # Snapshot the candidate ids for THIS builder.
         if prunable_only:
-            self._ids = [
-                rid for rid, row in store.rows.items() if store.is_prunable(row)
-            ]
+            self._ids = [rid for rid, row in store.rows.items() if store.is_prunable(row)]
         else:
             self._ids = list(store.rows.keys())
         self._limit = None
@@ -107,10 +105,18 @@ class _BasePrunableModel(MakesPrunable):
     # — test helpers —
     def seed(self, n_expired: int, n_fresh: int = 0):
         for _ in range(n_expired):
-            self.rows[self._next_id] = {"id": self._next_id, "expired": True, "deleted_at": None}
+            self.rows[self._next_id] = {
+                "id": self._next_id,
+                "expired": True,
+                "deleted_at": None,
+            }
             self._next_id += 1
         for _ in range(n_fresh):
-            self.rows[self._next_id] = {"id": self._next_id, "expired": False, "deleted_at": None}
+            self.rows[self._next_id] = {
+                "id": self._next_id,
+                "expired": False,
+                "deleted_at": None,
+            }
             self._next_id += 1
 
 

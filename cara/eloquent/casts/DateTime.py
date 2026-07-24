@@ -22,7 +22,7 @@ class DateCast(BaseCast):
             return None
         try:
             return pendulum.parse(str(value)).to_date_string()
-        except (ValueError, TypeError, OverflowError):
+        except ValueError, TypeError, OverflowError:
             return str(value) if value else None
 
     def set(self, value):
@@ -31,7 +31,7 @@ class DateCast(BaseCast):
             return None
         try:
             return pendulum.parse(str(value)).to_date_string()
-        except (ValueError, TypeError, OverflowError):
+        except ValueError, TypeError, OverflowError:
             return str(value) if value else None
 
 
@@ -98,7 +98,7 @@ class DateTimeCast(BaseCast):
             # NAIVE LOCAL-TIME datetime — TypeError when compared against
             # ``pendulum.now("UTC")`` and silent local/UTC drift.
             return dt
-        except (ValueError, TypeError, OverflowError, ImportError):
+        except ValueError, TypeError, OverflowError, ImportError:
             return None
 
     def set(self, value):
@@ -135,7 +135,7 @@ class DateTimeCast(BaseCast):
                 dt = pendulum.parse(s, tz=None if has_tz else app_timezone)
 
             return dt.in_timezone("UTC").to_datetime_string()
-        except (ValueError, TypeError, OverflowError, ImportError):
+        except ValueError, TypeError, OverflowError, ImportError:
             return str(value) if value else None
 
 
@@ -159,7 +159,7 @@ class TimestampCast(BaseCast):
                 dt = pendulum.parse(str(value))
 
             return int(dt.timestamp())
-        except (ValueError, TypeError, OverflowError):
+        except ValueError, TypeError, OverflowError:
             return None
 
     def set(self, value):
@@ -171,7 +171,7 @@ class TimestampCast(BaseCast):
             if isinstance(value, (int, float)):
                 return pendulum.from_timestamp(value).to_datetime_string()
             return self.get(value)
-        except (ValueError, TypeError, OverflowError):
+        except ValueError, TypeError, OverflowError:
             return None
 
 
@@ -205,7 +205,7 @@ class TimeCast(BaseCast):
             else:
                 # Try to parse as string
                 return self.get(str(value))
-        except (ValueError, TypeError, OverflowError, AttributeError):
+        except ValueError, TypeError, OverflowError, AttributeError:
             # If all parsing fails, return as string
             return str(value) if value else None
 
@@ -235,5 +235,5 @@ class TimeCast(BaseCast):
             else:
                 # Try to parse as string
                 return self.set(str(value))
-        except (ValueError, TypeError, OverflowError, AttributeError):
+        except ValueError, TypeError, OverflowError, AttributeError:
             return str(value) if value else None

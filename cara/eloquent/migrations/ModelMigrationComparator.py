@@ -130,7 +130,7 @@ class Column:
             source = value.strip()
             try:
                 value = ast.literal_eval(source)
-            except (SyntaxError, ValueError):
+            except SyntaxError, ValueError:
                 value = source
         if isinstance(value, (dict, list, set, tuple)):
             value = repr(value)

@@ -26,6 +26,17 @@ class Authenticatable:
         """Get the password for the user. Default empty for JWT-only auth."""
         return ""
 
+    def get_auth_version(self) -> int:
+        """Return the user's token-revocation epoch.
+
+        JWT authentication requires an explicit, persisted version. A default
+        epoch would keep old tokens valid when a model forgot to implement the
+        revocation contract.
+        """
+        raise NotImplementedError(
+            "Authenticatable models must implement get_auth_version()"
+        )
+
     def get_remember_token(self) -> str | None:
         """Get the remember token for the user."""
         return getattr(self, "remember_token", None)

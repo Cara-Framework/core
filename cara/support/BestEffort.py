@@ -9,8 +9,10 @@ Usage::
     @best_effort(category="images")
     def sync_side_effect(data): ...
 
+
     @best_effort(category="prices")
     async def async_side_effect(data): ...
+
 
     with best_effort_ctx("notifications"):
         send_notification(...)
@@ -60,7 +62,7 @@ def best_effort(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return fn(*args, **kwargs)
-            except (KeyboardInterrupt, SystemExit):
+            except KeyboardInterrupt, SystemExit:
                 raise
             except Exception as e:
                 key = f"{category}.{fn.__qualname__}"
@@ -78,7 +80,7 @@ def best_effort(
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await fn(*args, **kwargs)
-            except (KeyboardInterrupt, SystemExit):
+            except KeyboardInterrupt, SystemExit:
                 raise
             except Exception as e:
                 key = f"{category}.{fn.__qualname__}"
@@ -115,7 +117,7 @@ def best_effort_ctx(
     """
     try:
         yield
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt, SystemExit:
         raise
     except Exception as e:
         msg = f"[best_effort] {label or 'block'} failed: {e}"

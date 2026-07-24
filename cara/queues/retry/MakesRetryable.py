@@ -8,8 +8,7 @@ retry on transient exceptions with exponential backoff::
         async def handle(self):
             await self.wrap_with_retry(self._do_work)
 
-        async def _do_work(self):
-            ...
+        async def _do_work(self): ...
 """
 
 from __future__ import annotations
@@ -109,22 +108,46 @@ class MakesRetryable:
                 result = await callback()
 
                 if attempt > 0:
-                    Log.info("[Retry] %s succeeded on attempt %s", self.__class__.__name__, attempt + 1, category='retry')
+                    Log.info(
+                        "[Retry] %s succeeded on attempt %s",
+                        self.__class__.__name__,
+                        attempt + 1,
+                        category="retry",
+                    )
 
                 return result
 
             except Exception as e:
                 if not isinstance(e, self.RETRYABLE_EXCEPTIONS):
-                    Log.warning("[Retry] %s encountered non-retryable exception: %s", self.__class__.__name__, e, category='retry')
+                    Log.warning(
+                        "[Retry] %s encountered non-retryable exception: %s",
+                        self.__class__.__name__,
+                        e,
+                        category="retry",
+                    )
                     raise
 
                 if attempt == attempts - 1:
-                    Log.error("[Retry] %s failed after %s attempts: %s", self.__class__.__name__, attempts, e, category='retry')
+                    Log.error(
+                        "[Retry] %s failed after %s attempts: %s",
+                        self.__class__.__name__,
+                        attempts,
+                        e,
+                        category="retry",
+                    )
                     raise
 
                 current_delay = delay * (backoff**attempt)
 
-                Log.warning("[Retry] %s attempt %s/%s failed: %s, retrying in %ss", self.__class__.__name__, attempt + 1, attempts, e, current_delay, category='retry')
+                Log.warning(
+                    "[Retry] %s attempt %s/%s failed: %s, retrying in %ss",
+                    self.__class__.__name__,
+                    attempt + 1,
+                    attempts,
+                    e,
+                    current_delay,
+                    category="retry",
+                )
 
                 await asyncio.sleep(current_delay)
 

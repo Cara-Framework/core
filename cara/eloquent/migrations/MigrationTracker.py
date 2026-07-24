@@ -222,7 +222,7 @@ class MigrationTracker:
                         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     process_locked = True
                     break
-                except (BlockingIOError, OSError):
+                except BlockingIOError, OSError:
                     if time.monotonic() >= deadline:
                         raise ORMException(
                             "Timed out waiting for the SQLite migration lock."

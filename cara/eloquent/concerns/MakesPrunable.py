@@ -12,7 +12,8 @@ should be pruned (e.g. "outbound clicks older than 90 days")::
             cutoff = pendulum.now("UTC").subtract(days=90).to_datetime_string()
             return self.query().where("created_at", "<", cutoff)
 
-    OutboundClick().prune()              # delete the prunable set in batches
+
+    OutboundClick().prune()  # delete the prunable set in batches
     OutboundClick().prune(batch_size=500)
 
 :meth:`prune` walks the prunable set in batches of ``batch_size`` primary
@@ -104,7 +105,11 @@ class MakesPrunable:
         removes the row from the *next* ``prunable()`` evaluation (the
         soft-delete select scope hides it), so the loop still terminates.
         """
-        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        if (
+            not isinstance(batch_size, int)
+            or isinstance(batch_size, bool)
+            or batch_size < 1
+        ):
             raise ValueError(
                 f"prune() batch_size must be a positive integer, got {batch_size!r}."
             )
@@ -114,9 +119,7 @@ class MakesPrunable:
         total = 0
 
         while True:
-            ids = list(
-                self.prunable().take(batch_size).pluck(primary_key)
-            )
+            ids = list(self.prunable().take(batch_size).pluck(primary_key))
             if not ids:
                 break
 

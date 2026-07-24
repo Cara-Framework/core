@@ -50,6 +50,8 @@ def _is_column_expression(value) -> bool:
     here too so QueryBuilder need not reach into the grammar for the check.
     """
     return isinstance(value, (F, Operation, Greatest, Least))
+
+
 from cara.exceptions import (
     Http404Exception,
     InvalidArgumentException,
@@ -242,9 +244,7 @@ class QueryBuilder(ObservesEvents):
             raise InvalidArgumentException(
                 "lock_for_update: skip_locked and nowait are mutually exclusive."
             )
-        return self.make_lock(
-            "update", skip_locked=skip_locked, nowait=nowait, of=of
-        )
+        return self.make_lock("update", skip_locked=skip_locked, nowait=nowait, of=of)
 
     def make_lock(
         self,
@@ -722,8 +722,8 @@ class QueryBuilder(ObservesEvents):
             clauses.append("ORDER BY " + ", ".join(rendered))
 
         over = f" {' '.join(clauses)} " if clauses else ""
-        quoted_alias = self._rendering_grammar().column_string().format(
-            column=alias, separator=""
+        quoted_alias = (
+            self._rendering_grammar().column_string().format(column=alias, separator="")
         )
         self._columns += (
             SelectExpression(
@@ -765,8 +765,10 @@ class QueryBuilder(ObservesEvents):
         args = [c if _is_column_expression(c) else F(c) for c in columns]
         sql = self._rendering_grammar().compile_expression(func_cls(*args))
         if alias:
-            quoted_alias = self._rendering_grammar().column_string().format(
-                column=alias, separator=""
+            quoted_alias = (
+                self._rendering_grammar()
+                .column_string()
+                .format(column=alias, separator="")
             )
             sql += f" AS {quoted_alias}"
         self._columns += (SelectExpression(sql, raw=True),)
@@ -904,7 +906,9 @@ class QueryBuilder(ObservesEvents):
     def hydrate(self, result: Any, relations: list[str] | None = None) -> Any:
         return self._model.hydrate(result, relations)
 
-    def delete(self, column: str | None = None, value: Any = None, query: bool = False) -> Self | int:
+    def delete(
+        self, column: str | None = None, value: Any = None, query: bool = False
+    ) -> Self | int:
         """
         Delete rows matching a WHERE clause, or by column/value.
 
@@ -2293,13 +2297,17 @@ class QueryBuilder(ObservesEvents):
             # ``True``/``False`` would coerce to 1/0 silently — almost
             # always a caller mistake. ``False`` matches the sentinel
             # for "no limit", but pinning it here makes intent explicit.
-            raise InvalidArgumentException(f"limit() expects an int or None, got {amount!r}")
+            raise InvalidArgumentException(
+                f"limit() expects an int or None, got {amount!r}"
+            )
         elif isinstance(amount, int):
             if amount < 0:
                 raise InvalidArgumentException(f"limit() must be >= 0, got {amount!r}")
             self._limit = amount
         else:
-            raise InvalidArgumentException(f"limit() expects an int or None, got {amount!r}")
+            raise InvalidArgumentException(
+                f"limit() expects an int or None, got {amount!r}"
+            )
         return self
 
     def offset(self, amount) -> Self:
@@ -2316,13 +2324,17 @@ class QueryBuilder(ObservesEvents):
         if amount is None:
             self._offset = False
         elif isinstance(amount, bool):
-            raise InvalidArgumentException(f"offset() expects an int or None, got {amount!r}")
+            raise InvalidArgumentException(
+                f"offset() expects an int or None, got {amount!r}"
+            )
         elif isinstance(amount, int):
             if amount < 0:
                 raise InvalidArgumentException(f"offset() must be >= 0, got {amount!r}")
             self._offset = amount
         else:
-            raise InvalidArgumentException(f"offset() expects an int or None, got {amount!r}")
+            raise InvalidArgumentException(
+                f"offset() expects an int or None, got {amount!r}"
+            )
         return self
 
     def skip(self, *args, **kwargs):
@@ -2972,7 +2984,6 @@ class QueryBuilder(ObservesEvents):
 
             if (
                 self._eager_relation.relations
-                or self._eager_relation.eagers
                 or self._eager_relation.nested_eagers
                 or self._eager_relation.callback_eagers
             ) and hydrated_model:
@@ -2991,7 +3002,6 @@ class QueryBuilder(ObservesEvents):
                 # related model in a second query.
                 normalized, callbacks = self._normalize_eager_specs(
                     self._eager_relation.get_relations()
-                    + self._eager_relation.get_eagers()
                 )
                 # Merge any pre-registered callback_eagers (from
                 # register(dict) path) into callbacks map.
@@ -3222,11 +3232,11 @@ class QueryBuilder(ObservesEvents):
         # Sanitise inputs — coerce to int, clamp to safe bounds.
         try:
             per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             per_page = 15
         try:
             page = max(1, min(int(page), self._MAX_PAGE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             page = 1
 
         if page == 1:
@@ -3265,11 +3275,11 @@ class QueryBuilder(ObservesEvents):
         # Sanitise inputs — coerce to int, clamp to safe bounds.
         try:
             per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             per_page = 15
         try:
             page = max(1, min(int(page), self._MAX_PAGE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             page = 1
 
         if page == 1:
@@ -3404,8 +3414,8 @@ class QueryBuilder(ObservesEvents):
         from cara.facades import Log
 
         sql, bindings = self.dump_sql()
-        Log.debug("[SQL] %s", sql, category='db.debug')
-        Log.debug("[BIND] %s", bindings, category='db.debug')
+        Log.debug("[SQL] %s", sql, category="db.debug")
+        Log.debug("[BIND] %s", bindings, category="db.debug")
         return self
 
     def run_scopes(self) -> Self:
@@ -3530,7 +3540,9 @@ class QueryBuilder(ObservesEvents):
 
         if operator not in operators:
             raise InvalidArgumentException(
-                "Invalid comparison operator. The operator can be {}".format(", ".join(operators))
+                "Invalid comparison operator. The operator can be {}".format(
+                    ", ".join(operators)
+                )
             )
 
         return operator, value
@@ -3884,9 +3896,7 @@ class QueryBuilder(ObservesEvents):
         # explicitly-timestamped and bare rows still ends up uniform.
         # ``update=[]`` is the explicit insert-if-missing (DO NOTHING)
         # form — no update list to extend there.
-        stamp_timestamps = bool(
-            model and getattr(model, "__timestamps__", False)
-        )
+        stamp_timestamps = bool(model and getattr(model, "__timestamps__", False))
         if stamp_timestamps:
             timestamp_value = model.get_new_date().to_datetime_string()
             for record in processed:

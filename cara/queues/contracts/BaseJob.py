@@ -78,7 +78,9 @@ class BaseJob(BaseQueueable):
         """
         if level not in self._PRIORITY_LEVELS:
             valid = ", ".join(sorted(self._PRIORITY_LEVELS))
-            raise InvalidArgumentException(f"Unknown priority level {level!r}. Valid: {valid}")
+            raise InvalidArgumentException(
+                f"Unknown priority level {level!r}. Valid: {valid}"
+            )
         self.job_priority = level
         return self
 
@@ -154,7 +156,12 @@ class BaseJob(BaseQueueable):
         try:
             from cara.facades import Log
 
-            Log.info("Job %s progress: %s%% - %s", self.__class__.__name__, progress_data['percentage'], message)
+            Log.info(
+                "Job %s progress: %s%% - %s",
+                self.__class__.__name__,
+                progress_data["percentage"],
+                message,
+            )
         except ImportError:
             # Silently fail if Log facade not available - this is a framework component
             pass

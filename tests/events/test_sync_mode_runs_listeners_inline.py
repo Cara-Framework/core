@@ -25,14 +25,18 @@ from cara.queues.contracts import ShouldQueue
 
 class UserRegisteredEvent:
     """Test-local event fixture."""
+
     name = "user.registered"
+
     def __init__(self, user_id, email, **extra):
         self.user_id = user_id
         self.email = email
         self._stopped = False
+
     @property
     def is_propagation_stopped(self):
         return self._stopped
+
 
 _SYNC = "cara.context.ExecutionContext.ExecutionContext.is_sync"
 
@@ -69,9 +73,10 @@ async def test_should_queue_listener_is_queued_in_async_mode():
     d.subscribe("user.registered", _QueuedListener(log))
     event = UserRegisteredEvent(user_id=1, email="a@b.com")
 
-    with patch(_SYNC, return_value=False), patch.object(
-        EventDispatcher, "_queue_listener", return_value=True
-    ) as mock_queue:
+    with (
+        patch(_SYNC, return_value=False),
+        patch.object(EventDispatcher, "_queue_listener", return_value=True) as mock_queue,
+    ):
         await d.dispatch(event)
 
     mock_queue.assert_called_once()

@@ -100,15 +100,11 @@ def test_notification_mail_adds_confirmation_link_and_rfc8058_headers(
         "frontend_url": "https://app.example",
         "preferences_url": "https://app.example/notifications/preferences",
         "unsubscribe_url": f"https://app.example/unsubscribe?{query}",
-        "unsubscribe_one_click_url": (
-            f"https://app.example/api/unsubscribe?{query}"
-        ),
+        "unsubscribe_one_click_url": (f"https://app.example/api/unsubscribe?{query}"),
     }
     assert manager.message.headers_value == {
         "X-Message-Class": "inventory",
-        "List-Unsubscribe": (
-            f"<https://app.example/api/unsubscribe?{query}>"
-        ),
+        "List-Unsubscribe": (f"<https://app.example/api/unsubscribe?{query}>"),
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
 

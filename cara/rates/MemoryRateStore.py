@@ -225,8 +225,7 @@ def resolve_fallback_mode() -> str:
 
     Values:
       * ``"memory"`` — engage the in-memory store on cache failure.
-      * ``"open"``   — legacy availability-first fail-open posture
-        (also accepts the older ``rate.fail_open=True`` knob).
+      * ``"open"``   — explicitly allow traffic without counting.
       * ``"closed"`` (default) — raise 503 on cache failure.
 
     Config lookup is wrapped in a defensive try because this helper
@@ -241,11 +240,6 @@ def resolve_fallback_mode() -> str:
             normalised = mode.strip().lower()
             if normalised in ("memory", "open", "closed"):
                 return normalised
-        # Backward-compat: respect ``rate.fail_open`` when the new
-        # ``fallback_mode`` key isn't set. Operators who already
-        # opted into fail-open don't have to migrate to the new flag.
-        if bool(Config.get("rate.fail_open", False)):
-            return "open"
     except Exception:
         # Config facade unavailable — assume the safest default.
         pass
@@ -267,8 +261,8 @@ def attempt_with_fallback(
     Returns a four-tuple ``(allowed, remaining, reset_in, backend)``
     where ``backend`` is ``"cache"`` for the Redis path,
     ``"memory"`` for the in-memory fallback, or ``"open"`` for the
-    legacy fail-open posture (no counting). The caller decides what
-    to log / surface based on the backend.
+    explicit fail-open posture (no counting). The caller decides what to
+    log / surface based on the backend.
 
     Raises ``cara.exceptions.ServiceUnavailableException`` when the
     fallback mode is ``"closed"`` and Redis is unavailable — same
@@ -281,8 +275,16 @@ def attempt_with_fallback(
     except Exception as exc:
         mode = resolve_fallback_mode()
         if _health_state.record_failure(exc):
-            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
-                Log.warning("Rate-limit cache backend unhealthy (%s: %s); fallback_mode=%s", exc.__class__.__name__, exc, mode, category='rate.fallback')
+            with contextlib.suppress(
+                OSError, RuntimeError, AttributeError, ConnectionError
+            ):
+                Log.warning(
+                    "Rate-limit cache backend unhealthy (%s: %s); fallback_mode=%s",
+                    exc.__class__.__name__,
+                    exc,
+                    mode,
+                    category="rate.fallback",
+                )
 
         if mode == "memory":
             count = _memory_store.increment(cache_key, window_seconds)

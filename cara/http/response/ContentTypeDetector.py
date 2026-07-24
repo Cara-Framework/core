@@ -154,7 +154,7 @@ class ContentTypeDetector:
         try:
             json.loads(content)
             return True
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             return False
 
     @staticmethod
@@ -276,7 +276,7 @@ class ContentTypeDetector:
                 charset_part = content_type.lower().split("charset=")[1]
                 charset = charset_part.split(";")[0].strip()
                 return charset
-            except (IndexError, AttributeError):
+            except IndexError, AttributeError:
                 pass
         return "utf-8"
 

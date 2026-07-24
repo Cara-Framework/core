@@ -93,107 +93,53 @@ class Notifiable(NotifiableContract):
             return self.slack_webhook_url
         return None
 
-    _notification_model = None
-    _preference_model = None
+    @staticmethod
+    def _database_notification_channel():
+        """Resolve Cara's conventional polymorphic notification store."""
+        try:
+            from cara.facades import Notification as NotificationFacade
 
-    @classmethod
-    def set_notification_model(cls, model) -> None:
-        """Register the Notification model at app boot (e.g. in a ServiceProvider)."""
-        cls._notification_model = model
-
-    @classmethod
-    def set_preference_model(cls, model) -> None:
-        """Register the UserPreference model at app boot (e.g. in a ServiceProvider)."""
-        cls._preference_model = model
-
-    def _get_notification_model(self):
-        if self._notification_model is None:
+            channel = NotificationFacade.channel("database")
+        except Exception as exc:
             raise CaraException(
-                "Notification model not registered. "
-                "Call Notifiable.set_notification_model() in a ServiceProvider."
-            )
-        return self._notification_model
+                "The database notification channel is not registered."
+            ) from exc
+        for method in ("get_notifications", "mark_as_read", "mark_as_unread"):
+            if not callable(getattr(channel, method, None)):
+                raise CaraException(
+                    f"The database notification channel does not support {method}()."
+                )
+        return channel
 
     def notifications(self) -> list[dict[str, Any]]:
         """Get all notifications for this notifiable entity."""
-        try:
-            model = self._get_notification_model()
-            return list(
-                model.where("user_id", self.id)
-                .order_by("created_at", "desc")
-                .get()
-            )
-        except Exception as exc:
-            import sys
-
-            print(
-                f"[cara.notifications] notifications() failed for "
-                f"user_id={getattr(self, 'id', '?')}: {exc}",
-                file=sys.stderr,
-            )
-            return []
+        return list(self._database_notification_channel().get_notifications(self))
 
     def unread_notifications(self) -> list[dict[str, Any]]:
         """Get all unread notifications for this notifiable entity."""
-        try:
-            model = self._get_notification_model()
-            return list(
-                model.where("user_id", self.id)
-                .where_null("read_at")
-                .order_by("created_at", "desc")
-                .get()
+        return list(
+            self._database_notification_channel().get_notifications(
+                self,
+                read=False,
             )
-        except Exception as exc:
-            import sys
-
-            print(
-                f"[cara.notifications] unread_notifications() failed for "
-                f"user_id={getattr(self, 'id', '?')}: {exc}",
-                file=sys.stderr,
-            )
-            return []
+        )
 
     def read_notifications(self) -> list[dict[str, Any]]:
         """Get all read notifications for this notifiable entity."""
-        try:
-            model = self._get_notification_model()
-            return list(
-                model.where("user_id", self.id)
-                .where_not_null("read_at")
-                .order_by("created_at", "desc")
-                .get()
+        return list(
+            self._database_notification_channel().get_notifications(
+                self,
+                read=True,
             )
-        except Exception as exc:
-            import sys
-
-            print(
-                f"[cara.notifications] read_notifications() failed for "
-                f"user_id={getattr(self, 'id', '?')}: {exc}",
-                file=sys.stderr,
-            )
-            return []
+        )
 
     def mark_as_read(self, notification_ids: list[str] | None = None) -> None:
         """Mark notifications as read."""
-        import pendulum
-
-        model = self._get_notification_model()
-        query = model.where("user_id", self.id)
-
-        if notification_ids:
-            query = query.where_in("id", notification_ids)
-
-        query.update({"read_at": pendulum.now("UTC")})
+        self._database_notification_channel().mark_as_read(self, notification_ids)
 
     def mark_as_unread(self, notification_ids: list[str] | None = None) -> None:
         """Mark notifications as unread."""
-        model = self._get_notification_model()
-        query = model.where("user_id", self.id)
-
-        if notification_ids:
-            query = query.where_in("id", notification_ids)
-
-        query.update({"read_at": None})
+        self._database_notification_channel().mark_as_unread(self, notification_ids)
 
     def get_notification_key(self) -> Any:
         """
@@ -206,8 +152,9 @@ class Notifiable(NotifiableContract):
             return self.id
         elif hasattr(self, "pk"):
             return self.pk
-        else:
-            return id(self)
+        raise CaraException(
+            "Notifiable entities must expose a stable id or pk notification key."
+        )
 
     def get_notification_type(self) -> str:
         """
@@ -217,26 +164,3 @@ class Notifiable(NotifiableContract):
             The entity's type/class name
         """
         return self.__class__.__name__
-
-    def notification_preferences(self, notification_type: str) -> list[str]:
-        """Get user's preferred channels for a notification type."""
-        import json
-
-        if self._preference_model is None:
-            return []
-
-        pref = (
-            self._preference_model.where("user_id", self.id)
-            .where("key", f"notification.{notification_type}")
-            .first()
-        )
-
-        if pref:
-            try:
-                channels = json.loads(pref.value)
-                if isinstance(channels, list):
-                    return channels
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        return []

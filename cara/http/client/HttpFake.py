@@ -5,11 +5,13 @@ Usage::
     from cara.facades import Http
 
     # Stub by URL glob — dict → JSON 200, int → bare status, list → sequence
-    with Http.fake({
-        "api.example.com/users/*": {"id": 1, "name": "Ada"},
-        "api.example.com/flaky": [503, {"ok": True}],   # first call 503, then 200
-        "*": Http.response(status=404),
-    }):
+    with Http.fake(
+        {
+            "api.example.com/users/*": {"id": 1, "name": "Ada"},
+            "api.example.com/flaky": [503, {"ok": True}],  # first call 503, then 200
+            "*": Http.response(status=404),
+        }
+    ):
         response = await Http.get("https://api.example.com/users/1")
 
     Http.assert_sent(lambda r: r["method"] == "GET" and "/users/1" in r["url"])

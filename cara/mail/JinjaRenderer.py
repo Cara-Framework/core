@@ -68,9 +68,7 @@ def _environment(application) -> jinja2.Environment:
     return env
 
 
-def render_mail_view(
-    application, view: str, data: dict[str, Any] | None = None
-) -> str:
+def render_mail_view(application, view: str, data: dict[str, Any] | None = None) -> str:
     """Render a dotted mail view (e.g. ``mail.notifications.price_drop``).
 
     Raises ``jinja2.TemplateNotFound`` when no template file matches — mail

@@ -267,9 +267,7 @@ def test_naive_drift_message_carries_the_exact_repair_alter():
 def test_aware_live_column_under_naive_model_is_drift_without_a_lossy_default():
     cmd = _cmd()
     declared = {"wall_clock": {"type": "timestamp", "nullable": True}}
-    live = {
-        "wall_clock": {"data_type": "timestamp with time zone", "is_nullable": True}
-    }
+    live = {"wall_clock": {"data_type": "timestamp with time zone", "is_nullable": True}}
     message = cmd._diff_table("widget", declared, live)[0]
     assert "timezone-AWARE" in message
     # Narrowing discards the offset, so the message must say so rather than
@@ -338,5 +336,7 @@ def test_index_diff_reports_missing_and_extra_together():
         constraint_indexes=set(),
     )
     assert len(drift) == 2
-    assert any("listing_marketplace_external_unique" in d and "MISSING" in d for d in drift)
+    assert any(
+        "listing_marketplace_external_unique" in d and "MISSING" in d for d in drift
+    )
     assert any("an_undeclared_index" in d and "NOT declared" in d for d in drift)

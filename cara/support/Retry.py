@@ -14,7 +14,9 @@ Usage::
     result = await Retry.times(3).backoff(base=2.0, jitter=0.15).run(coro_factory)
 
     # Retry only on specific exceptions
-    result = await Retry.times(3).catch(httpx.TimeoutException, httpx.ConnectError).run(fn)
+    result = (
+        await Retry.times(3).catch(httpx.TimeoutException, httpx.ConnectError).run(fn)
+    )
 
     # With max delay cap
     result = await Retry.times(5).backoff(base=2.0, max_delay=30.0).run(fn)
@@ -72,7 +74,7 @@ class RetryBuilder:
         return self
 
     def _compute_delay(self, attempt: int) -> float:
-        delay = self._backoff_base ** attempt
+        delay = self._backoff_base**attempt
         delay *= 1.0 + random.uniform(-self._backoff_jitter, self._backoff_jitter)
         return min(delay, self._max_delay)
 
@@ -120,6 +122,8 @@ class Retry:
         return RetryBuilder(max_attempts=attempts)
 
     @staticmethod
-    def backoff(base: float = 2.0, *, jitter: float = 0.15, max_delay: float = 60.0) -> RetryBuilder:
+    def backoff(
+        base: float = 2.0, *, jitter: float = 0.15, max_delay: float = 60.0
+    ) -> RetryBuilder:
         """Create a retry builder with backoff configuration (default 3 attempts)."""
         return RetryBuilder().backoff(base, jitter=jitter, max_delay=max_delay)

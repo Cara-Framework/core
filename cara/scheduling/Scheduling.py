@@ -28,7 +28,9 @@ class Scheduling:
         chosen = name or self._default_driver
         inst = self._drivers.get(chosen)
         if not inst:
-            raise DriverNotRegisteredException(f"Scheduling driver '{chosen}' not registered.")
+            raise DriverNotRegisteredException(
+                f"Scheduling driver '{chosen}' not registered."
+            )
         return inst
 
     def call(self, callback: Any) -> ScheduleBuilder:

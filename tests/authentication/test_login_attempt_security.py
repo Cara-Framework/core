@@ -16,9 +16,9 @@ def test_identifier_digest_is_normalized_keyed_and_stable(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "config",
-        lambda key, default=None: "x" * 48
-        if key == "security.identifier_hmac_key"
-        else default,
+        lambda key, default=None: (
+            "x" * 48 if key == "security.identifier_hmac_key" else default
+        ),
     )
 
     first = module.LoginAttemptTracker.identifier_digest(" User@Example.com ")
@@ -34,9 +34,9 @@ def test_identifier_digest_rejects_weak_key(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "config",
-        lambda key, default=None: "weak"
-        if key == "security.identifier_hmac_key"
-        else default,
+        lambda key, default=None: (
+            "weak" if key == "security.identifier_hmac_key" else default
+        ),
     )
 
     with pytest.raises(AuthenticationConfigurationException, match="32 bytes"):

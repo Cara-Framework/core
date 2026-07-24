@@ -218,11 +218,14 @@ def test_rotation_accepts_previous_kid_and_unknown_kid_is_rejected():
         allowed_prefixes=_PREFIXES,
         issued_at=1_752_643_200,
     )
-    assert SignedJsonJobSerializer.inspect(
-        body,
-        signing_keys={_KID: _KEY, "old": _OLD_KEY},
-        now=1_752_643_201,
-    )["job_id"] == _JOB_ID
+    assert (
+        SignedJsonJobSerializer.inspect(
+            body,
+            signing_keys={_KID: _KEY, "old": _OLD_KEY},
+            now=1_752_643_201,
+        )["job_id"]
+        == _JOB_ID
+    )
     with pytest.raises(QueueException, match="Unknown AMQP signing key id"):
         SignedJsonJobSerializer.inspect(
             body,

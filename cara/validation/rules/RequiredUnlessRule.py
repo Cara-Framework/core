@@ -16,7 +16,7 @@ from cara.validation.rules.RequiredIfRule import _values_match
 
 class RequiredUnlessRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        raw = params.get("required_unless") or params.get("requiredunless")
+        raw = params.get("required_unless")
         if not raw:
             return True
         parts = [p.strip() for p in raw.split(",")]
@@ -41,7 +41,7 @@ class RequiredUnlessRule(BaseRule):
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
-        raw = params.get("required_unless") or params.get("requiredunless", "")
+        raw = params.get("required_unless", "")
         parts = [p.strip() for p in raw.split(",")]
         other = parts[0] if parts else ""
         expected = parts[1] if len(parts) > 1 else ""

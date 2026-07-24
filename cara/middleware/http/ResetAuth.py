@@ -31,7 +31,9 @@ class ResetAuth(Middleware):
     between different requests and users.
     """
 
-    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[..., Awaitable[Any]]
+    ) -> Response:
         """This middleware only works as terminable, no pre-processing needed."""
         return await next_fn(request)
 
@@ -51,7 +53,9 @@ class ResetAuth(Middleware):
             # use the canonical ``set_user`` setter where available.
             setter = getattr(request, "set_user", None)
             if callable(setter):
-                with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+                with contextlib.suppress(
+                    OSError, RuntimeError, AttributeError, ConnectionError
+                ):
                     setter(None)
             elif hasattr(request, "_user"):
                 request._user = None
@@ -76,4 +80,9 @@ class ResetAuth(Middleware):
         except Exception as exc:
             # CRITICAL: Never let cache cleanup break the application,
             # but do log so operators can diagnose cache-leak risks.
-            Log.warning("ResetAuth cleanup failed: %s", exc, category='cara.middleware.reset_auth', exc_info=True)
+            Log.warning(
+                "ResetAuth cleanup failed: %s",
+                exc,
+                category="cara.middleware.reset_auth",
+                exc_info=True,
+            )

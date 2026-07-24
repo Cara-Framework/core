@@ -126,6 +126,20 @@ class CreatePriceViews(Migration):
 '''
 
 
+def _transition_source(old_table: str, new_table: str) -> str:
+    return f'''"""Rename an applied table without rewriting migration history."""
+
+from cara.facades import DB
+
+MODEL_TRANSITION = ("{old_table}", "{new_table}")
+
+
+class RenameAppliedTable:
+    def up(self):
+        DB.statement("ALTER TABLE {old_table} RENAME TO {new_table}")
+'''
+
+
 def _write(d, name, content):
     p = d / name
     p.write_text(content, encoding="utf-8")
@@ -233,6 +247,82 @@ def test_partition_preserves_model_less_marked_files(migrations_dir):
     doomed, preserved = cmd._partition_migrations()
     assert [p.name for p in doomed] == ["0001_01_01_000000_create_widget_table.py"]
     assert [p.name for p in preserved] == ["9982_01_01_000000_create_price_views.py"]
+
+
+def test_partition_preserves_root_and_two_edge_transition_chain(migrations_dir):
+    cmd = _make_command()
+    root = _write(
+        migrations_dir,
+        "0001_01_01_000000_create_legacy_widget_table.py",
+        _GENERATED_CREATE,
+    )
+    first = _write(
+        migrations_dir,
+        "0002_01_01_000001_rename_legacy_widget_to_catalog_widget.py",
+        _transition_source("legacy_widget", "catalog_widget"),
+    )
+    second = _write(
+        migrations_dir,
+        "0003_01_01_000002_rename_catalog_widget_to_widget.py",
+        _transition_source("catalog_widget", "widget"),
+    )
+    doomed_file = _write(
+        migrations_dir,
+        "0004_01_01_000003_backfill_widget_slugs.py",
+        _HAND_WRITTEN,
+    )
+
+    doomed, preserved = cmd._partition_migrations()
+
+    assert doomed == [doomed_file]
+    assert preserved == [root, first, second]
+    assert cmd._transition_tables(preserved) == (
+        {"legacy_widget", "catalog_widget"},
+        {"widget"},
+    )
+    assert cmd._transition_targets(preserved) == {"widget"}
+
+
+def test_partition_rejects_transition_cycle(migrations_dir):
+    cmd = _make_command()
+    _write(
+        migrations_dir,
+        "0001_01_01_000000_create_legacy_widget_table.py",
+        _GENERATED_CREATE,
+    )
+    _write(
+        migrations_dir,
+        "0002_01_01_000001_rename_legacy_widget_to_catalog_widget.py",
+        _transition_source("legacy_widget", "catalog_widget"),
+    )
+    _write(
+        migrations_dir,
+        "0003_01_01_000002_rename_catalog_widget_to_legacy_widget.py",
+        _transition_source("catalog_widget", "legacy_widget"),
+    )
+
+    with pytest.raises(RuntimeError, match="cycle"):
+        cmd._partition_migrations()
+
+
+def test_partition_rejects_transition_without_exact_rename(migrations_dir):
+    cmd = _make_command()
+    _write(
+        migrations_dir,
+        "0001_01_01_000000_create_legacy_widget_table.py",
+        _GENERATED_CREATE,
+    )
+    _write(
+        migrations_dir,
+        "0002_01_01_000001_rename_legacy_widget_to_widget.py",
+        _transition_source("legacy_widget", "widget").replace(
+            "RENAME TO widget",
+            "RENAME TO other_widget",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="does not prove exactly"):
+        cmd._partition_migrations()
 
 
 def test_partition_ignores_package_init(migrations_dir):

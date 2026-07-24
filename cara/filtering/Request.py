@@ -265,7 +265,7 @@ class FilteredFormRequest(FormRequest):
         ):
             try:
                 setattr(request, attr, value)
-            except (AttributeError, TypeError):
+            except AttributeError, TypeError:
                 # Frozen / dataclass-like request; mirroring onto
                 # ``validated`` below covers callers that only see
                 # the dict, so the missing attribute isn't a problem.

@@ -101,9 +101,7 @@ class MailProvider(DeferredProvider):
         is_smtp_transport = isinstance(driver_class, type) and issubclass(
             driver_class, SmtpDriver
         )
-        if is_smtp_transport and not (
-            env("MAIL_HOST", "") and env("MAIL_USERNAME", "")
-        ):
+        if is_smtp_transport and not (env("MAIL_HOST", "") and env("MAIL_USERNAME", "")):
             raise RuntimeError(
                 "SMTP transport is not configured (MAIL_HOST / MAIL_USERNAME "
                 "unset in the environment) — every outgoing email would be "

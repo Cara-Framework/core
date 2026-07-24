@@ -147,7 +147,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         """Prepare and validate scheduler configuration."""
         driver_name = driver or config("scheduling.default")
         if not driver_name:
-            raise ConfigurationException("No scheduler driver specified and no default configured")
+            raise ConfigurationException(
+                "No scheduler driver specified and no default configured"
+            )
 
         return {
             "driver_name": driver_name,
@@ -363,7 +365,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             # follow-up work and stayed in their initial state (hidden from
             # the client). Overlap between slow ticks is still guarded by the
             # idempotency job lock + any WithoutOverlapping middleware.
-            with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+            with contextlib.suppress(
+                OSError, RuntimeError, AttributeError, ConnectionError
+            ):
                 instance.idempotency_cache_results = False
 
             # Resolve handle() parameters via DI container if needed.
@@ -377,7 +381,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                 if param_name in _kw:
                     handle_kwargs[param_name] = _kw[param_name]
                 elif param.annotation != inspect.Parameter.empty:
-                    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+                    with contextlib.suppress(
+                        OSError, RuntimeError, AttributeError, ConnectionError
+                    ):
                         handle_kwargs[param_name] = _app.make(param.annotation)
 
             # OPT-IN scheduler-tick observability (default OFF). The scheduler
@@ -427,11 +433,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                 from cara.context import Tenancy
                 from cara.queues.middleware import run_through_middleware_async
 
-                scope = (
-                    Tenancy.central()
-                    if _central
-                    else Tenancy.as_tenant(_tenant_id)
-                )
+                scope = Tenancy.central() if _central else Tenancy.as_tenant(_tenant_id)
                 with scope:
                     return await run_through_middleware_async(instance, _invoke)
 
@@ -533,9 +535,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                     f"Decorator-scheduled job {job_name} must explicitly declare "
                     "central_job = True; tenant jobs need dict scheduling with tenant_id."
                 )
-            builder = Schedule.call(
-                lambda: self._run_decorated_central_job(job_target)
-            )
+            builder = Schedule.call(lambda: self._run_decorated_central_job(job_target))
         elif mode == "command":
             driver_name = spec.get("driver_name")
             builder = Schedule.call(lambda: self._queue_command(job_target, driver_name))
@@ -740,7 +740,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             # Ensure the background scheduler stops its thread pool
             # when the command exits (Ctrl-C, auto-reload, --once).
             if driver is not None:
-                with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+                with contextlib.suppress(
+                    OSError, RuntimeError, AttributeError, ConnectionError
+                ):
                     driver.shutdown(wait=False)
 
     def _publish_schedule_snapshot(self, driver) -> None:

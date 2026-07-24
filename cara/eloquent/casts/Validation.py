@@ -73,7 +73,7 @@ class UUIDCast(BaseCast):
 
             uuid_obj = uuid.UUID(str(value))
             return str(uuid_obj)
-        except (ValueError, TypeError, ImportError):
+        except ValueError, TypeError, ImportError:
             return None
 
     def set(self, value):
@@ -89,7 +89,7 @@ class UUIDCast(BaseCast):
 
             uuid_obj = uuid.UUID(str(value))
             return str(uuid_obj)
-        except (ValueError, TypeError, ImportError):
+        except ValueError, TypeError, ImportError:
             return None
 
 

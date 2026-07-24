@@ -1,6 +1,5 @@
 """Sentinel type for conditional resource attributes."""
 
-
 from __future__ import annotations
 
 

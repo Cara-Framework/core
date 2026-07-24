@@ -66,24 +66,9 @@ class AuthenticateUser(ShouldAuthenticate):
         self._auth_manager = auth_manager
         return auth_manager
 
-    def _resolve_guards(self, auth_manager: Authentication) -> list[str]:
-        """Translate the configured ``self.guards`` into concrete guard names.
-
-        ``self.guards`` may be ``None`` (use default), explicitly
-        ``["jwt"]`` (which we treat as "use whatever the auth manager
-        considers the default"), or a list of explicit guard aliases.
-        """
-        configured: list[str] = self.guards or ["jwt"]
-        if configured != ["jwt"]:
-            return configured
-        try:
-            return [auth_manager.get_default_guard()]
-        except Exception as e:
-            Log.warning(
-                f"AuthenticateUser: get_default_guard() raised, falling back to 'jwt': {e}",
-                category="auth",
-            )
-            return ["jwt"]
+    def _resolve_guards(self) -> list[str]:
+        """Return the guard names fixed by middleware construction."""
+        return list(self.guards)
 
     async def handle(self, request: Request, next_fn: Callable) -> Response:
         auth_manager = self._resolve_auth_manager()
@@ -99,9 +84,10 @@ class AuthenticateUser(ShouldAuthenticate):
 
         guard_state: tuple[Any, Any] = (None, None)
 
-        for guard_name in self._resolve_guards(auth_manager):
+        for guard_name in self._resolve_guards():
             try:
                 guard = auth_manager.guard(guard_name)
+
                 # ``guard.user()`` resolves the JWT subject to a row via a
                 # SYNC ``User.find()`` (psycopg2). This middleware's ``handle``
                 # is async + runs on the event loop, so calling it inline would

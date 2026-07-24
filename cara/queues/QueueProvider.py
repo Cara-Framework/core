@@ -52,8 +52,7 @@ class QueueProvider(DeferredProvider):
         username = config("queue.drivers.amqp.username")
         password = config("queue.drivers.amqp.password")
         canonical_queues = sorted(
-            str(queue_name)
-            for queue_name in (config("queue.canonical_queues", ()) or ())
+            str(queue_name) for queue_name in (config("queue.canonical_queues", ()) or ())
         )
 
         if not username or not password or not canonical_queues:
@@ -83,9 +82,7 @@ class QueueProvider(DeferredProvider):
                 "ssl_certfile": config("queue.drivers.amqp.ssl_certfile"),
                 "ssl_keyfile": config("queue.drivers.amqp.ssl_keyfile"),
                 "exchange": config("queue.drivers.amqp.exchange", ""),
-                "connection_options": config(
-                    "queue.drivers.amqp.connection_options", {}
-                ),
+                "connection_options": config("queue.drivers.amqp.connection_options", {}),
                 "canonical_queues": canonical_queues,
                 "topology_sentinel_exchange": config(
                     "queue.topology_sentinel_exchange",
@@ -104,9 +101,7 @@ class QueueProvider(DeferredProvider):
                     "queue.drivers.amqp.max_length_bytes",
                     1073741824,
                 ),
-                "priority_levels": config(
-                    "queue.drivers.amqp.priority_levels", {}
-                ),
+                "priority_levels": config("queue.drivers.amqp.priority_levels", {}),
                 "signing_key_id": config(
                     "queue.drivers.amqp.signing_key_id",
                     "",
@@ -169,7 +164,9 @@ class QueueProvider(DeferredProvider):
         from cara.queues.tracking import JobTracker
 
         def create_job_tracker():
-            job_model = self.application.make("Job") if self.application.has("Job") else None
+            job_model = (
+                self.application.make("Job") if self.application.has("Job") else None
+            )
             return JobTracker(job_model=job_model)
 
         self.application.singleton("JobTracker", create_job_tracker)

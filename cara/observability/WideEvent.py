@@ -43,7 +43,7 @@ def _env(key: str, default: str = "") -> str:
         val = config(key)
         if val is not None:
             return str(val)
-    except (OSError, RuntimeError, AttributeError, ConnectionError):
+    except OSError, RuntimeError, AttributeError, ConnectionError:
         pass
     return os.environ.get(key.upper().replace(".", "_"), str(default))
 
@@ -76,9 +76,7 @@ def _ensure_worker() -> None:
     with _start_lock:
         if _worker_started:
             return
-        threading.Thread(
-            target=_run, name="wide-events-writer", daemon=True
-        ).start()
+        threading.Thread(target=_run, name="wide-events-writer", daemon=True).start()
         _worker_started = True
 
 
@@ -117,7 +115,7 @@ def _run() -> None:
                     auth=(user, password),
                     timeout=5,
                 )
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
+            except OSError, RuntimeError, AttributeError, ConnectionError:
                 pass  # ClickHouse down / transient → drop the batch
 
 

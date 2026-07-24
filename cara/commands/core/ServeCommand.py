@@ -216,7 +216,7 @@ class ServeCommand(CommandBase):
                 self.console.print(
                     f"[#e5c07b]│[/#e5c07b] [white]Network:[/white] [bold white]http://{local_ip}:{port}[/bold white]"
                 )
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
+            except OSError, RuntimeError, AttributeError, ConnectionError:
                 pass
 
         self.console.print("[#e5c07b]└─[/#e5c07b]")
@@ -395,7 +395,7 @@ class ServeCommand(CommandBase):
         """Best-effort signal to the server's process group."""
         try:
             os.killpg(pgid, signum)
-        except (ProcessLookupError, PermissionError, OSError):
+        except ProcessLookupError, PermissionError, OSError:
             if fallback is not None:
                 with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
                     fallback()

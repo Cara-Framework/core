@@ -20,6 +20,9 @@ CI gate for the convention:
      mixed-awareness cast that makes index expressions non-IMMUTABLE, which is
      what made a from-scratch migrate die in both products.
   5. NO DUPLICATES — two files creating the same table.
+  6. APPLIED MODEL TRANSITIONS — an immutable generated creator may be paired
+     with one later, explained ``MODEL_TRANSITION = ("old", "new")`` migration
+     only when its SQL proves the rename and ``new`` is the exact current model.
   7. INDEXES BELONG TO MODELS — an index that exists only inside a migration
      file is silently DROPPED by the next regenerate-from-models.
 
@@ -51,6 +54,7 @@ from pathlib import Path
 from cara.commands import CommandBase, missing_optional
 from cara.commands.core.MakeMigrationCommand import (
     MODEL_LESS_MARKER,
+    MODEL_TRANSITION_MARKER,
     MakeMigrationCommand,
 )
 from cara.decorators import command
@@ -79,6 +83,12 @@ _CREATE_INDEX_ON_RE = re.compile(
 _CREATE_TABLE_RE = re.compile(
     r"CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
     r"\"?(?:\w+\"?\.\"?)?(?P<table>\w+)\"?",
+    re.IGNORECASE,
+)
+
+_ALTER_TABLE_RENAME_RE = re.compile(
+    r"ALTER\s+TABLE\s+\"?(?P<old>[a-z0-9_]+)\"?\s+"
+    r"RENAME\s+TO\s+\"?(?P<new>[a-z0-9_]+)\"?",
     re.IGNORECASE,
 )
 
@@ -117,6 +127,8 @@ class MigrationFile:
     path: Path
     model_less: bool
     generated_table: str | None
+    model_transition: tuple[str, str] | None
+    transition_error: str | None
     docstring: str | None
     sql_constants: tuple[tuple[int, str], ...]
     syntax_error: str | None
@@ -155,17 +167,70 @@ def _string_constants(tree: ast.AST) -> list[tuple[int, str]]:
     return found
 
 
+def _model_transition(
+    tree: ast.Module,
+) -> tuple[tuple[str, str] | None, str | None]:
+    """Read one explicit old-table -> model-table transition marker."""
+
+    marker: ast.AST | None = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == MODEL_TRANSITION_MARKER
+            for target in node.targets
+        ):
+            marker = node.value
+            break
+    if marker is None:
+        return None, None
+    try:
+        value = ast.literal_eval(marker)
+    except ValueError, TypeError:
+        return None, f"{MODEL_TRANSITION_MARKER} must be a literal pair"
+    if (
+        not isinstance(value, tuple)
+        or len(value) != 2
+        or any(
+            not isinstance(table, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", table) is None
+            for table in value
+        )
+        or value[0] == value[1]
+    ):
+        return None, (f"{MODEL_TRANSITION_MARKER} must be an (old_table, new_table) pair")
+    return (value[0], value[1]), None
+
+
 def parse_migration_file(path: Path) -> MigrationFile:
     """Classify one migration file by PARSING it. Never imports it."""
     try:
         content = path.read_text(encoding="utf-8")
     except OSError as exc:
-        return MigrationFile(path, False, None, None, (), f"unreadable: {exc}")
+        return MigrationFile(
+            path,
+            False,
+            None,
+            None,
+            None,
+            None,
+            (),
+            f"unreadable: {exc}",
+        )
 
     try:
         tree = ast.parse(content, filename=str(path))
     except SyntaxError as exc:
-        return MigrationFile(path, False, None, None, (), f"does not parse: {exc}")
+        return MigrationFile(
+            path,
+            False,
+            None,
+            None,
+            None,
+            None,
+            (),
+            f"does not parse: {exc}",
+        )
 
     model_less = MakeMigrationCommand._declares_model_less(content, path)
     match = _GENERATED_NAME_RE.match(path.name)
@@ -173,11 +238,14 @@ def parse_migration_file(path: Path) -> MigrationFile:
     # framework-owned failed_job table is), so the marker is decided FIRST —
     # otherwise the escape hatch would be reported as an orphan every run.
     generated_table = match.group("table") if match and not model_less else None
+    model_transition, transition_error = _model_transition(tree)
 
     return MigrationFile(
         path=path,
         model_less=model_less,
         generated_table=generated_table,
+        model_transition=model_transition,
+        transition_error=transition_error,
         docstring=ast.get_docstring(tree),
         sql_constants=tuple(_string_constants(tree)),
         syntax_error=None,
@@ -205,6 +273,7 @@ def audit_migrations(
     # file could otherwise be counted twice and reported as its own duplicate.
     creators: dict[str, set[str]] = {}
     generated_files: set[str] = set()
+    transitions: list[MigrationFile] = []
 
     for entry in files:
         name = entry.path.name
@@ -224,11 +293,55 @@ def audit_migrations(
             )
             continue
 
-        if entry.model_less:
+        if entry.transition_error:
+            violations.append(
+                Violation(
+                    rule="invalid-model-transition",
+                    path=name,
+                    message=entry.transition_error,
+                    remedy=(
+                        f"declare {MODEL_TRANSITION_MARKER} = ('old_table', 'new_table')"
+                    ),
+                    human_only=True,
+                    blocks_fix=True,
+                )
+            )
+        elif entry.model_less and entry.model_transition:
+            violations.append(
+                Violation(
+                    rule="invalid-model-transition",
+                    path=name,
+                    message=(
+                        f"{MODEL_TRANSITION_MARKER} cannot be combined with "
+                        f"{MODEL_LESS_MARKER}"
+                    ),
+                    remedy="remove the conflicting marker",
+                    human_only=True,
+                    blocks_fix=True,
+                )
+            )
+        elif entry.model_less:
             violations.extend(_audit_model_less(entry))
         elif entry.generated_table:
-            creators.setdefault(entry.generated_table, set()).add(name)
-            generated_files.add(name)
+            if entry.model_transition:
+                violations.append(
+                    Violation(
+                        rule="invalid-model-transition",
+                        path=name,
+                        message=(
+                            f"{MODEL_TRANSITION_MARKER} belongs in a forward "
+                            "non-create migration"
+                        ),
+                        remedy="move the marker to the forward rename migration",
+                        human_only=True,
+                        blocks_fix=True,
+                    )
+                )
+            else:
+                creators.setdefault(entry.generated_table, set()).add(name)
+                generated_files.add(name)
+        elif entry.model_transition:
+            transitions.append(entry)
         else:
             violations.append(
                 Violation(
@@ -249,10 +362,226 @@ def audit_migrations(
         for table in _created_tables(entry):
             creators.setdefault(table, set()).add(name)
 
-    violations.extend(
-        _audit_table_coverage(creators, generated_files, model_indexes)
+    transition_violations, valid_transitions = _audit_model_transitions(
+        transitions,
+        creators,
+        generated_files,
+        model_indexes,
     )
+    violations.extend(transition_violations)
+    retired_tables: set[str] = set()
+    for _chain, tables, root_creator in valid_transitions:
+        retired_tables.update(tables[:-1])
+        creators.setdefault(tables[-1], set()).add(root_creator)
+
+    violations.extend(_audit_table_coverage(creators, generated_files, model_indexes))
+    violations = [
+        violation
+        for violation in violations
+        if not (
+            violation.rule == "orphan-migration"
+            and any(
+                violation.path in creators.get(table, set()) for table in retired_tables
+            )
+        )
+    ]
     return violations
+
+
+def _audit_model_transitions(
+    entries: list[MigrationFile],
+    creators: dict[str, set[str]],
+    generated_files: set[str],
+    model_indexes: dict[str, set[str]],
+) -> tuple[
+    list[Violation],
+    list[tuple[list[MigrationFile], list[str], str]],
+]:
+    """Validate applied immutable create -> forward model rename chains."""
+
+    violations: list[Violation] = []
+    conflicted: set[str] = set()
+    sources: dict[str, list[MigrationFile]] = {}
+    targets: dict[str, list[MigrationFile]] = {}
+    for entry in entries:
+        old_table, new_table = entry.model_transition or ("", "")
+        sources.setdefault(old_table, []).append(entry)
+        targets.setdefault(new_table, []).append(entry)
+
+    for label, grouped in (("source", sources), ("target", targets)):
+        for table, grouped_entries in grouped.items():
+            if len(grouped_entries) == 1:
+                continue
+            for entry in grouped_entries:
+                conflicted.add(entry.path.name)
+                violations.append(
+                    Violation(
+                        rule="duplicate-model-transition",
+                        path=entry.path.name,
+                        message=(
+                            f"model-transition {label} table {table!r} is "
+                            "declared more than once"
+                        ),
+                        remedy="keep exactly one forward transition per table",
+                        human_only=True,
+                        blocks_fix=True,
+                    )
+                )
+
+    by_source = {
+        source: grouped_entries[0]
+        for source, grouped_entries in sources.items()
+        if len(grouped_entries) == 1 and grouped_entries[0].path.name not in conflicted
+    }
+    by_target = {
+        target: grouped_entries[0]
+        for target, grouped_entries in targets.items()
+        if len(grouped_entries) == 1 and grouped_entries[0].path.name not in conflicted
+    }
+
+    chains: list[tuple[list[MigrationFile], list[str]]] = []
+    visited: set[str] = set()
+    roots = sorted(set(by_source) - set(by_target))
+    for root in roots:
+        chain: list[MigrationFile] = []
+        tables = [root]
+        source = root
+        while source in by_source:
+            entry = by_source[source]
+            name = entry.path.name
+            if name in visited:
+                break
+            visited.add(name)
+            chain.append(entry)
+            _old_table, new_table = entry.model_transition or ("", "")
+            tables.append(new_table)
+            source = new_table
+        chains.append((chain, tables))
+
+    cyclic = [
+        entry
+        for entry in entries
+        if entry.path.name not in conflicted and entry.path.name not in visited
+    ]
+    for entry in cyclic:
+        conflicted.add(entry.path.name)
+        violations.append(
+            Violation(
+                rule="cyclic-model-transition",
+                path=entry.path.name,
+                message="MODEL_TRANSITION graph contains a rename cycle",
+                remedy="break the cycle; applied table history must form a DAG",
+                human_only=True,
+                blocks_fix=True,
+            )
+        )
+
+    valid: list[tuple[list[MigrationFile], list[str], str]] = []
+    for chain, tables in chains:
+        if not chain:
+            continue
+        chain_errors: list[tuple[str, str, str]] = []
+        root_table, terminal_table = tables[0], tables[-1]
+        root_creators = creators.get(root_table, set())
+        if len(root_creators) != 1 or not root_creators <= generated_files:
+            chain_errors.append(
+                (
+                    chain[0].path.name,
+                    f"chain root {root_table!r} has no single generated creator",
+                    "point the root at exactly one applied generated create migration",
+                )
+            )
+        unexpected_creators = {
+            table: creators.get(table, set())
+            for table in tables[1:]
+            if creators.get(table)
+        }
+        if unexpected_creators:
+            chain_errors.append(
+                (
+                    chain[-1].path.name,
+                    "only the chain root may have a generated creator",
+                    "remove regenerated creators for transition intermediates/terminal",
+                )
+            )
+        stale_models = sorted(set(tables[:-1]) & set(model_indexes))
+        if stale_models:
+            chain_errors.append(
+                (
+                    chain[0].path.name,
+                    "non-terminal transition table(s) are still model-owned: "
+                    + ", ".join(stale_models),
+                    "only the terminal table may be the current model",
+                )
+            )
+        if terminal_table not in model_indexes:
+            chain_errors.append(
+                (
+                    chain[-1].path.name,
+                    f"terminal table {terminal_table!r} has no model",
+                    "point the chain terminal at the exact current model table",
+                )
+            )
+
+        previous_name = next(iter(root_creators)) if len(root_creators) == 1 else ""
+        for entry in chain:
+            name = entry.path.name
+            old_table, new_table = entry.model_transition or ("", "")
+            if not (entry.docstring or "").strip():
+                chain_errors.append(
+                    (
+                        name,
+                        "missing explanation",
+                        "add a module docstring explaining why immutable history "
+                        "requires this forward transition",
+                    )
+                )
+            rename_pairs = {
+                (match.group("old").lower(), match.group("new").lower())
+                for _, text in entry.sql_constants
+                for match in _ALTER_TABLE_RENAME_RE.finditer(text)
+            }
+            if rename_pairs != {(old_table, new_table)}:
+                chain_errors.append(
+                    (
+                        name,
+                        "SQL does not prove the declared one-to-one table rename",
+                        f"include exactly ALTER TABLE {old_table} RENAME TO {new_table}",
+                    )
+                )
+            if _created_tables(entry):
+                chain_errors.append(
+                    (
+                        name,
+                        "transition migration creates a table",
+                        "rename the applied chain; do not create a second table",
+                    )
+                )
+            if previous_name and name <= previous_name:
+                chain_errors.append(
+                    (
+                        name,
+                        "transition does not sort after its predecessor",
+                        "give every chain edge a later monotonic sequence number",
+                    )
+                )
+            previous_name = name
+
+        if chain_errors:
+            for path, message, remedy in chain_errors:
+                violations.append(
+                    Violation(
+                        rule="invalid-model-transition",
+                        path=path,
+                        message=message,
+                        remedy=remedy,
+                        human_only=True,
+                        blocks_fix=True,
+                    )
+                )
+            continue
+        valid.append((chain, tables, next(iter(root_creators))))
+    return violations, valid
 
 
 def _audit_model_less(entry: MigrationFile) -> list[Violation]:
@@ -265,9 +594,7 @@ def _audit_model_less(entry: MigrationFile) -> list[Violation]:
             Violation(
                 rule="unexplained-model-less",
                 path=name,
-                message=(
-                    f"marked {MODEL_LESS_MARKER} = True but carries no docstring"
-                ),
+                message=(f"marked {MODEL_LESS_MARKER} = True but carries no docstring"),
                 remedy=(
                     "add a docstring stating WHY no model can own this object "
                     "(materialized view, framework-owned table, extension)"
@@ -378,9 +705,7 @@ def _audit_table_coverage(
                 Violation(
                     rule="duplicate-table",
                     path=", ".join(sorted(files)),
-                    message=(
-                        f"table '{table}' is created by {len(files)} files"
-                    ),
+                    message=(f"table '{table}' is created by {len(files)} files"),
                     remedy=(
                         "delete the redundant file; one table is created by "
                         "exactly one migration"
@@ -416,16 +741,18 @@ def _audit_table_coverage(
     name="migrations:check",
     help=(
         "Audit the migrations directory against the migration convention: one "
-        "generated file per model table, no incremental add_*/alter_* files, "
-        "every MODEL_LESS file explained, TIMESTAMPTZ everywhere, no duplicate "
-        "or orphan table creations, and no index living only in a migration. "
+        "generated chain per model table, no undeclared incremental files, "
+        "every MODEL_LESS or MODEL_TRANSITION file proven and explained, "
+        "TIMESTAMPTZ everywhere, no duplicate or orphan table creations, and "
+        "no index living only in a migration. "
         "Exits non-zero on any violation so CI can gate on it."
     ),
     options={
         "--fix": (
             "Regenerate the directory from the models (the make:migration "
-            "--overwrite --force path, MODEL_LESS files preserved) and re-audit. "
-            "Naive timestamps and unexplained MODEL_LESS markers are never "
+            "--overwrite --force path, MODEL_LESS and validated "
+            "MODEL_TRANSITION chains preserved) and re-audit. Naive timestamps "
+            "and unexplained markers are never "
             "auto-fixed; a hand-added index or duplicate table blocks the fix."
         ),
     },
@@ -436,8 +763,7 @@ class MigrationsCheckCommand(CommandBase):
         migrations_dir = self._migrations_dir()
         if migrations_dir is None:
             self.error(
-                "No migrations directory found (paths('migrations')). "
-                "Nothing to check."
+                "No migrations directory found (paths('migrations')). Nothing to check."
             )
             return 2
 
@@ -484,9 +810,7 @@ class MigrationsCheckCommand(CommandBase):
         before = {path.name for path in migrations_dir.glob("*.py")}
 
         maker = MakeMigrationCommand(self.application)
-        maker.set_parsed_options(
-            {"overwrite": True, "force": True, "style": "blueprint"}
-        )
+        maker.set_parsed_options({"overwrite": True, "force": True, "style": "blueprint"})
         result = maker.handle()
         if result:
             self.error("Regeneration failed; the directory was left unchanged.")
@@ -535,8 +859,7 @@ class MigrationsCheckCommand(CommandBase):
         )
         if human_only:
             self.warning(
-                f"{human_only} of them need a HUMAN decision and are never "
-                "auto-fixed."
+                f"{human_only} of them need a HUMAN decision and are never auto-fixed."
             )
         if any(not v.human_only for v in violations) and not self.option("fix"):
             self.info("Run 'python craft migrations:check --fix' to regenerate.")

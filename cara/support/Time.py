@@ -79,8 +79,14 @@ def to_pendulum(dt):
         try:
             from cara.facades import Log
 
-            Log.warning("[Time.to_pendulum] coercion failed for value=%s: %s: %s", dt, e.__class__.__name__, e, category='datetime')
-        except (ImportError, RuntimeError):
+            Log.warning(
+                "[Time.to_pendulum] coercion failed for value=%s: %s: %s",
+                dt,
+                e.__class__.__name__,
+                e,
+                category="datetime",
+            )
+        except ImportError, RuntimeError:
             # Log facade not booted yet — silently swallow rather
             # than mask the original coercion failure.
             pass

@@ -67,9 +67,7 @@ class BatchExistsRule(BaseRule):
         # through identifier interpolation in the raw SQL below.
         for ident in (table, column, condition_column):
             if ident is not None and not _SAFE_IDENTIFIER_RE.match(ident):
-                self._log_debug(
-                    f"BatchExistsRule: rejected unsafe identifier '{ident}'"
-                )
+                self._log_debug(f"BatchExistsRule: rejected unsafe identifier '{ident}'")
                 return False
 
         # Deduplicate the input set so the IN clause stays compact and

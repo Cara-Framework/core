@@ -47,9 +47,7 @@ def _probe_module():
     always returns the module — the difference is invisible until a
     monkeypatch silently lands on the wrong object.
     """
-    return importlib.import_module(
-        "cara.queues.delivery.PublicationBacklogProbe"
-    )
+    return importlib.import_module("cara.queues.delivery.PublicationBacklogProbe")
 
 
 def _advisory(snapshot, *, budget=_BUDGET, minimum=_MIN):
@@ -117,12 +115,10 @@ def test_thresholds_come_from_the_same_config_keys_as_the_watchdog() -> None:
     whether the system is healthy, which is its own kind of silence.
     """
     assert (
-        PublicationBacklogProbe.AGE_BUDGET_CONFIG_KEY
-        == "queue.outbox_stall_age_seconds"
+        PublicationBacklogProbe.AGE_BUDGET_CONFIG_KEY == "queue.outbox_stall_age_seconds"
     )
     assert (
-        PublicationBacklogProbe.MIN_PENDING_CONFIG_KEY
-        == "queue.outbox_stall_min_pending"
+        PublicationBacklogProbe.MIN_PENDING_CONFIG_KEY == "queue.outbox_stall_min_pending"
     )
 
 
@@ -302,9 +298,7 @@ def test_a_broken_sample_is_swallowed(monkeypatch) -> None:
     def _boom():
         raise RuntimeError("database is down")
 
-    monkeypatch.setattr(
-        PublicationBacklogProbe, "sample", staticmethod(_boom)
-    )
+    monkeypatch.setattr(PublicationBacklogProbe, "sample", staticmethod(_boom))
     assert PublicationBacklogProbe.announce(emit=lambda _m: None) is None
 
 
@@ -458,7 +452,4 @@ def test_the_first_help_line_names_the_role(command) -> None:
     --help` reads, so the role has to survive the cut.
     """
     first_line = command.help.splitlines()[0]
-    assert any(
-        role in first_line
-        for role in ("CONSUMER", "PUBLISHER", "SCHEDULER")
-    )
+    assert any(role in first_line for role in ("CONSUMER", "PUBLISHER", "SCHEDULER"))

@@ -164,7 +164,11 @@ class HasAttributes:
                 from cara.facades import Log
 
                 model_name = cls.__name__ if hasattr(cls, "__name__") else str(cls)
-                Log.warning("[MassAssignment] %s: dropped non-fillable keys %s", model_name, dropped)
+                Log.warning(
+                    "[MassAssignment] %s: dropped non-fillable keys %s",
+                    model_name,
+                    dropped,
+                )
             except Exception:
                 _logger.debug("mass assignment warning log failed", exc_info=True)
 

@@ -107,7 +107,7 @@ class SerializesModels:
         # Fallback: convert to string
         try:
             return str(value)
-        except (TypeError, ValueError, RuntimeError, RecursionError):
+        except TypeError, ValueError, RuntimeError, RecursionError:
             return None
 
     def _serialize_object(self, obj: Any) -> dict[str, Any]:
@@ -136,7 +136,7 @@ class SerializesModels:
 
             try:
                 serialized[key] = self._serialize_property(value)
-            except (TypeError, ValueError, RuntimeError, RecursionError, AttributeError):
+            except TypeError, ValueError, RuntimeError, RecursionError, AttributeError:
                 continue
 
         return serialized
@@ -196,7 +196,13 @@ class SerializesModels:
         except (ImportError, AttributeError, KeyError, TypeError) as e:
             from cara.facades import Log
 
-            Log.warning("[SerializesModels] _resolve_class failed for %s.%s: %s. Returning NoneType stand-in — job attributes may be missing.", data.get('__class_module__', '?'), data.get('__class_name__', '?'), e, category='cara.queue')
+            Log.warning(
+                "[SerializesModels] _resolve_class failed for %s.%s: %s. Returning NoneType stand-in — job attributes may be missing.",
+                data.get("__class_module__", "?"),
+                data.get("__class_name__", "?"),
+                e,
+                category="cara.queue",
+            )
             return type("UnresolvableClass", (), {"__unresolvable__": True})
 
     def _deserialize_object(self, data: dict[str, Any]) -> Any:
@@ -221,18 +227,18 @@ class SerializesModels:
                 try:
                     # Try with empty constructor
                     obj = cls()
-                except (TypeError, ValueError, RuntimeError, AttributeError):
+                except TypeError, ValueError, RuntimeError, AttributeError:
                     try:
                         # Try with data as dict
                         obj = cls(obj_data)
-                    except (TypeError, ValueError, RuntimeError, AttributeError):
+                    except TypeError, ValueError, RuntimeError, AttributeError:
                         obj = cls.__new__(cls)
 
             # Set attributes
             for key, value in obj_data.items():
                 try:
                     setattr(obj, key, self._deserialize_property(value))
-                except (TypeError, ValueError, AttributeError):
+                except TypeError, ValueError, AttributeError:
                     continue
 
             return obj
@@ -240,7 +246,13 @@ class SerializesModels:
         except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as e:
             from cara.facades import Log
 
-            Log.error("[SerializesModels] _deserialize_object failed: %s. Module=%s, Class=%s. Returning stub — downstream attribute access will likely fail.", e, data.get('__class_module__', '?'), data.get('__class_name__', '?'), category='cara.queue')
+            Log.error(
+                "[SerializesModels] _deserialize_object failed: %s. Module=%s, Class=%s. Returning stub — downstream attribute access will likely fail.",
+                e,
+                data.get("__class_module__", "?"),
+                data.get("__class_name__", "?"),
+                category="cara.queue",
+            )
 
             class _FailedDeserializationStub:
                 __deserialization_failed__ = True

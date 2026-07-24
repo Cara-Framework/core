@@ -100,7 +100,7 @@ class EnforceBodySizeLimit(Middleware):
     def _max_body_size() -> int:
         try:
             return int(config("server.max_body_size", _DEFAULT_MAX_BODY_SIZE))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return _DEFAULT_MAX_BODY_SIZE
 
     @staticmethod
@@ -144,6 +144,6 @@ class EnforceBodySizeLimit(Middleware):
             return None
         try:
             length = int(raw.strip())
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         return length if length >= 0 else None

@@ -16,7 +16,7 @@ class JsonRule(BaseRule):
         try:
             json.loads(value)
             return True
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:

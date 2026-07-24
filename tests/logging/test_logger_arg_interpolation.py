@@ -16,9 +16,7 @@ class TestInterpolateHelper:
         assert Logger._interpolate("failed: %s", ("boom",)) == "failed: boom"
 
     def test_printf_multiple_args(self) -> None:
-        assert (
-            Logger._interpolate("user %s -> %s", (42, "ok")) == "user 42 -> ok"
-        )
+        assert Logger._interpolate("user %s -> %s", (42, "ok")) == "user 42 -> ok"
 
     def test_no_args_passthrough(self) -> None:
         # A bare message with no args must be returned untouched — even if

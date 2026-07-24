@@ -14,7 +14,7 @@ from cara.validation.rules.BaseRule import BaseRule
 def _to_number(v):
     try:
         return float(v)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

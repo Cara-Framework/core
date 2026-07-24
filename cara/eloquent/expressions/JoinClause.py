@@ -161,7 +161,9 @@ class JoinClause:
 
         if operator not in operators:
             raise InvalidArgumentException(
-                "Invalid comparison operator. The operator can be {}".format(", ".join(operators))
+                "Invalid comparison operator. The operator can be {}".format(
+                    ", ".join(operators)
+                )
             )
 
         return operator, value

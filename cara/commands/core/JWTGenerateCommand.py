@@ -89,7 +89,9 @@ class JWTGenerateCommand(CommandBase):
     def _validate_parameters(self, user: str | None, email: str | None) -> str:
         """Validate and return user identifier."""
         if not user and not email:
-            raise InvalidArgumentException("Either --user or --email parameter is required")
+            raise InvalidArgumentException(
+                "Either --user or --email parameter is required"
+            )
 
         if user and email:
             raise InvalidArgumentException("Cannot specify both --user and --email")
@@ -152,7 +154,7 @@ class JWTGenerateCommand(CommandBase):
                 user = user_model.find(identifier)
                 if user:
                     return user
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
+            except OSError, RuntimeError, AttributeError, ConnectionError:
                 pass
 
             return None
@@ -319,9 +321,7 @@ class JWTGenerateCommand(CommandBase):
         self.info("")
         self.info("💡 Usage Examples:")
         self.info("   cURL:")
-        self.info(
-            f"     curl -H 'Authorization: Bearer {token[:20]}...' {protected_url}"
-        )
+        self.info(f"     curl -H 'Authorization: Bearer {token[:20]}...' {protected_url}")
         self.info("")
         self.info("   JavaScript:")
         self.info(f"     const response = await fetch('{protected_url}', {{")

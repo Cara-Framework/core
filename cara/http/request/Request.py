@@ -76,7 +76,7 @@ def _is_trusted_proxy(addr: str) -> bool:
     """True if `addr` is inside any configured trusted-proxy network."""
     try:
         ip_obj = ipaddress.ip_address(addr)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return False
     return any(ip_obj in net for net in _trusted_proxy_networks())
 

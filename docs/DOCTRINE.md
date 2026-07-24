@@ -1,6 +1,6 @@
 # The Cara Product Doctrine
 
-**Version 1.3 — 2026-07-23.** This document is LAW for every product built on
+**Version 1.4 — 2026-07-24.** This document is LAW for every product built on
 Cara. It travels with the framework: cloning `cara` into a product delivers the
 doctrine with it. A product's `CLAUDE.md` is its atlas (ports, quirks, domain
 registry); *this* file is the invariant architecture. Where the two disagree,
@@ -96,6 +96,10 @@ drawer.** A port exists only when it is (a) a real boundary the consumer owns,
 edge, or (c) a stable capability used by more than one use-case. Auto-minting
 an `XDataContract` per repository is forbidden. Ports prefer typed DTOs and
 value objects over `Any`, bare `dict` and shapeless `list`.
+Generated reasons such as `database boundary for the <domain> capability`,
+`swappable <domain> use-case strategy boundary`, or
+`external-system or algorithm strategy boundary` prove nothing and are guard
+failures. Name the concrete external boundary or delete the ceremonial port.
 
 **Local DI interfaces are NOT kernel contracts.** A deployable's own
 dependency-inversion interfaces (connector contracts, data contracts,
@@ -175,6 +179,16 @@ one integration — connector, jobs, normalizers, schedules, manifest, its
 tests — lives in `services/packages/<plugin>/`. Core code NEVER imports a
 package; packages plug in at the composition root and are resolved through a
 **registry** (connector lanes, schedule registration, effect gates).
+
+Not every external discovery source is a marketplace plug-in. A provider such
+as Google Shopping may own a declared non-marketplace capability lane
+(`services/discovery/google_shopping/`) that discovers thin offer candidates;
+the candidate's retailer package performs the later scrape. The discovery lane
+is declared in the architecture manifest with its exact owned provider tokens,
+and core reaches it through a generic discovery registry/port — never by
+importing the provider implementation. Declaring the lane does not legalize
+marketplace-specific behavior in core or unrelated provider tokens inside the
+lane.
 
 A plugin's name may appear outside its package in exactly FOUR places:
 
@@ -354,6 +368,11 @@ gain product prefixes, semantics may not):
 | `test_inline_imports` | every function-local import carries a legal `# local:` reason tag (§5.1) |
 | barrel completeness | every public name re-exported, `__all__` alphabetical (§5.1) |
 | `test_domain_registry` | mirror rule + registry membership (§3) |
+| `domain_ownership` | services/repositories cannot bypass another domain's service door (§5) |
+| `flow_law` | controller/job edges cannot import or resolve persistence (§5) |
+| `source_shape` | hard file/method budgets and one public class per named file (§5) |
+| `transaction_ownership` | services own transactions; edge/repository debt is exact (§8) |
+| `write_ownership` | every model table has one owner; cross-owner writes are exact debt (§7) |
 | `test_vertical_slice_seams` | plugin names only at the Four Seams; brand-blind contracts; rm-rf simulation |
 | `test_queue_topology` / deploy topology | queue ownership, worker/image pairing, relay/scheduler separation |
 | `test_migration_convention` | model-first migrations, one file per table |
@@ -428,3 +447,9 @@ modes. Applied now; a §8 duplication introduced while fixing was removed in
 the same pass. Body and changelog are consistent — every normative topic
 appears exactly once. Found by an external audit; the lesson is §11's own
 rule: verify the BODY (whitespace-collapsed), not the changelog.*
+
+*Changelog — 1.4 (2026-07-24): §4 distinguishes owned non-marketplace
+discovery lanes from marketplace plug-ins; §5 size, one-class and edge-flow
+laws and §7/§8 write/transaction ownership gained framework scanners with
+exact shrink-only debt censuses; concrete plug-in string scanning is mandatory
+whenever plug-in tokens are declared.*

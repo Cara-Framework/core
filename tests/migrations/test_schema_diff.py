@@ -132,7 +132,7 @@ def test_scalar_standalone_constraints_round_trip_without_diff(tmp_path):
         '            table.string("sid", 64)\n'
         '            table.index(["email"])\n'
         '            table.unique(["sid"])\n'
-        '    def down(self):\n        pass\n'
+        "    def down(self):\n        pass\n"
     )
     comparator = ModelMigrationComparator.__new__(ModelMigrationComparator)
     comparator.migrations_dir = tmp_path

@@ -67,7 +67,12 @@ def test_f_column_renders_as_quoted_identifier():
 
 
 def test_f_plus_literal_in_update_self_references_column():
-    sql = _qb().where("id", 5).update({"click_count": F("click_count") + 1}, dry=True).to_sql()
+    sql = (
+        _qb()
+        .where("id", 5)
+        .update({"click_count": F("click_count") + 1}, dry=True)
+        .to_sql()
+    )
     assert '"click_count" = "click_count" + \'1\'' in sql, sql
     # The increment value is INLINED (matches increment_string convention),
     # not a bound %s param.
@@ -78,9 +83,12 @@ def test_f_minus_f_in_update():
     # In UPDATE context the column_strings template is unqualified
     # (``"col"`` — no table prefix), which is correct SQL: ``UPDATE listing
     # SET ...`` columns implicitly belong to the target table.
-    sql = _qb().where("id", 1).update(
-        {"price_low": F("price_low") - F("discount")}, dry=True
-    ).to_sql()
+    sql = (
+        _qb()
+        .where("id", 1)
+        .update({"price_low": F("price_low") - F("discount")}, dry=True)
+        .to_sql()
+    )
     assert '"price_low" = "price_low" - "discount"' in sql, sql
 
 
@@ -101,7 +109,7 @@ def test_f_reverse_arithmetic_keeps_operand_order():
 
 def test_nested_operation_is_parenthesized():
     g = SQLiteGrammar(table="t")
-    assert g.compile_expression((F("a") + 1) * 2) == '("t"."a" + \'1\') * \'2\''
+    assert g.compile_expression((F("a") + 1) * 2) == "(\"t\".\"a\" + '1') * '2'"
 
 
 def test_where_f_compared_to_f_emits_two_quoted_columns_no_binding():
@@ -154,11 +162,15 @@ def test_operation_rejects_unknown_operator():
 
 
 def test_select_window_row_number_partition_and_order():
-    qb = _qb().select("*").select_window(
-        "ROW_NUMBER()",
-        partition_by=["product_id"],
-        order_by=[("price_low", "asc")],
-        alias="rn",
+    qb = (
+        _qb()
+        .select("*")
+        .select_window(
+            "ROW_NUMBER()",
+            partition_by=["product_id"],
+            order_by=[("price_low", "asc")],
+            alias="rn",
+        )
     )
     sql = qb.to_sql()
     assert (
@@ -168,8 +180,10 @@ def test_select_window_row_number_partition_and_order():
 
 
 def test_select_window_rank_with_string_partition_and_order():
-    qb = _qb().select("id").select_window(
-        "RANK()", partition_by="brand_id", order_by="created_at"
+    qb = (
+        _qb()
+        .select("id")
+        .select_window("RANK()", partition_by="brand_id", order_by="created_at")
     )
     sql = qb.to_sql()
     # Default direction is ASC, default alias is "rn".
@@ -180,11 +194,15 @@ def test_select_window_rank_with_string_partition_and_order():
 
 
 def test_select_window_lag_descending():
-    qb = _qb().select("id").select_window(
-        "LAG(price_low)",
-        partition_by=["product_id"],
-        order_by=[("created_at", "desc")],
-        alias="prev_price",
+    qb = (
+        _qb()
+        .select("id")
+        .select_window(
+            "LAG(price_low)",
+            partition_by=["product_id"],
+            order_by=[("created_at", "desc")],
+            alias="prev_price",
+        )
     )
     sql = qb.to_sql()
     assert "LAG(price_low) OVER (" in sql, sql
@@ -206,9 +224,7 @@ def test_select_window_rejects_injection_in_partition():
 
 def test_select_window_rejects_bad_direction():
     with pytest.raises(InvalidArgumentException):
-        _qb().select_window(
-            "ROW_NUMBER()", order_by=[("price", "sideways")]
-        )
+        _qb().select_window("ROW_NUMBER()", order_by=[("price", "sideways")])
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -217,7 +233,9 @@ def test_select_window_rejects_bad_direction():
 
 
 def test_select_greatest_with_alias():
-    sql = _qb().select_greatest("price_low", "floor_price", alias="effective_low").to_sql()
+    sql = (
+        _qb().select_greatest("price_low", "floor_price", alias="effective_low").to_sql()
+    )
     assert (
         'GREATEST("listing"."price_low", "listing"."floor_price") AS "effective_low"'
         in sql
@@ -230,9 +248,12 @@ def test_select_least_without_alias():
 
 
 def test_least_inside_f_style_update():
-    sql = _qb().where("id", 1).update(
-        {"price_low": Least(F("price_low"), 10)}, dry=True
-    ).to_sql()
+    sql = (
+        _qb()
+        .where("id", 1)
+        .update({"price_low": Least(F("price_low"), 10)}, dry=True)
+        .to_sql()
+    )
     assert '"price_low" = LEAST("price_low", \'10\')' in sql, sql
     assert "?" not in sql
 
@@ -240,9 +261,12 @@ def test_least_inside_f_style_update():
 def test_greatest_inside_f_style_update():
     # UPDATE context → unqualified column identifiers (see
     # ``test_f_minus_f_in_update``).
-    sql = _qb().where("id", 1).update(
-        {"price_high": Greatest(F("price_high"), F("ceiling"))}, dry=True
-    ).to_sql()
+    sql = (
+        _qb()
+        .where("id", 1)
+        .update({"price_high": Greatest(F("price_high"), F("ceiling"))}, dry=True)
+        .to_sql()
+    )
     assert '"price_high" = GREATEST("price_high", "ceiling")' in sql, sql
 
 
@@ -279,12 +303,12 @@ def test_lock_for_update_nowait():
 
 def test_lock_for_update_of_tables():
     sql = _pg().where("status", "queued").lock_for_update(of=["job"]).to_sql()
-    assert "FOR UPDATE OF \"job\"" in sql, sql
+    assert 'FOR UPDATE OF "job"' in sql, sql
 
 
 def test_lock_for_update_of_single_string():
     sql = _pg().where("status", "queued").lock_for_update(of="job").to_sql()
-    assert "FOR UPDATE OF \"job\"" in sql, sql
+    assert 'FOR UPDATE OF "job"' in sql, sql
 
 
 def test_lock_for_update_plain_unchanged():

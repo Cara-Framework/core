@@ -23,7 +23,7 @@ app/architecture_manifest.py
         ▼
 Manifest.load()
         │
-        ├── nine pure scanners ──► list[Finding]
+        ├── fourteen pure scanners ──► list[Finding]
         │
         └── BarrelGenerator ─────► check or rewrite __init__.py barrels
 ```
@@ -32,8 +32,8 @@ A `Finding` has a deployable-relative path, a one-based line number when the
 violation belongs to a statement, and a message. There are no warning levels:
 one finding fails the command and therefore the build.
 
-The pack enforces only the scanners listed below. Doctrine guards for raw SQL,
-write ownership, queue/deploy topology, migrations and documentation remain
+The pack enforces only the scanners listed below. Doctrine guards for
+read-only raw SQL, queue/deploy topology, migrations and documentation remain
 product responsibilities until a framework scanner explicitly owns them.
 
 ## 2. Manifest reference
@@ -77,6 +77,7 @@ vertical-slice seams do not have the same honest scope.
 | `composition_roots` | Deployable-relative files where plug-ins are mounted. A plug-in token is legal there. |
 | `manifest_files` | Deployable-relative data-manifest files where plug-in metadata is legal. |
 | `data_vocabulary_prefixes` | Deployable-relative directory prefixes containing durable UPPER_SNAKE plug-in constants. |
+| `owned_integration_prefixes` | Deployable-relative non-marketplace capability lane → exact provider tokens owned by that lane. Only those tokens are legal inside it; core imports remain findings. |
 
 Generic parameterized ingress needs no field: `/webhooks/{marketplace}` does
 not contain a concrete plug-in token.
@@ -91,7 +92,7 @@ not contain a concrete plug-in token.
 | `layers` | Every barrel/import-governed app layer. Include `ports` only when the deployable has that layer. |
 | `domain_layers` | The subset of layers partitioned by domain/flow folders. Cross-cutting trees such as `support` usually stay out. |
 | `domains` | Domain name → non-empty one-line charter, normally loaded as literal data from the product's domain registry. |
-| `scan_plugin_string_literals` | Whether vertical-slice scanning also inspects concrete plug-in strings in comparisons, defaults, dict keys and call arguments. |
+| `scan_plugin_string_literals` | Must be `True` whenever `plugin_tokens` is non-empty; vertical-slice scanning inspects concrete plug-in strings in comparisons, defaults, dict keys and call arguments. |
 | `kernel_barrel_packages` | Kernel packages whose barrels are generated and checked in this deployable's run. Split ownership between twin manifests deliberately to avoid duplicate findings. |
 | `seam_kernel_packages` | Kernel packages included in vertical-slice seam scanning. |
 | `flows` | Non-domain flow-stage name → charter, for sanctioned mechanics such as `jobs/pipeline`. Default: empty. |
@@ -114,6 +115,13 @@ not contain a concrete plug-in token.
 | `side_effect_facade_names` | Optional imported-name filter within those facade modules. Empty means every imported name is forbidden. |
 | `third_party_packages` | Closed third-party import-root inventory. Empty uses a catch-all third-party tier; non-empty makes an unknown dependency a distinct final tier so it cannot enter silently. |
 | `deep_import_allowlist` | `(consumer_path, concrete_module)` pairs for dated cycle-breakers that cannot yet use a layer/domain barrel. Stale entries fail. |
+| `source_shape_hard_limit` | Hard production-source file budget; Doctrine default is 700 lines. |
+| `source_shape_edge_method_limit` | Hard public controller/job method budget; Doctrine default is 40 lines. |
+| `source_shape_edge_layers` | Layer names treated as transport edges by `source_shape`; normally `controllers` and `jobs`. |
+| `flow_edge_layers` | Layer names that must reach persistence only through a use-case service; normally `controllers` and `jobs`. |
+| `atomic_repository_methods` | Exact `path::Class.method` identities for the sole §8 exception: a fully-contained atomic persistence primitive. Stale identities fail. |
+| `write_ownership` | Table → `api-owned`, `services-owned` or `shared-gate-owned`. Every model-backed table must be declared. |
+| `model_less_write_tables` | Explicit table names whose model-less schema is documented by the product; permits ownership entries without a model class. |
 
 Do not fill a field because it exists. An empty value means “this deployable
 does not have this concept”; an allowlist means “tracked debt moving to zero,”
@@ -284,9 +292,15 @@ shrink-only and stale pins are findings.
 
 Keeps concrete plug-in tokens inside their package or the Four Legal Seams.
 Outside `packages/<plugin>`, it checks module paths, definitions, imports and
-module/class assignment names. When enabled, it also checks plug-in strings in
+module/class assignment names. It also checks plug-in strings in
 comparisons, default values, dict keys and call arguments. Comments, docstrings
 and unrelated string positions are not treated as coupling.
+
+A declared `owned_integration_prefixes` lane is still scanned. Its own provider
+tokens are legal inside the lane, while unrelated provider tokens and any core
+import of its concrete implementation remain findings. This models discovery
+providers that produce thin candidates for later marketplace scraping without
+misclassifying the discovery provider as a marketplace.
 
 Violation:
 
@@ -312,7 +326,9 @@ Checks top-level `*Contract` classes under `app/ports`. A port must have at
 least two distinct implementor files in the configured scan roots, or carry a
 truthful `# port: <reason>` tag for a genuine external-system edge. A
 single-implementation repository mirror is a finding, not an invitation to add
-a container binding.
+a container binding. Generated database/swappable/external-or-algorithm
+boilerplate is rejected; a retained single-implementor port must name its
+concrete boundary.
 
 Violation:
 
@@ -367,6 +383,45 @@ class RefreshProductJob(BaseJob):
 
 An empty tuple is still an explicit declaration; use it only when the base
 class semantics make that identity truthful.
+
+### `source_shape`
+
+Enforces the 700-line hard file budget, one public top-level class per file
+named for that file, and the 40-line public controller/job method budget.
+Existing violations use exact, shrink-only `source_shape_lines`,
+`source_shape_classes` and `source_shape_edge_methods` counts; growth and stale
+pins fail.
+
+### `flow_law`
+
+Keeps transport edges on `controller/job → use-case service → repository`.
+Controller/job files may not import repositories, models, kernel gates or the
+DB facade, nor resolve repositories from the container. Existing violations
+are counted per file in the shrink-only `flow_law` debt census.
+
+### `domain_ownership`
+
+Keeps each domain's repository behind that domain's service door. A service may
+call another domain's service, but services and repositories may not import a
+sibling domain's repository. Barrel imports are resolved back to the owning
+domain, so `from app.repositories import XRepository` cannot hide the reach.
+Existing violations use an exact, shrink-only per-file census.
+
+### `transaction_ownership`
+
+Enforces `use-case service → transaction → repository`. Controllers, jobs and
+repositories may not open, commit or roll back business transactions. The one
+legal repository exception is a fully-contained atomic persistence primitive
+named exactly in `atomic_repository_methods`; stale declarations fail. Existing
+violations use an exact per-file `transaction_ownership` census.
+
+### `write_ownership`
+
+Requires one declared owner for every model-backed table and scans direct ORM
+class writes, query-builder mutations and literal write SQL. The owning
+deployable may write its tables; `shared-gate-owned` tables may be written only
+through `gates/persistence`. Existing cross-owner writes are exact,
+shrink-only `path::table` debt.
 
 ## 4. Commands
 

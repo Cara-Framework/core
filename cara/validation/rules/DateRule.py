@@ -28,7 +28,7 @@ def _parse_date(value: Any):
             continue
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
 
 

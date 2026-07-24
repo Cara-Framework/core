@@ -52,7 +52,9 @@ class HandleCors(Middleware):
             "supports_credentials": config("cors.cors.supports_credentials", False),
         }
 
-    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[..., Awaitable[Any]]
+    ) -> Response:
         """
         Handle CORS request (Laravel style).
 

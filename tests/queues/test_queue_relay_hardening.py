@@ -73,9 +73,7 @@ def test_hook_timeout_is_immediately_deferred_instead_of_waiting_for_stale_lease
 
     result = QueueHooksCommand._run_isolated_hooks(driver)
 
-    assert deferred == [
-        ("hook-job-id", "isolated terminal-hook process timed out")
-    ]
+    assert deferred == [("hook-job-id", "isolated terminal-hook process timed out")]
     assert result["failed"] == 1
     assert result["deferred"] == 1
 
@@ -87,10 +85,8 @@ def test_hook_live_lease_child_exit_is_skipped_without_stealing_lease(
         delivery_store=SimpleNamespace(hook_timeout_seconds=5),
         due_terminal_hook_ids=lambda: ["hook-job-id"],
         defer_terminal_hook_process_failure=lambda *_args, **_kwargs: (
-            (_ for _ in ()).throw(
-                AssertionError("live lease must not be deferred")
-            )
-        ),
+            _ for _ in ()
+        ).throw(AssertionError("live lease must not be deferred")),
         refresh_delivery_metrics=lambda: {
             "hooks": {"failed": 0, "stale": 0, "quarantined": 0}
         },
@@ -274,9 +270,10 @@ class _DeliveryMetricsDB:
     def __init__(self):
         self.sql = None
         self.params = None
+        self.aggregate_sql = None
 
     def select_one(self, sql, params):
-        self.sql = sql
+        self.aggregate_sql = sql
         self.params = params
         return {
             "priority_critical_pending": 2,
@@ -289,6 +286,19 @@ class _DeliveryMetricsDB:
             "priority_low_oldest_due_age": 360,
             "broker_max_outstanding": 2,
         }
+
+    def select(self, sql, params):
+        self.sql = sql
+        return [
+            {
+                "queue": "sync",
+                "pending": 4,
+                "processing": 2,
+                "broker_outstanding": 3,
+                "completed_5m": 30,
+                "oldest_due_age": 12,
+            }
+        ]
 
 
 def test_delivery_metrics_expose_bounded_priority_slo_and_broker_window():
@@ -325,8 +335,16 @@ def test_delivery_metrics_expose_bounded_priority_slo_and_broker_window():
         "max_outstanding": 2,
         "limit": 2,
     }
-    assert "MIN(available_at) FILTER" in db.sql
-    assert "GROUP BY window_row.queue" in db.sql
+    assert snapshot["lane_backlog"]["sync"] == {
+        "pending": 4,
+        "processing": 2,
+        "broker_outstanding": 3,
+        "oldest_due_age": 12.0,
+        "throughput_per_second": 0.1,
+    }
+    assert "MIN(available_at) FILTER" in db.aggregate_sql
+    assert "GROUP BY window_row.queue" in db.aggregate_sql
+    assert "GROUP BY queue" in db.sql
 
 
 class _DeliveryStatsDB:
@@ -406,9 +424,7 @@ def test_delivery_stats_apply_queue_and_recent_window_to_ledger():
 def test_queue_stats_propagates_runtime_failure_instead_of_exit_zero(
     monkeypatch,
 ):
-    module = importlib.import_module(
-        "cara.commands.core.QueueStatsCommand"
-    )
+    module = importlib.import_module("cara.commands.core.QueueStatsCommand")
     command = QueueStatsCommand.__new__(QueueStatsCommand)
     monkeypatch.setattr(
         module,
@@ -485,15 +501,11 @@ def test_publish_outage_stops_after_one_broker_attempt():
         "reconciled": 0,
     }
     store.expire_due = lambda _limit: 0
-    store._claim_next_publish = lambda: (
-        claim_calls.append(True) or (row, "publish-token")
-    )
+    store._claim_next_publish = lambda: claim_calls.append(True) or (row, "publish-token")
     store._publish_claimed = lambda *_args: (_ for _ in ()).throw(
         ConnectionError("broker unavailable")
     )
-    store._release_publish = lambda *args: (
-        release_calls.append(args) or True
-    )
+    store._release_publish = lambda *args: release_calls.append(args) or True
 
     result = store.publish_due()
 
@@ -535,9 +547,7 @@ class _InvalidEnvelopeDB:
                 }
             )
             return {"db_job_id": self.row["db_job_id"]}
-        if sql.startswith(
-            "SELECT status, terminal_reason, post_hooks_completed_at"
-        ):
+        if sql.startswith("SELECT status, terminal_reason, post_hooks_completed_at"):
             return dict(self.row)
         raise AssertionError(f"Unexpected SELECT ONE: {sql}")
 

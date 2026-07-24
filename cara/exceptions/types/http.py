@@ -83,6 +83,13 @@ class BadRequestException(HttpException):
     error_type = "bad_request"
 
 
+class PayloadTooLargeException(HttpException):
+    """Thrown when a request body exceeds its allowed size (HTTP 413)."""
+
+    status_code = 413
+    error_type = "payload_too_large"
+
+
 class RouteNotFoundException(HttpException):
     """Thrown when no route matches a request path."""
 
@@ -146,11 +153,12 @@ class ServiceUnavailableException(HttpException):
 
 
 __all__ = [
-    "HttpException",
     "BadRequestException",
-    "RouteNotFoundException",
+    "HttpException",
     "MethodNotAllowedException",
-    "RouteMiddlewareNotFoundException",
+    "PayloadTooLargeException",
     "ResponseException",
+    "RouteMiddlewareNotFoundException",
+    "RouteNotFoundException",
     "ServiceUnavailableException",
 ]

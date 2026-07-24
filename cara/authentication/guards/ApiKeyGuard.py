@@ -249,7 +249,7 @@ class ApiKeyGuard(Guard):
                 return header_value
 
             return None
-        except (LookupError, RuntimeError):
+        except LookupError, RuntimeError:
             _logger.debug("No request context for API key extraction", exc_info=True)
             return None
         except Exception:

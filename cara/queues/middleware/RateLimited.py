@@ -108,7 +108,13 @@ class RateLimited:
                 try:
                     from cara.facades import Log
 
-                    Log.warning("Job %s rate limited (%s/%ss)", rate_key, self.max_attempts, self.decay_seconds, category='cara.queue.middleware')
+                    Log.warning(
+                        "Job %s rate limited (%s/%ss)",
+                        rate_key,
+                        self.max_attempts,
+                        self.decay_seconds,
+                        category="cara.queue.middleware",
+                    )
                 except ImportError:
                     pass
                 return None
@@ -212,7 +218,7 @@ class WithoutOverlapping:
             # to the in-memory implementation rather than failing the job.
             Cache.has("__cara_overlap_probe__")
             return Cache
-        except (ImportError, ConnectionError, TimeoutError, OSError, RuntimeError):
+        except ImportError, ConnectionError, TimeoutError, OSError, RuntimeError:
             return None
 
     # Buffer added to the job's per-attempt ``timeout`` when sizing the lock
@@ -248,7 +254,7 @@ class WithoutOverlapping:
         if callable(add):
             try:
                 return bool(add(redis_key, owner, ttl))
-            except (OSError, ConnectionError, TimeoutError, RuntimeError):
+            except OSError, ConnectionError, TimeoutError, RuntimeError:
                 return False
 
         # Fallback path — has + put. Subject to a TOCTOU window between
@@ -259,7 +265,7 @@ class WithoutOverlapping:
                 return False
             cache.put(redis_key, owner, ttl)
             return True
-        except (OSError, ConnectionError, TimeoutError, RuntimeError):
+        except OSError, ConnectionError, TimeoutError, RuntimeError:
             return False
 
     @staticmethod
@@ -267,6 +273,8 @@ class WithoutOverlapping:
         try:
             from cara.facades import Log
 
-            Log.debug("Job %s skipped (overlapping)", lock_key, category='cara.queue.middleware')
+            Log.debug(
+                "Job %s skipped (overlapping)", lock_key, category="cara.queue.middleware"
+            )
         except ImportError:
             pass

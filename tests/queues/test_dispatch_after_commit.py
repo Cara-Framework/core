@@ -86,9 +86,7 @@ def harness(monkeypatch):
     dm = DatabaseManager.get_instance()
     monkeypatch.setattr(dm, "_resolve_connection_name", lambda c=None: "app")
     monkeypatch.setattr(dm, "_ensure_resolver", lambda: resolver)
-    resolver.queue_driver = SimpleNamespace(
-        durable_transactional_outbox=False
-    )
+    resolver.queue_driver = SimpleNamespace(durable_transactional_outbox=False)
     queue_service = SimpleNamespace(
         driver=lambda *_args, **_kwargs: resolver.queue_driver
     )
@@ -97,9 +95,7 @@ def harness(monkeypatch):
         "app",
         lambda: SimpleNamespace(
             make=lambda key: (
-                queue_service
-                if key == "queue"
-                else (_ for _ in ()).throw(KeyError(key))
+                queue_service if key == "queue" else (_ for _ in ()).throw(KeyError(key))
             )
         ),
         raising=False,
@@ -175,9 +171,7 @@ class TestAfterCommitDispatch:
         self,
         harness,
     ):
-        harness.queue_driver = SimpleNamespace(
-            durable_transactional_outbox=True
-        )
+        harness.queue_driver = SimpleNamespace(durable_transactional_outbox=True)
         dispatch = _pending(_AfterCommitJob())
 
         with harness.transaction("app"):

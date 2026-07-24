@@ -131,9 +131,7 @@ class ModelPruneCommand(CommandBase):
             from cara.eloquent.models import Model
 
             classes.extend(
-                cls
-                for cls in self._all_subclasses(Model)
-                if self._is_prunable(cls)
+                cls for cls in self._all_subclasses(Model) if self._is_prunable(cls)
             )
         except Exception as exc:  # noqa: BLE001
             self.debug(f"subclass discovery skipped: {exc}")
@@ -175,7 +173,7 @@ class ModelPruneCommand(CommandBase):
         raw = self.option("batch", 1000)
         try:
             size = int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             self.warning(f"Invalid --batch={raw!r}; falling back to 1000.")
             return 1000
         return size if size >= 1 else 1000

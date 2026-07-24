@@ -23,10 +23,8 @@ class TraceRequests(Middleware):
         carrier = {
             key: value
             for key, value in {
-                "traceparent": headers.get("traceparent")
-                or headers.get("Traceparent"),
-                "tracestate": headers.get("tracestate")
-                or headers.get("Tracestate"),
+                "traceparent": headers.get("traceparent") or headers.get("Traceparent"),
+                "tracestate": headers.get("tracestate") or headers.get("Tracestate"),
             }.items()
             if value
         }

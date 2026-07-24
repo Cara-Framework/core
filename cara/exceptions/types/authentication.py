@@ -41,7 +41,9 @@ class AccountLockedException(CaraException):
     is_http_exception = True
     status_code = 429
 
-    def __init__(self, message: str = "Account temporarily locked", retry_after_seconds: int = 0):
+    def __init__(
+        self, message: str = "Account temporarily locked", retry_after_seconds: int = 0
+    ):
         super().__init__(message)
         self.retry_after_seconds = int(retry_after_seconds)
 

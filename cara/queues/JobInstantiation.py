@@ -50,7 +50,13 @@ def _emit_make_failure(job_class, error: Exception) -> None:
     try:
         from cara.facades import Log
 
-        Log.warning("queues.instantiate_job: container.make(%s) failed (%s: %s); falling back to no-arg constructor", job_class.__name__, error.__class__.__name__, error, category='queues')
+        Log.warning(
+            "queues.instantiate_job: container.make(%s) failed (%s: %s); falling back to no-arg constructor",
+            job_class.__name__,
+            error.__class__.__name__,
+            error,
+            category="queues",
+        )
     except Exception:
         import sys
 

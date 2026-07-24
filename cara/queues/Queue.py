@@ -206,7 +206,9 @@ class Queue:
         elif not isinstance(job, type) and isinstance(job, ShouldQueue):
             return self.schedule(job, delay, driver_name=driver_name)
         else:
-            raise QueueException(f"dispatch_after requires a ShouldQueue job, got: {job!r}")
+            raise QueueException(
+                f"dispatch_after requires a ShouldQueue job, got: {job!r}"
+            )
 
     def dispatch_now(
         self,

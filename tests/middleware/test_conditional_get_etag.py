@@ -179,9 +179,7 @@ async def test_304_drops_content_length_and_type():
 async def test_non_matching_if_none_match_returns_full_200():
     mw = _middleware()
     resp = _make_response(200, {"id": 99})
-    out = await _run(
-        mw, _make_request("GET", if_none_match='W/"deadbeef"'), resp
-    )
+    out = await _run(mw, _make_request("GET", if_none_match='W/"deadbeef"'), resp)
     assert out.status_code == 200
     assert out.content == b'{"id": 99}'
     assert out.header("ETag") is not None

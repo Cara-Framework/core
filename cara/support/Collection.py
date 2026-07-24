@@ -233,7 +233,7 @@ class Collection(Macroable):
             else:
                 # If odd number of items, return the middle value
                 return sorted_items[middle]
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
     def mode(self, key=None):
@@ -272,7 +272,7 @@ class Collection(Macroable):
                     mode_value = value
 
             return mode_value
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     def max(self, key=None):
@@ -294,7 +294,7 @@ class Collection(Macroable):
             if not items:
                 return 0
             return max(items)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             pass
         return result
 
@@ -316,7 +316,7 @@ class Collection(Macroable):
             if not items:
                 return 0
             return min(items)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
     def chunk(self, size: int):
@@ -727,7 +727,7 @@ class Collection(Macroable):
         """
         try:
             return self[key]
-        except (IndexError, KeyError):
+        except IndexError, KeyError:
             pass
 
         return self._value(default)
@@ -856,7 +856,9 @@ class Collection(Macroable):
         values = self.__get_items(values)
 
         if len(self._items) != len(values):
-            raise InvalidArgumentException("The number of keys must match the number of values")
+            raise InvalidArgumentException(
+                "The number of keys must match the number of values"
+            )
 
         return self.__class__(dict(zip(self._items, values, strict=False)))
 
@@ -1013,7 +1015,9 @@ class Collection(Macroable):
         if collection_count == 0:
             return None
         elif count and count > collection_count:
-            raise InvalidArgumentException("count argument must be inferior to collection length.")
+            raise InvalidArgumentException(
+                "count argument must be inferior to collection length."
+            )
         elif count:
             items = random.sample(self._items, k=count)
             return self.__class__(items)
@@ -1490,7 +1494,9 @@ class Collection(Macroable):
             A new Collection instance with the filtered items.
         """
         if len(values) != 2:
-            raise InvalidArgumentException("Values must be an array with exactly 2 elements")
+            raise InvalidArgumentException(
+                "Values must be an array with exactly 2 elements"
+            )
 
         min_value, max_value = values
 
@@ -1514,7 +1520,9 @@ class Collection(Macroable):
             A new Collection instance with the filtered items.
         """
         if len(values) != 2:
-            raise InvalidArgumentException("Values must be an array with exactly 2 elements")
+            raise InvalidArgumentException(
+                "Values must be an array with exactly 2 elements"
+            )
 
         min_value, max_value = values
 
@@ -1573,7 +1581,9 @@ class Collection(Macroable):
         """
         items = self.__get_items(items)
         if not isinstance(items, list):
-            raise InvalidArgumentException("The 'items' parameter must be a list or a Collection")
+            raise InvalidArgumentException(
+                "The 'items' parameter must be a list or a Collection"
+            )
 
         _items = []
         for x, y in zip(self, items, strict=False):
@@ -1717,7 +1727,7 @@ class Collection(Macroable):
 
                 if next_data is not None:
                     return self._extract_wildcard_path(next_data, remaining)
-            except (KeyError, IndexError, AttributeError, TypeError, ValueError):
+            except KeyError, IndexError, AttributeError, TypeError, ValueError:
                 pass
 
             return []
@@ -2183,7 +2193,7 @@ class Collection(Macroable):
             else:
                 try:
                     self._items[key]
-                except (IndexError, KeyError, TypeError):
+                except IndexError, KeyError, TypeError:
                     return False
 
         return True
@@ -2488,7 +2498,11 @@ class Collection(Macroable):
         items = self.__get_items(items)
 
         if isinstance(self._items, dict) or isinstance(items, dict):
-            base = dict(self._items) if isinstance(self._items, dict) else dict(enumerate(self._items))
+            base = (
+                dict(self._items)
+                if isinstance(self._items, dict)
+                else dict(enumerate(self._items))
+            )
             overlay = items if isinstance(items, dict) else dict(enumerate(items))
             base.update(overlay)
             return self.__class__(base)

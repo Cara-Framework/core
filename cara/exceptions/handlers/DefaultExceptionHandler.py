@@ -229,7 +229,7 @@ class DefaultExceptionHandler:
             exc_type = exception.__class__.__name__
             if status < 500:
                 Log.warning(
-                    '%s: %s',
+                    "%s: %s",
                     exc_type,
                     exception,
                     category="cara.exceptions",
@@ -240,7 +240,7 @@ class DefaultExceptionHandler:
                 )
             else:
                 Log.error(
-                    '%s: %s',
+                    "%s: %s",
                     exc_type,
                     exception,
                     category="cara.exceptions",
@@ -392,7 +392,7 @@ class DefaultExceptionHandler:
             elif isinstance(custom_hsts, str):
                 hsts = custom_hsts
             hsts_preload = bool(config("security.security.hsts_preload", False))
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
+        except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
 
         out: list = [
@@ -417,7 +417,7 @@ class DefaultExceptionHandler:
                 if hsts_preload and "preload" not in value:
                     value = f"{value}; preload"
                 out.append([b"strict-transport-security", value.encode()])
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
+        except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
 
         return out
@@ -541,7 +541,7 @@ class DefaultExceptionHandler:
             return []
         try:
             seconds = int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return []
         if seconds <= 0:
             return []
@@ -692,7 +692,7 @@ class DefaultExceptionHandler:
             from cara.configuration import config
 
             return config("app.debug", False)
-        except (ImportError, RuntimeError, TypeError):
+        except ImportError, RuntimeError, TypeError:
             return False
 
     def get_exception_file(self, exception: Exception) -> str | None:
@@ -703,7 +703,7 @@ class DefaultExceptionHandler:
                 while tb.tb_next:
                     tb = tb.tb_next
                 return tb.tb_frame.f_code.co_filename
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
+        except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
         return None
 
@@ -715,7 +715,7 @@ class DefaultExceptionHandler:
                 while tb.tb_next:
                     tb = tb.tb_next
                 return tb.tb_lineno
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
+        except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
         return None
 
@@ -723,5 +723,5 @@ class DefaultExceptionHandler:
         """Get formatted traceback."""
         try:
             return traceback.format_exc().split("\n")
-        except (RuntimeError, TypeError, ValueError):
+        except RuntimeError, TypeError, ValueError:
             return []

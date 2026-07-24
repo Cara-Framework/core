@@ -107,7 +107,9 @@ class GenerateKeyCommand(CommandBase):
             if key_length <= 0:
                 raise InvalidArgumentException("Length must be a positive integer")
             if key_length < 16:
-                raise InvalidArgumentException("Length should be at least 16 for security")
+                raise InvalidArgumentException(
+                    "Length should be at least 16 for security"
+                )
             if key_length > 256:
                 raise InvalidArgumentException("Length should not exceed 256")
             return key_length
@@ -121,7 +123,9 @@ class GenerateKeyCommand(CommandBase):
 
         encoding = encoding.lower()
         if encoding not in ["base64", "hex", "raw"]:
-            raise InvalidArgumentException(f"Invalid encoding '{encoding}'. Use: base64, hex, or raw")
+            raise InvalidArgumentException(
+                f"Invalid encoding '{encoding}'. Use: base64, hex, or raw"
+            )
 
         return encoding
 
@@ -148,7 +152,7 @@ class GenerateKeyCommand(CommandBase):
             for line in lines:
                 if line.strip().startswith("APP_KEY="):
                     return line.strip().split("=", 1)[1] if "=" in line else ""
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
+        except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
 
         return None

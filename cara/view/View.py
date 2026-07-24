@@ -117,14 +117,6 @@ class View:
         """Flush state if done for current request."""
         return self.flush_state()
 
-    def add_namespace(self, namespace: str, hints: list[str]) -> View:
-        """Reserved fluent API; namespaced view lookup is not supported."""
-        return self
-
-    def replace_namespace(self, namespace: str, hints: list[str]) -> View:
-        """Reserved fluent API; namespaced view lookup is not supported."""
-        return self
-
     # Private helper methods
     def _apply_composers(self, view: str, data: dict[str, Any]) -> dict[str, Any]:
         """Apply view composers to data."""

@@ -147,7 +147,7 @@ def test_no_cara_source_reads_the_uppercase_websocket_path():
     offenders = []
     for path in CARA_SRC.rglob("*.py"):
         text = path.read_text(encoding="utf-8", errors="replace")
-        if 'broadcasting.WEBSOCKET' in text or '"WEBSOCKET"' in text:
+        if "broadcasting.WEBSOCKET" in text or '"WEBSOCKET"' in text:
             offenders.append(str(path.relative_to(CARA_SRC)))
     assert not offenders, (
         "uppercase WEBSOCKET config lookups found (Configuration.load "

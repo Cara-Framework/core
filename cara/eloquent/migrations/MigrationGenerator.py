@@ -118,7 +118,7 @@ class MigrationGenerator:
         if self.counter_file.exists():
             try:
                 return int(self.counter_file.read_text().strip())
-            except (ValueError, FileNotFoundError):
+            except ValueError, FileNotFoundError:
                 return 0
         return 0
 

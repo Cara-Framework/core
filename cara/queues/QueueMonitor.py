@@ -109,7 +109,13 @@ class QueueMonitor:
             queue_stat["jobs_failed"] += 1
 
         status_emoji = "✅" if success else "❌"
-        Log.debug("[QueueMonitor] %s Job %s: %s (%.2fs)", status_emoji, job_stat['status'], job_stat['job_name'], job_stat['duration'])
+        Log.debug(
+            "[QueueMonitor] %s Job %s: %s (%.2fs)",
+            status_emoji,
+            job_stat["status"],
+            job_stat["job_name"],
+            job_stat["duration"],
+        )
 
         # Clean up old job stats (keep last 1000).
         # ROOT-CAUSE: the previous eviction sorted by dict KEY (which is
@@ -123,7 +129,9 @@ class QueueMonitor:
         if len(self.job_stats) > 1000:
             oldest_first = sorted(
                 self.job_stats.items(),
-                key=lambda kv: kv[1].get("started_at") or datetime.min.replace(tzinfo=UTC),
+                key=lambda kv: (
+                    kv[1].get("started_at") or datetime.min.replace(tzinfo=UTC)
+                ),
             )
             for old_job_id, _ in oldest_first[:100]:
                 del self.job_stats[old_job_id]

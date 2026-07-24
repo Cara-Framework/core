@@ -303,6 +303,7 @@ class MigrateCommand(CommandBase):
             def _recorder(query, bindings=(), connection=None):
                 _record(query)
                 return returns
+
             return _recorder
 
         # statement → bool-ish; select → rows; select_one → row.

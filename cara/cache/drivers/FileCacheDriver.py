@@ -309,7 +309,7 @@ class FileCacheDriver(Cache):
                     "File cache expiry must be numeric or null."
                 )
             return True, expires_at, value
-        except (CacheConfigurationException, TypeError, ValueError):
+        except CacheConfigurationException, TypeError, ValueError:
             self._delete_file(file_path)
             return False, None, None
 
@@ -364,7 +364,7 @@ class FileCacheDriver(Cache):
             is_new = current is sentinel
             try:
                 new_val = (0 if is_new else int(current)) + amount
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 is_new = True
                 new_val = amount
             # Redis INCRBY semantics: ``ttl`` applies on creation (or to

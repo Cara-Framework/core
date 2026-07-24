@@ -291,7 +291,7 @@ def test_indexes_entry_with_module_constant_fstring_resolves(discoverer, tmp_pat
     emitted no DDL, schema:check had nothing to compare, and the index simply
     never existed while every gate stayed green.
     """
-    src = '''
+    src = """
         from cara.schema import Schema
 
         _LIVE_SQL = "'active', 'trialing'"
@@ -318,20 +318,18 @@ def test_indexes_entry_with_module_constant_fstring_resolves(discoverer, tmp_pat
                         field.big_increments("id"),
                     )
                 )
-    '''
+    """
     info = discoverer._parse_model_file(_write_model(tmp_path, "Sub.py", src))
 
     assert [index["name"] for index in info["indexes"]] == ["sub_live_idx"]
-    assert info["indexes"][0]["up"].endswith(
-        "WHERE status IN ('active', 'trialing')"
-    )
+    assert info["indexes"][0]["up"].endswith("WHERE status IN ('active', 'trialing')")
     # An omitted "down" still defaults to the matching DROP.
     assert info["indexes"][0]["down"] == "DROP INDEX IF EXISTS sub_live_idx"
 
 
 def test_indexes_entry_with_unresolvable_sql_raises(discoverer, tmp_path):
     """Silently skipping is the dangerous outcome — fail loudly instead."""
-    src = '''
+    src = """
         from cara.schema import Schema
 
         _STATES = ("a", "b")
@@ -358,7 +356,7 @@ def test_indexes_entry_with_unresolvable_sql_raises(discoverer, tmp_path):
                         field.big_increments("id"),
                     )
                 )
-    '''
+    """
     model_path = _write_model(tmp_path, "Sub.py", src)
 
     with pytest.raises(RuntimeError, match="sub_computed_idx"):

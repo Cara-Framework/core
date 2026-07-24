@@ -281,7 +281,9 @@ class MiddlewareRegistry:
         """
         errors = self.validate()
         if errors:
-            raise ConfigurationException(f"Invalid middleware configuration: {', '.join(errors)}")
+            raise ConfigurationException(
+                f"Invalid middleware configuration: {', '.join(errors)}"
+            )
 
         return {
             "global": self.config["global"].copy(),

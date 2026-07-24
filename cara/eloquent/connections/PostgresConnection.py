@@ -214,10 +214,7 @@ class PostgresConnection(BaseConnection):
     def _release_pool_slot(self) -> None:
         """Release this wrapper's pool permit exactly once."""
         global _pool_semaphore
-        if (
-            getattr(self, "_pool_slot_acquired", False)
-            and _pool_semaphore is not None
-        ):
+        if getattr(self, "_pool_slot_acquired", False) and _pool_semaphore is not None:
             _pool_semaphore.release()
             self._pool_slot_acquired = False
 

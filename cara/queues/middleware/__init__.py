@@ -24,6 +24,7 @@ __all__ = [
     "RateLimited",
     "ThrottlesExceptions",
     "WithoutOverlapping",
+    "run_middleware_chain_async",
     "run_through_middleware",
     "run_through_middleware_async",
 ]
@@ -58,6 +59,23 @@ def _build_chain(job, handler: Callable) -> Callable:
 _TENANT_UNSET = object()
 
 
+async def run_middleware_chain_async(job, handler: Callable) -> Any:
+    """Run one job through its middleware inside an established scope.
+
+    Queue consumers normally use :func:`run_through_middleware_async`, which
+    also restores the serialized tenancy boundary. Envelope handlers already
+    run inside that boundary; when they construct the concrete worker job they
+    use this narrower entry point so the inner job's locks, rate limits and
+    provider concurrency controls are not skipped or applied under a second
+    tenancy transition.
+    """
+    chain = _build_chain(job, handler)
+    result = chain(job)
+    if asyncio.iscoroutine(result):
+        return await result
+    return result
+
+
 async def run_through_middleware_async(job, handler: Callable) -> Any:
     """Run an async handler through the job's middleware pipeline.
 
@@ -82,15 +100,13 @@ async def run_through_middleware_async(job, handler: Callable) -> Any:
         if is_central_job:
             if not Tenancy.is_central():
                 raise RuntimeError(
-                    f"Central job {job.__class__.__name__} requires "
-                    "Tenancy.central()."
+                    f"Central job {job.__class__.__name__} requires Tenancy.central()."
                 )
             scope = Tenancy.central()
         else:
             if not Tenancy.is_tenant():
                 raise RuntimeError(
-                    f"Ordinary job {job.__class__.__name__} requires "
-                    "an active tenant."
+                    f"Ordinary job {job.__class__.__name__} requires an active tenant."
                 )
             scope = Tenancy.as_tenant(Tenancy.id())
     elif tenant_mode == "central":
@@ -105,11 +121,7 @@ async def run_through_middleware_async(job, handler: Callable) -> Any:
         raise RuntimeError("Queue job has incomplete or invalid tenant metadata.")
 
     with scope:
-        chain = _build_chain(job, handler)
-        result = chain(job)
-        if asyncio.iscoroutine(result):
-            return await result
-        return result
+        return await run_middleware_chain_async(job, handler)
 
 
 def run_through_middleware(job, handler: Callable) -> Any:

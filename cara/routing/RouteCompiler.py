@@ -119,7 +119,7 @@ class RouteCompiler:
             # handler can decide what to do.
             try:
                 params[name] = unquote(raw)
-            except (UnicodeDecodeError, ValueError):
+            except UnicodeDecodeError, ValueError:
                 params[name] = raw
         return params
 

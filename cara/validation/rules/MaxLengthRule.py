@@ -29,7 +29,7 @@ class MaxLengthRule(BaseRule):
 
         try:
             threshold = int(max_length)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             # Misconfigured rule literal — ``max_length:abc`` would
             # otherwise raise ValueError out of the validator and
             # 500 the request. Mirror MinLengthRule's defensive
@@ -40,7 +40,12 @@ class MaxLengthRule(BaseRule):
             try:
                 from cara.facades import Log
 
-                Log.warning("MaxLengthRule: non-numeric max_length parameter %s on field %s; failing value as defensive default", max_length, field, category='cara.validation')
+                Log.warning(
+                    "MaxLengthRule: non-numeric max_length parameter %s on field %s; failing value as defensive default",
+                    max_length,
+                    field,
+                    category="cara.validation",
+                )
             except ImportError:
                 pass
             return False

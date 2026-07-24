@@ -94,7 +94,9 @@ class Process:
 
     def __init__(self, command: Sequence[str]) -> None:
         if not command:
-            raise InvalidArgumentException("Process.command(...) needs at least one argument")
+            raise InvalidArgumentException(
+                "Process.command(...) needs at least one argument"
+            )
         self._command: list = list(command)
         self._path: str | None = None
         self._env: dict | None = None

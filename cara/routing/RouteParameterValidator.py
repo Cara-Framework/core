@@ -179,7 +179,7 @@ class RouteParameterValidator:
         # Try to convert, return original value if conversion fails
         try:
             return converter(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # Conversion failed - validation will catch this later
             return value
 

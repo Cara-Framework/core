@@ -65,7 +65,9 @@ def _extract_optional_class(ann: Any, module: Any) -> type | None:
         if s.startswith("Optional[") and s.endswith("]"):
             name = s[len("Optional[") : -1].strip()
         elif "|" in s:
-            non_none = [p.strip() for p in s.split("|") if p.strip() not in ("None", "NoneType")]
+            non_none = [
+                p.strip() for p in s.split("|") if p.strip() not in ("None", "NoneType")
+            ]
             if len(non_none) == 1:
                 name = non_none[0]
         if name and module is not None:
@@ -595,7 +597,7 @@ class Container:
             sig = inspect.signature(func)
             params = list(sig.parameters.keys())
             return len(params) > 0 and params[0] in ("app", "container", "self")
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
     def fire_hook(self, action: str, key: Any, obj: Any) -> None:
@@ -735,7 +737,7 @@ class Container:
                     provider_obj.__class__
                 ):
                     return provider_obj.__class__
-            except (TypeError, AttributeError):
+            except TypeError, AttributeError:
                 pass
 
         return None

@@ -23,11 +23,11 @@ class BcryptHasher:
             return False
         try:
             return bcrypt.checkpw(value.encode(), hashed.encode())
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
     def needs_rehash(self, hashed: str, rounds: int = 12) -> bool:
         try:
             return int(hashed.split("$", 3)[2]) != int(rounds)
-        except (AttributeError, IndexError, TypeError, ValueError):
+        except AttributeError, IndexError, TypeError, ValueError:
             return True

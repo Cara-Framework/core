@@ -167,7 +167,7 @@ class Event:
             application = builtins.app()
             cls._app = application
             return application
-        except (ImportError, RuntimeError, AttributeError):
+        except ImportError, RuntimeError, AttributeError:
             return None
 
     def register_event(self, event_class: type[Event]) -> None:
@@ -384,9 +384,20 @@ class Event:
                 missing = validator()
             except Exception as _vexc:
                 missing = None
-                Log.warning("Event %s validate_payload() raised %s: %s; dispatching anyway", event_name, _vexc.__class__.__name__, _vexc, category='cara.events')
+                Log.warning(
+                    "Event %s validate_payload() raised %s: %s; dispatching anyway",
+                    event_name,
+                    _vexc.__class__.__name__,
+                    _vexc,
+                    category="cara.events",
+                )
             if missing:
-                Log.warning("Event %s failed validate_payload(); missing/invalid fields: %s. Skipping dispatch.", event_name, missing, category='cara.events')
+                Log.warning(
+                    "Event %s failed validate_payload(); missing/invalid fields: %s. Skipping dispatch.",
+                    event_name,
+                    missing,
+                    category="cara.events",
+                )
                 return
 
         # Cycle guard. If this same event name is already in flight on
@@ -489,7 +500,7 @@ class Event:
                 from cara.observability.Metrics import MetricsBase
 
                 metrics = MetricsBase
-            except (ImportError, RuntimeError):
+            except ImportError, RuntimeError:
                 metrics = None
 
             _lst_name = listener.__class__.__name__
@@ -511,8 +522,15 @@ class Event:
                 try:
                     from cara.facades import Log
 
-                    Log.error("Event listener %s failed: %s: %s", _lst_name, _listener_exc.__class__.__name__, _listener_exc, category='cara.events', exc_info=True)
-                except (ImportError, RuntimeError):
+                    Log.error(
+                        "Event listener %s failed: %s: %s",
+                        _lst_name,
+                        _listener_exc.__class__.__name__,
+                        _listener_exc,
+                        category="cara.events",
+                        exc_info=True,
+                    )
+                except ImportError, RuntimeError:
                     pass
                 # Pipeline-critical listeners opt in via
                 # ``propagate_failures = True``. Re-raising lets the
@@ -536,7 +554,7 @@ class Event:
                         metrics.listener_duration_seconds.labels(
                             listener=_lst_name,
                         ).observe(_t.time() - _lst_start)
-                    except (ImportError, AttributeError):
+                    except ImportError, AttributeError:
                         pass
 
     def _get_matching_wildcard_listeners(self, event_name: str) -> list[Listener]:

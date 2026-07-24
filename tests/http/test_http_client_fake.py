@@ -79,9 +79,7 @@ class TestFakeRetryInterplay:
         # 2 retries: 503 → 503 → 200; faked retries skip back-off sleeps,
         # so this completes instantly.
         with Http.fake({"api.example.com/r": [503, 503, {"done": True}]}):
-            response = _run(
-                Http.retry(2, backoff=30.0).get("https://api.example.com/r")
-            )
+            response = _run(Http.retry(2, backoff=30.0).get("https://api.example.com/r"))
 
         assert response.status_code == 200
         assert response.json() == {"done": True}
@@ -100,8 +98,9 @@ class TestRecordingAndAssertions:
 
             Http.assert_sent("api.example.com/users")
             Http.assert_sent(
-                lambda request: request["method"] == "POST"
-                and request["json"] == {"name": "Ada"}
+                lambda request: (
+                    request["method"] == "POST" and request["json"] == {"name": "Ada"}
+                )
             )
 
     def test_assert_sent_failure_lists_recorded(self):

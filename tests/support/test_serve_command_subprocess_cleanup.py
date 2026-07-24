@@ -181,7 +181,6 @@ def test_start_server_does_not_terminate_already_exited_process():
     fake_process.kill.assert_not_called()
 
 
-
 def test_start_server_refuses_port_with_live_listener():
     """A live listener on the target port must abort BEFORE Popen — a
     second server binding alongside an orphan (SO_REUSEPORT) splits

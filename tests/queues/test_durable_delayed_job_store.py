@@ -365,9 +365,7 @@ def test_worker_leaves_source_unacked_when_retry_acceptance_fails(monkeypatch):
 
     with pytest.raises(QueueException, match="database unavailable"):
         JobProcessor._requeue_with_delay(
-            SimpleNamespace(
-                basic_ack=lambda *, delivery_tag: acks.append(delivery_tag)
-            ),
+            SimpleNamespace(basic_ack=lambda *, delivery_tag: acks.append(delivery_tag)),
             SimpleNamespace(delivery_tag=88),
             {
                 "attempts": 0,

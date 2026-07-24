@@ -56,6 +56,31 @@ def test_documented_single_implementor_port_passes(tmp_path):
     assert PortMembership.scan(manifest) == []
 
 
+def test_generated_boilerplate_does_not_exempt_single_implementor_port(tmp_path):
+    manifest = make_manifest(tmp_path, layers=("ports", "services"))
+    write(
+        tmp_path / "app" / "ports" / "catalog" / "AccessContract.py",
+        "# port: database boundary for the catalog capability\n"
+        "class AccessContract:\n"
+        "    pass\n",
+    )
+
+    findings = PortMembership.scan(manifest)
+
+    assert len(findings) == 1
+    assert "boilerplate does not prove" in findings[0].message
+
+
+def test_tag_after_contract_does_not_exempt_it(tmp_path):
+    manifest = make_manifest(tmp_path, layers=("ports", "services"))
+    write(
+        tmp_path / "app" / "ports" / "catalog" / "AccessContract.py",
+        "class AccessContract:\n    pass\n# port: real but misplaced boundary reason\n",
+    )
+
+    assert len(PortMembership.scan(manifest)) == 1
+
+
 def test_absent_ports_layer_noops(tmp_path):
     manifest = make_manifest(tmp_path, layers=("services",))
     write(

@@ -14,7 +14,7 @@ from typing import Any
 from python_multipart import MultipartParser
 from python_multipart.multipart import parse_options_header
 
-from cara.exceptions import BadRequestException
+from cara.exceptions import BadRequestException, PayloadTooLargeException
 
 # Import the class directly from its submodule, NOT via the ``cara.http.request``
 # package barrel. The barrel's ``__init__`` imports ``.Request`` first, which pulls
@@ -97,23 +97,49 @@ class MakesBodyParsing:
             return cls.MAX_FILES
         return cfg
 
-    async def body(self) -> bytes:
+    @classmethod
+    def _body_size_limit(cls, max_bytes: int | None) -> int:
+        configured = cls._max_body_size()
+        if max_bytes is None:
+            return configured
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int):
+            raise TypeError("max_bytes must be an integer or None")
+        if max_bytes < 0:
+            raise ValueError("max_bytes must be non-negative")
+        return min(configured, max_bytes)
+
+    @staticmethod
+    def _payload_too_large(
+        max_bytes: int, content_length: int
+    ) -> PayloadTooLargeException:
+        return PayloadTooLargeException(
+            f"Request body too large. Maximum size: {max_bytes} bytes",
+            max_bytes=max_bytes,
+            content_length=content_length,
+        )
+
+    async def body(self, max_bytes: int | None = None) -> bytes:
         """Public accessor for the raw request body bytes.
 
         Thin wrapper around ``_read_body`` so callers (HMAC verification,
         webhook handlers, etc.) can read the literal bytes without
-        reaching for a name-mangled private method. Caches the body so
-        repeated calls are free.
+        reaching for a name-mangled private method. ``max_bytes`` can tighten
+        the global body limit for one endpoint. Cached bytes are checked
+        against that per-call limit too.
         """
-        return await self._read_body()
+        return await self._read_body(max_bytes=max_bytes)
 
-    async def _read_body(self) -> bytes:
+    async def _read_body(self, max_bytes: int | None = None) -> bytes:
         """
         Read and cache the raw request body from ASGI receive.
 
+        Raises PayloadTooLargeException when the effective body cap is exceeded.
         Raises BadRequestException if the body has already been consumed or fails.
         """
+        max_body = self._body_size_limit(max_bytes)
         if self._body is not None:
+            if len(self._body) > max_body:
+                raise self._payload_too_large(max_body, len(self._body))
             return self._body
 
         if self._body_consumed:
@@ -126,7 +152,6 @@ class MakesBodyParsing:
         # total work is O(n).
         chunks: list[bytes] = []
         total_size = 0
-        max_body = self._max_body_size()
 
         try:
             more = True
@@ -140,22 +165,20 @@ class MakesBodyParsing:
                 if chunk:
                     total_size += len(chunk)
                     if total_size > max_body:
-                        # Drain any remaining chunks so the ASGI server
-                        # can release the connection cleanly. The body
-                        # is intentionally NOT marked consumed here —
-                        # see the except path below.
+                        # Drain without retaining further chunks so the ASGI
+                        # server can release the connection cleanly while the
+                        # accumulator never grows beyond the cap.
                         while message.get("more_body", False):
                             try:
                                 message = await self.receive()
                             except Exception:
                                 break
-                        raise BadRequestException(
-                            f"Request body too large. Maximum size: {max_body} bytes"
-                        )
+                            total_size += len(message.get("body", b""))
+                        raise self._payload_too_large(max_body, total_size)
                     chunks.append(chunk)
 
                 more = message.get("more_body", False)
-        except BadRequestException:
+        except BadRequestException, PayloadTooLargeException:
             # Don't mark the body consumed on a size-cap violation —
             # the request is going to 4xx and ``_body`` was never
             # assigned, so a future ``_read_body`` call from a

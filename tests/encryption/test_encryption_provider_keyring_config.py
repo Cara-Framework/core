@@ -124,9 +124,7 @@ class TestEncryptionProviderFailsClosedWhenKeyringMissing:
         "values",
         [
             pytest.param({}, id="nothing-configured"),
-            pytest.param(
-                {"encryption.current_key_id": "local"}, id="keys-missing"
-            ),
+            pytest.param({"encryption.current_key_id": "local"}, id="keys-missing"),
             pytest.param(
                 {"encryption.keys": {"local": _SECRET}}, id="current-key-id-missing"
             ),

@@ -149,7 +149,9 @@ class Trackable:
             job_tracker = self._get_job_tracker()
             if job_tracker:
                 return job_tracker.track_job_failed(self._job_uid, error, should_retry)
-            Log.error("💥 Job failed: %s - %s", self._job_uid, error, category='cara.queue.jobs')
+            Log.error(
+                "💥 Job failed: %s - %s", self._job_uid, error, category="cara.queue.jobs"
+            )
         except Exception as e:
             Log.warning("Failed to mark job as failed: %s", str(e))
         return None

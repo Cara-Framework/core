@@ -103,9 +103,7 @@ class TenantScope(BaseScope):
             if explicit is None:
                 creates[self.tenant_column] = state
             elif explicit != state:
-                raise RuntimeError(
-                    "Tenant-scoped insert attempted a cross-tenant write."
-                )
+                raise RuntimeError("Tenant-scoped insert attempted a cross-tenant write.")
 
             return builder
 

@@ -121,6 +121,6 @@ class FileDriver(Storage):
             try:
                 current.relative_to(root)
                 current.rmdir()
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 return
             current = current.parent

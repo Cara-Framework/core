@@ -101,7 +101,7 @@ class PublicationBacklogProbe:
         try:
             count = int(snapshot.get("count") or 0)
             age = float(snapshot.get("age") or 0.0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         if count < min_pending or age < age_budget_seconds:
             return None

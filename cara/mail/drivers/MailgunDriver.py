@@ -36,7 +36,9 @@ class MailgunDriver(Mail):
         self.endpoint = self._get_endpoint()
 
         if not self.secret or not self.domain:
-            raise ConfigurationException("Mailgun driver requires 'secret' and 'domain' in config")
+            raise ConfigurationException(
+                "Mailgun driver requires 'secret' and 'domain' in config"
+            )
 
     def _get_endpoint(self) -> str:
         """Get Mailgun API endpoint based on region."""

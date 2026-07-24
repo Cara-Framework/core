@@ -459,7 +459,7 @@ class JWTGuard(Guard):
                     str(payload["fid"]), ttl=max(ttl, self.refresh_ttl)
                 )
             return won
-        except (jwt.InvalidTokenError, jwt.ExpiredSignatureError):
+        except jwt.InvalidTokenError, jwt.ExpiredSignatureError:
             _logger.debug("Refresh token consume failed", exc_info=True)
             return False
 
@@ -527,7 +527,7 @@ class JWTGuard(Guard):
             if header_value[:prefix_len].lower() != self.header_prefix.lower():
                 return None
             return header_value[prefix_len + 1 :]
-        except (LookupError, RuntimeError):
+        except LookupError, RuntimeError:
             _logger.debug("No request context for JWT extraction", exc_info=True)
             return None
         except Exception:
@@ -582,17 +582,23 @@ class JWTGuard(Guard):
             # Generic JWT authentication - call authenticate_jwt if available
             if hasattr(self._user_class, "authenticate_jwt"):
                 user = self._user_class.authenticate_jwt(user_id, context or {})
-                return user
+            else:
+                user = None
+                if hasattr(self._user_class, "where"):
+                    user = self._user_class.where("user_id", user_id).first()
+                if user is None:
+                    user = self._user_class.find(user_id)
 
-            # Fallback to standard lookup by user_id or id
-            # Try user_id field first (if exists)
-            if hasattr(self._user_class, "where"):
-                user = self._user_class.where("user_id", user_id).first()
-                if user:
-                    return user
-
-            # Fallback to primary key lookup
-            user = self._user_class.find(user_id)
+            if user is None:
+                return None
+            token_version = (context or {}).get("ver")
+            if (
+                isinstance(token_version, bool)
+                or not isinstance(token_version, int)
+                or token_version < 1
+                or self._require_auth_version(user) != token_version
+            ):
+                return None
             return user
 
         except Exception:
@@ -601,6 +607,26 @@ class JWTGuard(Guard):
                 exc_info=True,
             )
             return None
+
+    @staticmethod
+    def _require_auth_version(user: Any) -> int:
+        """Return a valid persisted auth epoch or reject the model contract."""
+        getter = getattr(user, "get_auth_version", None)
+        if not callable(getter):
+            raise AuthenticationConfigurationException(
+                "Authenticatable users must implement get_auth_version()"
+            )
+        try:
+            version = getter()
+        except (AttributeError, NotImplementedError, TypeError, ValueError) as exc:
+            raise AuthenticationConfigurationException(
+                "Authenticatable users must expose a persisted auth version"
+            ) from exc
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise AuthenticationConfigurationException(
+                "Authenticatable auth version must be a positive integer"
+            )
+        return version
 
     def _validate_password(self, user: Any, password: str) -> bool:
         """Validate user password."""
@@ -811,11 +837,7 @@ class JWTGuard(Guard):
             "fid": family_id or secrets.token_urlsafe(24),
             "iss": self.issuer,
             "aud": self.audience,
-            "ver": int(
-                user.get_auth_version()
-                if hasattr(user, "get_auth_version")
-                else getattr(user, "auth_version", 1)
-            ),
+            "ver": self._require_auth_version(user),
         }
 
         # Use user's custom payload if available

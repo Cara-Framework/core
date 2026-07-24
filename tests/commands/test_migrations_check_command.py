@@ -44,6 +44,22 @@ def _generated(directory, table, order=1, extra=""):
     return path
 
 
+def _transition(directory, old_table, new_table, order):
+    path = directory / (
+        f"{order:04d}_01_01_{order:06d}_rename_{old_table}_to_{new_table}.py"
+    )
+    path.write_text(
+        f'"""Preserve the applied {old_table} table while its model is renamed."""\n\n'
+        "from cara.facades import DB\n\n"
+        f'MODEL_TRANSITION = ("{old_table}", "{new_table}")\n\n'
+        "class RenameAppliedTable:\n"
+        "    def up(self):\n"
+        f'        DB.statement("ALTER TABLE {old_table} RENAME TO {new_table}")\n',
+        encoding="utf-8",
+    )
+    return path
+
+
 def _rules(violations):
     return sorted(v.rule for v in violations)
 
@@ -57,6 +73,61 @@ def test_clean_directory_has_no_violations(tmp_path):
     (tmp_path / "__init__.py").write_text("", encoding="utf-8")
 
     assert audit_migrations(tmp_path, {"product": set(), "listing": set()}) == []
+
+
+# ── applied model transitions ──────────────────────────────────────────────
+
+
+def test_single_applied_model_transition_covers_current_model(tmp_path):
+    _generated(tmp_path, "legacy_product")
+    _transition(tmp_path, "legacy_product", "product", order=2)
+
+    assert audit_migrations(tmp_path, {"product": set()}) == []
+
+
+def test_two_edge_applied_model_transition_chain_is_supported(tmp_path):
+    _generated(tmp_path, "legacy_product")
+    _transition(tmp_path, "legacy_product", "catalog_product", order=2)
+    _transition(tmp_path, "catalog_product", "product", order=3)
+
+    assert audit_migrations(tmp_path, {"product": set()}) == []
+
+
+def test_model_transition_chain_rejects_cycle(tmp_path):
+    _generated(tmp_path, "legacy_product")
+    _transition(tmp_path, "legacy_product", "catalog_product", order=2)
+    _transition(tmp_path, "catalog_product", "legacy_product", order=3)
+
+    violations = audit_migrations(tmp_path, {"product": set()})
+
+    assert "cyclic-model-transition" in _rules(violations)
+
+
+def test_model_transition_chain_rejects_branch_or_merge(tmp_path):
+    _generated(tmp_path, "legacy_product")
+    _generated(tmp_path, "other_product", order=2)
+    _transition(tmp_path, "legacy_product", "product", order=3)
+    _transition(tmp_path, "other_product", "product", order=4)
+
+    violations = audit_migrations(tmp_path, {"product": set()})
+
+    assert _rules(violations).count("duplicate-model-transition") == 2
+
+
+def test_model_transition_requires_exact_sql_docstring_and_terminal_model(tmp_path):
+    _generated(tmp_path, "legacy_product")
+    path = _transition(tmp_path, "legacy_product", "product", order=2)
+    path.write_text(
+        'MODEL_TRANSITION = ("legacy_product", "product")\nclass Broken:\n    pass\n',
+        encoding="utf-8",
+    )
+
+    violations = audit_migrations(tmp_path, {"listing": set()})
+    messages = "\n".join(violation.message for violation in violations)
+
+    assert "missing explanation" in messages
+    assert "does not prove" in messages
+    assert "has no model" in messages
 
 
 # ── rule 1: one file per table ──────────────────────────────────────────────
@@ -175,9 +246,7 @@ def test_timestamp_without_time_zone_is_naive(tmp_path):
         "CREATE TABLE audit_snapshot (taken_at TIMESTAMP WITHOUT TIME ZONE)",
     )
 
-    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
-        "naive-timestamp"
-    ]
+    assert _rules(audit_migrations(tmp_path, {"product": set()})) == ["naive-timestamp"]
 
 
 def test_timestamptz_and_current_timestamp_are_not_flagged(tmp_path):
@@ -263,9 +332,7 @@ def test_index_declared_by_the_model_is_accepted(tmp_path):
 
 def test_index_on_a_non_model_table_is_out_of_scope(tmp_path):
     _generated(tmp_path, "product")
-    _model_less_with_sql(
-        tmp_path, "CREATE INDEX audit_view_idx ON audit_view (taken_on)"
-    )
+    _model_less_with_sql(tmp_path, "CREATE INDEX audit_view_idx ON audit_view (taken_on)")
 
     # No model can own a materialized view's index, so rule 7 does not apply.
     assert audit_migrations(tmp_path, {"product": set()}) == []
@@ -276,9 +343,7 @@ def test_index_on_a_non_model_table_is_out_of_scope(tmp_path):
 
 def test_unparseable_migration_is_reported_and_blocks_fix(tmp_path):
     _generated(tmp_path, "product")
-    (tmp_path / "0002_01_01_000002_broken.py").write_text(
-        "def up(:\n", encoding="utf-8"
-    )
+    (tmp_path / "0002_01_01_000002_broken.py").write_text("def up(:\n", encoding="utf-8")
 
     violations = audit_migrations(tmp_path, {"product": set()})
 

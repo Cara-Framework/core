@@ -11,39 +11,44 @@ import os
 import time
 from typing import Any
 
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
-
 from .CommandLoader import CommandLoader
 from .CommandRegistry import CommandRegistry
 from .CommandRunner import CommandRunner
 
 
-class SimpleReloadHandler(FileSystemEventHandler):
-    """Simple file watcher for command reloading."""
+def _reload_handler(command):
+    """Build the optional watchdog handler only when watch mode is enabled."""
+    from watchdog.events import FileSystemEventHandler
 
-    def __init__(self, command):
-        self.command = command
-        self.last_reload = 0
-        self.debounce_delay = 1.0
-        super().__init__()
+    class SimpleReloadHandler(FileSystemEventHandler):
+        def __init__(self):
+            self.last_reload = 0
+            self.debounce_delay = 1.0
+            super().__init__()
 
-    def on_modified(self, event):
-        if event.is_directory or not event.src_path.endswith(".py"):
-            return
+        def on_modified(self, event):
+            if event.is_directory or not event.src_path.endswith(".py"):
+                return
 
-        # Debouncing
-        current_time = time.time()
-        if current_time - self.last_reload < self.debounce_delay:
-            return
+            current_time = time.time()
+            if current_time - self.last_reload < self.debounce_delay:
+                return
 
-        # Skip temp/cache files
-        ignore_patterns = ["__pycache__", ".pyc", ".pyo", ".tmp", ".swp", ".DS_Store"]
-        if any(pattern in event.src_path for pattern in ignore_patterns):
-            return
+            ignore_patterns = [
+                "__pycache__",
+                ".pyc",
+                ".pyo",
+                ".tmp",
+                ".swp",
+                ".DS_Store",
+            ]
+            if any(pattern in event.src_path for pattern in ignore_patterns):
+                return
 
-        self.last_reload = current_time
-        self.command.reload()
+            self.last_reload = current_time
+            command.reload()
+
+    return SimpleReloadHandler()
 
 
 class Command:
@@ -91,11 +96,13 @@ class Command:
 
     def _start_watcher(self):
         """Start file watcher for hot reloading during development."""
+        from watchdog.observers import Observer
+
         if self.observer is not None:
             return  # Already watching
 
         self.observer = Observer()
-        handler = SimpleReloadHandler(self)
+        handler = _reload_handler(self)
 
         # Watch paths to monitor for changes
         watch_paths = self._get_watch_paths()

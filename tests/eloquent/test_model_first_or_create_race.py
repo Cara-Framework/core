@@ -115,9 +115,7 @@ class TestIsUniqueViolation:
 
     def test_unique_constraint_message_detected(self) -> None:
         # Wrapped drivers may only preserve a generic message.
-        exc = Exception(
-            'duplicate value violates unique constraint "foo_pkey"'
-        )
+        exc = Exception('duplicate value violates unique constraint "foo_pkey"')
         assert Model._is_unique_violation(exc) is True
 
     def test_other_sqlstate_not_detected(self) -> None:

@@ -32,7 +32,7 @@ def test_evasion_via_compare_literal_is_caught(tmp_path):
     assert findings and "compare-literal" in findings[0].message
 
 
-def test_product_can_preserve_identifier_only_legacy_census(tmp_path):
+def test_product_cannot_disable_string_literal_scanning(tmp_path):
     manifest = make_manifest(
         tmp_path,
         plugin_tokens=TOKENS,
@@ -42,7 +42,9 @@ def test_product_can_preserve_identifier_only_legacy_census(tmp_path):
         tmp_path / "app" / "services" / "Check.py",
         "def check(slug):\n    return slug == 'ebay'\n",
     )
-    assert VerticalSliceSeams.scan(manifest) == []
+    findings = VerticalSliceSeams.scan(manifest)
+    assert len(findings) == 1
+    assert "scan_plugin_string_literals must be true" in findings[0].message
 
 
 def test_evasion_via_dict_key_literal_is_caught(tmp_path):
@@ -112,6 +114,85 @@ def test_manifest_data_seam_is_exempt(tmp_path):
         "class EbayMarketplace:\n    pass\n",
     )
     assert VerticalSliceSeams.scan(manifest) == []
+
+
+def test_architecture_manifest_is_implicit_manifest_data(tmp_path):
+    manifest = make_manifest(tmp_path, plugin_tokens=TOKENS)
+    write(
+        tmp_path / "app" / "architecture_manifest.py",
+        "PLUGIN_TOKENS = {'amazon': 'packages/amazon'}\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
+
+
+def test_owned_non_marketplace_integration_lane_allows_only_its_provider(tmp_path):
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=frozenset({"google", "amazon"}),
+        seam_locations=SeamLocations(
+            owned_integration_prefixes={
+                "discovery/google_shopping": frozenset({"google"})
+            }
+        ),
+    )
+    from dataclasses import replace
+
+    discovery = tmp_path / "discovery"
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            scanner_roots={
+                **manifest.roots.scanner_roots,
+                "vertical_slice_seams": (
+                    *manifest.roots.scan_dirs("vertical_slice_seams"),
+                    discovery,
+                ),
+            },
+        ),
+    )
+    write(
+        discovery / "google_shopping" / "GoogleShoppingDiscovery.py",
+        "class GoogleShoppingDiscovery:\n    pass\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
+
+    write(
+        discovery / "price_feeds" / "GooglePriceFeed.py",
+        "class GooglePriceFeed:\n    pass\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert any(
+        finding.path == "discovery/price_feeds/GooglePriceFeed.py" for finding in findings
+    )
+
+    write(
+        discovery / "google_shopping" / "AmazonBridge.py",
+        "class AmazonBridge:\n    pass\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert any(
+        finding.path == "discovery/google_shopping/AmazonBridge.py"
+        for finding in findings
+    )
+
+
+def test_core_import_of_owned_integration_provider_is_still_a_leak(tmp_path):
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=frozenset({"google"}),
+        seam_locations=SeamLocations(
+            owned_integration_prefixes={
+                "discovery/google_shopping": frozenset({"google"})
+            }
+        ),
+    )
+    write(
+        tmp_path / "app" / "jobs" / "Discover.py",
+        "from discovery.google_shopping import GoogleShoppingDiscovery\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert any(finding.path == "app/jobs/Discover.py" for finding in findings)
 
 
 def test_product_owned_extra_core_tree_is_scanned(tmp_path):

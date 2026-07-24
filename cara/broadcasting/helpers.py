@@ -99,8 +99,7 @@ def _handle_broadcast_task_exception(task: asyncio.Task) -> None:
             import sys
 
             print(
-                f"[cara.broadcasting] broadcast task raised "
-                f"{e.__class__.__name__}: {e}",
+                f"[cara.broadcasting] broadcast task raised {e.__class__.__name__}: {e}",
                 file=sys.stderr,
             )
 

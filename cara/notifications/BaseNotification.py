@@ -11,6 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
 from cara.queues.contracts import SerializesModels
 
 
@@ -116,6 +117,9 @@ class BaseNotification(ABC, SerializesModels):
         Returns:
             Self for method chaining
         """
+        notification_id = str(notification_id).strip()
+        if not notification_id:
+            raise InvalidArgumentException("Notification id must be a non-empty string.")
         self._id = notification_id
         return self
 
@@ -129,6 +133,10 @@ class BaseNotification(ABC, SerializesModels):
         Returns:
             Self for method chaining
         """
+        if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds <= 0:
+            raise InvalidArgumentException(
+                "Notification delay must be a positive integer number of seconds."
+            )
         self._delay = seconds
         return self
 
@@ -142,6 +150,11 @@ class BaseNotification(ABC, SerializesModels):
         Returns:
             Self for method chaining
         """
+        queue = str(queue).strip()
+        if not queue:
+            raise InvalidArgumentException(
+                "Notification queue must be a non-empty string."
+            )
         self._queue = queue
         return self
 
@@ -155,6 +168,8 @@ class BaseNotification(ABC, SerializesModels):
         Returns:
             Self for method chaining
         """
+        if not isinstance(data, dict):
+            raise InvalidArgumentException("Notification data must be a dictionary.")
         self._data.update(data)
         return self
 

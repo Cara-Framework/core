@@ -50,7 +50,7 @@ def validated_query_int(
     if validator.fails():
         try:
             return max(lo, min(hi, int(value)))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return default
     return int(validator.validated()[key])
 

@@ -1,6 +1,5 @@
 """Base exception classes for the Cara framework."""
 
-
 from __future__ import annotations
 
 

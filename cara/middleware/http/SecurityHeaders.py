@@ -102,7 +102,9 @@ class SecurityHeaders(Middleware):
 
         return headers, hsts, preload
 
-    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[..., Awaitable[Any]]
+    ) -> Response:
         response = await next_fn(request)
 
         try:
@@ -190,7 +192,7 @@ class SecurityHeaders(Middleware):
                         return True
                 except ValueError:
                     continue
-        except (AttributeError, TypeError, RuntimeError):
+        except AttributeError, TypeError, RuntimeError:
             return False
         return False
 
@@ -204,4 +206,10 @@ class SecurityHeaders(Middleware):
         except Exception as e:
             from cara.facades import Log
 
-            Log.warning("SecurityHeaders: log facade unavailable (%s: %s); original msg: %s", e.__class__.__name__, e, msg, exc_info=True)
+            Log.warning(
+                "SecurityHeaders: log facade unavailable (%s: %s); original msg: %s",
+                e.__class__.__name__,
+                e,
+                msg,
+                exc_info=True,
+            )

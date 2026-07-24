@@ -2007,7 +2007,7 @@ class QueueJobDeliveryStore:
         )
         try:
             return int(affected or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
     def execution_timeout_for(self, job_or_class: Any) -> int:
@@ -2402,6 +2402,62 @@ class QueueJobDeliveryStore:
                 self.PUBLISH_PROCESSING,
             ],
         )
+        lane_rows = self._db().select(
+            f"SELECT queue, "
+            "COUNT(*) FILTER (WHERE status = %s AND publish_status != %s "
+            "AND available_at <= NOW()) AS pending, "
+            "COUNT(*) FILTER (WHERE status = %s) AS processing, "
+            "COUNT(*) FILTER (WHERE status IN (%s, %s) AND "
+            "publish_status = %s) AS broker_outstanding, "
+            "COUNT(*) FILTER (WHERE status = %s AND "
+            "completed_at >= NOW() - INTERVAL '5 minutes') AS completed_5m, "
+            "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
+            "(MIN(available_at) FILTER (WHERE status = %s "
+            "AND publish_status != %s AND available_at <= NOW())))), 0) "
+            "AS oldest_due_age "
+            f"FROM {self.table} WHERE queue = ANY(%s) GROUP BY queue",
+            [
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+                self.STATUS_PROCESSING,
+                self.STATUS_PENDING,
+                self.STATUS_PROCESSING,
+                self.PUBLISH_PUBLISHED,
+                self.STATUS_COMPLETED,
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+                list(self.canonical_queues),
+            ],
+        )
+        lane_backlog = {
+            queue: {
+                "pending": 0,
+                "processing": 0,
+                "broker_outstanding": 0,
+                "oldest_due_age": 0.0,
+                "throughput_per_second": 0.0,
+            }
+            for queue in self.canonical_queues
+        }
+        for lane_row in lane_rows or ():
+            queue = str(self._row_value(lane_row, "queue") or "")
+            if queue not in lane_backlog:
+                continue
+            lane_backlog[queue] = {
+                "pending": int(self._row_value(lane_row, "pending") or 0),
+                "processing": int(self._row_value(lane_row, "processing") or 0),
+                "broker_outstanding": int(
+                    self._row_value(lane_row, "broker_outstanding") or 0
+                ),
+                "oldest_due_age": max(
+                    float(self._row_value(lane_row, "oldest_due_age") or 0),
+                    0.0,
+                ),
+                "throughput_per_second": max(
+                    float(self._row_value(lane_row, "completed_5m") or 0) / 300.0,
+                    0.0,
+                ),
+            }
 
         def value(key: str) -> int:
             return int(self._row_value(row, key) or 0)
@@ -2443,6 +2499,7 @@ class QueueJobDeliveryStore:
                 }
                 for priority in self._PRIORITY_RANKS
             },
+            "lane_backlog": lane_backlog,
             "broker_window": {
                 "max_outstanding": value("broker_max_outstanding"),
                 "limit": self.broker_window_per_queue,
@@ -2641,7 +2698,7 @@ class QueueJobDeliveryStore:
     def _affected(value: Any) -> bool:
         try:
             return int(value or 0) > 0
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return bool(value)
 
     @staticmethod

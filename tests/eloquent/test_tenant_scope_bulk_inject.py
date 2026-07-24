@@ -106,9 +106,7 @@ class TestBulkInjection:
         scope.on_boot(builder)
 
         builder.scopes[action][
-            "_tenant_filter"
-            if action == "select"
-            else f"_tenant_filter_{action}"
+            "_tenant_filter" if action == "select" else f"_tenant_filter_{action}"
         ](builder)
 
         assert builder.where_raw_call == "1 = 0"
@@ -120,9 +118,7 @@ class TestBulkInjection:
         scope.on_boot(builder)
 
         builder.scopes[action][
-            "_tenant_filter"
-            if action == "select"
-            else f"_tenant_filter_{action}"
+            "_tenant_filter" if action == "select" else f"_tenant_filter_{action}"
         ](builder)
 
         assert builder.where_call == ("example.tenant_id", 42)

@@ -31,7 +31,9 @@ class LogWSRequests(Middleware):
         started = time.perf_counter()
         # Routine connect/close are debug-level — per-connection traffic would
         # flood the log otherwise. Only abnormal closes are elevated.
-        Log.debug("🔌 WS: %s:%s -> CONNECT %s", masked, port, path, category='cara.websocket')
+        Log.debug(
+            "🔌 WS: %s:%s -> CONNECT %s", masked, port, path, category="cara.websocket"
+        )
 
         try:
             result = await next_fn(socket)
@@ -54,5 +56,12 @@ class LogWSRequests(Middleware):
             raise
         else:
             elapsed = (time.perf_counter() - started) * 1000
-            Log.debug("🔌 WS: %s:%s -> CLOSE %s ✓ | %.2fms", masked, port, path, elapsed, category='cara.websocket')
+            Log.debug(
+                "🔌 WS: %s:%s -> CLOSE %s ✓ | %.2fms",
+                masked,
+                port,
+                path,
+                elapsed,
+                category="cara.websocket",
+            )
             return result

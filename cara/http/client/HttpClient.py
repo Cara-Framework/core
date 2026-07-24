@@ -14,7 +14,9 @@ Usage::
     response = await Http.timeout(10).retry(3, backoff=2.0).get(url)
 
     # With headers
-    response = await Http.with_headers({"Authorization": "Bearer ..."}).post(url, json=payload)
+    response = await Http.with_headers({"Authorization": "Bearer ..."}).post(
+        url, json=payload
+    )
 
     # With base URL (for API clients)
     client = Http.base_url("https://api.example.com").with_headers({"X-API-Key": key})
@@ -56,7 +58,9 @@ class PendingRequest:
         self._timeout_seconds = seconds
         return self
 
-    def retry(self, times: int, *, backoff: float = 2.0, jitter: float = 0.15) -> PendingRequest:
+    def retry(
+        self, times: int, *, backoff: float = 2.0, jitter: float = 0.15
+    ) -> PendingRequest:
         self._retries = times
         self._backoff_base = backoff
         self._backoff_jitter = jitter
@@ -103,7 +107,7 @@ class PendingRequest:
             if attempt > 0 and HttpFake.current() is None:
                 # Real transport only — faked retries stay instant so a
                 # test exercising the retry ladder doesn't sleep.
-                delay = self._backoff_base ** attempt
+                delay = self._backoff_base**attempt
                 delay *= 1.0 + random.uniform(-self._backoff_jitter, self._backoff_jitter)
                 await asyncio.sleep(delay)
 
@@ -130,12 +134,17 @@ class PendingRequest:
                 ) as client:
                     response = await client.request(method, full_url, **kwargs)
 
-                if response.status_code in self._retry_on_status and attempt < self._retries:
+                if (
+                    response.status_code in self._retry_on_status
+                    and attempt < self._retries
+                ):
                     retry_after = response.headers.get("Retry-After")
                     if retry_after and retry_after.isdigit():
                         await asyncio.sleep(min(int(retry_after), 60))
                     last_exc = httpx.HTTPStatusError(
-                        f"{response.status_code}", request=response.request, response=response
+                        f"{response.status_code}",
+                        request=response.request,
+                        response=response,
                     )
                     continue
 
@@ -170,7 +179,9 @@ class HttpFacade:
         return PendingRequest().timeout(seconds)
 
     @staticmethod
-    def retry(times: int, *, backoff: float = 2.0, jitter: float = 0.15) -> PendingRequest:
+    def retry(
+        times: int, *, backoff: float = 2.0, jitter: float = 0.15
+    ) -> PendingRequest:
         return PendingRequest().retry(times, backoff=backoff, jitter=jitter)
 
     @staticmethod
@@ -242,7 +253,9 @@ class HttpFacade:
         """Build a stub response for ``fake()`` maps (or direct returns)."""
         from . import HttpFake
 
-        return HttpFake.make_response(json=json, status=status, headers=headers, body=body)
+        return HttpFake.make_response(
+            json=json, status=status, headers=headers, body=body
+        )
 
     @staticmethod
     def recorded() -> list[dict[str, Any]]:

@@ -37,6 +37,6 @@ def read_schedule_snapshot() -> dict[str, Any] | None:
         return None
     try:
         snapshot = json.loads(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return snapshot if isinstance(snapshot, dict) else None

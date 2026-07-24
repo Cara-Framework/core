@@ -25,8 +25,14 @@ class _DirectApplication:
     """Minimal invocation seam for commands that have no container dependencies."""
 
     @staticmethod
-    def call(callback: Any, **kwargs: Any) -> Any:
-        return callback(**kwargs)
+    def call(callback: Any, *args: Any, **kwargs: Any) -> Any:
+        """Invoke both plain and decorator-wrapped command callbacks.
+
+        Command decorators bind their command instance positionally before
+        forwarding parsed CLI kwargs. A bootless runner has no container, but
+        it must preserve that normal callback contract.
+        """
+        return callback(*args, **kwargs)
 
 
 def _load_command(spec: BootlessCommandSpec) -> type[CommandBase]:
@@ -45,9 +51,7 @@ def _load_command(spec: BootlessCommandSpec) -> type[CommandBase]:
         command_class,
         CommandBase,
     ):
-        raise TypeError(
-            f"{spec.class_name} in {path} must extend CommandBase"
-        )
+        raise TypeError(f"{spec.class_name} in {path} must extend CommandBase")
     if getattr(command_class, "name", None) != spec.name:
         raise ValueError(
             f"Bootless command spec names {spec.name!r}, but "
@@ -98,4 +102,24 @@ def dispatch_bootless(
     return True
 
 
-__all__ = ["BootlessCommandSpec", "dispatch_bootless"]
+_CORE_COMMANDS = Path(__file__).resolve().parent / "core"
+_ARCHITECTURE_SPECS = (
+    BootlessCommandSpec(
+        name="arch:barrels",
+        path=_CORE_COMMANDS / "ArchBarrelsCommand.py",
+        class_name="ArchBarrelsCommand",
+    ),
+    BootlessCommandSpec(
+        name="arch:check",
+        path=_CORE_COMMANDS / "ArchCheckCommand.py",
+        class_name="ArchCheckCommand",
+    ),
+)
+
+
+def dispatch_architecture(argv: list[str]) -> bool:
+    """Dispatch Cara's canonical architecture commands without app bootstrap."""
+    return dispatch_bootless(argv, _ARCHITECTURE_SPECS)
+
+
+__all__ = ["BootlessCommandSpec", "dispatch_architecture", "dispatch_bootless"]

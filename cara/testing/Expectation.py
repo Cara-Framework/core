@@ -45,7 +45,7 @@ def _format(value: Any, max_len: int = 200) -> str:
     except Exception:  # pragma: no cover — defensive against bad __repr__
         rendered = f"<{type(value).__name__} (unrepr-able)>"
     if len(rendered) > max_len:
-        rendered = f"{rendered[:max_len - 1]}…"
+        rendered = f"{rendered[: max_len - 1]}…"
     return rendered
 
 

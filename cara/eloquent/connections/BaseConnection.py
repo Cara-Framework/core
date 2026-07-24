@@ -110,7 +110,14 @@ class BaseConnection:
                 if hasattr(self, "get_transaction_level")
                 else 0
             )
-            Log.warning("SLOW QUERY (%.0fms, params=%s, tx=%s): %s", elapsed_ms, n_bindings, tx_level, self._normalize_query_for_log(query), category='slow_query')
+            Log.warning(
+                "SLOW QUERY (%.0fms, params=%s, tx=%s): %s",
+                elapsed_ms,
+                n_bindings,
+                tx_level,
+                self._normalize_query_for_log(query),
+                category="slow_query",
+            )
 
         # Log query if either connection-specific log_queries is True
         # or if LOG_DB_QUERIES is enabled via logging config

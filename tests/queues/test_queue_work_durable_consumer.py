@@ -161,9 +161,7 @@ def test_worker_registers_one_quorum_consumer_with_per_consumer_qos():
         config={"timeout": 1},
     )
 
-    assert manager.setup_channels[0].declarations == [
-        {"queue": "sync", "passive": True}
-    ]
+    assert manager.setup_channels[0].declarations == [{"queue": "sync", "passive": True}]
     assert manager.consumer_channel.prefetch == (1, False)
     assert [row[0] for row in manager.consumer_channel.callbacks] == queues
     assert all(row[2] is False for row in manager.consumer_channel.callbacks)
@@ -282,9 +280,7 @@ def test_oversized_payload_is_dead_lettered_instead_of_acked_and_lost():
 
 
 def test_async_handler_arms_and_cancels_hard_timeout_watchdog(monkeypatch):
-    module = importlib.import_module(
-        "cara.commands.core.QueueWorkCommand"
-    )
+    module = importlib.import_module("cara.commands.core.QueueWorkCommand")
     timers = []
 
     class _Timer:
@@ -308,20 +304,21 @@ def test_async_handler_arms_and_cancels_hard_timeout_watchdog(monkeypatch):
     async def _handler():
         return "done"
 
-    assert JobProcessor._execute_async_job_with_timeout(
-        _handler,
-        (),
-        10,
-    ) == "done"
+    assert (
+        JobProcessor._execute_async_job_with_timeout(
+            _handler,
+            (),
+            10,
+        )
+        == "done"
+    )
     assert timers[0].interval == 15
     assert timers[0].started is True
     assert timers[0].cancelled is True
 
 
 def test_uncooperative_timeout_watchdog_hard_exits_worker(monkeypatch):
-    module = importlib.import_module(
-        "cara.commands.core.QueueWorkCommand"
-    )
+    module = importlib.import_module("cara.commands.core.QueueWorkCommand")
     exits = []
     monkeypatch.setattr(
         module.os,

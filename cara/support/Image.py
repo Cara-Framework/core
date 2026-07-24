@@ -62,7 +62,7 @@ class ImageProcessor:
                         self.image = self.image.rotate(270, expand=True)
                     elif exif[orientation] == 8:
                         self.image = self.image.rotate(90, expand=True)
-        except (AttributeError, KeyError, IndexError, TypeError):
+        except AttributeError, KeyError, IndexError, TypeError:
             pass
 
         self._orientated = True
@@ -214,7 +214,9 @@ class Image:
         # data has been decoded yet, so the check is cheap.
         if fmt not in ImageProcessor.ALLOWED_FORMATS:
             allowed = ", ".join(sorted(ImageProcessor.ALLOWED_FORMATS))
-            raise InvalidArgumentException(f"Unsupported image format {fmt!r}; allowed: {allowed}")
+            raise InvalidArgumentException(
+                f"Unsupported image format {fmt!r}; allowed: {allowed}"
+            )
 
         # Pixel-count guard — declared dimensions only, no full
         # decode. A 100_000 × 100_000 PNG-bomb header is rejected

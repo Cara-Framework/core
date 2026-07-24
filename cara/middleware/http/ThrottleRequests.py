@@ -15,15 +15,6 @@ from cara.facades import Log, RateLimiter
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
-# Default to fail-closed when the cache backend that backs the rate
-# limiter is unreachable. Fail-open silently lifts the cap, so the
-# rate limiter that's supposed to absorb abuse stops working at the
-# exact moment Redis is also down (typical correlated-failure window
-# during DDoS / cache stampede). Operators who explicitly want the
-# legacy fail-open posture can flip ``rate.fail_open`` to True in
-# config — the tradeoff is documented but no longer the default.
-_DEFAULT_FAIL_OPEN = False
-
 
 class ThrottleRequests(Middleware):
     """Rate limiting middleware with automatic parameter parsing."""
@@ -53,7 +44,7 @@ class ThrottleRequests(Middleware):
         elif limit is not None:
             try:
                 self.custom_limit = int(limit)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 self.custom_limit = limit
         else:
             self.custom_limit = None
@@ -61,12 +52,14 @@ class ThrottleRequests(Middleware):
         if window is not None:
             try:
                 self.custom_window_minutes = int(window)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 self.custom_window_minutes = window
         else:
             self.custom_window_minutes = None
 
-    async def handle(self, request: Request, next_fn: Callable[..., Awaitable[Any]]) -> Response:
+    async def handle(
+        self, request: Request, next_fn: Callable[..., Awaitable[Any]]
+    ) -> Response:
         """Handle rate limiting logic."""
         # Bypass for trusted IPs (monitoring, health checks, local dev).
         if self._is_trusted_ip(request):
@@ -148,21 +141,6 @@ class ThrottleRequests(Middleware):
 
         return response
 
-    def _fail_open_mode(self) -> bool:
-        """Whether to allow traffic when the cache backend is down.
-
-        Default False (fail-closed). Operators flip ``rate.fail_open``
-        in config when the tradeoff favours availability over abuse
-        protection — but the safer default is to refuse traffic and
-        let the caller retry once the limiter is healthy again.
-        """
-        try:
-            from cara.facades import Config
-
-            return bool(Config.get("rate.fail_open", _DEFAULT_FAIL_OPEN))
-        except Exception:
-            return _DEFAULT_FAIL_OPEN
-
     def _is_trusted_ip(self, request: Request) -> bool:
         """Check whether the request originates from a trusted IP.
 
@@ -179,19 +157,12 @@ class ThrottleRequests(Middleware):
         ``Config.get("rate.TRUSTED_IPS")`` → ``[]`` while
         ``Config.get("rate.trusted_ips")`` → ``["127.0.0.1", "::1"]``.
 
-        We probe the lowercase path first (the canonical, post-load shape)
-        and fall back to the uppercase path so any legacy out-of-tree
-        config that was registered manually with ``Config.set("rate.TRUSTED_IPS", ...)``
-        keeps working without a behaviour change.
+        The lowercase path is the only canonical post-load shape.
         """
         try:
             from cara.facades import Config
 
-            trusted = Config.get("rate.trusted_ips", None)
-            if trusted is None:
-                # Defensive fallback — if a caller registered the
-                # uppercase key explicitly via Config.set, keep honouring it.
-                trusted = Config.get("rate.TRUSTED_IPS", [])
+            trusted = Config.get("rate.trusted_ips", [])
             if not trusted:
                 return False
             client_ip = (

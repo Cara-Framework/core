@@ -523,8 +523,7 @@ class Model(
             # from the model snapshot makes scope wiring survive the cache loss.
             booted = self.get_builder()
             self._global_scopes = {
-                action: dict(scopes)
-                for action, scopes in booted._global_scopes.items()
+                action: dict(scopes) for action, scopes in booted._global_scopes.items()
             }
             self._macros = dict(booted._macros)
 
@@ -574,7 +573,12 @@ class Model(
                 # Log error but don't stop other listeners
                 from cara.facades import Log
 
-                Log.error("Model event error in %s: %s", listener_method.__name__, e, exc_info=True)
+                Log.error(
+                    "Model event error in %s: %s",
+                    listener_method.__name__,
+                    e,
+                    exc_info=True,
+                )
 
         return True  # All listeners passed, continue
 
@@ -724,9 +728,7 @@ class Model(
             and isinstance(self.__timestamps__, (list, tuple))
         ):
             timestamp_col = (
-                self.__timestamps__[1]
-                if len(self.__timestamps__) > 1
-                else "updated_at"
+                self.__timestamps__[1] if len(self.__timestamps__) > 1 else "updated_at"
             )
 
         # Get the current datetime in the appropriate format
@@ -1601,10 +1603,6 @@ class Model(
         if mutator_method_name in self.__class__.__dict__:
             mutator_method = self.__class__.__dict__[mutator_method_name]
             if hasattr(mutator_method, "_is_mutator"):
-                # Decorated mutator (receives self and value)
-                value = mutator_method(self, value)
-            else:
-                # Non-decorated mutator (legacy support - receives self and value)
                 value = mutator_method(self, value)
 
         if attribute in self.__casts__:

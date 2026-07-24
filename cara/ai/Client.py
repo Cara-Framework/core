@@ -192,7 +192,7 @@ class AIClient:
                         )
                         try:
                             wait_s = float(retry_after_raw) if retry_after_raw else 0.0
-                        except (TypeError, ValueError):
+                        except TypeError, ValueError:
                             wait_s = 0.0
                         if wait_s <= 0:
                             wait_s = self._backoff_seconds(retry, status=429)
@@ -351,11 +351,19 @@ class AIClient:
     ) -> tuple[str, dict[str, Any]]:
         if self.provider == AIProvider.OLLAMA:
             return self._call_ollama(
-                model, messages, temperature, max_tokens, top_p,
+                model,
+                messages,
+                temperature,
+                max_tokens,
+                top_p,
                 response_format=response_format,
             )
         return self._call_openai_compatible(
-            model, messages, temperature, max_tokens, top_p,
+            model,
+            messages,
+            temperature,
+            max_tokens,
+            top_p,
             response_format=response_format,
         )
 

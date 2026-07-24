@@ -41,7 +41,7 @@ class Facade(type):
             import builtins
 
             application = builtins.app()
-        except (ImportError, ModuleNotFoundError, TypeError, AttributeError):
+        except ImportError, ModuleNotFoundError, TypeError, AttributeError:
             # Handle application-not-booted with targeted fallbacks
             # (e.g. running stress tests outside the full Cara framework,
             # or Python version mismatch causing TypeError on 3.10+ syntax)

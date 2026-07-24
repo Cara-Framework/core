@@ -71,8 +71,7 @@ class TestUpsertCompile:
 
         assert compile_once() == compile_once()
         assert (
-            '"a" = EXCLUDED."a", "b" = EXCLUDED."b", "c" = EXCLUDED."c"'
-            in compile_once()
+            '"a" = EXCLUDED."a", "b" = EXCLUDED."b", "c" = EXCLUDED."c"' in compile_once()
         )
 
     def test_empty_update_list_compiles_do_nothing(self):

@@ -10,7 +10,7 @@ from cara.validation.rules.BaseRule import BaseRule
 
 class EndsWithRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        raw = params.get("ends_with") or params.get("endswith")
+        raw = params.get("ends_with")
         if not raw or value is None:
             return False
         suffixes = [p.strip() for p in raw.split(",")]
@@ -18,5 +18,5 @@ class EndsWithRule(BaseRule):
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
-        raw = params.get("ends_with") or params.get("endswith", "")
+        raw = params.get("ends_with", "")
         return f"The {attr.lower()} must end with one of: {raw}."

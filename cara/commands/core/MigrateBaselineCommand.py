@@ -22,7 +22,9 @@ class MigrateBaselineCommand(CommandBase):
 
     def handle(self):
         if not self.option("force"):
-            self.error("migrate:baseline requires --force; it replaces migration history.")
+            self.error(
+                "migrate:baseline requires --force; it replaces migration history."
+            )
             return 2
 
         try:
@@ -92,8 +94,7 @@ class MigrateBaselineCommand(CommandBase):
             for file_path in files:
                 content = Path(file_path).read_text(encoding="utf-8")
                 model_owned = any(
-                    any(migration_table_actions(content, table))
-                    for table in model_tables
+                    any(migration_table_actions(content, table)) for table in model_tables
                 )
                 if not model_owned:
                     preserved.add(

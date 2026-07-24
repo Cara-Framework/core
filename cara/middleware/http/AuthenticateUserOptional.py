@@ -46,7 +46,7 @@ class AuthenticateUserOptional(AuthenticateUser):
         user: Any = None
         successful_guard: str | None = None
 
-        for guard_name in self._resolve_guards(auth_manager):
+        for guard_name in self._resolve_guards():
             try:
                 guard = auth_manager.guard(guard_name)
                 # Offload the sync ``guard.user()`` (a ``User.find()`` SELECT)

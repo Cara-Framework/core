@@ -161,7 +161,7 @@ class JsonCacheCodec:
             import pendulum
 
             is_pendulum = isinstance(value, pendulum.DateTime)
-        except (ImportError, AttributeError):
+        except ImportError, AttributeError:
             is_pendulum = False
         if is_pendulum:
             return {"t": "pendulum", "v": value.to_iso8601_string()}

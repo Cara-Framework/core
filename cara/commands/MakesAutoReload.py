@@ -12,66 +12,58 @@ import importlib
 import os
 import sys
 import time
-
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
+from typing import Any
 
 
-class AutoReloadHandler(FileSystemEventHandler):
-    """Enhanced file watcher for universal auto-reload."""
+def _auto_reload_handler(command: Any, debounce_delay: float = 0.3) -> Any:
+    """Build the optional watchdog handler only when reload is enabled."""
+    from watchdog.events import FileSystemEventHandler
 
-    def __init__(self, command, debounce_delay: float = 0.3):
-        self.command = command
-        self.last_reload = 0
-        self.debounce_delay = debounce_delay
-        super().__init__()
+    class AutoReloadHandler(FileSystemEventHandler):
+        """Enhanced file watcher for universal auto-reload."""
 
-    def on_modified(self, event):
-        """Handle file modification events."""
-        if event.is_directory:
-            return
+        def __init__(self) -> None:
+            self.last_reload = 0.0
+            super().__init__()
 
-        # Only watch Python files and config files
-        if not self._should_watch_file(event.src_path):
-            return
+        def on_modified(self, event: Any) -> None:
+            """Handle file modification events."""
+            if event.is_directory:
+                return
+            if not self._should_watch_file(event.src_path):
+                return
 
-        # Debouncing to avoid multiple reloads
-        current_time = time.time()
-        if current_time - self.last_reload < self.debounce_delay:
-            return
+            current_time = time.time()
+            if current_time - self.last_reload < debounce_delay:
+                return
+            if self._is_temp_file(event.src_path):
+                return
 
-        # Skip temp/cache files
-        if self._is_temp_file(event.src_path):
-            return
+            self.last_reload = current_time
+            command.info(f"🔄 File changed: {os.path.relpath(event.src_path)}")
+            command._trigger_auto_reload()
 
-        self.last_reload = current_time
+        @staticmethod
+        def _should_watch_file(file_path: str) -> bool:
+            watch_extensions = [".py", ".yaml", ".yml", ".json", ".toml", ".env", ".txt"]
+            return any(file_path.endswith(ext) for ext in watch_extensions)
 
-        # Show which file triggered the reload
-        rel_path = os.path.relpath(event.src_path)
-        self.command.info(f"🔄 File changed: {rel_path}")
+        @staticmethod
+        def _is_temp_file(file_path: str) -> bool:
+            ignore_patterns = [
+                "__pycache__",
+                ".pyc",
+                ".pyo",
+                ".tmp",
+                ".swp",
+                ".DS_Store",
+                ".git",
+                ".pytest_cache",
+                "node_modules",
+            ]
+            return any(pattern in file_path for pattern in ignore_patterns)
 
-        # Trigger reload
-        self.command._trigger_auto_reload()
-
-    def _should_watch_file(self, file_path: str) -> bool:
-        """Check if file should trigger reload."""
-        watch_extensions = [".py", ".yaml", ".yml", ".json", ".toml", ".env", ".txt"]
-        return any(file_path.endswith(ext) for ext in watch_extensions)
-
-    def _is_temp_file(self, file_path: str) -> bool:
-        """Check if file is temporary and should be ignored."""
-        ignore_patterns = [
-            "__pycache__",
-            ".pyc",
-            ".pyo",
-            ".tmp",
-            ".swp",
-            ".DS_Store",
-            ".git",
-            ".pytest_cache",
-            "node_modules",
-        ]
-        return any(pattern in file_path for pattern in ignore_patterns)
+    return AutoReloadHandler()
 
 
 class MakesAutoReload:
@@ -94,7 +86,7 @@ class MakesAutoReload:
         super().__init__(*args, **kwargs)
         self.shutdown_requested = False
         self._auto_reload_enabled = False
-        self._observer: Observer | None = None
+        self._observer: Any | None = None
         self._restart_params = ()
         self._restart_kwargs = {}
 
@@ -119,8 +111,10 @@ class MakesAutoReload:
         if self._observer is not None:
             return  # Already watching
 
+        from watchdog.observers import Observer
+
         self._observer = Observer()
-        handler = AutoReloadHandler(self)
+        handler = _auto_reload_handler(self)
 
         # Get paths to watch
         paths_to_watch = watch_paths or self._get_default_watch_paths()
@@ -159,7 +153,7 @@ class MakesAutoReload:
             try:
                 self._observer.stop()
                 self._observer.join()
-            except (OSError, RuntimeError, AttributeError, ConnectionError):
+            except OSError, RuntimeError, AttributeError, ConnectionError:
                 pass
             finally:
                 self._observer = None

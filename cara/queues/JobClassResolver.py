@@ -44,9 +44,7 @@ class JobClassResolver:
             raise QueueException("Queued-job module allowlist must be iterable.")
 
         normalized = tuple(
-            str(prefix).strip().rstrip(".")
-            for prefix in prefixes
-            if str(prefix).strip()
+            str(prefix).strip().rstrip(".") for prefix in prefixes if str(prefix).strip()
         )
         if not normalized:
             raise QueueException("Queued-job module allowlist must not be empty.")
@@ -54,7 +52,9 @@ class JobClassResolver:
             not all(part.isidentifier() for part in prefix.split("."))
             for prefix in normalized
         ):
-            raise QueueException("Queued-job module allowlist contains an invalid prefix.")
+            raise QueueException(
+                "Queued-job module allowlist contains an invalid prefix."
+            )
         return normalized
 
     @classmethod

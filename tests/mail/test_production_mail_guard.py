@@ -52,9 +52,7 @@ def mail_config(monkeypatch: pytest.MonkeyPatch):
 
     def _set(default_driver: str) -> None:
         monkeypatch.setitem(config_store, "mail.default", default_driver)
-        monkeypatch.setitem(
-            config_store, "mail.from_address", "noreply@app.example"
-        )
+        monkeypatch.setitem(config_store, "mail.from_address", "noreply@app.example")
         monkeypatch.setitem(
             config_store,
             "mail.drivers",
@@ -127,9 +125,7 @@ class TestProductionRequiresRawSmtpEnv:
         assert isinstance(application.bindings["mail"], Mail)
         assert application.bindings["mail"].default_driver == "smtp"
 
-    def test_smtp_derivative_driver_is_also_guarded(
-        self, clean_mail_env
-    ) -> None:
+    def test_smtp_derivative_driver_is_also_guarded(self, clean_mail_env) -> None:
         """A gmail-style SMTP subclass registered under another name gets
         the same raw-env requirement (guard checked directly — register()
         only wires the built-in driver set)."""

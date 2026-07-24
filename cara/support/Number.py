@@ -27,7 +27,7 @@ def to_decimal(value: Any) -> Decimal:
         if isinstance(value, float):
             return Decimal(str(value))
         return Decimal(value)
-    except (InvalidOperation, ValueError, TypeError):
+    except InvalidOperation, ValueError, TypeError:
         return Decimal("0")
 
 
@@ -41,7 +41,7 @@ def safe_divide_decimal(num: Any, den: Any) -> Decimal:
         return Decimal("0")
     try:
         return n / d
-    except (DivisionByZero, InvalidOperation):
+    except DivisionByZero, InvalidOperation:
         return Decimal("0")
 
 

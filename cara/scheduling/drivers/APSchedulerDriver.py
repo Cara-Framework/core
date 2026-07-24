@@ -43,11 +43,13 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
             return
         try:
             metrics.scheduled_tasks_total.labels(task=identifier, outcome=outcome).inc()
-            metrics.scheduled_task_duration_seconds.labels(task=identifier).observe(duration)
+            metrics.scheduled_task_duration_seconds.labels(task=identifier).observe(
+                duration
+            )
             metrics.scheduled_task_last_run_timestamp_seconds.labels(task=identifier).set(
                 _time.time()
             )
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             pass
 
     def _mark_tick() -> None:
@@ -132,7 +134,11 @@ def _wrap_without_overlapping(
         async def _async_locked(*a, **kw):
             owner = _new_owner()
             if not _Cache.add(lock_key, owner, lock_timeout):
-                Log.info("Scheduled job '%s' skipped — previous run still in flight.", identifier, category='scheduler')
+                Log.info(
+                    "Scheduled job '%s' skipped — previous run still in flight.",
+                    identifier,
+                    category="scheduler",
+                )
                 return None
             try:
                 return await callback(*a, **kw)
@@ -145,7 +151,11 @@ def _wrap_without_overlapping(
     def _sync_locked(*a, **kw):
         owner = _new_owner()
         if not _Cache.add(lock_key, owner, lock_timeout):
-            Log.info("Scheduled job '%s' skipped — previous run still in flight.", identifier, category='scheduler')
+            Log.info(
+                "Scheduled job '%s' skipped — previous run still in flight.",
+                identifier,
+                category="scheduler",
+            )
             return None
         try:
             return callback(*a, **kw)
@@ -162,7 +172,12 @@ def _wrap_without_overlapping(
 def _job_error_listener(event) -> None:
     """Forward APScheduler job errors to Cara's Log facade."""
     if event.exception:
-        Log.error("Scheduled job '%s' failed: %s", event.job_id, event.exception, category='scheduler')
+        Log.error(
+            "Scheduled job '%s' failed: %s",
+            event.job_id,
+            event.exception,
+            category="scheduler",
+        )
         if event.traceback:
             Log.debug(
                 "Scheduled job '%s' traceback:\n%s",
@@ -171,7 +186,11 @@ def _job_error_listener(event) -> None:
                 category="scheduler",
             )
     else:
-        Log.debug("Scheduled job '%s' executed successfully.", event.job_id, category='scheduler')
+        Log.debug(
+            "Scheduled job '%s' executed successfully.",
+            event.job_id,
+            category="scheduler",
+        )
 
 
 # ── Driver ────────────────────────────────────────────────────────────
@@ -288,7 +307,9 @@ class APSchedulerDriver(Scheduling):
                 )
             except Exception as e:
                 if not silent:
-                    Log.error("Failed to schedule job '%s': %s", identifier, e, exc_info=True)
+                    Log.error(
+                        "Failed to schedule job '%s': %s", identifier, e, exc_info=True
+                    )
                 raise
 
         if not silent:
@@ -304,9 +325,7 @@ class APSchedulerDriver(Scheduling):
             try:
                 self.scheduler.shutdown(wait=False)
             except Exception:
-                _logger.warning(
-                    "scheduler shutdown failed during restart", exc_info=True
-                )
+                _logger.warning("scheduler shutdown failed during restart", exc_info=True)
             self.scheduler = self._create_scheduler()
 
         # Apply every registered job to the fresh scheduler.
@@ -363,9 +382,7 @@ class APSchedulerDriver(Scheduling):
         try:
             self.scheduler.remove_job(job_id=identifier)
         except Exception:
-            _logger.warning(
-                "job removal failed: %s", identifier, exc_info=True
-            )
+            _logger.warning("job removal failed: %s", identifier, exc_info=True)
 
     def list_jobs(self) -> Iterable[Any]:
         try:

@@ -181,6 +181,6 @@ class SmtpDriver(Mail):
         try:
             from cara.facades import Log
 
-            Log.error("%s: %s", message, error, category='cara.mail.smtp', exc_info=True)
+            Log.error("%s: %s", message, error, category="cara.mail.smtp", exc_info=True)
         except ImportError:
             pass

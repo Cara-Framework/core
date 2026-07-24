@@ -1125,7 +1125,7 @@ class RouteGeneratorCommand(CommandBase):
 
                     shutil.copy2(self.backup_file, output_path)
                     self.info("🔄 Rolled back to backup file")
-                except (OSError, RuntimeError, AttributeError, ConnectionError):
+                except OSError, RuntimeError, AttributeError, ConnectionError:
                     pass
 
             raise StorageException(f"Failed to write routes file: {e}") from e

@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
@@ -25,17 +24,11 @@ class ShouldAuthenticate(Middleware):
             self.guards = list(guards)
             return
 
-        # No guards specified — resolve the configured default guard from the
-        # auth manager. Fall back to ["jwt"] only if auth is not wired up.
-        try:
-            auth_manager = application.make("auth")
-            self.guards = [auth_manager.get_default_guard()]
-        except Exception as e:
-            Log.warning(
-                "ShouldAuthenticate: failed to resolve default guard, falling back to jwt: %s",
-                e,
-            )
-            self.guards = ["jwt"]
+        # Missing auth wiring is a boot/configuration failure. Inventing a
+        # ``jwt`` default here can authenticate with a guard the application
+        # did not select.
+        auth_manager = application.make("auth")
+        self.guards = [auth_manager.get_default_guard()]
 
     async def handle(
         self, request: Request, next_fn: Callable[[Any], Awaitable[Any]]

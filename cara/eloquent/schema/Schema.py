@@ -28,7 +28,7 @@ def _release_connection(connection) -> None:
         close = getattr(connection, "close_connection", None)
         if callable(close):
             close()
-    except (OSError, RuntimeError, AttributeError):
+    except OSError, RuntimeError, AttributeError:
         # Cleanup must never mask the real result.
         pass
 
@@ -430,6 +430,31 @@ class BlueprintExecutor:
 class FieldBuilder:
     """Field builder for new Schema.build syntax."""
 
+    @staticmethod
+    def _constraint(
+        kind: str,
+        columns: str | list[str],
+        name: str | None,
+    ) -> FieldDefinition:
+        """Build a standalone index/constraint declaration.
+
+        ``Schema.build`` is executable framework API, not merely syntax for
+        the migration AST parser. Keep its runtime shape aligned with the
+        parser so model fields can be inspected without special-casing.
+        """
+        if not isinstance(columns, str | list):
+            raise ValueError(f"{kind} columns must be a string or list of strings")
+        normalized = [columns] if isinstance(columns, str) else list(columns)
+        if not normalized or any(
+            not isinstance(column, str) or not column for column in normalized
+        ):
+            raise ValueError(f"{kind} columns must be non-empty strings")
+        if name is not None and (not isinstance(name, str) or not name):
+            raise ValueError(f"{kind} name must be a non-empty string")
+        definition = FieldDefinition(kind, None, columns=normalized)
+        definition.params["name"] = name
+        return definition
+
     def string(self, name, length=255):
         return FieldDefinition("string", name, length=length)
 
@@ -529,6 +554,22 @@ class FieldBuilder:
         }
         return fk_definition
 
+    def unique(
+        self,
+        columns: str | list[str],
+        name: str | None = None,
+    ) -> FieldDefinition:
+        """Declare a standalone single- or multi-column unique constraint."""
+        return self._constraint("unique", columns, name)
+
+    def index(
+        self,
+        columns: str | list[str],
+        name: str | None = None,
+    ) -> FieldDefinition:
+        """Declare a standalone single- or multi-column index."""
+        return self._constraint("index", columns, name)
+
 
 class FieldDefinition:
     """Represents a field definition in the new syntax."""
@@ -540,6 +581,8 @@ class FieldDefinition:
         self._nullable = False
         self._default = None
         self._unique = False
+        self._index = False
+        self._use_current = False
         # Foreign key properties
         self._is_foreign = False
         self._foreign_key_config = {}
@@ -555,6 +598,16 @@ class FieldDefinition:
     def unique(self) -> Self:
         """Mark this field as unique."""
         self._unique = True
+        return self
+
+    def index(self) -> Self:
+        """Index this field."""
+        self._index = True
+        return self
+
+    def use_current(self) -> Self:
+        """Use the database's current timestamp as this field's default."""
+        self._use_current = True
         return self
 
     def foreign(self) -> Self:
@@ -602,6 +655,10 @@ class FieldDefinition:
             params["default"] = self._default
         if self._unique:
             params["unique"] = True
+        if self._index:
+            params["index"] = True
+        if self._use_current:
+            params["use_current"] = True
 
         result = {"type": self.field_type, "params": params}
 

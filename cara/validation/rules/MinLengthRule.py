@@ -29,7 +29,7 @@ class MinLengthRule(BaseRule):
 
         try:
             threshold = int(min_length)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             # Misconfigured rule literal — ``min_length:abc`` would
             # otherwise raise ValueError out of the validator and
             # 500 the request. Sibling ``MinRule``/``MaxRule`` log
@@ -42,7 +42,12 @@ class MinLengthRule(BaseRule):
             try:
                 from cara.facades import Log
 
-                Log.warning("MinLengthRule: non-numeric min_length parameter %s on field %s; failing value as defensive default", min_length, field, category='cara.validation')
+                Log.warning(
+                    "MinLengthRule: non-numeric min_length parameter %s on field %s; failing value as defensive default",
+                    min_length,
+                    field,
+                    category="cara.validation",
+                )
             except ImportError:
                 pass
             return False

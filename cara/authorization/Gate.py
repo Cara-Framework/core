@@ -100,8 +100,7 @@ class Gate(GateContract):
                 model_class, policy_class = entry
             except (TypeError, ValueError) as exc:
                 raise TypeError(
-                    "register_policies expects (Model, Policy) tuples, got: "
-                    f"{entry!r}"
+                    f"register_policies expects (Model, Policy) tuples, got: {entry!r}"
                 ) from exc
             self.policy(model_class, policy_class)
         return self
@@ -279,15 +278,11 @@ class Gate(GateContract):
                 response = self._normalize(post)
         return response
 
-    def _safe_hook(
-        self, hook: Callable, policy: Any, kind: str, *hook_args: Any
-    ) -> Any:
+    def _safe_hook(self, hook: Callable, policy: Any, kind: str, *hook_args: Any) -> Any:
         try:
             return hook(*hook_args)
         except Exception as exc:  # noqa: BLE001 — a bad hook must not crash a check
-            self._log(
-                f"policy {kind}-hook on {type(policy).__name__} raised: {exc}"
-            )
+            self._log(f"policy {kind}-hook on {type(policy).__name__} raised: {exc}")
             return None
 
     def _instantiate_policy(self, policy_ref: Any) -> Any:

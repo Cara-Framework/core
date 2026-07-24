@@ -166,7 +166,12 @@ class Pipeline:
 
     async def execute(self) -> dict[str, Any]:
         """Execute the pipeline based on type."""
-        Log.info("🚀 Executing pipeline: %s Type: %s", self.name, self.pipeline_type.value, category='cara.pipeline')
+        Log.info(
+            "🚀 Executing pipeline: %s Type: %s",
+            self.name,
+            self.pipeline_type.value,
+            category="cara.pipeline",
+        )
 
         if self.pipeline_type == PipelineType.SYNC:
             return await self._execute_sync()
@@ -180,9 +185,16 @@ class Pipeline:
     def dispatch(self) -> dict[str, Any]:
         """Dispatch async pipeline (non-blocking)."""
         if self.pipeline_type == PipelineType.SYNC:
-            raise InvalidArgumentException("Cannot dispatch sync pipeline. Use execute() instead.")
+            raise InvalidArgumentException(
+                "Cannot dispatch sync pipeline. Use execute() instead."
+            )
 
-        Log.info("📡 Dispatching pipeline: %s Type: %s", self.name, self.pipeline_type.value, category='cara.pipeline')
+        Log.info(
+            "📡 Dispatching pipeline: %s Type: %s",
+            self.name,
+            self.pipeline_type.value,
+            category="cara.pipeline",
+        )
 
         # Reserved async modes fail closed in their dispatch helpers.
         if self.pipeline_type == PipelineType.ASYNC_CHAIN:
@@ -200,10 +212,21 @@ class Pipeline:
             # Check condition
             if step.condition and not step.condition(self.context):
                 skipped_steps += 1
-                Log.info("⏭️ Skipping step %s: %s (condition not met)", i, step.step_class.__name__, category='cara.pipeline')
+                Log.info(
+                    "⏭️ Skipping step %s: %s (condition not met)",
+                    i,
+                    step.step_class.__name__,
+                    category="cara.pipeline",
+                )
                 continue
 
-            Log.info("🔄 Executing step %s/%s: %s", i, total_steps, step.step_class.__name__, category='cara.pipeline')
+            Log.info(
+                "🔄 Executing step %s/%s: %s",
+                i,
+                total_steps,
+                step.step_class.__name__,
+                category="cara.pipeline",
+            )
 
             try:
                 # Execute command - instantiate with constructor args only
@@ -254,7 +277,11 @@ class Pipeline:
                 if step.on_success:
                     step.on_success(step_result, self.context)
 
-                Log.info("✅ Step completed: %s", step.step_class.__name__, category='cara.pipeline')
+                Log.info(
+                    "✅ Step completed: %s",
+                    step.step_class.__name__,
+                    category="cara.pipeline",
+                )
 
             except Exception as e:
                 step_result = {
@@ -269,14 +296,17 @@ class Pipeline:
                 if step.on_failure:
                     step.on_failure(step_result, self.context)
 
-                Log.error("❌ Step failed: %s - %s", step.step_class.__name__, str(e), category='cara.pipeline')
+                Log.error(
+                    "❌ Step failed: %s - %s",
+                    step.step_class.__name__,
+                    str(e),
+                    category="cara.pipeline",
+                )
 
         # Condition-skipped steps are not failures — a healthy run with a
         # legitimately-skipped optional step must still report success.
         attempted_steps = total_steps - skipped_steps
-        success_rate = (
-            successful_steps / attempted_steps if attempted_steps > 0 else 1.0
-        )
+        success_rate = successful_steps / attempted_steps if attempted_steps > 0 else 1.0
 
         result = {
             "success": successful_steps == attempted_steps,
@@ -290,7 +320,14 @@ class Pipeline:
             "pipeline_type": self.pipeline_type.value,
         }
 
-        Log.info("🏁 Pipeline completed: %s Success: %s/%s (%s skipped)", self.name, successful_steps, attempted_steps, skipped_steps, category='cara.pipeline')
+        Log.info(
+            "🏁 Pipeline completed: %s Success: %s/%s (%s skipped)",
+            self.name,
+            successful_steps,
+            attempted_steps,
+            skipped_steps,
+            category="cara.pipeline",
+        )
         return result
 
     async def _execute_async_chain(self) -> dict[str, Any]:
@@ -307,7 +344,12 @@ class Pipeline:
         ]
         skipped = len(self.steps) - len(runnable)
 
-        Log.info("🔗 Executing async chain: %s steps (%s skipped)", len(runnable), skipped, category='cara.pipeline')
+        Log.info(
+            "🔗 Executing async chain: %s steps (%s skipped)",
+            len(runnable),
+            skipped,
+            category="cara.pipeline",
+        )
 
         result = self._dispatch_chain(runnable)
         result.update(

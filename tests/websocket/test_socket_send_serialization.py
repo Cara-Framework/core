@@ -22,7 +22,9 @@ def _make_socket(send):
     async def _receive():
         return {"type": "websocket.receive"}
 
-    sock = Socket(application=None, scope={"type": "websocket"}, receive=_receive, send=send)
+    sock = Socket(
+        application=None, scope={"type": "websocket"}, receive=_receive, send=send
+    )
     sock._ws_connected = True  # skip the handshake for the test
     return sock
 

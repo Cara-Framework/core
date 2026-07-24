@@ -211,8 +211,8 @@ def test_show_sql_preview_prints_collected_sql_and_makes_no_writes():
 
     migration_manager = MagicMock()
     migration_manager.file_manager.load_migration_class.return_value = _FakeMigration
-    migration_manager.file_manager.get_migration_name_from_file.side_effect = (
-        lambda p: p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    migration_manager.file_manager.get_migration_name_from_file.side_effect = lambda p: (
+        p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
     )
 
     pending = ["/fake/migrations/0001_create_baz_table.py"]

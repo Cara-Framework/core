@@ -56,9 +56,7 @@ def test_exported_symbols_never_collide_with_submodule_names() -> None:
         if directory == root:
             package_name = "cara"
         else:
-            package_name = "cara." + str(
-                directory.relative_to(root)
-            ).replace("/", ".")
+            package_name = "cara." + str(directory.relative_to(root)).replace("/", ".")
         package = importlib.import_module(package_name)
 
         exported = set(getattr(package, "__all__", ()) or ())

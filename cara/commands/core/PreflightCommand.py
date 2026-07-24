@@ -320,7 +320,9 @@ class PreflightCommand(CommandBase):
             if result.failed:
                 if warn_only:
                     warnings += 1
-                    self.warning(f"⚠ {name}: {result.message} (downgraded by --warn-only)")
+                    self.warning(
+                        f"⚠ {name}: {result.message} (downgraded by --warn-only)"
+                    )
                 else:
                     failures += 1
                     self.error(f"× {name}: {result.message}")

@@ -67,6 +67,27 @@ def test_token_pair_has_required_bound_claims(monkeypatch) -> None:
     assert access["ver"] == 3
 
 
+def test_token_issuance_requires_explicit_persisted_auth_version(monkeypatch) -> None:
+    jwt_guard, _ = guard(monkeypatch)
+
+    class MissingVersionUser(Authenticatable):
+        id = 7
+
+        def get_auth_id(self):
+            return self.id
+
+    with pytest.raises(AuthenticationConfigurationException, match="auth version"):
+        jwt_guard.generate_access_token(MissingVersionUser())
+
+
+def test_token_rejects_user_whose_auth_version_has_advanced(monkeypatch) -> None:
+    jwt_guard, _ = guard(monkeypatch)
+    token = jwt_guard.generate_access_token(User())
+    monkeypatch.setattr(User, "auth_version", 4)
+
+    assert jwt_guard.validate_token(token) is False
+
+
 def test_refresh_reuse_revokes_entire_family(monkeypatch) -> None:
     jwt_guard, cache = guard(monkeypatch)
     pair = jwt_guard.generate_token_pair(User())

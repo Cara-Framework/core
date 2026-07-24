@@ -7,9 +7,12 @@ with support for custom messages, complex conditions, and multiple validation sc
 
 from __future__ import annotations
 
+import importlib
 import re
 from typing import Any
 
+from cara.exceptions import ConfigurationException
+from cara.support import ModuleManager
 from cara.validation import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
 
@@ -57,102 +60,19 @@ class ExistsRule(BaseRule):
         # alphanumeric/underscore names. The rule parameters originate
         # from developer-authored request classes (e.g.
         # ``"exists:users,email"``), not from user input, but
-        # validating them prevents any SQL injection through identifier
-        # interpolation in the raw-SQL fallback path below.
+        # validating them prevents unsafe identifiers from reaching the
+        # model query builder.
         for ident in (table, column, condition_column):
             if ident is not None and not _SAFE_IDENTIFIER_RE.match(ident):
-                self._log_debug(
-                    f"ExistsRule: rejected unsafe identifier '{ident}'"
-                )
-                return False
-
-        try:
-            # Smart model discovery based on table name
-            model_class = self._discover_model(table)
-            if model_class:
-                try:
-                    query = model_class.where(column, value)
-
-                    # Add additional condition if provided
-                    if condition_column and condition_value is not None:
-                        query = query.where(condition_column, condition_value)
-
-                    result = query.first()
-                    return result is not None
-                except Exception as e:
-                    self._log_debug(
-                        f"ExistsRule: model-based query failed for "
-                        f"{model_class.__name__}.{column}: "
-                        f"{e.__class__.__name__}: {e}"
-                    )
-
-            # Fallback: Try DB facade with raw SELECT
-            try:
-                from cara.facades import DB
-
-                sql = f'SELECT 1 FROM "{table}" WHERE "{column}" = %s'
-                params = [value]
-                if condition_column and condition_value is not None:
-                    sql += f' AND "{condition_column}" = %s'
-                    params.append(condition_value)
-                sql += " LIMIT 1"
-                rows = DB.select(sql, params)
-                return len(rows) > 0
-            except Exception as e:
-                self._log_debug(
-                    f"ExistsRule: DB-fallback query failed for "
-                    f"{table}.{column}: {e.__class__.__name__}: {e}"
+                raise ConfigurationException(
+                    f"ExistsRule identifier '{ident}' is not a safe SQL identifier"
                 )
 
-        except Exception as e:
-            # Outer guard — should never hit. If it does, the rule is
-            # broken at a deeper level than the inner blocks; log so we
-            # see it in incident review instead of silently returning
-            # validation failure.
-            self._log_debug(
-                f"ExistsRule: unexpected outer failure: {e.__class__.__name__}: {e}"
-            )
-
-        return False
-
-    @staticmethod
-    def _log_debug(msg: str) -> None:
-        """Best-effort debug log; survives when Log facade isn't yet booted."""
-        try:
-            from cara.facades import Log
-
-            Log.debug(msg, category="cara.validation.exists")
-        except ImportError:
-            pass
-
-    @staticmethod
-    def _log_missing_model(
-        table_name: str, module_bases: list[str], candidates: set[str]
-    ) -> None:
-        """LOUD warning: model discovery failed → caller uses UNSCOPED raw SQL.
-
-        A missed model is SECURITY-relevant: the ExistsRule then runs a raw
-        SELECT with NO ``TenantScope`` applied, so an existence check can leak
-        across tenants. This must never be silent — log via the cara ``Log``
-        facade at WARNING, and if the facade isn't booted (or anything else
-        goes wrong) fall back to stderr rather than swallowing the signal.
-        """
-        names = ", ".join(sorted(n for n in candidates if n)) or "<none>"
-        pkgs = ", ".join(module_bases) or "<none>"
-        msg = (
-            f"ExistsRule: no model resolved for table '{table_name}' "
-            f"(tried classes [{names}] in packages [{pkgs}]); falling back to "
-            f"UNSCOPED raw SQL — TenantScope will NOT be applied to this "
-            f"existence check."
-        )
-        try:
-            from cara.facades import Log
-
-            Log.warning(msg, category="cara.validation.exists")
-        except Exception:
-            import sys
-
-            print(f"WARNING: {msg}", file=sys.stderr)
+        model_class = self._discover_model(table)
+        query = model_class.where(column, value)
+        if condition_column and condition_value is not None:
+            query = query.where(condition_column, condition_value)
+        return query.first() is not None
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         """Return default exists validation message."""
@@ -185,89 +105,32 @@ class ExistsRule(BaseRule):
             return f"The selected {attribute.lower()} does not exist in our records."
 
     def _discover_model(self, table_name: str):
+        """Resolve one table through the configured, generated model barrel.
+
+        The model barrel is the canonical registry: every public model is
+        exported there and each model owns an explicit ``__table__``. Missing
+        or ambiguous registrations are configuration errors. Raw SQL fallback
+        is forbidden because it would bypass model scopes such as tenancy.
         """
-        Auto-discover model class based on table name.
-        Converts table_name to model class name using Laravel conventions.
-
-        Resolution order, per candidate model name (both singular- and
-        plural-derived so ``product`` and ``users`` both resolve):
-
-          1. the CONFIGURED models package first — ``ModuleManager.
-             models_module()`` (defaults to ``commons.models``) — tried both
-             per-file (``<pkg>.<Name>``) and aggregated (``<pkg>`` barrel
-             re-export);
-          2. ``app.models`` as a backward-compatible fallback (same layouts).
-
-        Returns ``None`` only when nothing resolves in ANY package. That is a
-        security-relevant outcome — the caller then drops to UNSCOPED raw SQL
-        (no ``TenantScope``) — so the None path emits a LOUD warning naming the
-        table via :meth:`_log_missing_model`. A silent scope-drop is forbidden.
-        """
-        # Configured package first (commons.models by default), then the legacy
-        # app.models location. De-duplicated, order preserved.
+        models_module = ModuleManager.models_module()
+        if not isinstance(models_module, str) or not models_module:
+            raise ConfigurationException("Models module is not configured")
         try:
-            from cara.support import ModuleManager
+            model_barrel = importlib.import_module(models_module)
+        except ImportError as exc:
+            raise ConfigurationException(
+                f"Configured models module '{models_module}' is not importable"
+            ) from exc
 
-            configured = ModuleManager.models_module()
-        except Exception:
-            configured = "commons.models"
-
-        module_bases: list[str] = []
-        for base in (configured, "commons.models", "app.models"):
-            if base and base not in module_bases:
-                module_bases.append(base)
-
-        candidates = {
-            self._table_to_model_name(table_name),
-            self._table_to_model_name_plural(table_name),
-        }
-
-        try:
-            for base in module_bases:
-                for model_name in candidates:
-                    if not model_name:
-                        continue
-
-                    # 1. per-file layout: <base>.<Name>
-                    try:
-                        module = __import__(
-                            f"{base}.{model_name}", fromlist=[model_name]
-                        )
-                        cls = getattr(module, model_name, None)
-                        if cls is not None:
-                            return cls
-                    except (ImportError, AttributeError):
-                        pass
-
-                    # 2. aggregated layout: <base> barrel re-exports
-                    try:
-                        pkg = __import__(base, fromlist=[model_name])
-                        cls = getattr(pkg, model_name, None)
-                        if cls is not None:
-                            return cls
-                    except (ImportError, AttributeError):
-                        pass
-        except (ImportError, AttributeError, TypeError, RuntimeError):
-            pass
-
-        # Reached only when no model resolved in ANY package → caller falls to
-        # UNSCOPED raw SQL. Announce loudly; never a silent TenantScope bypass.
-        self._log_missing_model(table_name, module_bases, candidates)
-        return None
-
-    def _table_to_model_name_plural(self, table_name: str) -> str:
-        """Treat table as already-singular (no trailing 's' strip)."""
-        parts = table_name.split("_")
-        return "".join(word.capitalize() for word in parts)
-
-    def _table_to_model_name(self, table_name: str) -> str:
-        """Convert table name to model class name."""
-        # Remove plural 's' if present
-        if table_name.endswith("s"):
-            singular = table_name[:-1]
-        else:
-            singular = table_name
-
-        # Convert snake_case to PascalCase
-        parts = singular.split("_")
-        return "".join(word.capitalize() for word in parts)
+        matches = [
+            candidate
+            for candidate in vars(model_barrel).values()
+            if isinstance(candidate, type)
+            and getattr(candidate, "__table__", None) == table_name
+        ]
+        if len(matches) != 1:
+            raise ConfigurationException(
+                f"Table '{table_name}' must resolve to exactly one model in "
+                f"'{models_module}'; found {len(matches)}"
+            )
+        return matches[0]

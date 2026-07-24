@@ -19,8 +19,6 @@ class Policy:
         """Run before any ability check. Return True/False to short-circuit."""
         return None
 
-    def after(
-        self, user: Any, ability: str, result: bool, *args: Any
-    ) -> bool | None:
+    def after(self, user: Any, ability: str, result: bool, *args: Any) -> bool | None:
         """Run after the ability check. Return True/False to override."""
         return None

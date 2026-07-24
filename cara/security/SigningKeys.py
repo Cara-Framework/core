@@ -44,8 +44,7 @@ def require_signing_keyring(
     key_id = str(active_key_id or "").strip()
     if not _KEY_ID_PATTERN.fullmatch(key_id):
         raise RuntimeError(
-            "QUEUE_SIGNING_KEY_ID must match "
-            "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$."
+            "QUEUE_SIGNING_KEY_ID must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$."
         )
 
     active = require_independent_signing_key(
@@ -66,9 +65,7 @@ def require_signing_keyring(
 
     for previous_id, previous_key in parsed.items():
         if not _KEY_ID_PATTERN.fullmatch(previous_id):
-            raise RuntimeError(
-                "QUEUE_SIGNING_PREVIOUS_KEYS contains an invalid key id."
-            )
+            raise RuntimeError("QUEUE_SIGNING_PREVIOUS_KEYS contains an invalid key id.")
         validated = require_independent_signing_key(
             value=previous_key,
             variable_name=f"QUEUE_SIGNING_PREVIOUS_KEYS[{previous_id!r}]",
@@ -97,9 +94,7 @@ def _parse_previous_keys(
         try:
             parsed = json.loads(value)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                "QUEUE_SIGNING_PREVIOUS_KEYS must be valid JSON."
-            ) from exc
+            raise RuntimeError("QUEUE_SIGNING_PREVIOUS_KEYS must be valid JSON.") from exc
     elif isinstance(value, Mapping):
         parsed = dict(value)
     else:

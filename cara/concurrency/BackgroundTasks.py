@@ -103,7 +103,13 @@ def schedule_deduped_task(
         try:
             await coro_factory()
         except Exception as exc:
-            Log.warning("[%s] background task failed for %s: %s: %s", label, dedup_key, exc.__class__.__name__, exc)
+            Log.warning(
+                "[%s] background task failed for %s: %s: %s",
+                label,
+                dedup_key,
+                exc.__class__.__name__,
+                exc,
+            )
         finally:
             # Forget the inflight sentinel so a retry can re-trigger
             # immediately if the work itself failed silently. The

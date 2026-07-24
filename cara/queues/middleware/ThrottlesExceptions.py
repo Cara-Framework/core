@@ -67,7 +67,14 @@ class ThrottlesExceptions:
                     try:
                         from cara.facades import Log
 
-                        Log.warning("Job %s throttled (%s/%ss, retry in %ss)", throttle_key, self.max_exceptions, self.decay_seconds, self.retry_after, category='cara.queue.middleware')
+                        Log.warning(
+                            "Job %s throttled (%s/%ss, retry in %ss)",
+                            throttle_key,
+                            self.max_exceptions,
+                            self.decay_seconds,
+                            self.retry_after,
+                            category="cara.queue.middleware",
+                        )
                     except ImportError:
                         pass
                     raise JobThrottledException(
@@ -94,7 +101,13 @@ class ThrottlesExceptions:
                     try:
                         from cara.facades import Log
 
-                        Log.warning("Job %s throttled after %s exceptions in %ss", throttle_key, self.max_exceptions, self.decay_seconds, category='cara.queue.middleware')
+                        Log.warning(
+                            "Job %s throttled after %s exceptions in %ss",
+                            throttle_key,
+                            self.max_exceptions,
+                            self.decay_seconds,
+                            category="cara.queue.middleware",
+                        )
                     except ImportError:
                         pass
             raise

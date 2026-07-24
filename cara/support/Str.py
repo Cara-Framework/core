@@ -298,8 +298,14 @@ def mask_proxy_url(url: str) -> str:
                 host_port = f"{host_port}:{parsed.port}"
             masked_netloc = f"***:***@{host_port}"
             return urlunparse(
-                (parsed.scheme, masked_netloc, parsed.path,
-                 parsed.params, parsed.query, parsed.fragment)
+                (
+                    parsed.scheme,
+                    masked_netloc,
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment,
+                )
             )
         return url
     except Exception:

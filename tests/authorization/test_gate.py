@@ -72,9 +72,9 @@ def gate():
     g = Gate(user_resolver=lambda: None)
     g.define("admin", lambda user, *_a: bool(user and getattr(user, "is_admin", False)))
     g.before(
-        lambda user, _a, *_args: True
-        if user and getattr(user, "is_root", False)
-        else None
+        lambda user, _a, *_args: (
+            True if user and getattr(user, "is_root", False) else None
+        )
     )
     g.register_policies([(Product, ProductPolicy)])
     return g

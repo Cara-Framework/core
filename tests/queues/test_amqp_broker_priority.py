@@ -160,7 +160,9 @@ def test_direct_push_prefers_job_stage_over_driver_default(monkeypatch):
         "register",
         lambda **kwargs: captured.append(kwargs),
     )
-    monkeypatch.setattr(driver.delivery_store, "publish_after_commit", lambda _job_id: None)
+    monkeypatch.setattr(
+        driver.delivery_store, "publish_after_commit", lambda _job_id: None
+    )
 
     with Tenancy.as_tenant(5):
         driver.push(PriorityJob(2), options={})
@@ -200,9 +202,12 @@ def test_direct_publish_rejects_oversized_body_before_queue_declare(
         ),
     )
 
-    with Tenancy.as_tenant(5), pytest.raises(
-        QueueException,
-        match="maximum wire size",
+    with (
+        Tenancy.as_tenant(5),
+        pytest.raises(
+            QueueException,
+            match="maximum wire size",
+        ),
     ):
         driver.push(job, options={"queue": "sync"})
 
@@ -222,17 +227,23 @@ def test_direct_dispatch_rejects_missing_or_unknown_queue_before_persistence(
         ),
     )
 
-    with Tenancy.as_tenant(5), pytest.raises(
-        QueueException,
-        match="explicit canonical queue",
+    with (
+        Tenancy.as_tenant(5),
+        pytest.raises(
+            QueueException,
+            match="explicit canonical queue",
+        ),
     ):
         driver.push(SimpleNamespace(), options={})
 
     job = PriorityJob(1)
     job.queue = "default"
-    with Tenancy.as_tenant(5), pytest.raises(
-        QueueException,
-        match="not consumed",
+    with (
+        Tenancy.as_tenant(5),
+        pytest.raises(
+            QueueException,
+            match="not consumed",
+        ),
     ):
         driver.push(job, options={})
 

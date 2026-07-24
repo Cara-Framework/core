@@ -55,7 +55,7 @@ class RouteResolver:
         try:
             # Try normal signature first
             return inspect.signature(callable_obj)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # Handle builtin type annotation issues
             from typing import get_type_hints
 
@@ -72,7 +72,7 @@ class RouteResolver:
                 type_hints = {}
                 try:
                     type_hints = get_type_hints(callable_obj)
-                except (NameError, AttributeError, TypeError):
+                except NameError, AttributeError, TypeError:
                     # If type hints fail, try to get them from annotations
                     if hasattr(callable_obj, "__annotations__"):
                         type_hints = callable_obj.__annotations__
@@ -120,7 +120,7 @@ class RouteResolver:
         # Get constructor signature
         try:
             sig = inspect.signature(controller_class.__init__)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # No signature available, instantiate without args
             return controller_class()
 
@@ -219,7 +219,7 @@ class RouteResolver:
             else:
                 # For other types, try direct conversion
                 return expected_type(value)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # If conversion fails, return original value
             return value
 
@@ -252,7 +252,9 @@ class RouteResolver:
                 self._route_handler = instance.index
                 self._handler_signature = self._safe_signature(self._route_handler)
             else:
-                raise RouteRegistrationException(f"Cannot resolve handler from class: {handler}")
+                raise RouteRegistrationException(
+                    f"Cannot resolve handler from class: {handler}"
+                )
 
         elif callable(handler):
             # Any callable object
@@ -275,7 +277,9 @@ class RouteResolver:
             ControllerMethodNotFoundException: When method doesn't exist in controller
         """
         if "@" not in handler_path:
-            raise InvalidArgumentException('Handler must be in format "Controller@method"')
+            raise InvalidArgumentException(
+                'Handler must be in format "Controller@method"'
+            )
 
         controller_path, method_name = handler_path.split("@")
         path_parts = modularize(controller_path).split(".")
@@ -326,7 +330,7 @@ class RouteResolver:
 
             self._handler_signature = self._safe_signature(method)
 
-        except (ControllerMethodNotFoundException, RouteRegistrationException):
+        except ControllerMethodNotFoundException, RouteRegistrationException:
             # Re-raise our custom exceptions
             raise
         except Exception as e:

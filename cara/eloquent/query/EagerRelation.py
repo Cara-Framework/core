@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
+from typing import Self
 
 """
 EagerRelations - Simple eager loading component
@@ -15,7 +12,6 @@ class EagerRelations:
 
     def __init__(self):
         self.relations = []
-        self.eagers = []  # 🔧 For compatibility
         self.nested_eagers = {}  # 🔧 For nested eager loading
         self.callback_eagers = {}  # 🔧 For callback-based eager loading
 
@@ -46,7 +42,6 @@ class EagerRelations:
     def with_relation(self, relation: str) -> Self:
         """Add a relation to eager load."""
         self.relations.append(relation)
-        self.eagers.append(relation)
 
         # Handle nested relations (e.g., "posts.comments")
         if "." in relation:
@@ -63,7 +58,3 @@ class EagerRelations:
     def get_relations(self):
         """Get all relations to load."""
         return self.relations.copy()
-
-    def get_eagers(self):
-        """Get eager relations (alias for compatibility)."""
-        return self.eagers.copy()

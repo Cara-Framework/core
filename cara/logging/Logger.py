@@ -209,7 +209,7 @@ class Logger(Logger):
             corr = ExecutionContext.get_correlation_id()
             if corr:
                 return str(corr)
-        except (OSError, RuntimeError, AttributeError, ConnectionError):
+        except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
         try:
             from cara.http.request.Context import current_request
@@ -233,7 +233,7 @@ class Logger(Logger):
             ctx = _otel_trace.get_current_span().get_span_context()
             if getattr(ctx, "is_valid", False) and ctx.trace_id:
                 return format(ctx.trace_id, "032x")
-        except (ImportError, OSError, RuntimeError, AttributeError, ConnectionError):
+        except ImportError, OSError, RuntimeError, AttributeError, ConnectionError:
             # ``ImportError`` is the load-bearing case: the docstring promises a
             # graceful '' when opentelemetry ISN'T installed, but without it
             # here ``ModuleNotFoundError`` (an ImportError subclass) escaped and
@@ -278,7 +278,7 @@ class Logger(Logger):
             return message
         try:
             return message % args
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return f"{message} {' '.join(str(a) for a in args)}"
 
     def _log(
