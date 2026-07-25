@@ -53,6 +53,7 @@ def make_manifest(root: Path, **overrides) -> Manifest:
             "transaction_ownership",
             "vertical_slice_seams",
             "write_ownership",
+            "collaborator_calls",
         )
     }
 

@@ -92,9 +92,7 @@ class SeamLocations:
     composition_roots: frozenset[str] = frozenset()
     manifest_files: frozenset[str] = frozenset()
     data_vocabulary_prefixes: tuple[str, ...] = ()
-    owned_integration_prefixes: dict[str, frozenset[str]] = field(
-        default_factory=dict
-    )
+    owned_integration_prefixes: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +163,23 @@ class Manifest:
     seam_locations: SeamLocations = field(default_factory=SeamLocations)
     domain_layer_root_allowlist: frozenset[str] = frozenset()
     job_idempotency_exemptions: frozenset[str] = frozenset()
+    # Dotted callable names whose call shape is `forwarder(callable, *args,
+    # **kwargs)` == `callable(*args, **kwargs)` — the codebase's thread-offload
+    # idiom (`ExecutionContext.run_in_thread` is the sanctioned
+    # `asyncio.to_thread` drop-in). CollaboratorCalls treats a bare
+    # `self.attr.method` passed as the first argument to one of these the
+    # same as a direct `self.attr.method(...)` call.
+    collaborator_call_forwarders: frozenset[str] = frozenset(
+        {
+            "ExecutionContext.run_in_thread",
+            "run_in_thread",
+            "asyncio.to_thread",
+            "to_thread",
+        }
+    )
+    # Dated, shrink-only sunset debt for CollaboratorCalls: exact
+    # `"<path>:<line>:self.<attr>.<method>"` pins for pre-rule mismatches.
+    collaborator_call_exemptions: frozenset[str] = frozenset()
     job_root_class: str = "BaseJob"
     job_roots: tuple[str, ...] = ("jobs",)
     idempotency_field_name: str = "idempotency_params"

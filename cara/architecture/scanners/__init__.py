@@ -6,6 +6,7 @@ pytest fixture.
 """
 
 from .BarrelCompleteness import BarrelCompleteness
+from .CollaboratorCalls import CollaboratorCalls
 from .DomainOwnership import DomainOwnership
 from .DomainRegistry import DomainRegistry
 from .FlowLaw import FlowLaw
@@ -22,6 +23,7 @@ from .WriteOwnership import WriteOwnership
 
 __all__ = [
     "BarrelCompleteness",
+    "CollaboratorCalls",
     "DomainOwnership",
     "DomainRegistry",
     "FlowLaw",
@@ -53,4 +55,5 @@ REGISTRY: dict[str, type] = {
     "source_shape": SourceShape,
     "transaction_ownership": TransactionOwnership,
     "write_ownership": WriteOwnership,
+    "collaborator_calls": CollaboratorCalls,
 }
