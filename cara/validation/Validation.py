@@ -63,6 +63,17 @@ class Validation(ValidationContract):
         }
     )
 
+    # Rules that answer their question by BINDING THE RAW VALUE into a typed
+    # column comparison. They are skipped once an earlier rule in the same
+    # chain has already rejected the value: the lookup is meaningless (the
+    # shape rule already said "invalid"), and on a strict engine it is a
+    # crash. Postgres raises ``invalid input syntax for type bigint`` for
+    # ``exists:product,id`` with ``PRD01K…``, and that QueryException escapes
+    # the validator as a 500 where validation owes the caller a 422 — the
+    # rule chain ``required|integer|exists:product,id`` was already correct,
+    # so the fix belongs here rather than in every FormRequest.
+    _DB_BACKED_RULES = frozenset({"exists", "unique"})
+
     # Class-level registry of user-supplied custom rules (Laravel parity).
     # Mapping: rule_name (lowercase) → Rule class.
     _custom_rules: dict[str, type[Rule]] = {}
@@ -281,6 +292,14 @@ class Validation(ValidationContract):
                 # ``""``), not part of this defect.
                 if not was_provided and rule_name not in instance._IMPLICIT_RULES:
                     continue
+
+                # A shape rule already rejected this value — do not hand it to
+                # a rule that binds it into a typed column comparison (§
+                # ``_DB_BACKED_RULES``). Without this, ``integer`` failing and
+                # ``exists`` still querying turns a 422 into a 500 on Postgres.
+                if not field_passed and rule_name in instance._DB_BACKED_RULES:
+                    continue
+
                 params["_rules"] = _chain
                 rule_cls = instance._Validation__rule_classes.get(rule_name)
                 if not rule_cls:
