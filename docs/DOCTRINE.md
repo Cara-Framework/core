@@ -1,6 +1,6 @@
 # The Cara Product Doctrine
 
-**Version 1.4 — 2026-07-24.** This document is LAW for every product built on
+**Version 1.5 — 2026-07-25.** This document is LAW for every product built on
 Cara. It travels with the framework: cloning `cara` into a product delivers the
 doctrine with it. A product's `CLAUDE.md` is its atlas (ports, quirks, domain
 registry); *this* file is the invariant architecture. Where the two disagree,
@@ -241,6 +241,14 @@ leaking and the leak is the bug.
   snake_case, constants UPPER_SNAKE, routes kebab-case, domain folders
   lowercase English.
 - **Imports** follow the Import Law (§5.1).
+- **Read the SSOT, never restate it.** A predicate, gate, cache key, ceiling
+  or vocabulary that has a single source is IMPORTED at every use — including
+  in tests, fixtures and generators. A hand-copied predicate does not stay
+  wrong loudly; it drifts silently and then accuses correct code: a test that
+  restated a product-visibility predicate dropped a clause from its
+  container-collapse subquery, measured a different cohort than the endpoint,
+  and reported a correct API as broken. *(Why: a copy has no way to learn that
+  the original changed.)*
 - **No backward-compat shims, ever.** Movers migrate every caller in the
   same change. **Fix root causes** — a workaround that "works" is debt with
   interest.
@@ -304,7 +312,14 @@ is a lie that averages into reports)*. Every timestamp is `TIMESTAMPTZ` in
 UTC. Multi-tenant tables carry `tenant_id` with a fail-closed scope; raw SQL
 binds `tenant_id` explicitly, every time. **Migrations are generated from
 models** — one file per table, no incremental `add_/alter_/fix_` files; the
-flow is model → dev-DB ALTER → regenerate → check. This regenerate-freely
+flow is model → dev-DB ALTER → regenerate → check. **Both halves of that check
+are guarded, because they answer different questions:** `migrations:check`
+compares models to the migration FILES, `schema:check` compares them to the
+LIVE DATABASE. A green `migrations:check` proves nothing about the running
+system — a rename that lands in the model and in every query but never reaches
+the database leaves the unit suite fully green while endpoints answer 500 on a
+missing column. Every product MUST carry a guard that fails on live drift; it
+lives in the integration lane, since it needs a database. This regenerate-freely
 mode is **pre-launch only**: once a migration has been APPLIED to an
 environment you cannot reset, it is immutable (the executor's checksum guard
 enforces this) — schema changes become forward migrations, and a squashed
@@ -376,6 +391,7 @@ gain product prefixes, semantics may not):
 | `test_vertical_slice_seams` | plugin names only at the Four Seams; brand-blind contracts; rm-rf simulation |
 | `test_queue_topology` / deploy topology | queue ownership, worker/image pairing, relay/scheduler separation |
 | `test_migration_convention` | model-first migrations, one file per table |
+| live schema drift (integration lane) | the LIVE database matches the models — `schema:check` clean, not just `migrations:check` (§7) |
 | docs claim/freshness checks | §10 |
 | framework: vendor scan regression + dry-run harness | §2 prod story |
 
@@ -447,6 +463,15 @@ modes. Applied now; a §8 duplication introduced while fixing was removed in
 the same pass. Body and changelog are consistent — every normative topic
 appears exactly once. Found by an external audit; the lesson is §11's own
 rule: verify the BODY (whitespace-collapsed), not the changelog.*
+
+*Changelog — 1.5 (2026-07-25): §7 + §11 require a LIVE schema-drift guard —
+`migrations:check` compares models to migration files and says nothing about
+the running database; §5 adds "read the SSOT, never restate it". Both were
+paid for in production: a rename that never reached the database took five
+endpoints to HTTP 500 with a fully green unit suite (and a sibling tree was
+carrying 50 drift issues across 17 tables, including NOT NULL and CHECK
+invariants the code assumed held), while a hand-copied visibility predicate
+went stale and reported a correct endpoint as broken.*
 
 *Changelog — 1.4 (2026-07-24): §4 distinguishes owned non-marketplace
 discovery lanes from marketplace plug-ins; §5 size, one-class and edge-flow
