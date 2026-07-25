@@ -361,3 +361,86 @@ def test_indexes_entry_with_unresolvable_sql_raises(discoverer, tmp_path):
 
     with pytest.raises(RuntimeError, match="sub_computed_idx"):
         discoverer._parse_model_file(model_path)
+
+
+# --------------------------------------------------------------------------
+# A column named through the model's OWN class constant must stay visible
+# --------------------------------------------------------------------------
+
+
+def test_column_named_by_class_constant_is_discovered(discoverer, tmp_path):
+    """``field.x(self.CONST)`` must resolve to the constant's literal value.
+
+    A model may name a column through a class constant so the column has ONE
+    spelling shared with the repositories that query it
+    (``.where(McfFulfillment.ORIGIN_CHANNEL_ID_COLUMN, ...)``). The extractor
+    used to accept only an ``ast.Constant`` first argument, so such a column —
+    and any index declared the same way — was silently INVISIBLE: the generated
+    migration omitted a load-bearing FK column (a fresh install came up without
+    it) and ``schema:check`` reported the live column as "present in database
+    but NOT declared in model", accusing the DB of a column the model plainly
+    declares.
+    """
+    src = """
+        from cara.eloquent.schema import Schema
+
+        class Fulfillment(Model):
+            __table__ = "fulfillment"
+
+            ORIGIN_CHANNEL_ID_COLUMN = "amazon_channel_id"
+
+            @property
+            def fields(self):
+                return Schema.build(
+                    lambda field: (
+                        field.big_increments("id"),
+                        field.unsigned_big_integer(self.ORIGIN_CHANNEL_ID_COLUMN),
+                        field.string("status", 50),
+                        field.index(self.ORIGIN_CHANNEL_ID_COLUMN),
+                    )
+                )
+    """
+    model_path = _write_model(tmp_path, "Fulfillment.py", src)
+    info = discoverer._parse_model_file(model_path)
+
+    assert info is not None
+    assert "amazon_channel_id" in info["fields"], (
+        "a column named by a class constant vanished from discovery — "
+        "regenerating would DROP it from the table"
+    )
+    assert info["fields"]["amazon_channel_id"]["type"] == "unsigned_big_integer"
+    assert {"columns": ["amazon_channel_id"], "name": None} in info[
+        "composite_indexes"
+    ], "an index declared with a class constant vanished from discovery"
+
+
+def test_composite_index_mixes_literal_and_class_constant_columns(
+    discoverer, tmp_path
+):
+    """A composite index list may mix literals and class constants."""
+    src = """
+        from cara.eloquent.schema import Schema
+
+        class Mixed(Model):
+            __table__ = "mixed"
+
+            TENANT_COLUMN = "tenant_id"
+
+            @property
+            def fields(self):
+                return Schema.build(
+                    lambda field: (
+                        field.big_increments("id"),
+                        field.unsigned_big_integer(self.TENANT_COLUMN),
+                        field.string("status", 50),
+                        field.index([self.TENANT_COLUMN, "status"]),
+                    )
+                )
+    """
+    model_path = _write_model(tmp_path, "Mixed.py", src)
+    info = discoverer._parse_model_file(model_path)
+
+    assert "tenant_id" in info["fields"]
+    assert {"columns": ["tenant_id", "status"], "name": None} in info[
+        "composite_indexes"
+    ]

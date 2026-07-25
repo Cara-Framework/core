@@ -729,6 +729,21 @@ class ModelDiscoverer:
                             and isinstance(current.args[0].value, str)
                         ):
                             return current.args[0].value
+                        # …or the model's own class constant:
+                        # ``field.unsigned_big_integer(self.ORIGIN_CHANNEL_ID_COLUMN)``
+                        # keeps ONE spelling of the column shared with the
+                        # repositories that query it. Resolved exactly like a
+                        # schema default already is (``_resolve_self_constant``).
+                        # Without this the column is INVISIBLE to migration
+                        # generation and to ``schema:check``: the table is
+                        # generated without it, a fresh install comes up missing
+                        # a load-bearing FK column, and the drift report accuses
+                        # the database of holding a column "not declared in the
+                        # model" — while the model plainly declares it.
+                        if current.args:
+                            resolved = self._resolve_self_constant(current.args[0])
+                            if isinstance(resolved, str):
+                                return resolved
                     elif field_method in self.FIELD_TYPES_WITHOUT_NAMES:
                         # Special fields that don't take field names
                         return None
@@ -1079,12 +1094,30 @@ class ModelDiscoverer:
         if isinstance(first, ast.List):
             cols = []
             for elt in first.elts:
-                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                    cols.append(elt.value)
+                col = self._column_name_literal(elt)
+                if col is not None:
+                    cols.append(col)
             return cols, name
-        if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            return [first.value], name
+        col = self._column_name_literal(first)
+        if col is not None:
+            return [col], name
         return [], None
+
+    def _column_name_literal(self, node: ast.AST) -> str | None:
+        """A column-name argument as a string: a literal, or ``self.CONSTANT``.
+
+        Models may name a column through their own class constant so the column
+        has ONE spelling shared with the repositories that query it
+        (``field.index(self.ORIGIN_CHANNEL_ID_COLUMN)``). Resolving it here
+        keeps such an index visible to migration generation and to
+        ``schema:check`` — unresolved, the index is silently never generated and
+        the drift report accuses the database of holding an index the model
+        "does not declare", while the model plainly declares it.
+        """
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        resolved = self._resolve_self_constant(node)
+        return resolved if isinstance(resolved, str) else None
 
     def _is_separate_foreign_key_call(self, call_node: ast.Call) -> bool:
         """Check if this is a separate foreign key call: field.foreign("field_name").references("id").on("table")"""
