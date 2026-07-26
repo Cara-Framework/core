@@ -77,6 +77,18 @@ def test_literal_sql_and_query_builder_writes_are_detected(tmp_path):
     assert "2 cross-owner write" in findings[0].message
 
 
+def test_returning_writes_hidden_behind_select_methods_are_detected(tmp_path):
+    write(
+        tmp_path / "app/repositories/ProductRepository.py",
+        "from cara.facades import DB\n"
+        "DB.select_one('INSERT INTO product (title) VALUES (%s) RETURNING id', ['x'])\n"
+        "DB.select('UPDATE product SET title = %s RETURNING id', ['y'])\n",
+    )
+    findings = WriteOwnership.scan(_manifest(tmp_path, deployable="services"))
+    assert len(findings) == 1
+    assert "2 cross-owner write" in findings[0].message
+
+
 def test_shared_gate_owner_writes_only_through_gate_persistence(tmp_path):
     ownership = {"product": "shared-gate-owned"}
     write(

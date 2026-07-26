@@ -41,7 +41,16 @@ _MUTATORS = frozenset(
     }
 )
 _RAW_SQL_CALLS = frozenset(
-    {"delete", "execute", "insert", "statement", "unprepared", "update"}
+    {
+        "delete",
+        "execute",
+        "insert",
+        "select",
+        "select_one",
+        "statement",
+        "unprepared",
+        "update",
+    }
 )
 _WRITE_SQL = re.compile(
     r"\b(?:insert\s+into|update|delete\s+from|truncate(?:\s+table)?)\s+"
@@ -315,8 +324,7 @@ class WriteOwnership:
                     Finding(
                         path,
                         0,
-                        f"write-ownership debt grew for {identity}: "
-                        f"{pinned} -> {count}",
+                        f"write-ownership debt grew for {identity}: {pinned} -> {count}",
                     )
                 )
             elif count < pinned:

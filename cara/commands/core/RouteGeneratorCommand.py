@@ -45,6 +45,10 @@ from cara.support import paths
 class RouteGeneratorCommand(CommandBase):
     """Generate robust route definitions from enhanced controller docstrings."""
 
+    # Keep headroom for Ruff's multiline expansion. Controller annotations
+    # render compactly, but formatting can roughly triple the physical lines.
+    MAX_ROUTE_SHARD_LINES = 180
+
     def __init__(self, application=None):
         super().__init__(application)
         self.errors = []
@@ -140,18 +144,30 @@ class RouteGeneratorCommand(CommandBase):
                     self.info(f"⚠️  No {route_type} routes found")
                     continue
 
-                content = self._generate_routes_content_by_type(type_data, route_type)
-                output_file = f"routes/{route_type}.py"
+                artifacts = self._generate_route_artifacts(type_data, route_type)
+                wrote_all = True
+                for output_file, content in artifacts.items():
+                    if not self._validate_generated_syntax(content):
+                        return 1
 
-                # Syntax validation
-                if not self._validate_generated_syntax(content):
-                    return 1
+                    if self.option("dry"):
+                        self._show_dry_run(
+                            output_file,
+                            content,
+                            type_data,
+                            route_type,
+                        )
+                    else:
+                        if self._write_routes_file_safe(output_file, content):
+                            generated_files.append(output_file)
+                        else:
+                            wrote_all = False
 
-                if self.option("dry"):
-                    self._show_dry_run(output_file, content, type_data, route_type)
-                else:
-                    self._write_routes_file_safe(output_file, content)
-                    generated_files.append(output_file)
+                if not self.option("dry") and wrote_all:
+                    self._remove_stale_route_shards(
+                        route_type,
+                        keep=set(artifacts),
+                    )
 
             except Exception as e:
                 self.error(f"❌ Failed to generate {route_type} routes: {e}")
@@ -165,6 +181,178 @@ class RouteGeneratorCommand(CommandBase):
                 self.info(f"  📄 {file}")
 
         return 0
+
+    def _generate_route_artifacts(
+        self,
+        route_data: list[dict],
+        route_type: str,
+    ) -> dict[str, str]:
+        """Return a bounded route aggregator plus any generated shards."""
+        monolith = self._generate_routes_content_by_type(route_data, route_type)
+        if len(monolith.splitlines()) <= self.MAX_ROUTE_SHARD_LINES:
+            return {f"routes/{route_type}.py": monolith}
+
+        groups = [
+            group
+            for controller_info in route_data
+            for group in self._generate_controller_route_groups(controller_info)
+        ]
+        chunks = self._chunk_route_groups(groups)
+        artifacts: dict[str, str] = {}
+        shard_paths: list[str] = []
+        for index, chunk in enumerate(chunks):
+            path = f"routes/generated/{route_type}/group_{index:03d}.py"
+            artifacts[path] = self._generate_route_shard_content(
+                chunk,
+                route_type=route_type,
+            )
+            shard_paths.append(path)
+        artifacts[f"routes/{route_type}.py"] = self._generate_route_aggregator_content(
+            route_data,
+            route_type=route_type,
+            shard_paths=shard_paths,
+        )
+        return artifacts
+
+    def _chunk_route_groups(self, groups: list[str]) -> list[list[str]]:
+        """Partition complete route groups without splitting their semantics."""
+        chunks: list[list[str]] = []
+        current: list[str] = []
+        current_lines = 7
+        for group in groups:
+            group_lines = len(group.splitlines()) + 1
+            if current and current_lines + group_lines > self.MAX_ROUTE_SHARD_LINES:
+                chunks.append(current)
+                current = []
+                current_lines = 7
+            current.append(group)
+            current_lines += group_lines
+        if current:
+            chunks.append(current)
+        return chunks
+
+    @staticmethod
+    def _generate_route_shard_content(
+        groups: list[str],
+        *,
+        route_type: str,
+    ) -> str:
+        lines = [
+            f'"""Auto-generated {route_type.upper()} route groups. Do not edit manually."""',
+            "",
+            "from cara.routing import Route",
+            "",
+            "",
+            "def route_groups():",
+            '    """Build this bounded shard\'s route groups."""',
+            "    return (",
+        ]
+        for group in groups:
+            lines.append(f"        {group},")
+        lines.extend(("    )", ""))
+        return "\n".join(lines)
+
+    def _generate_route_aggregator_content(
+        self,
+        route_data: list[dict],
+        *,
+        route_type: str,
+        shard_paths: list[str],
+    ) -> str:
+        title = route_type.title()
+        lines = [
+            '"""',
+            f"{title} Routes - Auto-generated by enhanced routes:generate command",
+            "",
+            f"This file contains all {route_type} routes parsed from controller docstrings.",
+            "DO NOT EDIT MANUALLY - Use controller docstring annotations instead.",
+            '"""',
+            "",
+            "from cara.routing import Route",
+            "",
+        ]
+        lines.extend(self._generate_compiler_lines(route_data))
+        if lines[-1] != "":
+            lines.append("")
+
+        loader_names: list[str] = []
+        for index, shard_path in enumerate(shard_paths):
+            loader = f"_route_groups_{index:03d}"
+            module = "." + shard_path.removeprefix("routes/").removesuffix(".py").replace(
+                "/", "."
+            )
+            lines.append(f"from {module} import route_groups as {loader}")
+            loader_names.append(loader)
+
+        lines.extend(("", "_ROUTE_GROUP_LOADERS = ("))
+        lines.extend(f"    {loader}," for loader in loader_names)
+        lines.extend((")", "", "", "def register_routes():"))
+        lines.append(
+            f'    """Register {route_type} routes from bounded generated shards."""'
+        )
+        lines.append(
+            "    groups = [group for loader in _ROUTE_GROUP_LOADERS for group in loader()]"
+        )
+        if route_type == "api":
+            lines.append('    return Route.prefix("/api").routes(*groups)')
+        else:
+            lines.append("    return groups")
+        lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _generate_compiler_lines(route_data: list[dict]) -> list[str]:
+        lines = ["# Route Parameter Configuration"]
+        for controller_info in route_data:
+            for var_name, constraints in controller_info["compiler_vars"].items():
+                rules = [rule.strip() for rule in constraints.split("|")]
+                regex_rules = [
+                    rule
+                    for rule in rules
+                    if rule
+                    in {
+                        "int",
+                        "integer",
+                        "string",
+                        "alpha",
+                        "alphanum",
+                        "slug",
+                        "uuid",
+                        "bool",
+                        "any",
+                    }
+                    or rule.startswith("regex:")
+                ]
+                validation_rules = [rule for rule in rules if rule not in regex_rules]
+                if regex_rules:
+                    regex_pattern = regex_rules[0]
+                    if regex_pattern.startswith("regex:"):
+                        lines.append(
+                            f'Route.compile("{var_name}", r"{regex_pattern[6:]}")'
+                        )
+                    else:
+                        lines.append(f'Route.compile("{var_name}", "{regex_pattern}")')
+                if validation_rules:
+                    lines.append(
+                        f'Route.validate("{var_name}", "{"|".join(validation_rules)}")'
+                    )
+        return lines
+
+    def _remove_stale_route_shards(
+        self,
+        route_type: str,
+        *,
+        keep: set[str],
+    ) -> None:
+        """Delete only obsolete generator-owned shard files."""
+        base = Path(paths("base"))
+        shard_dir = base / "routes" / "generated" / route_type
+        if not shard_dir.is_dir():
+            return
+        kept_paths = {base / path for path in keep}
+        for path in shard_dir.glob("group_[0-9][0-9][0-9].py"):
+            if path not in kept_paths:
+                path.unlink()
 
     def _filter_routes_by_type(
         self, route_data: list[dict], route_type: str
@@ -1060,7 +1248,7 @@ class RouteGeneratorCommand(CommandBase):
             self.console.print(f"[dim]{content}[/dim]")
             self.info("=" * 60)
 
-    def _write_routes_file_safe(self, output_file: str, content: str):
+    def _write_routes_file_safe(self, output_file: str, content: str) -> bool:
         """Write routes file with backup and rollback support."""
         output_path = Path(paths("base")) / output_file
 
@@ -1079,7 +1267,7 @@ class RouteGeneratorCommand(CommandBase):
         if output_path.exists() and not self.option("overwrite"):
             self.warning(f"⚠️  File already exists: {output_file}")
             self.info("💡 Use --overwrite to overwrite existing file")
-            return
+            return False
 
         # Create directory if needed
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1112,6 +1300,7 @@ class RouteGeneratorCommand(CommandBase):
                     self.info(f"📦 Backup available: {self.backup_file}")
 
                 self._show_usage_tips()
+                return True
             else:
                 # Clean up temp file
                 temp_path.unlink(missing_ok=True)
