@@ -1337,7 +1337,7 @@ class QueueJobDeliveryStore:
         try:
             payload = message
             job_instance = instance
-            if payload is None or job_instance is None:
+            if payload is None:
                 envelope = SignedJsonJobSerializer.inspect_envelope(
                     claim.signed_envelope,
                     signing_keys=self.options.get("signing_keys", {}),
@@ -1355,6 +1355,26 @@ class QueueJobDeliveryStore:
                     envelope["payload"],
                     allowed_prefixes=self.options.get("allowed_job_prefixes"),
                 )
+
+            if payload is None:
+                raise QueueException(
+                    f"Queue delivery {job_id} terminal hook payload is invalid."
+                )
+
+            hook_owner = job_instance or payload.get("obj")
+            needs_failed_hook = claim.status in {
+                self.STATUS_DEAD_LETTERED,
+                self.STATUS_EXPIRED,
+            } and hasattr(hook_owner, "failed")
+
+            # Most jobs do not declare a terminal callback. Their signed
+            # constructor state is irrelevant here and may predate the current
+            # constructor contract, so do not instantiate work that cannot run.
+            if not needs_failed_hook:
+                self.complete_terminal_hooks(job_id, claim.lease_token)
+                return True
+
+            if job_instance is None:
                 from cara.queues.JobInstantiation import instantiate_job
 
                 job_instance = instantiate_job(
@@ -1363,7 +1383,7 @@ class QueueJobDeliveryStore:
                     payload.get("args", ()),
                     payload.get("init_kwargs", {}),
                 )
-            if payload is None or job_instance is None:
+            if job_instance is None:
                 raise QueueException(
                     f"Queue delivery {job_id} terminal hook payload is invalid."
                 )
@@ -1381,24 +1401,20 @@ class QueueJobDeliveryStore:
             with tenant_scope:
 
                 async def _run_hooks() -> None:
-                    if claim.status in {
-                        self.STATUS_DEAD_LETTERED,
-                        self.STATUS_EXPIRED,
-                    } and hasattr(job_instance, "failed"):
-                        failed_hook = job_instance.failed
-                        if not inspect.iscoroutinefunction(failed_hook):
-                            raise QueueException(
-                                f"{type(job_instance).__name__}.failed must "
-                                "be async and idempotency-aware."
-                            )
-                        hook_error = error or RuntimeError(
-                            claim.terminal_reason or str(claim.status)
+                    failed_hook = job_instance.failed
+                    if not inspect.iscoroutinefunction(failed_hook):
+                        raise QueueException(
+                            f"{type(job_instance).__name__}.failed must "
+                            "be async and idempotency-aware."
                         )
-                        await failed_hook(
-                            payload,
-                            str(hook_error),
-                            idempotency_key=(f"queue-delivery:{job_id}:failed"),
-                        )
+                    hook_error = error or RuntimeError(
+                        claim.terminal_reason or str(claim.status)
+                    )
+                    await failed_hook(
+                        payload,
+                        str(hook_error),
+                        idempotency_key=(f"queue-delivery:{job_id}:failed"),
+                    )
 
                 asyncio.run(
                     asyncio.wait_for(
@@ -2694,8 +2710,9 @@ class QueueJobDeliveryStore:
         ):
             raise QueueException(
                 "Queue delivery ledger is missing its unique_key column or "
-                "open-delivery unique index. Rebuild the database from the "
-                "current model-less ledger migration before dispatching jobs."
+                "open-delivery unique index. Run `craft migrate` to apply the "
+                "forward-only delivery-ledger uniqueness migration before "
+                "dispatching jobs."
             )
         self._ledger_schema_verified = True
 

@@ -7,6 +7,7 @@ based on execution context. Inspired by Laravel's Bus facade.
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -319,10 +320,7 @@ class Bus:
     @staticmethod
     def get_dispatch_params(job: Queueable) -> dict:
         """
-        Extract dispatch parameters from job instance.
-
-        Handles Pydantic models and other complex objects by converting them
-        to serializable dictionaries.
+        Extract the constructor-owned state required to rebuild a job.
 
         Args:
             job: Job instance
@@ -330,40 +328,44 @@ class Bus:
         Returns:
             Dict of parameters for dispatch
         """
-        # Get all init parameters from job
-        # Exclude internal attributes, queue-specific fields, and runtime objects
-        excluded_keys = {
-            "queue",
-            "attempts",
-            "routing_key",
-            "connection",
-            "delay",
-            "timeout",
-            "tries",
-            "backoff",
-            "kwargs",
-            # Runtime objects that should be reconstructed by the job
-            "job_metadata",
-            "job_context",
-            "job_tracking_id",
-            "is_cancelled",
-            "repository",
-            # Runtime-only DB fencing value acquired inside handle(); never
-            # serialize it into the immutable broker envelope.
-            "claim_token",
-        }
+        if not hasattr(job, "__dict__"):
+            return {}
 
-        params = {}
-        if hasattr(job, "__dict__"):
-            for key, value in job.__dict__.items():
-                if not key.startswith("_") and key not in excluded_keys:
-                    params[key] = value
+        state = vars(job)
+        parameter_names: set[str] = set()
+        accepts_stored_kwargs = False
 
-            # Special handling: if job has kwargs dict, merge it into params
-            # This ensures all init parameters are passed correctly
-            if "kwargs" in job.__dict__ and isinstance(job.__dict__["kwargs"], dict):
-                for k, v in job.__dict__["kwargs"].items():
-                    if k not in params and k not in excluded_keys:
-                        params[k] = v
+        # A subclass commonly accepts ``**kwargs`` and forwards framework-owned
+        # options to a base job. Walk the complete constructor chain so those
+        # explicit base parameters remain part of the durable wire contract.
+        for base in job.__class__.__mro__:
+            constructor = base.__dict__.get("__init__")
+            if constructor is None:
+                continue
+            try:
+                signature = inspect.signature(constructor)
+            except TypeError, ValueError:
+                continue
+            for name, parameter in signature.parameters.items():
+                if name == "self":
+                    continue
+                if parameter.kind in (
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                ):
+                    parameter_names.add(name)
+                elif parameter.kind is inspect.Parameter.VAR_KEYWORD:
+                    accepts_stored_kwargs = True
+
+        params = {name: state[name] for name in parameter_names if name in state}
+
+        # Some dynamic jobs retain their original ``**kwargs`` explicitly.
+        # That mapping is constructor input by definition; ordinary derived
+        # public attributes are not.
+        stored_kwargs = state.get("kwargs")
+        if accepts_stored_kwargs and isinstance(stored_kwargs, dict):
+            for name, value in stored_kwargs.items():
+                if isinstance(name, str) and name not in params:
+                    params[name] = value
 
         return params

@@ -17,6 +17,21 @@ from cara.queues.delivery import QueueJobDeliveryStore
 from cara.queues.tracking import JobTracker
 
 
+def test_relay_roles_resolve_independent_metrics_ports(monkeypatch):
+    module = importlib.import_module("cara.commands.core.QueueRelayCommand")
+    ports = {
+        "metrics.relay_port": 9402,
+        "metrics.hooks_port": 9403,
+    }
+    monkeypatch.setattr(module, "config", lambda key, default=0: ports.get(key, default))
+
+    relay = QueueRelayCommand.__new__(QueueRelayCommand)
+    hooks = QueueHooksCommand.__new__(QueueHooksCommand)
+
+    assert relay._metrics_port() == 9402
+    assert hooks._metrics_port() == 9403
+
+
 def test_relay_readiness_tracks_runtime_failure_not_quarantined_work_item():
     command = QueueRelayCommand.__new__(QueueRelayCommand)
 
@@ -47,6 +62,55 @@ def test_hook_readiness_separates_service_health_from_failed_work_items():
     failed = {"completed": 0, "failed": 1, "quarantined": 1}
     assert command._iteration_is_healthy(None, failed)
     assert command._iteration_has_failures(failed)
+
+
+def test_terminal_hook_outbox_skips_instantiation_without_callback(monkeypatch):
+    store = QueueJobDeliveryStore.__new__(QueueJobDeliveryStore)
+    store.options = {"signing_keys": {}, "allowed_job_prefixes": ()}
+    store.claim_terminal_hooks = lambda _job_id: SimpleNamespace(
+        outcome="claimed",
+        lease_token="hook-lease",
+        signed_envelope=b"{}",
+        status=QueueJobDeliveryStore.STATUS_DEAD_LETTERED,
+        terminal_reason="constructor rejected legacy state",
+    )
+    completed = []
+    store.complete_terminal_hooks = lambda job_id, token: completed.append(
+        (job_id, token)
+    )
+
+    serializer = importlib.import_module(
+        "cara.queues.serializers.SignedJsonJobSerializer"
+    ).SignedJsonJobSerializer
+    monkeypatch.setattr(
+        serializer,
+        "inspect_envelope",
+        lambda *_args, **_kwargs: {"payload": {}},
+    )
+
+    class NoFailureHook:
+        pass
+
+    monkeypatch.setattr(
+        serializer,
+        "deserialize_verified",
+        lambda *_args, **_kwargs: {
+            "obj": NoFailureHook,
+            "args": (),
+            "init_kwargs": {"unexpected": "runtime state"},
+        },
+    )
+    instantiation = importlib.import_module("cara.queues.JobInstantiation")
+    monkeypatch.setattr(
+        instantiation,
+        "instantiate_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("job without failed() must not be instantiated")
+        ),
+    )
+
+    assert store.process_terminal_hooks("job-id") is True
+    assert completed == [("job-id", "hook-lease")]
 
 
 def test_hook_timeout_is_immediately_deferred_instead_of_waiting_for_stale_lease(

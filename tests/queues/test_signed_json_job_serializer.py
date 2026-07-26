@@ -3,7 +3,7 @@ import json
 import pytest
 
 from cara.exceptions import QueueException
-from cara.queues import JobClassResolver
+from cara.queues import JobClassResolver, instantiate_job
 from cara.queues.contracts import Queueable, ShouldQueue
 from cara.queues.serializers import SignedJsonJobSerializer
 
@@ -16,8 +16,15 @@ _JOB_ID = "11111111-1111-4111-8111-111111111111"
 
 
 class ExampleJob(ShouldQueue, Queueable):
-    def __init__(self, item_id: int, *, priority: str = "default"):
+    def __init__(
+        self,
+        item_id: int,
+        *,
+        priority: str = "default",
+        payload=None,
+    ):
         self.item_id = int(item_id)
+        self.payload = payload
         super().__init__()
         self.queue = "sync"
         self.priority = priority
@@ -33,6 +40,19 @@ class SyncJob(ShouldQueue, Queueable):
         self.priority = "default"
 
     def handle(self):
+        return None
+
+
+class DerivedStateJob(ShouldQueue, Queueable):
+    def __init__(self, item_id: int, *, priority: str = "default"):
+        self.item_id = int(item_id)
+        self.source = "derived"
+        self.job_id = "runtime-only"
+        super().__init__()
+        self.queue = "sync"
+        self.priority = priority
+
+    async def handle(self):
         return None
 
 
@@ -81,9 +101,35 @@ def test_signed_json_round_trip_preserves_constructor_and_queue_metadata():
     assert decoded["_tenant_mode"] == "tenant"
 
 
+def test_round_trip_excludes_derived_public_state_from_constructor_kwargs():
+    body = SignedJsonJobSerializer.serialize(
+        _payload(DerivedStateJob(42, priority="high")),
+        signing_key_id=_KID,
+        signing_keys=_KEYS,
+        allowed_prefixes=_PREFIXES,
+        issued_at=1_752_643_200,
+    )
+
+    decoded = SignedJsonJobSerializer.deserialize(
+        body,
+        signing_keys=_KEYS,
+        allowed_prefixes=_PREFIXES,
+        now=1_752_643_201,
+    )
+
+    assert decoded["init_kwargs"] == {"item_id": 42, "priority": "high"}
+    instance = instantiate_job(
+        object(),
+        decoded["obj"],
+        (),
+        decoded["init_kwargs"],
+    )
+    assert instance.source == "derived"
+    assert instance.job_id == "runtime-only"
+
+
 def test_serializer_rejects_oversized_body_before_transport(monkeypatch):
-    job = ExampleJob(42)
-    job.large_argument = "x" * 1024
+    job = ExampleJob(42, payload="x" * 1024)
     monkeypatch.setattr(SignedJsonJobSerializer, "MAX_PAYLOAD_BYTES", 512)
 
     with pytest.raises(QueueException, match="maximum wire size"):
@@ -102,8 +148,7 @@ def test_serializer_rejects_excessive_json_depth():
     for _ in range(SignedJsonJobSerializer.MAX_JSON_DEPTH + 2):
         cursor["next"] = {}
         cursor = cursor["next"]
-    job = ExampleJob(7)
-    job.payload = nested
+    job = ExampleJob(7, payload=nested)
 
     with pytest.raises(QueueException, match="maximum JSON depth"):
         SignedJsonJobSerializer.serialize(
@@ -159,8 +204,7 @@ def test_job_class_resolver_uses_segment_aware_prefix_matching():
 
 
 def test_signed_json_rejects_non_primitive_constructor_state():
-    job = ExampleJob(42)
-    job.unsafe = object()
+    job = ExampleJob(42, payload=object())
 
     with pytest.raises(QueueException, match="JSON primitives"):
         SignedJsonJobSerializer.serialize(
@@ -187,8 +231,10 @@ def test_signed_json_rejects_non_primitive_constructor_state():
 def test_signed_json_rejects_secret_bearing_constructor_keys(
     forbidden_key,
 ):
-    job = ExampleJob(42)
-    job.payload = {"nested": {forbidden_key: "sensitive"}}
+    job = ExampleJob(
+        42,
+        payload={"nested": {forbidden_key: "sensitive"}},
+    )
 
     with pytest.raises(QueueException, match="forbidden secret-bearing key"):
         SignedJsonJobSerializer.serialize(

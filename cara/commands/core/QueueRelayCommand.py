@@ -19,6 +19,7 @@ from cara.facades import Log, Queue
 
 class _RelayLoop(CommandBase):
     metric_name: str
+    metrics_port_config: str
     operation_name: str
 
     def _iteration_is_healthy(
@@ -55,7 +56,7 @@ class _RelayLoop(CommandBase):
         metric = getattr(MetricsBase, self.metric_name)
         metric.set(0)
         start_http_server(
-            port=int(config("metrics.port", 0)),
+            port=self._metrics_port(),
             role=self.operation_name,
         )
 
@@ -113,6 +114,9 @@ class _RelayLoop(CommandBase):
         metric.set(0)
         return 0
 
+    def _metrics_port(self) -> int:
+        return int(config(f"metrics.{self.metrics_port_config}", 0))
+
 
 @command(
     name="queue:relay",
@@ -139,6 +143,7 @@ class QueueRelayCommand(_RelayLoop):
     """Long-running PostgreSQL-to-RabbitMQ publication relay."""
 
     metric_name = "queue_relay_ready"
+    metrics_port_config = "relay_port"
     operation_name = "queue-relay"
 
     def _iteration_is_healthy(
@@ -190,6 +195,7 @@ class QueueHooksCommand(_RelayLoop):
     """Long-running terminal-hook outbox relay."""
 
     metric_name = "queue_hooks_ready"
+    metrics_port_config = "hooks_port"
     operation_name = "queue-hooks"
 
     def _iteration_is_healthy(
