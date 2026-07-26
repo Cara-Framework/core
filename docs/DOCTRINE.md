@@ -1,6 +1,6 @@
 # The Cara Product Doctrine
 
-**Version 1.5 — 2026-07-25.** This document is LAW for every product built on
+**Version 2.0 — 2026-07-26.** This document is LAW for every product built on
 Cara. It travels with the framework: cloning `cara` into a product delivers the
 doctrine with it. A product's `CLAUDE.md` is its atlas (ports, quirks, domain
 registry); *this* file is the invariant architecture. Where the two disagree,
@@ -9,9 +9,9 @@ this file wins and the atlas is a bug.
 **Reading contract — humans and AI agents.** Every rule here is written as
 MUST / NEVER and carries a one-line *why*. Agents: you do not get to weigh
 these rules against your preferences; a change that violates a rule is wrong
-even if it works. Most rules are enforced by guard tests (§11) — if you find a
-rule without a guard, adding the guard is part of any work that touches the
-rule's area. Deviations require a doctrine amendment (§13), never a local
+even if it works. Most rules are enforced by guard tests (§11, §12.10) — if you
+find a rule without a guard, adding the guard is part of any work that touches
+the rule's area. Deviations require a doctrine amendment (§14), never a local
 exception.
 
 ---
@@ -33,10 +33,10 @@ A product is **two deployables + a dev-only kernel + surfaces**:
 - Each child is an **independent nested git repository**. Stage only files that
   belong to the repo you are committing to. `git add -A` at a workspace root is
   forbidden. *(Why: cross-repo bleed is unrecoverable at review time.)*
-- **Scope.** This doctrine governs the backend: the two deployables and the
-  kernel. Frontend surfaces follow their own conventions (React Server
-  Components, React Query for server state, Zustand UI-only) and are bound
-  only by the API contract; a surface doctrine may join later.
+- **Scope.** Sections §2–§11 govern the two backend deployables and kernel.
+  Section §12 governs every frontend surface: storefront, dashboard, admin
+  and extension. The API contract is the seam; frontend convenience never
+  weakens backend validation, authorization, tenancy or invariants.
 - The two deployables share **one PostgreSQL database** and speak to each
   other through the queue (RabbitMQ), the shared tables, and — for payloads
   too large for either — **durable object storage** whose keys are a
@@ -407,11 +407,160 @@ drift in a guard is a doctrine bug.
 **Allowlists are sunset debts, not exceptions.** A guard may carry a pinned
 allowlist ONLY for violations that predate the rule; every allowlist is
 shrink-only (adding an entry is a doctrine amendment), and its size is part
-of the guard's output. "Local exceptions do not exist" (§13) refers to
+of the guard's output. "Local exceptions do not exist" (§14) refers to
 UNTRACKED deviations — a dated, counted, shrink-only allowlist is the
 tracked path to zero.
 
-## 12. New product bootstrap
+## 12. Frontend law
+
+Frontend architecture follows the same doctrine logic as the backend: one
+owner for each kind of truth, one-directional flow, explicit seams,
+fail-closed gates and executable guards. Framework choice does not change
+these rules.
+
+### 12.1 Flow and ownership
+
+The legal server-data flow is:
+
+```
+RSC/page or query hook → domain API slice → shared transport → API contract
+mutation hook          → domain API slice → shared transport → API contract
+```
+
+- React Server Components are the route and static-composition default. A
+  client boundary exists only for browser APIs, local interaction or hooks.
+  Moving a whole route client-side for one interactive control is forbidden.
+- Domain clients are pure fetchers. They do not import React, Zustand,
+  components or route state. Raw transport calls live only in the shared
+  transport core, domain client/server adapters and framework route handlers.
+- Components render. They may consume hooks but never call transport or domain
+  API methods directly. Route-family hooks stay with the route; a hook moves to
+  a shared seam only at its second proven consumer.
+- Wire shapes, errors and envelopes come from the generated contract or a
+  domain-local type verified against it. Components consume domain/view
+  models, never transport DTOs. Missing values remain unknown; the UI never
+  invents zero, empty text or success.
+
+### 12.2 Server state has one owner
+
+- TanStack Query owns every reloadable server resource: cache, loading, error,
+  retry, pagination and optimistic reconciliation. Named query-key factories
+  are the SSOT used by reads, mutations and realtime invalidation.
+- Zustand owns client state only: open/closed controls, drafts, selection,
+  transient workflow input and device-local preferences. Auth session material
+  may use a dedicated session store. A Zustand action never fetches server
+  data.
+- Mirroring Query rows, counts, loading flags or errors into Zustand is
+  forbidden. Combine Query data with client state in selectors/hooks;
+  optimistic server state belongs in the Query cache. *(Why: a bridge creates
+  two clocks and two error models for one resource.)*
+- Browser storage holds only explicitly device-local state. Filters, columns,
+  density, saved searches, permissions and other account/workspace truth use
+  their server owner. Hydration reads happen after mount and never change
+  server-rendered semantics.
+
+### 12.3 Mutations and durable work
+
+- Writes use mutation hooks. The hook owns typed errors, optimistic cache
+  updates, rollback, invalidation and shared feedback policy; components own
+  only form-specific inline errors and interaction state.
+- User-triggered asynchronous work exposes the backend's durable operation
+  object. The frontend reloads it after refresh and applies realtime events to
+  the same Query cache. A bare “queued” toast, client-only progress fiction or
+  second operation registry is forbidden.
+- Backend idempotency/coalescing and the UI's disabled/loading state both
+  prevent repeat submission. Disabling a button is never the business
+  invariant.
+
+### 12.4 Rendering and errors
+
+- Every initial remote surface renders in this order: loading → error → empty
+  → data. Background refresh may retain proven data; an initial error never
+  becomes an empty business state.
+- Error UI is retryable where retry can help, preserves user input and uses the
+  typed error taxonomy. Parsing backend message text for control flow is
+  forbidden.
+- Permissions, entitlements, configuration and capability discovery fail
+  closed. A failed capability query is unavailable, never proof of absence or
+  permission. The backend remains authoritative for every write.
+- Render is pure. Effects synchronize external systems only; they do not
+  derive render state, copy Query data into stores or repair an architecture
+  boundary.
+
+### 12.5 IA and URL truth
+
+- Permanent destinations, canonical URLs, detail-tab order and capability
+  ownership each have one registry. Navigation, breadcrumbs, command search,
+  related rails and tests consume it rather than restating it.
+- URL parameters own shareable search, sort, page and filter state. Local
+  state may stage edits and then commit them to the URL.
+- Canonical routes have no compatibility aliases. Move the route and every
+  caller in the same change.
+- Every visible link and action resolves to a real product route or capability.
+  Placeholder navigation, `href="#"`, invented stores/carts/campaigns and
+  controls with no owned outcome are forbidden on production surfaces.
+
+### 12.6 Components and visual language
+
+- A product has one component system and token vocabulary. Extend its
+  primitives; do not introduce parallel buttons, inputs, dialogs, badges,
+  tables or one-off color systems.
+- References may teach layout principles, hierarchy or interaction quality;
+  they are not templates to reproduce. Copying another product's measured
+  layout, glyphs, branded copy, campaign assets or component wholesale is
+  forbidden. The shipped surface must express this product's brand and jobs.
+- Production UI renders only domain-owned content and locale-appropriate copy.
+  Prototype showcases, unrelated growth experiments, foreign-brand modules
+  and static fake products/prices never enter a customer route.
+- Semantic HTML, keyboard operation, visible focus, labels, reduced-motion
+  support, 320-CSS-pixel reflow and WCAG AA contrast are release
+  requirements. Native semantics may be wrapped, never erased.
+- Tables share one header/row/grid language. Selection feedback does not move
+  headers; sticky identity cells keep an opaque background and divider during
+  horizontal scroll.
+- Status color communicates state, not decoration. Text carries the meaning;
+  color is secondary. Customer copy uses the product locale and vocabulary,
+  never engine tokens.
+
+### 12.7 Placement, performance and surfaces
+
+- Route-private code stays with the route and is promoted only at its second
+  consumer. Domain slices are named for business resources, not pages or HTTP
+  mechanics. Components are PascalCase, hooks `useX`, routes canonical
+  kebab-case and imports direct unless a domain declares a public barrel.
+- Query inputs and effect dependencies are stable by construction. Lists have
+  stable business keys, bounded pagination and deliberate virtualization when
+  needed. Images reserve dimensions; route and bundle budgets are measured.
+- Source files have a 400-line soft budget and a 700-line hard review gate.
+  Generated contracts and declarative schemas may declare their generated
+  status; an interactive component, store or domain client may not.
+- Extensions put browser APIs behind one adapter and exchange typed messages
+  across runtime boundaries. Admin surfaces are not exemptions. Customer
+  surfaces preserve locale, design assets and availability truth.
+
+### 12.8 Frontend Guard Pack
+
+Every frontend carries executable checks for:
+
+| Guard | Pins |
+|---|---|
+| structure/layering | placement, naming, client boundaries and size budgets |
+| transport boundary | raw transport homes; components cannot call domain clients |
+| server-state ownership | no server fetch or Query mirror in Zustand |
+| query-key registry | named factories; invalidations target registered reads |
+| API contract | generated contract freshness and explicit wire/domain boundary |
+| render-state order | loading → error → empty → data |
+| IA registry | canonical routes/navigation/tab order have one source |
+| design-system boundary | shared primitives; no native-control drift |
+| product-truth boundary | no placeholder routes, foreign brands or prototype blocks |
+| accessibility | semantic scan plus keyboard/reflow browser tests |
+| quality gate | lint, typecheck, unit, critical E2E and production build |
+
+Deleting an assertion, broadening an escape comment or adding allowlist debt is
+a doctrine amendment. Existing debt may only be a dated, exact, shrink-only
+census under §11; touched files pay their debt immediately.
+
+## 13. New product bootstrap
 
 1. Create the workspace: `api/ services/ commons/ frontend/ docs/
    infrastructure/` as independent repos; clone cara under `commons/cara`.
@@ -424,7 +573,7 @@ tracked path to zero.
    docstrings, the queue topology SSOT, docs verifier, Dockerfiles with the
    vendor step + dry-run proof in CI.
 
-## 13. Amendment
+## 14. Amendment
 
 The doctrine changes by PR to the framework repo (version bump + dated
 changelog entry at the bottom), then products fast-forward their cara clones.
@@ -478,3 +627,9 @@ discovery lanes from marketplace plug-ins; §5 size, one-class and edge-flow
 laws and §7/§8 write/transaction ownership gained framework scanners with
 exact shrink-only debt censuses; concrete plug-in string scanning is mandatory
 whenever plug-in tokens are declared.*
+
+*Changelog — 2.0 (2026-07-26): §12 now governs every frontend surface with
+one-way data flow, Query-owned server state, Zustand UI-only, contract/domain
+boundaries, durable mutations, render-state order, fail-closed capabilities,
+IA/design-system SSOTs, accessibility, performance budgets and a mandatory
+Frontend Guard Pack.*
