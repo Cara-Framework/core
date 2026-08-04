@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cara.architecture.BarrelGenerator import BarrelGenerator
+from cara.architecture.BarrelGenerator import MAX_LINE, BarrelGenerator
 
 from ._fixtures import make_manifest, write
 
@@ -85,6 +85,67 @@ def test_aliased_import_is_preserved(tmp_path):
     # idempotent from here: a second run changes nothing further.
     second = BarrelGenerator.write(manifest)
     assert second.changed == []
+
+
+def test_long_aliased_import_is_wrapped_the_way_ruff_wraps_it(tmp_path):
+    """A preserved import keeps its NAMES, not its bytes: it is re-rendered
+    at ``MAX_LINE`` like any generated one.
+
+    Echoing a 96-char ``from X import Y as Z`` back on a single line made
+    ``ruff format`` wrap it and the next ``arch:barrels`` pass unwrap it
+    again — the generator and the formatter ping-ponging over one file, so
+    ``ruff format --check`` and ``arch:barrels`` (check) could never both
+    be green. The wrapped shape below is byte-for-byte what ruff emits, and
+    its trailing comma is what stops ruff collapsing it back.
+    """
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(
+        tmp_path / "app" / "services" / "caching" / "StorefrontRevalidate.py",
+        "def dispatch_for_product():\n    pass\n",
+    )
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\n'
+        "from .caching.StorefrontRevalidate import "
+        "dispatch_for_product as dispatch_storefront_revalidate\n\n"
+        '__all__ = [\n    "dispatch_storefront_revalidate",\n]\n',
+    )
+    BarrelGenerator.write(manifest)
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert (
+        "from .caching.StorefrontRevalidate import (\n"
+        "    dispatch_for_product as dispatch_storefront_revalidate,\n"
+        ")"
+    ) in content
+    assert max(len(line) for line in content.splitlines()) <= MAX_LINE
+
+    # ...and that wrapped form is a fixed point: re-running the generator
+    # over ruff's own shape must not unwrap it.
+    assert BarrelGenerator.write(manifest).changed == []
+
+
+def test_long_module_object_bind_is_wrapped(tmp_path):
+    """The module-object bind is rendered by the same width-aware helper —
+    the overflow is systemic to how imports are emitted, not specific to
+    the aliased form."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    stems = (
+        "StorefrontRevalidationCachingHelpers",
+        "StorefrontRevalidationQueueingHelpers",
+    )
+    for stem in stems:
+        write(tmp_path / "app" / "services" / f"{stem}.py", "def helper():\n    pass\n")
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\n'
+        f"from . import {', '.join(stems)}\n\n"
+        "__all__ = [\n" + "".join(f'    "{s}",\n' for s in stems) + "]\n",
+    )
+    BarrelGenerator.write(manifest)
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert "from . import (\n" + "".join(f"    {s},\n" for s in stems) + ")" in content
+    assert max(len(line) for line in content.splitlines()) <= MAX_LINE
+    assert BarrelGenerator.write(manifest).changed == []
 
 
 def test_post_all_deliberate_late_bind_is_preserved(tmp_path):

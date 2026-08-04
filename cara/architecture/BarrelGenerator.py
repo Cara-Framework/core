@@ -14,10 +14,10 @@ to an existing barrel:
 * the module docstring, verbatim;
 * ``__future__`` imports, kept first, never exported;
 * non-import top-level statements (constants) right after the docstring;
-* a MODULE-OBJECT bind (``from . import X``) verbatim — ``X``'s own
-  symbols stay module-qualified and are exempt from name-level generation
-  (the module-object contract);
-* an aliased relative import (``from .X import Y as Z``) verbatim;
+* a MODULE-OBJECT bind (``from . import X``) — ``X``'s own symbols stay
+  module-qualified and are exempt from name-level generation (the
+  module-object contract);
+* an aliased relative import (``from .X import Y as Z``);
 * an underscore-prefixed relative re-export, if the existing ``__all__``
   already listed it;
 * any statement placed AFTER the existing ``__all__`` — a deliberate late
@@ -28,6 +28,11 @@ to an existing barrel:
 Everything else is regenerated: the alphabetical superset of every direct
 child module's/subpackage's public surface. ``check()`` reports drift
 without writing; ``write()`` regenerates in place.
+
+A preserved import keeps its NAMES, not its bytes: it is re-rendered by
+``_fmt_from`` like every generated one, so a single generator owns the
+width of every import in the file. That is what keeps ``arch:barrels``
+and ``ruff format`` from fighting — see ``MAX_LINE``.
 """
 
 from __future__ import annotations
@@ -39,6 +44,14 @@ from pathlib import Path
 from cara.architecture._ast_utils import dunder_all, is_upper_const, parse, public_names
 from cara.architecture.Manifest import Manifest
 
+# Width EVERY emitted import is rendered against. The generator and
+# ``ruff format`` have to be fixed points of each other: whatever the
+# generator writes, ruff must leave alone, and whatever ruff writes, the
+# next generator pass must reproduce byte-for-byte. That holds as long as
+# MAX_LINE stays <= the narrowest ``line-length`` a consuming product pins
+# (both pin 90). Rendering a 89..90-char import wrapped is safe in the other
+# direction: ruff's magic trailing comma keeps an already-parenthesized
+# import open rather than collapsing it back onto one line.
 MAX_LINE = 88
 
 
@@ -55,13 +68,25 @@ def _declared_all(path: Path) -> list[str]:
     return list(declared) if declared is not None else []
 
 
-def _fmt_import(relmod: str, names: list[str]) -> str:
-    names = sorted(names)
-    one = f"from {relmod} import {', '.join(names)}"
+def _fmt_from(relmod: str, specs: list[str]) -> str:
+    """Render ONE ``from <relmod> import ...`` the way ruff would.
+
+    Every import this module emits — generated, preserved, aliased, pinned —
+    goes through here, so the generator can never hand ruff a statement ruff
+    wants to rewrite (which the next generator pass would then unwrap again,
+    the two formatters ping-ponging forever). ``specs`` are rendered in the
+    order given; each is a bare ``"Name"`` or an aliased ``"Name as Alias"``.
+    """
+    one = f"from {relmod} import {', '.join(specs)}"
     if len(one) <= MAX_LINE:
         return one
-    inner = "\n".join(f"    {n}," for n in names)
+    inner = "\n".join(f"    {s}," for s in specs)
     return f"from {relmod} import (\n{inner}\n)"
+
+
+def _fmt_import(relmod: str, names: list[str]) -> str:
+    """A GENERATED re-export block: same rendering, alphabetical order."""
+    return _fmt_from(relmod, sorted(names))
 
 
 def _fmt_all(names: list[str]) -> str:
@@ -192,11 +217,11 @@ class _Preserved:
                     for alias in node.names:
                         if alias.asname and alias.asname != alias.name:
                             self.stmts.append(
-                                f"from {relmod} import {alias.name} as {alias.asname}"
+                                _fmt_from(relmod, [f"{alias.name} as {alias.asname}"])
                             )
                             self.names.append(alias.asname)
                         elif alias.name.startswith("_"):
-                            self.stmts.append(f"from {relmod} import {alias.name}")
+                            self.stmts.append(_fmt_from(relmod, [alias.name]))
                             if alias.name in self.existing_all:
                                 self.names.append(alias.name)
                         else:
@@ -229,18 +254,16 @@ class _Preserved:
                 ]
                 rel = "." * node.level + (node.module or "")
                 if mod_objs:
-                    self.stmts.append(
-                        f"from {rel} import {', '.join(a.name for a in mod_objs)}"
-                    )
+                    self.stmts.append(_fmt_from(rel, [a.name for a in mod_objs]))
                     for a in mod_objs:
                         self.names.append(a.name)
                         if node.level == 1 and not node.module:
                             self.module_objects.add(a.name)
                 for a in aliases:
-                    self.stmts.append(f"from {rel} import {a.name} as {a.asname}")
+                    self.stmts.append(_fmt_from(rel, [f"{a.name} as {a.asname}"]))
                     self.names.append(a.asname)
                 for a in unders:
-                    self.stmts.append(f"from {rel} import {a.name}")
+                    self.stmts.append(_fmt_from(rel, [a.name]))
                     if a.name in self.existing_all:
                         self.names.append(a.name)
                 for a in node.names:
@@ -271,11 +294,15 @@ def _descend(base: Path, parts: list[str]) -> Path:
 
 
 def _pin_block(pin_name: str) -> str:
+    # The trailing `# isort: skip` is measured the way ruff measures it: a
+    # trailing comment never forces a split, so the import is rendered
+    # against MAX_LINE on its own and the comment rides the last line.
+    pin_import = _fmt_from(f".{pin_name}", [pin_name])
     return (
         f"# {pin_name} binds FIRST (package-namespace pin): a reader that hits\n"
         f"# this barrel mid-init must see the CLASS, never the half-built\n"
         f"# submodule. `# isort: skip` stops a sorter from re-burying it.\n"
-        f"from .{pin_name} import {pin_name}  # isort: skip"
+        f"{pin_import}  # isort: skip"
     )
 
 
