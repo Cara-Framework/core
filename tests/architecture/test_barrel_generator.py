@@ -148,6 +148,32 @@ def test_long_module_object_bind_is_wrapped(tmp_path):
     assert BarrelGenerator.write(manifest).changed == []
 
 
+def test_documented_import_gets_the_blank_line_ruff_puts_before_a_comment(tmp_path):
+    """A preserved import's leading comment block is spaced the way ruff
+    spaces it: ruff inserts a blank line before an own-line comment that
+    follows code, so emitting the comment butted against the previous
+    import was the same generator-vs-formatter ping-pong as the width bug,
+    one file over."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\n'
+        "from acme.kernel.Widgets import Widget\n"
+        "# Text helpers bind FIRST: a heavy module below back-imports them.\n"
+        "from acme.kernel.Text import format_title\n\n"
+        '__all__ = [\n    "Widget",\n    "format_title",\n]\n',
+    )
+    BarrelGenerator.write(manifest)
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert (
+        "from acme.kernel.Widgets import Widget\n"
+        "\n"
+        "# Text helpers bind FIRST: a heavy module below back-imports them.\n"
+        "from acme.kernel.Text import format_title"
+    ) in content
+    assert BarrelGenerator.write(manifest).changed == []
+
+
 def test_post_all_deliberate_late_bind_is_preserved(tmp_path):
     manifest = make_manifest(tmp_path, layers=("services",))
     write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")

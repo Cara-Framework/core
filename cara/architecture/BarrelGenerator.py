@@ -89,6 +89,25 @@ def _fmt_import(relmod: str, names: list[str]) -> str:
     return _fmt_from(relmod, sorted(names))
 
 
+def _join_stmts(stmts: list[str]) -> str:
+    """Join preserved statements the way ruff SPACES them.
+
+    Preserved statements carry their leading comment block (see
+    ``with_leading_comments``). ruff puts a blank line before an own-line
+    comment that follows code, so butting a documented import straight
+    against the previous one is another shape ruff rewrites and the next
+    generator pass undoes — the width problem's spacing twin. The blank
+    line is not part of any statement's captured text, so re-inserting it
+    here stays idempotent.
+    """
+    out: list[str] = []
+    for index, stmt in enumerate(stmts):
+        if index and stmt.startswith("#"):
+            out.append("")
+        out.append(stmt)
+    return "\n".join(out)
+
+
 def _fmt_all(names: list[str]) -> str:
     if not names:
         return "__all__: list[str] = []"
@@ -339,7 +358,7 @@ def _compose_init(
     if pin_name:
         parts.append(_pin_block(pin_name))
     if preserved.stmts:
-        parts.append("\n".join(preserved.stmts))
+        parts.append(_join_stmts(preserved.stmts))
     if gen_imports:
         parts.append("\n".join(gen_imports))
 
@@ -362,7 +381,7 @@ def _compose_init(
     all_names_sorted = sorted(all_names)
     parts.append(_fmt_all(all_names_sorted))
     if preserved.post_stmts:
-        parts.append("\n".join(preserved.post_stmts))
+        parts.append(_join_stmts(preserved.post_stmts))
     return "\n\n".join(parts) + "\n", all_names_sorted, dropped
 
 
