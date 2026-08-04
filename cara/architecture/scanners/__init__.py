@@ -18,6 +18,7 @@ from .KernelMembership import KernelMembership
 from .PortMembership import PortMembership
 from .SourceShape import SourceShape
 from .TransactionOwnership import TransactionOwnership
+from .VendorBarrelParity import VendorBarrelParity
 from .VerticalSliceSeams import VerticalSliceSeams
 from .WriteOwnership import WriteOwnership
 
@@ -35,6 +36,7 @@ __all__ = [
     "PortMembership",
     "SourceShape",
     "TransactionOwnership",
+    "VendorBarrelParity",
     "VerticalSliceSeams",
     "WriteOwnership",
 ]
@@ -54,6 +56,7 @@ REGISTRY: dict[str, type] = {
     "job_idempotency": JobIdempotency,
     "source_shape": SourceShape,
     "transaction_ownership": TransactionOwnership,
+    "vendor_barrel_parity": VendorBarrelParity,
     "write_ownership": WriteOwnership,
     "collaborator_calls": CollaboratorCalls,
 }

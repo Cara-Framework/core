@@ -108,8 +108,7 @@ def _violations(
                     violations.append(
                         (
                             node.lineno,
-                            f"{label} belongs to domain(s) {rendered}, "
-                            f"not {own_domain}",
+                            f"{label} belongs to domain(s) {rendered}, not {own_domain}",
                         )
                     )
         elif isinstance(node, ast.Import):
@@ -187,8 +186,7 @@ class DomainOwnership:
                     Finding(
                         rel,
                         hits[0][0],
-                        f"stale domain-ownership pin ({pinned}) — "
-                        f"only {count} remain",
+                        f"stale domain-ownership pin ({pinned}) — only {count} remain",
                     )
                 )
         for rel, pinned in sorted(allowlist.items()):

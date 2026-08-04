@@ -414,9 +414,7 @@ def test_column_named_by_class_constant_is_discovered(discoverer, tmp_path):
     ], "an index declared with a class constant vanished from discovery"
 
 
-def test_composite_index_mixes_literal_and_class_constant_columns(
-    discoverer, tmp_path
-):
+def test_composite_index_mixes_literal_and_class_constant_columns(discoverer, tmp_path):
     """A composite index list may mix literals and class constants."""
     src = """
         from cara.eloquent.schema import Schema
@@ -441,6 +439,4 @@ def test_composite_index_mixes_literal_and_class_constant_columns(
     info = discoverer._parse_model_file(model_path)
 
     assert "tenant_id" in info["fields"]
-    assert {"columns": ["tenant_id", "status"], "name": None} in info[
-        "composite_indexes"
-    ]
+    assert {"columns": ["tenant_id", "status"], "name": None} in info["composite_indexes"]

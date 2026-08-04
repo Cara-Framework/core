@@ -20,6 +20,12 @@ checks, for every package holding an ``__init__.py``:
 
 A package with child modules/subpackages but no ``__all__`` at all is
 itself a Finding (nothing generated it, or generation was hand-reverted).
+
+It then checks the BRIDGE barrels — the deployable's ``app/<kernel-pkg>``
+re-export facades over ``commons/<kernel-pkg>`` (§2's single runtime
+namespace). Those are hand-written files fronting a package in another
+repository, so nothing local goes red when the kernel gains a name; see
+``_check_kernel_bridge`` for the failure they exist to catch.
 """
 
 from __future__ import annotations
@@ -134,6 +140,84 @@ def _check_package(pkg_dir: Path, manifest: Manifest) -> list[Finding]:
     return findings
 
 
+def _check_kernel_bridge(pkg: str, kernel_dir: Path, manifest: Manifest) -> list[Finding]:
+    """Pin the dev-only bridge barrel ``app/<pkg>`` against ``commons/<pkg>``.
+
+    ``VendorBarrelParity`` next door covers the FLATTENED packages, where a
+    stale barrel survives development and dies in the production image. This
+    covers the opposite half — the packages that ship verbatim — where a stale
+    barrel dies immediately, in DEVELOPMENT, and takes the whole application
+    down: the kernel gains a public name, every guard stays green, and the next
+    boot fails with ``cannot import name X from 'app.<pkg>'``. Loud is not the
+    same as attributable. The traceback names ``config.middleware``, the suite
+    reports a hundred collection errors at once, and none of it points at the
+    one-line kernel edit that caused it.
+
+    Two directions, both from DOCTRINE §2:
+
+    * every kernel public name is re-exported, EXCEPT names the kernel itself
+      binds as module objects (``from . import persistence``). That exemption
+      is read from the kernel package rather than listed here, so a kernel
+      subpackage app trees must not reach — ``gates/persistence`` is the
+      standing case, guard-enforced separately — stays legitimately absent
+      without anyone maintaining a second list of it.
+    * the barrel carries NOTHING the kernel does not export. ``app/<kernel-pkg>``
+      is exclusively kernel content; local DI interfaces belong in
+      ``app/ports`` (§2), and the vendor step fails fast rather than merging a
+      barrel that mixes the two.
+    """
+    kernel_init = kernel_dir / "__init__.py"
+    kernel_all = dunder_all(parse(kernel_init)) if kernel_init.is_file() else None
+    if kernel_all is None:
+        return []
+    required = set(kernel_all) - module_object_names(kernel_dir)
+
+    barrel = manifest.roots.app / pkg / "__init__.py"
+    rel = relpath(barrel, manifest.roots.deployable)
+    tree = parse(barrel) if barrel.is_file() else None
+    if tree is None:
+        # A kernel package that exports nothing has nothing to bridge, so its
+        # absence is silence rather than a finding — the barrel is a door, and
+        # a door is only required once there is something behind it.
+        return (
+            [
+                Finding(
+                    rel, 0, f"the app.{pkg} bridge barrel over commons/{pkg} is missing"
+                )
+            ]
+            if required
+            else []
+        )
+
+    barrel_all = set(dunder_all(tree) or [])
+    findings: list[Finding] = []
+
+    missing = sorted(required - barrel_all)
+    if missing:
+        findings.append(
+            Finding(
+                rel,
+                0,
+                f"does not re-export {len(missing)} public name(s) of "
+                f"commons/{pkg}: {', '.join(missing)} — application code reaches "
+                f"the kernel only through this barrel (§2), so the name is "
+                "unimportable and the next boot fails",
+            )
+        )
+    local = sorted(barrel_all - set(kernel_all))
+    if local:
+        findings.append(
+            Finding(
+                rel,
+                0,
+                f"exports {len(local)} name(s) commons/{pkg} does not: "
+                f"{', '.join(local)} — a kernel barrel is exclusively kernel "
+                "content; local interfaces belong in app/ports (§2)",
+            )
+        )
+    return findings
+
+
 class BarrelCompleteness:
     """Every barrel-managed package's ``__all__`` is a sorted superset."""
 
@@ -149,4 +233,13 @@ class BarrelCompleteness:
         for root in roots:
             for pkg_dir in _walk_barrel_dirs(root):
                 findings.extend(_check_package(pkg_dir, manifest))
+        # Driven by ``kernel_packages``, NOT ``kernel_barrel_packages``: the
+        # latter splits who walks the SHARED kernel tree (identical from either
+        # twin, so one of them pays). A bridge barrel is the opposite — each
+        # deployable has its own copy, and the twin that does not own the
+        # kernel walk would otherwise never have its own barrel checked.
+        for pkg in sorted(manifest.kernel_packages):
+            kernel_dir = manifest.roots.kernel.get(pkg)
+            if kernel_dir is not None:
+                findings.extend(_check_kernel_bridge(pkg, kernel_dir, manifest))
         return findings

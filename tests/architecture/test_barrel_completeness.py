@@ -91,3 +91,94 @@ def test_kernel_package_completeness_is_checked_too(tmp_path):
     )
     findings = BarrelCompleteness.scan(manifest)
     assert any("User" in f.message for f in findings)
+
+
+# ── The dev-only bridge barrel: app/<kernel-pkg> over commons/<kernel-pkg> ──
+# VendorBarrelParity covers the FLATTENED packages, where a stale barrel
+# survives development and dies in the production image. These cover the
+# other half: a stale barrel over a verbatim-shipped package dies in
+# DEVELOPMENT, at boot, with a traceback that names config loading rather
+# than the kernel edit that caused it.
+
+
+def _kernel_with(tmp_path, pkg: str, *names: str, module_objects: str = "") -> None:
+    """A kernel package that both BINDS and exports ``names`` — an unbound
+    ``__all__`` entry is a different rule's finding and would mask this one."""
+    bindings = "".join(f"{name} = None\n" for name in names if name != "persistence")
+    exports = ", ".join(f'"{name}"' for name in sorted(names))
+    write(
+        tmp_path / "commons" / pkg / "__init__.py",
+        f'"""Kernel."""\n\n{module_objects}{bindings}\n__all__ = [{exports}]\n',
+    )
+
+
+def test_bridge_barrel_missing_a_kernel_name_is_a_finding(tmp_path):
+    manifest = make_manifest(tmp_path)
+    _kernel_with(tmp_path, "contracts", "CAP_ADS", "CAP_ORDERS")
+    write(
+        tmp_path / "app" / "contracts" / "__init__.py",
+        '"""Barrel."""\n\nfrom commons.contracts import CAP_ADS\n\n__all__ = ["CAP_ADS"]\n',
+    )
+    findings = BarrelCompleteness.scan(manifest)
+    assert any(
+        "CAP_ORDERS" in f.message and "does not re-export" in f.message for f in findings
+    )
+
+
+def test_bridge_barrel_carrying_a_local_member_is_a_finding(tmp_path):
+    manifest = make_manifest(tmp_path)
+    _kernel_with(tmp_path, "contracts", "CAP_ADS")
+    write(
+        tmp_path / "app" / "contracts" / "__init__.py",
+        '"""Barrel."""\n\nfrom commons.contracts import CAP_ADS\n'
+        "\n\nclass LocalPort:\n    pass\n\n\n"
+        '__all__ = ["CAP_ADS", "LocalPort"]\n',
+    )
+    findings = BarrelCompleteness.scan(manifest)
+    assert any("LocalPort" in f.message and "app/ports" in f.message for f in findings)
+
+
+def test_kernel_module_object_need_not_be_bridged(tmp_path):
+    """``gates/persistence`` is kernel-internal — app trees are forbidden to
+    reach it, so its absence from the bridge must not be a finding. The
+    exemption is read from the kernel's own module-object binding rather than
+    kept as a second list of forbidden names."""
+    manifest = make_manifest(tmp_path)
+    write(tmp_path / "commons" / "gates" / "persistence" / "__init__.py", "")
+    _kernel_with(
+        tmp_path,
+        "gates",
+        "Writer",
+        "persistence",
+        module_objects="from . import persistence\n",
+    )
+    write(
+        tmp_path / "app" / "gates" / "__init__.py",
+        '"""Barrel."""\n\nfrom commons.gates import Writer\n\n__all__ = ["Writer"]\n',
+    )
+    findings = BarrelCompleteness.scan(manifest)
+    assert not [f for f in findings if "gates" in f.path]
+
+
+def test_a_complete_bridge_barrel_passes(tmp_path):
+    manifest = make_manifest(tmp_path)
+    _kernel_with(tmp_path, "shared", "normalize_tags")
+    write(
+        tmp_path / "app" / "shared" / "__init__.py",
+        '"""Barrel."""\n\nfrom commons.shared import normalize_tags\n\n'
+        '__all__ = ["normalize_tags"]\n',
+    )
+    assert [f for f in BarrelCompleteness.scan(manifest) if "shared" in f.path] == []
+
+
+def test_both_twins_check_their_own_bridge_even_when_one_owns_the_kernel_walk(tmp_path):
+    """``kernel_barrel_packages`` splits who walks the SHARED kernel tree; the
+    bridge is per-deployable and must be checked from either side."""
+    manifest = make_manifest(tmp_path, kernel_barrel_packages=frozenset())
+    _kernel_with(tmp_path, "contracts", "CAP_ADS")
+    write(
+        tmp_path / "app" / "contracts" / "__init__.py",
+        '"""Barrel."""\n\n__all__: list[str] = []\n',
+    )
+    findings = BarrelCompleteness.scan(manifest)
+    assert any("CAP_ADS" in f.message for f in findings)

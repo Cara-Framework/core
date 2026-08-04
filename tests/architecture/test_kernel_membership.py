@@ -101,6 +101,40 @@ def test_pure_module_may_import_non_stateful_name_from_facade_module(tmp_path):
     assert KernelMembership.scan(manifest) == []
 
 
+def test_query_only_gate_persistence_module_is_a_finding(tmp_path):
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "commons" / "gates" / "persistence" / "ReportRepository.py",
+        "class ReportRepository:\n"
+        "    def rows(self):\n"
+        "        return Report.where('status', 'open').get()\n",
+    )
+
+    findings = KernelMembership.scan(manifest)
+
+    assert any("query-only gate persistence module" in f.message for f in findings)
+
+
+def test_gate_persistence_orm_write_and_sql_cas_pass(tmp_path):
+    manifest = make_manifest(tmp_path)
+    persistence = tmp_path / "commons" / "gates" / "persistence"
+    write(
+        persistence / "WriterRepository.py",
+        "class WriterRepository:\n"
+        "    def create(self, values):\n"
+        "        return Product.create(values)\n",
+    )
+    write(
+        persistence / "ClaimRepository.py",
+        "class ClaimRepository:\n"
+        "    def claim(self, row_id):\n"
+        "        return DB.select_one(\"UPDATE jobs SET status = 'claimed' \"\n"
+        '            "WHERE id = %s RETURNING id", [row_id])\n',
+    )
+
+    assert KernelMembership.scan(manifest) == []
+
+
 def test_single_consumer_shared_module_is_a_finding(tmp_path):
     consumer_a = tmp_path / "deployable_a" / "app"
     consumer_b = tmp_path / "deployable_b" / "app"
@@ -138,6 +172,53 @@ def test_single_consumer_allowlist_suppresses_the_finding(tmp_path):
     )
     write(tmp_path / "commons" / "shared" / "Fx.py", "def convert():\n    return 1\n")
     assert KernelMembership.scan(manifest) == []
+
+
+def test_single_consumer_allowlist_rejects_a_stale_pin(tmp_path):
+    from dataclasses import replace
+
+    consumer_a = tmp_path / "deployable_a" / "app"
+    consumer_b = tmp_path / "deployable_b" / "app"
+    write(consumer_a / "services" / "Uses.py", "from app.shared import Fx\n")
+    write(consumer_b / "services" / "Uses.py", "from app.shared import Fx\n")
+    manifest = make_manifest(tmp_path, single_consumer_allowlist=frozenset({"Fx"}))
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            consumer_roots={"a": (consumer_a,), "b": (consumer_b,)},
+        ),
+    )
+    write(tmp_path / "commons" / "shared" / "Fx.py", "def convert():\n    return 1\n")
+
+    findings = KernelMembership.scan(manifest)
+
+    assert any("stale single_consumer_allowlist pin" in f.message for f in findings)
+
+
+def test_transitive_shared_imports_prove_consumers(tmp_path):
+    from dataclasses import replace
+
+    consumer_a = tmp_path / "deployable_a" / "app"
+    consumer_b = tmp_path / "deployable_b" / "app"
+    write(consumer_a / "services" / "Uses.py", "from app.shared import Reader\n")
+    write(consumer_b / "services" / "Uses.py", "from app.shared import Writer\n")
+    manifest = make_manifest(tmp_path)
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            consumer_roots={"a": (consumer_a,), "b": (consumer_b,)},
+        ),
+    )
+    shared = tmp_path / "commons" / "shared"
+    write(shared / "Reader.py", "from commons.shared.Core import VALUE\n")
+    write(shared / "Writer.py", "from .Core import VALUE\n")
+    write(shared / "Core.py", "VALUE = 1\n")
+
+    findings = KernelMembership.scan(manifest)
+
+    assert not any("'Core' is consumed by exactly one" in f.message for f in findings)
 
 
 def test_kernel_internal_consumer_makes_shared_module_cross_process(tmp_path):

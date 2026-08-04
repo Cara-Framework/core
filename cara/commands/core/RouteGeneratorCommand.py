@@ -939,15 +939,13 @@ class RouteGeneratorCommand(CommandBase):
     def _validate_controller_methods(
         self, route_info: dict, file_content: str, file_path: Path
     ):
-        """Validate that controller methods actually exist."""
-        # Extract method names from the file
+        """Validate route handlers across the controller's static MRO."""
         try:
-            tree = ast.parse(file_content)
-            existing_methods = set()
-
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    existing_methods.add(node.name)
+            existing_methods = self._class_methods(
+                file_path,
+                route_info["class_name"],
+                source=file_content,
+            )
 
             # Check all route methods
             for group in route_info["route_groups"]:
@@ -962,6 +960,84 @@ class RouteGeneratorCommand(CommandBase):
 
         except Exception as e:
             self.warnings.append(f"Could not validate methods in {file_path.name}: {e}")
+
+    def _class_methods(
+        self,
+        file_path: Path,
+        class_name: str,
+        *,
+        source: str | None = None,
+        seen: set[tuple[Path, str]] | None = None,
+    ) -> set[str]:
+        """Collect methods declared by one class and resolvable local bases.
+
+        Controllers intentionally keep route docstrings on the thin edge class
+        while cohesive handlers live in imported mixins. Validation therefore
+        follows only the class's explicit bases; scanning every function in an
+        imported module would let unrelated helpers satisfy a route by accident.
+        """
+        path = file_path.resolve()
+        visited = seen if seen is not None else set()
+        identity = (path, class_name)
+        if identity in visited or not path.is_file():
+            return set()
+        visited.add(identity)
+
+        tree = ast.parse(source if source is not None else path.read_text())
+        classes = {
+            node.name: node for node in tree.body if isinstance(node, ast.ClassDef)
+        }
+        target = classes.get(class_name)
+        if target is None:
+            return set()
+
+        methods = {
+            node.name
+            for node in target.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        imports = self._imported_classes(tree, path)
+        for base in target.bases:
+            if not isinstance(base, ast.Name):
+                continue
+            if base.id in classes:
+                methods.update(
+                    self._class_methods(path, base.id, source=source, seen=visited)
+                )
+                continue
+            imported = imports.get(base.id)
+            if imported is not None:
+                base_path, imported_name = imported
+                methods.update(
+                    self._class_methods(base_path, imported_name, seen=visited)
+                )
+        return methods
+
+    @staticmethod
+    def _imported_classes(
+        tree: ast.Module, file_path: Path
+    ) -> dict[str, tuple[Path, str]]:
+        """Resolve direct ``from module import Class`` bases to source files."""
+        resolved: dict[str, tuple[Path, str]] = {}
+        project_root = Path(paths("base")).resolve()
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom) or node.module is None:
+                continue
+            if node.level:
+                module_root = file_path.parent
+                for _ in range(node.level - 1):
+                    module_root = module_root.parent
+                module_path = module_root.joinpath(*node.module.split("."))
+            else:
+                module_path = project_root.joinpath(*node.module.split("."))
+            source_path = module_path.with_suffix(".py")
+            if not source_path.is_file():
+                source_path = module_path / "__init__.py"
+            if not source_path.is_file():
+                continue
+            for alias in node.names:
+                resolved[alias.asname or alias.name] = (source_path, alias.name)
+        return resolved
 
     def _validate_parsed_data(self, result: dict, file_path: Path):
         """Validate the parsed route data for consistency."""

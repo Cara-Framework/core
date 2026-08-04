@@ -283,6 +283,28 @@ def test_partition_preserves_root_and_two_edge_transition_chain(migrations_dir):
     assert cmd._transition_targets(preserved) == {"widget"}
 
 
+def test_partition_accepts_an_exact_rename_split_across_string_literals(migrations_dir):
+    cmd = _make_command()
+    root = _write(
+        migrations_dir,
+        "0001_01_01_000000_create_legacy_widget_table.py",
+        _GENERATED_CREATE,
+    )
+    transition = _write(
+        migrations_dir,
+        "0002_01_01_000001_rename_legacy_widget_to_widget.py",
+        _transition_source("legacy_widget", "widget").replace(
+            'DB.statement("ALTER TABLE legacy_widget RENAME TO widget")',
+            'DB.statement("ALTER TABLE legacy_widget " "RENAME TO widget")',
+        ),
+    )
+
+    doomed, preserved = cmd._partition_migrations()
+
+    assert doomed == []
+    assert preserved == [root, transition]
+
+
 def test_partition_rejects_transition_cycle(migrations_dir):
     cmd = _make_command()
     _write(
@@ -477,7 +499,7 @@ def test_summary_surfaces_errors():
     assert "2 model(s)" in cmd.warning.call_args.args[0]
 
 
-def test_overwrite_prepares_before_replacing_files():
+def test_overwrite_prepares_before_replacing_files(migrations_dir):
     cmd = _make_command({"overwrite": True, "force": True})
     model = {
         "name": "Widget",
@@ -499,7 +521,7 @@ def test_overwrite_prepares_before_replacing_files():
     assert prepared == [(model, 0, "class MigrationFile:\n    pass\n")]
 
 
-def test_overwrite_bad_generated_syntax_changes_nothing():
+def test_overwrite_bad_generated_syntax_changes_nothing(migrations_dir):
     cmd = _make_command({"overwrite": True, "force": True})
     model = {
         "name": "Widget",

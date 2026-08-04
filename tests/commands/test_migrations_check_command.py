@@ -346,9 +346,7 @@ def test_later_valid_transition_may_rename_historical_index(tmp_path):
         "legacy_state",
         "state",
         order=3,
-        statements=(
-            "ALTER INDEX legacy_product_sku_idx RENAME TO product_sku_idx",
-        ),
+        statements=("ALTER INDEX legacy_product_sku_idx RENAME TO product_sku_idx",),
     )
 
     assert (
@@ -375,10 +373,13 @@ def test_later_valid_transition_may_drop_historical_index(tmp_path):
         statements=("DROP INDEX legacy_product_sku_idx",),
     )
 
-    assert audit_migrations(
-        tmp_path,
-        {"product": set(), "state": set()},
-    ) == []
+    assert (
+        audit_migrations(
+            tmp_path,
+            {"product": set(), "state": set()},
+        )
+        == []
+    )
 
 
 def test_index_transition_rejects_rename_to_undeclared_target(tmp_path):

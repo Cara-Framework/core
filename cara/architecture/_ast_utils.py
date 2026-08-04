@@ -202,7 +202,16 @@ def module_object_names(pkg: Path) -> set[str]:
     (``from . import X`` with no asname, X a real submodule) — the
     module-object contract exemption (§5.1): X's own symbols stay
     module-qualified and are exempt from barrel-superset/deep-import
-    checks."""
+    checks.
+
+    A SUBPACKAGE counts exactly like a leaf module. It has to: a theme kept
+    module-qualified to break a boot-order cycle (``from . import catalog``)
+    is a directory, and recognizing only ``X.py`` left the subpackage arm of
+    ``BarrelCompleteness._expected_exports`` unreachable — the exemption the
+    scanner's own docstring promises could never fire for the only shape
+    that needs it. ``BarrelGenerator._is_module_object`` already accepted
+    both shapes; this is the reader catching up to the writer.
+    """
     init = pkg / "__init__.py"
     if not init.exists():
         return set()
@@ -213,6 +222,9 @@ def module_object_names(pkg: Path) -> set[str]:
     for node in tree.body:
         if isinstance(node, ast.ImportFrom) and node.level == 1 and not node.module:
             for alias in node.names:
-                if alias.asname is None and (pkg / f"{alias.name}.py").exists():
+                if alias.asname is None and (
+                    (pkg / f"{alias.name}.py").exists()
+                    or (pkg / alias.name / "__init__.py").exists()
+                ):
                     out.add(alias.name)
     return out

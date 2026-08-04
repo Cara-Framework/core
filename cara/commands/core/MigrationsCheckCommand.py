@@ -400,9 +400,7 @@ def audit_migrations(
     for entry in files:
         if entry.syntax_error:
             continue
-        violations.extend(
-            _audit_indexes(entry, model_indexes, index_transitions)
-        )
+        violations.extend(_audit_indexes(entry, model_indexes, index_transitions))
 
     violations.extend(_audit_table_coverage(creators, generated_files, model_indexes))
     violations = [
@@ -703,9 +701,7 @@ def _audit_indexes(
 
 
 def _audit_index_transitions(
-    valid_transitions: list[
-        tuple[list[MigrationFile], list[str], str]
-    ],
+    valid_transitions: list[tuple[list[MigrationFile], list[str], str]],
     model_indexes: dict[str, set[str]],
 ) -> tuple[
     list[Violation],
@@ -719,11 +715,7 @@ def _audit_index_transitions(
     SQL in an invalid/unmarked migration is deliberately invisible here.
     """
 
-    declared = {
-        name.lower()
-        for names in model_indexes.values()
-        for name in names
-    }
+    declared = {name.lower() for names in model_indexes.values() for name in names}
     violations: list[Violation] = []
     found: dict[str, list[_IndexTransition]] = {}
 
@@ -763,10 +755,7 @@ def _audit_index_transitions(
 
     return (
         violations,
-        {
-            old: tuple(transitions)
-            for old, transitions in found.items()
-        },
+        {old: tuple(transitions) for old, transitions in found.items()},
     )
 
 

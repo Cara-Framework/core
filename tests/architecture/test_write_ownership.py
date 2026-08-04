@@ -89,6 +89,16 @@ def test_returning_writes_hidden_behind_select_methods_are_detected(tmp_path):
     assert "2 cross-owner write" in findings[0].message
 
 
+def test_select_lock_clause_is_not_mistaken_for_an_update_statement(tmp_path):
+    write(
+        tmp_path / "app/repositories/ProductRepository.py",
+        "from cara.facades import DB\n"
+        "DB.select('SELECT id FROM product FOR UPDATE SKIP LOCKED')\n",
+    )
+
+    assert WriteOwnership.scan(_manifest(tmp_path, deployable="services")) == []
+
+
 def test_shared_gate_owner_writes_only_through_gate_persistence(tmp_path):
     ownership = {"product": "shared-gate-owned"}
     write(

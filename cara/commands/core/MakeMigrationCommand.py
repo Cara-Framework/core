@@ -410,9 +410,10 @@ class MakeMigrationCommand(CommandBase):
             for transition_path, old_table, new_table in chain:
                 rename_pairs = {
                     (match.group("old").lower(), match.group("new").lower())
-                    for match in _ALTER_TABLE_RENAME_RE.finditer(
-                        contents[transition_path]
+                    for text in self._string_constants(
+                        contents[transition_path], transition_path
                     )
+                    for match in _ALTER_TABLE_RENAME_RE.finditer(text)
                 }
                 if rename_pairs != {(old_table, new_table)}:
                     raise RuntimeError(
@@ -536,6 +537,32 @@ class MakeMigrationCommand(CommandBase):
                 if isinstance(target, ast.Name) and target.id == MODEL_LESS_MARKER:
                     return True
         return False
+
+    @staticmethod
+    def _string_constants(content: str, file_path) -> tuple[str, ...]:
+        """Return parsed string constants, with adjacent SQL literals folded."""
+        tree = ast.parse(content, filename=str(file_path))
+        docstrings: set[int] = set()
+        for node in ast.walk(tree):
+            if not isinstance(
+                node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+            ):
+                continue
+            body = getattr(node, "body", None) or []
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                docstrings.add(id(body[0].value))
+        return tuple(
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        )
 
     @staticmethod
     def _declares_model_transition(

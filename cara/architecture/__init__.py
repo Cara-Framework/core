@@ -13,12 +13,13 @@ from .Finding import Finding
 from .ImportGraph import ImportGraph
 from .Manifest import Manifest, ManifestRoots, SeamLocations
 
-# ``scanners`` is a regular subpackage (import it directly —
-# ``from cara.architecture.scanners import ImportTiers`` or
-# ``cara.architecture.scanners.REGISTRY``) and is deliberately NOT
-# re-exported here: a name that is both an ``__all__`` entry and a
-# submodule is the exact shadowing footgun ``test_http_lazy_exports.py``
-# guards against repo-wide.
+# ``scanners`` and ``VendorDryRun`` are regular submodules — import them
+# directly (``from cara.architecture.scanners import ImportTiers``,
+# ``cara.architecture.scanners.REGISTRY``, ``from
+# cara.architecture.VendorDryRun import VendorDryRun``). They are
+# deliberately NOT re-exported here: a name that is both an ``__all__``
+# entry and a submodule is the exact shadowing footgun
+# ``test_http_lazy_exports.py`` guards against repo-wide.
 __all__ = [
     "BarrelGenerator",
     "BarrelPlan",

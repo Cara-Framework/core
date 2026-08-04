@@ -227,3 +227,71 @@ def test_vendor_fails_fast_on_local_members_in_kernel_barrel(tmp_path, monkeypat
     # nothing was mutated
     assert (tmp_path / "commons" / "models").exists()
     assert (tmp_path / "app" / "contracts" / "AccessContract.py").exists()
+
+
+def test_vendor_resolves_barrel_names_to_their_defining_module(tmp_path, monkeypatch):
+    """The flat copy keeps the FILE name, so a re-exported name whose module
+    stem differs (a helper beside the class it normalizes) must still resolve.
+
+    Emitting ``from .<name> import <name>`` for every name shipped an image
+    whose ``import app.models`` raised ModuleNotFoundError at boot.
+    """
+    _make_tree(tmp_path)
+    commons_models = tmp_path / "commons" / "models"
+    (commons_models / "core" / "IdentifierNormalization.py").write_text(
+        "def normalize_gtin(value):\n    return value\n"
+    )
+    (commons_models / "__init__.py").write_text(
+        "from .core.User import User\n"
+        "from .core.IdentifierNormalization import normalize_gtin\n\n"
+        '__all__ = ["User", "normalize_gtin"]\n'
+    )
+    (tmp_path / "app" / "models" / "__init__.py").write_text(
+        "from commons.models import (\n    User,\n    normalize_gtin,\n)\n\n"
+        '__all__ = [\n    "User",\n    "normalize_gtin",\n]\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    assert VendorCommonsCommand(application=None).handle() == 0
+
+    barrel = (tmp_path / "app" / "models" / "__init__.py").read_text()
+    assert "from .IdentifierNormalization import normalize_gtin" in barrel
+    assert "from .normalize_gtin import" not in barrel
+    assert "from .User import User" in barrel
+
+
+def test_vendor_fails_fast_on_barrel_name_no_module_defines(tmp_path, monkeypatch):
+    """A barrel re-export nothing defines would only surface as an import
+    error inside the built image — fail the build instead."""
+    _make_tree(tmp_path)
+    (tmp_path / "app" / "models" / "__init__.py").write_text(
+        "from commons.models import (\n    User,\n    ghost_helper,\n)\n\n"
+        '__all__ = [\n    "User",\n    "ghost_helper",\n]\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    assert VendorCommonsCommand(application=None).handle() == 1
+
+
+def test_vendor_removes_a_symlinked_commons(tmp_path, monkeypatch):
+    """A dev tree exposes the kernel as a SYMLINK (``api/commons -> ../commons``)
+    — which is exactly what the doctrine §2 dry-run proof vendors. ``rmtree``
+    refuses a symlink, and following it would delete the workspace kernel.
+    """
+    workspace = tmp_path / "workspace"
+    root = workspace / "api"
+    root.mkdir(parents=True)
+    _make_tree(root)
+    # re-shape into the dev layout: the kernel lives at the workspace root and
+    # the deployable reaches it through a symlink.
+    real_kernel = workspace / "commons"
+    (root / "commons").rename(real_kernel)
+    (root / "cara").unlink()
+    (root / "commons").symlink_to(real_kernel, target_is_directory=True)
+    (root / "cara").symlink_to(real_kernel / "cara" / "cara", target_is_directory=True)
+
+    monkeypatch.chdir(root)
+    assert VendorCommonsCommand(application=None).handle() == 0
+    assert not (root / "commons").exists() and not (root / "commons").is_symlink()
+    # the workspace kernel outside the image tree survives untouched
+    assert (real_kernel / "models" / "core" / "User.py").exists()
+    cara_dir = root / "cara"
+    assert cara_dir.is_dir() and not cara_dir.is_symlink()

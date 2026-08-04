@@ -1,7 +1,7 @@
 """KernelMembership: kernel direction, purity, and single-consumer eviction
 (DOCTRINE §2).
 
-Three checks over the dev-only kernel (``manifest.roots.kernel``):
+Four checks over the dev-only kernel (``manifest.roots.kernel``):
 
 * **Direction.** ``models`` imports NOTHING else in the kernel; ``contracts``
   may import ``models`` (typing) and itself, never ``gates``/``shared``.
@@ -19,16 +19,22 @@ Three checks over the dev-only kernel (``manifest.roots.kernel``):
   data-access seam.
 * **Single-consumer eviction.** A module living in the kernel's ``shared``
   package (§2: "shared" membership requires >=2 PROVABLE consumer processes)
-  that only ONE group in ``manifest.roots.consumer_roots`` actually imports
-  is evicted-in-waiting; ``manifest.single_consumer_allowlist`` pins the
+  that reaches only ONE group in ``manifest.roots.consumer_roots`` is
+  evicted-in-waiting. Reachability follows shared-to-shared imports, so a
+  private helper of a two-process shared facade is not mislabeled as
+  single-consumer debt. ``manifest.single_consumer_allowlist`` pins the
   current known set (shrink-only). This check no-ops when fewer than two
-  consumer trees are present (a sibling deployable not checked out) —
-  a whole-repo fact that per-service CI cannot evaluate alone.
+  consumer trees are present (a sibling deployable not checked out) — a
+  whole-repo fact that per-service CI cannot evaluate alone.
+* **Gate-persistence semantics.** Every concrete module under
+  ``gates/persistence`` must contain a write/CAS primitive. Query-only and
+  report repositories belong to a deployable repository layer.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 from cara.architecture._ast_utils import parse, python_files, relpath
@@ -36,6 +42,22 @@ from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
 SEAM_KEY = "kernel_direction"
+_MUTATION_METHODS = frozenset(
+    {
+        "create",
+        "decrement",
+        "delete",
+        "force_delete",
+        "increment",
+        "insert",
+        "save",
+        "statement",
+        "update",
+        "update_or_create",
+        "upsert",
+    }
+)
+_MUTATING_SQL = re.compile(r"\b(?:INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM)\b")
 
 
 def _direction_violations(
@@ -66,6 +88,25 @@ def _direction_violations(
                 if pkg_name in forbidden:
                     hits.setdefault(rel, []).append(f"{rel}:{lineno}: imports {base}")
     return hits
+
+
+def _contains_persistence_mutation(tree: ast.Module) -> bool:
+    """Whether one module owns an ORM write or mutating SQL primitive."""
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute) and node.func.attr in _MUTATION_METHODS:
+            return True
+        sql_fragments = [
+            part.value
+            for argument in (*node.args, *[kw.value for kw in node.keywords])
+            for part in ast.walk(argument)
+            if isinstance(part, ast.Constant) and isinstance(part.value, str)
+        ]
+        if _MUTATING_SQL.search(" ".join(sql_fragments).upper()):
+            return True
+    return False
 
 
 def _seam_findings(
@@ -110,8 +151,35 @@ class KernelMembership:
         return (
             KernelMembership._direction(manifest)
             + KernelMembership._purity(manifest)
+            + KernelMembership._gate_persistence_semantics(manifest)
             + KernelMembership._single_consumer(manifest)
         )
+
+    @staticmethod
+    def _gate_persistence_semantics(manifest: Manifest) -> list[Finding]:
+        gates = manifest.roots.kernel.get("gates")
+        if gates is None:
+            return []
+        persistence = gates / "persistence"
+        if not persistence.is_dir():
+            return []
+        findings: list[Finding] = []
+        for path in python_files(persistence):
+            if path.name == "__init__.py":
+                continue
+            tree = parse(path)
+            if tree is None or _contains_persistence_mutation(tree):
+                continue
+            findings.append(
+                Finding(
+                    relpath(path, manifest.roots.deployable),
+                    1,
+                    "query-only gate persistence module — move reads/reports to "
+                    "a deployable repository; gates/persistence is for writes, "
+                    "CAS, and atomic invariants",
+                )
+            )
+        return findings
 
     @staticmethod
     def _direction(manifest: Manifest) -> list[Finding]:
@@ -189,35 +257,49 @@ class KernelMembership:
             path.stem for path in python_files(shared_dir) if path.stem != "__init__"
         }
         barrel_symbols = _shared_barrel_symbols(shared_dir, stems)
-        consumed_by_group = {
-            name: _consumed_shared_stems(
-                roots,
-                kernel_root,
-                stems,
-                barrel_symbols,
-                skip_consumer_barrel=True,
-            )
-            for name, roots in consumer_groups.items()
-        }
-        kernel_consumers = _consumed_shared_stems(
-            tuple(
-                root
-                for package, root in manifest.roots.kernel.items()
-                if package != "shared"
-            ),
+        dependency_graph = _shared_dependency_graph(
+            shared_dir,
             kernel_root,
             stems,
             barrel_symbols,
         )
+        consumed_by_group = {
+            name: _expand_shared_dependencies(
+                _consumed_shared_stems(
+                    roots,
+                    kernel_root,
+                    stems,
+                    barrel_symbols,
+                    skip_consumer_barrel=True,
+                ),
+                dependency_graph,
+            )
+            for name, roots in consumer_groups.items()
+        }
+        kernel_consumers = _expand_shared_dependencies(
+            _consumed_shared_stems(
+                tuple(
+                    root
+                    for package, root in manifest.roots.kernel.items()
+                    if package != "shared"
+                ),
+                kernel_root,
+                stems,
+                barrel_symbols,
+            ),
+            dependency_graph,
+        )
         findings: list[Finding] = []
+        single_consumer_stems: set[str] = set()
         for path in python_files(shared_dir):
             if path.stem == "__init__":
                 continue
             stem = path.stem
-            if stem in manifest.single_consumer_allowlist:
-                continue
             consuming = sum(stem in used for used in consumed_by_group.values())
             if consuming == 1 and stem not in kernel_consumers:
+                single_consumer_stems.add(stem)
+                if stem in manifest.single_consumer_allowlist:
+                    continue
                 rel = relpath(path, manifest.roots.deployable)
                 findings.append(
                     Finding(
@@ -228,6 +310,15 @@ class KernelMembership:
                         f"(evacuate it, or pin it in single_consumer_allowlist)",
                     )
                 )
+        for stem in sorted(manifest.single_consumer_allowlist - single_consumer_stems):
+            findings.append(
+                Finding(
+                    "app/architecture_manifest.py",
+                    0,
+                    f"'{stem}' is a stale single_consumer_allowlist pin — the module "
+                    f"is absent or no longer consumed by exactly one process tree",
+                )
+            )
         return findings
 
 
@@ -265,52 +356,116 @@ def _consumed_shared_stems(
     *,
     skip_consumer_barrel: bool = False,
 ) -> set[str]:
-    shared_roots = ("app.shared", f"{kernel_root}.shared")
     consumed: set[str] = set()
     for tree_root in tree_roots:
         for path in python_files(tree_root):
             if skip_consumer_barrel and path == tree_root / "shared" / "__init__.py":
                 continue
-            tree = parse(path)
-            if tree is None:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and node.module:
-                    matched = next(
-                        (
-                            root
-                            for root in shared_roots
-                            if node.module == root or node.module.startswith(root + ".")
-                        ),
-                        None,
-                    )
-                    if matched is None:
-                        continue
-                    suffix = node.module[len(matched) :].lstrip(".")
-                    candidate = suffix.split(".")[-1] if suffix else ""
-                    if candidate in stems:
-                        consumed.add(candidate)
-                    for alias in node.names:
-                        resolved = barrel_symbols.get(
-                            (suffix, alias.asname or alias.name)
-                        )
-                        if resolved is not None:
-                            consumed.add(resolved)
-                        elif alias.name in stems:
-                            consumed.add(alias.name)
-                elif isinstance(node, ast.Import):
-                    for alias in node.names:
-                        matched = next(
-                            (
-                                root
-                                for root in shared_roots
-                                if alias.name.startswith(root + ".")
-                            ),
-                            None,
-                        )
-                        if matched is None:
-                            continue
-                        candidate = alias.name.split(".")[-1]
-                        if candidate in stems:
-                            consumed.add(candidate)
+            consumed.update(
+                _imported_shared_stems(
+                    path,
+                    kernel_root,
+                    stems,
+                    barrel_symbols,
+                )
+            )
     return consumed
+
+
+def _imported_shared_stems(
+    path: Path,
+    kernel_root: str,
+    stems: set[str],
+    barrel_symbols: dict[tuple[str, str], str],
+    *,
+    allow_relative: bool = False,
+) -> set[str]:
+    """Resolve shared module imports in one file to defining module stems."""
+
+    tree = parse(path)
+    if tree is None:
+        return set()
+    shared_roots = ("app.shared", f"{kernel_root}.shared")
+    consumed: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if allow_relative and node.level > 0:
+                candidate = (node.module or "").split(".")[-1]
+                if candidate in stems:
+                    consumed.add(candidate)
+                for alias in node.names:
+                    if alias.name in stems:
+                        consumed.add(alias.name)
+                continue
+            if not node.module:
+                continue
+            matched = next(
+                (
+                    root
+                    for root in shared_roots
+                    if node.module == root or node.module.startswith(root + ".")
+                ),
+                None,
+            )
+            if matched is None:
+                continue
+            suffix = node.module[len(matched) :].lstrip(".")
+            candidate = suffix.split(".")[-1] if suffix else ""
+            if candidate in stems:
+                consumed.add(candidate)
+            for alias in node.names:
+                resolved = barrel_symbols.get((suffix, alias.asname or alias.name))
+                if resolved is not None:
+                    consumed.add(resolved)
+                elif alias.name in stems:
+                    consumed.add(alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                matched = next(
+                    (root for root in shared_roots if alias.name.startswith(root + ".")),
+                    None,
+                )
+                if matched is None:
+                    continue
+                candidate = alias.name.split(".")[-1]
+                if candidate in stems:
+                    consumed.add(candidate)
+    return consumed
+
+
+def _shared_dependency_graph(
+    shared_dir: Path,
+    kernel_root: str,
+    stems: set[str],
+    barrel_symbols: dict[tuple[str, str], str],
+) -> dict[str, set[str]]:
+    """Shared module -> other shared modules it imports directly."""
+
+    return {
+        path.stem: _imported_shared_stems(
+            path,
+            kernel_root,
+            stems,
+            barrel_symbols,
+            allow_relative=True,
+        )
+        for path in python_files(shared_dir)
+        if path.stem != "__init__"
+    }
+
+
+def _expand_shared_dependencies(
+    consumed: set[str], dependency_graph: dict[str, set[str]]
+) -> set[str]:
+    """Prove indirect consumers through the shared package's import graph."""
+
+    expanded = set(consumed)
+    pending = list(consumed)
+    while pending:
+        stem = pending.pop()
+        for dependency in dependency_graph.get(stem, set()):
+            if dependency in expanded:
+                continue
+            expanded.add(dependency)
+            pending.append(dependency)
+    return expanded

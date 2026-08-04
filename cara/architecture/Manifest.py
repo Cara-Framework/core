@@ -151,6 +151,12 @@ class Manifest:
         {"models", "contracts", "gates", "shared"}
     )
     plugin_tokens: frozenset[str] = frozenset()
+    # Kernel packages that ``build:vendor-commons`` FLAT-copies into
+    # ``app/<pkg>/`` and whose deep imports it therefore folds onto the
+    # barrel. VendorBarrelParity requires those barrels to be complete
+    # supersets; every other kernel package ships verbatim and keeps its
+    # sub-paths. Mirrors VendorCommonsCommand's models-specific handling.
+    vendor_flattened_packages: frozenset[str] = frozenset({"models"})
     seam_allowlists: dict[str, dict[str, int]] = field(default_factory=dict)
     inline_import_exemptions: frozenset[tuple[str, str]] = frozenset()
     pure_modules: frozenset[str] = frozenset()

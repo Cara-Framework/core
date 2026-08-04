@@ -29,6 +29,7 @@ works inside a Docker build step where none of the production secrets exist.
 
 from __future__ import annotations
 
+import ast
 import re
 import shutil
 from pathlib import Path
@@ -47,6 +48,30 @@ _FROM_IMPORT = re.compile(r"from commons\.models(?:\.\w+)* import")
 _DOTTED_PREFIX = re.compile(r"\bcommons\.models(?:\.\w+)?\.")
 
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc")
+
+
+def _public_definitions(path: Path) -> list[str]:
+    """Top-level public names a model module defines (classes, functions,
+    constants).
+
+    The flat copy keeps the FILE name, so the barrel's relative import must
+    point at the defining module's stem — which equals the name only for the
+    one-class-per-file case. Parsed with ``ast`` rather than matched by regex
+    so a name inside a string or comment can never masquerade as a definition.
+    """
+    try:
+        tree = ast.parse(path.read_text(), filename=str(path))
+    except SyntaxError:
+        return []
+    names: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            names.append(node.name)
+        elif isinstance(node, ast.Assign):
+            names.extend(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.append(node.target.id)
+    return [n for n in names if not n.startswith("_")]
 
 
 def _split_import_names(block: str) -> list[str]:
@@ -153,13 +178,24 @@ class VendorCommonsCommand(CommandBase):
         models_src = commons / "models"
         if models_src.exists():
             copied = 0
+            owners: dict[str, str] = {}
             for py in sorted(models_src.rglob("*.py")):
                 if py.name == "__init__.py":
                     continue
                 shutil.copy2(py, app_models / py.name)
                 copied += 1
+                for name in _public_definitions(py):
+                    owners[name] = py.stem
             self.info(f"copied {copied} model module(s) → app/models")
-            self._rewrite_barrel(app_models / "__init__.py")
+            unresolved = self._rewrite_barrel(app_models / "__init__.py", owners)
+            if unresolved:
+                self.error(
+                    "app/models barrel re-exports name(s) no model module defines: "
+                    + ", ".join(sorted(set(unresolved)))
+                    + " — the vendored image would raise ModuleNotFoundError on "
+                    "`import app.models`"
+                )
+                return 1
 
         # 3) every other kernel package ships verbatim: copy the whole tree
         #    into app/<pkg>/, the package's real __init__.py replacing the pure
@@ -215,21 +251,45 @@ class VendorCommonsCommand(CommandBase):
                 self.info("materialised ./cara (real copy of the framework clone)")
 
         # 6) the kernel is dev-only: drop commons/ entirely from the image tree.
-        shutil.rmtree(commons)
+        #    ``commons`` is a real directory in the Docker build but a SYMLINK
+        #    into the workspace root in a dev tree — which is exactly what the
+        #    doctrine §2 dry-run proof vendors. ``rmtree`` refuses a symlink, so
+        #    unlink that case (and never follow it: the workspace kernel outside
+        #    the image tree must survive the dry-run untouched).
+        if commons.is_symlink():
+            commons.unlink()
+        else:
+            shutil.rmtree(commons)
         self.info("removed commons/ (kernel vendored into app/)")
         return 0
 
-    def _rewrite_barrel(self, init_file: Path) -> None:
+    def _rewrite_barrel(self, init_file: Path, owners: dict[str, str]) -> list[str]:
         """Convert ``from commons.models[...] import (...)`` in the app/models
-        ``__init__`` into per-name relative imports (the models now live alongside)."""
+        ``__init__`` into per-name relative imports (the models now live alongside).
+
+        ``owners`` maps each re-exported NAME to the flat module stem that
+        defines it. The stem is NOT always the name: one model file per class
+        makes ``Listing`` → ``Listing``, but a barrel may also re-export a
+        helper (``normalize_gtin`` from ``IdentifierNormalization``). Emitting
+        ``from .normalize_gtin import normalize_gtin`` on that name produced an
+        image whose ``app.models`` raised ModuleNotFoundError at boot, so an
+        unresolvable name is returned to the caller and fails the build rather
+        than shipping.
+        """
+        unresolved: list[str] = []
         if not init_file.exists():
-            return
+            return unresolved
         content = init_file.read_text()
 
         def repl(match: re.Match[str]) -> str:
-            return "\n".join(
-                f"from .{n} import {n}" for n in _split_import_names(match.group(1))
-            )
+            lines = []
+            for n in _split_import_names(match.group(1)):
+                stem = owners.get(n)
+                if stem is None:
+                    unresolved.append(n)
+                    stem = n
+                lines.append(f"from .{stem} import {n}")
+            return "\n".join(lines)
 
         # multi-line ``import (...)`` FIRST (more specific), then single-line
         content = re.sub(
@@ -243,3 +303,4 @@ class VendorCommonsCommand(CommandBase):
         )
         init_file.write_text(content)
         self.info(f"rewrote {init_file.name} to relative imports")
+        return unresolved
