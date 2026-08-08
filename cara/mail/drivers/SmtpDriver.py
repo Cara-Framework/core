@@ -3,6 +3,15 @@ SMTP Mail Driver for Cara Framework.
 
 This module provides SMTP email sending functionality following
 Cara framework conventions.
+
+A dropped connection or a refused recipient are NOT the same failure.
+The transient set (socket dropped, connect refused, HELO rejected, plain
+timeouts) is worth retrying with backoff — the message is fine and the
+peer is momentarily unavailable. The permanent set (recipient refused,
+sender rejected, malformed data, bad credentials) never becomes true by
+repeating it, and retrying only burns the window before the user asks
+again. Sending the same message once per attempt without that
+distinction is how a bad address turns into three duplicate deliveries.
 """
 
 from __future__ import annotations
@@ -10,6 +19,7 @@ from __future__ import annotations
 import os
 import smtplib
 import ssl
+import time
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -19,9 +29,36 @@ from typing import Any
 from cara.mail.contracts import Mail
 from cara.mail.Mailable import validate_custom_header
 
+#: Failures where the message is fine and the peer is momentarily
+#: unavailable — worth another attempt.
+TRANSIENT_SMTP_ERRORS: tuple[type[Exception], ...] = (
+    smtplib.SMTPServerDisconnected,
+    smtplib.SMTPConnectError,
+    smtplib.SMTPHeloError,
+    TimeoutError,
+    ConnectionError,
+    OSError,
+)
+
+#: Failures that repeating cannot fix. Listed FIRST at the catch site:
+#: several of these subclass ``SMTPResponseException``/``OSError``, so
+#: order is what keeps them out of the retry loop.
+PERMANENT_SMTP_ERRORS: tuple[type[Exception], ...] = (
+    smtplib.SMTPRecipientsRefused,
+    smtplib.SMTPSenderRefused,
+    smtplib.SMTPDataError,
+    smtplib.SMTPAuthenticationError,
+)
+
 
 class SmtpDriver(Mail):
     driver_name = "smtp"
+
+    #: Total attempts for a transient failure, and the base of the
+    #: exponential backoff between them. Overridable per app through the
+    #: driver's configuration.
+    DEFAULT_MAX_ATTEMPTS = 3
+    DEFAULT_RETRY_BASE_DELAY = 1.0
 
     def __init__(self, config: dict[str, Any]):
         """
@@ -37,27 +74,47 @@ class SmtpDriver(Mail):
         self.password = config.get("password")
         self.encryption = config.get("encryption", "tls")  # tls, ssl, none
         self.timeout = config.get("timeout", 30)
+        self.max_attempts = max(
+            int(config.get("max_attempts", self.DEFAULT_MAX_ATTEMPTS)), 1
+        )
+        self.retry_base_delay = max(
+            float(config.get("retry_base_delay", self.DEFAULT_RETRY_BASE_DELAY)), 0.0
+        )
 
     def send(self, mailable_data: dict[str, Any]) -> bool:
         """
-        Send email using SMTP.
+        Send email using SMTP, retrying transient failures with backoff.
         """
         try:
-            # Create message
             msg = self._create_message(mailable_data)
-
-            # Connect and send
-            with self._get_connection() as server:
-                if self.username and self.password:
-                    server.login(self.username, self.password)
-
-                # Send email
-                server.send_message(msg)
-                return True
-
         except Exception as e:
-            self._log_error("SMTP send failed", e)
+            # A message we cannot even build will not build on a retry.
+            self._log_error("SMTP message could not be built", e)
             return False
+
+        for attempt in range(self.max_attempts):
+            try:
+                with self._get_connection() as server:
+                    if self.username and self.password:
+                        server.login(self.username, self.password)
+                    server.send_message(msg)
+                    return True
+            except PERMANENT_SMTP_ERRORS as e:
+                self._log_error("SMTP send refused permanently", e)
+                return False
+            except TRANSIENT_SMTP_ERRORS as e:
+                if attempt == self.max_attempts - 1:
+                    self._log_error(
+                        f"SMTP send failed after {self.max_attempts} attempt(s)", e
+                    )
+                    return False
+                if self.retry_base_delay:
+                    time.sleep(self.retry_base_delay * (2**attempt))
+            except Exception as e:
+                self._log_error("SMTP send failed", e)
+                return False
+
+        return False
 
     def _create_message(self, data: dict[str, Any]) -> MIMEMultipart:
         """
