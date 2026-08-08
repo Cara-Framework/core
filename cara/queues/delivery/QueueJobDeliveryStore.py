@@ -111,6 +111,20 @@ class QueueJobDeliveryStore:
     PUBLISH_PUBLISHED = "published"
     PUBLISH_FAILED = "failed"
 
+    #: The ONE definition of "this row is due for terminal-hook delivery".
+    #: ``{now}`` is the caller's time expression — ``NOW()`` for pure-SQL
+    #: aggregate reads, ``%s`` where the caller binds an application clock.
+    #: Shared by :meth:`due_terminal_hook_ids` (the hooks worker's claim
+    #: scan) and :meth:`outbox_health_metrics` (the scheduler-side
+    #: watchdog) so the two can never disagree about what "due" means.
+    _HOOK_DUE_FILTER_TEMPLATE = (
+        "status = ANY(%s) AND post_hooks_completed_at IS NULL "
+        "AND post_hooks_quarantined_at IS NULL "
+        "AND (post_hooks_lease_token IS NULL OR "
+        "post_hooks_lease_expires_at IS NULL OR "
+        "post_hooks_lease_expires_at <= {now})"
+    )
+
     _PUBLISH_BACKOFF_SECONDS = (1, 5, 30, 60, 300)
     _HOOK_BACKOFF_SECONDS = (60, 300, 900, 3600, 21600, 86400)
     _SETTLEMENT_BACKOFF_SECONDS = (0.05, 0.25, 1.0, 2.0, 5.0)
@@ -1582,11 +1596,7 @@ class QueueJobDeliveryStore:
         rows = (
             self._db().select(
                 f"SELECT job_id FROM {self.table} "
-                "WHERE status = ANY(%s) AND post_hooks_completed_at IS NULL "
-                "AND post_hooks_quarantined_at IS NULL "
-                "AND (post_hooks_lease_token IS NULL OR "
-                "post_hooks_lease_expires_at IS NULL OR "
-                "post_hooks_lease_expires_at <= %s) "
+                f"WHERE {self._HOOK_DUE_FILTER_TEMPLATE.format(now='%s')} "
                 "ORDER BY completed_at, created_at LIMIT %s",
                 [list(self.HOOK_TERMINAL_STATUSES), now, limit],
             )
@@ -2166,6 +2176,82 @@ class QueueJobDeliveryStore:
         return {
             "count": int(self._row_value(row, "count") or 0),
             "age": max(float(self._row_value(row, "age") or 0), 0.0),
+        }
+
+    def outbox_health_metrics_if_installed(self) -> dict[str, float] | None:
+        """``outbox_health_metrics`` for callers that may run without the ledger.
+
+        Same contract as :meth:`backlog_metrics_if_installed`: ``None``
+        means this database carries no delivery ledger at all, which a
+        watchdog must distinguish from "ledger is fine".
+        """
+        row = self._db().select_one(
+            "SELECT to_regclass(%s) IS NOT NULL AS present",
+            [self.table],
+        )
+        if not self._row_value(row, "present"):
+            return None
+        return self.outbox_health_metrics()
+
+    def outbox_health_metrics(self) -> dict[str, float]:
+        """One bounded aggregate over BOTH halves of the durable outbox.
+
+        Read by the scheduler-side watchdog (``QueueOutboxHealth``) from a
+        process with no dependency on the relay or the hooks runner —
+        publication gauges emitted by the relay cannot describe the relay
+        being dead. Fleet-wide and label-safe: no tenant, queue or job
+        identifiers are read.
+
+        Keys: ``due_pending`` / ``oldest_due_age`` (publication half),
+        ``last_publish_age`` (diagnostic; ``-1.0`` means nothing has ever
+        been published), ``hook_due_pending`` / ``hook_oldest_due_age``
+        (terminal-hook half). The due predicates are the store's own —
+        publication mirrors :meth:`backlog_metrics`, hooks reuse
+        ``_HOOK_DUE_FILTER_TEMPLATE`` — so the watchdog's view and the
+        workers' view can never disagree about what "due" means.
+        """
+        due = "status = %s AND publish_status <> %s AND available_at <= NOW()"
+        hook_due = self._HOOK_DUE_FILTER_TEMPLATE.format(now="NOW()")
+        hook_statuses = list(self.HOOK_TERMINAL_STATUSES)
+        row = self._db().select_one(
+            f"SELECT COUNT(*) FILTER (WHERE {due}) AS due_pending, "
+            "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
+            f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
+            "AS oldest_due_age, "
+            "COALESCE(EXTRACT(EPOCH FROM (NOW() - MAX(published_at))), -1) "
+            "AS last_publish_age, "
+            f"COUNT(*) FILTER (WHERE {hook_due}) AS hook_due_pending, "
+            "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
+            "MIN(COALESCE(post_hooks_lease_expires_at, completed_at, created_at)) "
+            f"FILTER (WHERE {hook_due}))), 0) "
+            "AS hook_oldest_due_age "
+            f"FROM {self.table}",
+            [
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+                hook_statuses,
+                hook_statuses,
+            ],
+        )
+        last_publish = self._row_value(row, "last_publish_age")
+        return {
+            "due_pending": max(float(self._row_value(row, "due_pending") or 0), 0.0),
+            "oldest_due_age": max(
+                float(self._row_value(row, "oldest_due_age") or 0), 0.0
+            ),
+            # -1 means "nothing has ever been published"; a sentinel for
+            # human-readable alert bodies only, never emitted as a gauge.
+            "last_publish_age": float(
+                last_publish if last_publish is not None else -1
+            ),
+            "hook_due_pending": max(
+                float(self._row_value(row, "hook_due_pending") or 0), 0.0
+            ),
+            "hook_oldest_due_age": max(
+                float(self._row_value(row, "hook_oldest_due_age") or 0), 0.0
+            ),
         }
 
     def delivery_stats(

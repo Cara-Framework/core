@@ -16,16 +16,19 @@ silently.
 
 DIVISION OF LABOUR
 ------------------
-``QueueOutboxHealth`` (app-side, scheduler-driven, once a minute) is the
-CONTINUOUS alarm for this condition. This probe is the STARTUP one: it
-speaks at the one moment the operator is actually looking at a terminal,
-having just typed the command they believe is sufficient. The continuous
-alarm cannot cover that moment — a fresh worker start is precisely when
-the human is present and the feedback is cheapest.
+:class:`~cara.queues.delivery.QueueOutboxHealth` (scheduler-driven, once
+a minute) is the CONTINUOUS alarm for this condition. This probe is the
+STARTUP one: it speaks at the one moment the operator is actually
+looking at a terminal, having just typed the command they believe is
+sufficient. The continuous alarm cannot cover that moment — a fresh
+worker start is precisely when the human is present and the feedback is
+cheapest.
 
-Both read the SAME due predicate (``QueueJobDeliveryStore.backlog_metrics``)
-and the SAME thresholds (``queue.outbox_stall_*``), so the two surfaces
-can never disagree about what "stalled" means.
+Both read the store's own due predicates
+(``QueueJobDeliveryStore.backlog_metrics`` /
+``outbox_health_metrics``) and the SAME thresholds
+(``queue.outbox_stall_*``), so the two surfaces can never disagree about
+what "stalled" means.
 
 ADVISORY ONLY — NEVER FATAL
 ---------------------------
