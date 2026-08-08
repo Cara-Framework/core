@@ -20,6 +20,24 @@ from typing import Any
 from cara.configuration import config
 from cara.facades import Log
 
+# Database-driver connection drops are transient by nature, and psycopg2 is
+# the framework's own Postgres driver (``cara.eloquent.connections``), so
+# its transient classes belong in the DEFAULT retryable set. The import is
+# guarded — psycopg2 is deliberately absent from cara's dependencies, so a
+# non-Postgres install legitimately lacks it — and fails SILENT to the base
+# tuple: framework import may precede logging boot, and the absence is not
+# an error.
+try:  # pragma: no cover - import guard
+    from psycopg2 import InterfaceError as _PgInterfaceError
+    from psycopg2 import OperationalError as _PgOperationalError
+
+    _PG_TRANSIENT_EXCEPTIONS: tuple[type[Exception], ...] = (
+        _PgOperationalError,
+        _PgInterfaceError,
+    )
+except Exception:
+    _PG_TRANSIENT_EXCEPTIONS = ()
+
 
 class MakesRetryable:
     """Exponential backoff retry mixin for queue jobs.
@@ -29,7 +47,9 @@ class MakesRetryable:
     ``jobs.retry_backoff_multiplier``) take precedence when present.
 
     Extend ``RETRYABLE_EXCEPTIONS`` in subclasses to narrow or broaden
-    what triggers a retry vs immediate failure.
+    what triggers a retry vs immediate failure. psycopg2's transient
+    classes (``OperationalError`` / ``InterfaceError``) are included
+    automatically when the driver is installed.
     """
 
     MAX_RETRY_ATTEMPTS: int = 3
@@ -40,6 +60,7 @@ class MakesRetryable:
         TimeoutError,
         asyncio.TimeoutError,
         OSError,
+        *_PG_TRANSIENT_EXCEPTIONS,
     )
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
