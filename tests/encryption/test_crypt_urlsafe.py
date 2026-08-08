@@ -51,7 +51,16 @@ def test_v2_and_urlsafe_envelopes_cannot_be_replayed_into_each_other():
 def test_tampering_is_detected():
     crypt = _crypt()
     token = crypt.encrypt_urlsafe("secret")
-    flipped = token[:-1] + ("A" if token[-1] != "A" else "B")
+
+    # Flip a byte in the MIDDLE of the base64url payload, not the last
+    # character: base64's final character can carry unused padding bits,
+    # so changing it sometimes decodes to the very same bytes and the
+    # "tamper" is a silent no-op (this test failed roughly one run in
+    # three that way).
+    body = token.rsplit("~", 1)[-1]
+    index = len(token) - len(body) + len(body) // 2
+    flipped = token[:index] + ("A" if token[index] != "A" else "B") + token[index + 1 :]
+    assert flipped != token
 
     with pytest.raises(EncryptionException):
         crypt.decrypt_urlsafe(flipped)
