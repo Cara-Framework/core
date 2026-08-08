@@ -11,8 +11,8 @@ These tests pin the human-facing half of the fix:
 * it says so without ever being able to stop the worker from starting;
 * ordinary bursts stay quiet, or the banner becomes noise and we have
   rebuilt the original silence with extra steps;
-* the ledger being absent entirely (cheapa deploys no outbox) is silence,
-  not a crash;
+* the ledger being absent entirely (a product may deploy no outbox) is
+  silence, not a crash;
 * each command's own ``--help`` names the OTHER processes it needs.
 """
 
@@ -147,7 +147,7 @@ def test_thresholds_are_floored_so_a_zero_cannot_alarm_on_everything(
     assert PublicationBacklogProbe.min_pending() >= 1
 
 
-# ── the ledger may not exist at all (cheapa deploys no outbox) ───────
+# ── the ledger may not exist at all (a product may deploy no outbox) ─
 
 
 class _FakeDB:
@@ -179,11 +179,11 @@ def _store(db) -> QueueJobDeliveryStore:
 
 
 def test_a_missing_ledger_is_reported_as_none_not_an_exception() -> None:
-    """cheapa runs `queue:work` against a database with no outbox table.
+    """A product may run `queue:work` against a database with no outbox table.
 
     A probe that raised UndefinedTable here would take out every worker
-    start in that product — trading one silent failure for a loud one in
-    a codebase that never had the bug.
+    start in that deployment — trading one silent failure for a loud one
+    in a codebase that never had the bug.
     """
     db = _FakeDB(present=False)
     assert _store(db).backlog_metrics_if_installed() is None

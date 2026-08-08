@@ -1261,7 +1261,7 @@ class JobProcessor:
     options={
         "--driver=?": "Queue driver to use (overrides default configuration)",
         "--queue=?": "Queue name(s) to process (comma-separated)",
-        "--pool=?": "Worker pool name from config/queue.py WORKER_POOLS (e.g. pipeline, enrichment, background, realtime). Overrides --queue and --concurrency with pool config.",
+        "--pool=?": "Worker pool name from config/queue.py WORKER_POOLS (one of the keys your app declares there). Overrides --queue and --concurrency with pool config.",
         "--timeout=?": "Reconnect backoff in seconds after a broker disconnect (default: 5)",
         "--max-jobs=?": "Maximum number of jobs to process before stopping",
         "--max-time=?": "Maximum runtime in seconds before stopping",
@@ -1986,7 +1986,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         """Graceful-shutdown drain budget (seconds) for in-flight jobs.
 
         Configurable via ``queue.shutdown_drain_seconds``. Defaults GENEROUS
-        (120s) so a normal scrape/enrich/consolidation job finishes cleanly on
+        (120s) so a normal long-running batch job finishes cleanly on
         SIGTERM instead of being killed mid-transaction at the old flat 10s cap,
         while still bounding how long a wedged poison-thread can delay a deploy.
         Operators can raise it (long batch jobs) or lower it (fast-only workers).

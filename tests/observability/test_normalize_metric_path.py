@@ -31,26 +31,27 @@ def test_bare_ulid_segment_collapses():
 
 
 def test_prefixed_public_id_collapses_to_id():
-    # The real-world footgun: ``PREFIX + ULID`` (no separator). Any prefix
-    # this codebase uses must fold to a single ``{id}`` label.
-    for prefix in ("CHN", "PRD", "ORD", "STK", "SYN", "TEAM", "FFLG"):
+    # The real-world footgun: ``PREFIX + ULID`` (no separator). Any
+    # ``PREFIX+ULID`` public id must fold to a single ``{id}`` label —
+    # cover both length bounds of the 2-6 uppercase-prefix regex.
+    for prefix in ("AB", "ABC", "ABCD", "ABCDEF"):
         pid = f"{prefix}{ulid.new()}"
         assert normalize_metric_path(f"/api/x/{pid}") == "/api/x/{id}"
 
 
 def test_two_distinct_public_ids_share_one_route_label():
-    a = normalize_metric_path(f"/channels/CHN{ulid.new()}/pull")
-    b = normalize_metric_path(f"/channels/CHN{ulid.new()}/pull")
-    assert a == b == "/channels/{id}/pull"
+    a = normalize_metric_path(f"/widgets/AB{ulid.new()}/refresh")
+    b = normalize_metric_path(f"/widgets/AB{ulid.new()}/refresh")
+    assert a == b == "/widgets/{id}/refresh"
 
 
 def test_static_words_are_not_collapsed():
     # Bounded, low-cardinality segments must survive verbatim — including the
-    # lowercase route verbs and the short bounded marketplace/app keys.
+    # lowercase route verbs and short bounded provider/app keys.
     for path in (
         "/api/channels/pull",
-        "/api/oauth/amazon/callback",
-        "/api/apps/ebay/install",
+        "/api/oauth/providerx/callback",
+        "/api/apps/appx/install",
         "/api/recovery/cases/dismiss",
         "/metrics",
     ):

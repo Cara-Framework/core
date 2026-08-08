@@ -323,7 +323,7 @@ class MigrationGenerator:
         # __indexes__) so partial-unique / GIN / CHECK / GENERATED objects the
         # Blueprint can't express are (re)created from the model on every
         # ``make:migration --overwrite``. Injected BEFORE views so a view that
-        # reads a GENERATED column (e.g. listing_price_history.recorded_at) sees
+        # reads a GENERATED column (e.g. price_history.recorded_at) sees
         # the column already added.
         indexes = model_info.get("indexes", [])
         if indexes:

@@ -118,8 +118,8 @@ class SoftDeleteScope(BaseScope):
              an empty change-set and returned a no-op WITHOUT setting
              ``_action = "update"`` — leaving the builder on ``"delete"`` so it
              fell straight through to a hard ``DELETE``. With ``ON DELETE
-             CASCADE`` children (``listing.product_id`` → product) a single
-             ``Product.delete()`` obliterated the product AND its listings.
+             CASCADE`` children (``child.parent_id`` → parent) a single
+             ``Parent.delete()`` obliterated the parent AND its children.
           2. ``update()`` SELF-EXECUTES and ``reset()``s the builder, both of
              which corrupt the surrounding compile when run mid-``to_qmark()``.
 

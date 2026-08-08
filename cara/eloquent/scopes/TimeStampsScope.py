@@ -72,7 +72,7 @@ class TimeStampsScope(BaseScope):
         timestamp_value, updated_timestamp_value = self._timestamp_values(model)
 
         # ``_creates`` is a list of canonicalized rows here. Explicitly
-        # provided timestamps (seeders, scrape imports) are respected —
+        # provided timestamps (seeders, bulk imports) are respected —
         # only absent/None columns are stamped.
         for row in builder._creates:
             if row.get(model.date_created_at) is None:

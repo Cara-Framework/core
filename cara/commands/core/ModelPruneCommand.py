@@ -5,7 +5,7 @@ Discovers application models that mix in
 :meth:`prune`. A model becomes prunable by mixing in ``MakesPrunable`` and
 overriding ``prunable()`` to return the query selecting expired rows::
 
-    class OutboundClick(Model, MakesPrunable):
+    class AuditEvent(Model, MakesPrunable):
         def prunable(self):
             cutoff = pendulum.now("UTC").subtract(days=90).to_datetime_string()
             return self.query().where("created_at", "<", cutoff)
@@ -13,7 +13,7 @@ overriding ``prunable()`` to return the query selecting expired rows::
 Usage::
 
     craft model:prune                       # prune every discovered model
-    craft model:prune --model=OutboundClick # prune a single model by class name
+    craft model:prune --model=AuditEvent    # prune a single model by class name
     craft model:prune --batch=500           # override the per-batch size
     craft model:prune --pretend             # report counts without deleting
 
@@ -31,7 +31,7 @@ from cara.decorators import command
     name="model:prune",
     help="Prune expired rows from MakesPrunable models.",
     options={
-        "--model=?": "Prune only this model (class name, e.g. OutboundClick)",
+        "--model=?": "Prune only this model (class name, e.g. AuditEvent)",
         "--batch=1000": "Rows deleted per batch",
         "--pretend": "Report how many rows WOULD be pruned without deleting",
     },

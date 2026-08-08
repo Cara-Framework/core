@@ -3,18 +3,18 @@
 Laravel parity (``Illuminate\\Database\\Eloquent\\Prunable`` /
 ``MassPrunable``). A model opts in by mixing :class:`MakesPrunable` and
 overriding :meth:`prunable` to return the query identifying the rows that
-should be pruned (e.g. "outbound clicks older than 90 days")::
+should be pruned (e.g. "audit events older than 90 days")::
 
-    class OutboundClick(Model, MakesPrunable):
-        __table__ = "outbound_click"
+    class AuditEvent(Model, MakesPrunable):
+        __table__ = "audit_event"
 
         def prunable(self):
             cutoff = pendulum.now("UTC").subtract(days=90).to_datetime_string()
             return self.query().where("created_at", "<", cutoff)
 
 
-    OutboundClick().prune()  # delete the prunable set in batches
-    OutboundClick().prune(batch_size=500)
+    AuditEvent().prune()  # delete the prunable set in batches
+    AuditEvent().prune(batch_size=500)
 
 :meth:`prune` walks the prunable set in batches of ``batch_size`` primary
 keys, deleting each batch and returning the total number of rows removed.

@@ -97,10 +97,10 @@ MODEL_LESS = True
 class {class_name}(Migration):
     def up(self):
         # Mutate rows here — the query builder (Laravel DB::table()->update()):
-        # DB.table("product").where_null("slug").update({{"slug": "..."}})
+        # DB.table("account").where_null("slug").update({{"slug": "..."}})
         #
         # ...or a raw statement for anything the builder can't express:
-        # DB.statement("UPDATE product SET slug = lower(name) WHERE slug IS NULL")
+        # DB.statement("UPDATE account SET slug = lower(name) WHERE slug IS NULL")
         pass
 
     def down(self):

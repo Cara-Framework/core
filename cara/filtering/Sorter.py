@@ -164,7 +164,7 @@ class SortRegistry:
         """Return the sorter matching ``name`` (or the default if missing).
 
         Unknown names also fall back to the default rather than
-        raising — keeping the listing endpoint usable when the
+        raising — keeping the index endpoint usable when the
         client sends a stale sort value during a deploy.
         """
         if not name:

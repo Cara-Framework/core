@@ -688,14 +688,14 @@ class QueryBuilder(ObservesEvents):
 
         Example::
 
-            Listing.select("*").select_window(
+            Order.select("*").select_window(
                 "ROW_NUMBER()",
-                partition_by=["product_id"],
-                order_by=[("price_low", "asc")],
+                partition_by=["customer_id"],
+                order_by=[("placed_at", "asc")],
                 alias="rn",
             )
             # SELECT *, ROW_NUMBER() OVER (
-            #     PARTITION BY "product_id" ORDER BY "price_low" ASC
+            #     PARTITION BY "customer_id" ORDER BY "placed_at" ASC
             # ) AS "rn" FROM ...
         """
         clauses = []

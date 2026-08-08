@@ -69,8 +69,8 @@ class MakesIdempotentBase:
     #: claim) ALSO return None when the run was a no-op because another
     #: actor owned the entity — a claim-miss. Caching that None for the
     #: full 24h window poisoned every later re-dispatch of the same
-    #: identity (a re-queued sync task "completed" in 1ms without
-    #: touching the marketplace). A None result therefore only dedupes
+    #: identity (a re-dispatched job "completed" in 1ms without
+    #: reaching the external system). A None result therefore only dedupes
     #: the realistic duplicate-dispatch horizon — double scheduler
     #: ticks, racing envelopes, AMQP redelivery, the
     #: ``wait_for_completion`` window — while a re-dispatch driven by a
@@ -185,8 +185,8 @@ class MakesIdempotentBase:
             return None
 
         # Recovery/manual re-runs may bypass stale completed-result evidence,
-        # but never an active owner. Lock stealing allows two marketplace
-        # mutations to run concurrently and lets the older worker delete the
+        # but never an active owner. Lock stealing allows two external-side-effect
+        # jobs to run concurrently and lets the older worker delete the
         # newer worker's lock on exit.
         if self.is_job_locked():
             Log.debug(
@@ -355,8 +355,8 @@ class MakesIdempotentBase:
         an exception escaping here would REPLACE any in-flight
         callback exception (Python's exception-during-finally
         semantic), so a runtime Redis outage that fires mid-job would
-        silently transmute a precise domain exception (e.g.
-        ``PermanentScrapeError`` with ``do_not_retry=True``) into a
+        silently transmute a precise domain exception (e.g. a
+        ``PermanentJobError`` with ``do_not_retry=True``) into a
         generic ``ConnectionError`` — and every upstream consumer
         keyed on the original class (the queue worker retry router's
         do_not_retry branch, per-class retry policies, per-error

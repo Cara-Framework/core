@@ -99,7 +99,7 @@ class QueueRouter:
 
         Args:
             queue_name: Name of the queue to bind
-            routing_pattern: Routing pattern (e.g., "enrichment.*.high")
+            routing_pattern: Routing pattern (e.g., "reports.*.high")
         """
         if queue_name not in self.queue_bindings:
             self.queue_bindings[queue_name] = []
@@ -123,7 +123,7 @@ class QueueRouter:
         Get queues that match the routing key.
 
         Args:
-            routing_key: Full routing key (e.g., "enrichment.product.high")
+            routing_key: Full routing key (e.g., "reports.item.high")
 
         Returns:
             List of matching queue names
@@ -171,7 +171,7 @@ class QueueRouter:
         Dispatch job to appropriate queue based on routing key.
 
         Args:
-            routing_key: Routing key (e.g., "enrichment.product.high")
+            routing_key: Routing key (e.g., "reports.item.high")
             job_instance: Job instance to dispatch
             payload: Additional payload data
 

@@ -25,7 +25,7 @@ def test_paginated_response_uses_canonical_cursor_metadata(
         has_more=True,
         next_cursor="signed-token",
         prev_cursor="signed-previous-token",
-        source_counts={"amazon": 1},
+        source_counts={"providerx": 1},
     )
 
     assert configured is response
@@ -36,7 +36,7 @@ def test_paginated_response_uses_canonical_cursor_metadata(
             "has_more": True,
             "next_cursor": "signed-token",
             "prev_cursor": "signed-previous-token",
-            "source_counts": {"amazon": 1},
+            "source_counts": {"providerx": 1},
         },
     }
 

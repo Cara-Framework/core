@@ -240,7 +240,7 @@ class FilterPipeline:
     def explain(self) -> dict[str, Any]:
         """Render the pipeline's effective state without running SQL.
 
-        Useful for ``/admin/debug/listing?...`` style introspection
+        Useful for ``/admin/debug/items?...`` style introspection
         endpoints, regression tests that pin filter behaviour
         without touching the database, and the wizard's "preview
         the SQL we'd generate" view. Includes every piece a

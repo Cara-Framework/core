@@ -163,8 +163,8 @@ class Route:
         # ``__init__`` — which is exactly the form the route generator
         # emits (``Route.get(path, handler, middleware=[...], name=...)``).
         # That bug meant every generator-produced per-route middleware
-        # (``throttle:ai`` on the AI endpoints, ``auth,admin`` on
-        # ``products.marketplace_data``, ``throttle:health`` on the probes)
+        # (``throttle:*`` on rate-limited endpoints, ``auth,admin`` on
+        # protected routes, ``throttle:health`` on the probes)
         # vanished at registration, so the routes ran unthrottled /
         # unguarded. Applying it via ``route.middleware()`` keeps the
         # group-prepends-before-route ordering intact (RouteGroup.routes).

@@ -103,7 +103,7 @@ def reset_registry() -> None:
     parent's ContextVar bindings — and ``_ACTIVE_CONNECTIONS`` holds a *mutable
     dict by reference*, so the child task ends up sharing the SAME registry
     object as its parent and peer tasks. Under concurrent job execution
-    (workers run up to ``WORKER_SCRAPE_CONCURRENCY`` jobs as peer tasks) two
+    (workers run up to the pool's configured concurrency as peer tasks) two
     jobs would then share one registry: job A's transaction ``commit`` pops the
     connection out of the shared dict while job B is still mid-transaction on
     it, so B's own ``commit``/``rollback`` raises "No active transaction found

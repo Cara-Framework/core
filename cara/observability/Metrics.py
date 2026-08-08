@@ -213,8 +213,8 @@ _UUID_RE = re.compile(
 # bare ULID — it is neither all-digit, a UUID, nor exactly 26 alnum chars, so
 # the heuristics below miss it. Without this rule EVERY channel/order/case id
 # spawns its own ``route`` label time-series and the HTTP metrics explode.
-# Bound (2–6 prefix letters, ≥20 Crockford chars) mirrors the fold the
-# usage-analytics SQL already applies to the same ``http_request_log`` paths.
+# Bound (2–6 prefix letters, ≥20 Crockford chars) matches the shape
+# ``MakesPublicId`` mints, so any consumer folding the same paths agrees.
 _PREFIXED_ID_RE = re.compile(r"[A-Z]{2,6}[0-9A-HJKMNP-TV-Z]{20,}")
 
 

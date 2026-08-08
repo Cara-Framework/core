@@ -17,7 +17,7 @@ class BoolCast(BaseCast):
 
     Bare ``bool(value)`` is dangerously wrong for string inputs — every
     non-empty string is truthy, so ``bool("0")``, ``bool("false")``, and
-    ``bool("False")`` all evaluate to ``True``. Scrapers that write
+    ``bool("False")`` all evaluate to ``True``. Importers that write
     string-shaped truthiness (``"0"`` / ``"1"``, ``"true"`` / ``"false"``)
     into boolean columns silently flipped to ``True`` regardless of the
     intended value.

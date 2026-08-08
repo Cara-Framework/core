@@ -320,7 +320,7 @@ class Blueprint:
         among active / non-deleted rows" case::
 
             table.partial_unique(
-                ["marketplace_id", "external_id"], where="deleted_at IS NULL"
+                ["source_id", "external_id"], where="deleted_at IS NULL"
             )
         """
         return self.unique(column, name=name, where=where)

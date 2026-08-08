@@ -50,9 +50,8 @@ def _trusted_proxy_networks() -> tuple:
     Operators who genuinely terminate TLS at an internal LB on
     10.x / 172.x / 192.168.x MUST opt that range in explicitly via
     the ``TRUSTED_PROXIES`` config / env var. This matches what
-    Symfony / Laravel 9+ do, and what the repo's own
-    ``OutboundClickService._trusted_proxies`` already does (no
-    auto-defaults, explicit config only).
+    Symfony / Laravel 9+ do (no auto-defaults, explicit config
+    only).
     """
     try:
         from cara.configuration import config

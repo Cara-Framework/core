@@ -213,12 +213,12 @@ class DatabaseManager:
     def commit_open_transactions(self, connection=None) -> None:
         """Commit every open transaction level on the context-pinned connection.
 
-        Sync pipeline jobs (``craft collect:items --sync``) run inline in
-        one asyncio task. When an outer ``with db.transaction()`` stays pinned
-        in the ContextVar registry, later ``with db.transaction()`` blocks
-        become SAVEPOINTs — releasing them does not persist rows. A rollback
-        when the root job finishes then drops listings that downstream stages
-        already read, and ``_verify_sync_collection`` sees an empty table.
+        Sync pipeline jobs run inline in one asyncio task. When an outer
+        ``with db.transaction()`` stays pinned in the ContextVar registry,
+        later ``with db.transaction()`` blocks become SAVEPOINTs — releasing
+        them does not persist rows. A rollback when the root job finishes
+        then drops rows that downstream stages already read, and a
+        post-stage verification sees an empty table.
 
         Call at pipeline stage boundaries (match → validate → consolidate)
         so each stage's writes are durably committed before the next stage

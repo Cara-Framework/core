@@ -90,8 +90,8 @@ def test_double_wrapped_unique_violation_detected() -> None:
 
 def test_constraint_scope_matches_through_wrapper() -> None:
     class _Diag:
-        constraint_name = "product_container_container_signature_unique"
-        message_detail = "Key (container_signature)=(amazon-us:B0X) already exists."
+        constraint_name = "widget_container_container_signature_unique"
+        message_detail = "Key (container_signature)=(region-a:X1) already exists."
 
     # ``diag`` (like ``pgcode``) is a read-only driver attribute on instances,
     # so pin it at class level.

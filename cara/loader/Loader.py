@@ -59,7 +59,7 @@ class Loader:
         # Don't use as_filepath for filesystem paths, only for dotted paths
         module_paths = []
         for path in files_or_directories:
-            # If path contains dots but is not a dotted module path (like receet.io),
+            # If path contains dots but is not a dotted module path (like example.io),
             # treat it as filesystem path
             if "." in path and not path.startswith(".") and "/" in path:
                 module_paths.append(path)
