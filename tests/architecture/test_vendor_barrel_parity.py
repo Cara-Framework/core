@@ -7,7 +7,9 @@ from cara.architecture.scanners import VendorBarrelParity
 
 from ._fixtures import make_manifest, write
 
-BARREL = '"""Models barrel."""\n\nfrom commons.models import {names}\n\n__all__ = [{quoted}]\n'
+BARREL = (
+    '"""Models barrel."""\n\nfrom commons.models import {names}\n\n__all__ = [{quoted}]\n'
+)
 
 
 def _barrel(*names: str) -> str:
@@ -18,9 +20,8 @@ def _barrel(*names: str) -> str:
 
 
 def _kernel(*names: str) -> str:
-    return '"""Kernel package."""\n\n__all__ = [%s]\n' % ", ".join(
-        f'"{name}"' for name in names
-    )
+    exports = ", ".join(f'"{name}"' for name in names)
+    return f'"""Kernel package."""\n\n__all__ = [{exports}]\n'
 
 
 def test_complete_barrel_passes(tmp_path):

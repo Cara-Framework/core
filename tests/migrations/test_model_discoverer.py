@@ -133,6 +133,64 @@ def test_self_constant_default_resolves_to_literal(discoverer, tmp_path):
     assert info["fields"]["attempts"]["params"].get("default") == 5
 
 
+def test_model_class_constant_default_resolves_to_literal(discoverer, tmp_path):
+    src = """
+        from cara.eloquent.schema import Schema
+
+        class Ticket(Model):
+            __table__ = "ticket"
+            STATUS_PENDING = "pending"
+
+            @property
+            def fields(self):
+                return Schema.build(
+                    lambda field: (
+                        field.string("status", 20).default(Ticket.STATUS_PENDING),
+                    )
+                )
+    """
+    info = discoverer._parse_model_file(_write_model(tmp_path, "Ticket.py", src))
+
+    assert info["fields"]["status"]["params"] == {"length": 20, "default": "pending"}
+
+
+def test_discovery_excludes_models_pinned_inside_migration_history(
+    discoverer, tmp_path
+):
+    _write_model(
+        tmp_path,
+        "Canonical.py",
+        'class Canonical(Model):\n    __table__ = "record"\n',
+    )
+    migrations = tmp_path / "database" / "migrations"
+    migrations.mkdir(parents=True)
+    _write_model(
+        migrations,
+        "0001_transition.py",
+        'class HistoricalRow(Model):\n    __table__ = "record"\n',
+    )
+
+    models = discoverer._scan_path_for_models(tmp_path)
+
+    assert [(model["name"], model["table"]) for model in models] == [
+        ("Canonical", "record")
+    ]
+
+
+def test_discovery_rejects_duplicate_canonical_tables(discoverer, monkeypatch):
+    monkeypatch.setattr(
+        discoverer,
+        "_scan_path_for_models",
+        lambda *_args, **_kwargs: [
+            {"name": "First", "table": "record", "file": "/app/models/First.py"},
+            {"name": "Second", "table": "record", "file": "/app/models/Second.py"},
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Duplicate model table 'record'"):
+        discoverer.discover_models()
+
+
 # --------------------------------------------------------------------------
 # Fix 2: deterministic discovery + topological sort
 # --------------------------------------------------------------------------
@@ -210,7 +268,7 @@ def test_circular_dependency_breaks_on_lowest_table_deterministically(discoverer
 
 def test_phantom_id_columns_are_not_foreign_keys(discoverer):
     tables = ["brand", "product", "seller", "users"]
-    info = {"params": {}}
+    info = {"type": "unsigned_big_integer", "params": {}}
     # Real FK targets resolve to actual tables.
     assert discoverer._is_foreign_key_field("brand_id", info, tables)
     assert discoverer._extract_referenced_table("brand_id", info, tables) == "brand"
@@ -228,6 +286,20 @@ def test_phantom_id_columns_are_not_foreign_keys(discoverer):
     # merged_into_brand_id strips to merged_into_brand (not a table) → not a FK
     # via the implicit path (its real FK comes from an explicit field.foreign).
     assert not discoverer._is_foreign_key_field("merged_into_brand_id", info, tables)
+
+
+def test_string_id_column_is_not_an_implicit_foreign_key(discoverer):
+    info = {"type": "string", "params": {}}
+
+    assert not discoverer._is_foreign_key_field(
+        "notification_id", info, ["notification"]
+    )
+    assert (
+        discoverer._extract_referenced_table(
+            "notification_id", info, ["notification"]
+        )
+        is None
+    )
 
 
 def test_explicit_foreign_key_param_still_detected(discoverer):
@@ -249,6 +321,28 @@ def test_phantom_fk_excluded_from_dependency_graph(discoverer):
     }
     ordered = discoverer.resolve_dependency_order([model])
     assert ordered[0]["foreign_keys"] == []
+
+
+def test_raw_index_foreign_key_participates_in_dependency_order(discoverer):
+    parent = {"table": "parent", "name": "Parent", "fields": {}, "indexes": []}
+    child = {
+        "table": "child",
+        "name": "Child",
+        "fields": {},
+        "indexes": [
+            {
+                "up": (
+                    "ALTER TABLE child ADD CONSTRAINT child_parent_fk "
+                    "FOREIGN KEY (tenant_id, parent_id) "
+                    "REFERENCES parent (tenant_id, id)"
+                )
+            }
+        ],
+    }
+
+    ordered = discoverer.resolve_dependency_order([child, parent])
+
+    assert [model["table"] for model in ordered] == ["parent", "child"]
 
 
 # --------------------------------------------------------------------------
@@ -387,7 +481,7 @@ def test_column_named_by_class_constant_is_discovered(discoverer, tmp_path):
         class Fulfillment(Model):
             __table__ = "fulfillment"
 
-            ORIGIN_CHANNEL_ID_COLUMN = "amazon_channel_id"
+            ORIGIN_CHANNEL_ID_COLUMN = "origin_channel_id"
 
             @property
             def fields(self):
@@ -404,12 +498,12 @@ def test_column_named_by_class_constant_is_discovered(discoverer, tmp_path):
     info = discoverer._parse_model_file(model_path)
 
     assert info is not None
-    assert "amazon_channel_id" in info["fields"], (
+    assert "origin_channel_id" in info["fields"], (
         "a column named by a class constant vanished from discovery — "
         "regenerating would DROP it from the table"
     )
-    assert info["fields"]["amazon_channel_id"]["type"] == "unsigned_big_integer"
-    assert {"columns": ["amazon_channel_id"], "name": None} in info[
+    assert info["fields"]["origin_channel_id"]["type"] == "unsigned_big_integer"
+    assert {"columns": ["origin_channel_id"], "name": None} in info[
         "composite_indexes"
     ], "an index declared with a class constant vanished from discovery"
 

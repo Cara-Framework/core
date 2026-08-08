@@ -79,6 +79,20 @@ def test_clean_directory_has_no_violations(tmp_path):
     assert audit_migrations(tmp_path, {"product": set(), "listing": set()}) == []
 
 
+def test_generated_migration_rejects_model_constant_default(tmp_path):
+    _generated(
+        tmp_path,
+        "product",
+        extra='            table.string("source").default(Product.SOURCE_MANUAL)',
+    )
+
+    violations = audit_migrations(tmp_path, {"product": set()})
+
+    assert _rules(violations) == ["non-literal-default"]
+    assert "Product.SOURCE_MANUAL" in violations[0].message
+    assert violations[0].blocks_fix
+
+
 # ── applied model transitions ──────────────────────────────────────────────
 
 

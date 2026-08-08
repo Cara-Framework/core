@@ -25,6 +25,8 @@ CI gate for the convention:
      only when its SQL proves the rename and ``new`` is the exact current model.
   7. INDEXES BELONG TO MODELS — an index that exists only inside a migration
      file is silently DROPPED by the next regenerate-from-models.
+  8. LITERAL DEFAULTS — generated migrations must be replayable without model
+     imports; schema defaults therefore cannot contain class/constant lookups.
 
 (Rule 6, from-scratch installability, is not statically checkable; it is the
 acceptance test these rules exist to protect.)
@@ -183,6 +185,31 @@ def _string_constants(tree: ast.AST) -> list[tuple[int, str]]:
             and id(node) not in docstring_nodes
         ):
             found.append((node.lineno, node.value))
+    return found
+
+
+def _non_literal_defaults(path: Path) -> list[tuple[int, str]]:
+    """Return generated ``.default(...)`` calls that need runtime name lookup.
+
+    Migration generation copies the model's schema expression into a standalone
+    module. A model constant such as ``Product.SOURCE_MANUAL`` is not imported
+    there and only fails when a clean database executes the migration. Requiring
+    a literal keeps historical migrations self-contained and deterministic.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "default"
+            and node.args
+        ):
+            continue
+        try:
+            ast.literal_eval(node.args[0])
+        except ValueError, TypeError:
+            found.append((node.lineno, ast.unparse(node.args[0])))
     return found
 
 
@@ -359,6 +386,23 @@ def audit_migrations(
             else:
                 creators.setdefault(entry.generated_table, set()).add(name)
                 generated_files.add(name)
+                for line, expression in _non_literal_defaults(entry.path):
+                    violations.append(
+                        Violation(
+                            rule="non-literal-default",
+                            path=name,
+                            message=(
+                                f"line {line} default {expression!r} requires a "
+                                "runtime name lookup"
+                            ),
+                            remedy=(
+                                "declare the default as a literal in the model and "
+                                "regenerate migrations"
+                            ),
+                            human_only=True,
+                            blocks_fix=True,
+                        )
+                    )
         elif entry.model_transition:
             transitions.append(entry)
         else:

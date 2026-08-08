@@ -17,6 +17,12 @@ _logger = logging.getLogger("cara.migrations.discoverer")
 # literal (distinct from a legitimate ``None`` default value).
 _UNRESOLVED = object()
 
+_RAW_REFERENCES_RE = re.compile(
+    r'\bREFERENCES\s+(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?'
+    r'"?(?P<table>[A-Za-z_][A-Za-z0-9_]*)"?',
+    re.IGNORECASE,
+)
+
 
 class ModelDiscoverer:
     """Discover model files and extract Field.* definitions."""
@@ -63,6 +69,37 @@ class ModelDiscoverer:
     # Field types that don't take field names
     FIELD_TYPES_WITHOUT_NAMES = {"timestamps", "soft_deletes", "foreign", "foreign_key"}
 
+    # Migration history may intentionally pin a tiny ``Model`` subclass so a
+    # data transition can keep using the old row shape. It is executable
+    # history, never a canonical model source, and must not enter discovery.
+    DISCOVERY_EXCLUDED_DIRECTORIES = {
+        "migrations",
+        "tests",
+        "test",
+        "venv",
+        "__pycache__",
+        "node_modules",
+        "build",
+        "dist",
+        ".git",
+    }
+
+    # Implicit ``*_id`` inference is only safe for ID-shaped columns. External
+    # string identifiers such as ``notification_id`` may share a table prefix
+    # without being relational keys.
+    IMPLICIT_FOREIGN_KEY_TYPES = {
+        "tiny_integer",
+        "small_integer",
+        "medium_integer",
+        "integer",
+        "big_integer",
+        "unsigned_integer",
+        "unsigned_big_integer",
+        "increments",
+        "big_increments",
+        "id",
+    }
+
     def __init__(self):
         # Don't resolve path at init time - do it at runtime when needed
         self.models_dir = None
@@ -77,20 +114,40 @@ class ModelDiscoverer:
         # Scan project root with max 5 levels deep
         models.extend(self._scan_path_for_models(project_root, max_depth=5))
 
-        # Deduplicate by model name - keep first occurrence
-        seen_names = set()
+        # Fail closed on duplicate identities. Keeping whichever file happened
+        # to be scanned first lets one schema silently overwrite another in the
+        # table-keyed dependency graph.
+        seen_names: dict[str, str] = {}
+        seen_tables: dict[str, str] = {}
+        seen_files: set[str] = set()
         unique_models = []
         for model in models:
-            if model["name"] not in seen_names:
-                # Exclude models from within Cara framework
-                model_file = model.get("file", "")
-                if "/cara/" in model_file and (
-                    "eloquent" in model_file or "queues" in model_file
-                ):
-                    continue
-
-                seen_names.add(model["name"])
-                unique_models.append(model)
+            # Exclude models from within Cara framework
+            model_file = model.get("file", "")
+            if "/cara/" in model_file and (
+                "eloquent" in model_file or "queues" in model_file
+            ):
+                continue
+            # Local workspaces expose commons through a symlink while the
+            # monorepo root also contains its real directory. They are the
+            # same source file, not two model declarations.
+            resolved_file = str(Path(model_file).resolve())
+            if resolved_file in seen_files:
+                continue
+            seen_files.add(resolved_file)
+            name = model["name"]
+            table = model["table"]
+            if name in seen_names:
+                raise RuntimeError(
+                    f"Duplicate model class {name!r}: {seen_names[name]} and {model_file}"
+                )
+            if table in seen_tables:
+                raise RuntimeError(
+                    f"Duplicate model table {table!r}: {seen_tables[table]} and {model_file}"
+                )
+            seen_names[name] = model_file
+            seen_tables[table] = model_file
+            unique_models.append(model)
 
         return unique_models
 
@@ -112,14 +169,10 @@ class ModelDiscoverer:
             # numbers for the same set of models.
             for item in sorted(path.iterdir(), key=lambda p: p.name):
                 # Skip hidden directories, venv, __pycache__, .git, etc.
-                if item.name.startswith(".") or item.name in [
-                    "venv",
-                    "__pycache__",
-                    "node_modules",
-                    "build",
-                    "dist",
-                    ".git",
-                ]:
+                if (
+                    item.name.startswith(".")
+                    or item.name in self.DISCOVERY_EXCLUDED_DIRECTORIES
+                ):
                     continue
 
                 if item.is_dir():
@@ -247,6 +300,15 @@ class ModelDiscoverer:
                         }
                     )
 
+            # Raw constraints in ``__indexes__`` are emitted after CREATE
+            # TABLE, but their referenced table must still precede this model.
+            # This matters when the raw composite FK is the only relationship.
+            for index in model.get("indexes", []):
+                for match in _RAW_REFERENCES_RE.finditer(index.get("up", "")):
+                    referenced_table = match.group("table")
+                    if referenced_table in all_table_names:
+                        dependencies.append(referenced_table)
+
             dependency_graph[table_name] = dependencies
             model["foreign_keys"] = foreign_keys
 
@@ -354,6 +416,7 @@ class ModelDiscoverer:
             for target in node.targets
             if isinstance(target, ast.Name)
         }
+        self._class_name = class_node.name
 
         for node in class_node.body:
             if isinstance(node, ast.Assign):
@@ -576,13 +639,11 @@ class ModelDiscoverer:
                                     model_info["fields"][field_type] = field_def
 
     def _resolve_self_constant(self, node: ast.AST):
-        """A ``self.CONSTANT`` default → its class-level literal value, else
-        ``_UNRESOLVED``. Lets a schema default reuse the model's own status/enum
-        constant (DRY) while the generated migration still carries the VALUE."""
+        """Resolve ``self.CONSTANT`` or ``ModelName.CONSTANT`` to a literal."""
         if (
             isinstance(node, ast.Attribute)
             and isinstance(node.value, ast.Name)
-            and node.value.id == "self"
+            and node.value.id in {"self", getattr(self, "_class_name", None)}
         ):
             return getattr(self, "_class_constants", {}).get(node.attr, _UNRESOLVED)
         return _UNRESOLVED
@@ -775,6 +836,8 @@ class ModelDiscoverer:
             return True
         if not field_name.endswith("_id"):
             return False
+        if field_info.get("type") not in self.IMPLICIT_FOREIGN_KEY_TYPES:
+            return False
         return self._resolve_id_column_to_table(field_name, all_table_names) is not None
 
     def _extract_referenced_table(
@@ -784,8 +847,11 @@ class ModelDiscoverer:
         all_table_names: list[str],
     ) -> str | None:
         """Extract referenced table name from foreign key field."""
-        # For fields ending with _id, resolve the prefix to a real table.
-        if field_name.endswith("_id"):
+        # For ID-shaped fields ending with _id, resolve the prefix to a table.
+        if field_name.endswith("_id") and (
+            field_info.get("params", {}).get("foreign_key", False)
+            or field_info.get("type") in self.IMPLICIT_FOREIGN_KEY_TYPES
+        ):
             return self._resolve_id_column_to_table(field_name, all_table_names)
 
         # Check for explicit references parameter
