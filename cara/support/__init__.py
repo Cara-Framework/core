@@ -41,7 +41,7 @@ from .Str import (
 )
 from .Structures import data, data_get, data_set
 from .SupportProvider import SupportProvider
-from .Time import parse_human_time, to_pendulum
+from .Time import SECONDS_PER_DAY, parse_human_time, to_pendulum
 from .Modules import get_classes, modules
 from .Paths import base_path, paths, public_path, storage_path
 
@@ -63,6 +63,7 @@ __all__ = [
     "ProcessFailedException",
     "ProcessResult",
     "Retry",
+    "SECONDS_PER_DAY",
     "SMTP_TIMEOUT_SECONDS",
     "Sleep",
     "SupportProvider",

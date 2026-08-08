@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import pendulum
 
+#: One day in seconds. Named because ``86400`` in a TTL or a staleness
+#: window reads as a magic number at every call site, and both products
+#: had independently defined this same constant in their own kernels.
+SECONDS_PER_DAY = 86_400
+
 
 def parse_human_time(str_time):
     """
