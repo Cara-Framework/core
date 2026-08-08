@@ -203,7 +203,7 @@ def outbound_url_reason(
     allow_fragment: bool = True,
     allow_non_public: bool = False,
     host_allowlist: Iterable[str] | None = None,
-    resolver: Callable[..., list[tuple]] = socket.getaddrinfo,
+    resolver: Callable[..., list[tuple]] | None = None,
     resolve_dns: bool = True,
     max_length: int = 2048,
 ) -> str | None:
@@ -230,7 +230,12 @@ def outbound_url_reason(
 
     schemes = {str(scheme).lower() for scheme in allowed_schemes}
     if parsed.scheme.lower() not in schemes:
-        return f"scheme not allowed: {parsed.scheme!r}"
+        # Name the allowed set: the reason reaches operator-facing copy,
+        # and "not allowed" alone leaves the reader to guess the fix.
+        return (
+            f"scheme not allowed: {parsed.scheme!r} "
+            f"(allowed: {', '.join(sorted(schemes))})"
+        )
     if not parsed.hostname:
         return "url missing hostname"
     if not allow_userinfo and (parsed.username is not None or parsed.password is not None):
@@ -280,8 +285,12 @@ def outbound_url_reason(
     if not resolve_dns:
         return None
 
+    # Resolved at CALL time, never bound as a default: a module-level
+    # default would freeze the resolver at import and silently ignore any
+    # later replacement (a test double, a green-thread monkeypatch).
+    resolve = resolver if resolver is not None else socket.getaddrinfo
     try:
-        answers = resolver(host, None, type=socket.SOCK_STREAM)
+        answers = resolve(host, None, type=socket.SOCK_STREAM)
     except (OSError, UnicodeError) as exc:
         return f"dns resolution failed: {type(exc).__name__}"
 
@@ -344,7 +353,7 @@ def resolve_outbound_url(
     *,
     label: str = "url",
     port: int = 443,
-    resolver: Callable[..., list[tuple]] = socket.getaddrinfo,
+    resolver: Callable[..., list[tuple]] | None = None,
     **kwargs,
 ) -> tuple[str, str, tuple[str, ...]]:
     """Validate and return ``(url, host, addresses)`` for connect-time pinning.
@@ -357,8 +366,9 @@ def resolve_outbound_url(
 
     raw = str(url or "").strip()
     host = (urlsplit(raw).hostname or "").rstrip(".").lower()
+    resolve = resolver if resolver is not None else socket.getaddrinfo
     try:
-        answers = resolver(host, port, type=socket.SOCK_STREAM)
+        answers = resolve(host, port, type=socket.SOCK_STREAM)
     except OSError as exc:
         raise UnsafeOutboundUrl(f"{label}: hostname could not be resolved") from exc
 
