@@ -6,6 +6,7 @@ Provides authentication guards, managers, and policy primitives.
 
 from .Authentication import Authentication
 from .LoginAttemptTracker import LoginAttemptTracker, LoginLocked
+from .SignInHint import SignInHint
 from .AuthenticationProvider import AuthenticationProvider
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "AuthenticationProvider",
     "LoginAttemptTracker",
     "LoginLocked",
+    "SignInHint",
 ]

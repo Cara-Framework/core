@@ -20,6 +20,12 @@ from typing import Any
 # nothing is deferred by lazying it anyway.
 from cara.http.Pagination import Pagination as Pagination
 
+# EAGER for the reason directly above: ``ReturnPath`` also names both this
+# package's submodule and the class inside it, so a lazy entry would bind the
+# MODULE the first time ``import_module`` ran and hand every later importer
+# a module where they asked for a class. Pure stdlib, nothing deferred by it.
+from cara.http.ReturnPath import ReturnPath as ReturnPath
+
 _EXPORTS = {
     "Controller": ("cara.http.controllers", "Controller"),
     "FormRequest": ("cara.http.requests", "FormRequest"),
@@ -49,7 +55,7 @@ _EXPORTS = {
     "validated_query_int": ("cara.http.Payload", "validated_query_int"),
 }
 
-__all__ = sorted({*_EXPORTS, "Pagination"})
+__all__ = sorted({*_EXPORTS, "Pagination", "ReturnPath"})
 
 
 def __getattr__(name: str) -> Any:
