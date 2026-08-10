@@ -22,7 +22,7 @@ from tests.architecture._cara_self_scan import (
 #: Total pinned findings. Spelled out so the debt's SIZE is part of the
 #: guard's output, as §11 requires ("its size is part of the guard's
 #: output") — a census that only lives as a dict is a number nobody reads.
-CENSUS_TOTAL = 1532
+CENSUS_TOTAL = 1523
 
 
 class TestEveryScannerIsDecidedOn:

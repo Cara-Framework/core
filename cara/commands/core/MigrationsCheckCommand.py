@@ -3,47 +3,46 @@ only *implements*.
 
 ``make:migration --overwrite`` makes the migrations directory a function of the
 models. Nothing verified that it STAYED one. Between two regenerations anybody
-can drop an ``add_x_to_y.py`` in, hand-edit an index into a generated file, or
-write a MODEL_LESS migration with a naive ``TIMESTAMP`` column — and the next
-from-scratch install is the first thing to notice. ``migrations:check`` is the
-CI gate for the convention:
+can drop an ``add_x_to_y.py`` in, or hand-edit an index into a generated file —
+and the next from-scratch install is the first thing to notice.
+``migrations:check`` is the CI gate for the convention:
 
   1. ONE FILE PER TABLE — every model table has exactly one generated
      ``create_<table>_table.py``; zero and two are both defects.
-  2. NO INCREMENTAL MIGRATIONS — an unmarked file that is not a generated
-     create-table file (``add_*`` / ``alter_*`` / ``backfill_*`` / ``fix_*``)
-     is a violation. Change the MODEL, ALTER the dev database by hand, regenerate.
-  3. MODEL_LESS ESCAPE HATCH — a file marked ``MODEL_LESS = True`` must SAY in
-     its docstring why no model can own the object. An unexplained marker is how
-     the hatch turns back into a dumping ground.
-  4. UTC EVERYWHERE — a naive ``TIMESTAMP`` in hand-written SQL re-creates the
+  2. GENERATED FILES ONLY — every file must be a generated create-table file.
+     There are NO exemption markers: ``MODEL_LESS``, ``MODEL_TRANSITION`` and
+     ``DROPPED_INDEXES`` are banned outright, and a file carrying one is a
+     violation in itself. The escape hatch existed for content that now has a
+     model-side home — framework tables are declared in ``cara.models``,
+     triggers and named constraints live in a model's ``__indexes__`` DDL
+     entries, and one-time data rewrites are not migrations at all. The hatch
+     was removed after it accumulated 23 files in one product, six of which
+     redeclared columns their models already owned: two sources of truth,
+     one of them non-idempotent, so the documented regenerate workflow itself
+     would have broken the next from-scratch install.
+  3. UTC EVERYWHERE — a naive ``TIMESTAMP`` in migration SQL re-creates the
      mixed-awareness cast that makes index expressions non-IMMUTABLE, which is
-     what made a from-scratch migrate die in both products.
-  5. NO DUPLICATES — two files creating the same table.
-  6. APPLIED MODEL TRANSITIONS — an immutable generated creator may be paired
-     with one later, explained ``MODEL_TRANSITION = ("old", "new")`` migration
-     only when its SQL proves the rename and ``new`` is the exact current model.
-  7. INDEXES BELONG TO MODELS — an index that exists only inside a migration
-     file is silently DROPPED by the next regenerate-from-models. An immutable
-     historical index is exempt only when a later explained MODEL_LESS
-     migration declares ``DROPPED_INDEXES`` and its ``up()`` proves the drop.
-  8. LITERAL DEFAULTS — generated migrations must be replayable without model
+     what made a from-scratch migrate die in both products. Generated files
+     carry model-authored ``__indexes__`` SQL, so they are scanned too.
+  4. NO DUPLICATES — two files creating the same table.
+  5. INDEXES BELONG TO MODELS — an index that exists only inside a migration
+     file is silently DROPPED by the next regenerate-from-models. No
+     historical-immutability exemption: history is regenerated, not preserved.
+  6. LITERAL DEFAULTS — generated migrations must be replayable without model
      imports; schema defaults therefore cannot contain class/constant lookups.
 
-(Rule 6, from-scratch installability, is not statically checkable; it is the
-acceptance test these rules exist to protect.)
+(From-scratch installability itself is not statically checkable; it is the
+acceptance test these rules exist to protect: an empty database migrated from
+zero must equal the models' schema, byte for byte.)
 
 Every file is parsed with ``ast``, never imported — importing a migration can
 open a database connection, and a gate must not need one.
 
-``--fix`` takes the ``make:migration --overwrite --force`` path (honouring
-MODEL_LESS) and re-audits, printing which files it added and removed. Two
-classes of violation are deliberately NOT auto-fixed because they need a human
-decision: a naive timestamp inside a hand-written MODEL_LESS file, and a marked
-file with no explanation. Both are reported and keep the exit code non-zero.
-A third class BLOCKS the fix entirely rather than being carried out — an index
-declared only in a migration, a duplicated CREATE TABLE, an unparseable file —
-because regenerating would DESTROY the thing the check just found.
+``--fix`` takes the ``make:migration --overwrite --force`` path and re-audits,
+printing which files it added and removed. A naive timestamp in model-authored
+SQL is reported but never auto-fixed (the fix belongs in the model). A
+hand-added index, a duplicated CREATE TABLE and an unparseable file BLOCK the
+fix entirely — regenerating would DESTROY the thing the check just found.
 
 Exit code is 0 only when the directory is clean, so CI can gate on it.
 """
@@ -56,11 +55,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cara.commands import CommandBase, missing_optional
-from cara.commands.core.MakeMigrationCommand import (
-    MODEL_LESS_MARKER,
-    MODEL_TRANSITION_MARKER,
-    MakeMigrationCommand,
-)
+from cara.commands.core.MakeMigrationCommand import MakeMigrationCommand
 from cara.decorators import command
 
 # Filenames the generator authors: ``NNNN_01_01_NNNNNN_create_<table>_table.py``.
@@ -72,7 +67,7 @@ _GENERATED_NAME_RE = re.compile(
 )
 
 # ``CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] <name> ON <table>`` —
-# both halves captured, because rule 7 is about WHICH table's index escaped its
+# both halves captured, because rule 5 is about WHICH table's index escaped its
 # model. SchemaCheckCommand's sibling regex captures only the name.
 _CREATE_INDEX_ON_RE = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
@@ -82,7 +77,7 @@ _CREATE_INDEX_ON_RE = re.compile(
 )
 
 # ``CREATE TABLE [IF NOT EXISTS] <table>`` in raw SQL — the duplicate-table
-# check has to see past filenames, since a MODEL_LESS file can create a table a
+# check has to see past filenames, since raw SQL can create a table a
 # generated file already owns.
 _CREATE_TABLE_RE = re.compile(
     r"CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
@@ -90,34 +85,17 @@ _CREATE_TABLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_ALTER_TABLE_RENAME_RE = re.compile(
-    r"ALTER\s+TABLE\s+\"?(?P<old>[a-z0-9_]+)\"?\s+"
-    r"RENAME\s+TO\s+\"?(?P<new>[a-z0-9_]+)\"?",
-    re.IGNORECASE,
-)
-_ALTER_INDEX_RENAME_RE = re.compile(
-    r"ALTER\s+INDEX\s+(?:IF\s+EXISTS\s+)?"
-    r"(?:\"?[a-z0-9_]+\"?\.)?\"?(?P<old>[a-z0-9_]+)\"?\s+"
-    r"RENAME\s+TO\s+\"?(?P<new>[a-z0-9_]+)\"?",
-    re.IGNORECASE,
-)
-_DROP_INDEX_RE = re.compile(
-    r"DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?"
-    r"(?:\"?[a-z0-9_]+\"?\.)?\"?(?P<name>[a-z0-9_]+)\"?",
-    re.IGNORECASE,
-)
-
-# Literal metadata for a MODEL_LESS forward migration that retires an index
-# from immutable generated history: ``{index_name: model_table}``.  The audit
-# also requires an older matching CREATE and an exact DROP inside ``up()``;
-# the marker alone can never hide an undeclared index.
-DROPPED_INDEXES_MARKER = "DROPPED_INDEXES"
+# The retired escape hatches. Their NAMES stay known so a file that still
+# declares one is reported as exactly that, with a remedy, instead of as a
+# generic parse curiosity. Any assignment to one of these at module scope is a
+# violation regardless of the assigned value.
+_BANNED_MARKERS = ("MODEL_LESS", "MODEL_TRANSITION", "DROPPED_INDEXES")
 
 # A naive TIMESTAMP. ``CURRENT_TIMESTAMP`` / ``LOCALTIMESTAMP`` / ``to_timestamp``
 # are excluded by the lookbehind (they are preceded by a word character),
 # ``TIMESTAMPTZ`` and ``TIMESTAMP WITH TIME ZONE`` by the lookaheads. What is
 # left — bare ``TIMESTAMP`` and ``TIMESTAMP WITHOUT TIME ZONE`` — is exactly the
-# naive declaration rule 4 forbids.
+# naive declaration rule 3 forbids.
 _NAIVE_TIMESTAMP_RE = re.compile(
     r"(?<![A-Za-z0-9_])TIMESTAMP(?!TZ)(?!\s+WITH\s+TIME\s+ZONE)(?![A-Za-z0-9_])",
     re.IGNORECASE,
@@ -146,24 +124,11 @@ class MigrationFile:
     """A parsed migration file: classification + the SQL text it contains."""
 
     path: Path
-    model_less: bool
     generated_table: str | None
-    model_transition: tuple[str, str] | None
-    transition_error: str | None
-    dropped_indexes: tuple[tuple[str, str], ...]
-    dropped_indexes_error: str | None
+    banned_markers: tuple[str, ...]
     docstring: str | None
     sql_constants: tuple[tuple[int, str], ...]
-    up_sql_constants: tuple[tuple[int, str], ...]
     syntax_error: str | None
-
-
-@dataclass(frozen=True)
-class _IndexTransition:
-    """One proven retirement of a historical index in a later migration."""
-
-    migration_name: str
-    replacement: str | None
 
 
 def _string_constants(tree: ast.AST) -> list[tuple[int, str]]:
@@ -224,92 +189,21 @@ def _non_literal_defaults(path: Path) -> list[tuple[int, str]]:
     return found
 
 
-def _model_transition(
-    tree: ast.Module,
-) -> tuple[tuple[str, str] | None, str | None]:
-    """Read one explicit old-table -> model-table transition marker."""
-
-    marker: ast.AST | None = None
+def _banned_markers(tree: ast.Module) -> tuple[str, ...]:
+    """Module-scope assignments to any retired escape-hatch name."""
+    found: list[str] = []
     for node in tree.body:
-        if not isinstance(node, ast.Assign):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
             continue
-        if any(
-            isinstance(target, ast.Name) and target.id == MODEL_TRANSITION_MARKER
-            for target in node.targets
-        ):
-            marker = node.value
-            break
-    if marker is None:
-        return None, None
-    try:
-        value = ast.literal_eval(marker)
-    except ValueError, TypeError:
-        return None, f"{MODEL_TRANSITION_MARKER} must be a literal pair"
-    if (
-        not isinstance(value, tuple)
-        or len(value) != 2
-        or any(
-            not isinstance(table, str)
-            or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", table) is None
-            for table in value
-        )
-        or value[0] == value[1]
-    ):
-        return None, (f"{MODEL_TRANSITION_MARKER} must be an (old_table, new_table) pair")
-    return (value[0], value[1]), None
-
-
-def _dropped_indexes(
-    tree: ast.Module,
-) -> tuple[tuple[tuple[str, str], ...], str | None]:
-    """Read explicit ``{historical_index: model_table}`` retirement metadata."""
-
-    marker: ast.AST | None = None
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if any(
-            isinstance(target, ast.Name) and target.id == DROPPED_INDEXES_MARKER
-            for target in node.targets
-        ):
-            marker = node.value
-            break
-    if marker is None:
-        return (), None
-    try:
-        value = ast.literal_eval(marker)
-    except ValueError, TypeError:
-        return (), f"{DROPPED_INDEXES_MARKER} must be a literal mapping"
-    if not isinstance(value, dict) or not value:
-        return (), (
-            f"{DROPPED_INDEXES_MARKER} must be a non-empty "
-            "{index_name: model_table} mapping"
-        )
-
-    normalized: list[tuple[str, str]] = []
-    for index_name, table in value.items():
-        if (
-            not isinstance(index_name, str)
-            or not isinstance(table, str)
-            or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", index_name) is None
-            or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", table) is None
-        ):
-            return (), (
-                f"{DROPPED_INDEXES_MARKER} keys and values must be lowercase "
-                "Postgres identifiers"
-            )
-        normalized.append((index_name, table))
-    return tuple(sorted(normalized)), None
-
-
-def _up_sql_constants(tree: ast.Module) -> tuple[tuple[int, str], ...]:
-    """SQL-shaped literals contained by migration ``up()`` methods only."""
-
-    found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "up":
-            found.extend(_string_constants(node))
-    return tuple(found)
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id in _BANNED_MARKERS:
+                found.append(target.id)
+    return tuple(dict.fromkeys(found))
 
 
 def parse_migration_file(path: Path) -> MigrationFile:
@@ -317,57 +211,20 @@ def parse_migration_file(path: Path) -> MigrationFile:
     try:
         content = path.read_text(encoding="utf-8")
     except OSError as exc:
-        return MigrationFile(
-            path,
-            False,
-            None,
-            None,
-            None,
-            (),
-            None,
-            None,
-            (),
-            (),
-            f"unreadable: {exc}",
-        )
+        return MigrationFile(path, None, (), None, (), f"unreadable: {exc}")
 
     try:
         tree = ast.parse(content, filename=str(path))
     except SyntaxError as exc:
-        return MigrationFile(
-            path,
-            False,
-            None,
-            None,
-            None,
-            (),
-            None,
-            None,
-            (),
-            (),
-            f"does not parse: {exc}",
-        )
+        return MigrationFile(path, None, (), None, (), f"does not parse: {exc}")
 
-    model_less = MakeMigrationCommand._declares_model_less(content, path)
     match = _GENERATED_NAME_RE.match(path.name)
-    # A MODEL_LESS file may legitimately be named create_<table>_table.py (the
-    # framework-owned failed_job table is), so the marker is decided FIRST —
-    # otherwise the escape hatch would be reported as an orphan every run.
-    generated_table = match.group("table") if match and not model_less else None
-    model_transition, transition_error = _model_transition(tree)
-    dropped_indexes, dropped_indexes_error = _dropped_indexes(tree)
-
     return MigrationFile(
         path=path,
-        model_less=model_less,
-        generated_table=generated_table,
-        model_transition=model_transition,
-        transition_error=transition_error,
-        dropped_indexes=dropped_indexes,
-        dropped_indexes_error=dropped_indexes_error,
+        generated_table=match.group("table") if match else None,
+        banned_markers=_banned_markers(tree),
         docstring=ast.get_docstring(tree),
         sql_constants=tuple(_string_constants(tree)),
-        up_sql_constants=_up_sql_constants(tree),
         syntax_error=None,
     )
 
@@ -393,7 +250,6 @@ def audit_migrations(
     # file could otherwise be counted twice and reported as its own duplicate.
     creators: dict[str, set[str]] = {}
     generated_files: set[str] = set()
-    transitions: list[MigrationFile] = []
 
     for entry in files:
         name = entry.path.name
@@ -413,109 +269,50 @@ def audit_migrations(
             )
             continue
 
-        if entry.transition_error:
+        for marker in entry.banned_markers:
             violations.append(
                 Violation(
-                    rule="invalid-model-transition",
-                    path=name,
-                    message=entry.transition_error,
-                    remedy=(
-                        f"declare {MODEL_TRANSITION_MARKER} = ('old_table', 'new_table')"
-                    ),
-                    human_only=True,
-                    blocks_fix=True,
-                )
-            )
-        if entry.dropped_indexes_error:
-            violations.append(
-                Violation(
-                    rule="invalid-index-retirement",
-                    path=name,
-                    message=entry.dropped_indexes_error,
-                    remedy=(
-                        f"declare {DROPPED_INDEXES_MARKER} as a literal "
-                        "{index_name: model_table} mapping"
-                    ),
-                    human_only=True,
-                    blocks_fix=True,
-                )
-            )
-        elif entry.dropped_indexes and not entry.model_less:
-            violations.append(
-                Violation(
-                    rule="invalid-index-retirement",
+                    rule="banned-marker",
                     path=name,
                     message=(
-                        f"{DROPPED_INDEXES_MARKER} is valid only on an "
-                        f"explained {MODEL_LESS_MARKER} forward migration"
+                        f"declares {marker}, a retired escape hatch — the "
+                        "migrations directory carries generated files only"
                     ),
-                    remedy=f"add {MODEL_LESS_MARKER} = True or remove the marker",
-                    human_only=True,
-                    blocks_fix=True,
+                    remedy=(
+                        "move the schema into a model (columns as fields, named "
+                        "DDL in __indexes__; framework tables live in "
+                        "cara.models) and regenerate; data rewrites are not "
+                        "migrations"
+                    ),
                 )
             )
-        if entry.model_less and entry.model_transition:
-            violations.append(
-                Violation(
-                    rule="invalid-model-transition",
-                    path=name,
-                    message=(
-                        f"{MODEL_TRANSITION_MARKER} cannot be combined with "
-                        f"{MODEL_LESS_MARKER}"
-                    ),
-                    remedy="remove the conflicting marker",
-                    human_only=True,
-                    blocks_fix=True,
-                )
-            )
-        elif entry.model_less:
-            violations.extend(_audit_model_less(entry))
-        elif entry.generated_table:
-            if entry.model_transition:
+
+        if entry.generated_table and not entry.banned_markers:
+            creators.setdefault(entry.generated_table, set()).add(name)
+            generated_files.add(name)
+            for line, expression in _non_literal_defaults(entry.path):
                 violations.append(
                     Violation(
-                        rule="invalid-model-transition",
+                        rule="non-literal-default",
                         path=name,
                         message=(
-                            f"{MODEL_TRANSITION_MARKER} belongs in a forward "
-                            "non-create migration"
+                            f"line {line} default {expression!r} requires a "
+                            "runtime name lookup"
                         ),
-                        remedy="move the marker to the forward rename migration",
+                        remedy=(
+                            "declare the default as a literal in the model and "
+                            "regenerate migrations"
+                        ),
                         human_only=True,
                         blocks_fix=True,
                     )
                 )
-            else:
-                creators.setdefault(entry.generated_table, set()).add(name)
-                generated_files.add(name)
-                for line, expression in _non_literal_defaults(entry.path):
-                    violations.append(
-                        Violation(
-                            rule="non-literal-default",
-                            path=name,
-                            message=(
-                                f"line {line} default {expression!r} requires a "
-                                "runtime name lookup"
-                            ),
-                            remedy=(
-                                "declare the default as a literal in the model and "
-                                "regenerate migrations"
-                            ),
-                            human_only=True,
-                            blocks_fix=True,
-                        )
-                    )
-        elif entry.model_transition:
-            transitions.append(entry)
-        else:
+        elif not entry.banned_markers:
             violations.append(
                 Violation(
                     rule="incremental-migration",
                     path=name,
-                    message=(
-                        "not a generated create_<table>_table.py and not marked "
-                        f"{MODEL_LESS_MARKER} = True"
-                    ),
+                    message="not a generated create_<table>_table.py",
                     remedy=(
                         "put the change in the model and regenerate "
                         "(craft make:migration --overwrite --force)"
@@ -523,388 +320,58 @@ def audit_migrations(
                 )
             )
 
+        for lineno, text in entry.sql_constants:
+            # A bare identifier cannot be a type declaration — a product
+            # legitimately has a COLUMN named "timestamp", and the generated
+            # ``table.datetime("timestamp")`` line must not read as naive SQL.
+            # Naive TIMESTAMP as a TYPE only ever appears inside a longer
+            # statement, which always carries whitespace.
+            if " " not in text:
+                continue
+            if _NAIVE_TIMESTAMP_RE.search(text):
+                violations.append(
+                    Violation(
+                        rule="naive-timestamp",
+                        path=f"{name}:{lineno}",
+                        message=(
+                            "naive TIMESTAMP in migration SQL — mixing naive and "
+                            "aware values needs a non-IMMUTABLE cast, so index "
+                            "expressions over it cannot build"
+                        ),
+                        remedy=(
+                            "declare the column TIMESTAMPTZ (UTC everywhere); "
+                            "the SQL comes from a model's __indexes__, so fix "
+                            "it there and regenerate"
+                        ),
+                        human_only=True,
+                    )
+                )
+                # One report per file is enough to send a human in; listing
+                # every column would bury the other rules in identical lines.
+                break
+
         for table in _created_tables(entry):
             creators.setdefault(table, set()).add(name)
 
-    transition_violations, valid_transitions = _audit_model_transitions(
-        transitions,
-        creators,
-        generated_files,
-        model_indexes,
-    )
-    violations.extend(transition_violations)
-    retired_tables: set[str] = set()
-    for _chain, tables, root_creator in valid_transitions:
-        retired_tables.update(tables[:-1])
-        creators.setdefault(tables[-1], set()).add(root_creator)
-
-    index_transition_violations, index_transitions = _audit_index_transitions(
-        valid_transitions,
-        model_indexes,
-    )
-    violations.extend(index_transition_violations)
-    retirement_violations, forward_retirements = _audit_forward_index_retirements(
-        files,
-        model_indexes,
-    )
-    violations.extend(retirement_violations)
-    for index_name, transitions in forward_retirements.items():
-        index_transitions[index_name] = (
-            *index_transitions.get(index_name, ()),
-            *transitions,
-        )
     for entry in files:
         if entry.syntax_error:
             continue
-        violations.extend(_audit_indexes(entry, model_indexes, index_transitions))
+        violations.extend(_audit_indexes(entry, model_indexes))
 
     violations.extend(_audit_table_coverage(creators, generated_files, model_indexes))
-    violations = [
-        violation
-        for violation in violations
-        if not (
-            violation.rule == "orphan-migration"
-            and any(
-                violation.path in creators.get(table, set()) for table in retired_tables
-            )
-        )
-    ]
-    return violations
-
-
-def _audit_forward_index_retirements(
-    entries: list[MigrationFile],
-    model_indexes: dict[str, set[str]],
-) -> tuple[
-    list[Violation],
-    dict[str, tuple[_IndexTransition, ...]],
-]:
-    """Validate explicit index drops from immutable generated history.
-
-    A retirement is accepted only when an explained ``MODEL_LESS`` migration
-    declares a literal index/table pair, an older migration really creates
-    that exact index on that exact current model table, and the retirement's
-    ``up()`` really drops it.  This keeps applied creators byte-immutable
-    without letting arbitrary prose or a ``down()``-only DROP mask drift.
-    """
-
-    current = {name.lower() for names in model_indexes.values() for name in names}
-    creations: dict[tuple[str, str], set[str]] = {}
-    for entry in entries:
-        if entry.syntax_error:
-            continue
-        for _, text in entry.up_sql_constants:
-            for match in _CREATE_INDEX_ON_RE.finditer(text):
-                identity = (
-                    match.group("name").lower(),
-                    match.group("table").lower(),
-                )
-                creations.setdefault(identity, set()).add(entry.path.name)
-
-    violations: list[Violation] = []
-    accepted: dict[str, list[_IndexTransition]] = {}
-    for entry in entries:
-        if (
-            entry.syntax_error
-            or entry.dropped_indexes_error
-            or not entry.dropped_indexes
-            or not entry.model_less
-            or not (entry.docstring or "").strip()
-        ):
-            continue
-        up_drops = {
-            match.group("name").lower()
-            for _, text in entry.up_sql_constants
-            for match in _DROP_INDEX_RE.finditer(text)
-        }
-        for index_name, table in entry.dropped_indexes:
-            reasons: list[str] = []
-            if table not in model_indexes:
-                reasons.append(f"table {table!r} is not owned by a current model")
-            if index_name in current:
-                reasons.append(f"index {index_name!r} is still declared by a model")
-            if index_name not in up_drops:
-                reasons.append(f"up() does not DROP INDEX {index_name}")
-            older_creators = {
-                migration_name
-                for migration_name in creations.get((index_name, table), set())
-                if migration_name < entry.path.name
-            }
-            if not older_creators:
-                reasons.append(f"no older migration CREATEs {index_name!r} on {table!r}")
-            if reasons:
-                violations.append(
-                    Violation(
-                        rule="invalid-index-retirement",
-                        path=entry.path.name,
-                        message="; ".join(reasons),
-                        remedy=(
-                            "declare the exact historical index/table and DROP "
-                            "that index in this migration's up()"
-                        ),
-                        human_only=True,
-                        blocks_fix=True,
-                    )
-                )
-                continue
-            accepted.setdefault(index_name, []).append(
-                _IndexTransition(entry.path.name, None)
-            )
-
-    return (
-        violations,
-        {name: tuple(transitions) for name, transitions in accepted.items()},
-    )
-
-
-def _audit_model_transitions(
-    entries: list[MigrationFile],
-    creators: dict[str, set[str]],
-    generated_files: set[str],
-    model_indexes: dict[str, set[str]],
-) -> tuple[
-    list[Violation],
-    list[tuple[list[MigrationFile], list[str], str]],
-]:
-    """Validate applied immutable create -> forward model rename chains."""
-
-    violations: list[Violation] = []
-    conflicted: set[str] = set()
-    sources: dict[str, list[MigrationFile]] = {}
-    targets: dict[str, list[MigrationFile]] = {}
-    for entry in entries:
-        old_table, new_table = entry.model_transition or ("", "")
-        sources.setdefault(old_table, []).append(entry)
-        targets.setdefault(new_table, []).append(entry)
-
-    for label, grouped in (("source", sources), ("target", targets)):
-        for table, grouped_entries in grouped.items():
-            if len(grouped_entries) == 1:
-                continue
-            for entry in grouped_entries:
-                conflicted.add(entry.path.name)
-                violations.append(
-                    Violation(
-                        rule="duplicate-model-transition",
-                        path=entry.path.name,
-                        message=(
-                            f"model-transition {label} table {table!r} is "
-                            "declared more than once"
-                        ),
-                        remedy="keep exactly one forward transition per table",
-                        human_only=True,
-                        blocks_fix=True,
-                    )
-                )
-
-    by_source = {
-        source: grouped_entries[0]
-        for source, grouped_entries in sources.items()
-        if len(grouped_entries) == 1 and grouped_entries[0].path.name not in conflicted
-    }
-    by_target = {
-        target: grouped_entries[0]
-        for target, grouped_entries in targets.items()
-        if len(grouped_entries) == 1 and grouped_entries[0].path.name not in conflicted
-    }
-
-    chains: list[tuple[list[MigrationFile], list[str]]] = []
-    visited: set[str] = set()
-    roots = sorted(set(by_source) - set(by_target))
-    for root in roots:
-        chain: list[MigrationFile] = []
-        tables = [root]
-        source = root
-        while source in by_source:
-            entry = by_source[source]
-            name = entry.path.name
-            if name in visited:
-                break
-            visited.add(name)
-            chain.append(entry)
-            _old_table, new_table = entry.model_transition or ("", "")
-            tables.append(new_table)
-            source = new_table
-        chains.append((chain, tables))
-
-    cyclic = [
-        entry
-        for entry in entries
-        if entry.path.name not in conflicted and entry.path.name not in visited
-    ]
-    for entry in cyclic:
-        conflicted.add(entry.path.name)
-        violations.append(
-            Violation(
-                rule="cyclic-model-transition",
-                path=entry.path.name,
-                message="MODEL_TRANSITION graph contains a rename cycle",
-                remedy="break the cycle; applied table history must form a DAG",
-                human_only=True,
-                blocks_fix=True,
-            )
-        )
-
-    valid: list[tuple[list[MigrationFile], list[str], str]] = []
-    for chain, tables in chains:
-        if not chain:
-            continue
-        chain_errors: list[tuple[str, str, str]] = []
-        root_table, terminal_table = tables[0], tables[-1]
-        root_creators = creators.get(root_table, set())
-        if len(root_creators) != 1 or not root_creators <= generated_files:
-            chain_errors.append(
-                (
-                    chain[0].path.name,
-                    f"chain root {root_table!r} has no single generated creator",
-                    "point the root at exactly one applied generated create migration",
-                )
-            )
-        unexpected_creators = {
-            table: creators.get(table, set())
-            for table in tables[1:]
-            if creators.get(table)
-        }
-        if unexpected_creators:
-            chain_errors.append(
-                (
-                    chain[-1].path.name,
-                    "only the chain root may have a generated creator",
-                    "remove regenerated creators for transition intermediates/terminal",
-                )
-            )
-        stale_models = sorted(set(tables[:-1]) & set(model_indexes))
-        if stale_models:
-            chain_errors.append(
-                (
-                    chain[0].path.name,
-                    "non-terminal transition table(s) are still model-owned: "
-                    + ", ".join(stale_models),
-                    "only the terminal table may be the current model",
-                )
-            )
-        if terminal_table not in model_indexes:
-            chain_errors.append(
-                (
-                    chain[-1].path.name,
-                    f"terminal table {terminal_table!r} has no model",
-                    "point the chain terminal at the exact current model table",
-                )
-            )
-
-        previous_name = next(iter(root_creators)) if len(root_creators) == 1 else ""
-        for entry in chain:
-            name = entry.path.name
-            old_table, new_table = entry.model_transition or ("", "")
-            if not (entry.docstring or "").strip():
-                chain_errors.append(
-                    (
-                        name,
-                        "missing explanation",
-                        "add a module docstring explaining why immutable history "
-                        "requires this forward transition",
-                    )
-                )
-            rename_pairs = {
-                (match.group("old").lower(), match.group("new").lower())
-                for _, text in entry.sql_constants
-                for match in _ALTER_TABLE_RENAME_RE.finditer(text)
-            }
-            if rename_pairs != {(old_table, new_table)}:
-                chain_errors.append(
-                    (
-                        name,
-                        "SQL does not prove the declared one-to-one table rename",
-                        f"include exactly ALTER TABLE {old_table} RENAME TO {new_table}",
-                    )
-                )
-            if _created_tables(entry):
-                chain_errors.append(
-                    (
-                        name,
-                        "transition migration creates a table",
-                        "rename the applied chain; do not create a second table",
-                    )
-                )
-            if previous_name and name <= previous_name:
-                chain_errors.append(
-                    (
-                        name,
-                        "transition does not sort after its predecessor",
-                        "give every chain edge a later monotonic sequence number",
-                    )
-                )
-            previous_name = name
-
-        if chain_errors:
-            for path, message, remedy in chain_errors:
-                violations.append(
-                    Violation(
-                        rule="invalid-model-transition",
-                        path=path,
-                        message=message,
-                        remedy=remedy,
-                        human_only=True,
-                        blocks_fix=True,
-                    )
-                )
-            continue
-        valid.append((chain, tables, next(iter(root_creators))))
-    return violations, valid
-
-
-def _audit_model_less(entry: MigrationFile) -> list[Violation]:
-    """Rules 3 and 4 for a marked file: it must explain itself, and stay UTC."""
-    violations: list[Violation] = []
-    name = entry.path.name
-
-    if not (entry.docstring or "").strip():
-        violations.append(
-            Violation(
-                rule="unexplained-model-less",
-                path=name,
-                message=(f"marked {MODEL_LESS_MARKER} = True but carries no docstring"),
-                remedy=(
-                    "add a docstring stating WHY no model can own this object "
-                    "(materialized view, framework-owned table, extension)"
-                ),
-                human_only=True,
-            )
-        )
-
-    for lineno, text in entry.sql_constants:
-        if _NAIVE_TIMESTAMP_RE.search(text):
-            violations.append(
-                Violation(
-                    rule="naive-timestamp",
-                    path=f"{name}:{lineno}",
-                    message=(
-                        "naive TIMESTAMP in hand-written SQL — mixing naive and "
-                        "aware values needs a non-IMMUTABLE cast, so index "
-                        "expressions over it cannot build"
-                    ),
-                    remedy="declare the column TIMESTAMPTZ (UTC everywhere)",
-                    human_only=True,
-                )
-            )
-            # One report per file is enough to send a human in; listing every
-            # column would bury the other rules in a wall of identical lines.
-            break
-
     return violations
 
 
 def _audit_indexes(
     entry: MigrationFile,
     model_indexes: dict[str, set[str]],
-    index_transitions: dict[str, tuple[_IndexTransition, ...]],
 ) -> list[Violation]:
-    """Rule 7: an index on a MODEL table must be declared by that model.
+    """Rule 5: an index on a MODEL table must be declared by that model.
 
     An index that exists only inside a migration file survives exactly until the
     next regenerate-from-models, which rebuilds the file from the model and
-    drops it — silently, because nothing compares the two. Indexes on tables no
-    model owns (a MODEL_LESS materialized view) are out of scope by definition.
+    drops it — silently, because nothing compares the two. No historical
+    exemptions: history is regenerated, not preserved.
     """
     violations: list[Violation] = []
     seen: set[str] = set()
@@ -915,11 +382,6 @@ def _audit_indexes(
             if table not in model_indexes or index_name in seen:
                 continue
             if index_name in model_indexes[table]:
-                continue
-            if any(
-                transition.migration_name > entry.path.name
-                for transition in index_transitions.get(index_name.lower(), ())
-            ):
                 continue
             seen.add(index_name)
             violations.append(
@@ -941,71 +403,12 @@ def _audit_indexes(
     return violations
 
 
-def _audit_index_transitions(
-    valid_transitions: list[tuple[list[MigrationFile], list[str], str]],
-    model_indexes: dict[str, set[str]],
-) -> tuple[
-    list[Violation],
-    dict[str, tuple[_IndexTransition, ...]],
-]:
-    """Prove index retirements owned by valid, later model transitions.
-
-    A historical creator remains immutable, so its old raw index declaration
-    is legitimate only when a validated MODEL_TRANSITION later renames that
-    index to a name declared by a current model, or explicitly drops it.
-    SQL in an invalid/unmarked migration is deliberately invisible here.
-    """
-
-    declared = {name.lower() for names in model_indexes.values() for name in names}
-    violations: list[Violation] = []
-    found: dict[str, list[_IndexTransition]] = {}
-
-    for chain, _tables, _root_creator in valid_transitions:
-        for entry in chain:
-            for _, text in entry.sql_constants:
-                for match in _ALTER_INDEX_RENAME_RE.finditer(text):
-                    old = match.group("old").lower()
-                    new = match.group("new").lower()
-                    if new not in declared:
-                        violations.append(
-                            Violation(
-                                rule="invalid-index-transition",
-                                path=entry.path.name,
-                                message=(
-                                    f"index rename target {new!r} is not "
-                                    "declared by a current model"
-                                ),
-                                remedy=(
-                                    "rename to an index declared by the current "
-                                    "model, or drop the retired index explicitly"
-                                ),
-                                human_only=True,
-                                blocks_fix=True,
-                            )
-                        )
-                        continue
-                    found.setdefault(old, []).append(
-                        _IndexTransition(entry.path.name, new)
-                    )
-
-                for match in _DROP_INDEX_RE.finditer(text):
-                    old = match.group("name").lower()
-                    found.setdefault(old, []).append(
-                        _IndexTransition(entry.path.name, None)
-                    )
-
-    return (
-        violations,
-        {old: tuple(transitions) for old, transitions in found.items()},
-    )
-
-
 def _created_tables(entry: MigrationFile) -> set[str]:
     """Table names the file CREATEs in raw SQL.
 
     Generated files build tables through the Blueprint DSL, not raw
-    ``CREATE TABLE``, so this reports what a hand-written or MODEL_LESS file
-    creates — the only way a duplicate can slip past the generator's naming.
+    ``CREATE TABLE``, so this reports what raw SQL creates — the only way a
+    duplicate can slip past the generator's naming.
     """
     tables: set[str] = set()
     for _, text in entry.sql_constants:
@@ -1019,7 +422,7 @@ def _audit_table_coverage(
     generated_files: set[str],
     model_indexes: dict[str, set[str]],
 ) -> list[Violation]:
-    """Rules 1 and 5: exactly one creating file per model table, no orphans."""
+    """Rules 1 and 4: exactly one creating file per model table, no orphans."""
     violations: list[Violation] = []
 
     for table in sorted(model_indexes):
@@ -1052,8 +455,6 @@ def _audit_table_coverage(
                 )
             )
         elif table not in model_indexes and files <= generated_files:
-            # Only a GENERATED file can be orphaned: a MODEL_LESS file creating
-            # a table no model declares is the escape hatch working as intended.
             violations.append(
                 Violation(
                     rule="orphan-migration",
@@ -1062,10 +463,7 @@ def _audit_table_coverage(
                         f"creates table '{table}', which no model declares "
                         "(model deleted or renamed?)"
                     ),
-                    remedy=(
-                        "regenerate to drop it, or mark the file "
-                        f"{MODEL_LESS_MARKER} = True if no model can own the table"
-                    ),
+                    remedy="regenerate to drop it, or declare the owning model",
                 )
             )
 
@@ -1076,8 +474,8 @@ def _audit_table_coverage(
     name="migrations:check",
     help=(
         "Audit the migrations directory against the migration convention: one "
-        "generated chain per model table, no undeclared incremental files, "
-        "every MODEL_LESS or MODEL_TRANSITION file proven and explained, "
+        "generated file per model table and nothing else — no incremental "
+        "files, no escape markers (MODEL_LESS and friends are banned), "
         "TIMESTAMPTZ everywhere, no duplicate or orphan table creations, and "
         "no index living only in a migration. "
         "Exits non-zero on any violation so CI can gate on it."
@@ -1085,10 +483,9 @@ def _audit_table_coverage(
     options={
         "--fix": (
             "Regenerate the directory from the models (the make:migration "
-            "--overwrite --force path, MODEL_LESS and validated "
-            "MODEL_TRANSITION chains preserved) and re-audit. Naive timestamps "
-            "and unexplained markers are never "
-            "auto-fixed; a hand-added index or duplicate table blocks the fix."
+            "--overwrite --force path) and re-audit. Naive timestamps are "
+            "reported, never auto-fixed (fix the model); a hand-added index "
+            "or duplicate table blocks the fix."
         ),
     },
 )

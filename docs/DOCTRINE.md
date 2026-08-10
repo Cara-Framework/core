@@ -323,9 +323,18 @@ lives in the integration lane, since it needs a database. This regenerate-freely
 mode is **pre-launch only**: once a migration has been APPLIED to an
 environment you cannot reset, it is immutable (the executor's checksum guard
 enforces this) — schema changes become forward migrations, and a squashed
-baseline may periodically replace history for fresh installs. SQL a model
-cannot express is marked `MODEL_LESS = True` with the reason in its
-docstring. **Write ownership:** a shared table is not a shared pen — each
+baseline may periodically replace history for fresh installs. **There are no
+exemption files.** Every migration is generated; `MODEL_LESS`,
+`MODEL_TRANSITION` and `DROPPED_INDEXES` are banned markers that
+`migrations:check` fails on sight. Each thing the hatch used to shelter has a
+model-side home: framework tables are declared in `cara.models`; triggers,
+functions and named constraints are `__indexes__` named-DDL entries on the
+owning model; a natural or absent primary key is `__primary_key__` (a
+declared `None` generates a keyless table); and one-time data rewrites are
+not migrations at all — a directory that rebuilds the world from the models
+cannot carry history-dependent steps. The payoff is that the acceptance test
+becomes provable: an empty database migrated from zero equals the models'
+schema, exactly. **Write ownership:** a shared table is not a shared pen — each
 table is declared `api-owned`, `services-owned` or `shared-gate-owned` in a
 write-ownership manifest, and a guard checks repository writes against it.
 

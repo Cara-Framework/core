@@ -141,20 +141,20 @@ class MigrationGenerator:
             if not self._fresh_counter_batch:
                 current = max(current, self._highest_disk_sequence())
             new_counter = current + 1
-            _atomic_write(self.counter_file, str(new_counter))
+            _atomic_write(self.counter_file, f"{new_counter}\n")
             return new_counter
 
     def reset_counter(self):
         """Reset the migration counter for a fresh batch."""
         with _counter_lock(self.migrations_dir):
             self._fresh_counter_batch = True
-            _atomic_write(self.counter_file, "0")
+            _atomic_write(self.counter_file, "0\n")
 
     def finalize_counter(self):
         """Leave the counter beyond generated and preserved migration files."""
         with _counter_lock(self.migrations_dir):
             final_value = max(self._get_counter(), self._highest_disk_sequence())
-            _atomic_write(self.counter_file, str(final_value))
+            _atomic_write(self.counter_file, f"{final_value}\n")
             self._fresh_counter_batch = False
 
     def cancel_fresh_counter_batch(self):
@@ -285,7 +285,20 @@ class MigrationGenerator:
                 break
 
         if not has_primary_key:
-            fields_code.insert(0, '            table.increments("id")')
+            # A model may key on a natural column (``__primary_key__ = "job_id"``
+            # over a VARCHAR) rather than a serial surrogate. Injecting
+            # ``increments("id")`` here used to mint a second id column the
+            # model never declared — the reason the framework ledger tables
+            # could not be model-generated at all. Honour the declared key when
+            # it names a real declared field. An EXPLICIT ``__primary_key__ =
+            # None`` means keyless by design (a pure membership table addressed
+            # only through its parent's composite FK); the id injection remains
+            # only for models that declare no key at all.
+            declared_pk = model_info.get("primary_key")
+            if declared_pk and declared_pk != "id" and declared_pk in model_info["fields"]:
+                fields_code.append(f'            table.primary("{declared_pk}")')
+            elif not ("primary_key" in model_info and declared_pk is None):
+                fields_code.insert(0, '            table.increments("id")')
 
         # Composite ``field.unique([...])`` and ``field.index([...])``
         # calls were collected by ModelDiscoverer. Emit them as

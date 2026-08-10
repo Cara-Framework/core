@@ -2,46 +2,38 @@
 MakeMigrationCommand: Auto-generates migrations from models using stubs.
 Orchestrates model discovery, schema comparison, and migration generation.
 
-``--overwrite`` enforces ONE FILE PER TABLE: after regenerating, the migrations
-directory contains exactly the model-generated set and nothing else. It used to
-delete only the files it recognised as its own, so hand-written ``add_*`` /
-``backfill_*`` / ``fix_*`` migrations accumulated forever (one product reached
-123 generated + 40 hand-written) and the directory stopped being a function of
-the models.
+``--overwrite`` enforces ONE FILE PER TABLE, with no exceptions: after
+regenerating, the migrations directory contains exactly the model-generated
+set and nothing else. It used to delete only the files it recognised as its
+own, so hand-written ``add_*`` / ``backfill_*`` / ``fix_*`` migrations
+accumulated forever (one product reached 123 generated + 40 hand-written) and
+the directory stopped being a function of the models.
 
-The escape hatches are module-level literal markers: ``MODEL_LESS = True`` for
-objects no model can own, and ``MODEL_TRANSITION = ("old", "new")`` for an
-applied immutable create migration plus its forward table rename. ``--overwrite``
-preserves those files and skips regenerating the transition target. Unmarked
-files are deleted. Both lists are printed — the sweep is never silent.
+There are no escape markers. ``MODEL_LESS = True`` used to exempt a file from
+the purge for "objects no model can own", and ``MODEL_TRANSITION`` preserved
+applied rename chains. Both hatches turned back into dumping grounds: one
+product accumulated 23 marked files, six of which redeclared columns their
+models ALREADY owned — two sources of truth for eleven columns, one of them
+non-idempotent, so the documented regenerate workflow itself would have broken
+a from-scratch install. The framework now declares its own tables as models
+(``cara.models``), triggers and named constraints live in a model's
+``__indexes__`` DDL entries, and one-time data rewrites are simply not
+migrations — this directory rebuilds the WORLD from the models, and anything
+history-dependent has no home in it. A marked file found today is a hard
+error in ``migrations:check`` and is deleted by the sweep like any other
+stray.
 """
 
 from __future__ import annotations
 
-import ast
 import contextlib
 import os
-import re
 import shutil
 import tempfile
 from pathlib import Path
 
 from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
-
-# Module-level marker that exempts a migration from the ``--overwrite`` purge.
-# Constraint: it must be a literal ``MODEL_LESS = True`` at module scope — the
-# file is parsed, never imported, so a computed or nested value is not honoured.
-MODEL_LESS_MARKER = "MODEL_LESS"
-MODEL_TRANSITION_MARKER = "MODEL_TRANSITION"
-_GENERATED_NAME_RE = re.compile(
-    r"^\d+_\d+_\d+_\d+_create_(?P<table>[a-z0-9_]+?)_table\.py$"
-)
-_ALTER_TABLE_RENAME_RE = re.compile(
-    r"ALTER\s+TABLE\s+\"?(?P<old>[a-z0-9_]+)\"?\s+"
-    r"RENAME\s+TO\s+\"?(?P<new>[a-z0-9_]+)\"?",
-    re.IGNORECASE,
-)
 
 
 @command(
@@ -50,18 +42,16 @@ _ALTER_TABLE_RENAME_RE = re.compile(
         "Auto-generate migrations from models using Laravel 11+ ordering system "
         "(no timestamps). With --overwrite the migrations directory becomes "
         "EXACTLY one generated file per model table; every other .py file is "
-        "deleted unless it declares a module-level 'MODEL_LESS = True' or "
-        '\'MODEL_TRANSITION = ("old_table", "new_table")\' marker '
-        "(for materialized views, extensions, data backfills and other objects "
-        "no model owns). Preserved and deleted files are both printed. Run "
-        "'migrations:check' to audit the directory against that contract (it "
-        "also drives this command via --fix)."
+        "deleted — there are no exemption markers. Framework tables are models "
+        "too (cara.models), triggers and named constraints belong in a model's "
+        "__indexes__ entries, and data rewrites are not migrations. Deleted "
+        "files are printed. Run 'migrations:check' to audit the directory "
+        "against that contract (it also drives this command via --fix)."
     ),
     options={
         "--overwrite": (
             "Recreate all migrations from scratch: regenerate one file per table "
-            "and DELETE every other migration except validated MODEL_LESS or "
-            "MODEL_TRANSITION chains"
+            "and DELETE every other migration"
         ),
         "--force": "Skip the hand-edit confirmation prompt when --overwrite clobbers files",
         "--style=blueprint": "Migration style (blueprint is the only supported SSOT)",
@@ -163,13 +153,13 @@ class MakeMigrationCommand(CommandBase):
     def _handle_overwrite_mode(self):
         """Handle --overwrite mode: recreate all migrations from scratch.
 
-        ``--overwrite`` DELETES every migration file that is not marked
-        ``MODEL_LESS = True`` or part of a ``MODEL_TRANSITION`` chain and
-        regenerates exactly one per otherwise-uncovered model table.
-        Before unlinking anything we surface which files will be destroyed and
-        which are preserved, and if any doomed file looks hand-edited (contains
+        ``--overwrite`` DELETES every migration file and regenerates exactly
+        one per model table. Before unlinking anything we surface which files
+        will be destroyed, and if any doomed file looks hand-edited (contains
         markers the generator never authors) we require an interactive confirm
-        (or ``--force``) so the sweep can't silently wipe handwritten SQL.
+        (or ``--force``) so the sweep can't silently wipe handwritten SQL —
+        the confirm is the moment to move that SQL into a model's
+        ``__indexes__`` entries, which is its only durable home.
         """
         self.info("Overwrite mode: Recreating all migrations from scratch...")
 
@@ -182,34 +172,11 @@ class MakeMigrationCommand(CommandBase):
         # Sort models by dependency order (FK dependencies first)
         ordered_models = self.discoverer.resolve_dependency_order(models)
 
-        # Partition before rendering so validated applied-table transitions
-        # suppress a second create migration for their current model target.
         try:
-            doomed, preserved = self._partition_migrations()
+            doomed = self._partition_migrations()
         except RuntimeError as exc:
             self.error(f"Overwrite preflight failed; no files changed: {exc}")
             return 1
-        transition_nonterminals, transition_targets = self._transition_tables(preserved)
-        model_tables = {model.get("table") for model in ordered_models}
-        unknown_targets = transition_targets - model_tables
-        if unknown_targets:
-            self.error(
-                "MODEL_TRANSITION target(s) have no discovered model: "
-                + ", ".join(sorted(unknown_targets))
-            )
-            return 1
-        stale_models = transition_nonterminals & model_tables
-        if stale_models:
-            self.error(
-                "MODEL_TRANSITION non-terminal table(s) are still model-owned: "
-                + ", ".join(sorted(stale_models))
-            )
-            return 1
-        ordered_models = [
-            model
-            for model in ordered_models
-            if model.get("table") not in transition_targets
-        ]
 
         # Render and compile the complete replacement before touching disk. A
         # bad model or stub cannot leave a half-erased migration set.
@@ -221,7 +188,7 @@ class MakeMigrationCommand(CommandBase):
 
         # Safety gate: refuse to silently clobber hand-edited migrations.
         # Returns False (abort) only when the user declines the confirm.
-        if not self._confirm_clobber(doomed, preserved):
+        if not self._confirm_clobber(doomed):
             self.warning("Aborted: no files were changed.")
             return
 
@@ -249,22 +216,19 @@ class MakeMigrationCommand(CommandBase):
 
         # Summary: state the resulting CONTRACT, not just the count, so a run
         # that quietly removed 40 hand-written migrations says so.
-        removed, preserved_files = len(doomed), len(preserved)
+        removed = len(doomed)
         verb = "Would recreate" if self.option("dry_run") else "Recreated"
         self.success(
             f"{verb} {created_count} migration(s) with dependency-based ordering "
-            f"— one file per table"
+            f"— one file per table, no exemptions"
         )
         if removed:
             self.warning(
                 f"{removed} non-generated migration(s) "
                 f"{'would be' if self.option('dry_run') else 'were'} deleted "
-                f"(listed above). Use an audited {MODEL_LESS_MARKER} or "
-                f"{MODEL_TRANSITION_MARKER} marker to preserve immutable history."
-            )
-        if preserved_files:
-            self.info(
-                f"{preserved_files} escape-hatch/transition file(s) preserved untouched."
+                f"(listed above). Schema they carried belongs in a model "
+                f"(columns as fields, named DDL in __indexes__); data rewrites "
+                f"are not migrations."
             )
 
     def _prepare_overwrite(self, ordered_models):
@@ -339,269 +303,33 @@ class MakeMigrationCommand(CommandBase):
         return migrations_dir if migrations_dir.exists() else None
 
     def _partition_migrations(self):
-        """Split the migrations directory into (deleted, preserved) file lists.
+        """Return every migration file the overwrite will delete.
 
         ``--overwrite`` regenerates one file per model table, so ANY other .py
         file left behind breaks the one-file-per-table contract: it either
         duplicates a generated CREATE or applies an increment that the fresh
-        CREATE already contains. Selecting by "does this file touch a model
-        table" (the previous rule) let every hand-written ``add_*``/``backfill_*``
-        migration survive forever.
-
-        Exemptions are ``MODEL_LESS = True`` for schema objects no model can
-        own, and a validated ``MODEL_TRANSITION`` file together with its exact
-        applied generated source creator. ``__init__.py`` is package plumbing.
+        CREATE already contains. There is nothing to preserve — the exemption
+        markers this method used to honour are gone, because every kind of
+        content they sheltered now has a model-side home. ``__init__.py`` is
+        package plumbing.
         """
         migrations_dir = self._migrations_dir()
         if migrations_dir is None:
-            return [], []
+            return []
 
-        files = [
+        doomed = [
             path
             for path in sorted(migrations_dir.glob("*.py"))
             if path.name != "__init__.py"
         ]
-        contents: dict[Path, str] = {}
-        transitions: dict[Path, tuple[str, str]] = {}
-        for file_path in files:
+        for file_path in doomed:
             try:
-                contents[file_path] = file_path.read_text(encoding="utf-8")
+                file_path.read_text(encoding="utf-8")
             except OSError as exc:
                 raise RuntimeError(
                     f"Cannot safely inspect migration '{file_path.name}': {exc}"
                 ) from exc
-            transition = self._declares_model_transition(
-                contents[file_path],
-                file_path,
-            )
-            if transition is not None:
-                if self._declares_model_less(contents[file_path], file_path):
-                    raise RuntimeError(
-                        f"{file_path.name}: {MODEL_TRANSITION_MARKER} cannot be "
-                        f"combined with {MODEL_LESS_MARKER}"
-                    )
-                tree = ast.parse(contents[file_path], filename=str(file_path))
-                if not (ast.get_docstring(tree) or "").strip():
-                    raise RuntimeError(
-                        f"{file_path.name}: {MODEL_TRANSITION_MARKER} requires "
-                        "an explanatory module docstring"
-                    )
-                transitions[file_path] = transition
-
-        chains = self._build_transition_chains(transitions)
-
-        preserved_names = set(transitions)
-        for chain in chains:
-            root_table = chain[0][1]
-            source_files = [
-                path
-                for path in files
-                if (
-                    (match := _GENERATED_NAME_RE.match(path.name))
-                    and match.group("table") == root_table
-                )
-            ]
-            if len(source_files) != 1:
-                raise RuntimeError(
-                    f"{chain[0][0].name} requires one generated creator "
-                    f"for chain root {root_table!r}"
-                )
-            source_file = source_files[0]
-            previous_name = source_file.name
-            for transition_path, old_table, new_table in chain:
-                rename_pairs = {
-                    (match.group("old").lower(), match.group("new").lower())
-                    for text in self._string_constants(
-                        contents[transition_path], transition_path
-                    )
-                    for match in _ALTER_TABLE_RENAME_RE.finditer(text)
-                }
-                if rename_pairs != {(old_table, new_table)}:
-                    raise RuntimeError(
-                        f"{transition_path.name} does not prove exactly "
-                        f"ALTER TABLE {old_table} RENAME TO {new_table}"
-                    )
-                if transition_path.name <= previous_name:
-                    raise RuntimeError(
-                        f"{transition_path.name} must sort after the prior "
-                        f"creator/transition {previous_name}"
-                    )
-                previous_name = transition_path.name
-            preserved_names.add(source_file)
-
-        deleted: list[Path] = []
-        preserved: list[Path] = []
-        for file_path in files:
-            content = contents[file_path]
-            if file_path in preserved_names or self._declares_model_less(
-                content, file_path
-            ):
-                preserved.append(file_path)
-            else:
-                deleted.append(file_path)
-        return deleted, preserved
-
-    @classmethod
-    def _transition_tables(cls, files: list[Path]) -> tuple[set[str], set[str]]:
-        transitions: dict[Path, tuple[str, str]] = {}
-        for file_path in files:
-            try:
-                content = file_path.read_text(encoding="utf-8")
-            except OSError as exc:
-                raise RuntimeError(
-                    f"Cannot inspect preserved migration '{file_path.name}': {exc}"
-                ) from exc
-            transition = cls._declares_model_transition(content, file_path)
-            if transition is not None:
-                transitions[file_path] = transition
-        chains = cls._build_transition_chains(transitions)
-        nonterminals = {
-            table
-            for chain in chains
-            for table in [chain[0][1], *(edge[2] for edge in chain[:-1])]
-        }
-        terminals = {chain[-1][2] for chain in chains}
-        return nonterminals, terminals
-
-    @classmethod
-    def _transition_targets(cls, files: list[Path]) -> set[str]:
-        """Return only terminal model tables, never intermediate chain nodes."""
-
-        return cls._transition_tables(files)[1]
-
-    @staticmethod
-    def _build_transition_chains(
-        transitions: dict[Path, tuple[str, str]],
-    ) -> list[list[tuple[Path, str, str]]]:
-        """Build unique-in/out acyclic rename chains in root-to-terminal order."""
-
-        by_source: dict[str, tuple[Path, str]] = {}
-        by_target: dict[str, tuple[Path, str]] = {}
-        for path, (source, target) in transitions.items():
-            if source in by_source:
-                raise RuntimeError(
-                    f"MODEL_TRANSITION source {source!r} is declared more than once"
-                )
-            if target in by_target:
-                raise RuntimeError(
-                    f"MODEL_TRANSITION target {target!r} is declared more than once"
-                )
-            by_source[source] = (path, target)
-            by_target[target] = (path, source)
-
-        roots = sorted(set(by_source) - set(by_target))
-        chains: list[list[tuple[Path, str, str]]] = []
-        visited: set[Path] = set()
-        for root in roots:
-            chain: list[tuple[Path, str, str]] = []
-            source = root
-            while source in by_source:
-                path, target = by_source[source]
-                if path in visited:
-                    raise RuntimeError("MODEL_TRANSITION graph contains a cycle")
-                visited.add(path)
-                chain.append((path, source, target))
-                source = target
-            chains.append(chain)
-
-        if len(visited) != len(transitions):
-            raise RuntimeError("MODEL_TRANSITION graph contains a cycle")
-        return chains
-
-    @staticmethod
-    def _declares_model_less(content: str, file_path) -> bool:
-        """Whether the file carries a module-level ``MODEL_LESS = True``.
-
-        Parsed, never imported — a migration must not execute to be classified,
-        and importing one could open a database connection. A file that does not
-        parse is NOT treated as marked: an unparseable migration is broken, and
-        defaulting to "preserve" would let it dodge the sweep forever.
-        """
-        try:
-            tree = ast.parse(content, filename=str(file_path))
-        except SyntaxError:
-            return False
-
-        for node in tree.body:
-            targets = []
-            if isinstance(node, ast.Assign):
-                targets = node.targets
-            elif isinstance(node, ast.AnnAssign):
-                targets = [node.target]
-            else:
-                continue
-            if node.value is None:
-                continue
-            if not (isinstance(node.value, ast.Constant) and node.value.value is True):
-                continue
-            for target in targets:
-                if isinstance(target, ast.Name) and target.id == MODEL_LESS_MARKER:
-                    return True
-        return False
-
-    @staticmethod
-    def _string_constants(content: str, file_path) -> tuple[str, ...]:
-        """Return parsed string constants, with adjacent SQL literals folded."""
-        tree = ast.parse(content, filename=str(file_path))
-        docstrings: set[int] = set()
-        for node in ast.walk(tree):
-            if not isinstance(
-                node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
-            ):
-                continue
-            body = getattr(node, "body", None) or []
-            if (
-                body
-                and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)
-            ):
-                docstrings.add(id(body[0].value))
-        return tuple(
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and id(node) not in docstrings
-        )
-
-    @staticmethod
-    def _declares_model_transition(
-        content: str,
-        file_path,
-    ) -> tuple[str, str] | None:
-        """Return a literal old-table -> new-table transition, if declared."""
-
-        try:
-            tree = ast.parse(content, filename=str(file_path))
-        except SyntaxError:
-            return None
-        for node in tree.body:
-            if not isinstance(node, ast.Assign) or not any(
-                isinstance(target, ast.Name) and target.id == MODEL_TRANSITION_MARKER
-                for target in node.targets
-            ):
-                continue
-            try:
-                value = ast.literal_eval(node.value)
-            except (ValueError, TypeError) as exc:
-                raise RuntimeError(
-                    f"{file_path.name}: {MODEL_TRANSITION_MARKER} must be a "
-                    "literal (old_table, new_table) pair"
-                ) from exc
-            if (
-                not isinstance(value, tuple)
-                or len(value) != 2
-                or any(
-                    not isinstance(table, str)
-                    or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", table) is None
-                    for table in value
-                )
-                or value[0] == value[1]
-            ):
-                raise RuntimeError(f"{file_path.name}: invalid {MODEL_TRANSITION_MARKER}")
-            return value[0], value[1]
-        return None
+        return doomed
 
     # Comment fragments the generator DOES emit (inline annotations on the
     # drop/alter lines). Everything else after a ``#`` is a human comment.
@@ -672,23 +400,18 @@ class MakeMigrationCommand(CommandBase):
                 return True
         return False
 
-    def _confirm_clobber(self, targets, preserved) -> bool:
+    def _confirm_clobber(self, targets) -> bool:
         """Preview + gate the destructive unlink. Returns True to proceed.
 
-        Always prints WHICH files --overwrite deletes and which it PRESERVES,
-        so the one-file-per-table sweep is auditable before it runs. If any
-        deleted file looks hand-edited, requires an interactive confirm unless
+        Always prints WHICH files --overwrite deletes, so the
+        one-file-per-table sweep is auditable before it runs. If any deleted
+        file looks hand-edited, requires an interactive confirm unless
         ``--force`` (or ``--dry_run``, which never touches disk). Returns False
-        only when the user explicitly declines — the caller then aborts.
+        only when the user explicitly declines — the caller then aborts. The
+        confirm is deliberately the LAST stop for handwritten SQL: whatever it
+        expresses must move into a model (columns as fields, named DDL as
+        ``__indexes__`` entries) or it is gone.
         """
-        if preserved:
-            self.info(
-                f"--overwrite will PRESERVE {len(preserved)} audited "
-                f"{MODEL_LESS_MARKER}/{MODEL_TRANSITION_MARKER} file(s):"
-            )
-            for file_path in preserved:
-                self.info(f"   • {file_path.name}")
-
         if not targets:
             return True
 

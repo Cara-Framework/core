@@ -2791,8 +2791,9 @@ class QueueJobDeliveryStore:
                 "dispatch is written to this outbox first (`craft queue:relay` "
                 "is what publishes it). Run `craft migrate` to apply the "
                 "delivery-ledger migration. If the app has no such migration, "
-                "it never adopted the durable-queue contract — port the "
-                "MODEL_LESS `create_queue_job_delivery_ledger` migration."
+                "it never adopted the durable-queue contract — the ledger "
+                "tables are declared by cara.models and generated with "
+                "`craft make:migration --overwrite --force`."
             )
         unique_schema = database.select_one(
             "SELECT "

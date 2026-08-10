@@ -1,6 +1,6 @@
 """Tests for ``MakeMigrationCommand`` — focused on the --overwrite purge
-contract (one generated file per table, ``MODEL_LESS = True`` the only
-exemption), the clobber safety guard, the hand-edit detector, and the summary.
+contract (one generated file per table, NOTHING exempt), the clobber safety
+guard, the hand-edit detector, and the summary.
 
 These exercise pure command logic with no live database: the model
 discoverer / comparator / generator are never invoked. The migrations
@@ -108,8 +108,8 @@ class BackfillWidgetSlugs(Migration):
         pass
 '''
 
-# A model-less object (materialized view) marked for preservation.
-_MODEL_LESS_FILE = '''"""CreatePriceViews Migration."""
+# A file still carrying the RETIRED marker — the sweep owes it nothing.
+_MARKED_FILE = '''"""CreatePriceViews Migration."""
 
 from cara.eloquent.migrations import Migration
 from cara.facades import DB
@@ -123,20 +123,6 @@ class CreatePriceViews(Migration):
 
     def down(self):
         DB.statement("DROP MATERIALIZED VIEW IF EXISTS price_daily")
-'''
-
-
-def _transition_source(old_table: str, new_table: str) -> str:
-    return f'''"""Rename an applied table without rewriting migration history."""
-
-from cara.facades import DB
-
-MODEL_TRANSITION = ("{old_table}", "{new_table}")
-
-
-class RenameAppliedTable:
-    def up(self):
-        DB.statement("ALTER TABLE {old_table} RENAME TO {new_table}")
 '''
 
 
@@ -217,10 +203,10 @@ def test_unreadable_file_treated_as_hand_edited(migrations_dir):
 # --- _partition_migrations: the one-file-per-table contract -------------------
 
 
-def test_partition_dooms_every_unmarked_file_including_unrelated_tables(migrations_dir):
+def test_partition_dooms_every_file_including_unrelated_tables(migrations_dir):
     # The old rule ("does this file touch a model table?") let hand-written
     # add_*/backfill_* migrations survive forever, so the directory stopped
-    # being a function of the models. EVERY unmarked .py is now doomed.
+    # being a function of the models. EVERY .py is now doomed.
     cmd = _make_command()
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
     _write(
@@ -229,155 +215,35 @@ def test_partition_dooms_every_unmarked_file_including_unrelated_tables(migratio
     _write(migrations_dir, "0003_01_01_000000_backfill_widget_slugs.py", _HAND_WRITTEN)
     _write(migrations_dir, "0004_01_01_000000_create_gadget_table.py", _GENERATED_CREATE)
 
-    doomed, preserved = cmd._partition_migrations()
+    doomed = cmd._partition_migrations()
     assert sorted(p.name for p in doomed) == [
         "0001_01_01_000000_create_widget_table.py",
         "0002_01_01_000000_add_note_to_widget_table.py",
         "0003_01_01_000000_backfill_widget_slugs.py",
         "0004_01_01_000000_create_gadget_table.py",
     ]
-    assert preserved == []
 
 
-def test_partition_preserves_model_less_marked_files(migrations_dir):
+def test_partition_dooms_marked_files_like_any_other(migrations_dir):
+    """``MODEL_LESS = True`` bought an exemption once. It no longer buys
+    anything: framework tables are cara.models, named DDL lives in a model's
+    __indexes__, and data rewrites are not migrations — so a marked file is
+    just a stray with a vintage badge."""
     cmd = _make_command()
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
-    _write(migrations_dir, "9982_01_01_000000_create_price_views.py", _MODEL_LESS_FILE)
+    _write(migrations_dir, "9982_01_01_000000_create_price_views.py", _MARKED_FILE)
 
-    doomed, preserved = cmd._partition_migrations()
-    assert [p.name for p in doomed] == ["0001_01_01_000000_create_widget_table.py"]
-    assert [p.name for p in preserved] == ["9982_01_01_000000_create_price_views.py"]
-
-
-def test_partition_preserves_root_and_two_edge_transition_chain(migrations_dir):
-    cmd = _make_command()
-    root = _write(
-        migrations_dir,
-        "0001_01_01_000000_create_legacy_widget_table.py",
-        _GENERATED_CREATE,
-    )
-    first = _write(
-        migrations_dir,
-        "0002_01_01_000001_rename_legacy_widget_to_catalog_widget.py",
-        _transition_source("legacy_widget", "catalog_widget"),
-    )
-    second = _write(
-        migrations_dir,
-        "0003_01_01_000002_rename_catalog_widget_to_widget.py",
-        _transition_source("catalog_widget", "widget"),
-    )
-    doomed_file = _write(
-        migrations_dir,
-        "0004_01_01_000003_backfill_widget_slugs.py",
-        _HAND_WRITTEN,
-    )
-
-    doomed, preserved = cmd._partition_migrations()
-
-    assert doomed == [doomed_file]
-    assert preserved == [root, first, second]
-    assert cmd._transition_tables(preserved) == (
-        {"legacy_widget", "catalog_widget"},
-        {"widget"},
-    )
-    assert cmd._transition_targets(preserved) == {"widget"}
-
-
-def test_partition_accepts_an_exact_rename_split_across_string_literals(migrations_dir):
-    cmd = _make_command()
-    root = _write(
-        migrations_dir,
-        "0001_01_01_000000_create_legacy_widget_table.py",
-        _GENERATED_CREATE,
-    )
-    transition = _write(
-        migrations_dir,
-        "0002_01_01_000001_rename_legacy_widget_to_widget.py",
-        _transition_source("legacy_widget", "widget").replace(
-            'DB.statement("ALTER TABLE legacy_widget RENAME TO widget")',
-            'DB.statement("ALTER TABLE legacy_widget " "RENAME TO widget")',
-        ),
-    )
-
-    doomed, preserved = cmd._partition_migrations()
-
-    assert doomed == []
-    assert preserved == [root, transition]
-
-
-def test_partition_rejects_transition_cycle(migrations_dir):
-    cmd = _make_command()
-    _write(
-        migrations_dir,
-        "0001_01_01_000000_create_legacy_widget_table.py",
-        _GENERATED_CREATE,
-    )
-    _write(
-        migrations_dir,
-        "0002_01_01_000001_rename_legacy_widget_to_catalog_widget.py",
-        _transition_source("legacy_widget", "catalog_widget"),
-    )
-    _write(
-        migrations_dir,
-        "0003_01_01_000002_rename_catalog_widget_to_legacy_widget.py",
-        _transition_source("catalog_widget", "legacy_widget"),
-    )
-
-    with pytest.raises(RuntimeError, match="cycle"):
-        cmd._partition_migrations()
-
-
-def test_partition_rejects_transition_without_exact_rename(migrations_dir):
-    cmd = _make_command()
-    _write(
-        migrations_dir,
-        "0001_01_01_000000_create_legacy_widget_table.py",
-        _GENERATED_CREATE,
-    )
-    _write(
-        migrations_dir,
-        "0002_01_01_000001_rename_legacy_widget_to_widget.py",
-        _transition_source("legacy_widget", "widget").replace(
-            "RENAME TO widget",
-            "RENAME TO other_widget",
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="does not prove exactly"):
-        cmd._partition_migrations()
+    doomed = cmd._partition_migrations()
+    assert sorted(p.name for p in doomed) == [
+        "0001_01_01_000000_create_widget_table.py",
+        "9982_01_01_000000_create_price_views.py",
+    ]
 
 
 def test_partition_ignores_package_init(migrations_dir):
     cmd = _make_command()
     _write(migrations_dir, "__init__.py", "")
-    doomed, preserved = cmd._partition_migrations()
-    assert doomed == [] and preserved == []
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "MODEL_LESS = False",
-        "MODEL_LESS = 1",
-        "MODEL_LESS: bool = True",
-        "def f():\n    MODEL_LESS = True\n",
-        "class C:\n    MODEL_LESS = True\n",
-        "OTHER = True",
-        "",
-    ],
-)
-def test_model_less_marker_requires_module_level_literal_true(source, tmp_path):
-    expected = source == "MODEL_LESS: bool = True"
-    path = tmp_path / "m.py"
-    assert MakeMigrationCommand._declares_model_less(source, path) is expected
-
-
-def test_unparseable_file_is_not_treated_as_marked(tmp_path):
-    # A broken migration must not dodge the sweep by failing to parse.
-    assert (
-        MakeMigrationCommand._declares_model_less("def up(:\n", tmp_path / "m.py")
-        is False
-    )
+    assert cmd._partition_migrations() == []
 
 
 # --- _confirm_clobber gating --------------------------------------------------
@@ -385,7 +251,7 @@ def test_unparseable_file_is_not_treated_as_marked(tmp_path):
 
 def test_confirm_clobber_no_targets_proceeds(migrations_dir):
     cmd = _make_command()
-    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
+    assert cmd._confirm_clobber(cmd._partition_migrations()) is True
 
 
 def test_confirm_clobber_clean_files_proceeds_without_prompt(migrations_dir):
@@ -394,7 +260,7 @@ def test_confirm_clobber_clean_files_proceeds_without_prompt(migrations_dir):
         side_effect=AssertionError("should not prompt for clean files")
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
-    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
+    assert cmd._confirm_clobber(cmd._partition_migrations()) is True
 
 
 def test_confirm_clobber_hand_edited_prompts_and_respects_no(migrations_dir):
@@ -405,7 +271,7 @@ def test_confirm_clobber_hand_edited_prompts_and_respects_no(migrations_dir):
         "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
-    assert cmd._confirm_clobber(*cmd._partition_migrations()) is False
+    assert cmd._confirm_clobber(cmd._partition_migrations()) is False
     cmd.confirm.assert_called_once()
 
 
@@ -417,7 +283,7 @@ def test_confirm_clobber_hand_edited_prompts_and_respects_yes(migrations_dir):
         "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
-    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
+    assert cmd._confirm_clobber(cmd._partition_migrations()) is True
     cmd.confirm.assert_called_once()
 
 
@@ -429,7 +295,7 @@ def test_force_skips_prompt_even_when_hand_edited(migrations_dir):
         "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
-    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
+    assert cmd._confirm_clobber(cmd._partition_migrations()) is True
 
 
 def test_dry_run_skips_prompt_even_when_hand_edited(migrations_dir):
@@ -440,34 +306,33 @@ def test_dry_run_skips_prompt_even_when_hand_edited(migrations_dir):
         "            table.timestamps()\n            # manual tweak",
     )
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", edited)
-    assert cmd._confirm_clobber(*cmd._partition_migrations()) is True
+    assert cmd._confirm_clobber(cmd._partition_migrations()) is True
 
 
-# --- the purge is honest: preserved files survive the atomic replace ----------
+# --- the purge is honest: nothing survives the atomic replace ------------------
 
 
-def test_model_less_file_survives_and_is_announced(migrations_dir):
+def test_marked_file_is_deleted_by_the_atomic_replace(migrations_dir):
     cmd = _make_command({"force": True})
-    doomed_file = _write(
+    doomed_generated = _write(
         migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE
     )
-    kept = _write(
-        migrations_dir, "9982_01_01_000000_create_price_views.py", _MODEL_LESS_FILE
+    doomed_marked = _write(
+        migrations_dir, "9982_01_01_000000_create_price_views.py", _MARKED_FILE
     )
     cmd.info = MagicMock()
     cmd.warning = MagicMock()
 
-    doomed, preserved = cmd._partition_migrations()
-    assert cmd._confirm_clobber(doomed, preserved) is True
+    doomed = cmd._partition_migrations()
+    assert cmd._confirm_clobber(doomed) is True
 
-    # Both lists are printed — the sweep is never silent about what it keeps.
+    # The sweep is never silent: every doomed file is announced by name.
     announced = " ".join(str(c.args[0]) for c in cmd.info.call_args_list)
     assert "9982_01_01_000000_create_price_views.py" in announced
-    assert "MODEL_LESS" in announced
 
     cmd._replace_model_migrations_atomically(doomed, [])
-    assert kept.exists()
-    assert not doomed_file.exists()
+    assert not doomed_marked.exists()
+    assert not doomed_generated.exists()
 
 
 # --- _print_summary -----------------------------------------------------------
@@ -564,7 +429,7 @@ def test_finalize_counter_accounts_for_preserved_high_sequence(migrations_dir):
     cmd.generator.finalize_counter()
 
     assert first.name.startswith("0001_")
-    assert cmd.generator.counter_file.read_text() == "9984"
+    assert cmd.generator.counter_file.read_text() == "9984\n"
     following = cmd.generator.create_migration_file(
         "add_name_to_widget_table", "class AddName:\n    pass\n"
     )

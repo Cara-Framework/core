@@ -33,7 +33,6 @@ class MigrateBaselineCommand(CommandBase):
             from cara.eloquent.migrations.ModelMigrationComparator import (
                 migration_table_actions,
             )
-            from cara.facades import DB
         except ImportError as exc:
             raise missing_optional("db", exc) from exc
 
@@ -54,26 +53,12 @@ class MigrateBaselineCommand(CommandBase):
         tracker = migration.tracker
         with tracker.migration_lock():
             tracker.ensure_migrations_table()
-            ran = set(tracker.get_ran_migrations())
 
-            # Explicit bridge migrations are the only DDL allowed before the
-            # drift gate. They must be idempotent because a failed baseline is
-            # safe to retry.
-            bridges: set[str] = set()
-            for file_path in files:
-                migration_class = migration.file_manager.load_migration_class(file_path)
-                name = migration.file_manager.get_migration_name_from_file(file_path)
-                if not getattr(migration_class, "baseline_bridge", False):
-                    continue
-                bridges.add(name)
-                if name in ran:
-                    continue
-                if migration.executor._migration_is_transactional(file_path):
-                    with DB.transaction():
-                        migration.executor._run_migration(file_path, "up")
-                else:
-                    migration.executor._run_migration(file_path, "up")
-
+            # No DDL runs here. There are no bridge migrations any more —
+            # every file in the directory is generated from the models, so the
+            # live schema either already equals the models (and the drift gate
+            # below proves it) or the baseline is refused. A database that IS
+            # missing schema must be migrated or rebuilt, not baselined.
             check = SchemaCheckCommand(self.application)
             check.console = self.console
             check.set_parsed_options(
@@ -88,24 +73,26 @@ class MigrateBaselineCommand(CommandBase):
                 self.error("Schema drift remains; migration history was not changed.")
                 return 1
 
+            # Every file is a generated creator for a model table; the drift
+            # gate just proved the live schema equals those models. Verify the
+            # directory shape holds (a stray file here means migrations:check
+            # is red and adopting it into history would launder it), then
+            # rewrite the ledger.
             models = ModelDiscoverer().discover_models()
             model_tables = {model["table"] for model in models if model.get("table")}
-            preserved: set[str] = set()
-            for file_path in files:
-                content = Path(file_path).read_text(encoding="utf-8")
-                model_owned = any(
-                    any(migration_table_actions(content, table)) for table in model_tables
+            strays = [
+                migration.file_manager.get_migration_name_from_file(file_path)
+                for file_path in files
+                if not any(
+                    any(migration_table_actions(Path(file_path).read_text("utf-8"), t))
+                    for t in model_tables
                 )
-                if not model_owned:
-                    preserved.add(
-                        migration.file_manager.get_migration_name_from_file(file_path)
-                    )
-
-            missing_preserved = sorted(preserved - ran - bridges)
-            if missing_preserved:
+            ]
+            if strays:
                 self.error(
-                    "Refusing to hide pending data/framework migrations: "
-                    + ", ".join(missing_preserved)
+                    "Refusing to baseline non-generated migration(s): "
+                    + ", ".join(sorted(strays))
+                    + " — run migrations:check and regenerate first."
                 )
                 return 1
 

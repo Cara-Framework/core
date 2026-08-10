@@ -4,6 +4,13 @@ The audit is a pure function of (migrations directory, model table -> declared
 index names), so every case here writes real files to ``tmp_path`` and asserts
 on the returned violations. No database, and no migration is ever imported —
 the command parses with ``ast`` precisely so a gate never needs a connection.
+
+The convention under test is the hard one: every file is a generated
+``create_<table>_table.py``, one per model table, and the retired escape
+markers (``MODEL_LESS``, ``MODEL_TRANSITION``, ``DROPPED_INDEXES``) are
+violations in themselves. Framework tables are models now (``cara.models``),
+named DDL lives in a model's ``__indexes__``, and data rewrites are not
+migrations — so there is nothing left for a marker to legitimately shelter.
 """
 
 from __future__ import annotations
@@ -44,26 +51,6 @@ def _generated(directory, table, order=1, extra=""):
     return path
 
 
-def _transition(directory, old_table, new_table, order, statements=()):
-    path = directory / (
-        f"{order:04d}_01_01_{order:06d}_rename_{old_table}_to_{new_table}.py"
-    )
-    transition_sql = "".join(
-        f'        DB.statement("{statement}")\n' for statement in statements
-    )
-    path.write_text(
-        f'"""Preserve the applied {old_table} table while its model is renamed."""\n\n'
-        "from cara.facades import DB\n\n"
-        f'MODEL_TRANSITION = ("{old_table}", "{new_table}")\n\n'
-        "class RenameAppliedTable:\n"
-        "    def up(self):\n"
-        f'        DB.statement("ALTER TABLE {old_table} RENAME TO {new_table}")\n'
-        f"{transition_sql}",
-        encoding="utf-8",
-    )
-    return path
-
-
 def _rules(violations):
     return sorted(v.rule for v in violations)
 
@@ -93,61 +80,6 @@ def test_generated_migration_rejects_model_constant_default(tmp_path):
     assert violations[0].blocks_fix
 
 
-# ── applied model transitions ──────────────────────────────────────────────
-
-
-def test_single_applied_model_transition_covers_current_model(tmp_path):
-    _generated(tmp_path, "legacy_product")
-    _transition(tmp_path, "legacy_product", "product", order=2)
-
-    assert audit_migrations(tmp_path, {"product": set()}) == []
-
-
-def test_two_edge_applied_model_transition_chain_is_supported(tmp_path):
-    _generated(tmp_path, "legacy_product")
-    _transition(tmp_path, "legacy_product", "catalog_product", order=2)
-    _transition(tmp_path, "catalog_product", "product", order=3)
-
-    assert audit_migrations(tmp_path, {"product": set()}) == []
-
-
-def test_model_transition_chain_rejects_cycle(tmp_path):
-    _generated(tmp_path, "legacy_product")
-    _transition(tmp_path, "legacy_product", "catalog_product", order=2)
-    _transition(tmp_path, "catalog_product", "legacy_product", order=3)
-
-    violations = audit_migrations(tmp_path, {"product": set()})
-
-    assert "cyclic-model-transition" in _rules(violations)
-
-
-def test_model_transition_chain_rejects_branch_or_merge(tmp_path):
-    _generated(tmp_path, "legacy_product")
-    _generated(tmp_path, "other_product", order=2)
-    _transition(tmp_path, "legacy_product", "product", order=3)
-    _transition(tmp_path, "other_product", "product", order=4)
-
-    violations = audit_migrations(tmp_path, {"product": set()})
-
-    assert _rules(violations).count("duplicate-model-transition") == 2
-
-
-def test_model_transition_requires_exact_sql_docstring_and_terminal_model(tmp_path):
-    _generated(tmp_path, "legacy_product")
-    path = _transition(tmp_path, "legacy_product", "product", order=2)
-    path.write_text(
-        'MODEL_TRANSITION = ("legacy_product", "product")\nclass Broken:\n    pass\n',
-        encoding="utf-8",
-    )
-
-    violations = audit_migrations(tmp_path, {"listing": set()})
-    messages = "\n".join(violation.message for violation in violations)
-
-    assert "missing explanation" in messages
-    assert "does not prove" in messages
-    assert "has no model" in messages
-
-
 # ── rule 1: one file per table ──────────────────────────────────────────────
 
 
@@ -172,7 +104,7 @@ def test_two_generated_files_for_one_table_are_a_duplicate(tmp_path):
     assert violations[0].blocks_fix
 
 
-# ── rule 2: no incremental migrations ───────────────────────────────────────
+# ── rule 2: generated files only ────────────────────────────────────────────
 
 
 def test_incremental_file_is_a_violation(tmp_path):
@@ -189,12 +121,13 @@ def test_incremental_file_is_a_violation(tmp_path):
     assert not violations[0].human_only
 
 
-# ── rule 3: MODEL_LESS must explain itself ──────────────────────────────────
-
-
-def test_model_less_without_docstring_is_reported(tmp_path):
+def test_model_less_marker_is_banned(tmp_path):
+    """The escape hatch is not merely closed for NEW files — a file still
+    carrying the marker is a violation by itself, with a remedy naming where
+    each kind of content now lives."""
     _generated(tmp_path, "product")
     (tmp_path / "9000_01_01_000000_refresh_view.py").write_text(
+        '"""A view refresh that used to hide behind the marker."""\n\n'
         "MODEL_LESS = True\n\n"
         "from cara.facades import DB\n\n"
         "class RefreshView:\n"
@@ -205,15 +138,22 @@ def test_model_less_without_docstring_is_reported(tmp_path):
 
     violations = audit_migrations(tmp_path, {"product": set()})
 
-    assert _rules(violations) == ["unexplained-model-less"]
-    # Never auto-fixed: only a human knows why no model can own the object.
-    assert violations[0].human_only
+    assert "banned-marker" in _rules(violations)
+    marker = next(v for v in violations if v.rule == "banned-marker")
+    assert "MODEL_LESS" in marker.message
+    assert "__indexes__" in marker.remedy
+    # Deleting the file IS the fix, so --fix may run through it.
+    assert not marker.human_only
 
 
-def test_documented_model_less_file_is_accepted(tmp_path):
+def test_marker_on_a_generated_filename_is_still_banned(tmp_path):
+    """A marker used to WIN over the generated-name classification (the
+    framework's own failed_job file relied on that acceptance). Framework
+    tables are models now, so the marker never legitimises a file: the run is
+    red until --fix deletes it and regenerates the real creator."""
     _generated(tmp_path, "product")
     (tmp_path / "9000_01_01_000000_create_failed_job_table.py").write_text(
-        '"""Framework-owned dead-letter table; no app model owns it."""\n\n'
+        '"""Framework-owned dead-letter table (pre-cara.models copy)."""\n\n'
         "MODEL_LESS = True\n\n"
         "from cara.facades import DB\n\n"
         "class CreateFailedJobTable:\n"
@@ -223,89 +163,152 @@ def test_documented_model_less_file_is_accepted(tmp_path):
         encoding="utf-8",
     )
 
-    # The file NAME matches the generated shape, but the marker wins — otherwise
-    # the escape hatch would be reported as an orphan on every run.
-    assert audit_migrations(tmp_path, {"product": set()}) == []
+    violations = audit_migrations(tmp_path, {"product": set(), "failed_job": set()})
+
+    rules = _rules(violations)
+    assert "banned-marker" in rules
+    # Its raw CREATE TABLE still registers for duplicate detection, so the
+    # marked file "covers" failed_job here — the banned-marker violation is
+    # what keeps the run red until the file is deleted and regenerated.
+    assert "missing-migration" not in rules
+    marker = next(v for v in violations if v.rule == "banned-marker")
+    assert not marker.human_only
 
 
-# ── rule 4: UTC everywhere ──────────────────────────────────────────────────
-
-
-def _model_less_with_sql(directory, sql):
-    (directory / "9000_01_01_000000_create_audit_view.py").write_text(
-        '"""A materialized view no model can express."""\n\n'
-        "MODEL_LESS = True\n\n"
+def test_model_transition_marker_is_banned(tmp_path):
+    _generated(tmp_path, "legacy_product")
+    (tmp_path / "0002_01_01_000002_rename_legacy_product_to_product.py").write_text(
+        '"""Rename bridge from the retired transition mechanism."""\n\n'
+        'MODEL_TRANSITION = ("legacy_product", "product")\n\n'
         "from cara.facades import DB\n\n"
-        "class CreateAuditView:\n"
+        "class RenameAppliedTable:\n"
         "    def up(self):\n"
-        f'        DB.statement("""{sql}""")\n',
+        '        DB.statement("ALTER TABLE legacy_product RENAME TO product")\n',
         encoding="utf-8",
     )
 
+    violations = audit_migrations(tmp_path, {"product": set()})
 
-def test_naive_timestamp_in_hand_written_sql_is_reported(tmp_path):
+    assert "banned-marker" in _rules(violations)
+    marker = next(v for v in violations if v.rule == "banned-marker")
+    assert "MODEL_TRANSITION" in marker.message
+
+
+def test_dropped_indexes_marker_is_banned(tmp_path):
     _generated(tmp_path, "product")
-    _model_less_with_sql(
-        tmp_path, "CREATE TABLE audit_snapshot (taken_at TIMESTAMP NOT NULL)"
+    (tmp_path / "9001_01_01_000001_retire_index.py").write_text(
+        '"""Index retirement from the retired mechanism."""\n\n'
+        'DROPPED_INDEXES = {"legacy_idx": "product"}\n\n'
+        "from cara.facades import DB\n\n"
+        "class RetireIndex:\n"
+        "    def up(self):\n"
+        '        DB.statement("DROP INDEX IF EXISTS legacy_idx")\n',
+        encoding="utf-8",
+    )
+
+    violations = audit_migrations(tmp_path, {"product": set()})
+
+    assert "banned-marker" in _rules(violations)
+    marker = next(v for v in violations if v.rule == "banned-marker")
+    assert "DROPPED_INDEXES" in marker.message
+
+
+# ── rule 3: UTC everywhere ──────────────────────────────────────────────────
+
+
+def test_naive_timestamp_in_migration_sql_is_reported(tmp_path):
+    _generated(
+        tmp_path,
+        "product",
+        extra=(
+            "        DB.statement(\n"
+            '            """\n'
+            "            ALTER TABLE product ADD COLUMN taken_at TIMESTAMP\n"
+            '            """\n'
+            "        )\n\n"
+        ),
     )
 
     violations = audit_migrations(tmp_path, {"product": set()})
 
     assert _rules(violations) == ["naive-timestamp"]
     assert "TIMESTAMPTZ" in violations[0].remedy
-    # A human picks the conversion; --fix must never rewrite hand-written SQL.
+    # The SQL is model-authored (__indexes__); a human fixes the model.
     assert violations[0].human_only
 
 
 def test_timestamp_without_time_zone_is_naive(tmp_path):
-    _generated(tmp_path, "product")
-    _model_less_with_sql(
+    _generated(
         tmp_path,
-        "CREATE TABLE audit_snapshot (taken_at TIMESTAMP WITHOUT TIME ZONE)",
+        "product",
+        extra=(
+            "        DB.statement(\n"
+            '            """\n'
+            "            ALTER TABLE product ADD COLUMN t TIMESTAMP WITHOUT TIME ZONE\n"
+            '            """\n'
+            "        )\n\n"
+        ),
     )
 
     assert _rules(audit_migrations(tmp_path, {"product": set()})) == ["naive-timestamp"]
 
 
 def test_timestamptz_and_current_timestamp_are_not_flagged(tmp_path):
-    _generated(tmp_path, "product")
-    _model_less_with_sql(
+    _generated(
         tmp_path,
-        "CREATE TABLE audit_snapshot ("
-        "taken_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
-        "seen_at TIMESTAMP WITH TIME ZONE DEFAULT to_timestamp(0))",
+        "product",
+        extra=(
+            "        DB.statement(\n"
+            '            """\n'
+            "            ALTER TABLE product ADD COLUMN taken_at TIMESTAMPTZ\n"
+            "                NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+            '            """\n'
+            "        )\n"
+            "        DB.statement(\n"
+            '            """\n'
+            "            ALTER TABLE product ADD COLUMN seen_at\n"
+            "                TIMESTAMP WITH TIME ZONE DEFAULT to_timestamp(0)\n"
+            '            """\n'
+            "        )\n\n"
+        ),
     )
 
     assert audit_migrations(tmp_path, {"product": set()}) == []
 
 
 def test_timestamp_mentioned_only_in_a_docstring_is_not_flagged(tmp_path):
-    _generated(tmp_path, "product")
-    (tmp_path / "9000_01_01_000000_create_audit_view.py").write_text(
-        '"""A view no model owns. Its columns are TIMESTAMP-free by design."""\n\n'
-        "MODEL_LESS = True\n\n"
-        "from cara.facades import DB\n\n"
-        "class CreateAuditView:\n"
-        "    def up(self):\n"
-        '        DB.statement("CREATE MATERIALIZED VIEW v AS SELECT 1")\n',
-        encoding="utf-8",
+    path = _generated(tmp_path, "product")
+    text = path.read_text(encoding="utf-8").replace(
+        '"""Create the product table."""',
+        '"""Create the product table. Its columns are TIMESTAMP-free by design."""',
     )
+    path.write_text(text, encoding="utf-8")
 
     # Prose is not SQL: the scan reads string literals minus docstrings, so a
     # gate that cried wolf on documentation can't happen.
     assert audit_migrations(tmp_path, {"product": set()}) == []
 
 
-# ── rule 5 / orphans ────────────────────────────────────────────────────────
+# ── rule 4 / orphans ────────────────────────────────────────────────────────
 
 
-def test_model_less_file_creating_a_model_table_is_a_duplicate(tmp_path):
+def test_raw_sql_creating_a_model_table_twice_is_a_duplicate(tmp_path):
     _generated(tmp_path, "product")
-    _model_less_with_sql(tmp_path, "CREATE TABLE product (id BIGSERIAL PRIMARY KEY)")
+    (tmp_path / "0002_01_01_000002_bootstrap_extra.py").write_text(
+        '"""A stray file that also creates product."""\n\n'
+        "from cara.facades import DB\n\n"
+        "class BootstrapExtra:\n"
+        "    def up(self):\n"
+        '        DB.statement("CREATE TABLE product (id BIGSERIAL PRIMARY KEY)")\n',
+        encoding="utf-8",
+    )
 
     violations = audit_migrations(tmp_path, {"product": set()})
 
-    assert _rules(violations) == ["duplicate-table"]
+    rules = _rules(violations)
+    assert "duplicate-table" in rules
+    # The stray is independently an incremental-migration violation too.
+    assert "incremental-migration" in rules
 
 
 def test_generated_file_whose_model_vanished_is_an_orphan(tmp_path):
@@ -319,7 +322,7 @@ def test_generated_file_whose_model_vanished_is_an_orphan(tmp_path):
     assert not violations[0].human_only
 
 
-# ── rule 7: indexes belong to models ────────────────────────────────────────
+# ── rule 5: indexes belong to models ────────────────────────────────────────
 
 
 _INDEX_SQL = (
@@ -348,218 +351,33 @@ def test_index_declared_by_the_model_is_accepted(tmp_path):
     assert audit_migrations(tmp_path, {"product": {"product_sku_idx"}}) == []
 
 
-def test_later_valid_transition_may_rename_historical_index(tmp_path):
-    historical_index = _INDEX_SQL.replace(
-        "product_sku_idx",
-        "legacy_product_sku_idx",
+def test_index_on_a_non_model_table_is_out_of_scope(tmp_path):
+    """An index on a table no model declares is the orphan/duplicate rules'
+    problem, not the index rule's — reporting it here too would double-count
+    every stray file."""
+    _generated(tmp_path, "product")
+    (tmp_path / "0002_01_01_000002_stray.py").write_text(
+        '"""Stray."""\n\n'
+        "from cara.facades import DB\n\n"
+        "class Stray:\n"
+        "    def up(self):\n"
+        '        DB.statement("CREATE INDEX x_idx ON not_a_model (y)")\n',
+        encoding="utf-8",
     )
-    _generated(tmp_path, "product", extra=historical_index)
-    _generated(tmp_path, "legacy_state", order=2)
-    _transition(
-        tmp_path,
-        "legacy_state",
-        "state",
-        order=3,
-        statements=("ALTER INDEX legacy_product_sku_idx RENAME TO product_sku_idx",),
-    )
-
-    assert (
-        audit_migrations(
-            tmp_path,
-            {"product": {"product_sku_idx"}, "state": set()},
-        )
-        == []
-    )
-
-
-def test_later_valid_transition_may_drop_historical_index(tmp_path):
-    historical_index = _INDEX_SQL.replace(
-        "product_sku_idx",
-        "legacy_product_sku_idx",
-    )
-    _generated(tmp_path, "product", extra=historical_index)
-    _generated(tmp_path, "legacy_state", order=2)
-    _transition(
-        tmp_path,
-        "legacy_state",
-        "state",
-        order=3,
-        statements=("DROP INDEX legacy_product_sku_idx",),
-    )
-
-    assert (
-        audit_migrations(
-            tmp_path,
-            {"product": set(), "state": set()},
-        )
-        == []
-    )
-
-
-def test_index_transition_rejects_rename_to_undeclared_target(tmp_path):
-    historical_index = _INDEX_SQL.replace(
-        "product_sku_idx",
-        "legacy_product_sku_idx",
-    )
-    _generated(tmp_path, "product", extra=historical_index)
-    _generated(tmp_path, "legacy_state", order=2)
-    _transition(
-        tmp_path,
-        "legacy_state",
-        "state",
-        order=3,
-        statements=(
-            "ALTER INDEX legacy_product_sku_idx RENAME TO stale_product_sku_idx",
-        ),
-    )
-
-    violations = audit_migrations(
-        tmp_path,
-        {"product": {"product_sku_idx"}, "state": set()},
-    )
-
-    assert _rules(violations) == [
-        "invalid-index-transition",
-        "undeclared-index",
-    ]
-
-
-def test_sql_outside_valid_transition_cannot_mask_historical_index(tmp_path):
-    _generated(tmp_path, "product", extra=_INDEX_SQL)
-    _model_less_with_sql(tmp_path, "DROP INDEX product_sku_idx")
 
     violations = audit_migrations(tmp_path, {"product": set()})
 
-    assert _rules(violations) == ["undeclared-index"]
-
-
-def _forward_index_retirement(
-    directory,
-    *,
-    metadata='{"product_sku_idx": "product"}',
-    model_less=True,
-    drop_in_up=True,
-):
-    path = directory / "0002_01_01_000002_retire_product_sku_index.py"
-    up_sql = "DROP INDEX IF EXISTS product_sku_idx" if drop_in_up else "SELECT 1"
-    down_sql = "SELECT 1" if drop_in_up else "DROP INDEX product_sku_idx"
-    path.write_text(
-        '"""Retire an index from immutable generated history."""\n\n'
-        + ("MODEL_LESS = True\n" if model_less else "")
-        + f"DROPPED_INDEXES = {metadata}\n\n"
-        + "class RetireProductSkuIndex:\n"
-        + "    def up(self):\n"
-        + f'        DB.statement("{up_sql}")\n\n'
-        + "    def down(self):\n"
-        + f'        DB.statement("{down_sql}")\n',
-        encoding="utf-8",
-    )
-    return path
-
-
-def test_explicit_model_less_forward_drop_retires_historical_index(tmp_path):
-    _generated(tmp_path, "product", extra=_INDEX_SQL)
-    path = _forward_index_retirement(tmp_path)
-
-    entry = parse_migration_file(path)
-    assert entry.dropped_indexes == (("product_sku_idx", "product"),)
-    assert any("DROP INDEX" in sql for _, sql in entry.up_sql_constants)
-    assert audit_migrations(tmp_path, {"product": set()}) == []
-
-
-def test_forward_retirement_requires_drop_in_up_not_only_down(tmp_path):
-    _generated(tmp_path, "product", extra=_INDEX_SQL)
-    _forward_index_retirement(tmp_path, drop_in_up=False)
-
-    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
-        "invalid-index-retirement",
-        "undeclared-index",
-    ]
-
-
-def test_forward_retirement_requires_literal_mapping_and_model_less(tmp_path):
-    _generated(tmp_path, "product", extra=_INDEX_SQL)
-    _forward_index_retirement(tmp_path, metadata="build_retirements()")
-
-    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
-        "invalid-index-retirement",
-        "undeclared-index",
-    ]
-
-    _forward_index_retirement(tmp_path, model_less=False)
-    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
-        "incremental-migration",
-        "invalid-index-retirement",
-        "undeclared-index",
-    ]
-
-
-def test_forward_retirement_requires_exact_older_create_and_current_table(tmp_path):
-    _generated(tmp_path, "product")
-    _forward_index_retirement(tmp_path)
-
-    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
-        "invalid-index-retirement"
-    ]
-
-    _generated(tmp_path, "product", extra=_INDEX_SQL)
-    _generated(tmp_path, "listing", order=3)
-    _forward_index_retirement(
-        tmp_path,
-        metadata='{"product_sku_idx": "listing"}',
-    )
-    assert _rules(audit_migrations(tmp_path, {"product": set(), "listing": set()})) == [
-        "invalid-index-retirement",
-        "undeclared-index",
-    ]
-
-
-def test_forward_retirement_cannot_drop_an_index_still_declared_by_model(tmp_path):
-    _generated(tmp_path, "product", extra=_INDEX_SQL)
-    _forward_index_retirement(tmp_path)
-
-    assert _rules(audit_migrations(tmp_path, {"product": {"product_sku_idx"}})) == [
-        "invalid-index-retirement"
-    ]
-
-
-def test_index_transition_must_sort_after_historical_creator(tmp_path):
-    _generated(tmp_path, "legacy_widget")
-    _transition(
-        tmp_path,
-        "legacy_widget",
-        "widget",
-        order=2,
-        statements=("DROP INDEX IF EXISTS future_product_sku_idx",),
-    )
-    future_index = _INDEX_SQL.replace(
-        "product_sku_idx",
-        "future_product_sku_idx",
-    )
-    _generated(tmp_path, "product", order=3, extra=future_index)
-
-    violations = audit_migrations(
-        tmp_path,
-        {"widget": set(), "product": set()},
-    )
-
-    assert _rules(violations) == ["undeclared-index"]
-
-
-def test_index_on_a_non_model_table_is_out_of_scope(tmp_path):
-    _generated(tmp_path, "product")
-    _model_less_with_sql(tmp_path, "CREATE INDEX audit_view_idx ON audit_view (taken_on)")
-
-    # No model can own a materialized view's index, so rule 7 does not apply.
-    assert audit_migrations(tmp_path, {"product": set()}) == []
+    assert "undeclared-index" not in _rules(violations)
 
 
 # ── unparseable files ───────────────────────────────────────────────────────
 
 
-def test_unparseable_migration_is_reported_and_blocks_fix(tmp_path):
+def test_unparseable_file_is_reported_and_blocks_fix(tmp_path):
     _generated(tmp_path, "product")
-    (tmp_path / "0002_01_01_000002_broken.py").write_text("def up(:\n", encoding="utf-8")
+    (tmp_path / "0002_01_01_000002_broken.py").write_text(
+        "def broken(:\n", encoding="utf-8"
+    )
 
     violations = audit_migrations(tmp_path, {"product": set()})
 
@@ -567,32 +385,45 @@ def test_unparseable_migration_is_reported_and_blocks_fix(tmp_path):
     assert violations[0].blocks_fix
 
 
-def test_unparseable_file_is_never_treated_as_model_less(tmp_path):
-    path = tmp_path / "0002_01_01_000002_broken.py"
-    path.write_text("MODEL_LESS = True\ndef up(:\n", encoding="utf-8")
+def test_parse_migration_file_reports_banned_markers(tmp_path):
+    path = tmp_path / "0001_01_01_000001_create_product_table.py"
+    path.write_text(
+        '"""Doc."""\nMODEL_LESS = True\nDROPPED_INDEXES = {"a": "b"}\n',
+        encoding="utf-8",
+    )
 
     entry = parse_migration_file(path)
 
-    assert entry.syntax_error is not None
-    assert entry.model_less is False
+    assert entry.banned_markers == ("MODEL_LESS", "DROPPED_INDEXES")
+    assert entry.generated_table == "product"
 
 
 # ── exit codes ──────────────────────────────────────────────────────────────
 
 
-def _command() -> MigrationsCheckCommand:
-    command = MigrationsCheckCommand(application=None)
-    command.set_parsed_options({})
-    return command
+def test_report_exit_codes(tmp_path):
+    command = MigrationsCheckCommand.__new__(MigrationsCheckCommand)
+    printed: list[str] = []
+    for attr in ("info", "success", "warning", "error"):
+        setattr(command, attr, lambda msg, _p=printed: _p.append(str(msg)))
+    command.option = lambda name, default=None: False
+
+    assert command._report([], table_count=3) == 0
+
+    from cara.commands.core.MigrationsCheckCommand import Violation
+
+    violation = Violation(rule="incremental-migration", path="x.py", message="m", remedy="r")
+    assert command._report([violation], table_count=3) == 1
 
 
-def test_report_returns_zero_only_when_clean(tmp_path):
-    assert _command()._report([], table_count=3) == 0
+def test_a_column_merely_named_timestamp_is_not_naive_sql(tmp_path):
+    """``table.datetime("timestamp")`` is a COLUMN NAME in a generated file,
+    not a type declaration. Naive TIMESTAMP as a type only appears inside a
+    longer SQL statement, so bare identifiers are out of scope."""
+    _generated(
+        tmp_path,
+        "product_lifecycle",
+        extra='            table.datetime("timestamp")\n',
+    )
 
-
-def test_report_returns_non_zero_on_any_violation(tmp_path):
-    _generated(tmp_path, "product", extra=_INDEX_SQL)
-    violations = audit_migrations(tmp_path, {"product": set()})
-
-    # CI gates on this: human-only violations still fail the build.
-    assert _command()._report(violations, table_count=1) == 1
+    assert audit_migrations(tmp_path, {"product_lifecycle": set()}) == []
