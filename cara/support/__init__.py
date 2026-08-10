@@ -22,14 +22,6 @@ from .MailSafety import DEFAULT_SMTP_PORT, SMTP_TIMEOUT_SECONDS, strip_header_cr
 from .Currency import currency_symbol, default_currency, format_money
 from .Date import Date
 from .FilterValues import csv_filter_values
-from .Gtin import (
-    MIN_GTIN_DIGITS,
-    coerce_to_gtin_14,
-    gtin_check_digit,
-    is_valid_gtin,
-    normalize_gtin,
-    normalize_isbn,
-)
 from .HtmlString import HtmlString
 from .Image import Image
 from .JsonEncoding import decimal_to_wire, json_default, json_dumps
@@ -73,7 +65,6 @@ __all__ = [
     "HtmlString",
     "Image",
     "LogColors",
-    "MIN_GTIN_DIGITS",
     "Macroable",
     "Manager",
     "ModuleManager",
@@ -93,7 +84,6 @@ __all__ = [
     "base_path",
     "best_effort",
     "best_effort_ctx",
-    "coerce_to_gtin_14",
     "collect",
     "currency_symbol",
     "csv_filter_values",
@@ -107,8 +97,6 @@ __all__ = [
     "format_money",
     "gate_allows",
     "get_classes",
-    "gtin_check_digit",
-    "is_valid_gtin",
     "json_default",
     "json_dumps",
     "load",
@@ -119,8 +107,6 @@ __all__ = [
     "mask_token",
     "modularize",
     "modules",
-    "normalize_gtin",
-    "normalize_isbn",
     "optional_user_id",
     "parse_human_time",
     "paths",
