@@ -8,7 +8,22 @@ using ``APP_KEY``.
 Unsigned base64 JSON is not an opaque cursor: callers can edit it, reuse it
 against another endpoint/tenant/filter set, or feed an invalid comparand into
 the database.  This codec therefore validates every claim and fails closed by
-raising :class:`InvalidCursor`.
+raising :class:`~cara.exceptions.types.http.InvalidCursor`, which this module
+IMPORTS as an ordinary consumer.
+
+``InvalidCursor`` lives in the exception taxonomy rather than in this module
+because a tampered cursor is bad CLIENT input and must answer 422.  As a bare
+``ValueError`` it carried no ``status_code``, so the global handler's "default
+to 500 for unknown exceptions" branch turned an edited query string into a 500
+with an ERROR-level traceback.
+
+When it moved, this module kept an ``import … as …`` re-export so
+``cara.http``'s lazy export map could go on naming ``cara.http.Cursor`` as the
+class's home.  That is precisely the backward-compat shim §5 bans: the map
+entry is the only thing that kept the alias alive, and the alias was the only
+thing that let the map keep pointing at the wrong module.  Both are gone —
+``cara.http`` resolves ``InvalidCursor`` from the taxonomy directly, and the
+import below is a use, not a door.
 """
 
 from __future__ import annotations
@@ -23,6 +38,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
+from cara.exceptions.types.http import InvalidCursor
+
 SortDirection = Literal["asc", "desc"]
 CursorPayload = dict[str, Any]
 
@@ -33,10 +50,6 @@ _KEY_DERIVATION_LABEL = b"cara.cursor.v1"
 _BASE64URL_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
-
-
-class InvalidCursor(ValueError):
-    """The cursor is malformed, tampered with, or belongs to another query."""
 
 
 def cursor_fingerprint(filters: Any) -> str:

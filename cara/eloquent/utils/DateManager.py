@@ -62,6 +62,18 @@ class DateManager:
         """
         Parse a date value into a pendulum DateTime.
 
+        ``timezone_str`` has ONE meaning across every input shape:
+
+        * a value with no offset (naive datetime, bare date string) is a wall
+          clock **in** that zone and is LOCALIZED into it;
+        * a value that already carries an offset (aware datetime, epoch,
+          offset-bearing string) names an instant and is CONVERTED to it.
+
+        Pre-fix the argument meant "localize" on the ``pendulum.parse`` path
+        and "convert, assuming the wall clock was UTC" on every other path,
+        so the same call answered a different calendar day depending on which
+        format the caller happened to use.
+
         Args:
             date_value: Value to parse (string, datetime, timestamp, etc.)
             timezone_str: Target timezone
@@ -74,12 +86,14 @@ class DateManager:
 
         timezone_str = timezone_str or cls.DEFAULT_TIMEZONE
 
-        # Already a pendulum DateTime
+        # Already a pendulum DateTime — always aware, so convert.
         if isinstance(date_value, pendulum.DateTime):
             return date_value.in_timezone(timezone_str)
 
         # Standard datetime object
         if isinstance(date_value, datetime):
+            if date_value.tzinfo is None:
+                return pendulum.instance(date_value, tz=timezone_str)
             return pendulum.instance(date_value).in_timezone(timezone_str)
 
         # String parsing
@@ -285,12 +299,26 @@ class DateManager:
     def _parse_string(
         cls, date_string: str, timezone_str: str
     ) -> pendulum.DateTime | None:
-        """Parse a string date using multiple format attempts."""
+        """Parse a string date using multiple format attempts.
+
+        Both paths obey the one contract ``parse`` documents: a wall clock
+        with no offset is LOCALIZED into ``timezone_str``; a value that
+        already carries an offset is CONVERTED to it.
+
+        Pre-fix the fallback path read ``pendulum.instance(dt)``, which
+        assumes UTC, and then converted — so the two day-first formats (the
+        only ones ``pendulum.parse`` rejects, hence the only ones that ever
+        reached it) came back on the WRONG CALENDAR DAY west of Greenwich:
+        ``_parse_string("01/12/2023", "America/New_York")`` answered
+        2023-11-30. ``is_today`` inherited the shift.
+        """
         date_string = date_string.strip()
 
-        # Try pendulum's built-in parsing first
+        # Try pendulum's built-in parsing first. ``tz=`` localizes a naive
+        # string but leaves an offset-carrying one in its own zone, so the
+        # conversion is applied explicitly rather than assumed.
         try:
-            return pendulum.parse(date_string, tz=timezone_str)
+            return pendulum.parse(date_string, tz=timezone_str).in_timezone(timezone_str)
         except ValueError, TypeError:
             pass
 
@@ -298,9 +326,15 @@ class DateManager:
         for fmt in cls.SUPPORTED_FORMATS:
             try:
                 dt = datetime.strptime(date_string, fmt)
-                return pendulum.instance(dt).in_timezone(timezone_str)
             except ValueError:
                 continue
+
+            if dt.tzinfo is not None:
+                return pendulum.instance(dt).in_timezone(timezone_str)
+            if fmt.endswith("Z"):
+                # A literal ``Z`` in the format means the wall clock is UTC.
+                return pendulum.instance(dt, tz="UTC").in_timezone(timezone_str)
+            return pendulum.instance(dt, tz=timezone_str)
 
         return None
 

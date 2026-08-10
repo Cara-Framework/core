@@ -2,9 +2,9 @@
 counted as a failed step — not silently reported as completed.
 
 Regression: a seed command returning 1 (its snapshot import failed) was
-counted as success, so ``setup:all`` printed "8/8 completed" while a step
-had actually failed. Craft commands signal failure by return code, not by
-raising, so the pipeline must honour the exit-code convention.
+counted as success, so the enclosing setup workflow printed "8/8 completed"
+while a step had actually failed. Craft commands signal failure by return
+code, not by raising, so the pipeline must honour the exit-code convention.
 """
 
 from __future__ import annotations

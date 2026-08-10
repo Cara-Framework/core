@@ -1,5 +1,17 @@
 """Process-local canonical queue routing."""
 
-from .QueueRouter import QueueRouter, RoutingKey
+from .QueueRouter import (
+    ONE_WORD,
+    QueueRouter,
+    RoutingKey,
+    matches_pattern,
+    patterns_overlap,
+)
 
-__all__ = ["QueueRouter", "RoutingKey"]
+__all__ = [
+    "ONE_WORD",
+    "QueueRouter",
+    "RoutingKey",
+    "matches_pattern",
+    "patterns_overlap",
+]

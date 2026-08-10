@@ -23,3 +23,41 @@ def test_environment_files_are_resolved_from_the_application_base(
     import os
 
     assert os.environ["CARA_BASE_PATH_TEST"] == "from-application"
+
+
+def test_process_environment_wins_over_dotenv_by_default(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    application_root = tmp_path / "application"
+    application_root.mkdir()
+    (application_root / ".env").write_text(
+        "CARA_DEPLOYMENT_VALUE=from-dotenv\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CARA_DEPLOYMENT_VALUE", "from-process")
+
+    LoadEnvironment(base_path=application_root)
+
+    import os
+
+    assert os.environ["CARA_DEPLOYMENT_VALUE"] == "from-process"
+
+
+def test_dotenv_override_requires_explicit_opt_in(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    application_root = tmp_path / "application"
+    application_root.mkdir()
+    (application_root / ".env").write_text(
+        "CARA_DEPLOYMENT_VALUE=from-dotenv\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CARA_DEPLOYMENT_VALUE", "from-process")
+
+    LoadEnvironment(base_path=application_root, override=True)
+
+    import os
+
+    assert os.environ["CARA_DEPLOYMENT_VALUE"] == "from-dotenv"

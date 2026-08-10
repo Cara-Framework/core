@@ -50,6 +50,7 @@ from cara.queues.retry.Policy import (
 from cara.queues.serializers.SignedJsonJobSerializer import (
     SignedJsonJobSerializer,
 )
+from cara.queues.Topology import DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE
 from cara.support import HasColoredOutput
 
 # Connection/stream errors that warrant one publish retry. Built at module
@@ -282,8 +283,8 @@ class AMQPDriver(HasColoredOutput, Queue):
                 resources = [("queue", name) for name in names]
             else:
                 resources = [
-                    ("exchange", "dead.letter.dlx"),
-                    ("queue", "dead.letter.queue"),
+                    ("exchange", DEAD_LETTER_EXCHANGE),
+                    ("queue", DEAD_LETTER_QUEUE),
                     *(("queue", name) for name in names),
                 ]
             for kind, name in resources:
@@ -422,6 +423,16 @@ class AMQPDriver(HasColoredOutput, Queue):
     @property
     def delivery_store(self) -> QueueJobDeliveryStore:
         return self._delivery_store
+
+    @property
+    def canonical_queues(self) -> frozenset[str]:
+        """The queue inventory this driver accepts dispatches for.
+
+        The same SSOT ``require_canonical_queue`` validates against, exposed so
+        broker maintenance (reconcile, flush) reads one inventory instead of
+        re-deriving its own from configuration and drifting from it.
+        """
+        return self._canonical_queues
 
     def require_canonical_queue(self, queue_name: Any) -> str:
         """Return a configured consumed queue or fail before persistence."""
@@ -681,6 +692,7 @@ class AMQPDriver(HasColoredOutput, Queue):
             # instead of the whole family silently freezing.
             MetricsBase.queue_delivery_metrics_timestamp_seconds.set(time.time())
         except Exception:
+            # allow-silent-except: stranding the freshness timestamp is the SIGNAL; QueueDeliveryMetricsStale fires
             pass
         return snapshot
 
@@ -798,7 +810,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         job_name = job.__class__.__name__
         job_class = f"{job.__class__.__module__}.{job.__class__.__name__}"
 
-        from cara.queues import Bus
+        from cara.queues.Bus import Bus
 
         payload = Bus.get_dispatch_params(job)
         db_job_id = tracker.create_job_record(
@@ -824,7 +836,7 @@ class AMQPDriver(HasColoredOutput, Queue):
         return None
 
     def get_dead_letter_messages(
-        self, queue_name: str = "dead.letter.queue", limit: int = 100
+        self, queue_name: str = DEAD_LETTER_QUEUE, limit: int = 100
     ) -> list[dict[str, Any]]:
         """
         Peek at dead letter queue messages without consuming them.
@@ -952,7 +964,7 @@ class AMQPDriver(HasColoredOutput, Queue):
                 maximum=1000,
             ),
             "x-dead-letter-exchange": (
-                f"{exchange_name}.dlx" if exchange_name else "dead.letter.dlx"
+                f"{exchange_name}.dlx" if exchange_name else DEAD_LETTER_EXCHANGE
             ),
             "x-dead-letter-routing-key": f"dead.{queue_name}",
             "x-dead-letter-strategy": "at-least-once",
@@ -1143,7 +1155,8 @@ class AMQPDriver(HasColoredOutput, Queue):
         self.connection, self.channel = self._open_new_connection(opts)
 
         # NOTE: Queue declaration is intentionally NOT done here.
-        # Each caller (_connect_and_publish, setup_dead_letter_exchange, etc.)
+        # Each caller (_connect_and_publish, and the topology helpers in
+        # ``cara.queues.Topology`` that ``queue:reconcile`` drives)
         # declares its target queue with the correct arguments (x-message-ttl,
         # x-dead-letter-exchange, ...). Declaring here without arguments
         # conflicted with existing queues and caused PRECONDITION_FAILED

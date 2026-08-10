@@ -13,6 +13,7 @@ _KID = "current"
 _KEYS = {_KID: _KEY}
 _PREFIXES = ("tests.queues",)
 _JOB_ID = "11111111-1111-4111-8111-111111111111"
+_REPLAY_JOB_ID = "22222222-2222-4222-8222-222222222222"
 
 
 class ExampleJob(ShouldQueue, Queueable):
@@ -66,6 +67,7 @@ def _payload(job):
         "db_job_id": 12,
         "timeout_seconds": 300,
         "attempts": 0,
+        "throttle_attempts": 0,
         "_otel": {"traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01"},
         "_tenant": 7,
         "_tenant_mode": "tenant",
@@ -97,6 +99,7 @@ def test_signed_json_round_trip_preserves_constructor_and_queue_metadata():
     assert decoded["init_kwargs"]["priority"] == "high"
     assert decoded["queue"] == "sync"
     assert decoded["priority"] == "high"
+    assert decoded["throttle_attempts"] == 0
     assert decoded["_tenant"] == 7
     assert decoded["_tenant_mode"] == "tenant"
 
@@ -126,6 +129,43 @@ def test_round_trip_excludes_derived_public_state_from_constructor_kwargs():
     )
     assert instance.source == "derived"
     assert instance.job_id == "runtime-only"
+
+
+def test_replay_resets_failure_and_throttle_budgets():
+    payload = _payload(ExampleJob(42))
+    payload["attempts"] = 2
+    payload["throttle_attempts"] = 17
+    body = SignedJsonJobSerializer.serialize(
+        payload,
+        signing_key_id=_KID,
+        signing_keys=_KEYS,
+        allowed_prefixes=_PREFIXES,
+        issued_at=1_752_643_200,
+    )
+    verified = SignedJsonJobSerializer.inspect(
+        body,
+        signing_keys=_KEYS,
+        now=1_752_643_201,
+    )
+
+    replay_body = SignedJsonJobSerializer.serialize_replay(
+        verified,
+        new_job_id=_REPLAY_JOB_ID,
+        new_db_job_id=13,
+        signing_key_id=_KID,
+        signing_keys=_KEYS,
+        issued_at=1_752_643_202,
+    )
+    replay = SignedJsonJobSerializer.deserialize(
+        replay_body,
+        signing_keys=_KEYS,
+        allowed_prefixes=_PREFIXES,
+        now=1_752_643_203,
+    )
+
+    assert replay["attempts"] == 0
+    assert replay["throttle_attempts"] == 0
+    assert replay["replay_of"] == _JOB_ID
 
 
 def test_serializer_rejects_oversized_body_before_transport(monkeypatch):
@@ -376,3 +416,71 @@ def test_sync_handle_is_rejected_by_amqp_contract():
             signing_keys=_KEYS,
             allowed_prefixes=_PREFIXES,
         )
+
+
+def test_throttle_counter_survives_the_signed_round_trip():
+    """The starvation counter must cross the wire, or bounding is fiction.
+
+    ``throttle_attempts`` lives in the signed payload, and the signed payload
+    is built from an explicit key list validated against ``_PAYLOAD_KEYS`` by
+    exact set equality. A counter the worker increments but the envelope drops
+    reads back as 0 on every redelivery: the bound check is permanently
+    ``1 < max`` and the backoff index permanently 0, so a starved job loops at
+    one-second intervals forever while its unit tests — which hand-copy the
+    field back into the message dict instead of signing it — stay green. This
+    test drives the real sign/verify hop so that cannot be true again.
+    """
+    payload = _payload(ExampleJob(42))
+    payload["attempts"] = 2
+    payload["throttle_attempts"] = 7
+
+    body = SignedJsonJobSerializer.serialize(
+        payload,
+        signing_key_id=_KID,
+        signing_keys=_KEYS,
+        allowed_prefixes=_PREFIXES,
+        issued_at=1_752_643_200,
+    )
+    envelope = SignedJsonJobSerializer.inspect_envelope(
+        body, signing_keys=_KEYS, now=1_752_643_201
+    )
+    verified = SignedJsonJobSerializer.deserialize_verified(
+        envelope["payload"], allowed_prefixes=_PREFIXES
+    )
+
+    assert verified["throttle_attempts"] == 7
+    assert verified["attempts"] == 2
+
+
+def test_replay_clears_both_retry_counters():
+    """A replay is a fresh chance: neither budget carries over from the
+    original delivery, or an operator's replay of a dead-lettered job would
+    dead-letter again immediately."""
+    payload = _payload(ExampleJob(42))
+    payload["attempts"] = 3
+    payload["throttle_attempts"] = 9
+
+    body = SignedJsonJobSerializer.serialize(
+        payload,
+        signing_key_id=_KID,
+        signing_keys=_KEYS,
+        allowed_prefixes=_PREFIXES,
+        issued_at=1_752_643_200,
+    )
+    source = SignedJsonJobSerializer.inspect_envelope(
+        body, signing_keys=_KEYS, now=1_752_643_201
+    )["payload"]
+
+    replay_body = SignedJsonJobSerializer.serialize_replay(
+        source,
+        new_job_id=_REPLAY_JOB_ID,
+        new_db_job_id=99,
+        signing_key_id=_KID,
+        signing_keys=_KEYS,
+    )
+    replayed = SignedJsonJobSerializer.inspect_envelope(replay_body, signing_keys=_KEYS)[
+        "payload"
+    ]
+
+    assert replayed["attempts"] == 0
+    assert replayed["throttle_attempts"] == 0

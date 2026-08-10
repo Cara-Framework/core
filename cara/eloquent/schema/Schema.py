@@ -6,6 +6,7 @@ except ImportError:  # Python <3.11
     from typing import Self  # noqa: F401
 
 import contextlib
+import inspect
 from decimal import Decimal
 
 from cara.facades import DB
@@ -521,6 +522,14 @@ class FieldBuilder:
     def float(self, name):
         return FieldDefinition("float", name)
 
+    def double(self, name):
+        # The drift ran the other way for this one: ``ColumnFactory.double``,
+        # ``PostgresPlatform`` DOUBLE PRECISION and the migration emitter all
+        # speak ``double`` already, but the builder a model actually calls did
+        # not, so ``field.double(...)`` raised AttributeError inside
+        # ``Schema.build`` and the column vanished.
+        return FieldDefinition("double", name)
+
     def binary(self, name):
         return FieldDefinition("binary", name)
 
@@ -569,6 +578,83 @@ class FieldBuilder:
     ) -> FieldDefinition:
         """Declare a standalone single- or multi-column index."""
         return self._constraint("index", columns, name)
+
+
+# --- The model field-type vocabulary, derived from the builder above --------
+#
+# ``FieldBuilder`` IS the vocabulary: a model can declare exactly what
+# ``Schema.build(lambda field: ...)`` offers, no more. Every consumer that
+# needs to know the legal types — most importantly the migration AST parser —
+# reads these sets instead of restating the list.
+#
+# Restating it is not theoretical debt. The hand-copied list in
+# ``ModelDiscoverer`` was missing ``jsonb`` and erased the ``metadata`` column
+# from ~10 tables; it was still missing ``char`` and ``binary``, so those
+# columns never reached a generated migration and ``schema:check`` then
+# accused the model of failing to declare a column it plainly declares. A copy
+# has no way to learn that the builder grew a method. Deriving the sets here
+# means adding a builder method is the only step there is.
+
+#: Constraint declarations, not column types. ``field.unique([...])`` /
+#: ``field.index([...])`` are collected by the parser's separate composite
+#: path, so they must not be mistaken for a field type.
+CONSTRAINT_BUILDERS = frozenset({"unique", "index"})
+
+#: Builders whose first positional argument is not a column name.
+_UNNAMED_FIELD_BUILDERS = frozenset({"timestamps", "soft_deletes", "foreign"})
+
+#: ``field.foreign(...)`` yields a definition typed ``"foreign_key"``. There is
+#: no builder method by that name, so the alias is declared rather than derived.
+_INTERNAL_TYPE_ALIASES = frozenset({"foreign_key"})
+
+_FIELD_BUILDERS = (
+    frozenset(name for name in vars(FieldBuilder) if not name.startswith("_"))
+    - CONSTRAINT_BUILDERS
+)
+
+#: Field types declared as ``field.<type>("column_name", ...)``.
+FIELD_TYPES_WITH_NAMES = _FIELD_BUILDERS - _UNNAMED_FIELD_BUILDERS
+
+#: Field types that carry no column name of their own.
+FIELD_TYPES_WITHOUT_NAMES = _UNNAMED_FIELD_BUILDERS | _INTERNAL_TYPE_ALIASES
+
+
+def _derive_builder_parameters() -> tuple[
+    dict[str, tuple[str, ...]], dict[str, dict[str, object]]
+]:
+    """Read each builder's extra parameters and defaults off its signature.
+
+    The same restatement problem as the type list, one level down. The
+    migration AST parser hand-coded which POSITIONAL index meant what per
+    type (``decimal`` args 1/2 are precision/scale, ``string`` arg 1 is
+    length) and never looked at keywords at all, so
+    ``field.decimal("price", precision=12, scale=4)`` parsed to an EMPTY
+    param dict; the emitter then filled in its own restated ``10, 2`` and
+    wrote a money column four digits short of what the model declares. The
+    builder's signature already states both the order and the defaults, so
+    nobody has to say it a second time.
+    """
+    parameters: dict[str, tuple[str, ...]] = {}
+    defaults: dict[str, dict[str, object]] = {}
+    for field_type in _FIELD_BUILDERS:
+        signature = inspect.signature(getattr(FieldBuilder, field_type))
+        names = [name for name in signature.parameters if name != "self"]
+        if field_type in FIELD_TYPES_WITH_NAMES:
+            # The leading column name is not a field parameter — it names the
+            # column the parser keys the definition under.
+            names = names[1:]
+        parameters[field_type] = tuple(names)
+        defaults[field_type] = {
+            name: signature.parameters[name].default
+            for name in names
+            if signature.parameters[name].default is not inspect.Parameter.empty
+        }
+    return parameters, defaults
+
+
+#: ``<field type>`` -> its extra parameter names in positional order.
+#: ``<field type>`` -> ``{parameter: default}`` for the ones that have one.
+FIELD_TYPE_PARAMETERS, FIELD_TYPE_DEFAULTS = _derive_builder_parameters()
 
 
 class FieldDefinition:

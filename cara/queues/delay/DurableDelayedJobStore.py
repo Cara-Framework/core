@@ -65,6 +65,14 @@ class DurableDelayedJobStore:
             ).hexdigest()
             job_id = str(uuid.UUID(digest[:32]))
         attempts = self._non_negative_int(options.get("attempts", 0), "attempts")
+        # The throttle lane's own counter. A throttle deliberately leaves
+        # ``attempts`` frozen, so without a second field the worker had no
+        # way to bound or escalate a starved job and it re-queued itself
+        # through this outbox forever at a 1-second backoff.
+        throttle_attempts = self._non_negative_int(
+            options.get("throttle_attempts", 0),
+            "throttle_attempts",
+        )
         dispatched_at = now.to_iso8601_string()
         tenant_fields = self.driver._tenant_payload(job, merged)
         from cara.queues.contracts import UniqueJob
@@ -99,6 +107,7 @@ class DurableDelayedJobStore:
                 "db_job_id": db_job_id,
                 "timeout_seconds": timeout_seconds,
                 "attempts": attempts,
+                "throttle_attempts": throttle_attempts,
                 "_otel": options.get("_otel") or Trace.inject({}),
                 **tenant_fields,
                 "queue": queue_name,
@@ -185,6 +194,7 @@ class DurableDelayedJobStore:
             MetricsBase.queue_delayed_jobs.labels(status="failed").set(0)
             MetricsBase.queue_delayed_oldest_due_age_seconds.set(backlog["age"])
         except Exception:
+            # allow-silent-except: metrics must never make the durable publisher unavailable
             # Metrics must never make the durable publisher unavailable.
             return
 
@@ -243,4 +253,5 @@ class DurableDelayedJobStore:
 
             MetricsBase.queue_delayed_transitions_total.labels(outcome=outcome).inc(count)
         except Exception:
+            # allow-silent-except: metrics must never make the durable publisher unavailable
             return

@@ -157,5 +157,6 @@ class TinkerProvider(DeferredProvider):
             # Rich not available, skip
             pass
         except Exception:
+            # allow-silent-except: REPL sugar; the shell works without it
             # Shell not available yet, skip
             pass

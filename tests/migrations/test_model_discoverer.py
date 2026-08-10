@@ -154,9 +154,7 @@ def test_model_class_constant_default_resolves_to_literal(discoverer, tmp_path):
     assert info["fields"]["status"]["params"] == {"length": 20, "default": "pending"}
 
 
-def test_discovery_excludes_models_pinned_inside_migration_history(
-    discoverer, tmp_path
-):
+def test_discovery_excludes_models_pinned_inside_migration_history(discoverer, tmp_path):
     _write_model(
         tmp_path,
         "Canonical.py",
@@ -291,13 +289,9 @@ def test_phantom_id_columns_are_not_foreign_keys(discoverer):
 def test_string_id_column_is_not_an_implicit_foreign_key(discoverer):
     info = {"type": "string", "params": {}}
 
-    assert not discoverer._is_foreign_key_field(
-        "notification_id", info, ["notification"]
-    )
+    assert not discoverer._is_foreign_key_field("notification_id", info, ["notification"])
     assert (
-        discoverer._extract_referenced_table(
-            "notification_id", info, ["notification"]
-        )
+        discoverer._extract_referenced_table("notification_id", info, ["notification"])
         is None
     )
 

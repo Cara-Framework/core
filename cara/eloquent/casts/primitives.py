@@ -12,6 +12,16 @@ from decimal import Decimal, InvalidOperation
 from .base import BaseCast
 
 
+def _is_blank(value) -> bool:
+    """A string carrying no non-whitespace characters is unknown, not zero.
+
+    Shared by the numeric casts so ``""`` and ``"   "`` — what a CSV
+    import and a half-populated API payload actually deliver for a
+    missing number — resolve to ``NULL`` and not to a measured 0.
+    """
+    return isinstance(value, str) and not value.strip()
+
+
 class BoolCast(BaseCast):
     """Cast to boolean.
 
@@ -65,47 +75,63 @@ class IntCast(BaseCast):
     cast returned 0 for any non-numeric input including ``None``, which
     caused a job to insert ``parent_id=0`` and
     hit ``fk_child_parent_id`` when the referenced row failed to resolve.
+
+    That fix stopped one input short: it special-cased ``None`` but left
+    the ``except`` arms returning 0, so ``""``, ``"   "`` and ``"N/A"``
+    — the shapes a CSV import and a half-populated API payload actually
+    deliver — kept minting the same ``parent_id=0``. Unparseable is
+    unknown, and unknown is ``NULL``. ``DecimalCast.set`` below got the
+    empty/whitespace guard right first; it is now the shared
+    ``_is_blank`` helper so the three numeric casts cannot drift apart
+    again.
     """
 
     def get(self, value):
-        """Get as integer, preserving ``None`` for SQL NULL."""
-        if value is None:
+        """Get as integer, preserving ``None`` for SQL NULL / unparseable."""
+        if value is None or _is_blank(value):
             return None
         try:
             return int(value)
         except ValueError, TypeError:
-            return 0
+            return None
 
     def set(self, value):
-        """Set as integer, preserving ``None`` for SQL NULL."""
-        if value is None:
+        """Set as integer, preserving ``None`` for SQL NULL / unparseable."""
+        if value is None or _is_blank(value):
             return None
         try:
             return int(value)
         except ValueError, TypeError:
-            return 0
+            return None
 
 
 class FloatCast(BaseCast):
-    """Cast to float. ``None`` passes through — SQL NULL stays NULL."""
+    """Cast to float. ``None`` passes through — SQL NULL stays NULL.
+
+    Unparseable input is ``None`` too, for the same reason ``IntCast``
+    above stopped returning 0: a fake zero is indistinguishable from a
+    measured zero once it lands in a column, and it averages into every
+    report built on that column. ``float`` is for measurements — money
+    belongs in ``DecimalCast``.
+    """
 
     def get(self, value):
-        """Get as float, preserving ``None``."""
-        if value is None:
+        """Get as float, preserving ``None`` for SQL NULL / unparseable."""
+        if value is None or _is_blank(value):
             return None
         try:
             return float(value)
         except ValueError, TypeError:
-            return 0.0
+            return None
 
     def set(self, value):
-        """Set as float, preserving ``None``."""
-        if value is None:
+        """Set as float, preserving ``None`` for SQL NULL / unparseable."""
+        if value is None or _is_blank(value):
             return None
         try:
             return float(value)
         except ValueError, TypeError:
-            return 0.0
+            return None
 
 
 class DecimalCast(BaseCast):

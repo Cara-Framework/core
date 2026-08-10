@@ -125,6 +125,24 @@ class QueueJobDeliveryStore:
         "post_hooks_lease_expires_at <= {now})"
     )
 
+    #: The ONE definition of "this row is committed and past its release
+    #: time but has not reached the broker". ``{now}`` is the caller's time
+    #: expression, mirroring ``_HOOK_DUE_FILTER_TEMPLATE``; it binds two
+    #: parameters in order — ``STATUS_PENDING`` then ``PUBLISH_PUBLISHED``.
+    #:
+    #: Deliberately COARSER than ``_claim_next_publish``'s claim gate: this
+    #: answers "how much work has not been published", not "which row may I
+    #: lease right now". Publish backoff, a live publish lease, expiry and
+    #: the per-queue broker window all narrow CLAIMABILITY but must not
+    #: narrow BACKLOG — an age-gated alarm that drops backing-off rows
+    #: collapses ``MIN(available_at)`` to NULL and flaps between fired and
+    #: resolved. Every read-model site formats this constant; the string was
+    #: previously hand-copied at six of them while this method's own
+    #: docstring claimed they all read one source.
+    _PUBLISH_BACKLOG_FILTER_TEMPLATE = (
+        "status = %s AND publish_status != %s AND available_at <= {now}"
+    )
+
     _PUBLISH_BACKOFF_SECONDS = (1, 5, 30, 60, 300)
     _HOOK_BACKOFF_SECONDS = (60, 300, 900, 3600, 21600, 86400)
     _SETTLEMENT_BACKOFF_SECONDS = (0.05, 0.25, 1.0, 2.0, 5.0)
@@ -2167,10 +2185,11 @@ class QueueJobDeliveryStore:
         return self.backlog_metrics()
 
     def backlog_metrics(self) -> dict[str, int | float]:
+        due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
         row = self._db().select_one(
             f"SELECT COUNT(*) AS count, COALESCE(EXTRACT(EPOCH FROM "
             f"(NOW() - MIN(available_at))), 0) AS age FROM {self.table} "
-            "WHERE status = %s AND publish_status != %s AND available_at <= NOW()",
+            f"WHERE {due}",
             [self.STATUS_PENDING, self.PUBLISH_PUBLISHED],
         )
         return {
@@ -2205,12 +2224,19 @@ class QueueJobDeliveryStore:
         Keys: ``due_pending`` / ``oldest_due_age`` (publication half),
         ``last_publish_age`` (diagnostic; ``-1.0`` means nothing has ever
         been published), ``hook_due_pending`` / ``hook_oldest_due_age``
-        (terminal-hook half). The due predicates are the store's own —
-        publication mirrors :meth:`backlog_metrics`, hooks reuse
-        ``_HOOK_DUE_FILTER_TEMPLATE`` — so the watchdog's view and the
-        workers' view can never disagree about what "due" means.
+        (terminal-hook half).
+
+        Both due predicates now have exactly ONE home in this class:
+        ``_PUBLISH_BACKLOG_FILTER_TEMPLATE`` and
+        ``_HOOK_DUE_FILTER_TEMPLATE``. The publication half deliberately
+        measures BACKLOG, which is a SUPERSET of what
+        :meth:`_claim_next_publish` can lease at any instant — rows in
+        publish backoff, under a live publish lease, past expiry, or held
+        back by the per-queue broker window are counted on purpose, because
+        an alarm that drops them cannot report how much work is waiting.
+        Do not "align" the two: they answer different questions.
         """
-        due = "status = %s AND publish_status <> %s AND available_at <= NOW()"
+        due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
         hook_due = self._HOOK_DUE_FILTER_TEMPLATE.format(now="NOW()")
         hook_statuses = list(self.HOOK_TERMINAL_STATUSES)
         row = self._db().select_one(
@@ -2243,9 +2269,7 @@ class QueueJobDeliveryStore:
             ),
             # -1 means "nothing has ever been published"; a sentinel for
             # human-readable alert bodies only, never emitted as a gauge.
-            "last_publish_age": float(
-                last_publish if last_publish is not None else -1
-            ),
+            "last_publish_age": float(last_publish if last_publish is not None else -1),
             "hook_due_pending": max(
                 float(self._row_value(row, "hook_due_pending") or 0), 0.0
             ),
@@ -2273,15 +2297,14 @@ class QueueJobDeliveryStore:
             field="recent_hours",
         )
         database = self._db()
+        due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
         active = database.select_one(
             f"SELECT COUNT(*) AS active_total, "
             "COUNT(*) FILTER (WHERE status = %s) AS pending, "
             "COUNT(*) FILTER (WHERE status = %s) AS processing, "
-            "COUNT(*) FILTER (WHERE status = %s AND publish_status != %s "
-            "AND available_at <= NOW()) AS due_unpublished, "
+            f"COUNT(*) FILTER (WHERE {due}) AS due_unpublished, "
             "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
-            "(MIN(available_at) FILTER (WHERE status = %s "
-            "AND publish_status != %s AND available_at <= NOW())))), 0) "
+            f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
             "AS oldest_due_age, "
             "COUNT(*) FILTER (WHERE publish_status = %s) "
             "AS publish_processing, "
@@ -2398,14 +2421,12 @@ class QueueJobDeliveryStore:
 
     def delivery_metrics(self) -> dict[str, Any]:
         """Return one bounded aggregate snapshot for relay-owned metrics."""
+        due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
         priority_columns: list[str] = []
         priority_params: list[Any] = []
         for priority in self._PRIORITY_RANKS:
             alias = priority.replace("-", "_")
-            due_filter = (
-                "status = %s AND publish_status != %s "
-                "AND available_at <= NOW() AND priority = %s"
-            )
+            due_filter = f"{due} AND priority = %s"
             priority_columns.extend(
                 (
                     f"COUNT(*) FILTER (WHERE {due_filter}) AS priority_{alias}_pending",
@@ -2464,8 +2485,7 @@ class QueueJobDeliveryStore:
             "COUNT(*) FILTER (WHERE status = ANY(%s) AND "
             "post_hooks_quarantined_at IS NOT NULL) AS hook_quarantined, "
             "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
-            "(MIN(available_at) FILTER (WHERE status = %s "
-            "AND publish_status != %s AND available_at <= NOW())))), 0) "
+            f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
             "AS oldest_due_age, "
             f"{priority_select}, "
             "COALESCE((SELECT MAX(window_count) FROM ("
@@ -2506,16 +2526,14 @@ class QueueJobDeliveryStore:
         )
         lane_rows = self._db().select(
             f"SELECT queue, "
-            "COUNT(*) FILTER (WHERE status = %s AND publish_status != %s "
-            "AND available_at <= NOW()) AS pending, "
+            f"COUNT(*) FILTER (WHERE {due}) AS pending, "
             "COUNT(*) FILTER (WHERE status = %s) AS processing, "
             "COUNT(*) FILTER (WHERE status IN (%s, %s) AND "
             "publish_status = %s) AS broker_outstanding, "
             "COUNT(*) FILTER (WHERE status = %s AND "
             "completed_at >= NOW() - INTERVAL '5 minutes') AS completed_5m, "
             "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
-            "(MIN(available_at) FILTER (WHERE status = %s "
-            "AND publish_status != %s AND available_at <= NOW())))), 0) "
+            f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
             "AS oldest_due_age "
             f"FROM {self.table} WHERE queue = ANY(%s) GROUP BY queue",
             [
@@ -2563,16 +2581,14 @@ class QueueJobDeliveryStore:
 
         lane_rows = self._db().select(
             f"SELECT queue, "
-            "COUNT(*) FILTER (WHERE status = %s AND publish_status != %s "
-            "AND available_at <= NOW()) AS pending, "
+            f"COUNT(*) FILTER (WHERE {due}) AS pending, "
             "COUNT(*) FILTER (WHERE status = %s) AS processing, "
             "COUNT(*) FILTER (WHERE status IN (%s, %s) AND "
             "publish_status = %s) AS broker_outstanding, "
             "COUNT(*) FILTER (WHERE status = %s AND "
             "completed_at >= NOW() - INTERVAL '5 minutes') AS completed_5m, "
             "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
-            "(MIN(available_at) FILTER (WHERE status = %s "
-            "AND publish_status != %s AND available_at <= NOW())))), 0) "
+            f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
             "AS oldest_due_age "
             f"FROM {self.table} WHERE queue = ANY(%s) GROUP BY queue",
             [

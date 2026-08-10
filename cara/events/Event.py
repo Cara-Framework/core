@@ -617,7 +617,21 @@ class Event:
             event: The event instance
 
         Returns:
-            True if successfully queued, False otherwise
+            True once the job is on the broker. A dispatch failure RAISES —
+            this method never reports failure by return value.
+
+        ``propagate_failures`` does NOT apply here. It governs a listener's
+        own body failing (an observability listener may fail without taking
+        the source dispatch down); a *dispatch* failure means the listener
+        never ran at all and never will. Pre-fix a blanket
+        ``except Exception: Log.error(...); return False`` covered this
+        whole block, gated on ``propagate_failures`` — and the caller
+        (``_invoke_listeners``) ignores the return value, so a broker
+        outage, a bad routing key, or the serializer rejecting the job
+        (which it did for EVERY ShouldQueue listener while
+        ``HandleListenerJob.handle`` was sync) left the upstream job
+        marking itself successful with the listener silently dropped. §9
+        fail-closed: this raises so the queue worker retries.
         """
         # Queue the listener using the queue facade
         queue_name = getattr(listener, "queue", "default")
@@ -625,40 +639,22 @@ class Event:
             listener, "routing_key", f"listener.{event.__class__.__name__.lower()}"
         )
 
-        try:
-            # Create a HandleListenerJob
-            from cara.events.jobs import HandleListenerJob
+        # Create a HandleListenerJob
+        from cara.events.jobs import HandleListenerJob
 
-            job = HandleListenerJob(
-                listener_class=listener.__class__.__name__,
-                event_data=event.to_dict()
-                if hasattr(event, "to_dict")
-                else event.__dict__,
-                event_class=event.__class__.__name__,
-            )
-            job.queue = queue_name
+        job = HandleListenerJob(
+            listener_class=listener.__class__.__name__,
+            event_data=event.to_dict() if hasattr(event, "to_dict") else event.__dict__,
+            event_class=event.__class__.__name__,
+        )
+        job.queue = queue_name
 
-            from cara.queues.contracts.Queueable import PendingDispatch
+        from cara.queues.contracts.Queueable import PendingDispatch
 
-            pending = PendingDispatch(job)
-            pending.with_routing_key(routing_key)
-            pending.dispatch()
-            return True
-
-        except Exception as e:
-            Log.error("Failed to queue listener: %s", str(e), exc_info=True)
-            # Pipeline-critical listeners opt into propagation via
-            # ``propagate_failures = True``. Pre-fix this branch
-            # swallowed every queue-side failure (broker offline,
-            # serialisation error, missing routing key) and returned
-            # ``False`` — the caller (``_invoke_listeners``) ignored
-            # the return value, so the upstream job marked itself
-            # successful while the listener never ran. Re-raising
-            # here honours the same contract as the in-process
-            # listener path and lets the queue worker retry.
-            if getattr(listener, "propagate_failures", False):
-                raise
-            return False
+        pending = PendingDispatch(job)
+        pending.with_routing_key(routing_key)
+        pending.dispatch()
+        return True
 
     # Strong refs to fire-and-forget tasks. ``asyncio.create_task``
     # only weakly tracks tasks in the loop registry; without an extra

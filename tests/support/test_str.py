@@ -72,3 +72,33 @@ def test_slugify_non_latin_returns_empty_today():
     assert slugify("\ud83d\udcf1\ud83d\udcf1\ud83d\udcf1") == ""
     assert slugify("\u7535\u89c6") == ""
     assert slugify("\u041a\u043d\u0438\u0433\u0430") == ""
+
+
+def test_slugify_folds_accents_outside_the_explicit_map():
+    """An accent must FOLD to its ASCII base, never be deleted.
+
+    Deletion corrupts tokens ("Nestlé" → ``nestl``), which both splits one
+    entity across two slugs and lets distinct stems collide once the accent
+    is thrown away. The explicit char_map covers Turkish and the common
+    Latin-1 vowels; everything else reaches the NFKD fold.
+    """
+    assert slugify("Škoda") == "skoda"
+    assert slugify("Žilina") == "zilina"
+    assert slugify("Nestlé") == "nestle"
+    assert slugify("Müller") == "muller"
+    assert slugify("Curaçao") == "curacao"
+    assert slugify("Ångström") == "angstrom"
+
+
+def test_slugify_is_unicode_normalization_form_insensitive():
+    """The same text in NFC and NFD must produce the SAME slug."""
+    nfc = "caf\u00e9"  # é as ONE code point
+    nfd = "cafe\u0301"  # e + combining acute
+    assert nfc != nfd
+    assert slugify(nfc) == slugify(nfd) == "cafe"
+
+
+def test_slugify_distinct_accented_stems_stay_distinct():
+    """Folding must not merge letters that differ in their BASE."""
+    assert slugify("Máller") == "maller"
+    assert slugify("Müller") == "muller"

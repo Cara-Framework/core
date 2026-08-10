@@ -376,8 +376,14 @@ gain product prefixes, semantics may not):
 
 | Guard | Pins |
 |---|---|
-| `test_layering_guards` | flow direction, raw-SQL home, model-import ban, purity allowlist, kernel-membership counts (single-consumer eviction), app↛gates/persistence |
-| `test_import_wiring` | core↛packages, composition-root mounting, barrel-mid-load ban |
+| `test_layering_guards` | purity allowlist, kernel-membership counts (single-consumer eviction), kernel import direction, app↛gates/persistence, plus whatever a product's own layout genuinely adds |
+| `raw_sql_home` | raw SQL only inside a declared repository home; docstring / schema-metadata / one-query-compiler exemptions (§5) |
+| `model_query_discipline` | model queries go through a repository; PK-find, locking-transaction fence and tagged carve-outs only (§5) |
+| `http_in_business_logic` | transport types and `abort()` stop at the edge (§5) |
+| `env_read_discipline` | the process environment is read in `config/` only (§5) |
+| `silent_except_swallow` | no bare or broad `except` swallowing a failure without log or re-raise (§5) |
+| `test_import_wiring` | core↛packages, composition-root mounting |
+| `barrel_mid_load` | no import binds a barrel's half-built submodule, self or ancestor (§5.1) |
 | `test_import_ordering_convention` | the four import tiers |
 | `test_import_form` | barrel form for consumers, direct path for siblings, no deep paths from outside a layer (§5.1) |
 | `test_inline_imports` | every function-local import carries a legal `# local:` reason tag (§5.1) |
@@ -627,6 +633,22 @@ discovery lanes from marketplace plug-ins; §5 size, one-class and edge-flow
 laws and §7/§8 write/transaction ownership gained framework scanners with
 exact shrink-only debt censuses; concrete plug-in string scanning is mandatory
 whenever plug-in tokens are declared.*
+
+*Changelog — 1.6 (2026-08-08): §11 — the source laws that four product copies
+of `test_layering_guards` each enforced slightly differently became framework
+scanners: `raw_sql_home`, `model_query_discipline`, `http_in_business_logic`,
+`env_read_discipline`, `silent_except_swallow`. The raw-SQL rule converged on
+the strictest reading (docstring + schema-metadata + one-documented-compiler
+exemptions); the ORM rule converged on whole-chain detection with the
+locking-transaction and allow-tag carve-outs. Adoption over an unclean or
+previously unscanned tree rides `seam_allowlists` as an exact, shrink-only
+count — replacing the invisible tree-skip a product guard had reached for.
+The barrel-mid-load footgun (§5.1) and the §3 registry-shape rules (key order,
+DOMAINS/FLOWS disjointness, the single-layer mirror pin, an opt-in registry
+budget) became the `barrel_mid_load` scanner and four new `domain_registry`
+checks on the same grounds — the registry-shape rules existed in only ONE of
+the two products, and the master atlas asserted both had them.
+No rule was weakened: this is an extraction, not an amendment.*
 
 *Changelog — 2.0 (2026-07-26): §12 now governs every frontend surface with
 one-way data flow, Query-owned server state, Zustand UI-only, contract/domain

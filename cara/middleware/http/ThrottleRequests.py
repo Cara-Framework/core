@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from cara.exceptions import RateLimitConfigurationException
 from cara.facades import Log, RateLimiter
 from cara.http import Request, Response
 from cara.middleware import Middleware
@@ -91,12 +92,10 @@ class ThrottleRequests(Middleware):
         if self.custom_limit is None and self.custom_window_minutes is None:
             return await next_fn(request)
 
-        # First, check if parameter is a named limiter
+        # First, check if parameter is a named limiter. This either returns a
+        # Limit or raises — there is deliberately no "no config found, let it
+        # through" branch any more; an unresolvable throttle is a refusal.
         limit_config = self._resolve_limit_config(request)
-
-        if limit_config is None:
-            # If no limit config found, allow the request through
-            return await next_fn(request)
 
         # Get the rate limit key
         key = self._resolve_key(request, limit_config)
@@ -182,27 +181,47 @@ class ThrottleRequests(Middleware):
         Checks in order:
         1. Named limiter (if middleware parameter matches a registered limiter name)
         2. Custom numeric parameters (throttle:60,1 format)
-        3. Global rate limiter configuration
 
-        Returns a Limit object or None if no rate limiting applies.
+        Returns a Limit object, or raises ``RateLimitConfigurationException``
+        when the route asked for a limit this process cannot produce.
+
+        ROOT-CAUSE (§9 fail-closed).
+        ---------------------------
+        There used to be a third step: an unresolved ``throttle:<name>``
+        fell through to ``Limit(RateLimiter.limit, RateLimiter.window / 60)``
+        — the 60/minute global default. So a route declaring
+        ``throttle:login`` whose ``RateLimiter.for_("login", ...)``
+        registration was mistyped, moved to a provider that is not booted,
+        or simply forgotten enforced 60/min instead of 5/min, and said so
+        nowhere: the router table, the middleware list and the
+        ``X-RateLimit-Limit`` header all still read "throttled". The first
+        evidence of the 12x widening would have been a successful
+        credential-stuffing run. An unknown limiter name is an unconfigured
+        gate; it must refuse, not invent a permissive SLA.
+
+        The refusal is an exception rather than a zero-budget ``Limit``
+        because ``_attempt_limit`` reads ``max_attempts == 0`` as UNLIMITED
+        — the "fail-closed" sentinel would have been maximally fail-open.
         """
         from cara.rates import Limit
 
         # Check if custom_limit is actually a limiter name (string)
         if isinstance(self.custom_limit, str):
-            # Try to resolve as named limiter
             resolved = RateLimiter.resolve_limiter(self.custom_limit, request)
-            if resolved:
-                return resolved
-        elif self.custom_limit is not None:
+            if resolved is None:
+                raise RateLimitConfigurationException(
+                    f"throttle:{self.custom_limit} names an unregistered rate "
+                    f"limiter; register it in config/rate.py LIMITERS."
+                )
+            return resolved
+
+        if self.custom_limit is not None:
             # Custom numeric parameters provided (throttle:60,1)
             window_minutes = self.custom_window_minutes or 1
             return Limit(max_attempts=self.custom_limit, decay_minutes=window_minutes)
 
-        # Fall back to global RateLimiter config (if available)
-        # RateLimiter.window is in seconds; convert to minutes for Limit
-        return Limit(
-            max_attempts=RateLimiter.limit, decay_minutes=RateLimiter.window / 60
+        raise RateLimitConfigurationException(
+            "ThrottleRequests reached with no resolvable limit configuration."
         )
 
     def _resolve_key(self, request: Request, limit_config) -> str:

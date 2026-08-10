@@ -25,7 +25,15 @@ class CacheLock:
     Prevents race conditions in distributed systems using cache as storage.
     """
 
-    def __init__(self, cache, key: str, timeout: int = 86400, owner: str | None = None):
+    def __init__(
+        self,
+        cache,
+        key: str,
+        timeout: int = 86400,
+        owner: str | None = None,
+        *,
+        exact_key: bool = False,
+    ):
         """
         Initialize a cache lock.
 
@@ -45,12 +53,16 @@ class CacheLock:
                 share the same lock and you want the same owner to be able
                 to re-acquire / release. Otherwise leave None for a unique
                 per-instance owner.
+            exact_key: Keep ``key`` byte-for-byte instead of adding the
+                conventional ``lock:`` namespace. Framework callers should
+                request this through :meth:`Cache.exact_lock`; ordinary
+                :meth:`Cache.lock` names remain prefixed.
         """
         import os
         import uuid as _uuid
 
         self.cache = cache
-        self.key = f"lock:{key}"
+        self.key = key if exact_key else f"lock:{key}"
         self.timeout = timeout
         self.owner = owner or f"{os.getpid()}:{_uuid.uuid4().hex}"
 
@@ -663,3 +675,26 @@ class Cache:
         """
         driver = self.driver(driver_name)
         return CacheLock(driver, key, timeout, owner)
+
+    def exact_lock(
+        self,
+        key: str,
+        timeout: int = 86400,
+        owner: str | None = None,
+        driver_name: str | None = None,
+    ) -> CacheLock:
+        """Get an owner-fenced lock on an already-canonical cache key.
+
+        Use this only when a pre-existing coordination protocol defines the
+        complete key and changing it would split old and new workers during a
+        rolling deploy. Unlike :meth:`lock`, this method does not add the
+        ``lock:`` namespace. Acquisition still stores a unique owner token and
+        release still uses the driver's atomic ``forget_if`` fence.
+
+        This is a separate API on purpose: callers cannot accidentally disable
+        the prefix invariant of ordinary named locks with a boolean option.
+        """
+        if not isinstance(key, str) or not key:
+            raise ValueError("Exact cache lock key must be a non-empty string.")
+        driver = self.driver(driver_name)
+        return CacheLock(driver, key, timeout, owner, exact_key=True)

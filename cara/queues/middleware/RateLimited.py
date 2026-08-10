@@ -22,6 +22,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from cara.queues.contracts.CancellableJob import JobThrottledException
+
 _rate_buckets: dict = {}
 _rate_lock = threading.Lock()
 _rate_sweep_counter: int = 0
@@ -117,7 +119,21 @@ class RateLimited:
                     )
                 except ImportError:
                     pass
-                return None
+                # The job did NOT run. Pre-fix this returned ``None``, which
+                # the worker cannot tell from a successful handler (``None``
+                # is the normal success return — see ``Bus._run_sync``), so it
+                # settled the delivery as ``completed`` and ACKed: with two
+                # jobs over one limit, one was silently discarded and
+                # REPORTED AS DONE. Raising the throttle signal routes it
+                # through the starvation lane instead — frozen failure budget,
+                # escalating backoff, ``throttled`` in the ledger.
+                oldest = min(bucket)
+                raise JobThrottledException(
+                    f"Job {rate_key} rate limited ({self.max_attempts}/"
+                    f"{self.decay_seconds}s)",
+                    key=rate_key,
+                    retry_after=max(1, int(self.decay_seconds - (now - oldest)) + 1),
+                )
 
             bucket.append(now)
 
@@ -166,7 +182,17 @@ class WithoutOverlapping:
             ttl = self._effective_ttl(job)
             if not self._try_acquire(cache, redis_key, owner, ttl):
                 self._log_skip(lock_key)
-                return None
+                # A peer holds the lock, so this copy did NOT run. Returning
+                # ``None`` made the worker settle it as ``completed`` — the
+                # overlapping copy was DISCARDED and reported as done, which
+                # is the exact double-work-prevention this class exists for
+                # inverted into silent work LOSS. Come back after the peer's
+                # lease could have expired.
+                raise JobThrottledException(
+                    f"Job {lock_key} skipped: another copy holds the lock",
+                    key=lock_key,
+                    retry_after=max(1, int(ttl)),
+                )
             try:
                 return await _call_next(next_fn, job)
             finally:
@@ -182,17 +208,21 @@ class WithoutOverlapping:
             existing = _overlap_locks.get(lock_key)
             if existing is not None and now - existing < self.expire_after:
                 self._log_skip(lock_key)
-                return None
+                raise JobThrottledException(
+                    f"Job {lock_key} skipped: another copy holds the lock",
+                    key=lock_key,
+                    retry_after=max(1, int(self.expire_after - (now - existing)) + 1),
+                )
             _overlap_locks[lock_key] = now
 
             # Periodic sweep — same shape as the rate-bucket sweep
             # above. Without it, the fallback path leaks one entry
             # per unique lock_key over the worker's lifetime. The
             # try/finally pop() below catches successful completions,
-            # but a job that exits via ``return None`` from inside the
-            # ``with _overlap_lock`` block (the "skipped" branch
-            # above) leaves no entry to pop. The sweep covers the
-            # rare case where a non-cleaned entry survives.
+            # but the "skipped" branch above raises out of the
+            # ``with _overlap_lock`` block without ever installing an
+            # entry of its own, so it leaves nothing to pop. The sweep
+            # covers the rare case where a non-cleaned entry survives.
             global _overlap_sweep_counter
             _overlap_sweep_counter += 1
             if _overlap_sweep_counter >= _OVERLAP_SWEEP_EVERY:

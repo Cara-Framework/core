@@ -136,7 +136,7 @@ class ConnectionResolver:
 
     def __init__(self, database_manager=None):
         """Initialize ConnectionResolver with DatabaseManager dependency"""
-        from ..connections import ConnectionFactory
+        from ..connections.ConnectionFactory import ConnectionFactory
 
         self.connection_factory = ConnectionFactory()
         self.database_manager = database_manager
@@ -149,7 +149,8 @@ class ConnectionResolver:
 
     def _register_default_connections(self):
         """Register default connection types - Open/Closed principle"""
-        from ..connections import PostgresConnection, SQLiteConnection
+        from ..connections.PostgresConnection import PostgresConnection
+        from ..connections.SQLiteConnection import SQLiteConnection
 
         connection_types = [
             SQLiteConnection,

@@ -716,6 +716,7 @@ def sample_db_pool_metrics(metrics_cls: type = MetricsBase) -> None:
         metrics_cls.db_pool_connections_idle.set(stats["idle"])
         metrics_cls.db_pool_connections_max.set(stats["max"])
     except Exception:
+        # allow-silent-except: gauge writes must never break the scrape
         # Gauge writes must never break the scrape.
         return
 
@@ -800,7 +801,17 @@ def start_http_server(
     service: str | None = None,
     role: str | None = None,
 ) -> int | None:
-    """Stand up a ``/metrics`` HTTP server on ``port`` (default: $METRICS_PORT or 9101).
+    """Stand up a ``/metrics`` HTTP server on ``port``.
+
+    When ``port`` is ``None`` the value comes from ``config("metrics.port")``.
+    The framework carries NO fallback port number on purpose: a port
+    assignment is a deployment decision owned by the product's own config
+    tree. A framework default silently hands one product's port to every
+    other product built on cara, and a role that forgot to configure a port
+    then looks healthy while scraping the wrong socket.
+
+    An unset ``metrics.port`` warns loudly and runs without ``/metrics``; an
+    explicit ``0`` (argument or config) is the documented, silent opt-out.
 
     Safe to call multiple times — subsequent calls after the first are no-ops.
     """
@@ -808,7 +819,20 @@ def start_http_server(
     with _http_server_lock:
         if _http_server_started:
             return None
-        effective_port = int(port if port is not None else config("metrics.port", 9101))
+        if port is None:
+            configured = config("metrics.port", None)
+            if configured is None or configured == "":
+                from cara.facades import Log
+
+                Log.warning(
+                    f"metrics: no 'metrics.port' configured — running WITHOUT "
+                    f"/metrics for role {role or 'unknown'}. Set metrics.port "
+                    f"(METRICS_PORT) in this deployable's config to be scraped."
+                )
+                return None
+            effective_port = int(configured)
+        else:
+            effective_port = int(port)
         if effective_port <= 0:
             return None
         # A worker restart races its predecessor for the socket: the old

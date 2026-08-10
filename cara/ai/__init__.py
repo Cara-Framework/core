@@ -4,11 +4,12 @@ from .AIProvider import AIProvider
 from .AIResponse import AIResponse
 from .AIServiceProvider import AIServiceProvider
 from .Client import AIClient
-from .exceptions import AIException, AIResponseError
+from .exceptions import AIConfigurationError, AIException, AIResponseError
 from .Parsing import parse_json
 
 __all__ = [
     "AIClient",
+    "AIConfigurationError",
     "AIException",
     "AIProvider",
     "AIResponse",

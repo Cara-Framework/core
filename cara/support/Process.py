@@ -26,7 +26,7 @@ import os
 import subprocess
 from collections.abc import Mapping, Sequence
 
-from cara.exceptions import InvalidArgumentException
+from cara.exceptions import CaraException, InvalidArgumentException
 
 
 class ProcessResult:
@@ -76,8 +76,17 @@ class ProcessResult:
         return f"ProcessResult(exit={self._exit_code}, cmd={self._command!r})"
 
 
-class ProcessFailedException(RuntimeError):
-    """Raised by :meth:`ProcessResult.throw_on_failure` for non-zero exits."""
+class ProcessFailedException(CaraException, RuntimeError):
+    """Raised by :meth:`ProcessResult.throw_on_failure` for non-zero exits.
+
+    Inside the taxonomy (§9), with ``RuntimeError`` kept as a SECOND base:
+    craft commands and jobs that shell out already write
+    ``except RuntimeError`` around ``throw_on_failure``, and dropping that
+    base would convert their handled failure into an unhandled one. Rooted
+    only at ``RuntimeError`` it was invisible to ``except CaraException``,
+    which is how a subprocess failure reached the handler as an
+    unclassified 500 instead of a framework error with a mapping.
+    """
 
     def __init__(self, result: ProcessResult) -> None:
         self.result = result

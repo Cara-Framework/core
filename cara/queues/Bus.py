@@ -121,6 +121,7 @@ class Bus:
                         scope="unique_job", outcome=outcome
                     ).inc()
                 except Exception:
+                    # allow-silent-except: metrics must never break dispatch
                     pass
 
             # Prometheus dispatch counter — bounded by the (queue, job)
@@ -138,6 +139,7 @@ class Bus:
                     job_class=job.__class__.__name__,
                 ).inc()
             except Exception:
+                # allow-silent-except: metrics must never break dispatch
                 pass
             return job_id
 
@@ -242,22 +244,38 @@ class Bus:
                 return out
 
             # A synchronous dispatch is the framework-owned transaction
-            # boundary for one queued unit of work. Nested sync dispatches
-            # share the caller's asyncio task and therefore its
-            # ContextVar-pinned connection registry; finalize every open
-            # transaction level before control returns to the parent stage,
-            # rolling back the whole unit when execution fails or is cancelled.
-            # Keeping this here prevents product jobs from owning DB commits.
+            # boundary for the levels IT opens — and only those. Sync
+            # dispatch runs inline in the caller's asyncio task and therefore
+            # shares the caller's ContextVar-pinned connection registry, so
+            # finalizing *every* open level seized the caller's ambient
+            # business transaction: ``with DB.transaction(): repo.write();
+            # await Bus.dispatch(job)`` had the business write committed early
+            # on success (a later failure in the same use case could no longer
+            # undo it), had its already-written rows rolled back underneath it
+            # on failure, and then saw ``No active transaction found for
+            # connection: app`` from its own ``__exit__`` instead of the real
+            # job error. DOCTRINE §8 leaves the business transaction with the
+            # use-case service.
+            #
+            # Recording the depth first and unwinding back to it keeps the
+            # original guarantee intact — a job that leaks its own open level
+            # is still committed before the next sync pipeline stage runs, so
+            # that stage's ``with db.transaction()`` is a real transaction and
+            # not a SAVEPOINT whose release never persists — while leaving the
+            # caller's levels, and the after_commit/after_rollback callbacks
+            # registered at them, exactly where they were.
             from cara.facades import DB
+
+            baseline_level = DB.transaction_level()
 
             try:
                 with fresh_dispatch_scope():
                     result = await run_through_middleware_async(job, job_handler)
             except BaseException:
-                DB.rollback_open_transactions()
+                DB.rollback_transactions_above(baseline_level)
                 raise
             else:
-                DB.commit_open_transactions()
+                DB.commit_transactions_above(baseline_level)
 
             # ``None`` is a legitimate successful return: every pipeline
             # stage routes its work through wrap_with_idempotency(_do_work) and

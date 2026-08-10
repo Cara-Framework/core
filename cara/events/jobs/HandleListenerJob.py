@@ -6,8 +6,10 @@ This job is automatically created when event listeners implement ShouldQueue.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
+from cara.context import ExecutionContext
 from cara.events import Event as EventDispatcher
 from cara.events.contracts import Listener
 from cara.exceptions import (
@@ -133,8 +135,27 @@ class HandleListenerJob(BaseJob):
             **kwargs,
         )
 
-    def handle(self):
-        """Rehydrate listener + event and execute."""
+    async def handle(self):
+        """Rehydrate listener + event and execute.
+
+        ``handle`` MUST be async: ``SignedJsonJobSerializer`` rejects a
+        sync ``handle`` at both serialize and deserialize, and
+        ``queue:work`` repeats the gate consumer-side, so a sync handler
+        made this job undispatchable on the AMQP rail — the only rail
+        cara ships. ``Event._queue_listener`` swallowed the rejection and
+        returned ``False`` to a caller that ignores the return, so every
+        ``ShouldQueue`` listener silently never ran. Product listeners were
+        found carrying docstrings explaining that they deliberately stay
+        in-process because "a queued listener would silently drop" the work —
+        that is this bug, worked around.
+
+        A sync ``listener.handle`` is blocking, so it goes through
+        ``ExecutionContext.run_in_thread`` instead of stalling the
+        worker's event loop. The container ``call`` is itself sync, so the
+        whole DI-resolve-and-invoke moves into the thread together — doing
+        the resolve on the loop and only the body in a thread would split
+        the contextvar snapshot across two contexts.
+        """
         app = EventDispatcher._resolve_application()
         if app is not None:
             try:
@@ -164,6 +185,13 @@ class HandleListenerJob(BaseJob):
         else:
             listener = listener_cls()
 
+        handler = listener.handle
+        is_async = inspect.iscoroutinefunction(handler)
+
         if app is not None and hasattr(app, "call"):
-            return app.call(listener.handle, event)
-        return listener.handle(event)
+            if is_async:
+                return await app.call(handler, event)
+            return await ExecutionContext.run_in_thread(app.call, handler, event)
+        if is_async:
+            return await handler(event)
+        return await ExecutionContext.run_in_thread(handler, event)

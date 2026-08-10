@@ -29,8 +29,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from cara.configuration import config
+from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
+from cara.security.TrustedProxies import peer_is_trusted_proxy
 
 _DEFAULT_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
@@ -165,51 +167,24 @@ class SecurityHeaders(Middleware):
     def _peer_is_trusted_proxy(self, scope: dict) -> bool:
         """Decide whether to honour proxy-supplied scheme headers.
 
-        Reads ``trustedproxies.proxies`` (list of CIDR strings) from
-        config. Empty list → trust nobody (forwarded-proto ignored,
-        only direct https counts). The "*" sentinel preserves the
-        previous unconditional-trust behaviour for callers behind a
-        single load balancer they fully control.
+        Delegates to :mod:`cara.security.TrustedProxies`, the single source for
+        this boundary. This used to read ``trustedproxies.proxies`` falling
+        back to ``security.security.trusted_proxies`` — two keys NO product
+        defines, while both set ``app.trusted_proxies``. It therefore resolved
+        to ``[]`` on every request, so HSTS was never emitted behind a
+        TLS-terminating proxy. Do not reintroduce a local lookup here.
         """
-        try:
-            client = scope.get("client") or ()
-            client_ip = client[0] if client else None
-            if not client_ip:
-                return False
-            proxies = config(
-                "trustedproxies.proxies", config("security.security.trusted_proxies", [])
-            )
-            if not proxies:
-                return False
-            if "*" in proxies:
-                return True
-            import ipaddress
-
-            ip = ipaddress.ip_address(client_ip)
-            for entry in proxies:
-                try:
-                    if ip in ipaddress.ip_network(entry, strict=False):
-                        return True
-                except ValueError:
-                    continue
-        except AttributeError, TypeError, RuntimeError:
-            return False
-        return False
+        return peer_is_trusted_proxy(scope)
 
     @staticmethod
     def _log_debug(msg: str) -> None:
-        """Best-effort debug log; survives partial-boot when Log facade is missing."""
-        try:
-            from cara.facades import Log
+        """Debug log for a swallowed header-application failure.
 
-            Log.debug(msg, category="cara.http.security_headers")
-        except Exception as e:
-            from cara.facades import Log
-
-            Log.warning(
-                "SecurityHeaders: log facade unavailable (%s: %s); original msg: %s",
-                e.__class__.__name__,
-                e,
-                msg,
-                exc_info=True,
-            )
+        The old body claimed to "survive partial-boot when Log facade is
+        missing" while its ``except`` re-imported and re-called that exact
+        facade — if the import really had failed, the handler raised too and
+        the logging helper became the cause of the outage it was meant to
+        report. The missing-facade case has exactly one owner:
+        ``Facade.__getattr__``'s ``cls.key == "logger"`` stdlib fallback.
+        """
+        Log.debug(msg, category="cara.http.security_headers")

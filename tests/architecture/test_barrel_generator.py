@@ -28,6 +28,38 @@ def test_second_write_is_a_no_op_idempotence(tmp_path):
     assert second.collisions == []
 
 
+def test_deleted_child_module_is_removed_instead_of_preserved(tmp_path):
+    """Regeneration must not resurrect a dead generated relative import."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    child = tmp_path / "app" / "services" / "Removed.py"
+    write(child, "class Removed:\n    pass\n")
+    BarrelGenerator.write(manifest)
+    child.unlink()
+
+    plan = BarrelGenerator.write(manifest)
+
+    assert "app/services/__init__.py" in plan.changed
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert "Removed" not in content
+    assert BarrelGenerator.write(manifest).changed == []
+
+
+def test_removed_child_symbol_is_removed_instead_of_preserved(tmp_path):
+    """A surviving module must not keep a symbol it stopped exporting."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    child = tmp_path / "app" / "services" / "Child.py"
+    write(child, "class Removed:\n    pass\n")
+    BarrelGenerator.write(manifest)
+    write(child, "class Current:\n    pass\n")
+
+    BarrelGenerator.write(manifest)
+
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert "from .Child import Current" in content
+    assert "Removed" not in content
+    assert BarrelGenerator.write(manifest).changed == []
+
+
 def test_check_reports_drift_without_writing(tmp_path):
     manifest = make_manifest(tmp_path, layers=("services",))
     write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")

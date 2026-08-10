@@ -15,13 +15,13 @@ class CacheConfigurationException(CaraException):
     pass
 
 
-class DriverNotRegisteredException(CaraException):
-    """Raised when trying to fetch a driver that was never registered."""
-
-    pass
+# ``DriverNotRegisteredException`` lives in ``types.storage`` and nowhere
+# else. This module used to declare its own copy; ``Cache.get_driver``
+# raises the storage one (it imports from the ``cara.exceptions`` barrel,
+# whose last-wins ordering picked storage), so an ``except`` clause written
+# against the cache copy could never fire.
 
 
 __all__ = [
     "CacheConfigurationException",
-    "DriverNotRegisteredException",
 ]

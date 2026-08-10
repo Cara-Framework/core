@@ -164,6 +164,7 @@ def test_schedule_registers_future_v2_delivery_and_settles_source_atomically():
         available,
         {
             "attempts": 1,
+            "throttle_attempts": 7,
             "db_job_id": 9,
             "deduplication_key": "retry:source-1:1",
             "source_delivery_job_id": "source-1",
@@ -186,6 +187,14 @@ def test_schedule_registers_future_v2_delivery_and_settles_source_atomically():
         allow_not_before=True,
     )
     assert envelope["not_before"] == int(available.timestamp())
+    decoded = SignedJsonJobSerializer.deserialize(
+        registered["body"],
+        signing_keys={_KID: _KEY},
+        allowed_prefixes=(__name__,),
+        now=available.add(seconds=1),
+    )
+    assert decoded["attempts"] == 1
+    assert decoded["throttle_attempts"] == 7
 
 
 def test_schedule_rejects_oversized_body_before_transaction(monkeypatch):

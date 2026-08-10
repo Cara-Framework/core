@@ -14,6 +14,7 @@ from .OutboundUrl import (
     resolve_outbound_url,
 )
 from .PinnedHttps import PinnedHTTPSConnection, download_public_https, open_pinned_https
+from .SignedToken import SignedToken
 from .SigningKeys import require_independent_signing_key, require_signing_keyring
 from .UnsafeOutboundUrl import UnsafeOutboundUrl
 
@@ -21,6 +22,7 @@ __all__ = [
     "DNS_RESOLUTION_TIMEOUT_SECONDS",
     "LOOPBACK_HOSTNAMES",
     "PinnedHTTPSConnection",
+    "SignedToken",
     "UnsafeOutboundUrl",
     "assert_outbound_url_safe",
     "assert_outbound_url_safe_async",

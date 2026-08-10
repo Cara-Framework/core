@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from cara.support import json_dumps
+
 from .BaseResponse import BaseResponse
 from .ContentTypeDetector import ContentTypeDetector
 from .HeaderManager import HeaderManager
@@ -504,13 +506,10 @@ class Response(BaseResponse):
         headers: dict[str, str] | None = None,
     ) -> Response:
         """Stream JSON Lines (JSONL) format."""
-        import json
 
         async def chunks() -> AsyncGenerator[bytes]:
             async for data in data_generator:
-                yield (json.dumps(data, ensure_ascii=False, default=str) + "\n").encode(
-                    "utf-8"
-                )
+                yield (json_dumps(data) + "\n").encode("utf-8")
 
         return self.stream(
             chunks(),

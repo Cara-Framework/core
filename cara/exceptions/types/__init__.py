@@ -1,4 +1,15 @@
-"""Exception types package — explicit re-exports."""
+"""Exception types package — explicit re-exports.
+
+Every short name here resolves to the SAME class as the identically named
+attribute on ``cara.exceptions``. That used to be false for nine names:
+this barrel re-exported one copy while the parent barrel re-exported
+another, so ``from cara.exceptions.types import ModelNotFoundException``
+bound a class nothing ever raised and the ``except`` clause written
+against it silently never fired. Duplicate definitions are gone (one
+short name, one home) and ``tests/exceptions/test_exception_registry.py``
+pins the identity, so a re-introduced copy fails a guard instead of
+producing a handler that catches nothing.
+"""
 
 from .application import (
     AppException,
@@ -25,7 +36,6 @@ from .broadcasting import (
     BroadcastingException,
 )
 from .cache import CacheConfigurationException
-from .cache import DriverNotRegisteredException as CacheDriverNotRegisteredException
 from .configuration import (
     ConfigurationException,
     InvalidConfigurationLocationException,
@@ -37,21 +47,11 @@ from .container import (
     MissingContainerBindingException,
     StrictContainerException,
 )
-from .driver import (
-    DriverException,
-    DriverLibraryNotFoundException,
-    DriverNotFoundException,
-)
-from .driver import QueueException as DriverQueueException
 from .Eloquent import (
     ConnectionNotRegisteredException,
     DatabaseUnavailableException,
-    Http404Exception,
-    InvalidArgumentException,
-    ModelNotFoundException,
-    MultipleRecordsFoundException,
+    MigrationException,
     ORMException,
-    QueryException,
 )
 from .encryption import EncryptionException
 from .event import (
@@ -61,11 +61,12 @@ from .event import (
 )
 from .http import (
     BadRequestException,
+    Http404Exception,
     HttpException,
+    InvalidCursor,
     MethodNotAllowedException,
     PayloadTooLargeException,
     ResponseException,
-    RouteMiddlewareNotFoundException,
     RouteNotFoundException,
     ServiceUnavailableException,
 )
@@ -77,13 +78,34 @@ from .mail import (
     MailSendException,
 )
 from .middleware import MiddlewareException, MiddlewareNotFoundException
-from .ModelExceptions import ModelException
-from .queue import QueueConfigurationException, QueueException
+from .ModelExceptions import (
+    DriverNotFoundException,
+    InvalidArgumentException,
+    LazyLoadingViolation,
+    ModelException,
+    ModelNotFoundException,
+    MultipleRecordsFoundException,
+    QueryException,
+)
+from .queue import (
+    IdempotencyOverlapException,
+    QueueConfigurationException,
+    QueueDriverLibraryNotFoundException,
+    QueueException,
+)
 from .rates import RateLimitConfigurationException
-from .routing import RouteException
-from .routing import RouteRegistrationException as RoutingRouteRegistrationException
-from .scheduling import SchedulingConfigurationException, SchedulingException
-from .storage import KeyNotFoundException, StorageConfigurationException, StorageException
+from .routing import RouteException, RouteMiddlewareNotFoundException
+from .scheduling import (
+    DriverLibraryNotFoundException,
+    SchedulingConfigurationException,
+    SchedulingException,
+)
+from .storage import (
+    DriverNotRegisteredException,
+    KeyNotFoundException,
+    StorageConfigurationException,
+    StorageException,
+)
 from .validation import (
     InvalidRuleFormatException,
     RuleNotFoundException,
@@ -105,29 +127,30 @@ __all__ = [
     "BroadcastingDriverNotFoundException",
     "BroadcastingException",
     "CacheConfigurationException",
-    "CacheDriverNotRegisteredException",
     "CaraException",
     "ConfigurationException",
     "ConnectionNotRegisteredException",
     "ContainerException",
     "ControllerMethodNotFoundException",
     "DatabaseUnavailableException",
-    "DriverException",
     "DriverLibraryNotFoundException",
     "DriverNotFoundException",
-    "DriverQueueException",
+    "DriverNotRegisteredException",
     "EncryptionException",
     "EventDispatchCycleException",
     "EventNameConflictException",
     "GenericContainerException",
     "Http404Exception",
     "HttpException",
+    "IdempotencyOverlapException",
     "InvalidArgumentException",
     "InvalidConfigurationLocationException",
     "InvalidConfigurationSetupException",
+    "InvalidCursor",
     "InvalidRuleFormatException",
     "InvalidTokenException",
     "KeyNotFoundException",
+    "LazyLoadingViolation",
     "ListenerNotFoundException",
     "LoaderException",
     "LoaderNotFoundException",
@@ -138,6 +161,7 @@ __all__ = [
     "MethodNotAllowedException",
     "MiddlewareException",
     "MiddlewareNotFoundException",
+    "MigrationException",
     "MissingContainerBindingException",
     "ModelException",
     "ModelNotFoundException",
@@ -146,6 +170,7 @@ __all__ = [
     "PayloadTooLargeException",
     "QueryException",
     "QueueConfigurationException",
+    "QueueDriverLibraryNotFoundException",
     "QueueException",
     "RateLimitConfigurationException",
     "ResponseException",
@@ -153,7 +178,6 @@ __all__ = [
     "RouteMiddlewareNotFoundException",
     "RouteNotFoundException",
     "RouteRegistrationException",
-    "RoutingRouteRegistrationException",
     "RuleNotFoundException",
     "SchedulingConfigurationException",
     "SchedulingException",

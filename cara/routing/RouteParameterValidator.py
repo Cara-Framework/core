@@ -1,8 +1,21 @@
 """
-Route Parameter Validator for the Cara framework.
+Route Parameter Coercion for the Cara framework.
 
-This module provides a robust validation system for route parameters using automatic
-rule discovery and intelligent type conversion.
+This module turns a matched URL segment into the Python type its
+``Route.compile()`` declaration implies. It does NOT validate: the route's
+compiled regex is the only gate a parameter passes through, and by the time a
+value arrives here it has already matched.
+
+Everything that once looked like validation here — ``Route.validate()``, an
+explicit-rule registry, and a ``validate_parameters()`` entry point — was
+removed after an audit found it had no caller anywhere in the framework, in
+any product, or in the resolver: rules were registered and then silently
+dropped, so a route advertising ``id: int|min:1`` enforced nothing. The route
+generator even EMITTED those calls from controller docstrings, actively
+steering products onto the dead path. A surface that promises enforcement and
+delivers none fails open (DOCTRINE §9), so it is gone rather than half-wired.
+Enforce parameter shape in the compiled pattern, or in the controller's
+FormRequest.
 """
 
 from __future__ import annotations
@@ -11,52 +24,7 @@ from typing import Any
 
 
 class CompilerRuleMapper:
-    """Maps Route.compile() patterns to validation rules automatically."""
-
-    # Mapping from compiler pattern to validation rule(s)
-    PATTERN_TO_RULES = {
-        r"(\d+)": ["integer"],  # int, integer patterns
-        r"([a-zA-Z]+)": ["string"],  # string, alpha patterns
-        r"([a-zA-Z0-9]+)": ["alphanum"],  # alphanum patterns
-        r"([\w-]+)": ["slug"],  # slug patterns
-        r"([0-9a-fA-F-]{36})": ["uuid"],  # uuid patterns
-        r"(true|false|1|0)": ["boolean"],  # bool patterns
-        r"(.*)": [],  # any pattern - no validation
-        r"([^/]+)": [],  # default pattern - no validation
-    }
-
-    # Type-based compiler names that should have validation
-    COMPILER_TYPE_RULES = {
-        "int": ["integer"],
-        "integer": ["integer"],
-        "string": ["string"],
-        "alpha": ["string"],
-        "alphanum": ["alphanum"],
-        "slug": ["slug"],
-        "uuid": ["uuid"],
-        "bool": ["boolean"],
-        "boolean": ["boolean"],
-        "numeric": ["numeric"],
-        "any": [],
-        "default": [],
-    }
-
-    @classmethod
-    def get_validation_rules_for_compiler(
-        cls, compiler_type: str, pattern: str | None = None
-    ) -> list[str]:
-        """Get validation rules for a compiler type/pattern."""
-        # First try direct compiler type mapping
-        if compiler_type in cls.COMPILER_TYPE_RULES:
-            return cls.COMPILER_TYPE_RULES[compiler_type].copy()
-
-        # Then try pattern matching
-        if pattern:
-            for pattern_regex, rules in cls.PATTERN_TO_RULES.items():
-                if pattern == pattern_regex:
-                    return rules.copy()
-
-        return []
+    """Maps Route.compile() compiler types to type converters."""
 
     @classmethod
     def get_type_converter_for_compiler(cls, compiler_type: str) -> callable | None:
@@ -110,23 +78,16 @@ class CompilerRuleMapper:
 
 class RouteParameterValidator:
     """
-    Robust route parameter validator with automatic rule discovery and intelligent type conversion.
+    Coerces matched route parameters to the type their compiler declares.
 
-    Features:
-    - Automatic validation rule discovery from Route.compile() patterns
-    - Intelligent type conversion based on compiler types
-    - Clean error message extraction from validation rules
-    - Extensible compiler → validation rule mapping
+    The registry is process-global and keyed by the BARE parameter name, so
+    ``Route.compile("id", "int")`` in one routes file coerces ``id`` on every
+    route in the process. That is why coercion failure must stay non-fatal
+    (see ``convert_parameter_value``).
     """
 
-    _validation_rules: dict[str, str] = {}
     _compile_rules: dict[str, str] = {}
     _compile_patterns: dict[str, str] = {}
-
-    @classmethod
-    def set_validation_rules(cls, parameter: str, rules: str) -> None:
-        """Set explicit validation rules for a route parameter."""
-        cls._validation_rules[parameter] = rules
 
     @classmethod
     def set_compile_rule(
@@ -136,25 +97,6 @@ class RouteParameterValidator:
         cls._compile_rules[parameter] = compiler_type
         if pattern:
             cls._compile_patterns[parameter] = pattern
-
-    @classmethod
-    def get_all_rules_for_parameter(cls, parameter: str) -> str:
-        """Get combined validation rules for a parameter (explicit + auto-discovered)."""
-        rules = []
-
-        # Add explicit validation rules
-        if explicit_rules := cls._validation_rules.get(parameter):
-            rules.append(explicit_rules)
-
-        # Add auto-discovered rules from compiler
-        if compiler_type := cls._compile_rules.get(parameter):
-            pattern = cls._compile_patterns.get(parameter)
-            auto_rules = CompilerRuleMapper.get_validation_rules_for_compiler(
-                compiler_type, pattern
-            )
-            rules.extend(auto_rules)
-
-        return "|".join(rules) if rules else ""
 
     @classmethod
     def convert_parameter_value(cls, parameter: str, value: Any) -> Any:

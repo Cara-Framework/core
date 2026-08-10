@@ -76,7 +76,7 @@ def decode_obfuscated_ipv4(host: str) -> ipaddress.IPv4Address | None:
         if 0 <= packed <= 0xFFFFFFFF:
             try:
                 return ipaddress.IPv4Address(packed)
-            except (ValueError, ipaddress.AddressValueError):
+            except ValueError, ipaddress.AddressValueError:
                 return None
         return None
 
@@ -104,7 +104,7 @@ def decode_obfuscated_ipv4(host: str) -> ipaddress.IPv4Address | None:
         packed = (packed << 8) | value
     try:
         return ipaddress.IPv4Address(packed)
-    except (ValueError, ipaddress.AddressValueError):
+    except ValueError, ipaddress.AddressValueError:
         return None
 
 
@@ -155,9 +155,7 @@ def parse_host_allowlist(value: str | Iterable[str] | None) -> tuple[str, ...]:
     """
     if value is None:
         return ()
-    candidates = (
-        tuple(value.split(",")) if isinstance(value, str) else tuple(value or ())
-    )
+    candidates = tuple(value.split(",")) if isinstance(value, str) else tuple(value or ())
 
     normalized: list[str] = []
     for candidate in candidates:
@@ -238,13 +236,18 @@ def outbound_url_reason(
         )
     if not parsed.hostname:
         return "url missing hostname"
-    if not allow_userinfo and (parsed.username is not None or parsed.password is not None):
+    if not allow_userinfo and (
+        parsed.username is not None or parsed.password is not None
+    ):
         return "url must not contain userinfo"
     if not allow_fragment and parsed.fragment:
         return "url must not contain a fragment"
-    if allowed_ports is not None and port is not None:
-        if port not in {int(value) for value in allowed_ports}:
-            return f"port not allowed: {port}"
+    if (
+        allowed_ports is not None
+        and port is not None
+        and port not in {int(value) for value in allowed_ports}
+    ):
+        return f"port not allowed: {port}"
 
     host = parsed.hostname.rstrip(".").lower()
     try:

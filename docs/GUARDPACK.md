@@ -23,7 +23,7 @@ app/architecture_manifest.py
         ▼
 Manifest.load()
         │
-        ├── fourteen pure scanners ──► list[Finding]
+        ├── twenty-two pure scanners ──► list[Finding]
         │
         └── BarrelGenerator ─────► check or rewrite __init__.py barrels
 ```
@@ -32,9 +32,10 @@ A `Finding` has a deployable-relative path, a one-based line number when the
 violation belongs to a statement, and a message. There are no warning levels:
 one finding fails the command and therefore the build.
 
-The pack enforces only the scanners listed below. Doctrine guards for
-read-only raw SQL, queue/deploy topology, migrations and documentation remain
-product responsibilities until a framework scanner explicitly owns them.
+The pack enforces only the scanners listed below. Raw SQL now has a
+framework owner (`raw_sql_home`); queue/deploy topology, migrations and
+documentation remain product responsibilities until a framework scanner or
+audit explicitly owns them.
 
 ## 2. Manifest reference
 
@@ -122,6 +123,14 @@ not contain a concrete plug-in token.
 | `atomic_repository_methods` | Exact `path::Class.method` identities for the sole §8 exception: a fully-contained atomic persistence primitive. Stale identities fail. |
 | `write_ownership` | Table → `api-owned`, `services-owned` or `shared-gate-owned`. Every model-backed table must be declared. |
 | `model_less_write_tables` | Explicit table names whose model-less schema is documented by the product; permits ownership entries without a model class. |
+| `raw_sql_homes` | POSIX path fragments that legitimately own raw SQL, matched against a contiguous run of path parts. Defaults: `repositories`, `commons/gates/persistence`. |
+| `model_import_roots` | Import roots whose names are ORM model classes. Defaults: `app.models`, `models.core`. |
+| `inline_orm_allow_tag` | Comment tag documenting a deliberate inline ORM call. Default: `allow-inline-orm`. |
+| `silent_except_allow_tag` | Comment tag documenting a deliberate silent broad-except. Default: `allow-silent-except`. |
+| `http_import_prefixes` | Import prefixes carrying HTTP transport types. Defaults: `cara.http`, `cara.request`, `cara.response`. |
+| `env_read_exempt_environ_attrs` | `os.environ` methods that snapshot the whole mapping rather than read one variable. Default: `copy`. |
+| `registry_size_bounds` | Optional `(low, high)` budget for the combined `domains` + `flows` entry count. `None` (default) leaves size a review threshold, per §3. |
+| `single_layer_domains` | Domains that legitimately live in exactly one domain layer. Both an unpinned single-layer domain and a pin whose domain grew a second layer fail. |
 
 Do not fill a field because it exists. An empty value means “this deployable
 does not have this concept”; an allowlist means “tracked debt moving to zero,”
@@ -243,6 +252,14 @@ Enforces the mirror rule for `domain_layers`: every folder is a declared domain
 or flow, every declared domain has a member somewhere, universal domains exist,
 charters are non-empty, forbidden names are rejected, and loose layer-root
 modules are rejected unless pinned as documented base classes. Stale pins fail.
+
+Registry SHAPE on the same pass: keys are alphabetical lowercase identifiers,
+`domains` and `flows` never share a key, and the mirror exception is current —
+a domain living in exactly one domain layer must be pinned in
+`single_layer_domains`, and a pin whose domain has since grown a second layer
+fails as stale. `registry_size_bounds` holds the combined entry count inside a
+declared budget; it is OFF unless a product sets it, because §3 makes registry
+size a review threshold rather than a build failure.
 
 Violation:
 
@@ -423,6 +440,58 @@ deployable may write its tables; `shared-gate-owned` tables may be written only
 through `gates/persistence`. Existing cross-owner writes are exact,
 shrink-only `path::table` debt.
 
+### `barrel_mid_load`
+
+An import that binds a barrel's HALF-BUILT submodule instead of the class it
+re-exports (DOCTRINE §5.1). Fires on `from P import X` written inside `P`, and
+on the same import written in a subpackage of `P` — the ancestor is mid-load by
+construction there. Only a COLLIDING re-export (`from .X import X`, name equals
+submodule filename) is fragile; `from . import X` is module-valued on purpose.
+A name bound in the barrel's leading run, before it loads anything that
+re-enters the package, is exempt.
+
+### `raw_sql_home`
+
+Raw SQL — executing (`DB.select` / `DB.statement` / a `DatabaseManager`
+instance / a DB-API `cursor`) and composing (`.where_raw` and friends), plus a
+bare SQL string literal — only inside a path declared in `raw_sql_homes`
+(default: any `repositories` directory and `commons/gates/persistence`). Three
+exemptions: docstrings, `__indexes__` / `__views__` schema metadata, and ONE
+query-compiler class per product whose docstring names `Doctrine §5 query
+compiler`. A second such class is itself a finding. Adoption over an unclean
+tree uses the exact, shrink-only `raw_sql_home` census.
+
+### `model_query_discipline`
+
+ORM builder calls on a model imported from `model_import_roots`, anywhere the
+product declares that data access must go through a repository. The whole call
+chain counts, so `Model.without_scope().first()` cannot hide behind a
+non-ORM head. Carve-outs: a single-argument primary-key `find`, a query inside
+the row-locking statement of a `DB.transaction()`, and a
+`# allow-inline-orm: <reason>` tag. Whole-file debt is the exact, shrink-only
+`model_query_discipline` census — never a silently skipped subtree.
+
+### `http_in_business_logic`
+
+Business layers import nothing under `http_import_prefixes` and never call
+`abort()`. Business logic raises a domain exception; translating it to a status
+code is the edge's job.
+
+### `env_read_discipline`
+
+`env()`, `os.getenv` and `os.environ` reads belong to `config/`. Names imported
+from `os` or `cara.environment` are tracked, so a bare `getenv("X")` cannot slip
+past. `env_read_exempt_environ_attrs` (default `copy`) allows a whole-mapping
+snapshot handed to a subprocess.
+
+### `silent_except_swallow`
+
+A bare `except:`, or a broad `except Exception` / `except (..., Exception)`
+whose body only passes, ellipses, states a constant or exits the block, with no
+log or re-raise anywhere in the handler. A narrow typed fallback is untouched.
+`silent_except_allow_tag` (default `# allow-silent-except`) documents a
+collect-and-log-later loop.
+
 ## 4. Commands
 
 Run from the deployable root unless `--manifest` points elsewhere:
@@ -477,7 +546,9 @@ Recommended local/CI order:
    directory. Declare only layers and optional roots that exist.
 4. **Scope every scanner explicitly.** Populate `scanner_roots` for the
    scanners that consume it: `import_tiers`, `inline_imports`, `import_form`,
-   `vertical_slice_seams` and `port_membership`. The remaining scanners derive
+   `vertical_slice_seams`, `port_membership`, `barrel_mid_load`, `raw_sql_home`,
+   `model_query_discipline`, `http_in_business_logic`, `env_read_discipline`
+   and `silent_except_swallow`. The remaining scanners derive
    their scope from layer/kernel/job fields. Include app/config/routes/package
    trees according to each scanner's purpose; verify that no product-owned
    Python tree disappears between them.

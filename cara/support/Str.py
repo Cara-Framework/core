@@ -90,9 +90,11 @@ def slugify(
 ) -> str:
     """Convert a string to a URL-friendly slug.
 
-    Handles common Unicode transliterations (Turkish chars, accented letters).
-    Non-alphanumeric characters become the separator. Leading/trailing
-    separators and consecutive separators are removed.
+    Handles common Unicode transliterations (Turkish chars, accented
+    letters); anything the explicit map misses is NFKD-folded to its ASCII
+    base, so an accent is never simply deleted ("Škoda" → ``skoda``, not
+    ``koda``). Non-alphanumeric characters become the separator.
+    Leading/trailing separators and consecutive separators are removed.
 
     Returns empty string for empty/whitespace-only input.
 
@@ -103,11 +105,11 @@ def slugify(
             slug would otherwise be longer, it is truncated at the last
             separator before ``max_length`` (so the cut lands on a word
             boundary rather than mid-word). Set to ``None`` to opt out.
-            Callers persisting to a slug column (product/brand/category)
-            SHOULD pass this matching the column width / read-side cap.
-            Pre-fix the consolidator wrote 187-char slugs into a
-            ``varchar(500)`` column while the API's ``SlugParser`` capped
-            reads at 255 — a slug in (255, 500] was unreachable.
+            Callers persisting a slug SHOULD pass this, matching BOTH the
+            column width and whatever cap the READ side applies. A writer
+            allowed to mint slugs longer than the reader will accept
+            produces rows that can never be looked up again — the column
+            takes them, and every lookup misses.
     """
     if not text or text.isspace():
         return ""
@@ -151,6 +153,19 @@ def slugify(
     }
     for char, replacement in char_map.items():
         text = text.replace(char, replacement)
+
+    # Anything the explicit map doesn't cover is NFKD-decomposed and its
+    # combining marks dropped, so an accented letter FOLDS to its ASCII
+    # base instead of being deleted by the regex below. Deletion silently
+    # corrupts tokens ("Nestlé" → "nestl", "Müller" → "mller"), which both
+    # splits one entity across two slugs and lets distinct accented stems
+    # collide after the accent is thrown away ("Máller"/"Müller" → "mller").
+    # It also makes the same string in NFC and NFD hash to different slugs.
+    # Characters with no ASCII base (CJK, emoji) still fall through to the
+    # regex and become separators — a URL slug is ASCII by definition.
+    text = "".join(
+        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
+    )
 
     text = text.lower()
     text = re.sub(r"[^a-z0-9]+", separator, text)

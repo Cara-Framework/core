@@ -531,6 +531,19 @@ class PostgresConnection(BaseConnection):
             except ModuleNotFoundError:
                 psycopg2 = None  # type: ignore[assignment]
             if psycopg2 is not None and isinstance(e, psycopg2.OperationalError):
+                # A serialization failure / deadlock is an OperationalError
+                # SUBCLASS, so it must be classified BEFORE the outage branch.
+                # It is not an outage: the database is healthy and answering,
+                # it just refused this transaction so the caller can replay
+                # it. Classifying it as ``DatabaseUnavailableException`` put a
+                # write conflict in the outage taxonomy — a 503 telling the
+                # client the database is down, and an on-call page for a
+                # database that never faltered. ``atomic(attempts=N)`` still
+                # retried it either way, because ``Integrity.sqlstate_of``
+                # unwraps the cause chain to find SQLSTATE 40001/40P01; what
+                # was wrong is what everyone ELSE was told.
+                if isinstance(e, psycopg2.extensions.TransactionRollbackError):
+                    raise QueryException(str(e)) from e
                 raise DatabaseUnavailableException(str(e), retry_after=1) from e
             raise QueryException(str(e)) from e
         finally:

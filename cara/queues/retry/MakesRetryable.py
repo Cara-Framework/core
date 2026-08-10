@@ -14,11 +14,13 @@ retry on transient exceptions with exponential backoff::
 from __future__ import annotations
 
 import asyncio
+import random
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from cara.configuration import config
 from cara.facades import Log
+from cara.queues.retry.Policy import DEFAULT_RETRY_JITTER_FRACTION
 
 # Database-driver connection drops are transient by nature, and psycopg2 is
 # the framework's own Postgres driver (``cara.eloquent.connections``), so
@@ -42,9 +44,21 @@ except Exception:
 class MakesRetryable:
     """Exponential backoff retry mixin for queue jobs.
 
-    Class-level attributes can be overridden per-subclass. Runtime
-    config keys (``jobs.retry_max_attempts``, ``jobs.retry_base_delay``,
-    ``jobs.retry_backoff_multiplier``) take precedence when present.
+    Resolution order for every knob, in BOTH directions: an explicit
+    ``wrap_with_retry`` keyword wins, then a class-level attribute set by
+    the subclass, then the runtime config key
+    (``jobs.retry_max_attempts``, ``jobs.retry_base_delay``,
+    ``jobs.retry_backoff_multiplier``).
+
+    ``None`` is the "unset" sentinel and it is load-bearing. The knobs used
+    to carry concrete defaults (3 / 2.0 / 2.0) and the resolver recognised
+    an override by comparing each attribute against a hand-written copy of
+    that same default — so a subclass that deliberately NARROWED its budget
+    to ``MAX_RETRY_ATTEMPTS = 1`` because its body is a non-idempotent
+    external call resolved to ``max(1, 3)`` and issued that call three
+    times. Silently, and exactly opposite to what its author wrote. The
+    sentinel also removes the trap where changing a default here would
+    reclassify every subclass that had pinned the old value explicitly.
 
     Extend ``RETRYABLE_EXCEPTIONS`` in subclasses to narrow or broaden
     what triggers a retry vs immediate failure. psycopg2's transient
@@ -52,9 +66,15 @@ class MakesRetryable:
     automatically when the driver is installed.
     """
 
-    MAX_RETRY_ATTEMPTS: int = 3
-    BASE_RETRY_DELAY: float = 2.0
-    RETRY_BACKOFF_MULTIPLIER: float = 2.0
+    MAX_RETRY_ATTEMPTS: int | None = None
+    BASE_RETRY_DELAY: float | None = None
+    RETRY_BACKOFF_MULTIPLIER: float | None = None
+
+    #: Per-subclass jitter spread, mirroring ``AMQPDriver``'s
+    #: ``retry_jitter_fraction`` hook. 0 disables the spread; the default
+    #: is imported from the retry policy SSOT, never restated.
+    retry_jitter_fraction: float = DEFAULT_RETRY_JITTER_FRACTION
+
     RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
         ConnectionError,
         TimeoutError,
@@ -100,25 +120,23 @@ class MakesRetryable:
             Exception: The last exception after all retries exhausted,
                 or any non-retryable exception immediately.
         """
-        attempts = (
+        attempts = int(
             max_attempts
             if max_attempts is not None
-            else max(self.MAX_RETRY_ATTEMPTS, self._retry_max_attempts())
-            if self.MAX_RETRY_ATTEMPTS != 3
+            else self.MAX_RETRY_ATTEMPTS
+            if self.MAX_RETRY_ATTEMPTS is not None
             else self._retry_max_attempts()
         )
-        delay = (
+        delay = float(
             base_delay
             if base_delay is not None
-            else (
-                self.BASE_RETRY_DELAY
-                if self.BASE_RETRY_DELAY != 2.0
-                else self._retry_base_delay()
-            )
+            else self.BASE_RETRY_DELAY
+            if self.BASE_RETRY_DELAY is not None
+            else self._retry_base_delay()
         )
-        backoff = (
+        backoff = float(
             self.RETRY_BACKOFF_MULTIPLIER
-            if self.RETRY_BACKOFF_MULTIPLIER != 2.0
+            if self.RETRY_BACKOFF_MULTIPLIER is not None
             else self._retry_backoff_multiplier()
         )
 
@@ -158,7 +176,7 @@ class MakesRetryable:
                     )
                     raise
 
-                current_delay = delay * (backoff**attempt)
+                current_delay = self._jittered(delay * (backoff**attempt))
 
                 Log.warning(
                     "[Retry] %s attempt %s/%s failed: %s, retrying in %ss",
@@ -173,6 +191,34 @@ class MakesRetryable:
                 await asyncio.sleep(current_delay)
 
         raise RuntimeError("Unexpected exit from retry loop")
+
+    def _jittered(self, delay: float) -> float:
+        """Spread one backoff delay by ±``retry_jitter_fraction``.
+
+        ``Policy.DEFAULT_RETRY_JITTER_FRACTION`` owns the number and the
+        reason for it: N workers that all failed on the same downstream blip
+        would otherwise retry on the same second and recreate the spike that
+        caused the failure. The queue-republish path
+        (``AMQPDriver._apply_retry_jitter``) has applied that spread for
+        years; this in-job path did not, so a fleet retrying through the
+        mixin marched into the recovering dependency in lockstep. The
+        fraction is IMPORTED from the policy module — a second copy of the
+        number is the drift this framework keeps paying for (§5).
+
+        The spread is clamped to 0.9 so a misconfigured fraction can neither
+        double the wait nor push it below zero.
+        """
+        if delay <= 0:
+            return 0.0
+        try:
+            fraction = float(self.retry_jitter_fraction)
+        except TypeError, ValueError:
+            fraction = DEFAULT_RETRY_JITTER_FRACTION
+        if fraction <= 0:
+            return delay
+        fraction = min(fraction, 0.9)
+        swing = delay * fraction
+        return max(delay + random.uniform(-swing, swing), 0.0)
 
     @property
     def retry_attempt(self) -> int:

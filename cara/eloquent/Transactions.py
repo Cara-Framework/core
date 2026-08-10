@@ -67,12 +67,26 @@ _RETRY_BACKOFF_CAP_SECONDS = 0.5
 def _is_retriable_error(exc: BaseException) -> bool:
     """Return True for a Postgres deadlock / serialization failure.
 
-    Matches on the driver's structured ``pgcode`` (SQLSTATE) only — never
-    on message text — mirroring ``cara.eloquent.Integrity.is_unique_violation``.
-    Any exception without a retriable ``pgcode`` (including non-DB errors)
-    returns False so it propagates immediately.
+    Extraction is delegated to ``cara.eloquent.Integrity.sqlstate_of``, the
+    one owner of "get a SQLSTATE out of a possibly-wrapped driver exception".
+    This function used to read ``exc.pgcode`` directly, which claimed to
+    mirror ``Integrity`` but dropped the cause-chain unwrap that makes
+    ``Integrity`` work — and ``PostgresConnection.query`` re-raises every
+    Class-40 error as ``DatabaseUnavailableException(str(e)) from e``, an
+    ORMException with no ``pgcode``. So the predicate was False on the first
+    attempt every time and ``atomic(attempts=N)`` retried ZERO times in
+    production, invisibly: nothing was swallowed, the closure simply
+    propagated exactly as ``attempts=1`` would.
+
+    ``_RETRIABLE_SQLSTATES`` stays here — the set of codes worth re-running a
+    transaction for is this module's own vocabulary, stated once. Only the
+    extraction mechanism was restated.
     """
-    return getattr(exc, "pgcode", None) in _RETRIABLE_SQLSTATES
+    # local: heavy/optional dependency — ``Integrity`` imports psycopg2 at
+    # module scope, and ``Transactions`` must stay importable without it.
+    from cara.eloquent.Integrity import sqlstate_of
+
+    return sqlstate_of(exc) in _RETRIABLE_SQLSTATES
 
 
 class Atomic:

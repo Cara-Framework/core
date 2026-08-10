@@ -34,6 +34,7 @@ import ast
 from pathlib import Path
 
 from cara.architecture._ast_utils import (
+    declares_dunder_all,
     dunder_all,
     module_object_names,
     parse,
@@ -95,15 +96,50 @@ def _bound_names(tree: ast.Module) -> set[str]:
 
 def _check_package(pkg_dir: Path, manifest: Manifest) -> list[Finding]:
     init = pkg_dir / "__init__.py"
+    rel = relpath(init, manifest.roots.deployable)
+
+    # A layer root reaches ``_walk_barrel_dirs`` unconditionally — only its
+    # CHILDREN are filtered on having a barrel — so a directory holding
+    # modules and no ``__init__.py`` used to abort the whole pack with a
+    # FileNotFoundError. That is the state GUARDPACK §5 step 9 tells products
+    # to be in mid-change, i.e. the guard died exactly when a product was
+    # following its own documented procedure. It is a Finding, not a crash;
+    # the sibling ``_check_kernel_bridge`` already guards the same way.
+    if not init.is_file():
+        if any(pkg_dir.glob("*.py")):
+            return [
+                Finding(
+                    rel,
+                    0,
+                    "barrel-managed directory has no __init__.py — every "
+                    "package under a layer carries a generated barrel (§5.1); "
+                    "regenerate it",
+                )
+            ]
+        return []
+
     tree = parse(init)
     if tree is None:
         return []
-    rel = relpath(init, manifest.roots.deployable)
     module_objects = module_object_names(pkg_dir)
     expected = _expected_exports(pkg_dir, module_objects)
     declared = dunder_all(tree)
 
     if declared is None:
+        # Computed and absent are different failures. Reporting a computed
+        # ``__all__`` as "no __all__ declared" sent readers looking for a
+        # missing line that was right there, and left the barrel unverified
+        # whenever the package happened to export nothing yet.
+        if declares_dunder_all(tree):
+            return [
+                Finding(
+                    rel,
+                    0,
+                    "declares a non-literal __all__ — a generated barrel lists "
+                    "its names literally (§5.1) so completeness can be read "
+                    "without importing the package",
+                )
+            ]
         if expected:
             return [
                 Finding(
@@ -116,26 +152,23 @@ def _check_package(pkg_dir: Path, manifest: Manifest) -> list[Finding]:
         return []
 
     findings: list[Finding] = []
-    missing = sorted(expected - set(declared))
-    if missing:
-        findings.append(
-            Finding(
-                rel,
-                0,
-                f"__all__ is missing re-export(s): {', '.join(missing)}",
-            )
-        )
+    # ONE Finding PER NAME, deliberately — not one per barrel listing them all.
+    # A counting debt ratchet (DOCTRINE §11) identifies debt by path and count,
+    # so a scanner that aggregates every missing name of a package into a single
+    # Finding pins that package at "1" forever: any number of NEW missing
+    # re-exports then lands inside the pin and the ratchet stays green. That is
+    # a guard reporting a clean pass over code it did not judge — the exact
+    # failure the ratchet exists to abolish, one layer up. It is not
+    # theoretical: a barrel that dropped a class from ``__all__`` while keeping
+    # its import line let the submodule shadow the class, and every
+    # ``from <pkg> import <Name>`` consumer bound a module with no methods on it.
+    for name in sorted(expected - set(declared)):
+        findings.append(Finding(rel, 0, f"__all__ is missing re-export: {name}"))
     if declared != sorted(declared):
         findings.append(Finding(rel, 0, "__all__ is not alphabetically sorted"))
-    unbound = sorted(set(declared) - _bound_names(tree))
-    if unbound:
+    for name in sorted(set(declared) - _bound_names(tree)):
         findings.append(
-            Finding(
-                rel,
-                0,
-                "__all__ contains name(s) never bound by the barrel: "
-                + ", ".join(unbound),
-            )
+            Finding(rel, 0, f"__all__ names {name}, never bound by the barrel")
         )
     return findings
 
@@ -167,8 +200,25 @@ def _check_kernel_bridge(pkg: str, kernel_dir: Path, manifest: Manifest) -> list
       barrel that mixes the two.
     """
     kernel_init = kernel_dir / "__init__.py"
-    kernel_all = dunder_all(parse(kernel_init)) if kernel_init.is_file() else None
+    kernel_tree = parse(kernel_init) if kernel_init.is_file() else None
+    kernel_all = dunder_all(kernel_tree) if kernel_tree is not None else None
     if kernel_all is None:
+        # A kernel that declares NO ``__all__`` has nothing to bridge. A kernel
+        # that declares a COMPUTED one is the opposite case and used to land in
+        # the same silent ``return []``: the one check whose entire job is
+        # catching import-time death read the barrel it could not evaluate and
+        # reported success. Fail closed (§9) — the pack must never be greener
+        # than what it managed to inspect.
+        if kernel_tree is not None and declares_dunder_all(kernel_tree):
+            return [
+                Finding(
+                    relpath(kernel_init, manifest.roots.deployable),
+                    0,
+                    f"declares a non-literal __all__, so the app.{pkg} bridge "
+                    f"over commons/{pkg} cannot be verified against it — list "
+                    "the kernel's public names literally (§5.1)",
+                )
+            ]
         return []
     required = set(kernel_all) - module_object_names(kernel_dir)
 

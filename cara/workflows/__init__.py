@@ -1,7 +1,7 @@
 """
 Cara Framework Workflows Module.
 
-Unified pipeline system for commands and jobs.
+Ordered step-sequence pipeline for command workflows.
 """
 
 from .Pipeline import ConditionalPipeline, Pipeline, PipelineStep, PipelineType

@@ -2597,18 +2597,24 @@ class QueryBuilder(ObservesEvents):
         """Get the sum of a column's values.
 
         Returns:
-            The sum value, or ``None`` when the filter matches zero
-            rows (Postgres' ``SUM`` over an empty set returns ``NULL``,
-            which psycopg surfaces as Python ``None``). Callers that
-            want a numeric zero MUST coerce explicitly — the canonical
-            pattern in this codebase is ``float(qb.sum("amount") or 0)``.
+            The sum in the column's native type — a ``NUMERIC`` column
+            sums to ``Decimal`` — or ``None`` when the filter matches
+            zero rows (Postgres' ``SUM`` over an empty set returns
+            ``NULL``, which psycopg surfaces as Python ``None``).
+            Callers that want a numeric zero MUST coerce explicitly,
+            and money coerces to ``Decimal``, never ``float``:
+            ``qb.sum("amount") or Decimal("0")``.
 
         Pre-fix the docstring read "or 0 if no results" — incorrect,
         since every call site that didn't ``or 0`` would have hit a
         ``TypeError`` on the empty-table path (``None * 1`` raises).
         The aggregate ``COUNT`` does coerce to ``0`` on empty, but
         ``SUM`` / ``AVG`` / ``MIN`` / ``MAX`` all surface ``None``
-        because the SQL semantics differ.
+        because the SQL semantics differ. The docstring then went on
+        to advertise ``float(qb.sum("amount") or 0)`` as canonical,
+        which is how the float hop in ``_run_aggregate`` survived
+        review — a recommended pattern that loses precision on the
+        very column type it was written for.
         """
         return self._run_aggregate("SUM", column, dry)
 
@@ -2732,7 +2738,23 @@ class QueryBuilder(ObservesEvents):
         and cleaning up builder state afterward.
 
         Returns:
-            The aggregate result, or None/0 if no results.
+            The aggregate result in the driver's NATIVE type — a
+            Postgres ``NUMERIC`` column arrives as ``Decimal`` and
+            leaves as ``Decimal``. ``None`` when the filter matched
+            zero rows, except ``COUNT``, which is ``0`` on empty
+            because the SQL semantics differ.
+
+        Pre-fix this branch ran ``float(val)`` for ``AVG`` / ``SUM``
+        while ``MIN`` / ``MAX`` / ``COUNT`` on the very same line
+        returned the native value — so the same column answered in
+        two different types depending on which aggregate you asked
+        for. Worse, the float hop destroys money: at cara's own
+        ``NUMERIC(17,6)`` ceiling,
+        ``float(Decimal('99999999999.999999'))`` is
+        ``100000000000.0`` — a penny short of a hundred billion
+        rounded up to exactly a hundred billion, silently. Money is
+        ``Decimal`` end-to-end; the aggregate does not get to
+        downgrade it.
         """
         alias = f"m_{function.lower()}_result"
         self.aggregate(function, f"{column} as {alias}")
@@ -2755,7 +2777,7 @@ class QueryBuilder(ObservesEvents):
         if isinstance(result, dict):
             val = result.get(alias)
             if val is not None:
-                return float(val) if function in ("AVG", "SUM") else val
+                return val
             return 0 if function == "COUNT" else None
 
         prepared = list(result.values())
@@ -4270,7 +4292,7 @@ class QueryBuilder(ObservesEvents):
         """
         from cara.http.Cursor import decode_cursor, encode_cursor
 
-        from ..pagination import CursorPaginator
+        from ..pagination import CursorPaginator, keyset_operator
 
         if (
             isinstance(per_page, bool)
@@ -4294,7 +4316,10 @@ class QueryBuilder(ObservesEvents):
             raise ValueError("filter_fingerprint must be lowercase SHA-256 hex")
 
         builder = self.clone()
-        op = ">" if direction == "asc" else "<"
+        # One answer to "which comparison does a keyset seek use" for the
+        # whole framework: this fluent form and the raw-SQL forms in
+        # ``KeysetPredicate`` must never drift apart.
+        op = keyset_operator(direction)
         if cursor is not None:
             decoded = decode_cursor(
                 cursor,

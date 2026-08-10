@@ -7,7 +7,6 @@ collection methods with support for mapping, filtering, sorting, and aggregation
 
 from __future__ import annotations
 
-import contextlib
 import json
 import operator
 import random
@@ -194,13 +193,23 @@ class Collection(Macroable):
             key: The key to use to find the average of all the values of that key.
 
         Returns:
-            The average value.
+            The average value, or ``None`` for an empty collection — the same
+            contract ``QueryBuilder.avg`` documents, so an aggregate answers
+            the same way whether it was pushed to SQL or computed in Python.
+
+        Raises:
+            TypeError: when the items are not mutually summable.
+
+        Pre-fix this returned ``0`` on both paths: an empty cohort reported an
+        average of zero that averaged into every roll-up above it, and a
+        ``contextlib.suppress(TypeError, ZeroDivisionError)`` turned a
+        mixed ``Decimal``/``float`` money collection into a silent zero.
+        Unknown is ``NULL``, never ``0``.
         """
-        result = 0
         items = (self._get_value(key) or []) if key is not None else self._items
-        with contextlib.suppress(TypeError, ZeroDivisionError):
-            result = sum(items) / len(items)
-        return result
+        if not items:
+            return None
+        return sum(items) / len(items)
 
     def median(self, key=None):
         """
@@ -212,29 +221,34 @@ class Collection(Macroable):
             key: The key to use to find the median of all the values of that key.
 
         Returns:
-            The median value.
+            The median value, or ``None`` for an empty collection — matching
+            the empty-set semantics ``QueryBuilder.avg`` / ``min`` / ``max``
+            document.
+
+        Raises:
+            TypeError: when the items are not mutually comparable.
+
+        Pre-fix both the empty case and an unorderable collection returned the
+        literal ``0``, so "no data" and "this data is not comparable" were
+        reported as a real measurement of zero.
         """
         items = (self._get_value(key) or []) if key is not None else self._items
 
-        try:
-            # Sort the items
-            sorted_items = sorted(items)
-            count = len(sorted_items)
+        if not items:
+            return None
 
-            if count == 0:
-                return 0
+        sorted_items = sorted(items)
+        count = len(sorted_items)
 
-            # Get the middle index
-            middle = count // 2
+        # Get the middle index
+        middle = count // 2
 
-            if count % 2 == 0:
-                # If even number of items, average the two middle values
-                return (sorted_items[middle - 1] + sorted_items[middle]) / 2
-            else:
-                # If odd number of items, return the middle value
-                return sorted_items[middle]
-        except TypeError, ValueError:
-            return 0
+        if count % 2 == 0:
+            # If even number of items, average the two middle values
+            return (sorted_items[middle - 1] + sorted_items[middle]) / 2
+        else:
+            # If odd number of items, return the middle value
+            return sorted_items[middle]
 
     def mode(self, key=None):
         """
@@ -285,18 +299,20 @@ class Collection(Macroable):
             key: The key to use to find the maximum of all the values of that key.
 
         Returns:
-            The maximum value.
+            The maximum value, or ``None`` for an empty collection — the same
+            contract ``QueryBuilder.max`` documents.
+
+        Raises:
+            TypeError: when the items are not mutually comparable.
+
+        Pre-fix an empty or unorderable collection answered ``0``, which reads
+        as a genuine ceiling of zero to every caller above it.
         """
-        result = 0
         items = (self._get_value(key) or []) if key is not None else self._items
 
-        try:
-            if not items:
-                return 0
-            return max(items)
-        except TypeError, ValueError:
-            pass
-        return result
+        if not items:
+            return None
+        return max(items)
 
     def min(self, key=None):
         """
@@ -308,16 +324,20 @@ class Collection(Macroable):
             key: The key to use to find the minimum of all the values of that key.
 
         Returns:
-            The minimum value.
+            The minimum value, or ``None`` for an empty collection — the same
+            contract ``QueryBuilder.min`` documents.
+
+        Raises:
+            TypeError: when the items are not mutually comparable.
+
+        Pre-fix an empty or unorderable collection answered ``0``, which reads
+        as a genuine floor of zero to every caller above it.
         """
         items = (self._get_value(key) or []) if key is not None else self._items
 
-        try:
-            if not items:
-                return 0
-            return min(items)
-        except TypeError, ValueError:
-            return 0
+        if not items:
+            return None
+        return min(items)
 
     def chunk(self, size: int):
         """
@@ -1239,13 +1259,24 @@ class Collection(Macroable):
             key: The key to sum by.
 
         Returns:
-            The sum of the items.
+            The sum of the items, or ``0`` for an empty collection — the empty
+            sum is the additive identity in Python and in Laravel, and this is
+            the one aggregate where SQL's ``NULL`` is not the useful answer
+            (see ``QueryBuilder.sum`` for the SQL-side contract).
+
+        Raises:
+            TypeError: when the items are not mutually summable.
+
+        Pre-fix a ``contextlib.suppress(TypeError)`` wrapped the addition, so a
+        single ``float`` leaking into a list of ``Decimal`` money — one un-cast
+        column, one hand-built dict — turned a revenue total into ``0`` with no
+        log line and no exception. Money is ``Decimal`` end-to-end; a
+        collection that cannot be summed must say so, loudly.
         """
-        result = 0
         items = (self._get_value(key) or []) if key is not None else self._items
-        with contextlib.suppress(TypeError):
-            result = sum(items)
-        return result
+        if not items:
+            return 0
+        return sum(items)
 
     def to_json(self, **kwargs):
         """

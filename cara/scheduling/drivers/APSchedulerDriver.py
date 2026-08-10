@@ -210,6 +210,12 @@ class APSchedulerDriver(Scheduling):
         # Survives scheduler restarts — jobs are re-applied on start().
         self._job_registry: list[tuple[str, Callable, Any, dict]] = []
 
+        # Opaque per-entry metadata for the published snapshot, keyed by job
+        # id. Kept OUTSIDE the APScheduler job (its Job objects carry no
+        # arbitrary attributes) and pruned in ``remove_job`` so a long-lived
+        # scheduler that churns jobs cannot leak the map.
+        self._snapshot_meta: dict[str, dict] = {}
+
         self.scheduler = self._create_scheduler()
 
     # ── Scheduler creation ────────────────────────────────────────────
@@ -283,6 +289,15 @@ class APSchedulerDriver(Scheduling):
         display_name = options.get("display_name") if isinstance(options, dict) else None
         if display_name:
             job_opts.setdefault("name", str(display_name))
+
+        # Opaque snapshot metadata rides options straight through to the
+        # snapshot publisher. Re-registering an id replaces its metadata
+        # (including clearing it) so a restart never resurrects a stale dict.
+        meta = options.get("snapshot_meta") if isinstance(options, dict) else None
+        if isinstance(meta, dict) and meta:
+            self._snapshot_meta[identifier] = dict(meta)
+        else:
+            self._snapshot_meta.pop(identifier, None)
 
         # Remove any previous entry with the same id.
         self._job_registry = [
@@ -373,12 +388,22 @@ class APSchedulerDriver(Scheduling):
         except Exception as e:
             Log.warning("Error shutting down APScheduler: %s", e)
 
+    def snapshot_meta(self, identifier: str) -> dict | None:
+        """The opaque metadata registered for ``identifier``, or ``None``.
+
+        Read by the snapshot publisher. Optional in the driver contract —
+        the publisher probes for it with ``getattr`` so a driver that does
+        not implement it stays valid.
+        """
+        return self._snapshot_meta.get(identifier)
+
     def remove_job(self, identifier: str) -> None:
         self._job_registry = [
             (jid, cb, tr, jo)
             for jid, cb, tr, jo in self._job_registry
             if jid != identifier
         ]
+        self._snapshot_meta.pop(identifier, None)
         try:
             self.scheduler.remove_job(job_id=identifier)
         except Exception:

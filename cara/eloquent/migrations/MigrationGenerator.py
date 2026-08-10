@@ -81,7 +81,19 @@ _RENAME_SQL_TYPE = {
     "time": "time",
     "uuid": "uuid",
     "binary": "bytea",
+    "enum": "varchar",
+    "increments": "serial",
+    "big_increments": "bigserial",
 }
+# Field builders that declare no column of their own: ``timestamps`` /
+# ``soft_deletes`` expand into named datetime columns (each of which reaches
+# the rename path under its OWN type) and ``foreign`` / ``foreign_key``
+# declare a constraint. Nothing here can be renamed as a single column, so
+# they are deliberately absent rather than forgotten — the guard test in
+# ``tests/migrations/`` asserts this partition against the field-type SSOT.
+_NON_COLUMN_FIELD_TYPES = frozenset(
+    {"timestamps", "soft_deletes", "foreign", "foreign_key"}
+)
 
 
 def _as_change(line: str) -> str:
@@ -399,7 +411,21 @@ class MigrationGenerator:
 
             elif d.kind == "renamed":
                 col = d.column
-                sql_type = _RENAME_SQL_TYPE.get(col.type if col else "string", "varchar")
+                col_type = col.type if col else "string"
+                if col_type not in _RENAME_SQL_TYPE:
+                    # Pre-fix an unmapped type silently fell back to
+                    # ``"varchar"``, which SQLite's rename-by-table-rebuild
+                    # resolves to an EMPTY data type — the rebuilt column came
+                    # out typeless and the generator reported success. A type
+                    # the DSL accepts but this map has never heard of is a gap
+                    # in the map, and it must say so.
+                    raise ValueError(
+                        f"Cannot emit a rename for column {d.name!r}: field type "
+                        f"{col_type!r} has no SQL type in _RENAME_SQL_TYPE. Add it "
+                        f"there (or to _NON_COLUMN_FIELD_TYPES if it declares no "
+                        f"column of its own)."
+                    )
+                sql_type = _RENAME_SQL_TYPE[col_type]
                 length_arg = f", {col.length}" if (col and col.length) else ""
                 up_lines.append(
                     f'            table.rename("{d.old_name}", "{d.name}", '

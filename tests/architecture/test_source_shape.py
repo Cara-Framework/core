@@ -89,3 +89,23 @@ def test_generated_barrels_are_excluded(tmp_path):
         "\n".join(f"from .Job{index} import Job{index}" for index in range(10)),
     )
     assert SourceShape.scan(manifest) == []
+
+
+def test_a_non_utf8_file_is_skipped_not_fatal(tmp_path):
+    """One stray byte used to abort the WHOLE pack: the scanner read a file's
+    text BEFORE ``parse`` had a chance to answer ``None``, so a
+    ``UnicodeDecodeError`` escaped the scanner instead of that one file being
+    skipped like every other unparseable file."""
+    manifest = _manifest(tmp_path, source_shape_hard_limit=2)
+    binary = tmp_path / "app" / "jobs" / "Binary.py"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_bytes(b"# \xff\xfe\nclass Binary:\n    pass\n")
+    write(
+        tmp_path / "app" / "jobs" / "Large.py",
+        "\n".join(f"VALUE_{index} = {index}" for index in range(3)),
+    )
+
+    findings = SourceShape.scan(manifest)
+
+    assert any("app/jobs/Large.py" in finding.path for finding in findings)
+    assert not [finding for finding in findings if "Binary.py" in finding.path]

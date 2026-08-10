@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from cara.exceptions.types.queue import QueueException
+
 
 class CancellableJob(ABC):
     """
@@ -98,8 +100,19 @@ class CancellableJob(ABC):
         pass
 
 
-class JobCancelledException(Exception):
-    """Exception raised when a job is cancelled during execution."""
+class JobCancelledException(QueueException):
+    """Exception raised when a job is cancelled during execution.
+
+    ``do_not_retry`` is the load-bearing signal, read by
+    ``JobProcessor._route_failed_message``. A cancellation is a DECISION, not
+    a fault: retrying it re-runs work an operator deliberately stopped.
+    Pre-fix this exception declared nothing, so a cancelled job burned the
+    full 1s/5s/30s retry schedule — re-executing the cancelled work twice
+    more — before dead-lettering with ``Log.error`` tracebacks that read like
+    a crash.
+    """
+
+    do_not_retry: bool = True
 
     def __init__(
         self, message: str = "Job was cancelled", tracking_id: str | None = None
@@ -108,8 +121,24 @@ class JobCancelledException(Exception):
         self.tracking_id = tracking_id
 
 
-class JobThrottledException(Exception):
-    """Raised when middleware skips job execution due to throttling."""
+class JobThrottledException(QueueException):
+    """Raised when middleware skips job execution due to throttling.
+
+    ``is_throttle`` opts this exception into the worker's STARVATION budget
+    (``throttle_attempts`` / ``max_throttle_attempts``) instead of the FAILURE
+    budget (``attempts`` / ``max_attempts``) — the lane
+    ``JobProcessor._requeue_with_delay`` documents as the one "future throttle
+    classes opt in for free".
+
+    Cara's own throttle exception never opted in. A throttled job therefore
+    spent the failure budget: three attempts at 1s/5s/30s, all of them inside
+    a gate whose default ``retry_after`` is 300s, so a perfectly healthy job
+    dead-lettered roughly six seconds after it was first throttled.
+    ``ConcurrencyExceeded`` (``cara/queues/middleware/ConcurrencyLimited.py``)
+    has always declared this; the two throttle signals now settle the same way.
+    """
+
+    is_throttle: bool = True
 
     def __init__(
         self,

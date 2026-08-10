@@ -433,6 +433,96 @@ def test_sql_outside_valid_transition_cannot_mask_historical_index(tmp_path):
     assert _rules(violations) == ["undeclared-index"]
 
 
+def _forward_index_retirement(
+    directory,
+    *,
+    metadata='{"product_sku_idx": "product"}',
+    model_less=True,
+    drop_in_up=True,
+):
+    path = directory / "0002_01_01_000002_retire_product_sku_index.py"
+    up_sql = "DROP INDEX IF EXISTS product_sku_idx" if drop_in_up else "SELECT 1"
+    down_sql = "SELECT 1" if drop_in_up else "DROP INDEX product_sku_idx"
+    path.write_text(
+        '"""Retire an index from immutable generated history."""\n\n'
+        + ("MODEL_LESS = True\n" if model_less else "")
+        + f"DROPPED_INDEXES = {metadata}\n\n"
+        + "class RetireProductSkuIndex:\n"
+        + "    def up(self):\n"
+        + f'        DB.statement("{up_sql}")\n\n'
+        + "    def down(self):\n"
+        + f'        DB.statement("{down_sql}")\n',
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_explicit_model_less_forward_drop_retires_historical_index(tmp_path):
+    _generated(tmp_path, "product", extra=_INDEX_SQL)
+    path = _forward_index_retirement(tmp_path)
+
+    entry = parse_migration_file(path)
+    assert entry.dropped_indexes == (("product_sku_idx", "product"),)
+    assert any("DROP INDEX" in sql for _, sql in entry.up_sql_constants)
+    assert audit_migrations(tmp_path, {"product": set()}) == []
+
+
+def test_forward_retirement_requires_drop_in_up_not_only_down(tmp_path):
+    _generated(tmp_path, "product", extra=_INDEX_SQL)
+    _forward_index_retirement(tmp_path, drop_in_up=False)
+
+    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
+        "invalid-index-retirement",
+        "undeclared-index",
+    ]
+
+
+def test_forward_retirement_requires_literal_mapping_and_model_less(tmp_path):
+    _generated(tmp_path, "product", extra=_INDEX_SQL)
+    _forward_index_retirement(tmp_path, metadata="build_retirements()")
+
+    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
+        "invalid-index-retirement",
+        "undeclared-index",
+    ]
+
+    _forward_index_retirement(tmp_path, model_less=False)
+    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
+        "incremental-migration",
+        "invalid-index-retirement",
+        "undeclared-index",
+    ]
+
+
+def test_forward_retirement_requires_exact_older_create_and_current_table(tmp_path):
+    _generated(tmp_path, "product")
+    _forward_index_retirement(tmp_path)
+
+    assert _rules(audit_migrations(tmp_path, {"product": set()})) == [
+        "invalid-index-retirement"
+    ]
+
+    _generated(tmp_path, "product", extra=_INDEX_SQL)
+    _generated(tmp_path, "listing", order=3)
+    _forward_index_retirement(
+        tmp_path,
+        metadata='{"product_sku_idx": "listing"}',
+    )
+    assert _rules(audit_migrations(tmp_path, {"product": set(), "listing": set()})) == [
+        "invalid-index-retirement",
+        "undeclared-index",
+    ]
+
+
+def test_forward_retirement_cannot_drop_an_index_still_declared_by_model(tmp_path):
+    _generated(tmp_path, "product", extra=_INDEX_SQL)
+    _forward_index_retirement(tmp_path)
+
+    assert _rules(audit_migrations(tmp_path, {"product": {"product_sku_idx"}})) == [
+        "invalid-index-retirement"
+    ]
+
+
 def test_index_transition_must_sort_after_historical_creator(tmp_path):
     _generated(tmp_path, "legacy_widget")
     _transition(

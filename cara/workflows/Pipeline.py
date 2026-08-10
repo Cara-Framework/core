@@ -1,8 +1,19 @@
-"""
-Unified Pipeline System for Cara Framework.
+"""Step-sequence workflow pipeline for the Cara framework.
 
-Supports synchronous command workflows. The legacy async chain and parallel
-types fail closed until durable signed orchestration descriptors exist.
+Runs an ordered list of command/job classes through the IoC container and
+reports, per step, whether it succeeded, failed or was skipped by a
+condition. This is the *orchestration* pipeline; it is deliberately distinct
+from the two other pipelines in the framework:
+
+* :mod:`cara.support.Pipeline` — Laravel's ``Illuminate\\Pipeline``: push one
+  payload through a chain of middleware-shaped pipes.
+* :mod:`cara.filtering.Pipeline` — ``FilterPipeline``: compose filter / sort /
+  paginate over a query builder.
+
+Only synchronous execution is supported. Queue-backed chain and batch
+orchestration is intentionally absent: it requires durable, signed
+orchestration descriptors that the framework does not have, and advertising
+it as an enum value that raises on use is a lie the framework will not tell.
 """
 
 from __future__ import annotations
@@ -14,16 +25,23 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
-from cara.exceptions import InvalidArgumentException, QueueException
+from cara.exceptions import CaraException, InvalidArgumentException
 from cara.facades import Log
 
 
-class StepFailed(Exception):
+class StepFailed(CaraException):
     """A pipeline step signalled failure via a non-zero exit code.
 
     Raised internally so a step whose ``handle()`` RETURNS a non-zero
     craft exit code flows into the same failure path as one that raised —
     it must not be counted as a completed step.
+
+    Inside the taxonomy (§9) rather than rooted at bare ``Exception``:
+    an orphan carries no ``status_code``, so if one ever escapes a
+    command into the ASGI handler ``get_status_code`` takes its
+    "default to 500 for unknown exceptions" branch and the framework
+    reports somebody else's step failure as an unclassified server
+    fault. One taxonomy means one mapping.
     """
 
 
@@ -31,8 +49,6 @@ class PipelineType(Enum):
     """Pipeline execution types."""
 
     SYNC = "sync"  # Execute immediately (commands)
-    ASYNC_CHAIN = "chain"  # Reserved; dispatch fails closed
-    ASYNC_PARALLEL = "parallel"  # Reserved; dispatch fails closed
 
 
 class PipelineStep:
@@ -43,8 +59,6 @@ class PipelineStep:
         step_class,
         args: tuple = (),
         kwargs: dict | None = None,
-        routing_key: str | None = None,
-        priority: str = "default",
         condition: Callable | None = None,
         on_success: Callable | None = None,
         on_failure: Callable | None = None,
@@ -56,8 +70,6 @@ class PipelineStep:
             step_class: Command or Job class to execute
             args: Arguments to pass to step
             kwargs: Keyword arguments to pass to step
-            routing_key: Routing key for job dispatch (if job)
-            priority: Priority level for routing
             condition: Optional condition function to determine if step should run
             on_success: Callback on step success
             on_failure: Callback on step failure
@@ -65,23 +77,14 @@ class PipelineStep:
         self.step_class = step_class
         self.args = args or ()
         self.kwargs = kwargs or {}
-        self.routing_key = routing_key
-        self.priority = priority
         self.condition = condition
         self.on_success = on_success
         self.on_failure = on_failure
 
-        # Auto-generate routing key for jobs
-        if not self.routing_key and hasattr(step_class, "__name__"):
-            class_name = step_class.__name__.lower()
-            if "job" in class_name:
-                domain = class_name.replace("job", "")
-                self.routing_key = f"{domain}.{self.priority}"
-
 
 class Pipeline:
     """
-    Unified pipeline system for commands and jobs.
+    Ordered command workflow with per-step result accounting.
 
     Features:
     - Command workflows (sync execution)
@@ -89,15 +92,14 @@ class Pipeline:
     - Error handling
     - Progress tracking
 
-    Usage:
-        # Command workflow
-        Pipeline.create(PipelineType.SYNC)\
-            .add(SeedMarketplaces)\
-            .add(SeedCategories)\
-            .execute()
+    Usage::
 
-    ``ASYNC_CHAIN`` and ``ASYNC_PARALLEL`` remain reserved enum values; using
-    either raises ``QueueException`` instead of silently dropping work.
+        await (
+            Pipeline.create(PipelineType.SYNC)
+            .add(MigrateDatabase)
+            .add(SeedReferenceData)
+            .execute()
+        )
     """
 
     def __init__(self, pipeline_type: PipelineType, name: str | None = None):
@@ -117,8 +119,6 @@ class Pipeline:
         self,
         step_class,
         *args,
-        priority: str = "default",
-        routing_key: str | None = None,
         condition: Callable | None = None,
         on_success: Callable | None = None,
         on_failure: Callable | None = None,
@@ -130,8 +130,6 @@ class Pipeline:
         Args:
             step_class: Command or Job class
             *args: Arguments for the step
-            priority: Priority level (critical, high, default, low)
-            routing_key: Custom routing key (auto-generated if None)
             condition: Optional condition to check before executing step
             on_success: Callback on step success
             on_failure: Callback on step failure
@@ -141,8 +139,6 @@ class Pipeline:
             step_class=step_class,
             args=args,
             kwargs=kwargs,
-            routing_key=routing_key,
-            priority=priority,
             condition=condition,
             on_success=on_success,
             on_failure=on_failure,
@@ -175,32 +171,7 @@ class Pipeline:
 
         if self.pipeline_type == PipelineType.SYNC:
             return await self._execute_sync()
-        elif self.pipeline_type == PipelineType.ASYNC_CHAIN:
-            return await self._execute_async_chain()
-        elif self.pipeline_type == PipelineType.ASYNC_PARALLEL:
-            return await self._execute_async_parallel()
-        else:
-            raise InvalidArgumentException(f"Unknown pipeline type: {self.pipeline_type}")
-
-    def dispatch(self) -> dict[str, Any]:
-        """Dispatch async pipeline (non-blocking)."""
-        if self.pipeline_type == PipelineType.SYNC:
-            raise InvalidArgumentException(
-                "Cannot dispatch sync pipeline. Use execute() instead."
-            )
-
-        Log.info(
-            "📡 Dispatching pipeline: %s Type: %s",
-            self.name,
-            self.pipeline_type.value,
-            category="cara.pipeline",
-        )
-
-        # Reserved async modes fail closed in their dispatch helpers.
-        if self.pipeline_type == PipelineType.ASYNC_CHAIN:
-            return self._dispatch_chain()
-        elif self.pipeline_type == PipelineType.ASYNC_PARALLEL:
-            return self._dispatch_parallel()
+        raise InvalidArgumentException(f"Unknown pipeline type: {self.pipeline_type}")
 
     async def _execute_sync(self) -> dict[str, Any]:
         """Execute pipeline synchronously (for commands)."""
@@ -329,53 +300,6 @@ class Pipeline:
             category="cara.pipeline",
         )
         return result
-
-    async def _execute_async_chain(self) -> dict[str, Any]:
-        """Validate a reserved async chain request before rejecting dispatch."""
-        if not self.steps:
-            return {"success": False, "error": "No steps to execute"}
-
-        # Dispatch-time conditions still apply — steps whose condition
-        # rejects the current context are excluded from the chain.
-        runnable = [
-            step
-            for step in self.steps
-            if not (step.condition and not step.condition(self.context))
-        ]
-        skipped = len(self.steps) - len(runnable)
-
-        Log.info(
-            "🔗 Executing async chain: %s steps (%s skipped)",
-            len(runnable),
-            skipped,
-            category="cara.pipeline",
-        )
-
-        result = self._dispatch_chain(runnable)
-        result.update(
-            {
-                "skipped_steps": skipped,
-                "context": self.context,
-                "pipeline_type": self.pipeline_type.value,
-            }
-        )
-        return result
-
-    async def _execute_async_parallel(self) -> dict[str, Any]:
-        """Execute pipeline as async parallel (parallel job execution)."""
-        return self._dispatch_parallel()
-
-    def _dispatch_chain(self, steps: list[PipelineStep] | None = None) -> dict[str, Any]:
-        raise QueueException(
-            "Async pipeline chains are unsupported until durable JSON "
-            "chain descriptors are implemented."
-        )
-
-    def _dispatch_parallel(self) -> dict[str, Any]:
-        raise QueueException(
-            "Async parallel pipelines are unsupported until durable JSON "
-            "batch descriptors are implemented."
-        )
 
     async def _safe_call(self, func, *args, **kwargs):
         """Safely call a function (sync or async)."""

@@ -14,7 +14,11 @@ from typing import Any
 from python_multipart import MultipartParser
 from python_multipart.multipart import parse_options_header
 
-from cara.exceptions import BadRequestException, PayloadTooLargeException
+from cara.exceptions import (
+    BadRequestException,
+    PayloadTooLargeException,
+    ValidationException,
+)
 
 # Import the class directly from its submodule, NOT via the ``cara.http.request``
 # package barrel. The barrel's ``__init__`` imports ``.Request`` first, which pulls
@@ -172,6 +176,7 @@ class MakesBodyParsing:
                             try:
                                 message = await self.receive()
                             except Exception:
+                                # allow-silent-except: drain-and-discard; PayloadTooLarge is raised right after
                                 break
                             total_size += len(message.get("body", b""))
                         raise self._payload_too_large(max_body, total_size)
@@ -231,6 +236,30 @@ class MakesBodyParsing:
         """
         data = await self.json()
         return data if isinstance(data, dict) else {}
+
+    async def json_object(self) -> dict[str, Any]:
+        """Parse the JSON body and REJECT anything that is not an object.
+
+        The strict sibling of :meth:`json_dict`, for endpoints that read the
+        body directly instead of going through a ``FormRequest``.
+        ``json_dict`` swallows ``[1, 2]`` or ``"text"`` into ``{}``; the
+        caller then validates an empty payload and answers "field is
+        required", which points the client at the wrong mistake. This one
+        names the real one: a non-object body is a 422 whose failing field is
+        ``body``.
+
+        An empty body still returns ``{}`` — that is "nothing sent", not "the
+        wrong shape". Malformed JSON keeps raising the framework's 400 from
+        :meth:`json` rather than being re-wrapped, so one broken body does not
+        report two different error types depending on which endpoint received
+        it.
+        """
+        data = await self.json()
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            raise ValidationException.field("body", "Request body must be a JSON object.")
+        return data
 
     def _validate_multipart_structure(self, content_type: str) -> bytes | None:
         """Validate multipart content type and extract boundary."""

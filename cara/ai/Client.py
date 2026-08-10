@@ -15,7 +15,7 @@ import requests
 
 from cara.ai.AIProvider import AIProvider
 from cara.ai.AIResponse import AIResponse
-from cara.ai.exceptions import AIResponseError
+from cara.ai.exceptions import AIConfigurationError, AIResponseError
 from cara.ai.Parsing import parse_json as _parse_json
 from cara.configuration import config
 from cara.context import ExecutionContext
@@ -70,9 +70,13 @@ class AIClient:
             self.base_url = base_url or _cfg(
                 "openrouter_base_url", "https://openrouter.ai/api/v1/chat/completions"
             )
-            self.model = model or _cfg(
-                "openrouter_model", "mistralai/mistral-small-3.1-24b-instruct"
-            )
+            # No framework default. OpenRouter routes across hundreds of
+            # models from many vendors, so pinning one is a deployment
+            # decision that belongs in the product's ``config/ai.py`` — a
+            # framework-baked model name silently spends one product's
+            # budget on another product's vendor choice. Unset fails loudly
+            # on first use (see :meth:`chat`) instead of quietly working.
+            self.model = model or _cfg("openrouter_model", "")
             self.api_key = api_key or _cfg("openrouter_api_key", "")
         elif self.provider == AIProvider.OLLAMA:
             self.base_url = base_url or _cfg("ollama_base_url", "http://localhost:11434")
@@ -134,7 +138,14 @@ class AIClient:
         else:
             messages = list(prompt)
 
-        models_to_try = self._models_to_try(model or self.model)
+        requested = model or self.model
+        if not requested:
+            raise AIConfigurationError(
+                f"No model configured for AI provider '{self.provider.value}'. "
+                f"Set ai.{self.provider.value}_model in this deployable's "
+                f"config/ai.py, or pass model=... to the call."
+            )
+        models_to_try = self._models_to_try(requested)
 
         last_error: Exception | None = None
         for attempt_model in models_to_try:
@@ -240,6 +251,10 @@ class AIClient:
                 json_mode=json_mode,
             )
             return self.parse_json(resp.content, fallback=fallback)
+        except AIConfigurationError:
+            # A missing model is a deployment defect, not a flaky response —
+            # ``fallback`` must not turn it into a permanently silent no-op.
+            raise
         except Exception as e:  # noqa: BLE001 — fall back when the caller allows
             if fallback is not None:
                 _log("warning", f"AI.json fallback: {e}")

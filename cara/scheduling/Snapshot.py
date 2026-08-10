@@ -29,6 +29,14 @@ def read_schedule_snapshot() -> dict[str, Any] | None:
 
     Shape: ``{"published_at": iso, "jobs": [{"id", "name", "next_run_at"}]}``
     where ``next_run_at`` is ``None`` for a paused job.
+
+    An entry additionally carries ``"meta"`` — an opaque, application-owned
+    dict — when the schedule registered one via
+    ``ScheduleBuilder.snapshot_meta`` (or a ``snapshot_meta`` key on a
+    dict-config entry). The key is ABSENT when no metadata was registered,
+    so readers must use ``entry.get("meta")`` and degrade when it is
+    missing: a scheduler running an older revision publishes entries
+    without it. Cara never interprets the contents.
     """
     from cara.facades import Cache
 

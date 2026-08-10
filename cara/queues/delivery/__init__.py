@@ -10,6 +10,7 @@ from .QueueJobDeliveryStore import (
     ReplayDelivery,
     UniqueDeliveryConflict,
 )
+from .QueueOperationsStore import QueueOperationsStore
 from .QueueOutboxHealth import QueueOutboxHealth
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "DeliveryLeaseLost",
     "PublicationBacklogProbe",
     "QueueJobDeliveryStore",
+    "QueueOperationsStore",
     "QueueOutboxHealth",
     "ReplayDelivery",
     "UniqueDeliveryConflict",

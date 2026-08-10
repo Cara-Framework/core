@@ -29,7 +29,13 @@ from cara.http.ReturnPath import ReturnPath as ReturnPath
 _EXPORTS = {
     "Controller": ("cara.http.controllers", "Controller"),
     "FormRequest": ("cara.http.requests", "FormRequest"),
-    "InvalidCursor": ("cara.http.Cursor", "InvalidCursor"),
+    # The class lives in the taxonomy (§9), so this entry names the taxonomy.
+    # It used to name ``cara.http.Cursor``, which forced that module to keep an
+    # ``import InvalidCursor as InvalidCursor`` re-export alive purely to be
+    # re-imported from here — a backward-compat shim §5 bans outright, and one
+    # that quietly made ``cara.http`` the second place a reader had to look to
+    # find where an exception is defined.
+    "InvalidCursor": ("cara.exceptions.types.http", "InvalidCursor"),
     "JsonResource": ("cara.http.resources", "JsonResource"),
     "MissingValue": ("cara.http.resources", "MissingValue"),
     "Request": ("cara.http.request.Request", "Request"),

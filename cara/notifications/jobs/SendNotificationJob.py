@@ -35,16 +35,34 @@ class SendNotificationJob(BaseJob):
         # BaseJob automatically handles initialization
         super().__init__(payload={"notification_type": type(notification).__name__})
 
-    def handle(self):
+    async def handle(self):
         """
         Execute the job - send the notification.
+
+        ``handle`` MUST be async: ``SignedJsonJobSerializer`` rejects a
+        sync ``handle`` at both serialize and deserialize, and
+        ``queue:work`` repeats the gate consumer-side, so a sync handler
+        made this job undispatchable on the AMQP rail — the only rail
+        cara ships. ``Notification._queue_notification`` does not catch,
+        so a queued notification raised straight into the caller.
+
+        ``Notification._send_now`` fans out over blocking channel drivers
+        (SMTP, HTTP), so it crosses the boundary through
+        ``ExecutionContext.run_in_thread`` — which copies the contextvar
+        snapshot and gives the thread its own DB connection registry —
+        rather than stalling the worker's event loop.
         """
         # Objects are automatically reconstructed by SerializesModels
         # Get the notification service from container
+        from cara.context import ExecutionContext
         from cara.facades import Notification
 
         # Send the notification immediately (bypass queue check)
-        result = Notification._send_now(self.notifiable, self.notification)
+        result = await ExecutionContext.run_in_thread(
+            Notification._send_now,
+            self.notifiable,
+            self.notification,
+        )
 
         if not result:
             raise CaraException("Failed to send notification through channels")

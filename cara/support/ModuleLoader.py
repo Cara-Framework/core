@@ -38,6 +38,7 @@ def load(
 
             Log.warning(error_message, category="cara.support.module_loader")
         except Exception:
+            # allow-silent-except: logging is best-effort during early bootstrap and must not mask the import error
             # Logging here is best-effort. During early bootstrap the ``logger``
             # facade isn't bound yet (config loads BEFORE LoggerProvider), so the
             # Facade raises AttributeError; any logging failure must NEVER mask

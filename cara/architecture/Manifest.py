@@ -58,6 +58,37 @@ class ManifestRoots:
     kernel_dev_root_name: str = "commons"
     local_root_names: tuple[str, ...] = ("app", "config", "routes", "packages")
 
+    @property
+    def app_namespace(self) -> str:
+        """Dotted root of every app-local import: ``app`` in a product tree,
+        ``cara`` when the pack is pointed at the framework's own source.
+
+        Scanners used to spell this ``"app"`` as a literal. A wrong literal in
+        a guard is invisible: ``ImportForm`` and ``SourceShape`` compared
+        against ``app.<layer>`` / ``app/<layer>/`` and, aimed at a tree rooted
+        under any other name, matched NOTHING and reported a clean pass over
+        code they had never judged — a vacuously green guard, the one outcome
+        §9 forbids. It is also why cara itself could not be scanned for the
+        first eleven months the Guard Pack existed. ``BarrelGenerator`` always
+        derived the namespace from this directory; the scanners now read the
+        same source instead of restating it (§5).
+        """
+        return self.app.name
+
+    @property
+    def app_path_prefix(self) -> str:
+        """``app_namespace`` as it appears at the head of a deployable-relative
+        path (``app`` / ``cara``), for scanners that classify by PATH rather
+        than by dotted module. Derived, not assumed equal to the dotted name:
+        the two only coincide because the app package sits directly under the
+        deployable, and a guard should not depend on a coincidence it never
+        checked.
+        """
+        try:
+            return self.app.absolute().relative_to(self.deployable.absolute()).as_posix()
+        except ValueError:
+            return self.app.name
+
     def scan_dirs(self, scanner: str) -> tuple[Path, ...]:
         """Exact product-owned trees governed by ``scanner``.
 
@@ -80,10 +111,10 @@ class SeamLocations:
     deployable-relative paths; ``data_vocabulary_prefixes`` (Seam 1) are
     deployable-relative directory prefixes (typically a kernel models
     package) whose UPPER_SNAKE constants are exempt. ``owned_integration_prefixes``
-    declares non-marketplace capability lanes such as
-    ``discovery/google_shopping`` and the exact provider tokens each lane owns.
-    The lane is still scanned: only its owned tokens are legal, so an Amazon
-    dependency inside a Google Shopping discovery lane remains a finding.
+    declares capability lanes that are not plug-ins (for example a
+    ``discovery/<provider>`` lane) and the exact provider tokens each lane
+    owns. The lane is still scanned: only its owned tokens are legal, so a
+    dependency on one vendor inside another vendor's lane remains a finding.
     Seam 3 (generic, parameterized ingress routes) never touches an
     *identifier* or a scanned string-literal position, so it needs no location
     here.
@@ -204,6 +235,45 @@ class Manifest:
     atomic_repository_methods: frozenset[str] = frozenset()
     write_ownership: dict[str, str] = field(default_factory=dict)
     model_less_write_tables: frozenset[str] = frozenset()
+
+    # --- source-law scanners (raw SQL, ORM reach, HTTP/env leakage, silent
+    # swallows). Each value is a rule DIAL, not a scope: scope is always
+    # ``roots.scan_dirs(<scanner id>)`` so a product declares exactly which of
+    # its layers a law governs.
+    #
+    # POSIX path fragments that legitimately own raw SQL; matched against a
+    # contiguous run of a file's deployable-relative path parts (§5).
+    raw_sql_homes: frozenset[str] = frozenset(
+        {"repositories", "commons/gates/persistence"}
+    )
+    # Import roots whose names are ORM model classes. A model reached through
+    # one of these is the receiver ModelQueryDiscipline polices.
+    model_import_roots: tuple[str, ...] = ("app.models", "models.core")
+    # Comment tag documenting a deliberate inline ORM call outside a
+    # repository (a dated, shrink-only escape hatch: `# allow-inline-orm: why`).
+    inline_orm_allow_tag: str = "allow-inline-orm"
+    # Comment tag documenting a deliberate broad-except with no log/re-raise
+    # (collect-and-log-later loops).
+    silent_except_allow_tag: str = "allow-silent-except"
+    # Import prefixes carrying HTTP transport types. Business logic raises
+    # domain errors; only the edge speaks HTTP.
+    http_import_prefixes: tuple[str, ...] = (
+        "cara.http",
+        "cara.request",
+        "cara.response",
+    )
+    # ``os.environ`` methods that snapshot the whole mapping rather than read
+    # one variable (``copy()`` hands an env to a subprocess) — composition, not
+    # a hidden config read.
+    env_read_exempt_environ_attrs: frozenset[str] = frozenset({"copy"})
+
+    # --- domain registry shape (§3). ``registry_size_bounds`` stays None by
+    # default: §3 makes entry count a REVIEW threshold, so a product opts into
+    # enforcing its own budget. ``single_layer_domains`` pins the domains that
+    # legitimately appear in exactly one domain layer, making the pin itself
+    # go stale-loud when the domain grows a second layer.
+    registry_size_bounds: tuple[int, int] | None = None
+    single_layer_domains: frozenset[str] = frozenset()
 
     @classmethod
     def load(cls, path: Path) -> Manifest:

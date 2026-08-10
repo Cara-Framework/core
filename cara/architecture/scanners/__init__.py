@@ -6,16 +6,22 @@ pytest fixture.
 """
 
 from .BarrelCompleteness import BarrelCompleteness
+from .BarrelMidLoad import BarrelMidLoad
 from .CollaboratorCalls import CollaboratorCalls
 from .DomainOwnership import DomainOwnership
 from .DomainRegistry import DomainRegistry
+from .EnvReadDiscipline import EnvReadDiscipline
 from .FlowLaw import FlowLaw
+from .HttpInBusinessLogic import HttpInBusinessLogic
 from .ImportForm import ImportForm
 from .ImportTiers import ImportTiers
 from .InlineImports import InlineImports
 from .JobIdempotency import JobIdempotency
 from .KernelMembership import KernelMembership
+from .ModelQueryDiscipline import ModelQueryDiscipline
 from .PortMembership import PortMembership
+from .RawSqlHome import RawSqlHome
+from .SilentExceptSwallow import SilentExceptSwallow
 from .SourceShape import SourceShape
 from .TransactionOwnership import TransactionOwnership
 from .VendorBarrelParity import VendorBarrelParity
@@ -24,16 +30,22 @@ from .WriteOwnership import WriteOwnership
 
 __all__ = [
     "BarrelCompleteness",
+    "BarrelMidLoad",
     "CollaboratorCalls",
     "DomainOwnership",
     "DomainRegistry",
+    "EnvReadDiscipline",
     "FlowLaw",
+    "HttpInBusinessLogic",
     "ImportForm",
     "ImportTiers",
     "InlineImports",
     "JobIdempotency",
     "KernelMembership",
+    "ModelQueryDiscipline",
     "PortMembership",
+    "RawSqlHome",
+    "SilentExceptSwallow",
     "SourceShape",
     "TransactionOwnership",
     "VendorBarrelParity",
@@ -47,6 +59,7 @@ REGISTRY: dict[str, type] = {
     "inline_imports": InlineImports,
     "import_form": ImportForm,
     "barrel_completeness": BarrelCompleteness,
+    "barrel_mid_load": BarrelMidLoad,
     "domain_ownership": DomainOwnership,
     "domain_registry": DomainRegistry,
     "flow_law": FlowLaw,
@@ -59,4 +72,9 @@ REGISTRY: dict[str, type] = {
     "vendor_barrel_parity": VendorBarrelParity,
     "write_ownership": WriteOwnership,
     "collaborator_calls": CollaboratorCalls,
+    "raw_sql_home": RawSqlHome,
+    "model_query_discipline": ModelQueryDiscipline,
+    "http_in_business_logic": HttpInBusinessLogic,
+    "env_read_discipline": EnvReadDiscipline,
+    "silent_except_swallow": SilentExceptSwallow,
 }

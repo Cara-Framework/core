@@ -256,55 +256,57 @@ class DefaultExceptionHandler:
     def _cors_headers_for_scope(self, scope: dict[str, Any]) -> list:
         """Build CORS header pairs for an error response.
 
-        Mirrors the credentials/wildcard guard in ``HandleCors``: when
-        credentials are enabled we MUST NOT echo an arbitrary origin
-        next to ``Access-Control-Allow-Credentials: true``. The fix in
-        the live HandleCors path was useless if the exception path
-        kept reflecting; both have to apply the same rule.
+        Reads the policy from ``cara.middleware.http.Cors`` instead of
+        restating it. The restated copy had drifted OPEN: it never
+        consulted ``cors.cors.paths``, so a route the operator excluded
+        from CORS answered a 200 with no ``Access-Control-Allow-Origin``
+        but its 401/403/404/500 with ``Access-Control-Allow-Origin: *``
+        — an attacker's page could read status and body cross-origin by
+        provoking an error. And any configuration failure fell back to a
+        wildcard, granting the most in the case where we knew least.
+        Both are fixed by reading the single source: out of scope and
+        unreadable policy both emit NO CORS headers (§9, fail closed).
         """
         try:
-            from cara.configuration import config
+            # Imported here, inside the guard: resolving the policy module
+            # pulls the middleware package, and an exception handler is the
+            # one place that must never explode. An unimportable policy is
+            # an unreadable policy.
+            from cara.middleware.http.Cors import (
+                load_cors_policy,
+                path_in_cors_scope,
+                resolve_allow_origin,
+            )
 
-            allowed_origins = config("cors.cors.allowed_origins", ["*"])
-            allowed_origins_patterns = config("cors.cors.allowed_origins_patterns", [])
-            supports_credentials = config("cors.cors.supports_credentials", False)
-            allowed_methods = config("cors.cors.allowed_methods", ["*"])
-            allowed_headers = config("cors.cors.allowed_headers", ["*"])
-            max_age = config("cors.cors.max_age", 0)
+            policy = load_cors_policy()
         except Exception:
-            allowed_origins = ["*"]
-            allowed_origins_patterns = []
-            supports_credentials = False
-            allowed_methods = ["*"]
-            allowed_headers = ["*"]
-            max_age = 0
+            # Fail closed. A policy we could not read is not a policy
+            # that allows everyone — emitting nothing degrades the JS
+            # client to a visible CORS error, which is strictly better
+            # than handing an arbitrary origin a readable response.
+            self._log_cors_policy_unavailable()
+            return []
+
+        if not path_in_cors_scope(scope.get("path", ""), policy.get("paths")):
+            return []
 
         raw_headers = dict(scope.get("headers", []))
         origin = raw_headers.get(b"origin", b"").decode()
-
-        def _explicit_match(o: str) -> bool:
-            if not o:
-                return False
-            if o in allowed_origins:
-                return True
-            import re as _re
-
-            return any(_re.match(pat, o) for pat in allowed_origins_patterns or [])
+        allow_origin = resolve_allow_origin(origin, policy)
 
         headers: list = []
 
-        if supports_credentials:
-            # Only echo when there's an explicit allowlist match;
-            # never with a wildcard.
-            if origin and _explicit_match(origin):
-                headers.append([b"access-control-allow-origin", origin.encode()])
+        if allow_origin is not None:
+            headers.append([b"access-control-allow-origin", allow_origin.encode()])
+            if allow_origin != "*":
+                # When the ACAO value depends on the Origin header,
+                # proxies and CDNs must key their cache by it —
+                # otherwise one origin's response is served to another.
                 headers.append([b"vary", b"Origin"])
-        else:
-            if "*" in allowed_origins:
-                headers.append([b"access-control-allow-origin", b"*"])
-            elif origin and _explicit_match(origin):
-                headers.append([b"access-control-allow-origin", origin.encode()])
-                headers.append([b"vary", b"Origin"])
+
+        allowed_methods = policy.get("allowed_methods")
+        allowed_headers = policy.get("allowed_headers")
+        max_age = policy.get("max_age")
 
         if allowed_methods:
             headers.append(
@@ -314,12 +316,33 @@ class DefaultExceptionHandler:
             headers.append(
                 [b"access-control-allow-headers", ", ".join(allowed_headers).encode()]
             )
-        if supports_credentials:
+        if policy.get("supports_credentials"):
             headers.append([b"access-control-allow-credentials", b"true"])
         if max_age:
             headers.append([b"access-control-max-age", str(max_age).encode()])
 
         return headers
+
+    @staticmethod
+    def _log_cors_policy_unavailable() -> None:
+        """Make an unreadable CORS policy observable rather than silent.
+
+        Failing closed without a signal turns a configuration outage into
+        "the dashboard mysteriously reports CORS errors on every 500".
+        The logging facade may itself be unavailable this early, so its
+        absence must not replace the original failure.
+        """
+        try:
+            from cara.facades import Log
+
+            Log.warning(
+                "CORS policy unreadable on the error path — emitting no CORS headers",
+                category="cara.exceptions",
+                exc_info=True,
+            )
+        except Exception:
+            # allow-silent-except: logging the error path cannot itself raise on the error path
+            pass
 
     def _security_headers_for_scope(self, scope: dict[str, Any]) -> list:
         """Build defense-in-depth header pairs for an error response.
@@ -428,11 +451,16 @@ class DefaultExceptionHandler:
 
         Order of trust:
           1. ``scope["scheme"] == "https"`` (direct TLS at the worker).
-          2. When the immediate peer is in ``trustedproxies.proxies``,
-             honour ``X-Forwarded-Proto`` and RFC 7239 ``Forwarded``.
+          2. When the immediate peer is a configured trusted proxy, honour
+             ``X-Forwarded-Proto`` and RFC 7239 ``Forwarded``.
 
         Any signal from an untrusted peer is ignored so a public client
         cannot forge HSTS by setting ``X-Forwarded-Proto: https``.
+
+        The trust decision belongs to :mod:`cara.security.TrustedProxies`. This
+        method used to carry a verbatim copy of ``SecurityHeaders``' lookup,
+        including its read of two config keys no product defines — so it always
+        saw an empty proxy list and this branch was dead in every environment.
         """
         if not isinstance(scope, dict):
             return False
@@ -440,41 +468,12 @@ class DefaultExceptionHandler:
         if isinstance(scheme, str) and scheme.lower() == "https":
             return True
 
-        try:
-            from cara.configuration import config
+        # Imported inline like the rest of this module's cara dependencies:
+        # the exception handler is constructed during boot, ahead of the
+        # security package.
+        from cara.security.TrustedProxies import peer_is_trusted_proxy
 
-            proxies = config(
-                "trustedproxies.proxies",
-                config("security.security.trusted_proxies", []),
-            )
-        except Exception:
-            proxies = []
-        if not proxies:
-            return False
-
-        client = scope.get("client") or ()
-        client_ip = client[0] if client else None
-        if not client_ip:
-            return False
-
-        trusted = False
-        if "*" in proxies:
-            trusted = True
-        else:
-            try:
-                import ipaddress
-
-                ip = ipaddress.ip_address(client_ip)
-                for entry in proxies:
-                    try:
-                        if ip in ipaddress.ip_network(entry, strict=False):
-                            trusted = True
-                            break
-                    except ValueError:
-                        continue
-            except Exception:
-                trusted = False
-        if not trusted:
+        if not peer_is_trusted_proxy(scope):
             return False
 
         raw_headers = {

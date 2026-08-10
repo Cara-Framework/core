@@ -11,6 +11,53 @@ import json
 from .base import BaseCast
 
 
+def _write_list(value, *, cast_name: str, category: str):
+    """The write-side coercion shared by every list-shaped cast in this file.
+
+    It lives in one place because it was fixed in one place and not the
+    other. ``ArrayCast.set`` learned to preserve ``None`` as SQL NULL;
+    ``CollectionCast.set``, registered right beside it, kept returning the
+    literal ``"[]"`` — so a nullable column written through the "collection"
+    cast still split "no value" from "empty value", ``WHERE col IS NULL``
+    still missed every such row, and ``col = '[]'::jsonb`` still matched them
+    all. A copy has no way to learn that the original changed.
+
+    ``None`` → ``None``: unknown stays unknown.
+    Non-list → ``"[]"`` and a WARNING: the value is a caller bug and the
+    graceful fallback is the historical contract, but dropping a write in
+    total silence is not — ops must be able to see it.
+    """
+    if value is None:
+        return None
+
+    if not isinstance(value, list):
+        try:
+            from cara.facades import Log
+
+            Log.warning(
+                "%s: dropped %s input (repr=%s); expected list — storing as '[]'",
+                cast_name,
+                type(value).__name__,
+                value,
+                category=category,
+            )
+        except Exception:
+            # Facade not bound (unit-test boot order, etc.) — fall back to
+            # stdlib logging so the warning still lands in test capture and
+            # any plain Python harness.
+            import logging
+
+            logging.getLogger(f"cara.{category}").warning(
+                "%s: dropped %s input (repr=%r); expected list — storing as '[]'",
+                cast_name,
+                type(value).__name__,
+                value,
+            )
+        return "[]"
+
+    return json.dumps(value, default=str)
+
+
 class ArrayCast(BaseCast):
     """Cast to/from Python arrays with JSON storage."""
 
@@ -59,37 +106,7 @@ class ArrayCast(BaseCast):
         compatibility but logs a warning so ops can see the
         dropped write in observability.
         """
-        if value is None:
-            return None
-
-        if not isinstance(value, list):
-            # Caller bug — dropping a non-list to ``"[]"`` is data
-            # loss. Log so the bug surfaces; preserve the legacy
-            # return value so existing callers don't break.
-            try:
-                from cara.facades import Log
-
-                Log.warning(
-                    "ArrayCast: dropped %s input (repr=%s); expected list — storing as '[]'",
-                    type(value).__name__,
-                    value,
-                    category="cast.array",
-                )
-            except Exception:
-                # Facade not bound (unit-test boot order, etc.) —
-                # fall back to stdlib logging so the warning still
-                # lands in test capture and any plain Python harness.
-                import logging
-
-                logging.getLogger("cara.cast.array").warning(
-                    "ArrayCast: dropped %s input (repr=%r); "
-                    "expected list — storing as '[]'",
-                    type(value).__name__,
-                    value,
-                )
-            return "[]"
-
-        return json.dumps(value, default=str)
+        return _write_list(value, cast_name="ArrayCast", category="cast.array")
 
 
 class CollectionCast(BaseCast):
@@ -142,15 +159,29 @@ class CollectionCast(BaseCast):
         return []
 
     def set(self, value):
-        """Set from Collection or list."""
-        if value is None:
-            return "[]"
+        """Set from Collection or list.
 
-        # Handle Collection objects
-        if hasattr(value, "to_list"):
-            return json.dumps(value.to_list(), default=str)
+        Shares ``ArrayCast``'s write rule, so ``None`` is SQL NULL here too.
+        This cast used to return the literal ``"[]"`` for ``None`` — the
+        exact NULL drift ``ArrayCast.set`` documents as fixed, sitting
+        unfixed in the same file — and dropped a non-list write with no log
+        at all.
 
-        if isinstance(value, list):
-            return json.dumps(value, default=str)
+        ``get(None)`` still returns ``Collection([])``: as with
+        ``ArrayCast``, the read-side fallback is sanctioned and the hazard
+        was write-side only.
+        """
+        # ``Collection`` publishes ``to_array()`` (which runs ``serialize()``
+        # so nested models become dicts). The probe here used to be
+        # ``hasattr(value, "to_list")`` — a method cara's ``Collection`` has
+        # never had — so the one input type this cast is named for fell all
+        # the way through to the terminal ``return "[]"`` and the write was
+        # lost without a sound. ``to_list`` is kept for foreign
+        # collection-likes that do publish it.
+        for unwrap in ("to_array", "to_list"):
+            unwrapper = getattr(value, unwrap, None)
+            if callable(unwrapper):
+                value = unwrapper()
+                break
 
-        return "[]"
+        return _write_list(value, cast_name="CollectionCast", category="cast.collection")

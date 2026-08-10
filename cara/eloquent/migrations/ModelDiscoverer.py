@@ -9,6 +9,11 @@ import logging
 import re
 from pathlib import Path
 
+from cara.eloquent.schema.Schema import FIELD_TYPE_PARAMETERS as _FIELD_TYPE_PARAMETERS
+from cara.eloquent.schema.Schema import FIELD_TYPES_WITH_NAMES as _FIELD_TYPES_WITH_NAMES
+from cara.eloquent.schema.Schema import (
+    FIELD_TYPES_WITHOUT_NAMES as _FIELD_TYPES_WITHOUT_NAMES,
+)
 from cara.support import paths
 
 _logger = logging.getLogger("cara.migrations.discoverer")
@@ -27,47 +32,17 @@ _RAW_REFERENCES_RE = re.compile(
 class ModelDiscoverer:
     """Discover model files and extract Field.* definitions."""
 
-    # Field types that take field names as first argument.
-    # NOTE: ``jsonb`` lives next to ``json`` here on purpose — without
-    # this entry the AST parser silently drops every ``field.jsonb(...)``
-    # call (it doesn't match ``FIELD_TYPES_WITH_NAMES`` so
-    # ``_extract_field_definition_new_syntax`` returns None and the
-    # column never reaches the generated migration). That bug erased
-    # the ``metadata`` column from ~10 tables.
-    FIELD_TYPES_WITH_NAMES = {
-        "string",
-        "text",
-        "integer",
-        "tiny_integer",
-        "small_integer",
-        "medium_integer",
-        "big_integer",
-        "unsigned_integer",
-        "unsigned_big_integer",
-        "decimal",
-        "boolean",
-        "enum",
-        "uuid",
-        "json",
-        "jsonb",
-        "timestamp",
-        "date",
-        "time",
-        "datetime",
-        "id",
-        "increments",
-        "big_increments",
-        "float",
-        # ``double`` mirrors ``float``/``jsonb`` above — listed so a
-        # ``field.double(...)`` column is captured with type ``'double'``
-        # instead of being silently dropped (the ``jsonb`` footgun noted
-        # in the class docstring). ``uuid`` is already present above and
-        # reports type ``'uuid'`` faithfully.
-        "double",
-    }
-
-    # Field types that don't take field names
-    FIELD_TYPES_WITHOUT_NAMES = {"timestamps", "soft_deletes", "foreign", "foreign_key"}
+    # The legal field vocabulary is owned by ``FieldBuilder`` (the object a
+    # model's ``fields`` property is handed) and is READ here, never restated.
+    # The list used to be hand-copied, and every omission erased columns in
+    # silence: no ``jsonb`` entry deleted the ``metadata`` column from ~10
+    # tables, and ``char``/``binary`` were still missing — a
+    # ``field.char("currency_code", 3)`` produced no field definition at all,
+    # so ``make:migration`` wrote the table without the column,
+    # ``migrations:check`` compared the same blind view and stayed green, and
+    # ``schema:check`` reported the live column as undeclared drift.
+    FIELD_TYPES_WITH_NAMES = _FIELD_TYPES_WITH_NAMES
+    FIELD_TYPES_WITHOUT_NAMES = _FIELD_TYPES_WITHOUT_NAMES
 
     # Migration history may intentionally pin a tiny ``Model`` subclass so a
     # data transition can keep using the old row shape. It is executable
@@ -648,6 +623,24 @@ class ModelDiscoverer:
             return getattr(self, "_class_constants", {}).get(node.attr, _UNRESOLVED)
         return _UNRESOLVED
 
+    def _literal_argument(self, node: ast.AST):
+        """Resolve a builder argument to its literal value, or ``_UNRESOLVED``.
+
+        ``enum`` takes a list of options and every other builder takes
+        scalars, so both shapes are handled here instead of at each call site.
+        Anything else (a name, an expression) stays unresolved so the caller
+        records no param rather than a garbage one.
+        """
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return [
+                element.value
+                for element in node.elts
+                if isinstance(element, ast.Constant)
+            ]
+        return _UNRESOLVED
+
     def _extract_field_definition_new_syntax(self, call_node: ast.Call) -> dict | None:
         """Extract field definition from new syntax: field.string("name").nullable()"""
         field_type = None
@@ -665,29 +658,37 @@ class ModelDiscoverer:
                     if method_name in (
                         self.FIELD_TYPES_WITH_NAMES | self.FIELD_TYPES_WITHOUT_NAMES
                     ):
-                        # This is the base field type
+                        # This is the base field type. Which extra argument
+                        # means what is read off ``FieldBuilder``'s own
+                        # signature — the parser used to hand-code the
+                        # positional indices per type (``decimal`` 1/2 =
+                        # precision/scale, ``string``/``char`` 1 = length),
+                        # which meant a builder that grew a parameter kept it
+                        # invisible here.
                         field_type = method_name
-                        # Extract positional arguments (like precision/scale for decimal)
+                        names = _FIELD_TYPE_PARAMETERS.get(field_type, ())
+                        offset = 1 if field_type in self.FIELD_TYPES_WITH_NAMES else 0
                         for i, arg in enumerate(current.args):
-                            if isinstance(arg, ast.Constant):
-                                if field_type == "decimal":
-                                    if i == 1:  # First arg after field name
-                                        params["precision"] = arg.value
-                                    elif i == 2:  # Second arg after field name
-                                        params["scale"] = arg.value
-                                elif field_type == "string" and i == 1:
-                                    params["length"] = arg.value
-                            elif (
-                                field_type == "enum"
-                                and i == 1
-                                and isinstance(arg, ast.List)
-                            ):
-                                # Handle enum options list
-                                options = []
-                                for opt in arg.elts:
-                                    if isinstance(opt, ast.Constant):
-                                        options.append(opt.value)
-                                params["options"] = options
+                            position = i - offset
+                            if not 0 <= position < len(names):
+                                continue
+                            value = self._literal_argument(arg)
+                            if value is not _UNRESOLVED:
+                                params[names[position]] = value
+                        # Keyword form was dropped ENTIRELY: only positional
+                        # args were read, so a declared
+                        # ``field.decimal("price", precision=12, scale=4)``
+                        # reached the emitter with no params at all and was
+                        # written as NUMERIC(10,2) — four digits of scale lost
+                        # from a money column, in silence, with every check
+                        # green. The legacy extractor has always read
+                        # ``keywords``; this one never did.
+                        for keyword in current.keywords:
+                            if keyword.arg not in names:
+                                continue
+                            value = self._literal_argument(keyword.value)
+                            if value is not _UNRESOLVED:
+                                params[keyword.arg] = value
 
                     elif method_name == "nullable":
                         params["nullable"] = True
@@ -765,7 +766,54 @@ class ModelDiscoverer:
                     result["foreign_key"] = foreign_key_config
 
             return result
+
+        self._warn_unrecognised_field_call(call_node)
         return None
+
+    def _warn_unrecognised_field_call(self, call_node: ast.Call) -> None:
+        """Announce a field call the parser could not type, instead of dropping it.
+
+        Every column this parser fails to recognise disappears in total
+        silence: it never enters ``model_info["fields"]``, so
+        ``make:migration --overwrite`` writes the table without it,
+        ``migrations:check`` compares the same blind view and stays green, and
+        ``schema:check`` then reports the live column as undeclared drift —
+        three guards agreeing that a correct model is wrong. The vocabulary is
+        now derived from ``FieldBuilder`` so this should be unreachable for a
+        legal declaration; if it fires, the model wrote something
+        ``Schema.build`` cannot execute either, and ops should see it.
+
+        WARNING rather than a raise: discovery also runs under the read-only
+        ``migrations:check`` / ``schema:check`` paths, where refusing to start
+        would replace one silent wrong answer with no answer at all.
+        """
+        base_method = None
+        current = call_node
+        while isinstance(current, ast.Call) and isinstance(current.func, ast.Attribute):
+            base_method = current.func.attr
+            current = current.func.value
+
+        source = ast.unparse(call_node)
+        model = getattr(self, "_class_name", None) or "<unknown model>"
+        try:
+            from cara.facades import Log
+
+            Log.warning(
+                "Dropping unrecognised field declaration in %s: %s "
+                "(base method %r is not a Schema.build field builder)",
+                model,
+                source,
+                base_method,
+                category="cara.eloquent.migrations",
+            )
+        except Exception:
+            _logger.warning(
+                "Dropping unrecognised field declaration in %s: %s "
+                "(base method %r is not a Schema.build field builder)",
+                model,
+                source,
+                base_method,
+            )
 
     def _extract_field_name_from_call(self, call_node: ast.Call) -> str | None:
         """Extract field name from the first string argument in the call chain."""

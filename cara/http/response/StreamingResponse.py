@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
+from cara.support import json_dumps
+
 from .BaseResponse import BaseResponse
 from .HeaderManager import HeaderManager
 
@@ -189,12 +191,10 @@ class StreamingResponse:
             status: HTTP status code
             headers: Additional headers
         """
-        import json
 
         async def json_chunk_generator():
             async for data in data_generator:
-                json_line = f"{json.dumps(data, ensure_ascii=False, default=str)}\n"
-                yield json_line.encode("utf-8")
+                yield f"{json_dumps(data)}\n".encode()
 
         await self.stream(
             json_chunk_generator(),
@@ -324,8 +324,6 @@ class StreamingResponse:
         Returns:
             str: Formatted SSE event string
         """
-        import json
-
         lines = []
 
         if "id" in event:
@@ -340,7 +338,7 @@ class StreamingResponse:
         if "data" in event:
             data = event["data"]
             if isinstance(data, (dict, list)):
-                data = json.dumps(data, ensure_ascii=False, default=str)
+                data = json_dumps(data)
             # RFC 8030 §8.3: a multi-line ``data`` field MUST emit
             # ``data: `` on EVERY line — the SSE parser at the
             # browser end joins consecutive ``data:`` lines with

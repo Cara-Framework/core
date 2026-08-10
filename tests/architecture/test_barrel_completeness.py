@@ -182,3 +182,71 @@ def test_both_twins_check_their_own_bridge_even_when_one_owns_the_kernel_walk(tm
     )
     findings = BarrelCompleteness.scan(manifest)
     assert any("CAP_ADS" in f.message for f in findings)
+
+
+def test_a_directory_with_no_barrel_is_a_finding_not_a_crash(tmp_path):
+    """GUARDPACK §5 step 9 puts a product in exactly this state mid-change —
+    modules written, barrel not regenerated yet. Reading the absent
+    ``__init__.py`` aborted the whole pack with a ``FileNotFoundError``, so the
+    guard died precisely when a product followed its own documented procedure."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")
+
+    findings = BarrelCompleteness.scan(manifest)
+
+    assert any("has no __init__.py" in f.message for f in findings)
+    assert all(f.path == "app/services/__init__.py" for f in findings)
+
+
+def test_an_empty_directory_with_no_barrel_is_silent(tmp_path):
+    """Nothing to re-export, nothing to regenerate — a layer a deployable
+    simply does not use must not manufacture a finding."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    (tmp_path / "app" / "services").mkdir(parents=True)
+    assert BarrelCompleteness.scan(manifest) == []
+
+
+def test_a_non_literal_dunder_all_in_a_package_is_a_finding(tmp_path):
+    """A computed ``__all__`` is unreadable to a pure-AST checker. It used to
+    be reported as "no __all__ declared", sending readers after a line that was
+    right there."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\nfrom .Foo import Foo\n\n__all__ = sorted({"Foo"})\n',
+    )
+    findings = BarrelCompleteness.scan(manifest)
+    assert any("non-literal __all__" in f.message for f in findings)
+
+
+def test_a_kernel_with_a_non_literal_dunder_all_fails_the_bridge_check(tmp_path):
+    """The bridge check exists to catch import-time death; on a computed kernel
+    ``__all__`` it returned ``[]`` — greener than what it had inspected. §9 says
+    fail closed."""
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "commons" / "contracts" / "__init__.py",
+        '"""Kernel."""\n\nCAP_ADS = None\n\n__all__ = sorted({"CAP_ADS"})\n',
+    )
+    write(
+        tmp_path / "app" / "contracts" / "__init__.py",
+        '"""Barrel."""\n\n__all__: list[str] = []\n',
+    )
+
+    findings = BarrelCompleteness.scan(manifest)
+
+    assert any(
+        f.path == "commons/contracts/__init__.py"
+        and "cannot be verified" in f.message
+        and "app.contracts" in f.message
+        for f in findings
+    )
+
+
+def test_a_kernel_with_no_dunder_all_at_all_stays_silent(tmp_path):
+    """Absent and computed are different failures: a kernel package that
+    exports nothing has no bridge to verify."""
+    manifest = make_manifest(tmp_path, kernel_barrel_packages=frozenset())
+    write(tmp_path / "commons" / "contracts" / "__init__.py", '"""Kernel."""\n')
+    assert BarrelCompleteness.scan(manifest) == []

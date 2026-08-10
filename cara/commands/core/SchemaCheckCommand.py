@@ -75,9 +75,10 @@ _ADD_CHECK_RE = re.compile(
 # spelling) and an expression diff would cry wolf.
 #
 # Plain indexes used to be excluded here on the grounds that a missing perf
-# index is not a correctness bug. That reasoning was wrong in one direction: 37
-# synk indexes existed ONLY inside hand-written migrations, so nothing reported
-# them and a regenerate-from-models sweep would drop them silently.
+# index is not a correctness bug. That reasoning was wrong in one direction: in
+# a real product dozens of indexes existed ONLY inside hand-written migrations,
+# so nothing reported them and a regenerate-from-models sweep would drop them
+# silently.
 _CREATE_ANY_INDEX_RE = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
     r"(?:IF\s+NOT\s+EXISTS\s+)?\"?(?P<name>\w+)\"?",

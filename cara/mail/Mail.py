@@ -8,7 +8,7 @@ handling different drivers and mail sending operations.
 from __future__ import annotations
 
 from cara.exceptions import DriverNotFoundException
-from cara.facades import Log, Queue
+from cara.facades import Queue
 from cara.mail.Mailable import Mailable
 from cara.queues.contracts import ShouldQueue
 
@@ -123,22 +123,26 @@ class Mail:
             driver_name: Optional driver name
 
         Returns:
-            True if queued successfully, False otherwise
+            True once the job is on the broker. A dispatch failure RAISES —
+            this method never reports failure by return value.
+
+        Pre-fix the dispatch sat inside a blanket
+        ``except Exception: Log.error(...); return False``, and ``send()``
+        handed that ``False`` to callers that overwhelmingly ignore it. A
+        queued Mailable that never reached the broker — broker down, or the
+        serializer rejecting the job outright, which it did for EVERY
+        ShouldQueue mailable while ``SendMailableJob.handle`` was sync —
+        was indistinguishable from a sent one. §9 fail-closed: a mail that
+        was never queued must be loud at the dispatch site.
         """
-        try:
-            # Create a job to send the mailable
-            from cara.mail.jobs import SendMailableJob
+        # Create a job to send the mailable
+        from cara.mail.jobs import SendMailableJob
 
-            job = SendMailableJob(mailable, driver_name)
+        job = SendMailableJob(mailable, driver_name)
 
-            # Dispatch to queue using facade
-            Queue.dispatch(job)
-            return True
-
-        except Exception as e:
-            # Log error using facade
-            Log.error("Failed to queue mailable: %s", e, exc_info=True)
-            return False
+        # Dispatch to queue using facade
+        Queue.dispatch(job)
+        return True
 
     def _send_now(self, mailable: Mailable, driver_name: str | None = None) -> bool:
         """

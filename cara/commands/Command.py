@@ -135,6 +135,7 @@ class Command:
                 if path and os.path.isdir(path):
                     watch_paths.append(path)
             except Exception:
+                # allow-silent-except: an unresolvable watch dir is simply not watched
                 continue
 
         return watch_paths

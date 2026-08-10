@@ -28,22 +28,41 @@ both call ``create()``. Outcomes:
     the race surfaces an unhandled 500 even though the row IS
     there now — just inserted by the winner.
 
-Mirror of the unique-violation-translation pattern used elsewhere:
-catch the unique-violation SQLSTATE / message and re-query so the
-loser returns the winner's row.
+Both methods now ask ``cara.eloquent.Integrity.is_unique_violation`` —
+the framework's single classifier — instead of a private copy.
+
+Re-pinned 2026-08-08
+--------------------
+``Model._is_unique_violation`` was a second, drifted copy of that
+classifier. It read ``exc.sqlstate`` (the psycopg3 name) and
+``exc.orig.pgcode`` (the SQLAlchemy name), neither of which exists on
+a psycopg2 error nor on the ``QueryException`` the ORM wraps it in, so
+its SQLSTATE branch could never be true in this framework and EVERY
+decision fell through to substring-matching English message text — the
+exact technique ``Integrity``'s module docstring says it exists to
+abolish. A Postgres server with non-English ``lc_messages`` therefore
+turned a legitimate insert race into an unhandled 500.
+
+The old fixtures here certified that fiction: they hand-set a
+``.sqlstate`` attribute and a SQLAlchemy-shaped ``.orig``, shapes no
+cara driver produces. They are replaced with real driver exceptions
+wrapped exactly as ``PostgresConnection.query`` wraps them
+(``raise QueryException(str(e)) from e``), which is what exercises the
+cause-chain walk that makes the classifier work.
 
 Tests pin:
-  - Race on first_or_create: ``IntegrityError(23505)`` → re-query
-    → return the row the winner inserted.
+  - Race on first_or_create: wrapped ``UniqueViolation(23505)`` →
+    re-query → return the row the winner inserted.
   - Race on update_or_create: same, then APPLY the update (the
     "upsert" semantics — both racing payloads converge on one row
     with the latest merge).
   - Non-uniqueviolation errors RE-RAISE unchanged (foreign key
     violation, NOT NULL violation, etc.) — we only catch the
     documented race surface.
-  - SQLSTATE attribute, ``orig.pgcode`` attribute, and
-    ``"duplicate key"`` message form all match the unique-
-    violation detector (drivers vary on how they surface it).
+  - A non-English violation message with a correct SQLSTATE is still
+    detected. This is the bug the re-pin fixes.
+  - SQLite, the other driver both products configure, is recognised
+    through its message — the one driver that publishes no SQLSTATE.
   - Re-query returning None after the IntegrityError re-raises
     the original error — vanishing-row race (concurrent delete)
     surfaces the real failure instead of a misleading None.
@@ -52,81 +71,118 @@ Tests pin:
 from __future__ import annotations
 
 import importlib
+import sqlite3
 from typing import Any
 
+import psycopg2.errors
 import pytest
+
+from cara.eloquent.Integrity import is_unique_violation, sqlstate_of
+from cara.exceptions import QueryException
 
 _model_mod = importlib.import_module("cara.eloquent.models.Model")
 Model = _model_mod.Model
 
 
 # ── Helpers ────────────────────────────────────────────────────
+#
+# ``pgcode`` is read-only on a real psycopg2 error instance (the driver
+# populates it from the server response), so a test-constructed one carries
+# ``None``. Subclassing to pin it as a class attribute is the only way to
+# build the shape production actually raises.
 
 
-def _make_unique_violation(*, sqlstate: bool = True) -> Exception:
-    """psycopg2 / psycopg3-shaped exception with SQLSTATE 23505."""
-    exc = Exception("duplicate key value violates unique constraint")
-    if sqlstate:
-        exc.sqlstate = "23505"
-    return exc
+class _UniqueViolation(psycopg2.errors.UniqueViolation):
+    pgcode = "23505"
 
 
-def _make_orig_pgcode_violation() -> Exception:
-    """SQLAlchemy-style wrapped: original driver exception under .orig."""
+class _ForeignKeyViolation(psycopg2.errors.ForeignKeyViolation):
+    pgcode = "23503"
 
-    class _Orig:
-        pgcode = "23505"
 
-    exc = Exception("integrity error")
-    exc.orig = _Orig()
-    return exc
+def _wrapped(driver_error: Exception) -> Exception:
+    """Wrap as ``PostgresConnection.query`` does: ``QueryException from e``.
+
+    The driver exception is therefore NOT the exception a caller catches —
+    it hangs off ``__cause__``. Any classifier that inspects only the
+    top-level object sees nothing.
+    """
+    try:
+        raise QueryException(str(driver_error)) from driver_error
+    except QueryException as wrapper:
+        return wrapper
+
+
+def _make_unique_violation() -> Exception:
+    """What a lost insert race really looks like coming out of the ORM."""
+    return _wrapped(_UniqueViolation("duplicate key value violates unique constraint"))
 
 
 def _make_other_integrity_error() -> Exception:
     """A non-unique IntegrityError (e.g. FK violation). MUST re-raise
     — we only catch the documented race surface for first_or_create."""
-    exc = Exception("insert or update on table violates foreign key constraint")
-    exc.sqlstate = "23503"  # foreign_key_violation
-    return exc
+    return _wrapped(
+        _ForeignKeyViolation("insert or update on table violates foreign key constraint")
+    )
 
 
-# ── _is_unique_violation detector ─────────────────────────────
+# ── the shared Integrity classifier ───────────────────────────
 
 
 class TestIsUniqueViolation:
-    """The detector must catch every shape Postgres / SQLAlchemy
-    surface. Order of precedence: SQLSTATE attribute → wrapped
-    ``orig.pgcode`` → message-substring fallback. Each tested
-    independently so a driver change that drops one signal still
-    leaves the others working."""
+    """Every shape the drivers cara ships actually produce."""
 
-    def test_sqlstate_23505_detected(self) -> None:
-        assert Model._is_unique_violation(_make_unique_violation()) is True
+    def test_wrapped_psycopg2_violation_detected(self) -> None:
+        assert is_unique_violation(_make_unique_violation()) is True
 
-    def test_orig_pgcode_23505_detected(self) -> None:
-        assert Model._is_unique_violation(_make_orig_pgcode_violation()) is True
+    def test_bare_psycopg2_violation_detected(self) -> None:
+        # Not every call site goes through the ORM wrapper.
+        assert is_unique_violation(_UniqueViolation("duplicate key")) is True
 
-    def test_duplicate_key_message_detected(self) -> None:
-        # No SQLSTATE, no .orig — message-substring fallback.
-        exc = Exception(
-            'ERROR: duplicate key value violates unique constraint "foo_pkey"'
+    def test_non_english_message_with_correct_sqlstate_detected(self) -> None:
+        """The bug this file was re-pinned for.
+
+        Pre-fix the detector matched the English substrings "duplicate key" /
+        "unique constraint". On a server with Spanish ``lc_messages`` neither
+        appears, the race went undetected, and the loser of a legitimate
+        insert race surfaced an unhandled 500 instead of the winner's row.
+        """
+        spanish = _UniqueViolation(
+            'llave duplicada viola restriccion de unicidad "users_email_key"'
         )
-        assert Model._is_unique_violation(exc) is True
+        assert is_unique_violation(_wrapped(spanish)) is True
 
-    def test_unique_constraint_message_detected(self) -> None:
-        # Wrapped drivers may only preserve a generic message.
-        exc = Exception('duplicate value violates unique constraint "foo_pkey"')
-        assert Model._is_unique_violation(exc) is True
+    def test_sqlite_violation_detected(self) -> None:
+        """Both products configure a sqlite connection; it has no SQLSTATE."""
+        error = sqlite3.IntegrityError("UNIQUE constraint failed: users.email")
+        assert is_unique_violation(_wrapped(error)) is True
+        assert is_unique_violation(_wrapped(error), column="email") is True
+        assert is_unique_violation(_wrapped(error), column="slug") is False
+
+    def test_sqlite_non_unique_integrity_error_not_detected(self) -> None:
+        error = sqlite3.IntegrityError("FOREIGN KEY constraint failed")
+        assert is_unique_violation(_wrapped(error)) is False
 
     def test_other_sqlstate_not_detected(self) -> None:
         # ``23503`` is foreign_key_violation — must NOT be treated
         # as a unique-violation re-query opportunity. The whole point
         # of the narrow detector is that FK violations re-raise so
         # the caller sees the real bug.
-        assert Model._is_unique_violation(_make_other_integrity_error()) is False
+        assert is_unique_violation(_make_other_integrity_error()) is False
+
+    def test_message_text_alone_is_not_enough(self) -> None:
+        """A plain exception that merely MENTIONS a unique index is not a race.
+
+        Pre-fix this returned True, so an exclusion-constraint or deferred-
+        constraint report naming ``users_email_key`` was swallowed as a
+        "race", the row was re-queried, and a real integrity fault became a
+        wrong row or a confusing re-raise.
+        """
+        exc = Exception('check constraint refers to unique constraint "users_email_key"')
+        assert is_unique_violation(exc) is False
 
     def test_unrelated_exception_not_detected(self) -> None:
-        assert Model._is_unique_violation(ValueError("not a db error")) is False
+        assert is_unique_violation(ValueError("not a db error")) is False
 
 
 # ── first_or_create race semantics ────────────────────────────
@@ -142,11 +198,6 @@ class _RecordingModelFOC:
     create_side_effect: Exception | None = None
     create_payload: dict | None = None
     primary_key: str = "id"
-
-    # Inherit the unique-violation detector from the real Model —
-    # otherwise the classmethod under test calls ``cls._is_unique_
-    # violation`` on the stub and AttributeError out.
-    _is_unique_violation = staticmethod(Model._is_unique_violation)
 
     @classmethod
     def get_primary_key(cls) -> str:
@@ -268,7 +319,7 @@ class TestFirstOrCreateRace:
             Model.first_or_create.__func__(model_class, {"slug": "foo"}, {})
 
         # Re-raised the FK error verbatim — no swallow, no re-query.
-        assert getattr(excinfo.value, "sqlstate", None) == "23503"
+        assert sqlstate_of(excinfo.value) == "23503"
         # Only the original SELECT fired; the re-query did NOT
         # happen (we don't re-query on non-unique violations).
         assert len(model_class.select_calls) == 1
@@ -290,7 +341,7 @@ class TestFirstOrCreateRace:
         with pytest.raises(Exception) as excinfo:
             Model.first_or_create.__func__(model_class, {"slug": "foo"}, {})
 
-        assert getattr(excinfo.value, "sqlstate", None) == "23505"
+        assert sqlstate_of(excinfo.value) == "23505"
 
 
 # ── update_or_create race semantics ───────────────────────────
@@ -364,4 +415,4 @@ class TestUpdateOrCreateRace:
                 {"title": "x"},
             )
 
-        assert getattr(excinfo.value, "sqlstate", None) == "23505"
+        assert sqlstate_of(excinfo.value) == "23505"

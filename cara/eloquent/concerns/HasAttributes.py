@@ -8,11 +8,10 @@ Extracted from Model.py to follow SRP and DRY principles.
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 from typing import Any
 
-from cara.support import Collection
+from cara.support import Collection, json_dumps
 
 _logger = logging.getLogger("cara.eloquent.attributes")
 
@@ -39,11 +38,11 @@ class HasAttributes:
     __appends__ = []
 
     def __init__(self, **kwargs):
-        # Initialize internal state
-        self.__dict__["_attributes"] = {}
-        self.__dict__["_original"] = {}
-        self.__dict__["_changes"] = {}
-        self.__dict__["_loaded"] = False
+        # Visibility/serialization caches. The attribute VALUES themselves are
+        # owned by ``Model`` (``__attributes__`` / ``__original_attributes__``
+        # / ``__dirty_attributes__``) — this concern once kept a second
+        # ``_attributes`` / ``_original`` / ``_changes`` / ``_loaded`` set that
+        # ``Model`` never read, and every method that wrote it lost the value.
         self.__dict__["_hidden_cache"] = set()
         self.__dict__["_visible_cache"] = set()
         self.__dict__["_appends_cache"] = set()
@@ -54,40 +53,16 @@ class HasAttributes:
             self.fill(kwargs)
 
     # ===== Attribute Access =====
-
-    def __getattr__(self, attribute: str) -> Any:
-        """Get attribute with automatic casting and accessor support."""
-        # Check for accessor methods first
-        accessor_method = f"get_{attribute}_attribute"
-        if accessor_method in dir(self.__class__):
-            method = getattr(self.__class__, accessor_method, None)
-            if callable(method):
-                return method(self, self.get_raw_attribute(attribute))
-
-        # Check for relationship
-        if hasattr(self.__class__, attribute):
-            attr = getattr(self.__class__, attribute)
-            if callable(attr) and hasattr(attr, "get_related"):
-                return attr.__get__(self, self.__class__)
-
-        # Get regular attribute
-        return self.get_attribute(attribute)
-
-    def __setattr__(self, attribute: str, value: Any) -> None:
-        """Set attribute with automatic mutator support and casting."""
-        # Check for mutator methods first
-        mutator_method = f"set_{attribute}_attribute"
-        if hasattr(self, mutator_method) and callable(getattr(self, mutator_method)):
-            method = getattr(self, mutator_method)
-            if callable(method):
-                try:
-                    method(value)
-                    return
-                except RecursionError:
-                    pass
-
-        # Set regular attribute
-        self.set_attribute(attribute, value)
+    #
+    # ``__getattr__``, ``__setattr__``, ``get_raw_attribute`` and
+    # ``fill_original`` used to live here too. All four were shadowed by
+    # ``Model`` — the concern's ONLY consumer — so their bodies never ran, and
+    # all four addressed the retired parallel store. Keeping shadowed copies
+    # around is not harmless: this concern's ``__setattr__`` delegated to
+    # ``set_attribute``, so once ``set_attribute`` became the thin wrapper over
+    # the real write door the pair formed an infinite recursion for any class
+    # that mixed the concern in without ``Model``'s ``__setattr__``. Dead code
+    # cannot be trusted to stay dead.
 
     def get_attribute(self, attribute: str) -> Any:
         """Get an attribute value with casting."""
@@ -99,31 +74,20 @@ class HasAttributes:
         return value
 
     def set_attribute(self, attribute: str, value: Any) -> None:
-        """Set an attribute value with casting."""
-        # Apply mutator casting if defined
-        value = self._set_cast_attribute(attribute, value)
+        """Set an attribute value — the same write ``model.attr = value`` performs.
 
-        # Store the value
-        if not hasattr(self, "_attributes"):
-            self.__dict__["_attributes"] = {}
+        ``Model.__setattr__`` is the single write door: it applies ``@mutator``
+        methods, the cast registry and date conversion, then records the value
+        in ``__dirty_attributes__`` so ``save()`` can see it.
 
-        self._attributes[attribute] = value
-
-        # Track changes
-        if (
-            hasattr(self, "_original")
-            and attribute in self._original
-            and self._original[attribute] != value
-        ):
-            if not hasattr(self, "_changes"):
-                self.__dict__["_changes"] = {}
-            self._changes[attribute] = value
-
-    def get_raw_attribute(self, attribute: str) -> Any:
-        """Get raw attribute value without casting."""
-        if hasattr(self, "_attributes") and attribute in self._attributes:
-            return self._attributes[attribute]
-        return None
+        Pre-fix this method kept its OWN parallel store — ``_attributes`` /
+        ``_original`` / ``_changes`` — which ``Model`` never reads. The write
+        silently went nowhere: ``m.set_attribute("foo", 5)`` left ``m.foo``
+        missing, ``m.get_attribute("foo")`` answering ``None`` and ``save()``
+        with nothing to persist. A public ORM setter that loses data is worse
+        than one that raises, because nothing anywhere reports a failure.
+        """
+        setattr(self, attribute, value)
 
     # ===== Mass Assignment =====
 
@@ -133,17 +97,6 @@ class HasAttributes:
 
         for key, value in filtered_attributes.items():
             self.set_attribute(key, value)
-
-        return self
-
-    def fill_original(self, attributes: dict[str, Any]) -> HasAttributes:
-        """Fill original attributes (for loaded models)."""
-        if not hasattr(self, "_original"):
-            self.__dict__["_original"] = {}
-
-        self._original.update(attributes)
-        self._attributes.update(attributes)
-        self.__dict__["_loaded"] = True
 
         return self
 
@@ -217,8 +170,25 @@ class HasAttributes:
         return data
 
     def to_json(self, **kwargs) -> str:
-        """Convert model to JSON string."""
-        return json.dumps(self.to_array(), default=str, **kwargs)
+        """Convert to JSON through ``cara.support.JsonEncoding``.
+
+        The encoder is the shared wire rule, so ``allow_nan`` is off and
+        an unknown object raises instead of arriving at the client as
+        ``"<Order object at 0x10c3f2a10>"`` behind a 200 — which is what
+        the previous bare ``default=str`` did.
+
+        **Two honest caveats, because the first version of this docstring
+        claimed a fix it does not deliver.** ``Model`` overrides this
+        method, so no ORM model reaches this body at all; and
+        ``Model.serialize`` rewrites every ``Decimal`` as ``float`` while
+        building the dict, so ``to_array()`` has already spent the
+        precision before any encoder runs. Model money therefore leaves
+        as a JSON number while a hand-built payload leaves as an exact
+        string. That divergence, and why closing it is a coordinated
+        product change rather than a framework one, is written down in
+        ``cara/support/JsonEncoding.py``.
+        """
+        return json_dumps(self.to_array(), **kwargs)
 
     # ===== Visibility Control =====
 

@@ -12,7 +12,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from cara.exceptions import ORMException
+from cara.exceptions import MigrationException
 
 _logger = logging.getLogger("cara.migrations")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -46,7 +46,9 @@ class MigrationTracker:
 
     def __init__(self, db_manager, table_name: str = "migrations"):
         if not _IDENTIFIER.fullmatch(table_name or ""):
-            raise ORMException(f"Invalid migrations table identifier: {table_name!r}")
+            raise MigrationException(
+                f"Invalid migrations table identifier: {table_name!r}"
+            )
         self.db_manager = db_manager
         self.table_name = table_name
 
@@ -57,7 +59,7 @@ class MigrationTracker:
         info = self.db_manager.get_connection_info() or {}
         driver = str(info.get("driver", "sqlite")).lower()
         if driver not in {"postgres", "postgresql", "sqlite"}:
-            raise ORMException(
+            raise MigrationException(
                 f"Unsupported migration driver: {driver}. "
                 "Cara supports PostgreSQL and SQLite."
             )
@@ -71,17 +73,32 @@ class MigrationTracker:
 
     # ── Schema bootstrap ──────────────────────────────────────────────
     def ensure_migrations_table(self) -> None:
-        """Create/upgrade the tracker without ever deleting its history."""
+        """Create/upgrade the tracker without ever deleting its history.
+
+        The pass-through clause below is ``MigrationException`` and NOT
+        ``ORMException``. It exists to stop double-wrapping the errors the
+        helpers below already explained ("...has an unexpected schema",
+        "Could not add checksum tracking to..."), and ``ORMException`` used
+        to mean exactly that because the ORM's own driver errors lived in a
+        SEPARATE taxonomy. Collapsing the two ORM taxonomies put
+        ``QueryException`` under ``ORMException``, and the clause silently
+        widened to cover the driver failure raised by ``CREATE TABLE``
+        itself: a permission denial on the migrations table came back as a
+        bare ``relation "migrations" permission denied``, naming neither the
+        table we were initializing nor the phase we were in. A driver error
+        is somebody else's error — it gets wrapped, with the table name, and
+        keeps its ``__cause__``.
+        """
         connection = self._get_connection()
         try:
             self._create_migrations_table(connection)
             self._assert_base_structure(connection)
             self._ensure_checksum_column(connection)
             self._ensure_unique_migration_index(connection)
-        except ORMException:
+        except MigrationException:
             raise
         except Exception as exc:
-            raise ORMException(
+            raise MigrationException(
                 f"Could not initialize migrations table '{self.table_name}': {exc}"
             ) from exc
         finally:
@@ -108,7 +125,7 @@ class MigrationTracker:
         try:
             connection.query(self._select_one("id, migration, batch"))
         except Exception as exc:
-            raise ORMException(
+            raise MigrationException(
                 f"Migrations table '{self.table_name}' has an unexpected schema; "
                 "required columns are id, migration, and batch."
             ) from exc
@@ -118,6 +135,7 @@ class MigrationTracker:
             connection.query(self._select_one("checksum"))
             return
         except Exception:
+            # allow-silent-except: column-existence probe; a real fault re-raises from the ALTER below
             pass
         try:
             connection.query(
@@ -125,7 +143,7 @@ class MigrationTracker:
             )
             connection.query(self._select_one("checksum"))
         except Exception as exc:
-            raise ORMException(
+            raise MigrationException(
                 f"Could not add checksum tracking to '{self.table_name}'."
             ) from exc
 
@@ -137,7 +155,7 @@ class MigrationTracker:
                 f"ON {self.table_name} (migration)"
             )
         except Exception as exc:
-            raise ORMException(
+            raise MigrationException(
                 f"Could not enforce unique migration names in '{self.table_name}'. "
                 "Remove duplicate tracker rows before retrying."
             ) from exc
@@ -147,7 +165,7 @@ class MigrationTracker:
     def migration_lock(self, timeout_seconds: int = 60):
         """Serialize migration runners with a database advisory lock."""
         if not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
-            raise ORMException("Migration lock timeout must be a positive integer.")
+            raise MigrationException("Migration lock timeout must be a positive integer.")
         driver = self._get_driver_type()
         if driver == "sqlite":
             # SQLite only serializes each individual write. Without an outer
@@ -196,7 +214,7 @@ class MigrationTracker:
         with _SQLITE_LOCKS_GUARD:
             thread_lock = _SQLITE_LOCKS.setdefault(lock_key, threading.Lock())
         if not thread_lock.acquire(timeout=timeout_seconds):
-            raise ORMException("Timed out waiting for the SQLite migration lock.")
+            raise MigrationException("Timed out waiting for the SQLite migration lock.")
 
         digest = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()[:24]
         lock_path = Path(tempfile.gettempdir()) / f"cara-migrations-{digest}.lock"
@@ -224,7 +242,7 @@ class MigrationTracker:
                     break
                 except BlockingIOError, OSError:
                     if time.monotonic() >= deadline:
-                        raise ORMException(
+                        raise MigrationException(
                             "Timed out waiting for the SQLite migration lock."
                         ) from None
                     time.sleep(0.05)
@@ -303,7 +321,7 @@ class MigrationTracker:
     # ── Write APIs ───────────────────────────────────────────────────
     def record_migration(self, migration_name: str, batch: int, checksum: str) -> None:
         if not checksum or len(checksum) != 64:
-            raise ORMException("A SHA-256 migration checksum is required.")
+            raise MigrationException("A SHA-256 migration checksum is required.")
         connection = self._get_connection()
         try:
             placeholder = self._get_placeholder()
@@ -332,12 +350,14 @@ class MigrationTracker:
     ) -> None:
         """Atomically replace history after an explicit, schema-verified baseline."""
         if not records or int(batch) <= 0:
-            raise ORMException("Baseline history and batch must be non-empty.")
+            raise MigrationException("Baseline history and batch must be non-empty.")
         names = [name for name, _checksum in records]
         if len(names) != len(set(names)):
-            raise ORMException("Baseline migration names must be unique.")
+            raise MigrationException("Baseline migration names must be unique.")
         if any(not checksum or len(checksum) != 64 for _name, checksum in records):
-            raise ORMException("Every baseline migration requires a SHA-256 checksum.")
+            raise MigrationException(
+                "Every baseline migration requires a SHA-256 checksum."
+            )
 
         connection = self._get_connection()
         began = False

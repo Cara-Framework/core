@@ -6,22 +6,40 @@ Collection class which offers a fluent, Laravel-style interface for working with
 collections.
 """
 
-from .Auth import optional_user_id, resolve_user
+from .Auth import (
+    authenticated_user,
+    gate_allows,
+    optional_user_id,
+    resolve_user,
+    user_id,
+)
 from .BestEffort import best_effort, best_effort_ctx
+from .ClientIp import trusted_client_ip
 from .Coercion import safe_float, safe_int
 from .Collection import Collection, collect, flatten
 from .Console import HasColoredOutput
 from .MailSafety import DEFAULT_SMTP_PORT, SMTP_TIMEOUT_SECONDS, strip_header_crlf
 from .Currency import currency_symbol, default_currency, format_money
 from .Date import Date
+from .FilterValues import csv_filter_values
+from .Gtin import (
+    MIN_GTIN_DIGITS,
+    coerce_to_gtin_14,
+    gtin_check_digit,
+    is_valid_gtin,
+    normalize_gtin,
+    normalize_isbn,
+)
 from .HtmlString import HtmlString
 from .Image import Image
+from .JsonEncoding import decimal_to_wire, json_default, json_dumps
 from .LogColors import LogColors
 from .Macroable import Macroable
 from .Manager import Manager
 from .ModuleLoader import load
 from .ModuleManager import ModuleManager
-from .Number import safe_divide_decimal, to_decimal
+from .Money import CurrencyMismatch, Money, margin_ratio, markup_ratio
+from .Number import safe_divide_decimal, to_decimal, to_decimal_or_none
 from .PathManager import PathManager
 from .Pipeline import Pipeline
 from .Process import Process, ProcessFailedException, ProcessResult
@@ -48,15 +66,18 @@ from .Paths import base_path, paths, public_path, storage_path
 
 __all__ = [
     "Collection",
+    "CurrencyMismatch",
     "DEFAULT_SMTP_PORT",
     "Date",
     "HasColoredOutput",
     "HtmlString",
     "Image",
     "LogColors",
+    "MIN_GTIN_DIGITS",
     "Macroable",
     "Manager",
     "ModuleManager",
+    "Money",
     "PathManager",
     "Pipeline",
     "Process",
@@ -68,25 +89,38 @@ __all__ = [
     "Sleep",
     "SupportProvider",
     "as_filepath",
+    "authenticated_user",
     "base_path",
     "best_effort",
     "best_effort_ctx",
+    "coerce_to_gtin_14",
     "collect",
     "currency_symbol",
+    "csv_filter_values",
     "data",
     "data_get",
     "data_set",
     "default_currency",
+    "decimal_to_wire",
     "email_mask",
     "flatten",
     "format_money",
+    "gate_allows",
     "get_classes",
+    "gtin_check_digit",
+    "is_valid_gtin",
+    "json_default",
+    "json_dumps",
     "load",
+    "margin_ratio",
+    "markup_ratio",
     "mask_ip",
     "mask_proxy_url",
     "mask_token",
     "modularize",
     "modules",
+    "normalize_gtin",
+    "normalize_isbn",
     "optional_user_id",
     "parse_human_time",
     "paths",
@@ -102,5 +136,8 @@ __all__ = [
     "strip_header_crlf",
     "strip_tags",
     "to_decimal",
+    "to_decimal_or_none",
     "to_pendulum",
+    "trusted_client_ip",
+    "user_id",
 ]

@@ -181,8 +181,19 @@ class Trackable:
                 entity_id = self._get_entity_id()
                 job_tracker.validate_job_or_cancel(self._job_uid, entity_id, operation)
         except Exception as e:
-            # Re-raise specific exceptions but log others
-            if e.__class__.__name__ == "JobCancelledException":
+            # Re-raise the cancellation, log everything else. The check is a
+            # real ``isinstance``, not a comparison of ``__class__.__name__``
+            # against the literal string: a product that subclasses the
+            # cancellation for its own surface (``class TenantJobCancelled
+            # (JobCancelledException)``) reports a different name, so the
+            # string form did not match, the cancellation was downgraded to
+            # a WARNING, this method RETURNED NORMALLY and the explicitly
+            # cancelled job ran to completion.
+            from cara.queues.contracts.CancellableJob import (  # local: cycle with cara.queues.contracts
+                JobCancelledException,
+            )
+
+            if isinstance(e, JobCancelledException):
                 raise
             Log.warning("Failed to validate job continuation: %s", str(e))
 

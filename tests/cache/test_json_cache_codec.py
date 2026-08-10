@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import pickle
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 import pendulum
@@ -115,3 +118,35 @@ def test_depth_budget_rejects_pathological_values() -> None:
 
     with pytest.raises(CacheConfigurationException, match="nested too deeply"):
         codec.encode(value)
+
+
+def test_pendulum_is_a_hard_module_level_import() -> None:
+    """pendulum is in cara's ``install_requires``; the codec must not pretend
+    it is optional.
+
+    Pre-fix ``_encode_value`` probed ``pendulum.DateTime`` behind a
+    ``try: import pendulum`` / ``except ImportError, AttributeError`` whose
+    fallback set ``is_pendulum = False``. That fallback is NOT inert:
+    ``pendulum.DateTime`` subclasses ``datetime.datetime``, so the value fell
+    through to the ``datetime`` branch and was written with tag ``"datetime"``.
+    Redis then handed it back as a stdlib ``datetime`` — a silent type change
+    no caller can see, in a codec whose docstring promises every supported
+    type has an explicit tag. The decode side carried the same guard.
+    """
+    source = Path(inspect.getfile(JsonCacheCodec)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    module_level_imports = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert "pendulum" in module_level_imports
+
+    function_local_imports = [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import | ast.ImportFrom) and node not in tree.body
+    ]
+    assert function_local_imports == []

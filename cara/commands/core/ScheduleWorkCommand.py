@@ -453,6 +453,14 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
         # APScheduler's own logs) reads ``_sync_wrapped`` 58 times.
         builder.options.update({"silent": True, "display_name": job_name})
 
+        # Opaque per-entry metadata for the published snapshot. Declaring it
+        # on the schedule entry is what keeps a reader process from needing a
+        # second, application-invented cache key (and the duplicated constant
+        # that comes with it) to learn anything beyond the next run time.
+        snapshot_meta = spec.get("snapshot_meta")
+        if isinstance(snapshot_meta, dict) and snapshot_meta:
+            builder.options["snapshot_meta"] = dict(snapshot_meta)
+
         # ROOT-CAUSE: pre-fix the dict-job registration silently dropped
         # any ``without_overlapping`` flag in the spec, so every entry in
         # ``config/scheduling.py`` ran without scheduler-level overlap
@@ -763,18 +771,28 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
 
             from cara.facades import Cache
 
+            # Optional in the driver contract: a driver that does not carry
+            # per-entry metadata stays valid and simply publishes no ``meta``.
+            read_meta = getattr(driver, "snapshot_meta", None)
+
             jobs = []
             for job in driver.list_jobs():
                 next_run = getattr(job, "next_run_time", None)
-                jobs.append(
-                    {
-                        "id": str(getattr(job, "id", "") or ""),
-                        "name": str(getattr(job, "name", "") or getattr(job, "id", "")),
-                        # None while a job is paused — readers must not
-                        # invent a time for it.
-                        "next_run_at": next_run.isoformat() if next_run else None,
-                    }
-                )
+                job_id = str(getattr(job, "id", "") or "")
+                entry = {
+                    "id": job_id,
+                    "name": str(getattr(job, "name", "") or getattr(job, "id", "")),
+                    # None while a job is paused — readers must not
+                    # invent a time for it.
+                    "next_run_at": next_run.isoformat() if next_run else None,
+                }
+                # Metadata publishes for paused entries too: "when does this
+                # run" being unknown does not make "how often is it meant to
+                # run" unknown.
+                meta = read_meta(job_id) if callable(read_meta) else None
+                if meta:
+                    entry["meta"] = meta
+                jobs.append(entry)
             Cache.put(
                 SCHEDULE_SNAPSHOT_CACHE_KEY,
                 json.dumps(

@@ -28,9 +28,11 @@ class Authenticate(Middleware):
         # Browser WebSocket API doesn't let third-party JS set arbitrary
         # headers (so auth tokens can't normally be forged from another
         # origin), but a stolen token can still be replayed if the
-        # middleware accepts every Origin. Read the allowlist from
-        # config so it stays empty (= unrestricted, matches legacy
-        # behaviour) until ops opts in.
+        # middleware accepts every Origin. The allowlist is read from
+        # config; an empty one is a development posture (localhost ports
+        # vary per surface), and production is held to a configured
+        # allowlist by the deployable's own boot guard rather than by
+        # denying every handshake here.
         if not self._origin_is_allowed(socket):
             Log.warning(
                 "WebSocket origin rejected: %s",
@@ -134,19 +136,30 @@ class Authenticate(Middleware):
         return ""
 
     def _origin_is_allowed(self, socket: Socket) -> bool:
-        """Origin check — opt-in via ``broadcasting.websocket.allowed_origins``
+        """Origin check — reads ``broadcasting.websocket.allowed_origins``
         (lowercase: Configuration.load lower-cases module attribute names, so
-        the WEBSOCKET dict materialises under that path). An empty / missing
-        list means no check is performed (legacy permissive default). When a
-        list is configured, an exact-match comparison is performed against the
-        Origin header; missing Origin (non-browser client) is allowed
-        because curl/Postman/etc. don't send it and there's no clean
-        way to distinguish a malicious browser from a server-side client
-        without UA fingerprinting."""
-        try:
-            allowed = config("broadcasting.websocket.allowed_origins", None) or []
-        except Exception:
-            allowed = []
+        the WEBSOCKET dict materialises under that path).
+
+        An empty / missing list performs no check. That is a **development**
+        posture, not a compatibility concession: local surfaces move between
+        localhost ports and non-browser clients have no Origin at all, so a
+        blanket deny here would be a gate nobody could run behind. The
+        fail-closed decision belongs at BOOT — the deployable that serves the
+        WS upgrade refuses to start in production with an empty allowlist —
+        so an unconfigured production handshake never reaches this method.
+
+        When a list IS configured, comparison is exact against the Origin
+        header; a missing Origin (non-browser client) is allowed, because
+        curl/Postman/etc. don't send one and there is no clean way to tell a
+        malicious browser from a server-side client without UA fingerprinting.
+
+        There is deliberately no ``try/except`` around the config read. It
+        used to swallow every exception into ``allowed = []`` — a second,
+        silent path to "allow" that would have dropped an allowlist ops HAD
+        configured. ``Configuration.get`` returns the default on a missing
+        key and never raises, so the handler only ever hid real faults.
+        """
+        allowed = config("broadcasting.websocket.allowed_origins", None) or []
         if not allowed:
             return True
         origin = self._read_origin(socket)

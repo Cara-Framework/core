@@ -66,9 +66,7 @@ def test_a_clean_send_succeeds_on_the_first_attempt(monkeypatch) -> None:
 
 
 def test_a_dropped_connection_is_retried_and_can_succeed(monkeypatch) -> None:
-    driver, server = _driver(
-        monkeypatch, [smtplib.SMTPServerDisconnected("bye"), None]
-    )
+    driver, server = _driver(monkeypatch, [smtplib.SMTPServerDisconnected("bye"), None])
     assert driver.send(_payload()) is True
     assert len(server.sent) == 1, "the successful attempt sent exactly once"
 

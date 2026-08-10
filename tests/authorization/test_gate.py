@@ -201,6 +201,47 @@ def test_raising_policy_fails_closed(admin, product):
     assert g.for_user(admin).allows("explode", product) is False
 
 
+def _explodes(user, ability, *args):
+    raise RuntimeError("boom")
+
+
+def test_crashed_before_hook_denies_instead_of_deferring(root):
+    """A before-hook that RAISES must deny, never hand the verdict onward.
+
+    Before-hooks are an ORDERED chain, and applications mix narrowing hooks
+    (a credential that caps what it may do) with widening ones (an operator
+    bypass). Skipping a crashed hook does not degrade to "no opinion" — it
+    promotes the next hook to the decision, so a fault inside the narrow
+    guard would answer with MORE access than the intact chain could ever
+    grant. Crash means deny, at the hook that crashed.
+    """
+    g = Gate()
+    g.define("anything", lambda user, *_a: False)
+    g.before(_explodes)
+    g.before(lambda user, _a, *_args: True if getattr(user, "is_root", False) else None)
+
+    assert g.for_user(root).allows("anything") is False
+
+
+def test_before_hooks_answer_in_registration_order(root):
+    """The FIRST hook with an opinion wins — order is the whole contract.
+
+    A narrowing hook only narrows if it is registered ahead of the bypass
+    it is meant to survive; registered after, it is unreachable for exactly
+    the users it exists to constrain. Pinned here because the ordering is
+    invisible at the call site and a refactor that sorts, reverses or
+    de-duplicates the callback list would silently widen access.
+    """
+    g = Gate()
+    g.define("narrowed", lambda user, *_a: True)
+    g.define("open", lambda user, *_a: True)
+    g.before(lambda user, ability, *_a: False if ability == "narrowed" else None)
+    g.before(lambda user, _a, *_args: True if getattr(user, "is_root", False) else None)
+
+    assert g.for_user(root).allows("narrowed") is False
+    assert g.for_user(root).allows("open") is True
+
+
 # -- performance contract ------------------------------------------------- #
 
 

@@ -14,10 +14,17 @@ These tests drive the retry contract WITHOUT a real database by pinning a
 fake connection (mirroring ``PostgresConnection``'s ``transaction_level``
 math) on the singleton ``DatabaseManager``'s resolver — the same technique
 ``test_after_commit.py`` uses.
+
+The bare-``pgcode`` cases below are unit coverage of the vocabulary. They are
+NOT sufficient on their own: they passed for the whole time the retry loop
+was dead in production, because the real driver error never reaches
+``Atomic.run`` in that shape. ``TestRealDriverPath`` covers what actually
+happens on the wire.
 """
 
 from __future__ import annotations
 
+import psycopg2.errors
 import pytest
 
 from cara.eloquent.connections.ConnectionResolver import (
@@ -26,6 +33,7 @@ from cara.eloquent.connections.ConnectionResolver import (
 )
 from cara.eloquent.DatabaseManager import DatabaseManager
 from cara.eloquent.Transactions import Atomic, atomic
+from cara.exceptions import DatabaseUnavailableException, QueryException
 
 
 class _FakeConnection:
@@ -268,3 +276,98 @@ def test_run_executes_and_returns(_fake_db):
     result = atomic(attempts=2).run(lambda: "value")
     assert result == "value"
     assert _fake_db.committed == 1
+
+
+# ── the shape the real driver path actually delivers ────────────────────
+
+
+class _RealDeadlock(psycopg2.errors.DeadlockDetected):
+    """``pgcode`` is read-only on a live instance; pin it as a class attr."""
+
+    pgcode = "40P01"
+
+
+class _RealSerializationFailure(psycopg2.errors.SerializationFailure):
+    pgcode = "40001"
+
+
+class _RealCheckViolation(psycopg2.errors.CheckViolation):
+    pgcode = "23514"
+
+
+def _as_postgres_connection_would(driver_error: Exception) -> Exception:
+    """Reproduce ``PostgresConnection.query``'s except block exactly.
+
+    Both Class-40 errors subclass ``psycopg2.OperationalError``, so they take
+    the FIRST branch there and are re-raised as
+    ``DatabaseUnavailableException(str(e), retry_after=1) from e`` — an
+    ORMException carrying no ``pgcode`` at all.
+    """
+    try:
+        if isinstance(driver_error, psycopg2.OperationalError):
+            raise DatabaseUnavailableException(str(driver_error), retry_after=1) from (
+                driver_error
+            )
+        raise QueryException(str(driver_error)) from driver_error
+    except Exception as wrapper:
+        return wrapper
+
+
+class TestRealDriverPath:
+    """``atomic(attempts=N)`` retried ZERO times in production.
+
+    ``_is_retriable_error`` read ``exc.pgcode`` off the top-level exception,
+    but the exception ``Atomic.run`` catches is the ORM's wrapper, which has
+    no such attribute. So ``retriable`` was False on attempt 1 and the
+    closure propagated exactly as ``attempts=1`` would — with nothing
+    swallowed and nothing logged, i.e. completely invisible. The unit tests
+    above could not see it because they raise a bare object that carries
+    ``pgcode`` on itself.
+    """
+
+    def test_wrapped_deadlock_is_retried(self, _fake_db):
+        calls = {"n": 0}
+
+        @atomic(attempts=3)
+        def work():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise _as_postgres_connection_would(_RealDeadlock("deadlock detected"))
+            return "ok"
+
+        assert work() == "ok"
+        # Pre-fix: 1 — the closure never re-ran.
+        assert calls["n"] == 3
+        assert _fake_db.rolled_back == 2
+        assert _fake_db.committed == 1
+
+    def test_wrapped_serialization_failure_is_retried(self, _fake_db):
+        calls = {"n": 0}
+
+        @atomic(attempts=2)
+        def work():
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise _as_postgres_connection_would(
+                    _RealSerializationFailure("could not serialize access")
+                )
+            return calls["n"]
+
+        assert work() == 2
+        assert calls["n"] == 2
+
+    def test_wrapped_non_retriable_error_still_propagates_once(self, _fake_db):
+        """The unwrap must not turn every wrapped DB error into a retry."""
+        calls = {"n": 0}
+
+        @atomic(attempts=4)
+        def work():
+            calls["n"] += 1
+            raise _as_postgres_connection_would(
+                _RealCheckViolation("check constraint violated")
+            )
+
+        with pytest.raises(QueryException):
+            work()
+
+        assert calls["n"] == 1

@@ -2,27 +2,21 @@
 Cara Framework Exception System.
 
 Central exception registry. Explicit re-exports via ``__all__`` — no implicit
-wildcard imports, so shadowed/duplicate names are visible and deterministic.
+wildcard imports, so every public name is visible and deterministic.
 
-Several type modules define classes with the same short name (e.g. both
-``types.eloquent`` and ``types.model`` declare ``ModelNotFoundException``).
-The previous wildcard-import layout resolved those collisions implicitly by
-"last import wins". We preserve the same canonical winners here so that
-callers using the short name get the same class, but we *also* expose the
-shadowed copies under prefixed aliases so they are reachable without
-reaching into the ``types.*`` sub-packages.
-
-Canonical winners (preserved from the legacy wildcard order):
-  - DriverNotRegisteredException   -> types.storage
-  - DriverNotFoundException        -> types.model
-  - DriverLibraryNotFoundException -> types.scheduling
-  - QueueException                 -> types.queue
-  - ModelNotFoundException         -> types.model
-  - QueryException                 -> types.model
-  - MultipleRecordsFoundException  -> types.model
-  - InvalidArgumentException       -> types.model
-  - RouteRegistrationException     -> types.routing
-  - RouteMiddlewareNotFoundException -> types.routing
+**One short name, one class.** This registry used to carry "canonical
+winners preserved from the legacy wildcard order": nine exception short
+names were declared in two or three ``types.*`` modules, this barrel bound
+one copy, ``cara.exceptions.types`` bound another, and fourteen prefixed
+aliases existed purely to keep the shadowed copies reachable. The taxonomy
+was three taxonomies held together by an import ordering nobody could see
+at a call site — ``except ModelNotFoundException`` written against the
+``types`` path never matched what ``Model.find_or_fail`` raised, and the
+404 escaped as an unhandled 500. Every duplicate definition has been
+deleted and every alias with it (§5: no backward-compat shims — movers
+migrate every caller in the same change). ``tests/exceptions/`` pins both
+halves: no short name is defined twice under ``types/``, and every shared
+name resolves to the same object here and in ``cara.exceptions.types``.
 """
 
 from __future__ import annotations
@@ -41,9 +35,7 @@ from __future__ import annotations
 from .types.application import (
     AppException,
     ControllerMethodNotFoundException,
-)
-from .types.application import (
-    RouteRegistrationException as AppRouteRegistrationException,
+    RouteRegistrationException,
 )
 from .types.authentication import (
     AccountLockedException,
@@ -60,6 +52,7 @@ from .types.authorization import (
     AuthorizationException,
     AuthorizationFailedException,
 )
+from .Envelopes import validate_exception_envelopes
 from .types.Base import CaraException
 from .types.broadcasting import (
     BroadcastingChannelException,
@@ -69,9 +62,6 @@ from .types.broadcasting import (
     BroadcastingException,
 )
 from .types.cache import CacheConfigurationException
-from .types.cache import (
-    DriverNotRegisteredException as CacheDriverNotRegisteredException,
-)
 from .types.configuration import (
     ConfigurationException,
     InvalidConfigurationLocationException,
@@ -83,36 +73,11 @@ from .types.container import (
     MissingContainerBindingException,
     StrictContainerException,
 )
-from .types.driver import DriverException
-from .types.driver import (
-    DriverLibraryNotFoundException as DriverLibraryNotFoundFromDriver,
-)
-from .types.driver import (
-    DriverNotFoundException as DriverNotFoundFromDriver,
-)
-from .types.driver import (
-    QueueException as DriverQueueException,
-)
 from .types.Eloquent import (
-    DatabaseUnavailableException,
-    Http404Exception,
     ConnectionNotRegisteredException,
+    DatabaseUnavailableException,
+    MigrationException,
     ORMException,
-)
-from .types.Eloquent import (
-    DriverNotFoundException as EloquentDriverNotFoundException,
-)
-from .types.Eloquent import (
-    InvalidArgumentException as EloquentInvalidArgumentException,
-)
-from .types.Eloquent import (
-    ModelNotFoundException as EloquentModelNotFoundException,
-)
-from .types.Eloquent import (
-    MultipleRecordsFoundException as EloquentMultipleRecordsFoundException,
-)
-from .types.Eloquent import (
-    QueryException as EloquentQueryException,
 )
 from .types.encryption import EncryptionException
 from .types.event import (
@@ -122,15 +87,14 @@ from .types.event import (
 )
 from .types.http import (
     BadRequestException,
+    Http404Exception,
     HttpException,
+    InvalidCursor,
     MethodNotAllowedException,
     PayloadTooLargeException,
     ResponseException,
     RouteNotFoundException,
     ServiceUnavailableException,
-)
-from .types.http import (
-    RouteMiddlewareNotFoundException as HttpRouteMiddlewareNotFoundException,
 )
 from .types.loader import (
     LoaderException,
@@ -146,8 +110,6 @@ from .types.middleware import (
     MiddlewareException,
     MiddlewareNotFoundException,
 )
-
-# Canonical shared names come from ``types.ModelExceptions`` (matches legacy last-wins).
 from .types.ModelExceptions import (
     DriverNotFoundException,
     InvalidArgumentException,
@@ -158,20 +120,15 @@ from .types.ModelExceptions import (
     QueryException,
 )
 from .types.queue import (
+    IdempotencyOverlapException,
     QueueConfigurationException,
+    QueueDriverLibraryNotFoundException,
     QueueException,
-)
-from .types.queue import (
-    DriverLibraryNotFoundException as QueueDriverLibraryNotFoundException,
-)
-from .types.queue import (
-    DriverNotRegisteredException as QueueDriverNotRegisteredException,
 )
 from .types.rates import RateLimitConfigurationException
 from .types.routing import (
     RouteException,
     RouteMiddlewareNotFoundException,
-    RouteRegistrationException,
 )
 from .types.scheduling import (
     DriverLibraryNotFoundException,
@@ -195,7 +152,6 @@ __all__ = [
     "AccountLockedException",
     "ApiKeyInvalidException",
     "AppException",
-    "AppRouteRegistrationException",
     "AuthenticationConfigurationException",
     "AuthenticationException",
     "AuthorizationException",
@@ -207,25 +163,15 @@ __all__ = [
     "BroadcastingDriverNotFoundException",
     "BroadcastingException",
     "CacheConfigurationException",
-    "CacheDriverNotRegisteredException",
     "CaraException",
     "ConfigurationException",
     "ConnectionNotRegisteredException",
     "ContainerException",
     "ControllerMethodNotFoundException",
     "DatabaseUnavailableException",
-    "DriverException",
     "DriverLibraryNotFoundException",
-    "DriverLibraryNotFoundFromDriver",
     "DriverNotFoundException",
-    "DriverNotFoundFromDriver",
     "DriverNotRegisteredException",
-    "DriverQueueException",
-    "EloquentDriverNotFoundException",
-    "EloquentInvalidArgumentException",
-    "EloquentModelNotFoundException",
-    "EloquentMultipleRecordsFoundException",
-    "EloquentQueryException",
     "EncryptionException",
     "EventDispatchCycleException",
     "EventNameConflictException",
@@ -233,10 +179,11 @@ __all__ = [
     "GenericContainerException",
     "Http404Exception",
     "HttpException",
-    "HttpRouteMiddlewareNotFoundException",
+    "IdempotencyOverlapException",
     "InvalidArgumentException",
     "InvalidConfigurationLocationException",
     "InvalidConfigurationSetupException",
+    "InvalidCursor",
     "InvalidRuleFormatException",
     "InvalidTokenException",
     "KeyNotFoundException",
@@ -251,6 +198,7 @@ __all__ = [
     "MethodNotAllowedException",
     "MiddlewareException",
     "MiddlewareNotFoundException",
+    "MigrationException",
     "MissingContainerBindingException",
     "ModelException",
     "ModelNotFoundException",
@@ -260,7 +208,6 @@ __all__ = [
     "QueryException",
     "QueueConfigurationException",
     "QueueDriverLibraryNotFoundException",
-    "QueueDriverNotRegisteredException",
     "QueueException",
     "RateLimitConfigurationException",
     "ResponseException",
@@ -281,6 +228,7 @@ __all__ = [
     "UserNotFoundException",
     "ValidationException",
     "WebSocketException",
+    "validate_exception_envelopes",
 ]
 
 # Eager import LAST (after every exception name above is bound). A PEP 562

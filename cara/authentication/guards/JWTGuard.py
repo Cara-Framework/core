@@ -14,6 +14,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from cara.authentication.contracts import Authenticatable, Guard
+from cara.authentication.SessionPolicy import AUTH_SECURITY_MAX_WINDOW
 from cara.exceptions import (
     AuthenticationConfigurationException,
     TokenBlacklistedException,
@@ -119,7 +120,7 @@ class JWTGuard(Guard):
             raise AuthenticationConfigurationException(
                 "JWT refresh-token TTL must be longer than the access-token TTL"
             )
-        if int(refresh_ttl) > 30 * 24 * 60 * 60:
+        if int(refresh_ttl) > int(AUTH_SECURITY_MAX_WINDOW.total_seconds()):
             raise AuthenticationConfigurationException(
                 "JWT refresh-token TTL must not exceed 30 days"
             )

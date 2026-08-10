@@ -41,6 +41,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from cara.configuration import config
+from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
@@ -242,17 +243,20 @@ class CompressResponses(Middleware):
                 tokens.append(value)
             response.header("Vary", ", ".join(tokens))
         except Exception:
+            # allow-silent-except: Vary is advisory for shared caches
             # Vary is advisory for shared caches; failure to append it
             # doesn't break the response itself.
             pass
 
     @staticmethod
     def _log_debug(msg: str) -> None:
-        try:
-            from cara.facades import Log
+        """Debug log for a swallowed compression failure.
 
-            Log.debug(msg, category="cara.http.compress_responses")
-        except Exception:
-            from cara.facades import Log
-
-            Log.warning(msg, exc_info=True)
+        Previously a function-local ``from cara.facades import Log`` inside a
+        ``try`` whose ``except`` re-imported and re-called the SAME facade —
+        a handler that cannot succeed where the body failed. On the response
+        path that meant a logging helper raising out of ``handle`` and turning
+        a servable response into a 500. Partial-boot tolerance already has one
+        source: ``Facade.__getattr__``'s ``cls.key == "logger"`` fallback.
+        """
+        Log.debug(msg, category="cara.http.compress_responses")

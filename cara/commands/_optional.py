@@ -15,12 +15,22 @@ available.
 
 from __future__ import annotations
 
+# Imported from ``types.Base`` rather than the ``cara.exceptions`` barrel on
+# purpose: this module exists so a CLI stays importable without the optional
+# dependency groups, and the barrel eagerly binds ``ExceptionProvider`` (and
+# through it ``cara.foundation``). ``types/Base.py`` imports nothing.
+from cara.exceptions.types.Base import CaraException
 
-class OptionalDependencyError(RuntimeError):
+
+class OptionalDependencyError(CaraException, RuntimeError):
     """A command needs an optional cara dependency group that isn't installed.
 
     Carries the extra name so the message tells the operator exactly what to
     install. Raised at command run time, never at import time.
+
+    In the taxonomy (§9) with ``RuntimeError`` kept as a SECOND base, because
+    command runners catch ``RuntimeError`` around ``handle()`` to turn a fault
+    into a non-zero exit code rather than a traceback.
     """
 
 

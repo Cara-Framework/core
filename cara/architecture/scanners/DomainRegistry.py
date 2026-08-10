@@ -24,12 +24,41 @@ real:
   entry (the file no longer exists) is a Finding too;
 * every charter (domain AND flow) is a real, non-empty one-liner — a dict
   of names is not a registry.
+
+Registry SHAPE, on the same pass, because a registry that is merely populated
+is not yet a registry you can read:
+
+* keys are alphabetical and are lowercase identifiers — a registry read as a
+  list needs a stable order, and a name that is not an identifier cannot be a
+  package folder;
+* ``domains`` and ``flows`` never share a key — §3 v1.3 registers a
+  stage-grouped folder in exactly one of the two, and an overlap makes
+  "which registry owns this?" unanswerable;
+* the MIRROR EXCEPTION is current: a domain present in exactly one domain
+  layer must be pinned in ``manifest.single_layer_domains``, and a pinned
+  name that has since grown a second layer is a stale pin. Both directions
+  fail, so the pin cannot rot in either;
+* ``manifest.registry_size_bounds``, when a product sets it, holds the
+  combined ``domains`` + ``flows`` entry count inside its declared budget.
+  It stays OFF by default: §3 makes registry size a REVIEW threshold, and a
+  default-on budget would be a doctrine amendment rather than a scanner.
+
+These four lived in a hand-written product test that only ONE of the two
+products carried — and the master atlas claimed both did. The claim was false
+for weeks precisely because the rule had no framework home.
 """
 
 from __future__ import annotations
 
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
+
+#: Registry name -> the product file a shape finding should point the reader at.
+_REGISTRY_FILES = {"DOMAINS": "app/domains.py", "FLOWS": "app/flows.py"}
+
+
+def _registries(manifest: Manifest) -> tuple[tuple[str, dict[str, str]], ...]:
+    return (("DOMAINS", manifest.domains), ("FLOWS", manifest.flows))
 
 
 def _layer_domain_dirs(manifest: Manifest, layer: str) -> list:
@@ -51,6 +80,10 @@ class DomainRegistry:
             + DomainRegistry._missing_universal_domains(manifest)
             + DomainRegistry._loose_layer_root_files(manifest)
             + DomainRegistry._unreal_charters(manifest)
+            + DomainRegistry._registry_shape(manifest)
+            + DomainRegistry._overlapping_registries(manifest)
+            + DomainRegistry._stale_mirror_exceptions(manifest)
+            + DomainRegistry._registry_size(manifest)
         )
 
     @staticmethod
@@ -146,6 +179,106 @@ class DomainRegistry:
                     )
                 )
         return findings
+
+    @staticmethod
+    def _registry_shape(manifest: Manifest) -> list[Finding]:
+        findings: list[Finding] = []
+        for registry_name, registry in _registries(manifest):
+            if list(registry) != sorted(registry):
+                findings.append(
+                    Finding(
+                        _REGISTRY_FILES[registry_name],
+                        0,
+                        f"{registry_name} keys are not alphabetical",
+                    )
+                )
+            findings.extend(
+                Finding(
+                    _REGISTRY_FILES[registry_name],
+                    0,
+                    f"{registry_name}[{name!r}] is not a lowercase identifier — a "
+                    f"registry key has to be usable as a package folder name",
+                )
+                for name in registry
+                if name != name.lower() or not name.isidentifier()
+            )
+        return findings
+
+    @staticmethod
+    def _overlapping_registries(manifest: Manifest) -> list[Finding]:
+        overlap = sorted(set(manifest.domains) & set(manifest.flows))
+        return [
+            Finding(
+                "app/domains.py",
+                0,
+                f"{name!r} is registered as BOTH a domain and a flow stage — §3 "
+                f"puts a stage-grouped folder in exactly one registry",
+            )
+            for name in overlap
+        ]
+
+    @staticmethod
+    def _stale_mirror_exceptions(manifest: Manifest) -> list[Finding]:
+        """A one-layer domain must be pinned, and a pin must still be true."""
+        findings: list[Finding] = []
+        pinned = manifest.single_layer_domains
+        if len(manifest.domain_layers) < 2:
+            # Nothing to mirror ACROSS: with one domain layer every domain is
+            # trivially single-layer, so the rule would flag the whole registry
+            # and say nothing. A stale pin is still worth reporting, though.
+            return [
+                Finding(
+                    "app/architecture_manifest.py",
+                    0,
+                    f"single_layer_domains pins {name!r}, but this deployable has "
+                    f"fewer than two domain layers — the pin cannot mean anything",
+                )
+                for name in sorted(pinned)
+            ]
+        registered = {**manifest.domains, **manifest.flows}
+        for name in sorted(registered):
+            layers = [
+                layer
+                for layer in manifest.domain_layers
+                if (manifest.roots.app / layer / name).is_dir()
+            ]
+            if len(layers) == 1 and name not in pinned:
+                findings.append(
+                    Finding(
+                        f"app/{layers[0]}/{name}",
+                        0,
+                        f"{name!r} exists in one domain layer only — mirror it "
+                        f"across its layers or pin it in single_layer_domains",
+                    )
+                )
+            elif len(layers) > 1 and name in pinned:
+                findings.append(
+                    Finding(
+                        "app/architecture_manifest.py",
+                        0,
+                        f"stale single_layer_domains pin {name!r}: it now spans "
+                        f"{', '.join(layers)}",
+                    )
+                )
+        return findings
+
+    @staticmethod
+    def _registry_size(manifest: Manifest) -> list[Finding]:
+        bounds = manifest.registry_size_bounds
+        if bounds is None:
+            return []
+        low, high = bounds
+        total = len(manifest.domains) + len(manifest.flows)
+        if low <= total <= high:
+            return []
+        return [
+            Finding(
+                "app/domains.py",
+                0,
+                f"DOMAINS + FLOWS holds {total} entries; this product declares a "
+                f"budget of {low}-{high}",
+            )
+        ]
 
     @staticmethod
     def _unreal_charters(manifest: Manifest) -> list[Finding]:

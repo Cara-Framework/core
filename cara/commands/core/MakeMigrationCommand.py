@@ -5,8 +5,9 @@ Orchestrates model discovery, schema comparison, and migration generation.
 ``--overwrite`` enforces ONE FILE PER TABLE: after regenerating, the migrations
 directory contains exactly the model-generated set and nothing else. It used to
 delete only the files it recognised as its own, so hand-written ``add_*`` /
-``backfill_*`` / ``fix_*`` migrations accumulated forever (synk: 123 generated +
-40 hand-written) and the directory stopped being a function of the models.
+``backfill_*`` / ``fix_*`` migrations accumulated forever (one product reached
+123 generated + 40 hand-written) and the directory stopped being a function of
+the models.
 
 The escape hatches are module-level literal markers: ``MODEL_LESS = True`` for
 objects no model can own, and ``MODEL_TRANSITION = ("old", "new")`` for an

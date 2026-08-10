@@ -9,6 +9,7 @@ from __future__ import annotations
 from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException
+from cara.queues.idempotency.MakesIdempotentBase import MakesIdempotentBase
 
 
 @command(
@@ -62,22 +63,37 @@ class MigrateResetCommand(CommandBase):
     def _flush_job_idempotency_cache(self) -> None:
         """Invalidate job idempotency caches after a schema reset.
 
-        ``job_result:*`` / ``job_lock:*`` keys are hashed from the job
-        class plus its entity-id arguments. A fresh schema restarts every
-        sequence at 1, so e.g. listing id 5 after a reset collides with a
-        stale cached result from a *different* entity that held id 5
-        before the reset. The job is then served from cache and its
-        downstream event / dispatch never fires — silently stalling the
-        pipeline at the stage where the false hit occurs. Clearing these
-        on reset keeps DB state and job idempotency consistent. URL-keyed
-        caches (e.g. upstream responses) don't collide and are kept.
+        The namespaces come from
+        :attr:`MakesIdempotentBase.RESET_FLUSHABLE_KEY_PREFIXES` — the
+        class that MINTS them — rather than a literal tuple here. This
+        command used to restate the vocabulary and had fallen one
+        namespace behind it: ``job_fence:`` was added to
+        ``acquire_job_lock`` and the copy never learned, so the operator
+        read "🧹 Flushed N job idempotency cache entries" while a whole
+        namespace survived the reset untouched. A copy has no way to know
+        the original changed; importing it means the next namespace added
+        to the mixin is classified there, once, by the code that owns it.
+
+        (``job_fence:`` is still deliberately NOT flushed — see that
+        attribute's docstring for why zeroing a monotonic counter is
+        worse than leaving it high. What changed is that the decision
+        now lives with the fence, not in a reset command's blind spot.)
+
+        Why flush at all: these keys are hashed from the job class plus
+        its entity-id arguments. A fresh schema restarts every sequence
+        at 1, so e.g. listing id 5 after a reset collides with a stale
+        cached result from a *different* entity that held id 5 before the
+        reset. The job is then served from cache and its downstream event
+        / dispatch never fires — silently stalling the pipeline at the
+        stage where the false hit occurs. URL-keyed caches (e.g. upstream
+        responses) don't collide and are kept.
         """
         try:
             from cara.facades import Cache
 
             removed = 0
-            for pattern in ("job_result:*", "job_lock:*"):
-                removed += Cache.forget_pattern(pattern)
+            for prefix in MakesIdempotentBase.RESET_FLUSHABLE_KEY_PREFIXES:
+                removed += Cache.forget_by_prefix(prefix)
             self.info(f"🧹 Flushed {removed} job idempotency cache entries")
         except Exception as e:
             self.warning(f"⚠️  Could not flush job idempotency cache: {e}")

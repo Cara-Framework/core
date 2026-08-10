@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import Any
 
 import pendulum
@@ -90,10 +91,8 @@ class SignInHint:
         thing here that can still throw (an unbootstrapped or misconfigured
         logger facade), so it is the last thing that gets swallowed.
         """
-        try:
+        with suppress(Exception):
             Log.warning(message, category="auth")
-        except Exception:
-            pass
 
     @classmethod
     def read(cls, token: object) -> dict[str, Any] | None:
@@ -115,7 +114,10 @@ class SignInHint:
         if not isinstance(envelope, dict):
             return None
         expires_at = envelope.get("x")
-        if not isinstance(expires_at, int) or expires_at <= pendulum.now("UTC").int_timestamp:
+        if (
+            not isinstance(expires_at, int)
+            or expires_at <= pendulum.now("UTC").int_timestamp
+        ):
             return None
         claims = envelope.get("c")
         return claims if isinstance(claims, dict) else None

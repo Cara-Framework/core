@@ -241,6 +241,7 @@ def resolve_fallback_mode() -> str:
             if normalised in ("memory", "open", "closed"):
                 return normalised
     except Exception:
+        # allow-silent-except: Config facade unavailable; the fail-closed default below applies
         # Config facade unavailable — assume the safest default.
         pass
     return "closed"

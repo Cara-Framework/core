@@ -7,9 +7,7 @@ request handling.
 
 from __future__ import annotations
 
-import ipaddress
 import uuid
-from functools import lru_cache
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -24,60 +22,24 @@ from cara.http.request.mixins import (
 from cara.http.request.UploadedFile import UploadedFile
 
 
-@lru_cache(maxsize=1)
-def _trusted_proxy_networks() -> tuple:
-    """Parse TRUSTED_PROXIES env into a tuple of ip_network objects.
-
-    Accepts comma-separated IPs or CIDR blocks.
-
-    Auto-defaults are LOOPBACK ONLY (``127.0.0.0/8`` + ``::1/128``).
-    A process that can spoof its own loopback peer can already do
-    anything to itself, so trusting it adds no attack surface.
-
-    Private RFC1918 ranges (``10.0.0.0/8``, ``172.16.0.0/12``,
-    ``192.168.0.0/16``) are NOT auto-trusted. Pre-fix they were —
-    which silently turned every internal-LAN peer into a trusted
-    proxy and allowed:
-
-    * A compromised pod / sidecar / debug container on the same VPC
-      to spoof ``X-Forwarded-For`` and dictate ``request.ip()``,
-      bypassing per-IP rate limits, audit-log non-repudiation, and
-      the ``RequireAdminIp`` allowlist.
-    * Default Docker / docker-compose container networks
-      (172.17.x.x) to spoof each other's IPs by default.
-    * Local k8s pod networks (typically 10.244.x.x) to do the same.
-
-    Operators who genuinely terminate TLS at an internal LB on
-    10.x / 172.x / 192.168.x MUST opt that range in explicitly via
-    the ``TRUSTED_PROXIES`` config / env var. This matches what
-    Symfony / Laravel 9+ do (no auto-defaults, explicit config
-    only).
-    """
-    try:
-        from cara.configuration import config
-
-        raw = str(config("app.trusted_proxies", "") or "")
-    except Exception:
-        raw = ""
-    nets = []
-    # Loopback only — safe to auto-trust because spoofing the
-    # loopback peer requires being the process itself.
-    defaults = ("127.0.0.0/8", "::1/128")
-    for entry in (*defaults, *[e.strip() for e in raw.split(",") if e.strip()]):
-        try:
-            nets.append(ipaddress.ip_network(entry, strict=False))
-        except ValueError:
-            continue
-    return tuple(nets)
-
-
 def _is_trusted_proxy(addr: str) -> bool:
-    """True if `addr` is inside any configured trusted-proxy network."""
-    try:
-        ip_obj = ipaddress.ip_address(addr)
-    except ValueError, TypeError:
-        return False
-    return any(ip_obj in net for net in _trusted_proxy_networks())
+    """True if ``addr`` is inside any configured trusted-proxy network.
+
+    The rules (loopback auto-trusted, RFC1918 never, ``TRUSTED_PROXIES``
+    read from ``app.trusted_proxies``) now live in
+    :mod:`cara.security.TrustedProxies`, which is also what decides whether
+    ``X-Forwarded-Proto`` may prove HTTPS. Keeping one resolver is the point:
+    while this module had its own, ``SecurityHeaders`` had a second one reading
+    a config key no product defines, so the framework trusted the operator's
+    proxies for ``request.ip()`` and nobody at all for HSTS.
+
+    The parse was previously ``lru_cache``d here with no key, which froze the
+    boundary at whatever the first request observed; the shared resolver caches
+    on the raw config value instead, so a reload still takes effect.
+    """
+    from cara.security.TrustedProxies import is_trusted_proxy
+
+    return is_trusted_proxy(addr)
 
 
 class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):

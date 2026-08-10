@@ -5,6 +5,10 @@ key collisions, dotted-path resolution, or a callable predicate). These pin
 the ADDITIVE enrichment so the new behavior cannot silently regress.
 """
 
+from decimal import Decimal
+
+import pytest
+
 from cara.support.Collection import Collection, collect
 
 # --- key_by ---
@@ -331,3 +335,90 @@ def test_times_with_callback():
 
 def test_times_zero_is_empty():
     assert Collection.times(0).all() == []
+
+
+# --- aggregates: empty semantics and the no-swallow rule ---
+#
+# Pre-fix every aggregate here wrapped its arithmetic in
+# ``contextlib.suppress(TypeError)`` (or an ``except TypeError, ValueError``
+# arm) and answered the literal ``0``. Two distinct lies came out of that:
+# "no data" was reported as a measured zero, and a collection that genuinely
+# held money but could not be summed — one ``float`` among ``Decimal``s —
+# was reported as a revenue total of zero, with no log line and no exception.
+
+
+def test_sum_of_empty_is_zero():
+    """Empty sum stays the additive identity — see Collection.sum's docstring."""
+    assert collect([]).sum() == 0
+
+
+def test_sum_of_decimals_stays_decimal():
+    total = collect([Decimal("1.50"), Decimal("2.25")]).sum()
+    assert total == Decimal("3.75")
+    assert isinstance(total, Decimal)
+
+
+def test_sum_of_mixed_decimal_and_float_raises():
+    """Pinned wrong behaviour: this used to return ``0`` for £4.00 of money."""
+    with pytest.raises(TypeError):
+        collect([Decimal("1.50"), 2.5]).sum()
+
+
+def test_sum_by_key_over_missing_key_is_zero():
+    assert collect([{"a": 1}, {"a": 2}]).sum("b") == 0
+
+
+def test_avg_of_empty_is_none():
+    """Pinned wrong behaviour: an empty cohort reported an average of ``0``."""
+    assert collect([]).avg() is None
+
+
+def test_avg_of_mixed_decimal_and_float_raises():
+    with pytest.raises(TypeError):
+        collect([Decimal("1.50"), 2.5]).avg()
+
+
+def test_avg_of_values():
+    assert collect([2, 4, 6]).avg() == 4
+
+
+def test_median_of_empty_is_none():
+    """Pinned wrong behaviour: an empty collection reported a median of ``0``."""
+    assert collect([]).median() is None
+
+
+def test_median_of_unorderable_items_raises():
+    with pytest.raises(TypeError):
+        collect([1, "two"]).median()
+
+
+def test_median_odd_and_even():
+    assert collect([3, 1, 2]).median() == 2
+    assert collect([1, 2, 3, 4]).median() == 2.5
+
+
+def test_max_of_empty_is_none():
+    """Pinned wrong behaviour: an empty collection reported a ceiling of ``0``."""
+    assert collect([]).max() is None
+
+
+def test_min_of_empty_is_none():
+    """Pinned wrong behaviour: an empty collection reported a floor of ``0``."""
+    assert collect([]).min() is None
+
+
+def test_max_and_min_of_negative_values():
+    # The pre-fix ``0`` default was not merely imprecise here — it sat OUTSIDE
+    # the data's own range, so a max below zero read as a max of zero.
+    assert collect([-5, -2, -9]).max() == -2
+    assert collect([-5, -2, -9]).min() == -9
+
+
+def test_max_of_unorderable_items_raises():
+    with pytest.raises(TypeError):
+        collect([1, "two"]).max()
+
+
+def test_min_of_unorderable_items_raises():
+    with pytest.raises(TypeError):
+        collect([1, "two"]).min()

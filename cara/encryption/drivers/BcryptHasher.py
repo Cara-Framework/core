@@ -11,15 +11,22 @@ import bcrypt
 
 
 class BcryptHasher:
+    # bcrypt authenticates only the first 72 bytes of its input; everything
+    # beyond is discarded by the algorithm itself. Declaring the boundary
+    # here makes it readable by policy code (``cara.authentication``'s
+    # password policy clamps its byte ceiling to it) instead of being a
+    # literal repeated wherever someone remembers the limit exists.
+    TRUNCATES_AT_BYTES = 72
+
     def make(self, value: str, rounds: int = 12) -> str:
         salt = bcrypt.gensalt(rounds)
         return bcrypt.hashpw(value.encode(), salt).decode()
 
     def check(self, value: str, hashed: str) -> bool:
-        # bcrypt only authenticates the first 72 bytes. Rejecting longer
-        # inputs prevents suffix-equivalent passwords on older bcrypt builds
-        # and normalizes bcrypt 5.x's ValueError into an auth miss.
-        if len(value.encode("utf-8")) > 72:
+        # Rejecting over-long inputs prevents suffix-equivalent passwords on
+        # older bcrypt builds and normalizes bcrypt 5.x's ValueError into an
+        # auth miss.
+        if len(value.encode("utf-8")) > self.TRUNCATES_AT_BYTES:
             return False
         try:
             return bcrypt.checkpw(value.encode(), hashed.encode())

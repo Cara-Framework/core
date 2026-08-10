@@ -9,6 +9,11 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 class Argon2idHasher:
     """Memory-hard password hashing; parameters are encoded in every hash."""
 
+    # Argon2 hashes the whole input — no length is silently discarded, so a
+    # password policy over this driver needs no truncation clamp (only its
+    # own cost bound).
+    TRUNCATES_AT_BYTES = None
+
     def __init__(self) -> None:
         self._hasher = PasswordHasher(
             time_cost=2,

@@ -54,7 +54,8 @@ def test_declared_check_constraints_extracts_name():
 
 def test_declared_indexes_harvests_unique_and_plain():
     # Both forms are the model's declaration; the plain CREATE INDEX used to be
-    # dropped on the floor, which is how 37 synk indexes stayed invisible.
+    # dropped on the floor, which is how dozens of a product's indexes stayed
+    # invisible.
     assert SchemaCheckCommand._declared_indexes(_LISTING_LIKE) == {
         "listing_active_by_product",
         "listing_marketplace_external_unique",

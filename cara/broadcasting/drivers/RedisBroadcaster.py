@@ -59,26 +59,13 @@ from cara.broadcasting.ConnectionManager import (
 from cara.broadcasting.contracts.Broadcaster import Broadcaster
 from cara.exceptions import BroadcastingConfigurationException
 from cara.facades import Log
+from cara.support import json_dumps
 
 # Pubsub channel name for per-user broadcasts. ``broadcast_to_user``
 # publishes here; nodes auto-subscribe whenever they hold a connection
 # for the relevant user. The ``__user:`` prefix is private to the
 # driver and doesn't collide with application channel names.
 _USER_CHANNEL_PREFIX = "__user:"
-
-
-class _SafeEncoder(json.JSONEncoder):
-    """JSON encoder that handles Decimal/datetime values from ORM models."""
-
-    def default(self, o):
-        import datetime
-        from decimal import Decimal
-
-        if isinstance(o, Decimal):
-            return float(o)
-        if isinstance(o, (datetime.datetime, datetime.date)):
-            return o.isoformat()
-        return super().default(o)
 
 
 class RedisBroadcaster(ConnectionManager, Broadcaster):
@@ -260,17 +247,23 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
 
         # Cross-process publish. Skip-self is encoded into the payload
         # so the listener can drop messages we originated.
+        #
+        # Encoding sits OUTSIDE the try: the ``except`` below exists to
+        # tolerate a Redis blip, and a payload cara cannot encode is not
+        # a Redis blip — it is a programming error. Swallowing it into a
+        # ``Log.debug`` dropped the broadcast on every node and told
+        # nobody, which is how a Decimal could ship as a float here for
+        # as long as it did.
+        payload = json_dumps(
+            {
+                "event": event,
+                "channel": unprefixed,
+                "data": data,
+                "_node_id": self._node_id,
+                "_except_socket_id": except_socket_id,
+            },
+        )
         try:
-            payload = json.dumps(
-                {
-                    "event": event,
-                    "channel": unprefixed,
-                    "data": data,
-                    "_node_id": self._node_id,
-                    "_except_socket_id": except_socket_id,
-                },
-                cls=_SafeEncoder,
-            )
             client = await self._redis()
             await client.publish(self._prefixed(unprefixed), payload)
         except Exception as e:
@@ -296,18 +289,18 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         await self.broadcast_to_user_local(
             user_id, event, data, except_socket_id=except_socket_id
         )
-        # Then fan out across processes.
+        # Then fan out across processes. Encoding sits outside the try
+        # for the reason spelled out in ``_broadcast_one``.
+        payload = json_dumps(
+            {
+                "event": event,
+                "user_id": user_id,
+                "data": data,
+                "_node_id": self._node_id,
+                "_except_socket_id": except_socket_id,
+            },
+        )
         try:
-            payload = json.dumps(
-                {
-                    "event": event,
-                    "user_id": user_id,
-                    "data": data,
-                    "_node_id": self._node_id,
-                    "_except_socket_id": except_socket_id,
-                },
-                cls=_SafeEncoder,
-            )
             client = await self._redis()
             await client.publish(
                 self._prefixed(f"{_USER_CHANNEL_PREFIX}{user_id}"), payload

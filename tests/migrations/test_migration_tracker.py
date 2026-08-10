@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cara.eloquent.migrations import MigrationTracker
-from cara.exceptions import ORMException
+from cara.exceptions import MigrationException, ORMException, QueryException
 
 
 def _fake_db_manager(driver="postgres", queries_made=None, query_handler=None):
@@ -209,3 +209,68 @@ def test_replace_migration_history_rolls_back_on_failure():
 
     connection.rollback.assert_called_once()
     connection.commit.assert_not_called()
+
+
+# ── ensure_migrations_table: a driver failure must keep its context ──
+
+
+def test_a_driver_failure_creating_the_table_names_the_table():
+    """The wrap must survive the collapse of the two ORM taxonomies.
+
+    ``ensure_migrations_table`` re-raises its OWN already-explained errors
+    untouched and wraps everything else with the table name. The "mine"
+    test used to be ``except ORMException`` — correct only while the ORM's
+    driver errors lived in a different taxonomy. Once ``QueryException``
+    became an ``ORMException``, the clause matched the driver error raised
+    by ``CREATE TABLE`` itself and a permission denial on the migrations
+    table propagated as a bare ``relation "migrations" permission denied``:
+    no table name, no phase, no wrap. The sentinel is now a class of its
+    own (``MigrationException``), so this stays wrapped.
+    """
+
+    def handler(sql, *_args, **_kwargs):
+        if sql.strip().startswith("CREATE TABLE"):
+            raise QueryException('relation "migrations" permission denied')
+        return [{"id": 1, "migration": "x", "batch": 1}]
+
+    manager, _connection, _queries = _fake_db_manager(query_handler=handler)
+    tracker = MigrationTracker(manager, "migrations")
+
+    with pytest.raises(
+        ORMException, match=r"Could not initialize migrations table 'migrations'"
+    ) as raised:
+        tracker.ensure_migrations_table()
+
+    assert isinstance(raised.value.__cause__, QueryException), (
+        "the driver error must stay reachable through __cause__"
+    )
+    assert "permission denied" in str(raised.value)
+
+
+def test_the_trackers_own_errors_are_not_double_wrapped():
+    """The other half of the clause: an explained error passes through."""
+
+    def handler(sql, *_args, **_kwargs):
+        if sql.strip().startswith("SELECT id, migration, batch"):
+            raise QueryException("column batch does not exist")
+        return []
+
+    manager, _connection, _queries = _fake_db_manager(query_handler=handler)
+    tracker = MigrationTracker(manager, "migrations")
+
+    with pytest.raises(MigrationException) as raised:
+        tracker.ensure_migrations_table()
+
+    message = str(raised.value)
+    assert "unexpected schema" in message
+    assert "Could not initialize" not in message, (
+        "an error the tracker already explained must not be wrapped again"
+    )
+
+
+def test_the_migration_sentinel_is_inside_the_orm_taxonomy():
+    """§9 asks for ONE taxonomy: narrowing must not create an orphan."""
+    assert issubclass(MigrationException, ORMException)
+    assert not issubclass(QueryException, MigrationException), (
+        "a driver error is not a migration error — that conflation IS the bug"
+    )

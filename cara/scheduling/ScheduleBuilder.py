@@ -121,6 +121,41 @@ class ScheduleBuilder:
         )
         return self
 
+    def snapshot_meta(self, meta: dict) -> ScheduleBuilder:
+        """
+        Attach opaque, JSON-serializable metadata to this entry's published
+        snapshot row.
+
+        The published snapshot (``cara.scheduling.Snapshot``) is the only
+        thing a reader process can see about the live schedule, and it
+        carries ``{id, name, next_run_at}``. When an application knows
+        something about an entry that a reader needs — the interval
+        vocabulary behind a sweep, a display grouping — that fact otherwise
+        has to travel on a SECOND cache key the application invents,
+        publishes and reads itself, duplicating a constant across two
+        deployables. This is the passthrough that removes the need for that
+        second channel.
+
+        Cara never interprets the contents: it stores the dict against the
+        job id and copies it into the snapshot entry as ``meta``. Keep it
+        small and JSON-serializable — it is republished on every snapshot
+        tick.
+
+        Must be called BEFORE the terminal ``.interval()`` / ``.daily()`` /
+        ``.cron()`` call, same rule as ``without_overlapping`` — those
+        methods dispatch ``options`` to the driver immediately.
+
+        Example:
+            scheduler.command("sweep:inbox").snapshot_meta(
+                {"default_minutes": 360}
+            ).interval(minutes=15)
+
+        Returns:
+            self for fluent interface
+        """
+        self.options["snapshot_meta"] = dict(meta or {})
+        return self
+
     def without_overlapping(self, timeout: int = 1440) -> ScheduleBuilder:
         """
         Prevent this scheduled task from overlapping executions (Laravel-style).

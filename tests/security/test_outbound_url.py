@@ -31,7 +31,9 @@ def _resolver(*addresses: str):
     """Fake getaddrinfo returning the given addresses."""
 
     def _resolve(_host, _port=None, **_kw):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, 443)) for addr in addresses]
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, 443)) for addr in addresses
+        ]
 
     return _resolve
 
@@ -225,9 +227,7 @@ def test_dns_can_be_skipped_for_structure_only_callers() -> None:
         raise AssertionError("must not resolve")
 
     assert (
-        outbound_url_reason(
-            "https://example.com/x", resolve_dns=False, resolver=_explode
-        )
+        outbound_url_reason("https://example.com/x", resolve_dns=False, resolver=_explode)
         is None
     )
 

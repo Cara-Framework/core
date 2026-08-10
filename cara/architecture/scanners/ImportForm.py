@@ -34,7 +34,8 @@ from cara.architecture.Manifest import Manifest
 
 
 def _kernel_barrel_files(manifest: Manifest) -> frozenset[str]:
-    return frozenset(f"app/{pkg}/__init__.py" for pkg in manifest.kernel_packages)
+    prefix = manifest.roots.app_path_prefix
+    return frozenset(f"{prefix}/{pkg}/__init__.py" for pkg in manifest.kernel_packages)
 
 
 class ImportForm:
@@ -53,8 +54,10 @@ class ImportForm:
         findings: list[Finding] = []
         exercised_allowlist: set[tuple[str, str]] = set()
         app = manifest.roots.app
+        namespace = manifest.roots.app_namespace
+        path_prefix = manifest.roots.app_path_prefix
         layers = manifest.layers
-        deep_prefixes = tuple(f"app.{layer}." for layer in layers)
+        deep_prefixes = tuple(f"{namespace}.{layer}." for layer in layers)
         for base in manifest.roots.scan_dirs("import_form"):
             for path in python_files(base):
                 if path.name == "__init__.py":
@@ -81,7 +84,7 @@ class ImportForm:
                     )
                     if matched_layer is None:
                         continue
-                    if rel.startswith(f"app/{matched_layer}/"):
+                    if rel.startswith(f"{path_prefix}/{matched_layer}/"):
                         continue  # sibling — direct path is the rule there
                     if all(alias.name.startswith("_") for alias in node.names):
                         continue  # private symbols deliberately have no barrel home
@@ -100,7 +103,7 @@ class ImportForm:
                             rel,
                             node.lineno,
                             f"deep import `from {module} import ...` — use the "
-                            f"app.{matched_layer} barrel",
+                            f"{namespace}.{matched_layer} barrel",
                         )
                     )
         for rel, module in sorted(manifest.deep_import_allowlist - exercised_allowlist):
@@ -116,6 +119,7 @@ class ImportForm:
     @staticmethod
     def _siblings_never_import_own_barrel(manifest: Manifest) -> list[Finding]:
         findings: list[Finding] = []
+        namespace = manifest.roots.app_namespace
         for layer in manifest.layers:
             layer_dir = manifest.roots.app / layer
             for path in python_files(layer_dir):
@@ -129,14 +133,14 @@ class ImportForm:
                     if (
                         isinstance(node, ast.ImportFrom)
                         and node.level == 0
-                        and node.module == f"app.{layer}"
+                        and node.module == f"{namespace}.{layer}"
                     ):
                         findings.append(
                             Finding(
                                 rel,
                                 node.lineno,
                                 f"sibling reaches through its own layer barrel "
-                                f"`app.{layer}` — import the submodule directly",
+                                f"`{namespace}.{layer}` — import the submodule directly",
                             )
                         )
         return findings

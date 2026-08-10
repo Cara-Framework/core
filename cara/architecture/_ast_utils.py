@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import sys
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 STDLIB: frozenset[str] = frozenset(sys.stdlib_module_names) | {"__future__"}
@@ -36,6 +37,33 @@ def python_files(base: Path) -> list[Path]:
     return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
 
 
+def iter_modules(
+    roots: Iterable[Path], deployable: Path
+) -> Iterator[tuple[Path, str, ast.Module]]:
+    """Yield ``(path, deployable-relative path, tree)`` for every non-barrel
+    module under ``roots``.
+
+    Barrels (``__init__.py``) are generated and carry no logic, so every
+    source-law scanner skips them. A root may be listed twice (two scanners
+    sharing a tree) or be a symlink into a sibling checkout; a file is
+    yielded once, keyed by its resolved path, and its reported path stays
+    the LOGICAL one so findings read the way a developer navigates.
+    """
+    seen: set[Path] = set()
+    for root in roots:
+        for path in python_files(root):
+            if path.name == "__init__.py":
+                continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            tree = parse(path)
+            if tree is None:
+                continue
+            yield path, relpath(path, deployable), tree
+
+
 def relpath(path: Path, root: Path) -> str:
     """POSIX-style path relative to ``root`` (falls back to the name)."""
     # Preserve the logical path through a deployable's symlinked dev kernel.
@@ -51,12 +79,32 @@ def relpath(path: Path, root: Path) -> str:
         return path.name
 
 
+def read_source(path: Path) -> str | None:
+    """A file's text, or ``None`` when it cannot be read as UTF-8 source.
+
+    Every scanner that needs raw lines goes through here rather than calling
+    ``read_text`` itself. A guard pack walks a tree that is MID-CHANGE by
+    definition: a file disappears between the glob and the read, a directory
+    has no barrel yet, a vendored asset carries one non-UTF-8 byte. Any of
+    those used to abort the whole pack with a traceback that named the
+    scanner and not the file.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError, UnicodeDecodeError:
+        return None
+
+
 def parse(path: Path) -> ast.Module | None:
     """Parse a file; ``None`` on a syntax error (a scanner's own concern —
-    py_compile / the test suite catches genuine syntax breakage)."""
+    py_compile / the test suite catches genuine syntax breakage) or on a file
+    that cannot be read at all (see ``read_source``)."""
+    source = read_source(path)
+    if source is None:
+        return None
     try:
-        return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except SyntaxError, UnicodeDecodeError:
+        return ast.parse(source, filename=str(path))
+    except SyntaxError:
         return None
 
 
@@ -169,6 +217,26 @@ def dunder_all(tree: ast.Module) -> list[str] | None:
     return None
 
 
+def declares_dunder_all(tree: ast.Module) -> bool:
+    """True when the module assigns ``__all__`` at all — literal or computed.
+
+    ``dunder_all`` answers ``None`` for two very different modules: one that
+    declares no ``__all__``, and one that declares a COMPUTED ``__all__``
+    (``sorted({*_EXPORTS, ...})`` — the shape a hand-written lazy barrel
+    uses). A checker that cannot tell them apart silently fails OPEN on the
+    computed form, so the two questions are asked separately.
+    """
+    for node in tree.body:
+        target = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            target = node.target
+        if isinstance(target, ast.Name) and target.id == "__all__":
+            return True
+    return False
+
+
 def public_names(path: Path) -> list[str]:
     """Public surface of a module: ``__all__`` if declared, else top-level
     classes/functions and UPPER_SNAKE constants, ``_``-prefixed excluded."""
@@ -197,34 +265,70 @@ def public_names(path: Path) -> list[str]:
     return sorted(names)
 
 
+def declared_all(path: Path) -> list[str]:
+    """Only the EXPLICIT literal ``__all__`` of a module file (never the
+    derived-names fallback ``public_names`` uses) — the way to tell "not yet
+    generated" apart from "generated with an empty surface"."""
+    tree = parse(path) if path.exists() else None
+    if tree is None:
+        return []
+    declared = dunder_all(tree)
+    return list(declared) if declared is not None else []
+
+
+def is_module_object(pkg_dir: Path, name: str) -> bool:
+    """Does ``from . import <name>`` inside ``pkg_dir/__init__.py`` bind the
+    SUBMODULE, rather than a same-named symbol re-exported from it?
+
+    This is the module-object contract of §5.1, and it is a single question
+    with a single answer, asked from both sides: the BarrelGenerator asks it
+    to decide what to preserve and keep module-qualified, and
+    ``BarrelCompleteness`` / ``ImportForm`` ask it to decide what to exempt
+    from the barrel-superset and deep-import rules. It lived in two places
+    that disagreed, and the disagreement was one-directional: the reader
+    accepted ANY existing submodule, so the class-per-file case
+    (``ChannelService.py`` defining ``class ChannelService``) was granted the
+    exemption. That is name/submodule shadowing — the exact failure §5.1's
+    "a public name missing from its barrel is a bug even before anyone
+    imports it" sentence was written for — and the completeness guard was
+    blind to it precisely because the writer, which got it right, was not the
+    one being read (§5: read the SSOT, never restate it).
+
+    A leaf ``X.py`` that exports a public ``X`` resolves to that symbol once
+    any re-export runs, so it is NOT a module object. A subpackage is judged
+    by its literal ``__all__`` for the same reason: a barrel that re-exports
+    its own name shadows itself.
+    """
+    leaf = pkg_dir / f"{name}.py"
+    if leaf.exists():
+        return name not in public_names(leaf)
+    sub_init = pkg_dir / name / "__init__.py"
+    if sub_init.exists():
+        return name not in declared_all(sub_init)
+    return False
+
+
 def module_object_names(pkg: Path) -> set[str]:
     """Submodule names this package's ``__init__`` binds as MODULE OBJECTS
-    (``from . import X`` with no asname, X a real submodule) — the
-    module-object contract exemption (§5.1): X's own symbols stay
-    module-qualified and are exempt from barrel-superset/deep-import
-    checks.
+    (``from . import X`` with no asname, X passing :func:`is_module_object`)
+    — the module-object contract exemption (§5.1): X's own symbols stay
+    module-qualified and are exempt from barrel-superset/deep-import checks.
 
     A SUBPACKAGE counts exactly like a leaf module. It has to: a theme kept
     module-qualified to break a boot-order cycle (``from . import catalog``)
     is a directory, and recognizing only ``X.py`` left the subpackage arm of
     ``BarrelCompleteness._expected_exports`` unreachable — the exemption the
     scanner's own docstring promises could never fire for the only shape
-    that needs it. ``BarrelGenerator._is_module_object`` already accepted
-    both shapes; this is the reader catching up to the writer.
+    that needs it.
     """
     init = pkg / "__init__.py"
-    if not init.exists():
-        return set()
-    tree = parse(init)
+    tree = parse(init) if init.exists() else None
     if tree is None:
         return set()
-    out: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.level == 1 and not node.module:
-            for alias in node.names:
-                if alias.asname is None and (
-                    (pkg / f"{alias.name}.py").exists()
-                    or (pkg / alias.name / "__init__.py").exists()
-                ):
-                    out.add(alias.name)
-    return out
+    return {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.level == 1 and not node.module
+        for alias in node.names
+        if alias.asname is None and is_module_object(pkg, alias.name)
+    }

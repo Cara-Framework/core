@@ -7,6 +7,51 @@ from dataclasses import dataclass
 from cara.exceptions import QueueException
 from cara.facades import Log
 
+#: Wildcard standing for exactly one dot-separated word in a binding pattern.
+ONE_WORD = "*"
+
+
+def matches_pattern(routing_key: str, pattern: str) -> bool:
+    """True when ``routing_key`` is routed by ``pattern``.
+
+    ``*`` stands for exactly ONE dot-separated word; a multi-word ``#``
+    wildcard is deliberately unsupported, so an unequal word count never
+    matches. Keeping the rule narrow is what lets a topology guard prove a
+    routing key reaches exactly one queue: ``#`` would make the reachable set
+    unbounded and the proof vacuous.
+
+    Public because the invariant belongs to whoever is checking a topology,
+    not only to the router that dispatches through it. Products used to
+    re-implement this inside their own guards, which meant a guard whose whole
+    job was proving routing correct was modelling routing by hand.
+    """
+    key_parts = routing_key.split(".")
+    pattern_parts = pattern.split(".")
+    if len(key_parts) != len(pattern_parts):
+        return False
+    return all(
+        part in (ONE_WORD, word)
+        for word, part in zip(key_parts, pattern_parts, strict=True)
+    )
+
+
+def patterns_overlap(one: str, other: str) -> bool:
+    """True when SOME concrete routing key would match both patterns.
+
+    Two bindings that overlap fan one message out to two queues, so the same
+    job is consumed twice. This is the question a topology guard actually
+    asks, and it is not answerable by matching a key: it compares two patterns
+    position by position, where a wildcard on either side always agrees.
+    """
+    one_parts = one.split(".")
+    other_parts = other.split(".")
+    if len(one_parts) != len(other_parts):
+        return False
+    return all(
+        left == ONE_WORD or right in (ONE_WORD, left)
+        for left, right in zip(one_parts, other_parts, strict=True)
+    )
+
 
 @dataclass
 class RoutingKey:
@@ -139,24 +184,12 @@ class QueueRouter:
         return matching_queues
 
     def _matches_pattern(self, routing_key: str, pattern: str) -> bool:
+        """Whether this router would route ``routing_key`` through ``pattern``.
+
+        Delegates to :func:`matches_pattern` so a caller checking the rule and
+        the router applying it can never answer differently.
         """
-        Check if routing key matches the pattern.
-
-        Supports:
-        - * matches exactly one word
-        - # matches zero or more words (not implemented for simplicity)
-        """
-        routing_parts = routing_key.split(".")
-        pattern_parts = pattern.split(".")
-
-        if len(routing_parts) != len(pattern_parts):
-            return False
-
-        for routing_part, pattern_part in zip(routing_parts, pattern_parts, strict=False):
-            if pattern_part != "*" and pattern_part != routing_part:
-                return False
-
-        return True
+        return matches_pattern(routing_key, pattern)
 
     def dispatch_job(
         self,

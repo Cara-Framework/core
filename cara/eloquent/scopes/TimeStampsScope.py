@@ -32,23 +32,42 @@ class TimeStampsScope(BaseScope):
     def on_remove(self, builder):
         """No cleanup needed when timestamps scope is removed."""
 
+    @staticmethod
+    def _stamp(model, column, now):
+        """Render ``now`` for ``column``, keeping the instant intact.
+
+        The value handed to the cast MUST stay tz-aware. Stringifying first
+        with ``to_datetime_string()`` dropped the offset, and
+        ``DateTimeCast.set`` then re-read that naive string as APP_TIMEZONE
+        (its documented contract for product-supplied naive input) — so a
+        product on Europe/Madrid stamped every created_at/updated_at two
+        hours in the past, an instant that never happened. Passing the aware
+        ``pendulum.DateTime`` takes the offset-preserving branch instead.
+
+        Without a cast the value goes straight into the builder, so it is
+        rendered ISO-8601 WITH the offset: a naive literal into a TIMESTAMPTZ
+        column is resolved by PostgreSQL against the session ``TimeZone``
+        GUC, which the framework does not assert.
+        """
+        if column in model.__casts__:
+            return model._set_cast_attribute(column, now)
+
+        return now.to_iso8601_string()
+
     def _timestamp_values(self, model):
-        """Compute (created_at, updated_at) values through the cast system."""
-        timestamp_value = model.get_new_date().to_datetime_string()
+        """Compute (created_at, updated_at) values through the cast system.
 
-        # Apply cast to timestamp values if casts are defined
-        if model.date_created_at in model.__casts__:
-            timestamp_value = model._set_cast_attribute(
-                model.date_created_at, timestamp_value
-            )
+        Both columns are rendered from the SAME aware instant. Deriving
+        updated_at from the already-cast created_at value fed a naive UTC
+        string back through ``DateTimeCast.set``, shifting updated_at by the
+        app-timezone offset a second time.
+        """
+        now = model.get_new_date()
 
-        updated_timestamp_value = timestamp_value
-        if model.date_updated_at in model.__casts__:
-            updated_timestamp_value = model._set_cast_attribute(
-                model.date_updated_at, timestamp_value
-            )
-
-        return timestamp_value, updated_timestamp_value
+        return (
+            self._stamp(model, model.date_created_at, now),
+            self._stamp(model, model.date_updated_at, now),
+        )
 
     def set_timestamp_create(self, builder):
         if not builder._model.__timestamps__:
@@ -90,13 +109,7 @@ class TimeStampsScope(BaseScope):
 
         # Use model's cast system for timestamp values
         model = builder._model
-        timestamp_value = model.get_new_date().to_datetime_string()
-
-        # Apply cast to timestamp value if cast is defined
-        if model.date_updated_at in model.__casts__:
-            timestamp_value = model._set_cast_attribute(
-                model.date_updated_at, timestamp_value
-            )
+        timestamp_value = self._stamp(model, model.date_updated_at, model.get_new_date())
 
         builder._updates += (
             UpdateQueryExpression({model.date_updated_at: timestamp_value}),

@@ -64,6 +64,7 @@ def emit(event: dict[str, Any]) -> None:
         _ensure_worker()
         _QUEUE.put_nowait(event)
     except Exception:
+        # allow-silent-except: analytics may never back-pressure the job path
         # Queue full or anything else → drop. Analytics are never
         # allowed to back-pressure or break the job path.
         pass
@@ -95,6 +96,7 @@ def _run() -> None:
     try:
         import requests
     except Exception:
+        # allow-silent-except: no HTTP client available means nothing to ship to
         return  # no HTTP client available → nothing to write to
 
     buf: list[dict] = []

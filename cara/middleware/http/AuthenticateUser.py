@@ -11,6 +11,7 @@ from typing import Any
 
 from cara.authentication import Authentication
 from cara.context import ExecutionContext
+from cara.exceptions import CaraException
 from cara.facades import Log
 from cara.http import Request, Response
 from cara.observability import set_request_tag, set_request_user
@@ -114,7 +115,15 @@ class AuthenticateUser(ShouldAuthenticate):
                 if user:
                     successful_guard = guard_name
                     break
-            except Exception as e:
+            # Mirrors ``ShouldAuthenticate.handle``: only an HTTP-facing
+            # taxonomy exception is a guard saying "no". A bare
+            # ``except Exception`` turned a Postgres pool exhaustion or a
+            # Redis timeout into a 401 carrying the raw driver message,
+            # bypassing DefaultExceptionHandler's 5xx redaction and hiding a
+            # total outage from every 5xx alert. Everything else propagates.
+            except CaraException as e:
+                if not getattr(e, "is_http_exception", False):
+                    raise
                 last_error = e
                 Log.debug(
                     f"AuthenticateUser: guard '{guard_name}' failed: "

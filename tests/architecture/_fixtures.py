@@ -54,8 +54,16 @@ def make_manifest(root: Path, **overrides) -> Manifest:
             "vertical_slice_seams",
             "write_ownership",
             "collaborator_calls",
+            "model_query_discipline",
+            "http_in_business_logic",
+            "env_read_discipline",
+            "silent_except_swallow",
+            "barrel_mid_load",
         )
     }
+    # The raw-SQL home rule spans the kernel too: a query written in
+    # ``commons/`` is as misplaced as one written in ``app/`` (DOCTRINE §5).
+    scanner_roots["raw_sql_home"] = (app, config, *kernel.values())
 
     layers = overrides.get("layers", ())
     defaults: dict = dict(

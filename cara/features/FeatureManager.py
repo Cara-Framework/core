@@ -260,6 +260,7 @@ class FeatureManager:
 
             Log.warning(message, extra={"feature_flag": key})
         except Exception:
+            # allow-silent-except: warn during facade bootstrap, before the Log facade is bound
             pass
 
 

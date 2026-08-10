@@ -22,10 +22,10 @@ an oversized file behind a boolean exemption.
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
 from pathlib import Path
 
-from cara.architecture._ast_utils import parse, python_files, relpath
+from cara.architecture._ast_utils import parse, python_files, read_source, relpath
+from cara.architecture._ratchet import ratchet as _ratchet
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -34,59 +34,24 @@ CLASSES_KEY = "source_shape_classes"
 EDGE_METHODS_KEY = "source_shape_edge_methods"
 
 
-def _is_edge_path(path: Path, edge_layers: frozenset[str]) -> bool:
+def _is_edge_path(path: Path, edge_layers: frozenset[str], app_root: str) -> bool:
+    """True when ``path`` names a layer directory that is a real edge root.
+
+    ``app_root`` is ``manifest.roots.app_path_prefix``, never the literal
+    ``"app"``: a hardcoded root name makes this predicate answer False for
+    every file of a tree rooted under any other name, so the edge-method
+    budget silently governed nothing at all. See ``ManifestRoots``.
+    """
     parts = path.parts
     return any(
         part in edge_layers
         and (
             index == 0
-            or parts[index - 1] in {"app", "packages"}
+            or parts[index - 1] in {app_root, "packages"}
             or "packages" in parts[:index]
         )
         for index, part in enumerate(parts)
     )
-
-
-def _ratchet(
-    *,
-    key: str,
-    current: Mapping[str, int],
-    pinned: Mapping[str, int],
-    message: str,
-) -> list[Finding]:
-    findings: list[Finding] = []
-    for identity, count in sorted(current.items()):
-        expected = pinned.get(identity)
-        path = identity.split("::", 1)[0]
-        if expected is None:
-            findings.append(Finding(path, 0, f"{message}: {identity} ({count})"))
-        elif count > expected:
-            findings.append(
-                Finding(
-                    path,
-                    0,
-                    f"{key} debt grew for {identity}: {expected} -> {count}",
-                )
-            )
-        elif count < expected:
-            findings.append(
-                Finding(
-                    path,
-                    0,
-                    f"stale {key} pin for {identity}: {expected}, now {count}",
-                )
-            )
-    for identity, expected in sorted(pinned.items()):
-        if identity not in current:
-            path = identity.split("::", 1)[0]
-            findings.append(
-                Finding(
-                    path,
-                    0,
-                    f"stale {key} pin for {identity}: {expected}, violation resolved",
-                )
-            )
-    return findings
 
 
 class SourceShape:
@@ -119,14 +84,18 @@ class SourceShape:
                     continue
                 seen.add(resolved)
                 rel = relpath(path, manifest.roots.deployable)
-                source = path.read_text(encoding="utf-8")
+                # Read AFTER the file has proved readable, the way the sibling
+                # source-law scanners do. Counting lines first meant a single
+                # non-UTF-8 byte anywhere under a scan root raised out of the
+                # scanner and took the whole pack down, instead of that one
+                # file being skipped like every other unparseable file.
+                tree = parse(path)
+                source = read_source(path)
+                if tree is None or source is None:
+                    continue
                 line_count = len(source.splitlines())
                 if line_count > hard_limit:
                     oversized[rel] = line_count
-
-                tree = parse(path)
-                if tree is None:
-                    continue
                 public_classes = [
                     node
                     for node in tree.body
@@ -145,7 +114,11 @@ class SourceShape:
                     )
 
                 relative_path = Path(rel)
-                if not _is_edge_path(relative_path, manifest.source_shape_edge_layers):
+                if not _is_edge_path(
+                    relative_path,
+                    manifest.source_shape_edge_layers,
+                    manifest.roots.app_path_prefix,
+                ):
                     continue
                 for class_node in public_classes:
                     for node in class_node.body:

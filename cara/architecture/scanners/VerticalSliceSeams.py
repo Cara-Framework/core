@@ -25,10 +25,10 @@ What counts as a token appearance:
   names, import module paths and imported/aliased names, assignment
   target names at module/class level;
 * **closing a known evasion — string literals in four syntactic
-  positions**: a Compare operand (``if slug == "ebay":`` dodges the
-  identifier scan the same branch on ``Channel.MARKETPLACE_EBAY`` would
-  not), a function/lambda default value, a dict key, and a call argument
-  (positional or keyword).
+  positions**: a Compare operand (``if slug == "<vendor>":`` dodges the
+  identifier scan that the same branch on ``Channel.MARKETPLACE_<VENDOR>``
+  would not), a function/lambda default value, a dict key, and a call
+  argument (positional or keyword).
 
 Prose, comments, docstrings and STRING LITERALS OUTSIDE those four
 positions are exempt (a bare assignment of a brand slug to its own

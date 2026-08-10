@@ -17,6 +17,11 @@ from cara.exceptions import InvalidArgumentException
 
 
 class Hash:
+    # The algorithm every caller gets unless it names another one. Policy
+    # code needs this name to reason about the storage algorithm's limits,
+    # so it is a constant rather than a literal repeated in each signature.
+    DEFAULT_ALGORITHM = "argon2id"
+
     drivers = {
         "argon2id": Argon2idHasher(),
         "bcrypt": BcryptHasher(),
@@ -24,10 +29,25 @@ class Hash:
     }
 
     @classmethod
+    def truncation_boundary(cls, algorithm: str = DEFAULT_ALGORITHM) -> int | None:
+        """Bytes after which ``algorithm`` stops reading its input, else None.
+
+        bcrypt authenticates only its first 72 bytes; longer passwords form a
+        suffix-equivalence class. Password policy has to know this to keep a
+        product from accepting a plaintext its own storage cannot round-trip,
+        so the number is published by the driver rather than re-remembered by
+        every caller.
+        """
+        driver = cls.drivers.get(algorithm)
+        if not driver:
+            raise InvalidArgumentException(f"Unsupported algorithm: {algorithm}")
+        return getattr(driver, "TRUNCATES_AT_BYTES", None)
+
+    @classmethod
     def make(
         cls,
         value: str,
-        algorithm: str = "argon2id",
+        algorithm: str = DEFAULT_ALGORITHM,
         rounds: int = 12,
     ) -> str:
         driver = cls.drivers.get(algorithm)
@@ -42,7 +62,7 @@ class Hash:
         cls,
         value: str,
         hashed: str,
-        algorithm: str = "argon2id",
+        algorithm: str = DEFAULT_ALGORITHM,
     ) -> bool:
         algorithm = cls._detect_algorithm(hashed, fallback=algorithm)
         driver = cls.drivers.get(algorithm)
@@ -54,7 +74,7 @@ class Hash:
     def needs_rehash(
         cls,
         hashed: str,
-        algorithm: str = "argon2id",
+        algorithm: str = DEFAULT_ALGORITHM,
         rounds: int = 12,
     ) -> bool:
         stored_algorithm = cls._detect_algorithm(hashed, fallback=algorithm)

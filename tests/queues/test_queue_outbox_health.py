@@ -113,6 +113,43 @@ def test_hook_due_predicate_has_exactly_one_home() -> None:
     assert template.format(now="%s").endswith("%s)")
 
 
+def test_publication_due_predicate_has_exactly_one_home() -> None:
+    """The publication half now formats ONE template too.
+
+    Pins the drift this file's docstring already claimed was impossible:
+    the watchdog carried a fifth hand-written copy of "committed, released,
+    not yet published" while ``backlog_metrics``, ``delivery_stats`` and
+    ``delivery_metrics`` carried the other four. A copy cannot learn that
+    the original changed — and this particular signal gates a CRITICAL page
+    that tells the operator ``queue:relay`` is not running.
+    """
+    template = QueueJobDeliveryStore._PUBLISH_BACKLOG_FILTER_TEMPLATE
+    assert "{now}" in template, "the clock must stay the caller's to bind"
+    assert template.format(now="NOW()") == (
+        "status = %s AND publish_status != %s AND available_at <= NOW()"
+    )
+    assert template.format(now="%s").endswith("available_at <= %s")
+
+
+def test_no_read_model_site_restates_the_due_predicate() -> None:
+    """``available_at <=`` appears only in the two templates and the claim.
+
+    The claim gate (``_claim_publish`` / ``_claim_next_publish``) is
+    deliberately NARROWER — it answers "which row may I lease right now",
+    not "how much work is waiting" — so it keeps its own spelling. Every
+    other occurrence is a copy waiting to drift.
+    """
+    import inspect
+
+    source = inspect.getsource(QueueJobDeliveryStore)
+    occurrences = source.count("available_at <=")
+    # 1 × template declaration, 1 × _claim_publish, 1 × _claim_next_publish.
+    assert occurrences == 3, (
+        "a new hand-written 'available_at <=' appeared; format "
+        "_PUBLISH_BACKLOG_FILTER_TEMPLATE instead"
+    )
+
+
 def test_sample_reads_the_store_not_a_restated_query() -> None:
     seen = {}
 
@@ -157,8 +194,7 @@ def test_hook_stall_budget_defaults_looser_than_publication(monkeypatch) -> None
     """One ordinary 60s hooks retry cycle must not page."""
     monkeypatch.setattr(module, "config", lambda key, default=None: default)
     assert (
-        QueueOutboxHealth.hook_stall_age_seconds()
-        > QueueOutboxHealth.stall_age_seconds()
+        QueueOutboxHealth.hook_stall_age_seconds() > QueueOutboxHealth.stall_age_seconds()
     )
 
 

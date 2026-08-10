@@ -13,6 +13,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
+import pendulum
+
 from cara.exceptions import CacheConfigurationException
 
 
@@ -157,13 +159,16 @@ class JsonCacheCodec:
         if isinstance(value, UUID):
             return {"t": "uuid", "v": str(value)}
 
-        try:
-            import pendulum
-
-            is_pendulum = isinstance(value, pendulum.DateTime)
-        except ImportError, AttributeError:
-            is_pendulum = False
-        if is_pendulum:
+        # MUST stay ahead of the ``datetime`` branch: ``pendulum.DateTime``
+        # subclasses ``datetime.datetime``. Pre-fix this probe sat behind a
+        # ``try: import pendulum / except ImportError, AttributeError`` that
+        # stated a contract the packaging does not honour — pendulum is a hard
+        # ``install_requires`` — and whose fallback was not inert: it fell
+        # through to the ``datetime`` branch and wrote tag ``"datetime"``, so
+        # the value round-tripped back out of Redis as a stdlib ``datetime``.
+        # A silent type change no caller can see, in a codec that promises
+        # every supported type has an explicit tag.
+        if isinstance(value, pendulum.DateTime):
             return {"t": "pendulum", "v": value.to_iso8601_string()}
         if isinstance(value, datetime):
             return {
@@ -290,10 +295,8 @@ class JsonCacheCodec:
                 ) from exc
         if tag == "pendulum" and isinstance(value, str):
             try:
-                import pendulum
-
                 return pendulum.parse(value)
-            except (ImportError, ValueError, TypeError) as exc:
+            except (ValueError, TypeError) as exc:
                 raise CacheConfigurationException(
                     "Redis cache pendulum tag is invalid."
                 ) from exc

@@ -252,9 +252,7 @@ class QueueOutboxHealth:
                 body=cls._hook_stall_body(snapshot),
                 context={
                     "hook_due_pending": int(snapshot["hook_due_pending"]),
-                    "hook_oldest_due_age_seconds": int(
-                        snapshot["hook_oldest_due_age"]
-                    ),
+                    "hook_oldest_due_age_seconds": int(snapshot["hook_oldest_due_age"]),
                     "hook_stall_age_budget_seconds": cls.hook_stall_age_seconds(),
                 },
                 category="queue.outbox.hook_stall",

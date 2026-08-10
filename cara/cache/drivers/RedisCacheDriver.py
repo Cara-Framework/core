@@ -144,6 +144,26 @@ class RedisCacheDriver(Cache):
         }
         self._client = redis.Redis(**redis_kwargs)
 
+    def connection(self):
+        """The raw redis-py client this driver writes through.
+
+        The ONE supported way for a primitive that needs Redis server-side
+        atomicity — a Lua ``EVAL``, a sorted-set semaphore — to reach the
+        connection. ``ConcurrencyLimited`` used to duck-type five private
+        attribute names looking for it (``_redis``, ``store._redis``,
+        ``store.redis``, ``connection()``, ``redis``); this driver has never
+        had any of them, so the probe returned ``None`` on every call and a
+        hard concurrency ceiling silently enforced nothing for its entire
+        life. A named accessor makes that class of miss impossible: it
+        either exists or the caller fails loudly.
+
+        Callers must NOT use this for ordinary get/put/forget work — those
+        go through the codec-versioned, HMAC-authenticated methods above,
+        and bypassing them writes values this driver will later refuse to
+        decode.
+        """
+        return self._client
+
     @staticmethod
     def _resolve_signing_key(explicit: str | bytes | None) -> str | bytes:
         if explicit:

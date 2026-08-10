@@ -67,6 +67,7 @@ class ResetAuth(Middleware):
                 try:
                     guard = auth_manager.guard(guard_name)
                 except Exception:
+                    # allow-silent-except: unknown or unconfigured guard has no cache to reset
                     # Unknown/unconfigured guard — nothing to reset.
                     continue
 

@@ -82,9 +82,7 @@ def test_unusable_hints_degrade_to_none(crypt, value):
 
 def test_hint_minted_under_a_retired_key_reads_as_none(monkeypatch):
     old = Crypt(keys={"gone": "g" * 32}, current_key_id="gone")
-    monkeypatch.setattr(
-        builtins, "app", lambda: _StubApp({"crypt": old}), raising=False
-    )
+    monkeypatch.setattr(builtins, "app", lambda: _StubApp({"crypt": old}), raising=False)
     token = SignInHint.mint({"e": "a@example.com"})
 
     rotated = Crypt(keys={"k1": "a" * 32}, current_key_id="k1")

@@ -210,6 +210,104 @@ class DatabaseManager:
         resolver = self._ensure_resolver()
         return resolver.after_rollback(connection_name, callback)
 
+    def transaction_level(self, connection=None) -> int:
+        """Return the open transaction depth on the context-pinned connection.
+
+        ``0`` means this execution context holds no transaction. Framework
+        execution boundaries read the depth BEFORE they run a unit of work so
+        they can afterwards unwind exactly the levels they opened themselves
+        — see :meth:`commit_transactions_above`.
+        """
+        from .connections.ConnectionResolver import _get_registry
+
+        connection_name = self._resolve_connection_name(connection)
+        conn = _get_registry().get(connection_name)
+        if conn is None:
+            return 0
+        return int(getattr(conn, "transaction_level", 0) or 0)
+
+    def commit_transactions_above(self, baseline: int, connection=None) -> None:
+        """Commit only the transaction levels opened above ``baseline``.
+
+        :meth:`commit_open_transactions` finalizes EVERYTHING pinned in the
+        context registry. That is right for a pipeline stage that owns the
+        connection and wrong for a boundary that runs inside a transaction it
+        did not open: sync ``Bus`` dispatch executes inline in the caller's
+        asyncio task and therefore shares the caller's ContextVar-pinned
+        registry, so unwinding every level committed the caller's ambient
+        business transaction early — a later failure in the same use case
+        could no longer undo the write — and left the caller's own
+        ``with DB.transaction():`` exit raising ``No active transaction found
+        for connection: app``. DOCTRINE §8 keeps the business transaction with
+        the use-case service; a framework boundary owns only what it opened.
+
+        Levels at or below ``baseline`` are left untouched, including the
+        after-commit / after-rollback callbacks registered there: the resolver
+        keys those by level and only drains them at the outermost commit.
+        """
+        self._unwind_transactions(baseline, connection, commit=True)
+
+    def rollback_transactions_above(self, baseline: int, connection=None) -> None:
+        """Roll back only the transaction levels opened above ``baseline``.
+
+        Failure-side counterpart of :meth:`commit_transactions_above`, used
+        before a framework boundary propagates a failed or cancelled unit of
+        work so its own levels cannot leak into the next one.
+        """
+        self._unwind_transactions(baseline, connection, commit=False)
+
+    def _unwind_transactions(self, baseline: int, connection, *, commit: bool) -> None:
+        """Drive the pinned connection down to ``baseline`` through the resolver.
+
+        The resolver already unpins the registry entry and returns the
+        connection to the pool when the OUTERMOST level closes, so this loop
+        must never pop or close on its own — doing that unconditionally is
+        precisely what let a boundary release a connection it did not open.
+        """
+        from .connections.ConnectionResolver import _get_registry
+
+        connection_name = self._resolve_connection_name(connection)
+        registry = _get_registry()
+        resolver = self._ensure_resolver()
+        floor = max(int(baseline), 0)
+        finalize = resolver.commit if commit else resolver.rollback
+
+        # Bounded loop: a connection whose ``transaction_level`` never
+        # decrements must not spin the boundary forever.
+        for _ in range(64):
+            conn = registry.get(connection_name)
+            if conn is None:
+                break
+            if int(getattr(conn, "transaction_level", 0) or 0) <= floor:
+                break
+            finalize(connection_name)
+
+    def _release_pinned_connection(self, connection=None) -> None:
+        """Unpin a fully-unwound connection and return it to the pool.
+
+        The resolver already does this when the outermost level closes; this
+        covers the residue case where a registry entry survives with no open
+        level (a boundary running after a driver-level failure), which would
+        otherwise pin a dead handle for the rest of the context.
+        """
+        from .connections.ConnectionResolver import _get_registry
+
+        registry = _get_registry()
+        connection_name = self._resolve_connection_name(connection)
+        conn = registry.get(connection_name)
+        if conn is None or int(getattr(conn, "transaction_level", 0) or 0) > 0:
+            return
+
+        registry.pop(connection_name, None)
+        try:
+            conn.open = 0
+            conn.close_connection()
+        except Exception:
+            _logger.debug(
+                "transaction boundary: connection close failed",
+                exc_info=True,
+            )
+
     def commit_open_transactions(self, connection=None) -> None:
         """Commit every open transaction level on the context-pinned connection.
 
@@ -222,33 +320,12 @@ class DatabaseManager:
 
         Call at pipeline stage boundaries (match → validate → consolidate)
         so each stage's writes are durably committed before the next stage
-        runs.
+        runs. Only a caller that OWNS the connection may use this; a boundary
+        that can run inside somebody else's transaction must take a baseline
+        and use :meth:`commit_transactions_above` instead.
         """
-        from .connections.ConnectionResolver import _get_registry
-
-        connection_name = self._resolve_connection_name(connection)
-        registry = _get_registry()
-        if connection_name not in registry:
-            return
-
-        resolver = self._ensure_resolver()
-        conn = registry.get(connection_name)
-        for _ in range(64):
-            level = getattr(conn, "transaction_level", 0) if conn is not None else 0
-            if level <= 0:
-                break
-            resolver.commit(connection_name)
-
-        registry.pop(connection_name, None)
-        if conn is not None and getattr(conn, "transaction_level", 0) <= 0:
-            try:
-                conn.open = 0
-                conn.close_connection()
-            except Exception:
-                _logger.debug(
-                    "commit_open_transactions: connection close failed",
-                    exc_info=True,
-                )
+        self._unwind_transactions(0, connection, commit=True)
+        self._release_pinned_connection(connection)
 
     def rollback_open_transactions(self, connection=None) -> None:
         """Roll back every open level on the context-pinned connection.
@@ -258,31 +335,8 @@ class DatabaseManager:
         it before propagating a failed or cancelled unit of work so a caught
         exception cannot leak a live transaction into the next sync job.
         """
-        from .connections.ConnectionResolver import _get_registry
-
-        connection_name = self._resolve_connection_name(connection)
-        registry = _get_registry()
-        if connection_name not in registry:
-            return
-
-        resolver = self._ensure_resolver()
-        conn = registry.get(connection_name)
-        for _ in range(64):
-            level = getattr(conn, "transaction_level", 0) if conn is not None else 0
-            if level <= 0:
-                break
-            resolver.rollback(connection_name)
-
-        registry.pop(connection_name, None)
-        if conn is not None and getattr(conn, "transaction_level", 0) <= 0:
-            try:
-                conn.open = 0
-                conn.close_connection()
-            except Exception:
-                _logger.debug(
-                    "rollback_open_transactions: connection close failed",
-                    exc_info=True,
-                )
+        self._unwind_transactions(0, connection, commit=False)
+        self._release_pinned_connection(connection)
 
     @contextmanager
     def transaction(self, connection=None):

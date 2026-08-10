@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import pendulum
 
-#: One day in seconds. Named because ``86400`` in a TTL or a staleness
-#: window reads as a magic number at every call site, and both products
-#: had independently defined this same constant in their own kernels.
+#: One day in seconds. Named because ``86400`` sitting in a TTL or a
+#: staleness window reads as a magic number at every call site, and an
+#: application that needs it will otherwise define it again next to each
+#: one — the framework owning it keeps a single spelling.
 SECONDS_PER_DAY = 86_400
 
 

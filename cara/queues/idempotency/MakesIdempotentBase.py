@@ -37,7 +37,9 @@ from typing import Any
 
 import pendulum
 
+from cara.configuration import config
 from cara.context import ExecutionContext
+from cara.exceptions.types.queue import IdempotencyOverlapException
 from cara.facades import Cache, Log
 
 
@@ -108,6 +110,64 @@ class MakesIdempotentBase:
     #: (and any WithoutOverlapping / cross-process lock the job declares).
     idempotency_cache_results = True
 
+    #: Durable intent jobs opt in when returning another dispatch's cached
+    #: result would strand their own database row. An overlap is surfaced as
+    #: a throttle so the queue redelivers after the current owner releases the
+    #: channel-grain lease; the two callbacks never run concurrently.
+    retry_on_idempotency_overlap = False
+
+    #: Cache-key namespace for the per-source poll cooldown.
+    COOLDOWN_KEY_PREFIX = "collection_cooldown:"
+
+    #: Cache-key namespace for the result cache (:meth:`_result_key`).
+    RESULT_KEY_PREFIX = "job_result:"
+
+    #: Cache-key namespace for the exclusive job lease (:meth:`_lock_key`).
+    LOCK_KEY_PREFIX = "job_lock:"
+
+    #: Cache-key namespace for the monotonic owner fence
+    #: (:meth:`_fence_key`).
+    FENCE_KEY_PREFIX = "job_fence:"
+
+    #: Namespaces a schema reset MUST clear, as the single source that
+    #: ``migrate:reset`` reads instead of restating the vocabulary.
+    #:
+    #: The result cache and the job lease are hashed from the job class
+    #: plus its entity-id arguments. A fresh schema restarts every
+    #: sequence at 1, so listing id 5 after a reset collides with a stale
+    #: entry belonging to a DIFFERENT entity that held id 5 before it —
+    #: the job is served from cache and its downstream dispatch never
+    #: fires, silently stalling the pipeline.
+    #:
+    #: :attr:`FENCE_KEY_PREFIX` is deliberately ABSENT. The fence is a
+    #: monotonic counter, never a gate: it stamps each lease with a
+    #: strictly increasing owner token so a resurrected zombie holder can
+    #: be recognised as stale. Flushing it would really delete the
+    #: counters (``RedisCacheDriver.forget_pattern`` scans the counter
+    #: namespace too) and restart them at 1, minting fence numbers that
+    #: have already been issued — reuse is precisely the failure the
+    #: fence exists to prevent. A too-high fence after a reset is
+    #: harmless; a reused one is not.
+    RESET_FLUSHABLE_KEY_PREFIXES = (RESULT_KEY_PREFIX, LOCK_KEY_PREFIX)
+
+    #: Per-source cooldown windows in minutes, e.g. ``{"reports": 5}``. A
+    #: source absent from the map falls back to
+    #: ``config("jobs.source_cooldown_minutes")`` and then to
+    #: :attr:`default_source_cooldown_minutes`.
+    source_cooldown_minutes: dict[str, int] = {}
+
+    #: Cooldown for sources the map does not name.
+    default_source_cooldown_minutes = 15
+
+    #: Job attributes whose truthy values, in this order, make one poll
+    #: distinct from another. They join the cooldown key after the source.
+    cooldown_grain_attrs: tuple[str, ...] = ()
+
+    #: When True, a job that resolves NO grain is never throttled. Set this
+    #: wherever a source-only key would be a fleet-wide claim (multi-entity
+    #: deployments); leave it False where the source alone IS the identity.
+    cooldown_requires_grains = False
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._idempotency_key: str | None = None
@@ -133,6 +193,10 @@ class MakesIdempotentBase:
             The callback return value (cached on success), the cached
             prior result, or ``None`` when the run was deliberately
             skipped (cooldown / lifecycle-already-ran).
+
+        Raises:
+            IdempotencyOverlapException: When a durable-intent job opted into
+                redelivery and another callback owns the same lease.
         """
         if ExecutionContext.is_sync() and not getattr(
             self, "enforce_sync_idempotency", True
@@ -161,7 +225,7 @@ class MakesIdempotentBase:
         # result cache. That is distinct from operator recovery: lifecycle
         # policy still applies and the active owner lock is always respected.
         if not bypass_result_cache and getattr(self, "idempotency_cache_results", True):
-            cache_key = f"job_result:{self._idempotency_key}"
+            cache_key = self._result_key()
             if Cache.has(cache_key):
                 cached_raw = Cache.get(cache_key)
                 cached_result = None if cached_raw == self._NONE_SENTINEL else cached_raw
@@ -195,6 +259,10 @@ class MakesIdempotentBase:
                 category="idempotency",
             )
             self._emit_idempotency_metric("locked")
+            if getattr(self, "retry_on_idempotency_overlap", False):
+                raise IdempotencyOverlapException(
+                    f"Idempotency lease is active for {self.get_job_identifier()}"
+                )
             return await self.wait_for_completion()
 
         self._emit_idempotency_metric("fresh")
@@ -281,6 +349,18 @@ class MakesIdempotentBase:
 
     # ── Cache / lock primitives ────────────────────────────────────
 
+    def _result_key(self) -> str:
+        """Cache key for this job's result-cache entry."""
+        return f"{self.RESULT_KEY_PREFIX}{self._idempotency_key}"
+
+    def _lock_key(self) -> str:
+        """Cache key for this job's exclusive lease."""
+        return f"{self.LOCK_KEY_PREFIX}{self._idempotency_key}"
+
+    def _fence_key(self) -> str:
+        """Cache key for this job's monotonic owner-fence counter."""
+        return f"{self.FENCE_KEY_PREFIX}{self._idempotency_key}"
+
     def get_cached_result(self) -> Any | None:
         """Read the cached result, decoding the None-sentinel.
 
@@ -292,7 +372,7 @@ class MakesIdempotentBase:
         ``if cached is not None`` shape in external callers remains
         meaningful.
         """
-        cache_key = f"job_result:{self._idempotency_key}"
+        cache_key = self._result_key()
         raw = Cache.get(cache_key)
         if raw == self._NONE_SENTINEL:
             return None
@@ -308,19 +388,19 @@ class MakesIdempotentBase:
         indistinguishable from a claim-miss no-op and only holds for
         ``IDEMPOTENCY_NONE_TTL`` (see the knob's doc for the poisoning
         story this prevents)."""
-        cache_key = f"job_result:{self._idempotency_key}"
+        cache_key = self._result_key()
         stored = self._NONE_SENTINEL if result is None else result
         ttl = self.IDEMPOTENCY_NONE_TTL if result is None else self.IDEMPOTENCY_CACHE_TTL
         Cache.put(cache_key, stored, ttl)
 
     def is_job_locked(self) -> bool:
-        lock_key = f"job_lock:{self._idempotency_key}"
+        lock_key = self._lock_key()
         return Cache.has(lock_key)
 
     def acquire_job_lock(self) -> bool:
         """Acquire an owner-fenced exclusive lease atomically."""
-        lock_key = f"job_lock:{self._idempotency_key}"
-        fence_key = f"job_fence:{self._idempotency_key}"
+        lock_key = self._lock_key()
+        fence_key = self._fence_key()
         fence = Cache.increment(
             fence_key,
             1,
@@ -370,7 +450,7 @@ class MakesIdempotentBase:
         ``JOB_LOCK_TTL`` (30m) on the unlikely path where Cache is
         still down when the TTL expires.
         """
-        lock_key = f"job_lock:{self._idempotency_key}"
+        lock_key = self._lock_key()
         expected = self._idempotency_lock_value
         if expected is None:
             return
@@ -402,8 +482,89 @@ class MakesIdempotentBase:
     def should_collect_again(self) -> bool:
         """Decide whether a collection job (no entity id, source-driven)
         should run again given any cooldown the app enforces. Default
-        ``True`` — subclass override for per-source cooldowns."""
+        ``True`` — subclass override for per-source cooldowns.
+
+        A subclass that wants the standard per-source cooldown returns
+        :meth:`_claim_source_cooldown` from here and configures the class
+        attributes above it. The default stays a pass-through on purpose:
+        a job that merely happens to carry a ``source`` attribute must not
+        start claiming cooldown keys because it inherited this mixin.
+        """
         return True
+
+    def _claim_source_cooldown(self) -> bool:
+        """Atomically claim this poll's cooldown window; ``True`` if it won.
+
+        Poll-style jobs (feed sweeps, inventory refreshes, discovery runs)
+        are dispatched by schedulers that can fire the same poll twice
+        inside one window — two ticks racing, a redelivery, an operator
+        re-run. Claiming a per-``(source, grains)`` key with SETNX + TTL
+        lets exactly the first caller through; the key expires with the
+        cooldown so the next window re-claims it. A ``get`` → ``put``
+        check-then-act here does NOT work: both racing callers read
+        "expired", both pass, and the upstream is polled twice.
+
+        Three escape hatches, in order:
+
+        * no ``source`` attribute — not a poll, never throttled;
+        * a truthy ``force`` attribute — an operator asked for this run;
+        * :attr:`cooldown_requires_grains` with no grain resolved — a
+          source-only key is a GLOBAL claim across every entity, so fail
+          open rather than let one job hold the whole fleet's key. The
+          job's own durable gate (claim token, TTL, lifecycle row) is the
+          real authority.
+        """
+        source = getattr(self, "source", None)
+        if not hasattr(self, "source"):
+            return True
+
+        if getattr(self, "force", None):
+            Log.debug(
+                "Force flag enabled - bypassing cooldown for %s",
+                source,
+                category="idempotency",
+            )
+            return True
+
+        cooldown_minutes = self.source_cooldown_minutes.get(
+            source,
+            int(
+                config(
+                    "jobs.source_cooldown_minutes",
+                    self.default_source_cooldown_minutes,
+                )
+            ),
+        )
+
+        # Grains come from the same identity tuple the idempotency key is
+        # built from, so the cooldown key and the idempotency key can never
+        # disagree about what makes two dispatches "the same poll".
+        grains = [
+            str(getattr(self, attr))
+            for attr in self.cooldown_grain_attrs
+            if getattr(self, attr, None)
+        ]
+        if self.cooldown_requires_grains and not grains:
+            return True
+
+        time_key = self.COOLDOWN_KEY_PREFIX + ":".join([str(source), *grains])
+
+        if Cache.add(time_key, pendulum.now("UTC").isoformat(), cooldown_minutes * 60):
+            Log.debug(
+                "Cooldown claim taken for %s (cooldown: %sm)",
+                source,
+                cooldown_minutes,
+                category="idempotency",
+            )
+            return True
+
+        Log.debug(
+            "Cooldown active for %s (cooldown: %sm)",
+            source,
+            cooldown_minutes,
+            category="idempotency",
+        )
+        return False
 
     # ── Metric emission hooks (override in subclass) ───────────────
 
@@ -424,8 +585,9 @@ class MakesIdempotentBase:
     async def _execute_with_lock(self, callback: Callable[[], Awaitable[Any]]) -> Any:
         """Acquire lock, run callback, cache result, release lock.
 
-        Lock-acquisition failure now falls through to
-        ``wait_for_completion`` instead of returning ``None``.
+        Lock-acquisition failure waits for the owner by default. Durable
+        intent jobs instead raise a throttle so their own callback is
+        redelivered after the owner releases the lease.
         Previously: caller A raced caller B between
         ``is_job_locked()`` (returned False) and ``acquire_job_lock``
         (returned False because B already won). A then returned None
@@ -441,6 +603,10 @@ class MakesIdempotentBase:
                 category="idempotency",
             )
             self._emit_idempotency_metric("locked")
+            if getattr(self, "retry_on_idempotency_overlap", False):
+                raise IdempotencyOverlapException(
+                    f"Idempotency lease race for {self.get_job_identifier()}"
+                )
             return await self.wait_for_completion()
 
         try:
@@ -481,7 +647,7 @@ class MakesIdempotentBase:
         max_wait_time = 300  # 5 minutes
         check_interval = 5
         waited = 0
-        cache_key = f"job_result:{self._idempotency_key}"
+        cache_key = self._result_key()
 
         while waited < max_wait_time:
             await asyncio.sleep(check_interval)

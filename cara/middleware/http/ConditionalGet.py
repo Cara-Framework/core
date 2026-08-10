@@ -44,6 +44,7 @@ import hashlib
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
+from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware import Middleware
 
@@ -236,12 +237,20 @@ class ConditionalGet(Middleware):
 
     @staticmethod
     def _log_debug(msg: str) -> None:
-        """Best-effort debug log; survives partial-boot."""
-        try:
-            from cara.facades import Log
+        """Debug log for a swallowed ETag failure.
 
-            Log.debug(msg, category="cara.http.conditional_get")
-        except Exception:
-            from cara.facades import Log
-
-            Log.warning(msg, exc_info=True)
+        This used to be a function-local ``from cara.facades import Log``
+        wrapped in ``try/except`` that re-imported and re-called the SAME
+        facade in its handler, under a docstring claiming it "survives
+        partial-boot". Both halves were false. The import is not a
+        cycle-breaker (importing ``cara.facades`` does not pull this module
+        in, so the edge belongs at the top of the file), and a handler that
+        repeats the failing call cannot succeed where the body failed — in
+        the very scenario it was written for it raised OUT of the ``except``
+        and turned a servable response into a 500. Partial-boot tolerance is
+        already owned by ``Facade.__getattr__``'s ``cls.key == "logger"``
+        fallback, which is the single source for it. The ``except`` also
+        caught ordinary ``Log.debug`` failures and escalated a debug message
+        to ``Log.warning``, mis-reporting severity.
+        """
+        Log.debug(msg, category="cara.http.conditional_get")

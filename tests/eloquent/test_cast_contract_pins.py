@@ -53,7 +53,7 @@ from decimal import Decimal
 
 import pytest
 
-from cara.eloquent.casts.Collections import ArrayCast
+from cara.eloquent.casts.Collections import ArrayCast, CollectionCast
 from cara.eloquent.casts.primitives import (
     BoolCast,
     DecimalCast,
@@ -153,12 +153,10 @@ class TestIntCast:
         assert IntCast().set("42") == 42
         assert IntCast().set("  42  ") == 42
 
-    def test_invalid_input_returns_zero_not_none(self):
-        """Non-numeric strings collapse to 0 — historical contract.
-        Callers that care about the difference between "invalid input"
-        and "zero" must validate before the cast."""
-        assert IntCast().set("garbage") == 0
-        assert IntCast().get("garbage") == 0
+    def test_invalid_input_is_unknown_not_a_fabricated_zero(self):
+        """An unparseable value must not become a valid foreign-key id."""
+        assert IntCast().set("garbage") is None
+        assert IntCast().get("garbage") is None
 
 
 # ── FloatCast: None-preservation + invalid handling ──────────────
@@ -169,8 +167,8 @@ class TestFloatCast:
         assert FloatCast().set(None) is None
         assert FloatCast().get(None) is None
 
-    def test_invalid_input_returns_zero(self):
-        assert FloatCast().set("not a number") == 0.0
+    def test_invalid_input_is_unknown_not_a_measured_zero(self):
+        assert FloatCast().set("not a number") is None
 
     def test_string_numbers_coerced(self):
         assert FloatCast().set("3.14") == 3.14
@@ -364,4 +362,80 @@ class TestArrayCastNullPreservation:
         # The dropped input type must show up in the message so ops
         # can grep for ``ArrayCast: dropped dict input`` and trace
         # back to the offending call site.
+        assert "dict" in joined
+
+
+# ── CollectionCast: the same fix, in the same file, one cast later ──────
+
+
+class TestCollectionCastNullPreservation:
+    """``CollectionCast`` is registered side by side with ``ArrayCast``
+    (``casts/__init__.py`` "array"/"collection", ``Model.py`` likewise) and
+    encodes the same write rule — but the NULL fix above was applied to only
+    one of the two. ``CollectionCast.set(None)`` kept returning the literal
+    ``"[]"``, so a model declaring ``__casts__ = {"tags": "collection"}`` and
+    assigning ``None`` persisted a non-NULL value: ``WHERE tags IS NULL``
+    returned zero rows while ``tags = '[]'::jsonb`` matched them all. The
+    dropped non-list write had no log at all, so it was invisible too.
+
+    Both casts now share one write-side coercion helper, which is the only
+    thing that stops the rule drifting apart a third time."""
+
+    def test_set_none_returns_none_not_empty_array(self):
+        """Pre-fix this returned ``"[]"`` — the NULL drift its sibling
+        cast's docstring says was already fixed."""
+        assert CollectionCast().set(None) is None
+
+    def test_get_none_still_returns_empty_collection(self):
+        """Read-side fallback stays, exactly as for ``ArrayCast``."""
+        assert list(CollectionCast().get(None)) == []
+
+    def test_set_empty_list_persists_as_empty_array(self):
+        assert CollectionCast().set([]) == "[]"
+
+    def test_set_populated_list_serialises_to_json(self):
+        assert CollectionCast().set([1, 2, 3]) == "[1, 2, 3]"
+
+    def test_set_collection_object_serialises_its_items(self):
+        """The one input type this cast is named for.
+
+        Pre-fix the unwrap probed for ``to_list``, a method cara's
+        ``Collection`` has never published (it exposes ``all()`` /
+        ``to_array()``), so a Collection fell through to the terminal
+        ``return "[]"`` and the entire write was discarded — silently, since
+        that branch carried no log either.
+        """
+        from cara.support.Collection import Collection
+
+        assert CollectionCast().set(Collection([1, 2])) == "[1, 2]"
+
+    def test_set_non_list_logs_and_falls_back(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Pre-fix the value vanished into ``"[]"`` with NO signal — the
+        terminal ``return "[]"`` had no log, unlike its sibling."""
+        from types import SimpleNamespace
+
+        import cara.facades as facades_module
+
+        warnings: list[str] = []
+
+        def _capture(msg, *args, **kwargs):
+            rendered = str(msg)
+            if args:
+                try:
+                    rendered = rendered % args
+                except TypeError, ValueError:
+                    rendered = f"{rendered} {args!r}"
+            warnings.append(rendered)
+
+        monkeypatch.setattr(facades_module, "Log", SimpleNamespace(warning=_capture))
+
+        assert CollectionCast().set({"not": "a list"}) == "[]"
+
+        joined = " ".join(warnings).lower()
+        assert "collectioncast" in joined, (
+            f"expected CollectionCast warning to fire, got: {warnings!r}"
+        )
         assert "dict" in joined

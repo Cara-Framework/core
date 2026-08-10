@@ -79,7 +79,17 @@ async def run_through_middleware_async(job, handler: Callable) -> Any:
 
     ``handler`` must be an async callable ``(job) -> coroutine``. Each
     middleware's ``handle`` is expected to be async as well; middleware may
-    short-circuit by returning ``None`` without invoking ``next_fn``.
+    refuse the job by RAISING ``JobThrottledException`` instead of invoking
+    ``next_fn``.
+
+    A middleware must never signal "I did not run the job" by returning a
+    value. ``None`` is the normal SUCCESS return of an async handler (see
+    ``Bus._run_sync``), so a returning short-circuit is indistinguishable
+    from a completed job: the worker settled the delivery ``completed`` and
+    ACKed it, and the refused job was discarded while the ledger reported it
+    as done. ``JobThrottledException`` carries ``retry_after`` and is settled
+    through the starvation lane — frozen failure budget, escalating backoff,
+    ``throttled`` in the tracker — on both the async and the sync path.
 
     Tenancy: a job consumed off the queue carries the dispatcher's
     tenant scope as ``_tenant_id`` (stamped by the worker from the

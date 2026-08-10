@@ -7,8 +7,9 @@ Provides explicit methods with priority over intelligent detection.
 
 from __future__ import annotations
 
-import json
 from typing import Any
+
+from cara.support import json_dumps
 
 from .BaseResponse import BaseResponse
 from .ContentTypeDetector import ContentTypeDetector
@@ -76,7 +77,7 @@ class ResponseFactory:
             BaseResponse: Configured response
         """
         self.response._status = status
-        self.response.set_content(json.dumps(payload, ensure_ascii=False, default=str))
+        self.response.set_content(json_dumps(payload))
 
         # Explicitly set content-type (Laravel approach)
         self.headers.content_type("application/json; charset=utf-8")
@@ -531,20 +532,28 @@ class ResponseFactory:
             if content_type is None:
                 content_type = "application/octet-stream"
 
-        # Set headers
-        self.response.header("Content-Type", content_type)
-        self.response.header("Content-Length", str(file_size))
-        self.response.header("Accept-Ranges", "bytes")
+        # Set headers through the shared HeaderManager, exactly as the
+        # sibling ``download()`` does. This method used to reach for
+        # ``self.response.header(...)`` / ``.with_headers(...)``, which are
+        # ``Response`` methods — but the collaborator is typed (and used) as
+        # ``BaseResponse``, which has neither. It survived only because both
+        # construction sites happen to pass a full ``Response``; a plain
+        # ``BaseResponse`` would have died with AttributeError halfway
+        # through, after the status and before the body. Those two methods
+        # are pure delegates to ``self.headers.set`` / ``.merge`` over the
+        # very same HeaderManager, so this is behaviour-identical — including
+        # the ``_content_type_explicitly_set`` flag, which ``set()`` flips.
+        self.headers.set("Content-Type", content_type)
+        self.headers.set("Content-Length", str(file_size))
+        self.headers.set("Accept-Ranges", "bytes")
 
         # Set filename if provided (for downloads)
         if filename:
-            self.response.header(
-                "Content-Disposition", f'attachment; filename="{filename}"'
-            )
+            self.headers.set("Content-Disposition", f'attachment; filename="{filename}"')
 
         # Add additional headers
         if headers:
-            self.response.with_headers(headers)
+            self.headers.merge(headers)
 
         # Read and serve file content
         try:

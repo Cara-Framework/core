@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from cara.exceptions import RateLimitConfigurationException
 from cara.facades import Cache
 from cara.rates.contracts import RateLimit
 
@@ -166,12 +167,24 @@ class RateLimiter(RateLimit):
         """
         Register a named rate limiter with a callback.
 
-        The callback receives a request object and should return a Limit object
-        or list of Limit objects defining the rate limit configuration.
+        The callback receives a request object and must return exactly ONE
+        ``Limit``. Both this docstring and ``resolve_limiter`` used to promise
+        "a Limit object or list of Limit objects" — nothing implements the
+        list. ``ThrottleRequests._get_limit_config`` returns the callback's
+        value unchanged and ``_attempt_limit`` then reads
+        ``limit_config.max_attempts``, so a limiter that took the documented
+        second option answered ``AttributeError: 'list' object has no
+        attribute 'max_attempts'`` — a 500 on every request to every route
+        carrying that ``throttle:<name>``. §10: the promise is deleted rather
+        than implemented, because composing several windows also needs a key
+        per limit, a most-restrictive rule for the ``X-RateLimit-*`` headers
+        and a choice of which limit's ``response`` callback wins — none of
+        which exist. ``resolve_limiter`` now refuses a non-``Limit`` return
+        instead of letting it reach the middleware as an AttributeError.
 
         Args:
             name: Unique identifier for this named limiter
-            callback: Function that takes a request and returns Limit or list[Limit]
+            callback: Function that takes a request and returns a ``Limit``
 
         Returns:
             self for method chaining
@@ -200,12 +213,34 @@ class RateLimiter(RateLimit):
             request: The HTTP request object
 
         Returns:
-            Limit object or list of Limit objects, or None if limiter not found
+            The ``Limit`` the callback produced, or ``None`` when no limiter
+            is registered under ``name`` (``ThrottleRequests`` turns that
+            ``None`` into a refusal — an unregistered limiter name is an
+            unconfigured gate, not a permissive default).
+
+        Raises:
+            RateLimitConfigurationException: the callback returned something
+                the throttle cannot enforce. Checked on the two attributes
+                ``ThrottleRequests`` actually dereferences rather than on the
+                concrete class, so an application's own limit object still
+                works. The list form this method's docstring used to advertise
+                lands here: it reached ``_attempt_limit`` as a bare
+                ``AttributeError`` 500 with nothing naming the misconfigured
+                limiter, and a shape the gate cannot read must fail closed
+                and say which limiter is wrong (§9).
         """
         callback = self._limiters.get(name)
-        if callback:
-            return callback(request)
-        return None
+        if callback is None:
+            return None
+
+        limit = callback(request)
+        if not hasattr(limit, "max_attempts") or not hasattr(limit, "decay_minutes"):
+            raise RateLimitConfigurationException(
+                f"throttle:{name} resolved to {type(limit).__name__}, which is "
+                f"not a Limit; a limiter callback must return exactly one "
+                f"Limit (see config/rate.py LIMITERS)."
+            )
+        return limit
 
     def reset(self, key: str) -> None:
         """Immediately reset this key's counter."""

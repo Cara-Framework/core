@@ -23,7 +23,7 @@ from cara.queues.PayloadLimits import MAX_AMQP_JOB_PAYLOAD_BYTES
 class SignedJsonJobSerializer:
     """Serialize jobs as canonical, expiring, rotatable signed envelopes."""
 
-    VERSION = 3
+    VERSION = 4
     MAX_PAYLOAD_BYTES = MAX_AMQP_JOB_PAYLOAD_BYTES
     DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60
     DEFAULT_MAX_AGE_SECONDS = 31 * 24 * 60 * 60
@@ -65,6 +65,7 @@ class SignedJsonJobSerializer:
             "queue",
             "replay_of",
             "timeout_seconds",
+            "throttle_attempts",
             "unique_key",
             "version",
         }
@@ -151,6 +152,7 @@ class SignedJsonJobSerializer:
         replay_payload.update(
             {
                 "attempts": 0,
+                "throttle_attempts": 0,
                 "created": datetime.fromtimestamp(now, tz=UTC).isoformat(),
                 "db_job_id": cls._required_positive_int(
                     new_db_job_id,
@@ -232,6 +234,7 @@ class SignedJsonJobSerializer:
             "db_job_id": primitive["db_job_id"],
             "timeout_seconds": primitive["timeout_seconds"],
             "attempts": primitive["attempts"],
+            "throttle_attempts": primitive["throttle_attempts"],
             "_otel": primitive["_otel"],
             "_tenant": primitive["_tenant"],
             "_tenant_mode": primitive["_tenant_mode"],
@@ -398,6 +401,10 @@ class SignedJsonJobSerializer:
                 "timeout_seconds",
             ),
             "attempts": cls._non_negative_int(payload.get("attempts", 0), "attempts"),
+            "throttle_attempts": cls._non_negative_int(
+                payload.get("throttle_attempts", 0),
+                "throttle_attempts",
+            ),
             "_otel": cls._json_value(payload.get("_otel") or {}, path="_otel"),
             "_tenant": cls._optional_positive_int(
                 payload.get("_tenant"),
@@ -586,6 +593,10 @@ class SignedJsonJobSerializer:
         cls._required_string(payload.get("dispatched_at"), "dispatched_at")
         cls._required_string(payload.get("created"), "created")
         cls._non_negative_int(payload.get("attempts"), "attempts")
+        cls._non_negative_int(
+            payload.get("throttle_attempts"),
+            "throttle_attempts",
+        )
         cls._required_positive_int(payload.get("db_job_id"), "db_job_id")
         cls._required_positive_int(
             payload.get("timeout_seconds"),

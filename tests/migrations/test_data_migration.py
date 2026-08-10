@@ -14,6 +14,7 @@ filename machinery resolve through the real ``paths()`` plumbing.
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -103,3 +104,37 @@ def test_scaffolded_file_is_an_importable_plain_migration(migrations_dir):
     assert "DB.table(" in body
     assert "DB.statement(" in body
     assert "from cara.facades import DB" in body
+
+
+def test_loader_registers_dynamic_module_before_dataclass_decorators_run(
+    migrations_dir,
+):
+    file_path = migrations_dir / "0001_01_01_000000_dataclass_migration.py"
+    file_path.write_text(
+        """from dataclasses import dataclass
+
+from cara.eloquent.migrations import Migration
+
+
+@dataclass(frozen=True, slots=True)
+class Evidence:
+    value: int
+
+
+class DataclassMigration(Migration):
+    evidence = Evidence(7)
+
+    def up(self):
+        pass
+
+    def down(self):
+        pass
+"""
+    )
+
+    cls = _load_class(file_path)
+    try:
+        assert cls.evidence.value == 7
+        assert sys.modules[cls.__module__].DataclassMigration is cls
+    finally:
+        sys.modules.pop(cls.__module__, None)

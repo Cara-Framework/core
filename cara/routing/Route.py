@@ -385,12 +385,6 @@ class Route:
         return cls
 
     @classmethod
-    def validate(cls, parameter: str, rules: str) -> Route:
-        """Set validation rules for a route parameter."""
-        RouteParameterValidator.set_validation_rules(parameter, rules)
-        return cls
-
-    @classmethod
     def prefix(cls, prefix: str) -> RouteGroup:
         return RouteGroup(prefix=prefix)
 

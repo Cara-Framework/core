@@ -1,4 +1,22 @@
-"""ORM / Eloquent-style exceptions."""
+"""Database-infrastructure exceptions and the root of the ORM taxonomy.
+
+``ORMException`` is the single base for EVERY ORM/database error the
+framework raises — connections, migrations, and (via ``ModelException``
+in ``types.ModelExceptions``) model and query failures.
+
+It did not used to be. Two disjoint roots shipped side by side:
+``ORMException`` here and ``ModelException`` there, each with its own
+``ModelNotFoundException`` / ``QueryException`` / ``InvalidArgumentException``
+/ ``MultipleRecordsFoundException`` / ``DriverNotFoundException``. The two
+public barrels one level apart bound those short names to DIFFERENT
+classes, so ``except ORMException`` — the base whose own docstring
+advertised it as "Base for ORM-related errors" — caught NONE of the
+errors the ORM actually raised, and ``from cara.exceptions.types import
+ModelNotFoundException`` produced an ``except`` clause that could never
+fire. The duplicates are gone and ``ModelException`` now descends from
+this class, so one ``except ORMException`` finally covers "anything the
+database layer raised".
+"""
 
 from __future__ import annotations
 
@@ -6,35 +24,9 @@ from .Base import CaraException
 
 
 class ORMException(CaraException):
-    """Base for ORM-related errors."""
+    """Base for every ORM/database error, including migrations and connections."""
 
     pass
-
-
-class DriverNotFoundException(ORMException):
-    """Exception raised when a database driver is not found."""
-
-    pass
-
-
-class ModelNotFoundException(ORMException):
-    """
-    Exception raised when a model is not found.
-    HTTP 404 Not Found.
-    """
-
-    is_http_exception = True
-    status_code = 404
-
-
-class Http404Exception(CaraException):
-    """
-    Exception for HTTP 404 errors.
-    HTTP 404 Not Found.
-    """
-
-    is_http_exception = True
-    status_code = 404
 
 
 class ConnectionNotRegisteredException(ORMException):
@@ -43,24 +35,21 @@ class ConnectionNotRegisteredException(ORMException):
     pass
 
 
-class QueryException(ORMException):
-    """Exception raised when a database query fails."""
+class MigrationException(ORMException):
+    """The migration history layer refused, or could not describe, a request.
 
-    pass
-
-
-class MultipleRecordsFoundException(ORMException):
-    """Exception raised when multiple records are found when expecting one."""
-
-    pass
-
-
-class InvalidArgumentException(ORMException, ValueError):
-    """Exception raised when an invalid argument is provided.
-
-    Also a ``ValueError`` (an invalid argument IS a value error) so callers
-    and tests that catch ``ValueError`` keep working — mirrors the canonical
-    ``types.model.InvalidArgumentException``.
+    Exists because ``ORMException`` stopped being a usable sentinel the
+    moment it became the root of the WHOLE database taxonomy.
+    ``MigrationTracker.ensure_migrations_table`` wraps any bootstrap
+    failure with the table name and re-raises its OWN already-contextual
+    errors untouched — ``except ORMException: raise`` was how it told the
+    two apart. Once ``QueryException`` joined the taxonomy under
+    ``ORMException``, that clause also matched the driver error raised by
+    ``CREATE TABLE`` itself, so a permission failure on the migrations
+    table propagated as a bare ``relation "migrations" permission denied``
+    with no hint of which table or which phase produced it. The
+    "mine, already explained" signal is now a class, not a base everyone
+    else joined.
     """
 
     pass
@@ -90,13 +79,8 @@ class DatabaseUnavailableException(ORMException):
 
 
 __all__ = [
-    "ORMException",
-    "DriverNotFoundException",
-    "ModelNotFoundException",
-    "Http404Exception",
     "ConnectionNotRegisteredException",
-    "QueryException",
-    "MultipleRecordsFoundException",
-    "InvalidArgumentException",
     "DatabaseUnavailableException",
+    "MigrationException",
+    "ORMException",
 ]

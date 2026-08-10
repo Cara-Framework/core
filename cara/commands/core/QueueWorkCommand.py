@@ -46,6 +46,9 @@ from cara.queues.retry.Policy import (
     DEFAULT_MAX_ATTEMPTS as _RETRY_DEFAULT_MAX_ATTEMPTS,
 )
 from cara.queues.retry.Policy import (
+    DEFAULT_MAX_THROTTLE_ATTEMPTS as _RETRY_DEFAULT_MAX_THROTTLE_ATTEMPTS,
+)
+from cara.queues.retry.Policy import (
     DEFAULT_RETRY_BACKOFF_SECONDS as _RETRY_DEFAULT_BACKOFF_SECONDS,
 )
 from cara.queues.serializers.SignedJsonJobSerializer import (
@@ -174,47 +177,39 @@ class AMQPConnectionManager:
             return False
 
     def _create_connection(self):
-        """Create new AMQP connection."""
+        """Create a new AMQP connection from the driver's parameters.
+
+        ``AMQPDriver._connection_parameters`` is the ONE source of AMQP
+        connection truth: it is the only place that reads ``scheme``,
+        builds the verified TLS context (``check_hostname`` +
+        ``CERT_REQUIRED``), refuses a half-configured mTLS pair, and pins
+        ``connection_attempts=1`` / ``retry_delay=0`` so a dead broker
+        surfaces here instead of inside pika's own retry loop.
+
+        This method used to restate those parameters in an ``else``
+        branch for the case where the driver could not supply them. That
+        copy knew nothing about ``scheme``: it built
+        ``pika.ConnectionParameters`` with ``PlainCredentials`` and no
+        ``ssl_options``, so a worker whose operator had configured
+        ``RABBIT_SCHEME=amqps`` would have connected in PLAINTEXT and put
+        the broker username and password on the wire. It survived only
+        because an unrelated precondition 1600 lines away happened to
+        reject drivers without ``_connection_parameters``; relaxing that
+        check would have silently downgraded every worker connection.
+        Reading the SSOT removes the downgrade path entirely — a driver
+        that cannot describe its own connection is a misconfiguration and
+        must fail loudly, never connect insecurely.
+        """
         import pika
 
-        if self.driver is not None and hasattr(self.driver, "_connection_parameters"):
-            parameters = self.driver._connection_parameters(self.driver.options)
-        else:
-            credentials = pika.PlainCredentials(
-                self.config("queue.drivers.amqp.username"),
-                self.config("queue.drivers.amqp.password"),
+        if self.driver is None or not hasattr(self.driver, "_connection_parameters"):
+            raise ConfigurationException(
+                "queue:work requires the AMQP driver for durable subscriptions; "
+                "refusing to build connection parameters without it."
             )
-            parameters = pika.ConnectionParameters(
-                host=self.config("queue.drivers.amqp.host"),
-                port=self.config("queue.drivers.amqp.port", 5672),
-                virtual_host=self.config("queue.drivers.amqp.vhost", "/"),
-                credentials=credentials,
-                heartbeat=int(
-                    self.config(
-                        "queue.drivers.amqp.heartbeat_seconds",
-                        60,
-                    )
-                ),
-                blocked_connection_timeout=float(
-                    self.config(
-                        "queue.drivers.amqp.blocked_connection_timeout_seconds",
-                        10,
-                    )
-                ),
-                socket_timeout=float(
-                    self.config(
-                        "queue.drivers.amqp.socket_timeout_seconds",
-                        5,
-                    )
-                ),
-                stack_timeout=float(
-                    self.config(
-                        "queue.drivers.amqp.stack_timeout_seconds",
-                        10,
-                    )
-                ),
-            )
-        return pika.BlockingConnection(parameters)
+        return pika.BlockingConnection(
+            self.driver._connection_parameters(self.driver.options)
+        )
 
     def create_channel(self):
         """Create fresh channel for queue operations."""
@@ -465,15 +460,46 @@ class JobProcessor:
     # hand-copied constants "in lockstep" by comment only.
     DEFAULT_MAX_ATTEMPTS = _RETRY_DEFAULT_MAX_ATTEMPTS
     DEFAULT_RETRY_BACKOFF_SECONDS = _RETRY_DEFAULT_BACKOFF_SECONDS
+    DEFAULT_MAX_THROTTLE_ATTEMPTS = _RETRY_DEFAULT_MAX_THROTTLE_ATTEMPTS
 
     @staticmethod
-    def _should_retry_job(msg, instance) -> bool:
+    def _envelope_counter(msg, key: str) -> int:
+        """Read a non-negative integer counter out of a job envelope.
+
+        Envelopes signed before a counter existed simply do not carry the
+        key, and a corrupted producer can stamp it ``None`` or a string;
+        both must read as 0 rather than explode inside the failure router,
+        because the router is the last thing standing between a failed job
+        and a lost delivery. Negative values are clamped: a negative index
+        would silently select the LAST backoff entry instead of the first.
+        """
+        if not msg:
+            return 0
+        try:
+            raw = msg.get(key, 0)
+            return max(0, int(raw if raw is not None else 0))
+        except TypeError, ValueError:
+            return 0
+
+    @staticmethod
+    def _should_retry_job(msg, instance, exc: Exception) -> bool:
         """Decide whether a failed message should be republished with a delay.
 
         ``msg["attempts"]`` is the *attempts-already-made* counter
         (AMQPDriver.push stamps it 0; each retry republish bumps it).
         The cap is whatever the job class declares via ``max_attempts``
         (default :data:`DEFAULT_MAX_ATTEMPTS`).
+
+        Throttles are budgeted SEPARATELY. A throttle deliberately leaves
+        ``attempts`` frozen (see _requeue_with_delay), which used to mean
+        the budget check below was permanently ``1 < 3`` → True: a job
+        starved by a sustained concurrency limit re-queued itself forever,
+        writing a delivery row plus a job UPDATE and a broker publish every
+        few seconds with no terminal signal to anyone. ``throttle_attempts``
+        is the throttle lane's own counter, capped by the job's
+        ``max_throttle_attempts`` (default
+        :data:`DEFAULT_MAX_THROTTLE_ATTEMPTS`), so sustained starvation now
+        ends in the DLQ where operators can see it.
 
         Pre-fix this read ``msg["attempt"]`` (singular — a key nothing
         ever set) and compared it to ``msg["attempts"]`` as if that
@@ -483,12 +509,26 @@ class JobProcessor:
         """
         if not msg:
             return False
-        try:
-            attempts_done = int(
-                msg.get("attempts", 0) if msg.get("attempts", 0) is not None else 0
+        if getattr(exc, "is_throttle", False):
+            # The two budgets are ORTHOGONAL, and that is safe only because
+            # ``throttle_attempts`` survives the signed envelope: this branch
+            # bounds starvation on its own counter, so it is not a bypass of
+            # the failure budget. It also cannot buy the job an extra
+            # EXECUTION — a throttle means the job never ran, so no throttle
+            # chain can produce more than ``max_attempts`` actual runs. Making
+            # the two conjunctive instead would dead-letter a job that still
+            # has a run coming to it, purely because a gate happened to be shut
+            # when its turn arrived.
+            # If the envelope ever stops carrying the counter, this read is
+            # permanently 0 and the bound becomes fiction — that hop is pinned
+            # in tests/queues/test_signed_json_job_serializer.py.
+            max_throttle_attempts = int(
+                getattr(instance, "max_throttle_attempts", None)
+                or JobProcessor.DEFAULT_MAX_THROTTLE_ATTEMPTS
             )
-        except TypeError, ValueError:
-            attempts_done = 0
+            throttle_done = JobProcessor._envelope_counter(msg, "throttle_attempts")
+            return throttle_done + 1 < max_throttle_attempts
+        attempts_done = JobProcessor._envelope_counter(msg, "attempts")
         max_attempts = int(
             getattr(instance, "max_attempts", None) or JobProcessor.DEFAULT_MAX_ATTEMPTS
         )
@@ -521,13 +561,22 @@ class JobProcessor:
         commit and stamp the new message with
         ``attempts = attempts_done + 1`` so the next failure can decide
         budget correctly.
+
+        The envelope carries TWO counters, not one. ``attempts`` is the
+        failure budget; ``throttle_attempts`` is the starvation budget.
+        They were the same integer once, and because a throttle correctly
+        leaves ``attempts`` frozen, the backoff index derived from it was
+        frozen too — every throttled redelivery came back after the FIRST
+        schedule entry (1 second) forever, and the failure budget never
+        moved, so nothing ever dead-lettered. Two counters means the
+        throttle lane escalates through the same 1s/5s/30s schedule and
+        still never spends the failure budget.
         """
         # The delivery ledger commits the new row and the source
         # ``retry_scheduled`` terminal transition in ONE DB transaction. Only
         # after that durable acceptance may the broker source be ACKed.
-        attempts_done = int(
-            msg.get("attempts", 0) if msg.get("attempts", 0) is not None else 0
-        )
+        attempts_done = JobProcessor._envelope_counter(msg, "attempts")
+        throttle_attempts = JobProcessor._envelope_counter(msg, "throttle_attempts")
         # Throttle-class exceptions (``ConcurrencyExceeded`` raised by
         # the ``ConcurrencyLimited`` middleware, future per-host rate-
         # limit middleware) signal "the job never got a slot, try again
@@ -539,6 +588,9 @@ class JobProcessor:
         # throttle classes opt in for free.
         is_throttle = bool(getattr(exc, "is_throttle", False))
         next_attempt = attempts_done if is_throttle else attempts_done + 1
+        # A real failure clears the starvation counter: the job DID get a
+        # slot and ran, so whatever starvation preceded it is history.
+        next_throttle = throttle_attempts + 1 if is_throttle else 0
 
         backoff_schedule = getattr(
             instance,
@@ -547,8 +599,17 @@ class JobProcessor:
         )
         if not isinstance(backoff_schedule, (list, tuple)) or not backoff_schedule:
             backoff_schedule = JobProcessor.DEFAULT_RETRY_BACKOFF_SECONDS
-        idx = min(attempts_done, len(backoff_schedule) - 1)
+        # Both counters advance the SAME schedule — a redelivery is a
+        # redelivery, whether it was caused by a fault or by starvation.
+        idx = min(attempts_done + throttle_attempts, len(backoff_schedule) - 1)
         base_delay = int(backoff_schedule[idx])
+        # A throttle that knows WHEN its gate reopens outranks the generic
+        # schedule. ``ThrottlesExceptions`` opens after ``retry_after``
+        # seconds (300 by default); coming back on the 1s/5s/30s schedule
+        # just spends the starvation budget knocking on a closed door.
+        retry_after = getattr(exc, "retry_after", None)
+        if is_throttle and isinstance(retry_after, (int, float)) and retry_after > 0:
+            base_delay = max(base_delay, int(retry_after))
 
         try:
             from cara.facades import Queue as _Queue
@@ -568,11 +629,19 @@ class JobProcessor:
             retry_options = {
                 "queue": queue_name or msg.get("queue") or "default",
                 "attempts": next_attempt,
+                "throttle_attempts": next_throttle,
                 "_otel": msg.get("_otel") or {},
                 "db_job_id": msg.get("db_job_id"),
                 "source_delivery_job_id": msg.get("job_id"),
                 "source_delivery_lease_token": delivery_lease_token,
-                "deduplication_key": (f"retry:{msg.get('job_id')}:{next_attempt}"),
+                # Both counters are in the dedup key. With ``attempts``
+                # alone a throttle chain minted the SAME key on every
+                # cycle (the counter is deliberately frozen) and only
+                # stayed unique by accident, because the source job_id
+                # happened to rotate.
+                "deduplication_key": (
+                    f"retry:{msg.get('job_id')}:{next_attempt}:{next_throttle}"
+                ),
                 "unique_key": msg.get("unique_key"),
             }
             if msg.get("_tenant_mode") == "tenant":
@@ -606,9 +675,11 @@ class JobProcessor:
                 with Tenancy.as_tenant(msg.get("_tenant")):
                     _Queue.later(delay_seconds, instance, **retry_options)
             Log.info(
-                "↻ Durable retry scheduled for %s (attempt %s, +%ss, reason=%s)",
+                "↻ Durable retry scheduled for %s "
+                "(attempt %s, throttle %s, +%ss, reason=%s)",
                 instance.__class__.__name__,
                 next_attempt,
+                next_throttle,
                 delay_seconds,
                 type(exc).__name__,
             )
@@ -659,14 +730,24 @@ class JobProcessor:
           fence from the processing source to its delayed child.
         * Terminal failure removes the row from the open-delivery index, so a
           later legitimate dispatch can proceed.
+
+        The budget question needs the exception, because a throttle
+        ("never got a slot") and a fault ("ran and blew up") spend
+        different budgets — see ``_should_retry_job``. A job that exhausts
+        the throttle budget dead-letters with a ``throttle_exhausted``
+        reason so DLQ triage can tell capacity starvation apart from job
+        failure without re-reading the job's own error text.
         """
         do_not_retry = bool(getattr(exc, "do_not_retry", False))
         can_retry = (
             msg
             and instance is not None
             and not do_not_retry
-            and JobProcessor._should_retry_job(msg, instance)
+            and JobProcessor._should_retry_job(msg, instance, exc)
         )
+        terminal_reason = str(exc)
+        if not can_retry and getattr(exc, "is_throttle", False):
+            terminal_reason = f"throttle_exhausted: {exc}"
 
         if can_retry:
             if delivery_store is None or delivery_lease_token is None:
@@ -693,7 +774,7 @@ class JobProcessor:
             channel,
             method_frame,
             msg,
-            str(exc),
+            terminal_reason,
             instance=instance,
             delivery_store=delivery_store,
             delivery_lease_token=delivery_lease_token,
@@ -2532,6 +2613,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                         driver._connected = False
 
                 except Exception:
+                    # allow-silent-except: best-effort teardown of an already-broken driver
                     continue
 
             # Force a small delay to let any pending operations complete

@@ -145,3 +145,114 @@ def test_cross_cutting_layer_is_not_treated_as_a_domain_layer(tmp_path):
         "class Client:\n    pass\n",
     )
     assert DomainRegistry.scan(manifest) == []
+
+
+# ── registry shape (folded in from a product-only hand-written test) ──
+
+
+def _two_layer(tmp_path, domains, **overrides):
+    """A manifest over two domain layers, with a member module per domain."""
+    manifest = make_manifest(
+        tmp_path,
+        layers=("services", "repositories"),
+        domains=domains,
+        **overrides,
+    )
+    for name in {**domains, **overrides.get("flows", {})}:
+        for layer in ("services", "repositories"):
+            write(
+                tmp_path / "app" / layer / name / "Thing.py", "class Thing:\n    pass\n"
+            )
+    return manifest
+
+
+def test_unsorted_registry_keys_are_a_finding(tmp_path):
+    manifest = _two_layer(
+        tmp_path, {"user": "User domain.", "catalog": "Catalog domain."}
+    )
+
+    assert any("not alphabetical" in f.message for f in DomainRegistry.scan(manifest))
+
+
+def test_a_key_that_is_not_a_lowercase_identifier_is_a_finding(tmp_path):
+    manifest = _two_layer(tmp_path, {"Catalog": "Catalog domain."})
+
+    assert any(
+        "not a lowercase identifier" in f.message for f in DomainRegistry.scan(manifest)
+    )
+
+
+def test_a_name_in_both_registries_is_a_finding(tmp_path):
+    manifest = _two_layer(
+        tmp_path,
+        {"catalog": "Catalog domain."},
+        flows={"catalog": "Catalog pipeline stage."},
+    )
+
+    assert any(
+        "BOTH a domain and a flow stage" in f.message
+        for f in DomainRegistry.scan(manifest)
+    )
+
+
+def test_an_unpinned_single_layer_domain_is_a_finding(tmp_path):
+    manifest = _two_layer(tmp_path, {"catalog": "Catalog domain."})
+    (tmp_path / "app" / "repositories" / "catalog" / "Thing.py").unlink()
+    (tmp_path / "app" / "repositories" / "catalog").rmdir()
+
+    assert any(
+        "exists in one domain layer only" in f.message
+        for f in DomainRegistry.scan(manifest)
+    )
+
+
+def test_pinning_that_single_layer_domain_clears_it(tmp_path):
+    manifest = _two_layer(
+        tmp_path,
+        {"catalog": "Catalog domain."},
+        single_layer_domains=frozenset({"catalog"}),
+    )
+    (tmp_path / "app" / "repositories" / "catalog" / "Thing.py").unlink()
+    (tmp_path / "app" / "repositories" / "catalog").rmdir()
+
+    assert DomainRegistry.scan(manifest) == []
+
+
+def test_a_pin_whose_domain_grew_a_second_layer_is_stale(tmp_path):
+    manifest = _two_layer(
+        tmp_path,
+        {"catalog": "Catalog domain."},
+        single_layer_domains=frozenset({"catalog"}),
+    )
+
+    assert any(
+        "stale single_layer_domains pin" in f.message
+        for f in DomainRegistry.scan(manifest)
+    )
+
+
+def test_registry_size_is_unenforced_until_a_product_declares_a_budget(tmp_path):
+    domains = {name: f"{name} domain." for name in ("a", "b", "c")}
+
+    assert not any(
+        "budget" in f.message for f in DomainRegistry.scan(_two_layer(tmp_path, domains))
+    )
+
+    manifest = _two_layer(tmp_path, domains, registry_size_bounds=(6, 14))
+    assert any("budget of 6-14" in f.message for f in DomainRegistry.scan(manifest))
+
+
+def test_a_pin_is_meaningless_when_the_deployable_has_one_domain_layer(tmp_path):
+    manifest = make_manifest(
+        tmp_path,
+        layers=("services",),
+        domains={"catalog": "Catalog domain."},
+        single_layer_domains=frozenset({"catalog"}),
+    )
+    write(
+        tmp_path / "app" / "services" / "catalog" / "Thing.py", "class Thing:\n    pass\n"
+    )
+
+    assert any(
+        "fewer than two domain layers" in f.message for f in DomainRegistry.scan(manifest)
+    )

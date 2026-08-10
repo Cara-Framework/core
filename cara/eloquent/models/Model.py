@@ -29,6 +29,7 @@ from typing import Any, Self
 import pendulum
 from inflection import tableize, underscore
 
+from cara.eloquent.Integrity import is_unique_violation
 from cara.exceptions import InvalidArgumentException, ModelNotFoundException
 from cara.support import Collection
 
@@ -48,6 +49,24 @@ from ..query import QueryBuilder
 from ..scopes import MakesTimestamps
 
 _logger = logging.getLogger("cara.eloquent.models")
+
+
+def _is_delegated(cls: type, attribute: str) -> bool:
+    """Whether ``cls`` advertises ``attribute`` for instantiate-and-delegate.
+
+    Read through ``type.__getattribute__`` rather than ordinary attribute
+    access: on a class whose metaclass is ``ModelMeta`` an ordinary read
+    re-enters ``ModelMeta.__getattribute__``, and reading the gate must not
+    trip the gate.
+    """
+    for source in ("__passthrough__", "_class_scopes"):
+        try:
+            names = type.__getattribute__(cls, source)
+        except AttributeError:
+            continue
+        if names and attribute in names:
+            return True
+    return False
 
 
 class ModelMeta(type):
@@ -118,8 +137,18 @@ class ModelMeta(type):
     def __getattribute__(cls: type, attribute: str) -> Any:
         """Enhanced meta method with Laravel-style scope handling.
 
-        Enables static method calls on models by instantiating and delegating.
-        Falls back to instance method access if class attribute not found.
+        Enables static method calls on models by instantiating and delegating,
+        but ONLY for the names the model deliberately delegates: its
+        ``__passthrough__`` query surface and its registered query scopes.
+
+        Pre-fix ANY missing attribute reached the instantiation fallback, and
+        constructing a model boots the application — so ``hasattr(M, "x")``
+        raised ``ConnectionNotRegisteredException`` instead of answering
+        False, and ``getattr(M, "__test__", default)`` raised instead of
+        returning the default. Pytest collection, ``copy``, ``pickle`` and
+        every duck-typing probe pay that cost, which is the root of the
+        "touching a model attribute boots the app" hazard. A name the model
+        never advertised is simply absent.
 
         Args:
             attribute: The attribute name to access
@@ -134,14 +163,21 @@ class ModelMeta(type):
             # First try normal attribute access
             return super().__getattribute__(attribute)
         except AttributeError:
-            # If attribute doesn't exist, try to instantiate and get it (original behavior)
+            pass
+
+        # Private and dunder names are never delegated: they are probes
+        # (``__test__``, ``__deepcopy__``, ``__getstate__``) or internals, and
+        # answering them must never cost a database connection.
+        if not attribute.startswith("_") and _is_delegated(cls, attribute):
             try:
                 instantiated = cls()
                 return getattr(instantiated, attribute)
             except AttributeError:
-                raise AttributeError(
-                    f"'{cls.__name__}' object has no attribute '{attribute}'"
-                ) from None
+                pass
+
+        raise AttributeError(
+            f"'{cls.__name__}' object has no attribute '{attribute}'"
+        ) from None
 
 
 class Model(
@@ -1285,10 +1321,9 @@ class Model(
         the loser of the race surfaces that as an unhandled
         ``IntegrityError`` even though semantically the operation
         succeeded (the row IS there now — just inserted by the other
-        request). The fix detects the unique-violation SQLSTATE /
-        message and re-runs the SELECT to return the row the winning
-        side inserted. Mirrors the driver-agnostic pattern used
-        elsewhere for unique-violation translation.
+        request). The fix asks ``cara.eloquent.Integrity`` — the single
+        classifier — and re-runs the SELECT to return the row the winning
+        side inserted.
 
         Without a UNIQUE constraint there's no atomic guard — two
         concurrent callers DO each insert a row. ``first_or_create``
@@ -1311,7 +1346,7 @@ class Model(
         try:
             return self.create(total, id_key=cls.get_primary_key())
         except Exception as exc:
-            if not cls._is_unique_violation(exc):
+            if not is_unique_violation(exc):
                 raise
             # Concurrent insert won the race — re-query and return
             # the row they inserted. If it's STILL not there
@@ -1322,23 +1357,6 @@ class Model(
             if again is not None:
                 return again
             raise
-
-    @staticmethod
-    def _is_unique_violation(exc: Exception) -> bool:
-        """Detect a UNIQUE constraint violation across psycopg2,
-        psycopg3, and wrapped database exceptions.
-
-        psycopg surfaces SQLSTATE ``23505`` on the exception (and on
-        ``exc.orig.pgcode`` when wrapped); most database layers preserve
-        one of those signals in the message string.
-        """
-        sqlstate = getattr(exc, "sqlstate", None) or getattr(
-            getattr(exc, "orig", None), "pgcode", None
-        )
-        if sqlstate == "23505":
-            return True
-        msg = str(exc).lower()
-        return "duplicate key" in msg or "unique constraint" in msg
 
     @classmethod
     def first_or_new(cls, wheres, values: dict | None = None) -> Any:
@@ -1382,7 +1400,7 @@ class Model(
             try:
                 return self.create(total, id_key=cls.get_primary_key()).fresh()
             except Exception as exc:
-                if not cls._is_unique_violation(exc):
+                if not is_unique_violation(exc):
                     raise
                 # Concurrent insert beat us. Fall through to the
                 # UPDATE branch so the loser's payload still lands
@@ -1468,20 +1486,8 @@ class Model(
         if accessor_method_name in self.__class__.__dict__:
             accessor_method = self.__class__.__dict__[accessor_method_name]
             if hasattr(accessor_method, "_is_accessor"):
-                # Get the raw value (dirty first, then stored, then None for virtual attributes)
-                if (
-                    "__dirty_attributes__" in self.__dict__
-                    and attribute in self.__dict__["__dirty_attributes__"]
-                ):
-                    raw_value = self.__dict__["__dirty_attributes__"][attribute]
-                elif (
-                    "__attributes__" in self.__dict__
-                    and attribute in self.__dict__["__attributes__"]
-                ):
-                    raw_value = self.__dict__["__attributes__"][attribute]
-                else:
-                    # For virtual attributes (no stored value), pass None
-                    raw_value = None
+                # Dirty first, then stored, then None for virtual attributes.
+                raw_value = self.get_raw_attribute(attribute)
 
                 # Call the accessor with the raw value (bound method call)
                 return accessor_method(self, raw_value)
@@ -1490,20 +1496,8 @@ class Model(
         non_decorated_accessor = f"get_{attribute}_attribute"
         if non_decorated_accessor in self.__class__.__dict__:
             accessor_method = self.__class__.__dict__[non_decorated_accessor]
-            # Get the raw value for non-decorated accessors
-            if (
-                "__dirty_attributes__" in self.__dict__
-                and attribute in self.__dict__["__dirty_attributes__"]
-            ):
-                raw_value = self.__dict__["__dirty_attributes__"][attribute]
-            elif (
-                "__attributes__" in self.__dict__
-                and attribute in self.__dict__["__attributes__"]
-            ):
-                raw_value = self.__dict__["__attributes__"][attribute]
-            else:
-                # For virtual attributes (no stored value), pass None
-                raw_value = None
+            # Same precedence, same owner.
+            raw_value = self.get_raw_attribute(attribute)
 
             # Call the accessor method with raw value
             return accessor_method(self, raw_value)
@@ -1630,9 +1624,18 @@ class Model(
                 self.__dict__[attribute] = value
 
     def get_raw_attribute(self, attribute):
-        """
-        Gets an attribute without having to call the models magic methods. Gets around infinite
-        recursion loops.
+        """Read an attribute's stored value: PENDING first, then persisted.
+
+        This is the one owner of that precedence. Reads go through
+        ``self.__dict__`` rather than attribute access so the method stays
+        usable from ``__getattr__`` without recursing.
+
+        Pre-fix this read ``__attributes__`` alone while every write lands in
+        ``__dirty_attributes__`` (``Model.__setattr__``), so it could not see
+        an unsaved value: ``m.foo = 5`` followed by ``m.get_attribute("foo")``
+        answered ``None`` — the public read API disagreed with ``m.foo`` on
+        the same model. ``__getattr__`` had the precedence right and spelled
+        it out three separate times; those copies now call here.
 
         Args:
             attribute (string): The attribute to fetch
@@ -1640,7 +1643,13 @@ class Model(
         Returns:
             mixed: Any value an attribute can be.
         """
-        return self.__attributes__.get(attribute)
+        dirty = self.__dict__.get("__dirty_attributes__")
+        if dirty is not None and attribute in dirty:
+            return dirty[attribute]
+        stored = self.__dict__.get("__attributes__")
+        if stored is not None:
+            return stored.get(attribute)
+        return None
 
     def is_dirty(self, *attributes: str) -> bool:
         """Return ``True`` if the model (or specific attributes) has unsaved changes.
@@ -1713,6 +1722,14 @@ class Model(
         return {**self.__internal_cast_map__, **self.__cast_map__}
 
     def _cast_attribute(self, attribute, value):
+        # An undeclared attribute has no cast — return it as it is stored.
+        # This used to ``KeyError``, which only stayed hidden because
+        # ``get_raw_attribute`` answered ``None`` for every unsaved value and
+        # ``get_attribute`` short-circuits on ``None``: the moment reads saw
+        # pending writes, every uncast attribute raised.
+        if attribute not in self.__casts__:
+            return value
+
         cast_method = self.__casts__[attribute]
         cast_map = self.get_cast_map()
 

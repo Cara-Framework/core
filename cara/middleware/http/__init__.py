@@ -9,8 +9,10 @@ from .EnforceBodySizeLimit import EnforceBodySizeLimit
 from .FilterBlockedUserAgents import FilterBlockedUserAgents
 from .HandleCors import HandleCors
 from .LogHttpRequests import LogHttpRequests
+from .PersistRequestLog import PersistRequestLog
 from .RecordPrometheusMetrics import RecordPrometheusMetrics
 from .RecordRequestMetrics import RecordRequestMetrics
+from .RequestLogStore import RequestLogStore
 from .ResetAuth import ResetAuth
 from .SecurityHeaders import SecurityHeaders
 from .ServeStaticFiles import ServeStaticFiles
@@ -31,8 +33,10 @@ __all__ = [
     "FilterBlockedUserAgents",
     "HandleCors",
     "LogHttpRequests",
+    "PersistRequestLog",
     "RecordPrometheusMetrics",
     "RecordRequestMetrics",
+    "RequestLogStore",
     "ResetAuth",
     "SecurityHeaders",
     "ServeStaticFiles",

@@ -39,6 +39,7 @@ from urllib.parse import parse_qs
 
 from cara.exceptions.types.websocket import WebSocketException
 from cara.facades import Broadcast, Log
+from cara.support import json_dumps
 
 
 class Socket:
@@ -234,7 +235,7 @@ class Socket:
 
     async def send_json(self, obj: Any) -> None:
         try:
-            payload = json.dumps(obj, default=_json_default)
+            payload = json_dumps(obj)
         except Exception as e:
             raise WebSocketException(f"Failed to serialize JSON: {e}", 4009) from e
         await self.send_text(payload)
@@ -569,22 +570,6 @@ class Socket:
     def receive(self) -> Any:
         """Direct ASGI receive callable. Same caveat as ``send``."""
         return self._receive
-
-
-# ---------------------------------------------------------------------
-# JSON encoder default — handles types stdlib json doesn't (Decimal,
-# datetime). Centralised so every send_json call accepts the same set
-# of inputs.
-# ---------------------------------------------------------------------
-def _json_default(value: Any) -> Any:
-    from datetime import date, datetime
-    from decimal import Decimal
-
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 __all__ = ["Socket"]

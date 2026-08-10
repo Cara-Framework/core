@@ -25,7 +25,7 @@ class LoadEnvironment:
     def __init__(
         self,
         environment=None,
-        override=True,
+        override=False,
         only=None,
         base_path: str | Path | None = None,
     ):
@@ -34,7 +34,7 @@ class LoadEnvironment:
 
         Keyword Arguments:
             environment {string} -- An additional environment file to load. (default: {None})
-            override {bool} -- Whether or not the environment variables found should overwrite existing ones. (default: {False})
+            override {bool} -- Whether environment files should overwrite values already supplied by the process. (default: {False})
             only {string} -- If this is set then it will only load that environment. (default: {None})
             base_path {string|Path} -- Directory that owns the environment files. (default: cwd)
         """

@@ -6,14 +6,22 @@ handlers. Each handler can modify the input before passing it to the next stage.
 Similar to Laravel's Pipeline implementation - enables middleware chains and other
 sequential processing patterns.
 
-Two API surfaces are exposed:
+The Laravel-canonical fluent API is the only surface:
+``Pipeline.send(payload).through([...]).via("handle").then(destination)``.
+Both sync and async ``then()`` callables are supported; sync chains stay
+fully synchronous so callers can use the pipeline outside an event loop.
+Calling a pipeline — ``await Pipeline(passable, app).through([...])(handler)``,
+the shape the middleware capsules use — is an awaitable alias for ``then()``
+and nothing more.
 
-* The legacy async API used by middleware capsules:
-  ``Pipeline(passable, application).through([...]).__call__(final_handler)``.
-* The Laravel-canonical fluent API for general use:
-  ``Pipeline.send(payload).through([...]).via("handle").then(destination)``.
-  Both sync and async ``then()`` callables are supported; sync chains stay
-  fully synchronous so callers can use the pipeline outside an event loop.
+Pre-fix ``__call__`` was a second, independently written dispatch loop
+advertised as a "legacy async API". It had drifted: it hardcoded
+``pipe.handle`` so a caller who set ``via("process")`` had it silently
+discarded, it could not run a plain-callable pipe at all, and it appended to
+``executed_instances`` itself instead of going through ``_resolve_pipe`` — so
+every change to instance tracking had to be made twice. One behaviour, two
+implementations, is the failure the doctrine's no-shims rule exists to
+prevent.
 """
 
 from __future__ import annotations
@@ -146,11 +154,17 @@ class Pipeline:
         return False
 
     def _resolve_pipe(self, pipe: Any) -> Any:
-        """Materialise a pipe — instantiate classes, leave callables alone."""
+        """Materialise a pipe — instantiate classes, leave callables alone.
+
+        Every pipe the chain actually reaches is recorded in
+        ``executed_instances``, whether the caller handed us a class or an
+        already-built instance. The conductors terminate exactly this list, so
+        a pre-instantiated middleware that was skipped here never got its
+        ``terminate()`` called.
+        """
         if isinstance(pipe, type):
-            instance = pipe(self.application) if self.application else pipe()
-            self.executed_instances.append(instance)
-            return instance
+            pipe = pipe(self.application) if self.application else pipe()
+        self.executed_instances.append(pipe)
         return pipe
 
     def _invoke(self, pipe: Any, request: Any, next_callable: Callable) -> Any:
@@ -205,7 +219,7 @@ class Pipeline:
 
         return await call(0, self.passable)
 
-    # ── Legacy async API (preserved for middleware capsule callers) ────
+    # ── Chain construction and the callable alias ───────────────────
 
     def through(self, pipes: list[type | Any]) -> Pipeline:
         """Set the objects to send through the pipeline.
@@ -222,10 +236,22 @@ class Pipeline:
     async def __call__(
         self, final_handler: Callable[[Any], Awaitable[Any]] | None = None
     ) -> Any:
-        """Execute the pipeline.
+        """Run the pipeline — an awaitable alias for :meth:`then`.
+
+        This is the shape the HTTP and WebSocket conductors use
+        (``await pipeline.through(middleware)(handler)``). It owns no dispatch
+        logic of its own: everything goes through ``then()`` so ``via()``, the
+        depth ceiling, plain-callable pipes and ``executed_instances`` behave
+        identically no matter which entry point a caller reaches for.
+
+        A fully synchronous chain makes ``then()`` return a plain value rather
+        than an awaitable, so the result is awaited only when it is awaitable —
+        a bare ``await self.then(...)`` would raise ``TypeError`` on a sync
+        chain reached through this ``async def``.
 
         Args:
-            final_handler: Optional final handler to call at the end
+            final_handler: Optional final handler to call at the end.
+                Defaults to identity, matching ``then()``.
 
         Returns:
             The processed passable after going through all pipes
@@ -233,39 +259,9 @@ class Pipeline:
         Raises:
             RuntimeError: If the pipeline exceeds MAX_DEPTH pipes
         """
-        if len(self.pipes) > self.MAX_DEPTH:
-            raise RuntimeError(
-                f"Pipeline depth ({len(self.pipes)}) exceeds maximum "
-                f"({self.MAX_DEPTH}). Check for circular middleware."
-            )
-
-        executed = self.executed_instances
-
-        async def call_pipe(index: int, request: Any) -> Any:
-            # If we've processed all pipes, call the final handler or return
-            if index >= len(self.pipes):
-                if final_handler:
-                    return await final_handler(request)
-                return request
-
-            # Get the current pipe
-            pipe = self.pipes[index]
-
-            # Instantiate pipe if it's a class
-            if isinstance(pipe, type):
-                pipe = pipe(self.application) if self.application else pipe()
-
-            # Track the instance for later terminate() calls
-            executed.append(pipe)
-
-            # Call the pipe's handle method with a closure for the next pipe
-            result = await pipe.handle(
-                request,
-                lambda r: call_pipe(index + 1, r),
-            )
-            return result
-
-        result = await call_pipe(0, self.passable)
+        result = self.then(final_handler)
+        if inspect.isawaitable(result):
+            result = await result
         return result
 
 

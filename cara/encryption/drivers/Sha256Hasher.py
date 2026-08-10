@@ -12,6 +12,9 @@ import hmac
 
 
 class Sha256Hasher:
+    # SHA-256 absorbs its whole input; nothing is truncated away.
+    TRUNCATES_AT_BYTES = None
+
     def make(self, value: str) -> str:
         return hashlib.sha256(value.encode()).hexdigest()
 

@@ -29,6 +29,13 @@ Quick start
             expect(reason).to_equal("Price is null")
 """
 
+from .audits import (
+    AsyncDispatchAudit,
+    CacheKeyAudit,
+    DeployTopologyAudit,
+    DeployTopologyManifest,
+    NumericTruthinessAudit,
+)
 from .DatabaseTransactions import DatabaseTransactions
 from .Expectation import Expectation, ExpectationFailed, expect
 from .TestCase import TestCase
@@ -53,8 +60,12 @@ from .mocks import Mock, Spy, returning, when
 from .Pest import describe, it
 
 __all__ = [
+    "AsyncDispatchAudit",
     "CacheFake",
+    "CacheKeyAudit",
     "DatabaseTransactions",
+    "DeployTopologyAudit",
+    "DeployTopologyManifest",
     "EventFake",
     "Expectation",
     "ExpectationFailed",
@@ -62,6 +73,7 @@ __all__ = [
     "MailFake",
     "Mock",
     "NotificationFake",
+    "NumericTruthinessAudit",
     "QueueFake",
     "Spy",
     "TestCase",

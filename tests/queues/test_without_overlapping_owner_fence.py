@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from cara.queues.contracts.CancellableJob import JobThrottledException
 from cara.queues.middleware.RateLimited import WithoutOverlapping
 from cara.testing.fakes.CacheFake import CacheFake
 
@@ -78,7 +81,20 @@ def test_held_lock_skips_the_second_run(monkeypatch) -> None:
         ran.append("B")
         return "B-done"
 
-    # B's middleware run must find the key held and SKIP without running the body.
-    result_b = asyncio.run(mw.handle(_Job(timeout=60), _b_body))
-    assert result_b is None, "B must be skipped while A holds the lock"
+    # B's middleware run must find the key held and REFUSE to run the body.
+    #
+    # It must refuse by RAISING, not by returning. This assertion used to read
+    # ``result_b is None`` — but ``None`` is also the normal success return of
+    # an async handler, so the worker could not tell "skipped" from "done": it
+    # settled the delivery ``completed`` and ACKed, discarding B while the
+    # ledger reported it finished. The throttle signal is unambiguous and
+    # carries the delay after which the peer's lease could have expired.
+    with pytest.raises(JobThrottledException) as raised:
+        asyncio.run(mw.handle(_Job(timeout=60), _b_body))
+
     assert ran == [], "B's body must not run while the lock is held"
+    assert raised.value.key == "dup"
+    assert raised.value.retry_after >= 1
+    # The starvation lane, not the failure budget: B is healthy, it just lost
+    # the lock lottery.
+    assert JobThrottledException.is_throttle is True

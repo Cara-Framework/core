@@ -227,20 +227,37 @@ class JobTracker:
 
         Returns:
             bool: True if job should continue
+
+        Raises:
+            Exception: whatever the jobs-table read raised. A failed read is
+                NOT an answer. Pool exhaustion, a transient network drop or a
+                savepoint poisoned by an earlier 23505 used to be swallowed
+                into ``return True``, so an operator's cancellation was
+                ignored and the job's side effects kept landing — on a
+                long-running bulk push, writes continued reaching the channel
+                after cancel with only a WARNING as evidence. Unknown stays
+                unknown (§7); the caller decides what to do with it.
         """
-        try:
-            if not self.job_model:
-                return True
-
-            job_record = self.job_model.where("job_uid", job_uid).first()
-            if not job_record:
-                return True
-
-            return job_record.status not in [self.job_model.STATUS_CANCELLED]
-
-        except Exception as e:
-            Log.warning("Error checking job status %s: %s", job_uid, str(e))
+        if not self.job_model:
+            # No tracker model is configured, so no cancellation record can
+            # exist. Absence of the feature, not an unknown state.
             return True
+
+        try:
+            job_record = self.job_model.where("job_uid", job_uid).first()
+        except Exception:
+            Log.error(
+                "Cancellation gate could not read job %s — refusing to guess",
+                job_uid,
+                category="cara.queue.jobs",
+                exc_info=True,
+            )
+            raise
+
+        if not job_record:
+            return True
+
+        return job_record.status not in [self.job_model.STATUS_CANCELLED]
 
     def validate_job_or_cancel(
         self, job_uid: str, entity_id: str | None = None, operation: str = "operation"

@@ -7,12 +7,11 @@ integrating with Cara's mail system.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 from typing import Any
 from urllib.parse import urlencode
 
 from cara.notifications.channels.BaseChannel import BaseChannel
+from cara.notifications.UnsubscribeToken import mint as mint_unsubscribe_token
 
 
 class MailChannel(BaseChannel):
@@ -268,6 +267,7 @@ class MailChannel(BaseChannel):
         try:
             from cara.configuration import config
         except Exception:
+            # allow-silent-except: unset config injects nothing; templates carry their own defaults
             return
 
         def setting(key: str) -> str:
@@ -305,11 +305,9 @@ class MailChannel(BaseChannel):
 
         query = ""
         if user_public_id and email and secret:
-            token = hmac.new(
-                secret.encode("utf-8"),
-                f"{user_public_id}:{email}".encode(),
-                hashlib.sha256,
-            ).hexdigest()
+            # One frozen wire format, shared with whatever verifies the click
+            # — see cara.notifications.UnsubscribeToken.
+            token = mint_unsubscribe_token(user_public_id, email, secret)
             query = urlencode({"user": user_public_id, "token": token})
         elif confirm_url or processor_url:
             # The product declared an unsubscribe endpoint, so a link was meant

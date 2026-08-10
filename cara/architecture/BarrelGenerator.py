@@ -17,7 +17,8 @@ to an existing barrel:
 * a MODULE-OBJECT bind (``from . import X``) — ``X``'s own symbols stay
   module-qualified and are exempt from name-level generation (the
   module-object contract);
-* an aliased relative import (``from .X import Y as Z``);
+* an aliased relative import whose source still exists
+  (``from .X import Y as Z``);
 * an underscore-prefixed relative re-export, if the existing ``__all__``
   already listed it;
 * any statement placed AFTER the existing ``__all__`` — a deliberate late
@@ -41,7 +42,12 @@ import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cara.architecture._ast_utils import dunder_all, is_upper_const, parse, public_names
+from cara.architecture._ast_utils import (
+    declared_all,
+    is_module_object,
+    is_upper_const,
+    public_names,
+)
 from cara.architecture.Manifest import Manifest
 
 # Width EVERY emitted import is rendered against. The generator and
@@ -53,19 +59,6 @@ from cara.architecture.Manifest import Manifest
 # direction: ruff's magic trailing comma keeps an already-parenthesized
 # import open rather than collapsing it back onto one line.
 MAX_LINE = 88
-
-
-def _declared_all(path: Path) -> list[str]:
-    """Only the EXPLICIT ``__all__`` list (never the derived-names
-    fallback ``public_names`` uses) — needed to tell "not yet generated"
-    apart from "generated with an empty surface"."""
-    if not path.exists():
-        return []
-    tree = parse(path)
-    if tree is None:
-        return []
-    declared = dunder_all(tree)
-    return list(declared) if declared is not None else []
 
 
 def _fmt_from(relmod: str, specs: list[str]) -> str:
@@ -123,19 +116,6 @@ def _child_dirs(pkg_dir: Path) -> list[Path]:
     )
 
 
-def _is_module_object(pkg_dir: Path, name: str) -> bool:
-    """True only for a genuine module-object binding: the target is a real
-    submodule/subpackage AND does not itself export a same-named symbol
-    (class-per-file re-exports resolve to the CLASS, not the module)."""
-    leaf = pkg_dir / f"{name}.py"
-    if leaf.exists():
-        return name not in public_names(leaf)
-    sub_init = pkg_dir / name / "__init__.py"
-    if sub_init.exists():
-        return name not in _declared_all(sub_init)
-    return False
-
-
 class _Preserved:
     """What an existing ``__init__.py`` contributes to the regenerated file."""
 
@@ -148,7 +128,6 @@ class _Preserved:
         self.names: list[str] = []
         self.module_objects: set[str] = set()
         self.existing_all: set[str] = set()
-        self.rel_candidates: list[tuple[str, str]] = []
         if not init.exists():
             return
         source = init.read_text(encoding="utf-8")
@@ -201,6 +180,13 @@ class _Preserved:
                 and isinstance(node.value.value, str)
             ):
                 continue
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.level >= 1
+                and node.module
+                and not _relative_source_exists(pkg, node.level, node.module)
+            ):
+                continue
             if is_all_stmt(node):
                 continue
             if (
@@ -243,8 +229,6 @@ class _Preserved:
                             self.stmts.append(_fmt_from(relmod, [alias.name]))
                             if alias.name in self.existing_all:
                                 self.names.append(alias.name)
-                        else:
-                            self.rel_candidates.append((relmod, alias.name))
                     continue
                 self.stmts.append(with_leading_comments(node))
                 for alias in node.names:
@@ -263,7 +247,7 @@ class _Preserved:
                     a
                     for a in node.names
                     if a.asname is None
-                    and _is_module_object(_descend(pkg, base_parts), a.name)
+                    and is_module_object(_descend(pkg, base_parts), a.name)
                 ]
                 aliases = [a for a in node.names if a.asname and a.asname != a.name]
                 unders = [
@@ -285,13 +269,6 @@ class _Preserved:
                     self.stmts.append(_fmt_from(rel, [a.name]))
                     if a.name in self.existing_all:
                         self.names.append(a.name)
-                for a in node.names:
-                    if (
-                        a.asname is None
-                        and not a.name.startswith("_")
-                        and a not in mod_objs
-                    ):
-                        self.rel_candidates.append((rel, a.name))
             else:
                 self.const_stmts.append(with_leading_comments(node))
                 if isinstance(node, ast.Assign):
@@ -310,6 +287,21 @@ def _descend(base: Path, parts: list[str]) -> Path:
     for part in parts:
         base = base / part
     return base
+
+
+def _relative_source_exists(pkg: Path, level: int, module: str) -> bool:
+    """Return whether a relative import still has a source module.
+
+    Generated imports become ordinary relative imports on the next run. If a
+    child module is deleted, treating that old statement as a deliberate
+    preservation resurrects a dead import and makes the package unbootable.
+    Preserve custom relative imports only while their module/package exists.
+    """
+    base = pkg
+    for _ in range(max(0, level - 1)):
+        base = base.parent
+    target = _descend(base, module.split("."))
+    return target.with_suffix(".py").is_file() or (target / "__init__.py").is_file()
 
 
 def _pin_block(pin_name: str) -> str:
@@ -363,21 +355,6 @@ def _compose_init(
         parts.append("\n".join(gen_imports))
 
     all_names = set(exported) | preserved_names | ({pin_name} if pin_name else set())
-    residual: dict[str, list[str]] = {}
-    for relmod, name in preserved.rel_candidates:
-        if (
-            name not in all_names
-            and relmod.lstrip(".").split(".")[0] not in preserved.module_objects
-        ):
-            residual.setdefault(relmod, []).append(name)
-            all_names.add(name)
-    if residual:
-        parts.append(
-            "\n".join(
-                _fmt_import(rm, sorted(set(ns))) for rm, ns in sorted(residual.items())
-            )
-        )
-
     all_names_sorted = sorted(all_names)
     parts.append(_fmt_all(all_names_sorted))
     if preserved.post_stmts:
@@ -399,7 +376,7 @@ def _module_exports(pkg_dir: Path) -> dict[str, list[str]]:
         if names:
             out[f".{py.stem}"] = names
     for sub in _child_dirs(pkg_dir):
-        names = _declared_all(sub / "__init__.py")
+        names = declared_all(sub / "__init__.py")
         if names:
             out[f".{sub.name}"] = sorted(names)
     return out

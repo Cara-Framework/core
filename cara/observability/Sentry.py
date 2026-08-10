@@ -163,6 +163,7 @@ def set_request_user(user_id: Any, email: str | None = None) -> None:
     try:
         import sentry_sdk
     except Exception:
+        # allow-silent-except: sentry_sdk is optional
         return
     payload: dict = {"id": str(user_id)}
     if email:

@@ -1,12 +1,22 @@
-"""Model / ORM-related exceptions."""
+"""Model and query exceptions — the model half of the ORM taxonomy.
+
+Rooted at ``ORMException`` (``types.Eloquent``) rather than directly at
+``CaraException``: ``DatabaseUnavailableException`` and
+``QueryException`` were siblings with no common ancestor below
+``CaraException``, so no single ``except`` clause could mean "a database
+error from this call". A repository that wrote ``except ORMException``
+swallowed nothing and a 23505 escaped to the handler as an unhandled
+500. One root, two halves — infrastructure in ``types.Eloquent``, model
+and query here.
+"""
 
 from __future__ import annotations
 
-from .Base import CaraException
+from .Eloquent import ORMException
 
 
-class ModelException(CaraException):
-    """Base for all Eloquent/ORM exceptions."""
+class ModelException(ORMException):
+    """Base for model/query errors."""
 
     pass
 
@@ -74,7 +84,8 @@ class InvalidArgumentException(ModelException, ValueError):
     from spots that historically raised a bare ``ValueError`` — making it
     a ``ValueError`` subclass keeps every one of those call sites working
     whether they catch the specific type or the builtin. MRO is well-formed
-    (``ModelException`` → ``CaraException`` → ``Exception`` ← ``ValueError``).
+    (``ModelException`` → ``ORMException`` → ``CaraException`` → ``Exception``
+    ← ``ValueError``).
     """
 
     pass

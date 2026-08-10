@@ -24,7 +24,9 @@ CI gate for the convention:
      with one later, explained ``MODEL_TRANSITION = ("old", "new")`` migration
      only when its SQL proves the rename and ``new`` is the exact current model.
   7. INDEXES BELONG TO MODELS — an index that exists only inside a migration
-     file is silently DROPPED by the next regenerate-from-models.
+     file is silently DROPPED by the next regenerate-from-models. An immutable
+     historical index is exempt only when a later explained MODEL_LESS
+     migration declares ``DROPPED_INDEXES`` and its ``up()`` proves the drop.
   8. LITERAL DEFAULTS — generated migrations must be replayable without model
      imports; schema defaults therefore cannot contain class/constant lookups.
 
@@ -105,6 +107,12 @@ _DROP_INDEX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Literal metadata for a MODEL_LESS forward migration that retires an index
+# from immutable generated history: ``{index_name: model_table}``.  The audit
+# also requires an older matching CREATE and an exact DROP inside ``up()``;
+# the marker alone can never hide an undeclared index.
+DROPPED_INDEXES_MARKER = "DROPPED_INDEXES"
+
 # A naive TIMESTAMP. ``CURRENT_TIMESTAMP`` / ``LOCALTIMESTAMP`` / ``to_timestamp``
 # are excluded by the lookbehind (they are preceded by a word character),
 # ``TIMESTAMPTZ`` and ``TIMESTAMP WITH TIME ZONE`` by the lookaheads. What is
@@ -142,8 +150,11 @@ class MigrationFile:
     generated_table: str | None
     model_transition: tuple[str, str] | None
     transition_error: str | None
+    dropped_indexes: tuple[tuple[str, str], ...]
+    dropped_indexes_error: str | None
     docstring: str | None
     sql_constants: tuple[tuple[int, str], ...]
+    up_sql_constants: tuple[tuple[int, str], ...]
     syntax_error: str | None
 
 
@@ -248,6 +259,59 @@ def _model_transition(
     return (value[0], value[1]), None
 
 
+def _dropped_indexes(
+    tree: ast.Module,
+) -> tuple[tuple[tuple[str, str], ...], str | None]:
+    """Read explicit ``{historical_index: model_table}`` retirement metadata."""
+
+    marker: ast.AST | None = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == DROPPED_INDEXES_MARKER
+            for target in node.targets
+        ):
+            marker = node.value
+            break
+    if marker is None:
+        return (), None
+    try:
+        value = ast.literal_eval(marker)
+    except ValueError, TypeError:
+        return (), f"{DROPPED_INDEXES_MARKER} must be a literal mapping"
+    if not isinstance(value, dict) or not value:
+        return (), (
+            f"{DROPPED_INDEXES_MARKER} must be a non-empty "
+            "{index_name: model_table} mapping"
+        )
+
+    normalized: list[tuple[str, str]] = []
+    for index_name, table in value.items():
+        if (
+            not isinstance(index_name, str)
+            or not isinstance(table, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", index_name) is None
+            or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", table) is None
+        ):
+            return (), (
+                f"{DROPPED_INDEXES_MARKER} keys and values must be lowercase "
+                "Postgres identifiers"
+            )
+        normalized.append((index_name, table))
+    return tuple(sorted(normalized)), None
+
+
+def _up_sql_constants(tree: ast.Module) -> tuple[tuple[int, str], ...]:
+    """SQL-shaped literals contained by migration ``up()`` methods only."""
+
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "up":
+            found.extend(_string_constants(node))
+    return tuple(found)
+
+
 def parse_migration_file(path: Path) -> MigrationFile:
     """Classify one migration file by PARSING it. Never imports it."""
     try:
@@ -259,7 +323,10 @@ def parse_migration_file(path: Path) -> MigrationFile:
             None,
             None,
             None,
+            (),
             None,
+            None,
+            (),
             (),
             f"unreadable: {exc}",
         )
@@ -273,7 +340,10 @@ def parse_migration_file(path: Path) -> MigrationFile:
             None,
             None,
             None,
+            (),
             None,
+            None,
+            (),
             (),
             f"does not parse: {exc}",
         )
@@ -285,6 +355,7 @@ def parse_migration_file(path: Path) -> MigrationFile:
     # otherwise the escape hatch would be reported as an orphan every run.
     generated_table = match.group("table") if match and not model_less else None
     model_transition, transition_error = _model_transition(tree)
+    dropped_indexes, dropped_indexes_error = _dropped_indexes(tree)
 
     return MigrationFile(
         path=path,
@@ -292,8 +363,11 @@ def parse_migration_file(path: Path) -> MigrationFile:
         generated_table=generated_table,
         model_transition=model_transition,
         transition_error=transition_error,
+        dropped_indexes=dropped_indexes,
+        dropped_indexes_error=dropped_indexes_error,
         docstring=ast.get_docstring(tree),
         sql_constants=tuple(_string_constants(tree)),
+        up_sql_constants=_up_sql_constants(tree),
         syntax_error=None,
     )
 
@@ -352,7 +426,35 @@ def audit_migrations(
                     blocks_fix=True,
                 )
             )
-        elif entry.model_less and entry.model_transition:
+        if entry.dropped_indexes_error:
+            violations.append(
+                Violation(
+                    rule="invalid-index-retirement",
+                    path=name,
+                    message=entry.dropped_indexes_error,
+                    remedy=(
+                        f"declare {DROPPED_INDEXES_MARKER} as a literal "
+                        "{index_name: model_table} mapping"
+                    ),
+                    human_only=True,
+                    blocks_fix=True,
+                )
+            )
+        elif entry.dropped_indexes and not entry.model_less:
+            violations.append(
+                Violation(
+                    rule="invalid-index-retirement",
+                    path=name,
+                    message=(
+                        f"{DROPPED_INDEXES_MARKER} is valid only on an "
+                        f"explained {MODEL_LESS_MARKER} forward migration"
+                    ),
+                    remedy=f"add {MODEL_LESS_MARKER} = True or remove the marker",
+                    human_only=True,
+                    blocks_fix=True,
+                )
+            )
+        if entry.model_less and entry.model_transition:
             violations.append(
                 Violation(
                     rule="invalid-model-transition",
@@ -441,6 +543,16 @@ def audit_migrations(
         model_indexes,
     )
     violations.extend(index_transition_violations)
+    retirement_violations, forward_retirements = _audit_forward_index_retirements(
+        files,
+        model_indexes,
+    )
+    violations.extend(retirement_violations)
+    for index_name, transitions in forward_retirements.items():
+        index_transitions[index_name] = (
+            *index_transitions.get(index_name, ()),
+            *transitions,
+        )
     for entry in files:
         if entry.syntax_error:
             continue
@@ -458,6 +570,91 @@ def audit_migrations(
         )
     ]
     return violations
+
+
+def _audit_forward_index_retirements(
+    entries: list[MigrationFile],
+    model_indexes: dict[str, set[str]],
+) -> tuple[
+    list[Violation],
+    dict[str, tuple[_IndexTransition, ...]],
+]:
+    """Validate explicit index drops from immutable generated history.
+
+    A retirement is accepted only when an explained ``MODEL_LESS`` migration
+    declares a literal index/table pair, an older migration really creates
+    that exact index on that exact current model table, and the retirement's
+    ``up()`` really drops it.  This keeps applied creators byte-immutable
+    without letting arbitrary prose or a ``down()``-only DROP mask drift.
+    """
+
+    current = {name.lower() for names in model_indexes.values() for name in names}
+    creations: dict[tuple[str, str], set[str]] = {}
+    for entry in entries:
+        if entry.syntax_error:
+            continue
+        for _, text in entry.up_sql_constants:
+            for match in _CREATE_INDEX_ON_RE.finditer(text):
+                identity = (
+                    match.group("name").lower(),
+                    match.group("table").lower(),
+                )
+                creations.setdefault(identity, set()).add(entry.path.name)
+
+    violations: list[Violation] = []
+    accepted: dict[str, list[_IndexTransition]] = {}
+    for entry in entries:
+        if (
+            entry.syntax_error
+            or entry.dropped_indexes_error
+            or not entry.dropped_indexes
+            or not entry.model_less
+            or not (entry.docstring or "").strip()
+        ):
+            continue
+        up_drops = {
+            match.group("name").lower()
+            for _, text in entry.up_sql_constants
+            for match in _DROP_INDEX_RE.finditer(text)
+        }
+        for index_name, table in entry.dropped_indexes:
+            reasons: list[str] = []
+            if table not in model_indexes:
+                reasons.append(f"table {table!r} is not owned by a current model")
+            if index_name in current:
+                reasons.append(f"index {index_name!r} is still declared by a model")
+            if index_name not in up_drops:
+                reasons.append(f"up() does not DROP INDEX {index_name}")
+            older_creators = {
+                migration_name
+                for migration_name in creations.get((index_name, table), set())
+                if migration_name < entry.path.name
+            }
+            if not older_creators:
+                reasons.append(f"no older migration CREATEs {index_name!r} on {table!r}")
+            if reasons:
+                violations.append(
+                    Violation(
+                        rule="invalid-index-retirement",
+                        path=entry.path.name,
+                        message="; ".join(reasons),
+                        remedy=(
+                            "declare the exact historical index/table and DROP "
+                            "that index in this migration's up()"
+                        ),
+                        human_only=True,
+                        blocks_fix=True,
+                    )
+                )
+                continue
+            accepted.setdefault(index_name, []).append(
+                _IndexTransition(entry.path.name, None)
+            )
+
+    return (
+        violations,
+        {name: tuple(transitions) for name, transitions in accepted.items()},
+    )
 
 
 def _audit_model_transitions(
