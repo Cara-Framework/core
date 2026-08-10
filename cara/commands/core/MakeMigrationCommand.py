@@ -1,13 +1,31 @@
 """
-MakeMigrationCommand: Auto-generates migrations from models using stubs.
-Orchestrates model discovery, schema comparison, and migration generation.
+MakeMigrationCommand: the migrations directory as a function of the models.
 
-``--overwrite`` enforces ONE FILE PER TABLE, with no exceptions: after
-regenerating, the migrations directory contains exactly the model-generated
-set and nothing else. It used to delete only the files it recognised as its
-own, so hand-written ``add_*`` / ``backfill_*`` / ``fix_*`` migrations
-accumulated forever (one product reached 123 generated + 40 hand-written) and
-the directory stopped being a function of the models.
+The command has exactly two modes, and only one of them writes:
+
+* **Bare (report).** Compares every model against the generated directory
+  with the structured differ and PRINTS the typed changes — added / removed /
+  altered / renamed columns, missing create files, orphaned files whose model
+  is gone. Exit 1 when anything drifts, 0 when the directory is exactly the
+  models. It never creates a file: the bare mode used to emit incremental
+  ``add_x_to_y`` migrations from this same diff, which is precisely the file
+  class ``migrations:check`` bans — one command manufacturing what the other
+  rejects. The diff intelligence survives as the report; the emission is gone.
+
+* **``--overwrite`` (write).** Regenerates the whole directory: ONE FILE PER
+  TABLE, with no exceptions: after regenerating, the directory contains
+  exactly the model-generated set and nothing else. It used to delete only
+  the files it recognised as its own, so hand-written ``add_*`` / ``alter_*``
+  / ``backfill_*`` / ``fix_*`` migrations accumulated forever (one product
+  reached 123 generated + 40 hand-written) and the directory stopped being a
+  function of the models.
+
+Both modes REFUSE in production. Regeneration renumbers files an applied
+ledger already references, and a report against production models answers a
+question the deploy pipeline should be asking of the repository instead. The
+production schema path is the evolve workflow (DOCTRINE §migrations): planned,
+ordered, append-only operations against the deployed database — built at
+cutover, refused here so nobody reaches for the dev tool out of habit.
 
 There are no escape markers. ``MODEL_LESS = True`` used to exempt a file from
 the purge for "objects no model can own", and ``MODEL_TRANSITION`` preserved
@@ -28,25 +46,30 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
 
 from cara.commands import CommandBase, missing_optional
+from cara.configuration import config
 from cara.decorators import command
 
 
 @command(
     name="make:migration",
     help=(
-        "Auto-generate migrations from models using Laravel 11+ ordering system "
-        "(no timestamps). With --overwrite the migrations directory becomes "
-        "EXACTLY one generated file per model table; every other .py file is "
-        "deleted — there are no exemption markers. Framework tables are models "
-        "too (cara.models), triggers and named constraints belong in a model's "
-        "__indexes__ entries, and data rewrites are not migrations. Deleted "
-        "files are printed. Run 'migrations:check' to audit the directory "
-        "against that contract (it also drives this command via --fix)."
+        "Bare: REPORT model↔directory drift (typed column diffs, missing and "
+        "orphaned files) and exit 1 on drift — writes nothing. With "
+        "--overwrite: regenerate the directory as EXACTLY one generated file "
+        "per model table; every other .py file is deleted — there are no "
+        "exemption markers. Framework tables are models too (cara.models), "
+        "triggers and named constraints belong in a model's __indexes__ "
+        "entries, and data rewrites are not migrations. Deleted files are "
+        "printed. 'migrations:check' audits the same contract statically; "
+        "'schema:verify' proves it against a scratch database. Both modes "
+        "refuse in production — the deployed schema evolves through the "
+        "evolve workflow, never by regeneration."
     ),
     options={
         "--overwrite": (
@@ -55,7 +78,7 @@ from cara.decorators import command
         ),
         "--force": "Skip the hand-edit confirmation prompt when --overwrite clobbers files",
         "--style=blueprint": "Migration style (blueprint is the only supported SSOT)",
-        "--dry_run": "Show what would be generated without creating files",
+        "--dry_run": "With --overwrite: show what would be generated without creating files",
     },
 )
 class MakeMigrationCommand(CommandBase):
@@ -79,14 +102,32 @@ class MakeMigrationCommand(CommandBase):
         self.generator = MigrationGenerator()
 
     def handle(self):
-        """Generate migrations from model Field.* definitions."""
+        """Report drift (bare) or regenerate the directory (--overwrite)."""
+        if self._refuse_in_production():
+            return 2
         with self.generator.generation_lock():
             return self._handle_locked()
 
-    def _handle_locked(self):
-        """Generate while holding the cross-process generation lock."""
-        self.info("Auto-generating migrations from models...")
+    def _refuse_in_production(self) -> bool:
+        """Neither mode may run against a production environment.
 
+        Same guard idiom as ``dev:reset``: the environment name is the only
+        thing consulted, and no flag can talk past it. Regeneration renumbers
+        files the applied ledger references by filename, so on a deployed
+        database every already-applied migration would look pending again.
+        """
+        if (config("app.env", "") or "").lower() in ("production", "prod"):
+            self.error(
+                "Refusing to run make:migration in production. The migrations "
+                "directory is regenerated from models in development only; the "
+                "deployed schema evolves through the evolve workflow "
+                "(DOCTRINE §migrations). If this is not production, fix APP_ENV."
+            )
+            return True
+        return False
+
+    def _handle_locked(self):
+        """Run the selected mode while holding the cross-process lock."""
         if self.option("style", "blueprint") != "blueprint":
             self.error(
                 "Only --style=blueprint is supported. Raw SQL cannot be "
@@ -94,61 +135,98 @@ class MakeMigrationCommand(CommandBase):
             )
             return 2
 
-        # Check for overwrite mode
-        overwrite_mode = self.option("overwrite", False)
-        if overwrite_mode:
+        if self.option("overwrite", False):
+            self.info("Auto-generating migrations from models...")
             return self._handle_overwrite_mode()
 
-        # Discover models
+        return self._handle_report_mode()
+
+    def _handle_report_mode(self):
+        """Print typed model↔directory drift; write nothing; exit 1 on drift.
+
+        The report answers one question — is the directory still a function
+        of the models? — from both directions: a model whose generated file is
+        missing or stale (typed column diffs from the structured comparator),
+        and a generated file whose model no longer exists. The remedy is
+        always the same single command, so the report names it and stops;
+        deciding WHEN to regenerate stays with the operator, which is what
+        makes this safe to wire into CI and pre-commit.
+        """
+        self.info("Comparing models against the generated migrations directory...")
+
         models = self.discoverer.discover_models()
         if not models:
             self.info("No models found in app/models directory")
             return
 
-        # Sort models by dependency order (FK dependencies first)
         ordered_models = self.discoverer.resolve_dependency_order(models)
 
-        created_count = 0
-        updated_count = 0
-        unchanged_count = 0
-        error_count = 0
-
+        drifted = 0
+        in_sync = 0
         for model_info in ordered_models:
-            result = self._process_model(model_info)
-            if result == "created":
-                created_count += 1
-            elif result == "updated":
-                updated_count += 1
-            elif result == "error":
-                error_count += 1
-            else:  # "unchanged"
-                unchanged_count += 1
+            if not model_info.get("has_fields_method", False):
+                in_sync += 1
+                continue
+            table_name = model_info["table"]
+            diff = self.comparator.compare_model_with_migrations(model_info)
+            if not diff:
+                in_sync += 1
+                continue
+            drifted += 1
+            if self.comparator.table_exists_in_migrations(table_name):
+                from cara.eloquent.migrations.ModelMigrationComparator import (  # local: heavy optional dep
+                    summarize_change_name,
+                )
 
-        self._print_summary(
-            created_count,
-            updated_count,
-            unchanged_count,
-            error_count,
-            dry_run=bool(self.option("dry_run")),
+                label, _ = summarize_change_name(table_name, diff)
+                self.warning(f"{model_info['name']} → {table_name}  ({label})")
+                for change in diff:
+                    self.info(f"   • {change}")
+            else:
+                self.warning(
+                    f"{model_info['name']} → {table_name}  "
+                    f"(no generated create_{table_name}_table file)"
+                )
+
+        orphans = self._orphaned_files({m["table"] for m in ordered_models})
+        for orphan in orphans:
+            self.warning(f"{orphan}  (no model owns this file)")
+
+        total = drifted + len(orphans)
+        self.info("")
+        if total:
+            self.warning(
+                f"Drift: {drifted} model(s) out of sync, {len(orphans)} orphaned "
+                f"file(s), {in_sync} in sync."
+            )
+            self.warning(
+                "Regenerate with 'python craft make:migration --overwrite' "
+                "(one file per table; nothing else survives)."
+            )
+            return 1
+        self.success(
+            f"All {in_sync} model(s) in sync — the directory is exactly the models."
         )
+        return 0
 
-    def _print_summary(
-        self,
-        created: int,
-        updated: int,
-        unchanged: int,
-        error: int,
-        dry_run: bool,
-    ):
-        """Print a single, actionable N created / N updated / N unchanged line."""
-        verb = "Would create" if dry_run else "Created"
-        # Always show the full tally so the run is self-describing (even a
-        # no-op states that every model is already covered).
-        self.success(f"{verb} {created} new, {updated} updated, {unchanged} unchanged")
-        if error:
-            # Errors were already printed per-model via self.error(); surface
-            # the count so a partially-failed sweep isn't mistaken for success.
-            self.warning(f"{error} model(s) could not be processed (see errors above)")
+    def _orphaned_files(self, model_tables: set[str]) -> list[str]:
+        """Generated create-files whose table no model declares any more.
+
+        Only generated names are considered: a non-generated file is a
+        different violation with a dedicated report in ``migrations:check``,
+        and double-reporting it here would suggest two remedies for one file.
+        """
+        migrations_dir = self._migrations_dir()
+        if migrations_dir is None:
+            return []
+
+        generated = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{6}_create_(.+)_table\.py$")
+        orphans = []
+        for path in sorted(migrations_dir.glob("*.py")):
+            match = generated.match(path.name)
+            if match and match.group(1) not in model_tables:
+                orphans.append(path.name)
+        return orphans
 
     def _handle_overwrite_mode(self):
         """Handle --overwrite mode: recreate all migrations from scratch.
@@ -437,108 +515,3 @@ class MakeMigrationCommand(CommandBase):
                 "Overwrite hand-edited migration(s) anyway?", default=False
             )
         return True
-
-    def _create_fresh_migration(self, model_info, dependency_order=0):
-        """Create a fresh CREATE TABLE migration for a model."""
-        style = self.option("style", "blueprint")
-
-        # Skip VIEW-only models (no fields property, backed by a SQL VIEW).
-        if not model_info.get("has_fields_method", False):
-            self.info(f"{model_info['name']} is up to date with migrations")
-            return "skipped"
-
-        try:
-            # Generate CREATE migration content
-            content = self.generator.generate_create_migration(model_info, style)
-            if not content:
-                return "skipped"
-
-            if self.option("dry_run"):
-                self.info(
-                    f"Would create fresh migration for {model_info['name']} -> {model_info['table']} (order: {dependency_order})"
-                )
-                self.info("Create migration content:")
-                self.info(content)
-                self.info("=" * 50)
-                return "created"
-
-            # Create migration file with dependency-based timestamp
-            migration_name = f"create_{model_info['table']}_table"
-            filepath = self.generator.create_migration_file(
-                migration_name, content, dependency_order=dependency_order
-            )
-            self.info(f"Created fresh migration (order {dependency_order}): \n{filepath}")
-            return "created"
-        except ValueError as e:
-            # Handle missing fields method error
-            self.error(str(e))
-            return "error"
-
-    def _process_model(self, model_info: dict) -> str:
-        """Process a single model migration with database comparison."""
-        table_name = model_info["table"]
-
-        # Skip VIEW-only models (no fields property).
-        if not model_info.get("has_fields_method", False):
-            self.info(f"{model_info['name']} is up to date with migrations")
-            return "unchanged"
-
-        try:
-            # Compare model with migration files
-            diff = self.comparator.compare_model_with_migrations(model_info)
-
-            if diff:
-                # Check if this is a table creation or update
-                table_exists = self.comparator.table_exists_in_migrations(table_name)
-
-                if table_exists:
-                    # Table exists, create update migration
-                    self.info(f"Differences found for {model_info['name']}:")
-                    for change in diff:
-                        self.info(f"   • {change}")
-
-                    # Intent-revealing name from the change set (add_x_to_y /
-                    # drop_x_from_y / rename_x_to_y_on_y / change_x_on_y), not
-                    # a generic update_<table>_table.
-                    from cara.eloquent.migrations.ModelMigrationComparator import (
-                        summarize_change_name,
-                    )
-
-                    name, _ = summarize_change_name(table_name, diff)
-                    content = self.generator.generate_update_migration(
-                        model_info, diff, self.option("style", "blueprint")
-                    )
-                    if not self.option("dry_run"):
-                        filepath = self.generator.create_migration_file(name, content)
-                        self.info(f"Created migration: \n{filepath}")
-                    else:
-                        self.info(
-                            f"Would create '{name}' (update) for {model_info['name']}:"
-                        )
-                        self.info(content)
-                        self.info("=" * 50)
-                    return "updated"
-                else:
-                    # Table doesn't exist, create table migration
-                    self.info(
-                        f"Creating migration for {model_info['name']} -> {table_name}"
-                    )
-                    name = f"create_{table_name}_table"
-                    content = self.generator.generate_create_migration(
-                        model_info, self.option("style", "blueprint")
-                    )
-                    if not self.option("dry_run"):
-                        filepath = self.generator.create_migration_file(name, content)
-                        self.info(f"Created migration: \n{filepath}")
-                    else:
-                        self.info(f"Would create '{name}' for {model_info['name']}:")
-                        self.info(content)
-                        self.info("=" * 50)
-                    return "created"
-            else:
-                self.info(f"{model_info['name']} is up to date with migrations")
-                return "unchanged"
-        except ValueError as e:
-            # Handle missing fields method error
-            self.error(str(e))
-            return "error"

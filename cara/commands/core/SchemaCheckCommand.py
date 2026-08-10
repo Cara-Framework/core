@@ -723,8 +723,11 @@ class SchemaCheckCommand(CommandBase):
                 f"{tables_with_drift} table(s)."
             )
             self.warning(
-                "Run 'python craft make:migration' to generate the missing "
-                "migration(s), then 'python craft migrate'."
+                "Align the two sides: edit the model, or ALTER the development "
+                "database to match it. Then regenerate the directory with "
+                "'python craft make:migration --overwrite' and prove the loop "
+                "with 'python craft schema:verify'. (Bare make:migration only "
+                "REPORTS model↔directory drift; it never writes.)"
             )
         else:
             self.success("No drift — models and database are in sync!")

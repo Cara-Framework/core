@@ -147,3 +147,51 @@ def test_scalar_standalone_constraints_round_trip_without_diff(tmp_path):
     }
 
     assert comparator.compare_model_with_migrations(model_info) == []
+
+
+# ── standalone declarations that are NOT columns ────────────────────────────
+
+
+def test_named_single_column_index_is_applied_to_the_column():
+    """``table.index(["expires_at"], name="...")`` marks the column indexed.
+
+    The name kwarg's value used to be swept into the column-name scrape, so a
+    NAMED single-column index looked multi-column, was skipped, and the model
+    side reported a phantom ``index`` diff on every regenerate."""
+    cols = {"expires_at": Column("expires_at", "datetime")}
+    ModelMigrationComparator._apply_standalone_indexes(
+        'table.index(["expires_at"], name="product_event_expires_at_idx")', cols
+    )
+    assert cols["expires_at"].index is True
+
+
+def test_named_single_column_unique_is_applied_to_the_column():
+    cols = {"selector": Column("selector", "string", length=64)}
+    ModelMigrationComparator._apply_standalone_indexes(
+        'table.unique(["selector"], name="session_selector_unique")', cols
+    )
+    assert cols["selector"].unique is True
+
+
+def test_composite_index_marks_no_single_column():
+    cols = {
+        "name": Column("name", "string"),
+        "occurred_at": Column("occurred_at", "datetime"),
+    }
+    ModelMigrationComparator._apply_standalone_indexes(
+        'table.index(["name", "occurred_at"], name="product_event_name_time_idx")',
+        cols,
+    )
+    assert cols["name"].index is False
+    assert cols["occurred_at"].index is False
+
+
+def test_standalone_primary_is_not_a_column_line():
+    """``table.primary("job_id")`` declares the KEY of an existing column.
+
+    Parsed as a column line it replaced the real ``string(64)`` snapshot with
+    a phantom ``primary``-typed column, and every compare reported a
+    type/length diff the regenerate could never satisfy."""
+    body = 'table.string("job_id", 64)\ntable.primary("job_id")'
+    lines = ModelMigrationComparator._blueprint_column_lines(body)
+    assert lines == ['table.string("job_id", 64)']

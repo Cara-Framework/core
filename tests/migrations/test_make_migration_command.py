@@ -335,33 +335,9 @@ def test_marked_file_is_deleted_by_the_atomic_replace(migrations_dir):
     assert not doomed_generated.exists()
 
 
-# --- _print_summary -----------------------------------------------------------
-
-
-def test_summary_reports_full_tally():
-    cmd = _make_command()
-    cmd.success = MagicMock()
-    cmd.warning = MagicMock()
-    cmd._print_summary(2, 1, 5, 0, dry_run=False)
-    msg = cmd.success.call_args.args[0]
-    assert "Created 2 new" in msg and "1 updated" in msg and "5 unchanged" in msg
-    cmd.warning.assert_not_called()
-
-
-def test_summary_dry_run_uses_would_create():
-    cmd = _make_command()
-    cmd.success = MagicMock()
-    cmd._print_summary(1, 0, 0, 0, dry_run=True)
-    assert cmd.success.call_args.args[0].startswith("Would create")
-
-
-def test_summary_surfaces_errors():
-    cmd = _make_command()
-    cmd.success = MagicMock()
-    cmd.warning = MagicMock()
-    cmd._print_summary(0, 0, 3, 2, dry_run=False)
-    cmd.warning.assert_called_once()
-    assert "2 model(s)" in cmd.warning.call_args.args[0]
+# ``_print_summary`` is gone with the incremental emitter it summarised: the
+# bare mode is a drift REPORT now, pinned in
+# tests/commands/test_make_migration_report.py.
 
 
 def test_overwrite_prepares_before_replacing_files(migrations_dir):

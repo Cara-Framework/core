@@ -1,0 +1,186 @@
+"""``schema:verify`` — orchestration pins, no database.
+
+The command's value is choreography: scratch created before anything runs,
+the two subcommands in proof order, the scratch dropped on EVERY exit path,
+and the failing step's exit code surfacing unchanged. All world-facing work
+lives behind three seams (``_connection_params`` / ``_admin_sql`` /
+``_run_craft``), so these tests replace the seams and pin the choreography.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from cara.commands.core.SchemaVerifyCommand import SchemaVerifyCommand
+
+_PARAMS = {
+    "driver": "postgres",
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "app",
+    "password": "s3cret",
+    "database": "synkronus",
+    "options": {"sslmode": "disable"},
+}
+
+
+class _Verify(SchemaVerifyCommand):
+    def __init__(self, options=None, craft_codes=None, params=None):
+        self.application = None
+        self._parsed_options = options or {}
+        self.messages: list[str] = []
+        self.admin_batches: list[list[str]] = []
+        self.craft_calls: list[tuple[list[str], str]] = []
+        self._craft_codes = list(craft_codes or [0, 0])
+        self._params = dict(params or _PARAMS)
+
+    def info(self, message: str) -> None:
+        self.messages.append(message)
+
+    def warning(self, message: str) -> None:
+        self.messages.append(message)
+
+    def error(self, message: str, **_kwargs) -> None:
+        self.messages.append(message)
+
+    def success(self, message: str) -> None:
+        self.messages.append(message)
+
+    def _connection_params(self) -> dict:
+        return self._params
+
+    def _admin_sql(self, params, statements) -> None:
+        assert params is self._params
+        self.admin_batches.append(list(statements))
+
+    def _run_craft(self, arguments, scratch_database) -> int:
+        self.craft_calls.append((list(arguments), scratch_database))
+        return self._craft_codes.pop(0)
+
+
+def _text(command) -> str:
+    return "\n".join(command.messages)
+
+
+# ── the happy path is the invariant ─────────────────────────────────────────
+
+
+def test_proof_order_and_cleanup():
+    command = _Verify()
+    assert command.handle() == 0
+
+    assert command.craft_calls == [
+        (["migrate"], "synkronus_verify"),
+        (["schema:check"], "synkronus_verify"),
+    ]
+    # First batch prepares the scratch (drop-if-exists then create); the last
+    # batch is the unconditional cleanup drop.
+    assert 'CREATE DATABASE "synkronus_verify"' in command.admin_batches[0][1]
+    assert command.admin_batches[0][0].startswith('DROP DATABASE IF EXISTS')
+    assert command.admin_batches[-1] == [
+        'DROP DATABASE IF EXISTS "synkronus_verify" WITH (FORCE)'
+    ]
+    assert "migrated from zero equals the models" in _text(command)
+
+
+# ── every failure keeps the exit code and still cleans up ───────────────────
+
+
+def test_failed_migrate_propagates_and_skips_schema_check():
+    command = _Verify(craft_codes=[3])
+    assert command.handle() == 3
+    assert command.craft_calls == [(["migrate"], "synkronus_verify")]
+    # Cleanup drop still ran.
+    assert command.admin_batches[-1][0].startswith("DROP DATABASE IF EXISTS")
+    assert "does not install from zero" in _text(command)
+
+
+def test_failed_schema_check_propagates_drift_exit():
+    command = _Verify(craft_codes=[0, 1])
+    assert command.handle() == 1
+    assert [arguments for arguments, _ in command.craft_calls] == [
+        ["migrate"],
+        ["schema:check"],
+    ]
+    assert command.admin_batches[-1][0].startswith("DROP DATABASE IF EXISTS")
+
+
+def test_keep_leaves_the_scratch_for_autopsy():
+    command = _Verify(options={"keep": True})
+    assert command.handle() == 0
+    # One admin batch only: the create; no cleanup drop.
+    assert len(command.admin_batches) == 1
+    assert "left in place" in _text(command)
+
+
+def test_scratch_creation_failure_stops_before_any_subcommand():
+    class _Broken(_Verify):
+        def _admin_sql(self, params, statements) -> None:
+            raise RuntimeError("connection refused")
+
+    command = _Broken()
+    assert command.handle() == 2
+    assert command.craft_calls == []
+
+
+# ── refusals ────────────────────────────────────────────────────────────────
+
+
+def test_refuses_to_target_the_configured_database():
+    command = _Verify(options={"database": "synkronus"})
+    assert command.handle() == 2
+    assert command.admin_batches == []
+    assert command.craft_calls == []
+
+
+@pytest.mark.parametrize("name", ["x;drop", "Verify", "1abc", 'a"b'])
+def test_refuses_unsafe_scratch_names(name):
+    command = _Verify(options={"database": name})
+    assert command.handle() == 2
+    assert command.admin_batches == []
+
+
+def test_refuses_in_production(monkeypatch):
+    # ``config`` is bound at the command module's top — patch that name.
+    monkeypatch.setattr(
+        "cara.commands.core.SchemaVerifyCommand.config",
+        lambda key, default=None: "production" if key == "app.env" else default,
+    )
+    command = _Verify()
+    assert command.handle() == 2
+    assert command.admin_batches == []
+    assert command.craft_calls == []
+
+
+def test_non_postgres_driver_is_refused_by_the_real_params_reader(monkeypatch):
+    values = {
+        "app.env": "local",
+        "database.default": "app",
+        "database.drivers": {"app": {"driver": "sqlite", "database": "cara.sqlite3"}},
+    }
+    monkeypatch.setattr(
+        "cara.commands.core.SchemaVerifyCommand.config",
+        lambda key, default=None: values.get(key, default),
+    )
+
+    class _RealParams(_Verify):
+        _connection_params = SchemaVerifyCommand._connection_params
+
+    command = _RealParams()
+    assert command.handle() == 2
+    assert "postgres driver only" in _text(command)
+
+
+def test_scratch_name_is_sanitised_from_an_exotic_configured_name():
+    """``synkronus.io`` is a real configured database name — the derived
+    scratch must still be a boring identifier, while an explicit --database
+    keeps having to pass the safety check on its own."""
+    command = _Verify(params={**_PARAMS, "database": "synkronus.io"})
+    assert command.handle() == 0
+    assert command.craft_calls[0] == (["migrate"], "synkronus_io_verify")
+
+
+def test_scratch_name_gains_a_leading_letter_when_needed():
+    command = _Verify(params={**_PARAMS, "database": "1shop"})
+    assert command.handle() == 0
+    assert command.craft_calls[0] == (["migrate"], "v_1shop_verify")

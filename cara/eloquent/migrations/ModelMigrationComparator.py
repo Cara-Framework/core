@@ -392,9 +392,18 @@ class ModelMigrationComparator:
 
     @staticmethod
     def _apply_standalone_indexes(body: str, cols: dict[str, Column]) -> None:
-        """Apply scalar/list-of-one table.index/unique declarations."""
+        """Apply scalar/list-of-one table.index/unique declarations.
+
+        Only the COLUMN argument decides which column the flag lands on — a
+        ``name="..."`` kwarg is the index's identifier, not a column. The old
+        string-scrape swept the kwarg's value into the name list, so every
+        NAMED single-column index looked multi-column and was skipped, and the
+        model side (which does project named single-column declarations)
+        reported a phantom ``index`` diff on every regenerate.
+        """
         for method, raw in re.findall(r"table\.(index|unique)\(([^\n)]*)\)", body):
-            names = re.findall(r"[\"'](\w+)[\"']", raw)
+            columns_part = re.sub(r"name\s*=\s*[\"'][^\"']*[\"']", "", raw)
+            names = re.findall(r"[\"'](\w+)[\"']", columns_part)
             if len(names) != 1 or names[0] not in cols:
                 continue
             if method == "index":
@@ -405,7 +414,15 @@ class ModelMigrationComparator:
     @staticmethod
     def _blueprint_column_lines(body: str) -> list[str]:
         """The ``table.<type>("name", ...)...`` column lines — NOT drop_column /
-        rename_column / index / unique / foreign (those are handled separately)."""
+        rename_column / index / unique / primary / foreign (those are handled
+        separately).
+
+        ``primary`` matters: a natural-key table declares its key as a real
+        column plus a standalone ``table.primary("job_id")``. Parsed as a
+        column line, that second statement REPLACED the real ``string(64)``
+        snapshot with a phantom ``primary``-typed column, and every compare
+        reported a type/length diff the regenerate could never satisfy.
+        """
         out = []
         for raw in body.split("\n"):
             line = raw.strip()
@@ -420,9 +437,11 @@ class ModelMigrationComparator:
                 "rename",
                 "index",
                 "unique",
+                "primary",
                 "foreign",
                 "drop_index",
                 "drop_unique",
+                "drop_primary",
                 "drop_foreign",
             ):
                 continue

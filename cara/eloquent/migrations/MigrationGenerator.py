@@ -15,8 +15,6 @@ from pathlib import Path
 from cara.exceptions import InvalidArgumentException
 from cara.support import paths
 
-from .ModelMigrationComparator import FieldDiff, summarize_change_name
-
 _COUNTER_THREAD_LOCK = threading.Lock()
 _GENERATION_THREAD_LOCK = threading.Lock()
 
@@ -200,17 +198,6 @@ class MigrationGenerator:
         else:
             return self._generate_blueprint_create_migration(model_info)
 
-    def generate_update_migration(
-        self, model_info: dict, diff: list[FieldDiff], style: str = "blueprint"
-    ) -> str:
-        """Generate an ALTER migration from typed :class:`FieldDiff` changes.
-
-        Updates always use the blueprint path — the structured differ targets
-        the blueprint Schema builder, and ``--style=sql`` is a CREATE-only
-        option (no SQL-style ALTER migrations exist in the consolidated set).
-        """
-        return self._generate_blueprint_update_migration(model_info, diff)
-
     def create_migration_file(self, name: str, content: str, dependency_order: int = 0):
         """Create migration file with Laravel 11+ ordering system (no timestamps).
 
@@ -359,110 +346,6 @@ class MigrationGenerator:
         if views:
             result = self._inject_views_into_migration(result, views, table_name)
 
-        return result
-
-    def _generate_blueprint_update_migration(
-        self, model_info: dict, diffs: list[FieldDiff]
-    ) -> str:
-        """Generate a blueprint ALTER migration from typed :class:`FieldDiff`s.
-
-        Emits faithful, REVERSIBLE up()/down() per change kind:
-          * added   → the column line in up(); drop_column in down().
-          * removed → drop_column (marked DESTRUCTIVE) in up(); the column's REAL
-                      parsed definition re-added in down() — a lossless rollback,
-                      not a varchar stand-in.
-          * altered → the new shape with .change() in up(); the OLD shape with
-                      .change() in down().
-          * renamed → table.rename(old, new, ...) in up(); the reverse in down()
-                      — NO drop+add, so the column's data survives.
-        """
-        stub_content = self._get_update_stub_path().read_text()
-        table_name = model_info["table"]
-        _, class_name = summarize_change_name(table_name, diffs)
-
-        up_lines: list[str] = []
-        down_lines: list[str] = []
-
-        for d in diffs:
-            if d.kind == "added":
-                fi = model_info["fields"].get(d.name, {})
-                if fi.get("type") == "foreign_key":
-                    fk = self._generate_foreign_key_line(fi)
-                    if fk:
-                        up_lines.append(f"            {fk}")
-                else:
-                    line = self._generate_field_line(d.name, fi)
-                    if line:
-                        up_lines.append(f"            {line}")
-                down_lines.append(f'            table.drop_column("{d.name}")')
-
-            elif d.kind == "removed":
-                up_lines.append(
-                    f'            table.drop_column("{d.name}")'
-                    "  # DESTRUCTIVE: drops data — review before applying"
-                )
-                recreate = (
-                    d.column.raw_line
-                    if d.column and d.column.raw_line
-                    else f'table.string("{d.name}")'
-                )
-                down_lines.append(f"            {recreate}")
-
-            elif d.kind == "altered":
-                fi = model_info["fields"].get(d.name, {})
-                new_line = self._generate_field_line(d.name, fi)
-                up_lines.append(
-                    f"            {_as_change(new_line)}"
-                    f"  # altered: {', '.join(d.changed_attrs)}"
-                )
-                old_line = (
-                    d.old.raw_line
-                    if d.old and d.old.raw_line
-                    else f'table.string("{d.name}")'
-                )
-                down_lines.append(f"            {_as_change(old_line)}")
-
-            elif d.kind == "renamed":
-                col = d.column
-                col_type = col.type if col else "string"
-                if col_type not in _RENAME_SQL_TYPE:
-                    # Pre-fix an unmapped type silently fell back to
-                    # ``"varchar"``, which SQLite's rename-by-table-rebuild
-                    # resolves to an EMPTY data type — the rebuilt column came
-                    # out typeless and the generator reported success. A type
-                    # the DSL accepts but this map has never heard of is a gap
-                    # in the map, and it must say so.
-                    raise ValueError(
-                        f"Cannot emit a rename for column {d.name!r}: field type "
-                        f"{col_type!r} has no SQL type in _RENAME_SQL_TYPE. Add it "
-                        f"there (or to _NON_COLUMN_FIELD_TYPES if it declares no "
-                        f"column of its own)."
-                    )
-                sql_type = _RENAME_SQL_TYPE[col_type]
-                length_arg = f", {col.length}" if (col and col.length) else ""
-                up_lines.append(
-                    f'            table.rename("{d.old_name}", "{d.name}", '
-                    f'"{sql_type}"{length_arg})'
-                )
-                down_lines.append(
-                    f'            table.rename("{d.name}", "{d.old_name}", '
-                    f'"{sql_type}"{length_arg})'
-                )
-
-        if not up_lines:
-            up_lines.append("            pass")
-        if not down_lines:
-            down_lines.append("            pass")
-
-        replacements = {
-            "{{ class }}": class_name,
-            "{{ table }}": table_name,
-            "{{ fields }}": "\n".join(up_lines),
-            "{{ drop_fields }}": "\n".join(down_lines),
-        }
-        result = stub_content
-        for placeholder, replacement in replacements.items():
-            result = result.replace(placeholder, replacement)
         return result
 
     def _prettify_sql(self, sql: str) -> str:
@@ -902,15 +785,6 @@ class {class_name}(Migration):
             / "commands"
             / "stubs"
             / "CreateMigration.stub"
-        )
-
-    def _get_update_stub_path(self) -> Path:
-        """Get path to update migration stub."""
-        return (
-            Path(__file__).parent.parent.parent
-            / "commands"
-            / "stubs"
-            / "UpdateMigration.stub"
         )
 
     def _get_raw_sql_stub_path(self) -> Path:

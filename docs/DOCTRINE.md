@@ -319,12 +319,42 @@ LIVE DATABASE. A green `migrations:check` proves nothing about the running
 system — a rename that lands in the model and in every query but never reaches
 the database leaves the unit suite fully green while endpoints answer 500 on a
 missing column. Every product MUST carry a guard that fails on live drift; it
-lives in the integration lane, since it needs a database. This regenerate-freely
-mode is **pre-launch only**: once a migration has been APPLIED to an
-environment you cannot reset, it is immutable (the executor's checksum guard
-enforces this) — schema changes become forward migrations, and a squashed
-baseline may periodically replace history for fresh installs. **There are no
-exemption files.** Every migration is generated; `MODEL_LESS`,
+lives in the integration lane, since it needs a database.
+
+**The schema has exactly two modes, and the environment picks the mode — never
+the operator.** In **regenerate mode** (development; implemented) the
+migrations directory is a build artifact: bare `make:migration` is a REPORT
+(typed model↔directory diffs, missing creators, orphaned files; exit 1 on
+drift, so CI and pre-commit can gate on it) and `--overwrite` is the only
+writer. The acceptance invariant is one command — `schema:verify` creates a
+scratch database, migrates it from zero and runs the full `schema:check`
+differ against the models; exit 0 IS the proof. Both entry points refuse when
+`APP_ENV` is production, because regeneration renumbers files an applied
+ledger references by name.
+
+In **evolve mode** (production; specified here, built at cutover) the deployed
+database is the object and nothing regenerates: changes ship as planned,
+ordered, append-only OPERATIONS. `schema:plan` derives them by diffing the
+DEPLOYED schema against the models — the same comparator `schema:check`
+already is — and classifies every operation: *additive* (new table, nullable
+column, `CREATE INDEX CONCURRENTLY`) applies without ceremony; *locking*
+(`SET NOT NULL`, type changes, plain `ADD CONSTRAINT`) must ship as its safe
+recipe (`NOT VALID` + `VALIDATE`, batched rewrites); *destructive* (drops,
+narrowing) requires an explicit flag naming the object. `schema:apply`
+executes a plan under lock timeouts, records each operation in its own
+checksummed ledger, and resumes idempotently after a crash. Data movement is
+DECLARED, not hand-written: a backfill expression lives on the field it
+fills, and a rename carries its old name on the model (`__renamed_from__`) so
+the differ emits RENAME instead of the drop+add that loses a column. Two
+gates keep plans honest: apply refuses when the deployed schema no longer
+matches the ledger's last-known state (hotfix drift must be adopted into the
+models or reverted first), and every plan is rehearsed against a
+structure-clone scratch — `schema:verify`'s machinery — before it may touch
+production. Fresh installs keep running the generated directory, which the
+regenerate-mode invariant keeps exactly equal to the models, so a fresh
+environment and an evolved one converge on the same schema by construction.
+
+**There are no exemption files.** Every migration is generated; `MODEL_LESS`,
 `MODEL_TRANSITION` and `DROPPED_INDEXES` are banned markers that
 `migrations:check` fails on sight. Each thing the hatch used to shelter has a
 model-side home: framework tables are declared in `cara.models`; triggers,
