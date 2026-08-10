@@ -62,9 +62,9 @@ def _binds_model_class(names) -> bool:
     leading capital: ``MIN_GTIN_DIGITS`` is an UPPER_SNAKE constant of the
     same pure helper module, and ``str.isupper()`` is what separates the two.
     """
-    return any(
-        alias.name[:1].isupper() and not alias.name.isupper() for alias in names
-    )
+    return any(alias.name[:1].isupper() and not alias.name.isupper() for alias in names)
+
+
 _FORBIDDEN_BARREL_MEMBERS = {
     "app": frozenset({"gates", "models", "repositories"}),
     "commons": frozenset({"gates", "models"}),

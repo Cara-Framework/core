@@ -152,9 +152,7 @@ def test_model_class_from_the_same_module_is_still_a_finding(tmp_path):
     manifest = make_manifest(tmp_path)
     write(
         tmp_path / "app" / "jobs" / "ScrapeJob.py",
-        "from app.models import normalize_gtin, Product\n"
-        "class ScrapeJob:\n"
-        "    pass\n",
+        "from app.models import normalize_gtin, Product\nclass ScrapeJob:\n    pass\n",
     )
     findings = FlowLaw.scan(manifest)
     assert len(findings) == 1
@@ -194,9 +192,7 @@ def test_importing_the_models_module_object_stays_forbidden(tmp_path):
     manifest = make_manifest(tmp_path)
     write(
         tmp_path / "app" / "jobs" / "ScrapeJob.py",
-        "from app import models\n"
-        "class ScrapeJob:\n"
-        "    pass\n",
+        "from app import models\nclass ScrapeJob:\n    pass\n",
     )
     findings = FlowLaw.scan(manifest)
     assert len(findings) == 1
@@ -209,8 +205,6 @@ def test_upper_snake_constant_is_not_mistaken_for_a_class(tmp_path):
     manifest = make_manifest(tmp_path)
     write(
         tmp_path / "app" / "jobs" / "ScrapeJob.py",
-        "from app.models import MIN_GTIN_DIGITS\n"
-        "class ScrapeJob:\n"
-        "    pass\n",
+        "from app.models import MIN_GTIN_DIGITS\nclass ScrapeJob:\n    pass\n",
     )
     assert FlowLaw.scan(manifest) == []

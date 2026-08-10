@@ -282,7 +282,11 @@ class MigrationGenerator:
             # only through its parent's composite FK); the id injection remains
             # only for models that declare no key at all.
             declared_pk = model_info.get("primary_key")
-            if declared_pk and declared_pk != "id" and declared_pk in model_info["fields"]:
+            if (
+                declared_pk
+                and declared_pk != "id"
+                and declared_pk in model_info["fields"]
+            ):
                 fields_code.append(f'            table.primary("{declared_pk}")')
             elif not ("primary_key" in model_info and declared_pk is None):
                 fields_code.insert(0, '            table.increments("id")')

@@ -47,7 +47,9 @@ def test_plan_id_is_content_derived_and_order_sensitive():
 
 def test_plan_id_changes_when_a_statement_changes():
     before = plan_id([_operation()])
-    after = plan_id([_operation(forward='ALTER TABLE "users" ADD COLUMN "phone" NOT NULL')])
+    after = plan_id(
+        [_operation(forward='ALTER TABLE "users" ADD COLUMN "phone" NOT NULL')]
+    )
     assert before != after
 
 

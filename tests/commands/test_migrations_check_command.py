@@ -412,7 +412,9 @@ def test_report_exit_codes(tmp_path):
 
     from cara.commands.core.MigrationsCheckCommand import Violation
 
-    violation = Violation(rule="incremental-migration", path="x.py", message="m", remedy="r")
+    violation = Violation(
+        rule="incremental-migration", path="x.py", message="m", remedy="r"
+    )
     assert command._report([violation], table_count=3) == 1
 
 

@@ -132,9 +132,7 @@ def test_view_only_models_count_as_in_sync():
 def test_typed_diff_reports_the_change_and_exits_one():
     command = _Report(
         [_model("Product", "product")],
-        _Comparator(
-            diffs={"product": [_added("sku")]}, existing={"product"}
-        ),
+        _Comparator(diffs={"product": [_added("sku")]}, existing={"product"}),
     )
     assert command.handle() == 1
     out = _text(command)

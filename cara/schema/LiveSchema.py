@@ -64,13 +64,16 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
     run = live_schema.query_executor.get_query_result
 
     tables: dict[str, dict] = {}
-    for row in run(
-        "SELECT table_name, column_name, data_type, is_nullable, "
-        "character_maximum_length "
-        "FROM information_schema.columns "
-        f"WHERE table_schema = '{sql_literal(target)}' "
-        "ORDER BY table_name, ordinal_position"
-    ) or []:
+    for row in (
+        run(
+            "SELECT table_name, column_name, data_type, is_nullable, "
+            "character_maximum_length "
+            "FROM information_schema.columns "
+            f"WHERE table_schema = '{sql_literal(target)}' "
+            "ORDER BY table_name, ordinal_position"
+        )
+        or []
+    ):
         tables.setdefault(row["table_name"], {})[row["column_name"]] = {
             "data_type": (row["data_type"] or "").lower(),
             "is_nullable": (row["is_nullable"] or "").upper() == "YES",
@@ -80,51 +83,63 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
 
     checks: dict[str, set[str]] = {}
     constraints: dict[str, set[str]] = {}
-    for row in run(
-        "SELECT c.relname AS table_name, con.conname AS constraint_name, "
-        "con.contype AS constraint_type "
-        "FROM pg_constraint con "
-        "JOIN pg_class c ON c.oid = con.conrelid "
-        "JOIN pg_namespace n ON n.oid = c.relnamespace "
-        f"WHERE n.nspname = '{sql_literal(target)}' "
-        "ORDER BY c.relname, con.conname"
-    ) or []:
+    for row in (
+        run(
+            "SELECT c.relname AS table_name, con.conname AS constraint_name, "
+            "con.contype AS constraint_type "
+            "FROM pg_constraint con "
+            "JOIN pg_class c ON c.oid = con.conrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname = '{sql_literal(target)}' "
+            "ORDER BY c.relname, con.conname"
+        )
+        or []
+    ):
         constraints.setdefault(row["table_name"], set()).add(row["constraint_name"])
         if str(row["constraint_type"]) == "c":
             checks.setdefault(row["table_name"], set()).add(row["constraint_name"])
 
     indexes: dict[str, set[str]] = {}
-    for row in run(
-        "SELECT tablename AS table_name, indexname AS index_name "
-        "FROM pg_indexes "
-        f"WHERE schemaname = '{sql_literal(target)}' "
-        "ORDER BY tablename, indexname"
-    ) or []:
+    for row in (
+        run(
+            "SELECT tablename AS table_name, indexname AS index_name "
+            "FROM pg_indexes "
+            f"WHERE schemaname = '{sql_literal(target)}' "
+            "ORDER BY tablename, indexname"
+        )
+        or []
+    ):
         indexes.setdefault(row["table_name"], set()).add(row["index_name"])
 
     constraint_indexes: dict[str, set[str]] = {}
-    for row in run(
-        "SELECT c.relname AS table_name, i.relname AS index_name "
-        "FROM pg_constraint con "
-        "JOIN pg_class c ON c.oid = con.conrelid "
-        "JOIN pg_class i ON i.oid = con.conindid "
-        "JOIN pg_namespace n ON n.oid = c.relnamespace "
-        f"WHERE n.nspname = '{sql_literal(target)}' "
-        "AND con.conindid <> 0 "
-        "ORDER BY c.relname, i.relname"
-    ) or []:
+    for row in (
+        run(
+            "SELECT c.relname AS table_name, i.relname AS index_name "
+            "FROM pg_constraint con "
+            "JOIN pg_class c ON c.oid = con.conrelid "
+            "JOIN pg_class i ON i.oid = con.conindid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname = '{sql_literal(target)}' "
+            "AND con.conindid <> 0 "
+            "ORDER BY c.relname, i.relname"
+        )
+        or []
+    ):
         constraint_indexes.setdefault(row["table_name"], set()).add(row["index_name"])
 
     triggers: dict[str, set[str]] = {}
-    for row in run(
-        "SELECT c.relname AS table_name, t.tgname AS trigger_name "
-        "FROM pg_trigger t "
-        "JOIN pg_class c ON c.oid = t.tgrelid "
-        "JOIN pg_namespace n ON n.oid = c.relnamespace "
-        f"WHERE n.nspname = '{sql_literal(target)}' "
-        "AND NOT t.tgisinternal "
-        "ORDER BY c.relname, t.tgname"
-    ) or []:
+    for row in (
+        run(
+            "SELECT c.relname AS table_name, t.tgname AS trigger_name "
+            "FROM pg_trigger t "
+            "JOIN pg_class c ON c.oid = t.tgrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname = '{sql_literal(target)}' "
+            "AND NOT t.tgisinternal "
+            "ORDER BY c.relname, t.tgname"
+        )
+        or []
+    ):
         triggers.setdefault(row["table_name"], set()).add(row["trigger_name"])
 
     functions = {
