@@ -370,13 +370,40 @@ and lets a human judge. **Adding a NOT NULL column with a default** becomes
 the three-step expand recipe (add nullable → backfill → tighten), because the
 naive form rewrites every row of a populated table.
 
-`schema:apply` re-derives at run time — a printed plan is for humans, and
-between review and deploy the database can move. Every operation is recorded
-in the `schema_operation` ledger (a framework model, so the migration
-directory still generates it) together with the statement that reverses it,
-captured at apply time rather than re-derived later against a schema the
-operation has already changed. A re-run skips what is applied and resumes; a
-failure stops and is recorded with its error.
+A safety class says what an operation COSTS, never whether it works, so an
+operation that can fail on DATA carries a **preflight**: a read-only query
+that must return no rows — a NULL in a column about to become NOT NULL, a
+duplicate under a unique index about to be built. It is answered against
+production, because the question is about production's rows; a structure-only
+rehearsal has none and would answer it wrong. `schema:plan` reports the result
+while a human is still reading; `schema:apply` re-runs it immediately before
+each statement and stops BEFORE running, so a doomed operation costs nothing.
+
+`schema:plan --out` writes the plan as a JSON **artifact**. That restores the
+one real advantage a hand-written migration has: the change becomes a file
+reviewed in a pull request, before the deploy, rather than terminal output
+watched during it. `schema:apply --plan` does not weaken the re-derivation —
+it derives afresh and COMPARES, running only when the two agree. That
+comparison is also the drift gate, and it is checked before every other
+outcome: a hotfix applied by hand makes the derived plan match the models
+exactly, so a gate placed after the empty-plan case would report a cheerful
+"nothing to apply" for a database somebody changed behind the deploy's back.
+
+Every applied operation is recorded in the `schema_operation` ledger (a
+framework model, so the migration directory still generates it) together with
+the statement that reverses it, captured at apply time rather than re-derived
+later against a schema the operation has already changed. A re-run skips what
+is applied and resumes; a failure stops and is recorded with its error. A NEW
+TABLE is created by running its own generated migration rather than a CREATE
+TABLE re-rendered here — one renderer for a table's shape, so an evolved
+database and a fresh install receive byte-identical DDL.
+
+What the database has and the models do not is treated by kind. An index no
+model declares is planned as a destructive drop (excluding the indexes that
+BACK a constraint). A TABLE no model declares is only ever REPORTED: a diff
+cannot tell an abandoned table from a partition child, an extension's table or
+the migration tracker, and a DROP TABLE derived from a guess is where this
+class of tool does its worst damage.
 
 `schema:rollback` replays those reverses newest-first and refuses by default
 what it cannot honestly undo: an operation whose reverse restores a column's

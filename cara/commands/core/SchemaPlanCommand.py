@@ -24,15 +24,33 @@ column — the planner states that it will not write SQL for these, and the
 plan is reported as incomplete. A tool that guessed here would be exactly the
 autogenerator this replaces.
 
-The command only reads. ``schema:apply`` executes, and re-derives the plan at
-that moment so a stale printout can never be what runs.
+``--out`` writes the plan as a JSON ARTIFACT. That is what restores the one
+real advantage a hand-written migration has: the change becomes a file a
+reviewer reads in a pull request, before the deploy, rather than terminal
+output someone watches during it. The artifact is DERIVED, so it is still not
+a second source of truth — and ``schema:apply --plan`` re-derives anyway and
+refuses if the database has moved since, so a stale artifact can never be
+what runs.
+
+The command only reads.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
-from cara.schema import ADDITIVE, DESTRUCTIVE, LOCKING, introspect, plan
+from cara.schema import (
+    ADDITIVE,
+    DESTRUCTIVE,
+    LOCKING,
+    as_dict,
+    introspect,
+    plan,
+    plan_id,
+)
 
 
 @command(
@@ -49,6 +67,7 @@ from cara.schema import ADDITIVE, DESTRUCTIVE, LOCKING, introspect, plan
         "--schema=?": "The Postgres schema to inspect (defaults to the connection's)",
         "--allow_destructive": "Permit destructive operations (drops) in the plan",
         "--sql": "Print the executable SQL for each operation",
+        "--out=?": "Write the plan as a JSON artifact to this path (for review)",
     },
 )
 class SchemaPlanCommand(CommandBase):
@@ -129,6 +148,28 @@ class SchemaPlanCommand(CommandBase):
                 "they remove data and no rollback restores it."
             )
             return 1
+
+        destination = self.option("out")
+        if destination:
+            identifier = plan_id(operations)
+            Path(destination).write_text(
+                json.dumps(
+                    {
+                        "plan_id": identifier,
+                        "operations": [as_dict(op) for op in operations],
+                        "notices": notices,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.success(
+                f"{len(operations)} operation(s) written to {destination} "
+                f"(plan {identifier}). Review it, then "
+                f"'craft schema:apply --plan {destination}'."
+            )
+            return 0
 
         self.success(
             f"{len(operations)} operation(s) planned. Apply with 'craft schema:apply'."

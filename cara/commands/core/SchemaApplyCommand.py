@@ -1,9 +1,17 @@
 """``schema:apply`` — run the derived plan, and record what ran.
 
-The plan is re-derived here rather than read from a file. Between the review
-and the deploy the database can move (another deploy, a hotfix), and the only
+The plan is always re-derived here. Between the review and the deploy the
+database can move — another deploy, a hotfix applied by hand — and the only
 plan that is safe to execute is the one computed against the schema actually
-being changed. A printed plan is for humans; this is what runs.
+being changed.
+
+``--plan`` does not weaken that: it names a reviewed artifact and apply then
+DERIVES the plan afresh and compares. Identical, it runs and you have both
+properties at once — a change reviewed in a pull request AND a statement
+computed against the current database. Different, it refuses and says so,
+which is also the drift gate: an unadopted hotfix cannot be silently planned
+around, because the plan a human approved is no longer the plan that would
+run.
 
 Three properties make it safe to run against production:
 
@@ -39,14 +47,14 @@ plan drops and rebuilds it, which is the trade for not locking the table.
 
 from __future__ import annotations
 
-import hashlib
+import json
 from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
 from cara.commands.core.SchemaPlanCommand import SchemaPlanCommand
 from cara.decorators import command
 from cara.facades import DB
-from cara.schema import DESTRUCTIVE, migration_to_run
+from cara.schema import DESTRUCTIVE, migration_to_run, plan_id
 
 #: Short on purpose — see the module docstring.
 DEFAULT_LOCK_TIMEOUT_MS = 5000
@@ -67,6 +75,7 @@ DEFAULT_LOCK_TIMEOUT_MS = 5000
         "--allow_destructive": "Permit destructive operations (drops)",
         "--lock_timeout=5000": "Per-statement lock timeout in milliseconds",
         "--dry_run": "Show what would run without executing or recording anything",
+        "--plan=?": "Apply a reviewed plan artifact; refuses if the database has moved",
     },
 )
 class SchemaApplyCommand(CommandBase):
@@ -88,6 +97,32 @@ class SchemaApplyCommand(CommandBase):
             self.error(str(exc))
             return 2
 
+        identifier = plan_id(operations)
+
+        # FIRST, before any other outcome. "The plan you approved is not what
+        # I would do now" is true whether the new plan is different, incomplete
+        # or empty — and empty is the case that matters most: a hand-applied
+        # hotfix makes the derived plan match the models exactly, so a check
+        # placed after the empty-plan return would report a cheerful "nothing
+        # to apply" for a database somebody changed behind the deploy's back.
+        artifact = self.option("plan")
+        if artifact:
+            approved = self._approved_plan_id(artifact)
+            if approved is None:
+                return 2
+            if approved != identifier:
+                self.error(
+                    f"The database has MOVED since {artifact} was reviewed.\n"
+                    f"   approved plan: {approved}\n"
+                    f"   derived now:   {identifier}"
+                    f"{' (nothing left to do)' if not operations else ''}\n"
+                    f"   Something changed this schema outside these commands, "
+                    f"or the models changed after the plan was written. Re-run "
+                    f"'schema:plan --out {artifact}', review it again, redeploy."
+                )
+                return 1
+            self.info(f"Artifact {artifact} still matches the database.")
+
         if refusals:
             self.error(
                 f"Refusing to apply an INCOMPLETE plan — {len(refusals)} "
@@ -108,15 +143,14 @@ class SchemaApplyCommand(CommandBase):
             )
             return 1
 
-        plan_id = self._plan_id(operations)
-        self.info(f"Plan {plan_id}: {len(operations)} operation(s)")
+        self.info(f"Plan {identifier}: {len(operations)} operation(s)")
 
         if self.option("dry_run"):
             for operation in operations:
                 self.info(f"   would run: {operation.forward_sql}")
             return 0
 
-        applied = self._already_applied(plan_id)
+        applied = self._already_applied(identifier)
         if applied:
             self.warning(
                 f"Resuming: {len(applied)} operation(s) of this plan are already applied."
@@ -140,7 +174,7 @@ class SchemaApplyCommand(CommandBase):
             try:
                 self._execute(operation, lock_timeout)
             except Exception as exc:
-                self._record(plan_id, operation, status="failed", error=str(exc))
+                self._record(identifier, operation, status="failed", error=str(exc))
                 self.error(
                     f"FAILED on {operation.key}: {exc}\n"
                     f"   statement: {operation.forward_sql}\n"
@@ -148,26 +182,26 @@ class SchemaApplyCommand(CommandBase):
                     f"recorded; re-run to continue from here once the cause is fixed."
                 )
                 return 1
-            self._record(plan_id, operation, status="applied")
+            self._record(identifier, operation, status="applied")
             done += 1
 
-        self.success(f"Applied {done} operation(s). Plan {plan_id} recorded.")
+        self.success(f"Applied {done} operation(s). Plan {identifier} recorded.")
         return 0
 
     # ── seams ───────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _plan_id(operations) -> str:
-        """A stable id for this exact set of operations.
-
-        Content-derived, so re-running the same plan resumes the same ledger
-        rows instead of opening a second, half-empty record of the same work.
-        """
-        digest = hashlib.sha256()
-        for operation in operations:
-            digest.update(operation.key.encode())
-            digest.update(operation.forward_sql.encode())
-        return digest.hexdigest()[:16]
+    def _approved_plan_id(self, path: str) -> str | None:
+        """The plan id recorded in a reviewed artifact, or None if unreadable."""
+        try:
+            document = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception as exc:
+            self.error(f"Could not read the plan artifact {path}: {exc}")
+            return None
+        approved = document.get("plan_id")
+        if not approved:
+            self.error(f"{path} carries no plan_id — it is not a plan artifact.")
+            return None
+        return approved
 
     def _already_applied(self, plan_id: str) -> set[str]:
         rows = (

@@ -35,6 +35,7 @@ data, and a structure-only rehearsal — no rows — would answer it wrong.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 #: Applies to a table without touching existing rows or blocking readers and
@@ -113,6 +114,63 @@ class Operation:
         return f"{self.safety:11} {self.kind:16} {self.key}{suffix}"
 
 
+def as_dict(operation: Operation) -> dict:
+    """An operation as plain JSON data, for a plan artifact.
+
+    Every field is carried, including the reverse statement and the preflight
+    query: a reviewer reading the artifact in a pull request must see exactly
+    what a reviewer reading the terminal saw, or the artifact is a summary
+    pretending to be a plan.
+    """
+    return {
+        "kind": operation.kind,
+        "table": operation.table,
+        "key": operation.key,
+        "forward_sql": operation.forward_sql,
+        "reverse_sql": operation.reverse_sql,
+        "safety": operation.safety,
+        "reason": operation.reason,
+        "restores_data": operation.restores_data,
+        "transactional": operation.transactional,
+        "preflight_sql": operation.preflight_sql,
+        "preflight_failure": operation.preflight_failure,
+        "notes": list(operation.notes),
+    }
+
+
+def from_dict(data: dict) -> Operation:
+    """The inverse of :func:`as_dict`, for reading a plan artifact back."""
+    return Operation(
+        kind=data["kind"],
+        table=data["table"],
+        key=data["key"],
+        forward_sql=data["forward_sql"],
+        reverse_sql=data.get("reverse_sql"),
+        safety=data["safety"],
+        reason=data["reason"],
+        restores_data=data.get("restores_data", True),
+        transactional=data.get("transactional", True),
+        preflight_sql=data.get("preflight_sql"),
+        preflight_failure=data.get("preflight_failure"),
+        notes=tuple(data.get("notes") or ()),
+    )
+
+
+def plan_id(operations: list[Operation]) -> str:
+    """A stable id for this exact set of operations.
+
+    Content-derived on purpose. It is the ledger's grouping key, so re-running
+    the same plan resumes the same rows instead of opening a second,
+    half-empty record of the same work — and it is what lets apply tell "this
+    artifact still describes the database" from "the database moved".
+    """
+    digest = hashlib.sha256()
+    for operation in operations:
+        digest.update(operation.key.encode())
+        digest.update(operation.forward_sql.encode())
+    return digest.hexdigest()[:16]
+
+
 def sort_operations(operations: list[Operation]) -> list[Operation]:
     """Safest first, then stable by table and key.
 
@@ -133,6 +191,9 @@ def sort_operations(operations: list[Operation]) -> list[Operation]:
 
 __all__ = [
     "ADDITIVE",
+    "as_dict",
+    "from_dict",
+    "plan_id",
     "RUN_MIGRATION_PREFIX",
     "DESTRUCTIVE",
     "LOCKING",
