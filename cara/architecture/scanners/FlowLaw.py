@@ -4,6 +4,19 @@ Controllers and queued jobs are adapters. They may validate/decode input and
 invoke a use-case service; they must not import repositories, models, kernel
 gates or the DB facade, nor resolve repositories from the container.
 
+The hazard is REACHING THE DATA LAYER, not the spelling of a package. The
+models package is also the kernel's foundation (DOCTRINE §2), so it is where
+pure value helpers live — identifier normalisation, text canonicalisation —
+precisely because it is the one layer every other layer may import. A
+lowercase function or an UPPER_SNAKE constant bound from there is a pure
+transformation: `models` imports nothing from the kernel, so nothing in it
+can reach a repository, a gate or a connection. Binding a PascalCase name IS
+the data layer — that is a model class, and an edge holding one has skipped
+the use-case service. So the models packages are judged on the BOUND NAME;
+``app.repositories`` and the gate packages stay forbidden outright, and
+importing the models module OBJECT (``from app import models``) stays
+forbidden too, since that hands the edge every class in it.
+
 Existing violations are counted per file in the exact, shrink-only
 ``seam_allowlists["flow_law"]`` census. New files, growth and stale counts all
 fail.
@@ -26,6 +39,32 @@ _FORBIDDEN_MODULE_PREFIXES = (
     "commons.models",
     "commons.gates",
 )
+
+#: Prefixes judged on the BOUND NAME rather than banned outright — see the
+#: module docstring. A PascalCase binding is a model class (the data layer);
+#: anything else is a pure helper the foundation layer legitimately owns.
+_NAME_JUDGED_PREFIXES = ("app.models", "commons.models")
+
+
+def _is_name_judged(module: str) -> bool:
+    return any(
+        module == prefix or module.startswith(f"{prefix}.")
+        for prefix in _NAME_JUDGED_PREFIXES
+    )
+
+
+def _binds_model_class(names) -> bool:
+    """True when any bound name looks like a model class.
+
+    File-name-equals-class-name is doctrine and separately guarded, so
+    PascalCase is a reliable, AST-only signal for "this is a model" without
+    resolving the target package. PascalCase specifically, not merely a
+    leading capital: ``MIN_GTIN_DIGITS`` is an UPPER_SNAKE constant of the
+    same pure helper module, and ``str.isupper()`` is what separates the two.
+    """
+    return any(
+        alias.name[:1].isupper() and not alias.name.isupper() for alias in names
+    )
 _FORBIDDEN_BARREL_MEMBERS = {
     "app": frozenset({"gates", "models", "repositories"}),
     "commons": frozenset({"gates", "models"}),
@@ -67,6 +106,8 @@ def _hits(tree: ast.Module) -> list[tuple[int, str]]:
         if isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if _forbidden_import(module):
+                if _is_name_judged(module) and not _binds_model_class(node.names):
+                    continue  # pure helper from the foundation layer
                 hits.append((node.lineno, f"imports forbidden edge dependency {module}"))
             elif module in _FORBIDDEN_BARREL_MEMBERS and any(
                 alias.name in _FORBIDDEN_BARREL_MEMBERS[module] for alias in node.names

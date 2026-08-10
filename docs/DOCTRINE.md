@@ -90,6 +90,20 @@ kernel. `contracts` may import `models` for typing only. `gates` and `shared`
 may import `models` and `contracts`. The kernel NEVER imports an app tree.
 App trees import the kernel only through the barrels below.
 
+**That direction decides WHERE a pure value helper lives, and the answer is
+the same in every product.** A helper with no I/O and no kernel imports —
+identifier normalisation, money math, text canonicalisation — belongs in
+`models`, because the one-way rule makes `models` the only layer every other
+layer can reach. Placing it in `shared` makes it reachable by everything
+EXCEPT a model, and not as a bookkeeping technicality: importing any
+`commons.shared` submodule executes that package's eager barrel, which pulls
+the whole kernel back in (`commons.models` included), so a model-side import
+is a genuine cycle. Choose the home from the concept, never from which
+consumer happens to exist today — a product whose models don't need it *yet*
+will look fine under `shared` and force the next product into a different
+layout for the same concept. Two products with two homes for one idea is not
+a pattern; it is the rule being applied twice with different local excuses.
+
 **Ports have a membership rule — `app/ports` must not become the next junk
 drawer.** A port exists only when it is (a) a real boundary the consumer owns,
 (b) an implementation that can plausibly be swapped or an external-system
