@@ -14,6 +14,8 @@ Four modules, in dependency order:
 * ``LiveSchema`` — read-only introspection of a deployed database, plus the
   flattening of a model's declared fields into concrete columns.
 * ``Operation`` — one change as a typed, safety-classified, reversible record.
+* ``Objects`` — which named objects a model owns, and whether the database
+  already has them (asked of the right catalogue per kind).
 * ``Planner`` — the difference between the two, as ordered operations.
 * ``Scratch`` — a disposable database beside a real one, for proving both
   the acceptance invariant and a plan before it runs.
@@ -39,6 +41,12 @@ from cara.schema.Operation import (
     migration_to_run,
     plan_id,
     sort_operations,
+)
+from cara.schema.Objects import (
+    created_objects,
+    missing_indexes,
+    orphaned_indexes,
+    orphaned_tables,
 )
 from cara.schema.Planner import plan
 from cara.schema.Vocabulary import (
@@ -82,10 +90,14 @@ __all__ = [
     "RUN_MIGRATION_PREFIX",
     "SAFETY_ORDER",
     "as_dict",
+    "created_objects",
     "declared_columns",
     "from_dict",
     "introspect",
     "migration_to_run",
+    "missing_indexes",
+    "orphaned_indexes",
+    "orphaned_tables",
     "plan",
     "plan_id",
     "postgres_type",

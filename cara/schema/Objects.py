@@ -1,0 +1,331 @@
+"""Which schema OBJECTS does the model own, and does the database have them?
+
+Split out of ``Planner`` because it answers a different question with a
+different failure mode. Column planning compares two descriptions of the same
+thing — a declared column and a live column — and the risk is emitting the
+wrong ALTER. Objects are named things scattered across several catalogues, and
+the risk is asking the WRONG catalogue: an extension looked for among indexes,
+a column looked for among constraints. That answer is always "missing", so the
+entry is planned again on every single run.
+
+Five such phantoms sat in every cheapa plan, each an ``IF NOT EXISTS`` no-op a
+reviewer had to dismiss by hand. Nothing broke, which is what made it
+corrosive: a plan that is never empty stops meaning anything when it is not
+empty, and the empty plan is precisely the signal a deploy relies on.
+
+So names are KIND-QUALIFIED here (``extension:pg_trgm``, ``column:search_vector``)
+and matched against :meth:`LiveSchema.objects_on`, which qualifies the same way.
+An entry whose SQL names nothing recognisable is REFUSED rather than guessed at
+in either direction — replanning forever and silently skipping a real object are
+both wrong, and only one of them is visible.
+"""
+
+from __future__ import annotations
+
+import re
+
+from cara.exceptions import SchemaPlanRefused
+from cara.schema.LiveSchema import LiveSchema
+from cara.schema.Operation import ADDITIVE, DESTRUCTIVE, LOCKING, Operation
+
+#: Object names an ``__indexes__`` entry's SQL actually creates.
+_CREATES_RE = re.compile(
+    r"(?:CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"|ADD\s+CONSTRAINT\s+"
+    r"|CREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+"
+    r"|CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+)"
+    r"\"?(?P<name>\w+)\"?",
+    re.IGNORECASE,
+)
+
+#: Extensions live in a schema-wide catalogue, not the table's namespace, and
+#: the entry that installs one is conventionally labelled after the entry
+#: (``ext_pg_trgm``) rather than after the extension.
+_CREATES_EXTENSION_RE = re.compile(
+    r"CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?(?P<name>\w+)\"?",
+    re.IGNORECASE,
+)
+
+#: A column added by named DDL rather than by a field. Cara reaches for this
+#: when the model DSL has no builder for the type — a GENERATED ALWAYS AS
+#: ``tsvector`` is the live example — so the column exists in the database and
+#: in no ``fields`` dict, and only the table's own column list can answer for
+#: it.
+_ADDS_COLUMN_RE = re.compile(
+    r"ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?(?P<name>\w+)\"?",
+    re.IGNORECASE,
+)
+
+
+def created_objects(up_sql: str) -> set[str] | None:
+    """The objects this statement creates, or None when it cannot be read.
+
+    An entry's ``name`` is a LABEL, not necessarily a database object: one
+    entry legitimately creates two differently-named CHECK constraints, and
+    keying presence on the label alone makes that entry replan forever. Since
+    the plan is the thing a human reads before a production deploy, permanent
+    phantom entries are not cosmetic — they train the reader to skim.
+
+    Names are returned KIND-QUALIFIED where the object does not live in the
+    per-table namespace, because otherwise the question "is it already there?"
+    is asked of the wrong catalogue. ``CREATE EXTENSION pg_trgm`` creates an
+    extension named ``pg_trgm``, not an index named ``ext_pg_trgm``, and
+    ``ALTER TABLE product ADD COLUMN search_vector`` creates a column — both
+    read as permanently missing against a set of index and constraint names.
+    That was five phantom operations in every cheapa plan, forever, each one
+    an ``IF NOT EXISTS`` no-op that a reader had to re-dismiss by hand.
+
+    None means "this statement creates nothing I can name", which the caller
+    reports as a refusal rather than replanning it. Guessing in either
+    direction is worse: run-it-always is the phantom above, skip-it-always
+    silently drops a real object from the plan.
+    """
+    found = {match.group("name") for match in _CREATES_RE.finditer(up_sql)}
+    found |= {
+        f"extension:{match.group('name')}"
+        for match in _CREATES_EXTENSION_RE.finditer(up_sql)
+    }
+    found |= {
+        f"column:{match.group('name')}" for match in _ADDS_COLUMN_RE.finditer(up_sql)
+    }
+    return found or None
+
+
+#: PostgreSQL truncates every identifier to NAMEDATALEN-1 bytes. The stored
+#: name is the truncated one, so a planner comparing the full convention name
+#: against the catalogue finds nothing and plans an index that already exists —
+#: on this schema, 23 of them, every single plan.
+_MAX_IDENTIFIER_LENGTH = 63
+
+
+def _blueprint_index_name(table: str, columns: list[str], unique: bool) -> str:
+    """The name Cara's Blueprint gives an unnamed ``index``/``unique``.
+
+    ``table.index(["a", "b"])`` becomes ``<table>_a_b_index``, truncated the
+    way Postgres truncates it. Reproducing the convention is what lets the
+    planner ask "does the database already have this one?" — without it, a
+    field-level index is invisible on the deployed side and never planned.
+    """
+    name = f"{table}_{'_'.join(columns)}_{'unique' if unique else 'index'}"
+    return name[:_MAX_IDENTIFIER_LENGTH]
+
+
+def _declared_blueprint_indexes(
+    model: dict, table: str
+) -> list[tuple[str, list[str], bool]]:
+    """``(name, columns, unique)`` for every field-level index the model declares.
+
+    Covers both spellings: the per-field ``.index()`` / ``.unique()`` flags and
+    the standalone ``field.index([...], name=...)`` declarations, which may
+    carry an explicit name.
+
+    Keyed by NAME, because the discoverer records a single-column
+    ``field.string(...).index()`` under both spellings — once as a param flag,
+    once as a standalone declaration. Emitting both would put the same
+    ``CREATE INDEX`` in one plan twice, and a plan that lists an operation
+    twice is a plan nobody trusts.
+    """
+    declared: dict[str, tuple[str, list[str], bool]] = {}
+
+    for column, definition in (model.get("fields") or {}).items():
+        params = definition.get("params") or {}
+        for flag, unique in (("index", False), ("unique", True)):
+            if params.get(flag):
+                name = _blueprint_index_name(table, [column], unique)
+                declared[name] = (name, [column], unique)
+
+    for key, unique in (("composite_indexes", False), ("composite_uniques", True)):
+        for declaration in model.get(key, []) or []:
+            columns = list(declaration.get("columns") or [])
+            if not columns:
+                continue
+            name = declaration.get("name") or _blueprint_index_name(
+                table, columns, unique
+            )
+            declared[name] = (name, columns, unique)
+
+    return list(declared.values())
+
+
+def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation]:
+    """Index-shaped objects the model declares and the database does not have.
+
+    Two sources, because a model has two ways to say "index this": the
+    Blueprint flags (``field.string(...).index()``, ``field.index([...])``),
+    whose SQL the planner renders from the declaration, and ``__indexes__``
+    named-DDL entries, whose SQL is the entry's own ``up`` — nothing is
+    re-rendered there. Missing the first source is not a cosmetic gap: a
+    field-level index added to a model would never reach a deployed database
+    and nothing would say so.
+    """
+    present = live.objects_on(table)
+    operations: list[Operation] = []
+
+    for name, columns, unique in _declared_blueprint_indexes(model, table):
+        if name in present:
+            continue
+        column_list = ", ".join(f'"{column}"' for column in columns)
+        operations.append(
+            Operation(
+                kind="create_index",
+                table=table,
+                key=f"{table}:{name}",
+                # CONCURRENTLY by default: on a deployed table a plain build
+                # holds a write lock for its duration, and the planner has no
+                # reason to choose the blocking form when the model only asked
+                # for an index.
+                forward_sql=(
+                    f"CREATE {'UNIQUE ' if unique else ''}INDEX CONCURRENTLY "
+                    f'IF NOT EXISTS {name} ON "{table}" ({column_list})'
+                ),
+                reverse_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
+                safety=ADDITIVE,
+                reason=(
+                    f"model declares {'a unique' if unique else 'an'} index on "
+                    f"{', '.join(columns)}"
+                ),
+                transactional=False,
+                preflight_sql=(
+                    f'SELECT 1 FROM "{table}" GROUP BY {column_list} '
+                    f"HAVING COUNT(*) > 1 LIMIT 1"
+                )
+                if unique
+                else None,
+                preflight_failure=(
+                    f"{table} already holds duplicate {', '.join(columns)} — a "
+                    f"UNIQUE index cannot be built until they are resolved"
+                )
+                if unique
+                else None,
+                notes=(
+                    "built CONCURRENTLY: cannot run in a transaction, and an "
+                    "interrupted build leaves an INVALID index that re-running "
+                    "replaces",
+                ),
+            )
+        )
+
+    for index in model.get("indexes", []) or []:
+        name = index.get("name")
+        up = index.get("up")
+        if not name or not up:
+            continue
+        created = created_objects(up)
+        if created is None:
+            raise SchemaPlanRefused(
+                f"{table}.__indexes__ entry '{name}' — the planner cannot tell "
+                f"what this SQL creates, so it cannot tell whether the database "
+                f"already has it. Left to guess it would either replan forever "
+                f"or silently drop a real object from the plan. Express it as "
+                f"DDL naming its object (CREATE [UNIQUE] INDEX, ADD CONSTRAINT, "
+                f"CREATE TRIGGER, CREATE FUNCTION, CREATE EXTENSION, ADD COLUMN) "
+                f"— a DO block wrapping one of those reads fine."
+            )
+        if created <= present:
+            continue
+        concurrent = "CONCURRENTLY" in up.upper()
+        operations.append(
+            Operation(
+                kind="create_index",
+                table=table,
+                key=f"{table}:{name}",
+                forward_sql=up,
+                reverse_sql=index.get("down"),
+                safety=ADDITIVE if concurrent else LOCKING,
+                reason="named DDL declared by the model, absent from the database",
+                transactional=not concurrent,
+                notes=()
+                if concurrent
+                else ("builds with a write lock; declare it CONCURRENTLY to avoid that",),
+            )
+        )
+    return operations
+
+
+def orphaned_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation]:
+    """Indexes on a model-owned table that the model no longer declares.
+
+    Removing ``.index()`` from a model is a real instruction, and without this
+    the index survives in production forever with nothing reporting it — the
+    mirror of the missing-index gap, and just as silent.
+
+    Three exclusions keep it from firing on objects the model never owned:
+    the indexes Postgres creates to BACK a constraint (a primary key, a unique
+    constraint — dropping those means dropping the constraint), anything a
+    ``__indexes__`` entry creates, and the primary key itself.
+
+    Classed ``destructive`` even though no row is lost: an index is the
+    difference between a query and an outage, so removing one must be an
+    explicit decision. Its reverse fully restores it, which is why
+    ``restores_data`` stays True — the object comes back complete, unlike a
+    dropped column.
+    """
+    declared = {name for name, _, _ in _declared_blueprint_indexes(model, table)}
+    for index in model.get("indexes", []) or []:
+        up = index.get("up")
+        if up:
+            # An entry whose SQL cannot be read contributes the entry's own
+            # LABEL here, deliberately. This side of the comparison decides
+            # what to DROP, so the safe direction when the planner cannot tell
+            # what an entry creates is to over-claim ownership: at worst an
+            # orphan survives one more deploy, where under-claiming would drop
+            # a live index the model does own. The refusal raised on the
+            # missing-index side is where the operator hears about it.
+            declared |= created_objects(up) or {index.get("name") or ""}
+
+    backed_by_constraint = live.constraint_indexes.get(table, set())
+    present = live.indexes.get(table, set())
+
+    operations: list[Operation] = []
+    for name in sorted(present - declared - backed_by_constraint):
+        if name.endswith("_pkey"):
+            continue
+        operations.append(
+            Operation(
+                kind="drop_index",
+                table=table,
+                key=f"{table}:{name}",
+                forward_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
+                # Rebuilt from the catalogue's own definition, so the reverse
+                # is exact rather than a reconstruction from the model.
+                reverse_sql=None,
+                safety=DESTRUCTIVE,
+                reason="index in the database that no model declares",
+                transactional=False,
+                notes=(
+                    "no reverse is recorded: an index the model does not declare "
+                    "has no declaration to rebuild it from. Capture its "
+                    "definition from pg_indexes before dropping if you may want "
+                    "it back",
+                ),
+            )
+        )
+    return operations
+
+
+def orphaned_tables(model_tables: set[str], live: LiveSchema) -> list[str]:
+    """Tables in the database that no model declares — REPORTED, never dropped.
+
+    A DROP TABLE derived from a diff is where an autogenerating tool does its
+    worst damage, because the diff cannot distinguish an abandoned table from
+    a partition child, a table an extension owns, or the framework's own
+    migration tracker. So this returns prose for a human, not an operation.
+    """
+    ignored = {"migrations"}
+    # BASE TABLES only. A VIEW is never a table a model declares, so every
+    # view in the schema matched this rule and was reported as an orphan
+    # inviting a DROP — advice about a relation the application reads.
+    orphans = sorted(live.base_table_names() - model_tables - ignored)
+    return [
+        f"table '{name}' exists in the database and no model declares it — "
+        f"if it is obsolete, drop it by hand; the planner will not guess"
+        for name in orphans
+    ]
+
+
+__all__ = [
+    "created_objects",
+    "missing_indexes",
+    "orphaned_indexes",
+    "orphaned_tables",
+]

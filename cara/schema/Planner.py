@@ -29,10 +29,13 @@ Three rules keep the derivation honest:
 
 from __future__ import annotations
 
-import re
-
 from cara.exceptions import SchemaPlanRefused
 from cara.schema.LiveSchema import LiveSchema, declared_columns
+from cara.schema.Objects import (
+    missing_indexes,
+    orphaned_indexes,
+    orphaned_tables,
+)
 from cara.schema.Operation import (
     ADDITIVE,
     DESTRUCTIVE,
@@ -47,16 +50,6 @@ from cara.schema.Vocabulary import (
     MODEL_INT_RANK,
     MODEL_TYPE_CATEGORY,
     postgres_type,
-)
-
-#: Object names an ``__indexes__`` entry's SQL actually creates.
-_CREATES_RE = re.compile(
-    r"(?:CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"
-    r"|ADD\s+CONSTRAINT\s+"
-    r"|CREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+"
-    r"|CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+)"
-    r"\"?(?P<name>\w+)\"?",
-    re.IGNORECASE,
 )
 
 
@@ -181,10 +174,13 @@ def plan(
             except SchemaPlanRefused as refusal:
                 refusals.append(f"{table}.{name}: {refusal}")
 
-        operations.extend(_missing_indexes(model, table, live))
-        operations.extend(_orphaned_indexes(model, table, live))
+        try:
+            operations.extend(missing_indexes(model, table, live))
+        except SchemaPlanRefused as refusal:
+            refusals.append(str(refusal))
+        operations.extend(orphaned_indexes(model, table, live))
 
-    notices.extend(_orphaned_tables({m["table"] for m in planned}, live))
+    notices.extend(orphaned_tables({m["table"] for m in planned}, live))
 
     return sort_operations(operations), refusals, notices
 
@@ -413,159 +409,6 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
     return operations
 
 
-def _created_objects(up_sql: str, fallback: str) -> set[str]:
-    """The names this statement creates, or the entry's own name as a fallback.
-
-    An entry's ``name`` is a LABEL, not necessarily a database object: one
-    entry legitimately creates two differently-named CHECK constraints, and
-    keying presence on the label alone makes that entry replan forever. Since
-    the plan is the thing a human reads before a production deploy, permanent
-    phantom entries are not cosmetic — they train the reader to skim.
-    """
-    found = {match.group("name") for match in _CREATES_RE.finditer(up_sql)}
-    return found or {fallback}
-
-
-#: PostgreSQL truncates every identifier to NAMEDATALEN-1 bytes. The stored
-#: name is the truncated one, so a planner comparing the full convention name
-#: against the catalogue finds nothing and plans an index that already exists —
-#: on this schema, 23 of them, every single plan.
-_MAX_IDENTIFIER_LENGTH = 63
-
-
-def _blueprint_index_name(table: str, columns: list[str], unique: bool) -> str:
-    """The name Cara's Blueprint gives an unnamed ``index``/``unique``.
-
-    ``table.index(["a", "b"])`` becomes ``<table>_a_b_index``, truncated the
-    way Postgres truncates it. Reproducing the convention is what lets the
-    planner ask "does the database already have this one?" — without it, a
-    field-level index is invisible on the deployed side and never planned.
-    """
-    name = f"{table}_{'_'.join(columns)}_{'unique' if unique else 'index'}"
-    return name[:_MAX_IDENTIFIER_LENGTH]
-
-
-def _declared_blueprint_indexes(
-    model: dict, table: str
-) -> list[tuple[str, list[str], bool]]:
-    """``(name, columns, unique)`` for every field-level index the model declares.
-
-    Covers both spellings: the per-field ``.index()`` / ``.unique()`` flags and
-    the standalone ``field.index([...], name=...)`` declarations, which may
-    carry an explicit name.
-
-    Keyed by NAME, because the discoverer records a single-column
-    ``field.string(...).index()`` under both spellings — once as a param flag,
-    once as a standalone declaration. Emitting both would put the same
-    ``CREATE INDEX`` in one plan twice, and a plan that lists an operation
-    twice is a plan nobody trusts.
-    """
-    declared: dict[str, tuple[str, list[str], bool]] = {}
-
-    for column, definition in (model.get("fields") or {}).items():
-        params = definition.get("params") or {}
-        for flag, unique in (("index", False), ("unique", True)):
-            if params.get(flag):
-                name = _blueprint_index_name(table, [column], unique)
-                declared[name] = (name, [column], unique)
-
-    for key, unique in (("composite_indexes", False), ("composite_uniques", True)):
-        for declaration in model.get(key, []) or []:
-            columns = list(declaration.get("columns") or [])
-            if not columns:
-                continue
-            name = declaration.get("name") or _blueprint_index_name(
-                table, columns, unique
-            )
-            declared[name] = (name, columns, unique)
-
-    return list(declared.values())
-
-
-def _missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation]:
-    """Index-shaped objects the model declares and the database does not have.
-
-    Two sources, because a model has two ways to say "index this": the
-    Blueprint flags (``field.string(...).index()``, ``field.index([...])``),
-    whose SQL the planner renders from the declaration, and ``__indexes__``
-    named-DDL entries, whose SQL is the entry's own ``up`` — nothing is
-    re-rendered there. Missing the first source is not a cosmetic gap: a
-    field-level index added to a model would never reach a deployed database
-    and nothing would say so.
-    """
-    present = live.objects_on(table)
-    operations: list[Operation] = []
-
-    for name, columns, unique in _declared_blueprint_indexes(model, table):
-        if name in present:
-            continue
-        column_list = ", ".join(f'"{column}"' for column in columns)
-        operations.append(
-            Operation(
-                kind="create_index",
-                table=table,
-                key=f"{table}:{name}",
-                # CONCURRENTLY by default: on a deployed table a plain build
-                # holds a write lock for its duration, and the planner has no
-                # reason to choose the blocking form when the model only asked
-                # for an index.
-                forward_sql=(
-                    f"CREATE {'UNIQUE ' if unique else ''}INDEX CONCURRENTLY "
-                    f'IF NOT EXISTS {name} ON "{table}" ({column_list})'
-                ),
-                reverse_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
-                safety=ADDITIVE,
-                reason=(
-                    f"model declares {'a unique' if unique else 'an'} index on "
-                    f"{', '.join(columns)}"
-                ),
-                transactional=False,
-                preflight_sql=(
-                    f'SELECT 1 FROM "{table}" GROUP BY {column_list} '
-                    f"HAVING COUNT(*) > 1 LIMIT 1"
-                )
-                if unique
-                else None,
-                preflight_failure=(
-                    f"{table} already holds duplicate {', '.join(columns)} — a "
-                    f"UNIQUE index cannot be built until they are resolved"
-                )
-                if unique
-                else None,
-                notes=(
-                    "built CONCURRENTLY: cannot run in a transaction, and an "
-                    "interrupted build leaves an INVALID index that re-running "
-                    "replaces",
-                ),
-            )
-        )
-
-    for index in model.get("indexes", []) or []:
-        name = index.get("name")
-        up = index.get("up")
-        if not name or not up:
-            continue
-        if _created_objects(up, name) <= present:
-            continue
-        concurrent = "CONCURRENTLY" in up.upper()
-        operations.append(
-            Operation(
-                kind="create_index",
-                table=table,
-                key=f"{table}:{name}",
-                forward_sql=up,
-                reverse_sql=index.get("down"),
-                safety=ADDITIVE if concurrent else LOCKING,
-                reason="named DDL declared by the model, absent from the database",
-                transactional=not concurrent,
-                notes=()
-                if concurrent
-                else ("builds with a write lock; declare it CONCURRENTLY to avoid that",),
-            )
-        )
-    return operations
-
-
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -592,74 +435,3 @@ def _sql_default(value) -> str:
 
 
 __all__ = ["plan"]
-
-
-def _orphaned_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation]:
-    """Indexes on a model-owned table that the model no longer declares.
-
-    Removing ``.index()`` from a model is a real instruction, and without this
-    the index survives in production forever with nothing reporting it — the
-    mirror of the missing-index gap, and just as silent.
-
-    Three exclusions keep it from firing on objects the model never owned:
-    the indexes Postgres creates to BACK a constraint (a primary key, a unique
-    constraint — dropping those means dropping the constraint), anything a
-    ``__indexes__`` entry creates, and the primary key itself.
-
-    Classed ``destructive`` even though no row is lost: an index is the
-    difference between a query and an outage, so removing one must be an
-    explicit decision. Its reverse fully restores it, which is why
-    ``restores_data`` stays True — the object comes back complete, unlike a
-    dropped column.
-    """
-    declared = {name for name, _, _ in _declared_blueprint_indexes(model, table)}
-    for index in model.get("indexes", []) or []:
-        up = index.get("up")
-        if up:
-            declared |= _created_objects(up, index.get("name") or "")
-
-    backed_by_constraint = live.constraint_indexes.get(table, set())
-    present = live.indexes.get(table, set())
-
-    operations: list[Operation] = []
-    for name in sorted(present - declared - backed_by_constraint):
-        if name.endswith("_pkey"):
-            continue
-        operations.append(
-            Operation(
-                kind="drop_index",
-                table=table,
-                key=f"{table}:{name}",
-                forward_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
-                # Rebuilt from the catalogue's own definition, so the reverse
-                # is exact rather than a reconstruction from the model.
-                reverse_sql=None,
-                safety=DESTRUCTIVE,
-                reason="index in the database that no model declares",
-                transactional=False,
-                notes=(
-                    "no reverse is recorded: an index the model does not declare "
-                    "has no declaration to rebuild it from. Capture its "
-                    "definition from pg_indexes before dropping if you may want "
-                    "it back",
-                ),
-            )
-        )
-    return operations
-
-
-def _orphaned_tables(model_tables: set[str], live: LiveSchema) -> list[str]:
-    """Tables in the database that no model declares — REPORTED, never dropped.
-
-    A DROP TABLE derived from a diff is where an autogenerating tool does its
-    worst damage, because the diff cannot distinguish an abandoned table from
-    a partition child, a table an extension owns, or the framework's own
-    migration tracker. So this returns prose for a human, not an operation.
-    """
-    ignored = {"migrations"}
-    orphans = sorted(live.table_names() - model_tables - ignored)
-    return [
-        f"table '{name}' exists in the database and no model declares it — "
-        f"if it is obsolete, drop it by hand; the planner will not guess"
-        for name in orphans
-    ]

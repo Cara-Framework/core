@@ -38,28 +38,70 @@ class LiveSchema:
     #: the introspection cannot see is one the planner re-creates every time.
     triggers: dict[str, set[str]] | None = None
     functions: set[str] | None = None
+    #: Installed extension names. Schema-wide rather than per-table, and read
+    #: because a model may install one through ``__indexes__`` — an entry
+    #: labelled ``ext_pg_trgm`` creates an extension called ``pg_trgm``, so
+    #: without this catalogue it reads as missing on every plan, forever.
+    extensions: set[str] | None = None
+    #: Relation name -> ``information_schema.tables.table_type``. ``tables``
+    #: is built from ``information_schema.columns``, which does not
+    #: distinguish a table from a VIEW — so without this, three cheapa views
+    #: were reported as orphaned TABLES with the advice "drop it by hand",
+    #: about relations the storefront reads on every request.
+    relation_kinds: dict[str, str] | None = None
 
     def __post_init__(self):
-        for name, empty in (("constraints", {}), ("triggers", {}), ("functions", set())):
+        for name, empty in (
+            ("constraints", {}),
+            ("triggers", {}),
+            ("functions", set()),
+            ("extensions", set()),
+            ("relation_kinds", {}),
+        ):
             if getattr(self, name) is None:
                 object.__setattr__(self, name, empty)
 
     def table_names(self) -> set[str]:
+        """Every relation carrying columns, VIEWS INCLUDED — see
+        :meth:`base_table_names` for the ones a model could own."""
         return set(self.tables)
 
+    def base_table_names(self) -> set[str]:
+        """Relations a model can legitimately be backed by.
+
+        A relation whose kind was never read counts as a base table: this must
+        not start hiding real orphans the day a Postgres release renames a
+        ``table_type``, and a missing kind means "unknown", not "view".
+        """
+        return {
+            name
+            for name in self.tables
+            if self.relation_kinds.get(name, "BASE TABLE") == "BASE TABLE"
+        }
+
     def objects_on(self, table: str) -> set[str]:
-        """Every named schema object the database already carries for ``table``."""
+        """Every named schema object the database already carries for ``table``.
+
+        Objects that do NOT live in the table's namespace are kind-qualified
+        (``extension:pg_trgm``, ``column:search_vector``) so a planner asking
+        "is it already there?" asks the right catalogue. Unqualified names
+        would collide across namespaces and, worse, silently miss: an
+        extension is not an index, and no amount of looking through the index
+        list will ever find one.
+        """
         return (
             self.indexes.get(table, set())
             | self.checks.get(table, set())
             | self.constraints.get(table, set())
             | self.triggers.get(table, set())
             | self.functions
+            | {f"extension:{name}" for name in self.extensions}
+            | {f"column:{name}" for name in self.tables.get(table, {})}
         )
 
 
 def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
-    """Read columns, constraints, indexes, triggers and functions."""
+    """Read columns, constraints, indexes, triggers, functions, extensions."""
     target = schema_name or live_schema.get_schema() or "public"
     run = live_schema.query_executor.get_query_result
 
@@ -153,6 +195,20 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         or []
     }
 
+    relation_kinds = {
+        row["table_name"]: (row["table_type"] or "").upper()
+        for row in run(
+            "SELECT table_name, table_type FROM information_schema.tables "
+            f"WHERE table_schema = '{sql_literal(target)}'"
+        )
+        or []
+    }
+
+    extensions = {
+        row["extension_name"]
+        for row in run("SELECT extname AS extension_name FROM pg_extension") or []
+    }
+
     return LiveSchema(
         tables=tables,
         checks=checks,
@@ -161,6 +217,8 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         constraints=constraints,
         triggers=triggers,
         functions=functions,
+        extensions=extensions,
+        relation_kinds=relation_kinds,
     )
 
 

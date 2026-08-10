@@ -232,3 +232,70 @@ def test_every_flag_a_message_recommends_actually_exists():
                 f"{module.__name__} tells the operator to type --{token}, "
                 f"but the parser only accepts --{token.replace('-', '_')}"
             )
+
+
+class _Registry:
+    """Just enough of the command runner to answer "is X registered?"."""
+
+    def __init__(self, names):
+        self.runner = type(
+            "_Runner",
+            (),
+            {
+                "console_app": type(
+                    "_Console",
+                    (),
+                    {
+                        "registered_commands": [
+                            type("_Cmd", (), {"name": name})() for name in names
+                        ]
+                    },
+                )()
+            },
+        )()
+
+
+class _Application:
+    def __init__(self, names):
+        self._registry = _Registry(names)
+
+    def make(self, key):
+        assert key == "commands"
+        return self._registry
+
+
+def _verify_with(names):
+    command = _Verify()
+    command.application = _Application(names)
+    return command
+
+
+def test_a_deployable_without_migrate_says_so_instead_of_blaming_the_directory():
+    """Spawned from a worker repository, verify died on "No such command
+    'migrate'" and reported "the generated directory does not install from
+    zero" — a false accusation produced by a command that could not find its
+    own dependency."""
+    command = _verify_with(["schema:check", "queue:work"])
+
+    assert command.handle() == 2
+    text = _text(command)
+    assert "does not carry migrate" in text
+    assert "not about the migrations" in text
+    assert "does not install from zero" not in text
+
+
+def test_the_dependency_check_asks_the_registry_not_the_repository_name():
+    """cheapa's services keeps `migrate` for its reset workflow and
+    synkronus' does not — the strip list is each product's decision, so
+    guessing from the deployable's name would be wrong in one of them."""
+    command = _verify_with(["migrate", "schema:check"])
+
+    assert command.handle() == 0
+
+
+def test_no_registry_to_ask_means_proceed_rather_than_refuse():
+    """Absence of evidence is not evidence of absence: with no runner to
+    query, let the child process speak for itself."""
+    command = _Verify()  # no .application at all
+
+    assert command.handle() == 0

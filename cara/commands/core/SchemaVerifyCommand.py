@@ -81,6 +81,19 @@ class SchemaVerifyCommand(CommandBase):
             )
             return 2
 
+        missing = self._missing_dependencies()
+        if missing:
+            self.error(
+                f"This deployable does not carry {', '.join(missing)}, so the "
+                f"invariant cannot be proved from here — the child process "
+                f"would fail on a command that is not registered, and a run "
+                f"that cannot execute the directory has no verdict to give.\n"
+                f"   Run 'craft schema:verify' from the deployable that owns "
+                f"the schema (the one with the migration commands). This is "
+                f"about WHERE it was run, not about the migrations."
+            )
+            return 2
+
         try:
             params = self._connection_params()
         except ValueError as exc:
@@ -160,6 +173,38 @@ class SchemaVerifyCommand(CommandBase):
         return 0
 
     # ── seams (unit tests replace these; nothing else may talk to the world) ─
+
+    #: The child commands this one is built out of. Not a doc comment — the
+    #: pre-flight below reads it.
+    REQUIRES = ("migrate", "schema:check")
+
+    def _missing_dependencies(self) -> list[str]:
+        """Which of :attr:`REQUIRES` this deployable's CLI does not register.
+
+        A worker repository deliberately strips the commands that WRITE a
+        schema, ``migrate`` among them — so ``schema:verify`` spawned there
+        died on "No such command 'migrate'" and reported it as
+        "the generated directory does not install from zero". That is a false
+        accusation about the migration directory, produced by a command that
+        could not find its own dependency, and it is exactly the failure this
+        whole workflow exists to prevent: a tool that says something untrue
+        with confidence.
+
+        Asked of the runner rather than assumed from the deployable's name,
+        because the strip list is the product's decision and differs between
+        them — cheapa's services keeps ``migrate`` for its reset workflow,
+        synkronus' does not.
+        """
+        try:
+            console = self.application.make("commands").runner.console_app
+            registered = {
+                getattr(command, "name", None) for command in console.registered_commands
+            }
+        except Exception:
+            # No registry to ask means no evidence of absence. Proceed and let
+            # the child speak for itself rather than refusing on a guess.
+            return []
+        return [name for name in self.REQUIRES if name not in registered]
 
     def _connection_params(self) -> dict:
         """The default connection's parameters, or ValueError when unusable."""
