@@ -74,6 +74,7 @@ from .types.container import (
     StrictContainerException,
 )
 from .types.Eloquent import (
+    SchemaPlanRefused,
     ConnectionNotRegisteredException,
     DatabaseUnavailableException,
     MigrationException,
@@ -218,6 +219,7 @@ __all__ = [
     "RuleNotFoundException",
     "SchedulingConfigurationException",
     "SchedulingException",
+    "SchemaPlanRefused",
     "ServiceUnavailableException",
     "StorageConfigurationException",
     "StorageException",

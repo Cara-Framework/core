@@ -496,7 +496,7 @@ CENSUS: dict[str, dict[str, int]] = {
         "cara/broadcasting/__init__.py": 6,
         "cara/cache/__init__.py": 8,
         "cara/commands/__init__.py": 4,
-        "cara/commands/core/__init__.py": 67,
+        "cara/commands/core/__init__.py": 71,
         "cara/container/__init__.py": 1,
         "cara/context/__init__.py": 2,
         "cara/decorators/__init__.py": 5,

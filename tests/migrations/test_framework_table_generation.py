@@ -47,6 +47,7 @@ def test_framework_models_are_discoverable():
         "FailedJob": "failed_job",
         "QueueJobDelivery": "queue_job_delivery",
         "QueueJobDeliveryHookRetryAudit": "queue_job_delivery_hook_retry_audit",
+        "SchemaOperation": "schema_operation",
     }
 
 

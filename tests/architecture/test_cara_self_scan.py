@@ -22,7 +22,15 @@ from tests.architecture._cara_self_scan import (
 #: Total pinned findings. Spelled out so the debt's SIZE is part of the
 #: guard's output, as §11 requires ("its size is part of the guard's
 #: output") — a census that only lives as a dict is a number nobody reads.
-CENSUS_TOTAL = 1523
+# 1523 -> 1527: evolve mode adds four framework commands
+# (schema:verify, schema:plan, schema:apply, schema:rollback) to
+# cara/commands/core/__init__.py, a barrel that deliberately re-exports
+# NOTHING so one command's optional dependency cannot disable the rest.
+# Every command in it therefore counts as a missing re-export: this is a
+# structural consequence of the barrel's design, not new debt of a new
+# kind, and the only way to avoid it would be to give the barrel the
+# eager imports it exists to prevent.
+CENSUS_TOTAL = 1527
 
 
 class TestEveryScannerIsDecidedOn:

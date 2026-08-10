@@ -372,6 +372,14 @@ class ModelDiscoverer:
             # down(), keeping the MODEL the single source of truth so
             # ``make:migration --overwrite`` regenerates them.
             "indexes": [],
+            # Column renames, DECLARED: ``__renamed_from__ = {"new": "old"}``.
+            # A diff cannot tell a rename from a drop plus an add — they are
+            # the same two facts — so every tool that guesses emits DROP+ADD
+            # and throws the column's data away. Evolve-mode planning reads
+            # this map and emits ``RENAME COLUMN`` instead; undeclared, it
+            # refuses to guess. Regenerate mode ignores it: a regenerated
+            # creator only ever states the CURRENT name.
+            "renamed_from": {},
         }
 
         # Check if model uses MakesSoftDeletes
@@ -472,6 +480,14 @@ class ModelDiscoverer:
                     assign_node.value, ast.List
                 ):
                     model_info["indexes"] = self._parse_indexes_attribute(
+                        assign_node.value
+                    )
+
+                # Parse __renamed_from__ = {"new_name": "old_name"}
+                elif target.id == "__renamed_from__" and isinstance(
+                    assign_node.value, ast.Dict
+                ):
+                    model_info["renamed_from"] = self._parse_renamed_from_attribute(
                         assign_node.value
                     )
 
@@ -1039,6 +1055,26 @@ class ModelDiscoverer:
             if view_entry.get("name") and view_entry.get("sql"):
                 views.append(view_entry)
         return views
+
+    def _parse_renamed_from_attribute(self, dict_node: ast.Dict) -> dict:
+        """Parse ``__renamed_from__ = {"new": "old"}`` from AST.
+
+        Both sides must be string literals: the map is read by a planner that
+        writes ``RENAME COLUMN`` against a production table, so a computed key
+        is refused rather than resolved. A non-literal entry is skipped and
+        the rename simply is not declared — which makes the planner fall back
+        to reporting a drop and an add for a human to judge, the safe default.
+        """
+        renames: dict[str, str] = {}
+        for key, value in zip(dict_node.keys, dict_node.values, strict=False):
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+            ):
+                renames[key.value] = value.value
+        return renames
 
     def _parse_indexes_attribute(self, list_node: ast.List) -> list:
         """Parse ``__indexes__ = [{"name": .., "up": .., "down": ..}]`` from AST.
