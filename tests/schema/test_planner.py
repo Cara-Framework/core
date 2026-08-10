@@ -269,3 +269,84 @@ def test_plan_is_ordered_safest_first():
     ranks = {ADDITIVE: 0, LOCKING: 1, DESTRUCTIVE: 2}
     safeties = [ranks[op.safety] for op in operations]
     assert safeties == sorted(safeties)
+
+
+# ── field-level indexes reach a deployed database too ───────────────────────
+
+
+def test_field_level_index_is_planned_when_the_database_lacks_it():
+    """``field.string(...).index()`` is the common spelling. Before this, only
+    ``__indexes__`` entries were compared, so an index added this way never
+    reached a deployed database and nothing reported it."""
+    model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
+    operations, _ = plan([model], _live({"sku": _col()}))
+    index_op = next(op for op in operations if op.kind == "create_index")
+    assert index_op.key == "product:product_sku_index"
+    assert "CREATE INDEX CONCURRENTLY" in index_op.forward_sql
+    # CONCURRENTLY by default: a plain build holds a write lock, and the model
+    # only asked for an index.
+    assert index_op.safety == ADDITIVE
+    assert index_op.transactional is False
+    assert "DROP INDEX CONCURRENTLY" in index_op.reverse_sql
+
+
+def test_field_level_unique_uses_the_unique_naming_convention():
+    model = _model({"slug": _field("string", length=64, nullable=True, unique=True)})
+    operations, _ = plan([model], _live({"slug": _col()}))
+    index_op = next(op for op in operations if op.kind == "create_index")
+    assert index_op.key == "product:product_slug_unique"
+    assert "CREATE UNIQUE INDEX CONCURRENTLY" in index_op.forward_sql
+
+
+def test_field_level_index_the_database_already_has_is_not_planned():
+    model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
+    operations, _ = plan(
+        [model], _live({"sku": _col()}, indexes=["product_sku_index"])
+    )
+    assert [op for op in operations if op.kind == "create_index"] == []
+
+
+def test_composite_index_declaration_is_planned_by_its_declared_name():
+    model = _model({"sku": _field("string", length=64, nullable=True)})
+    model["composite_indexes"] = [
+        {"columns": ["sku", "brand"], "name": "product_sku_brand_idx"}
+    ]
+    operations, _ = plan([model], _live({"sku": _col(), "brand": _col()}))
+    index_op = next(op for op in operations if op.kind == "create_index")
+    assert index_op.key == "product:product_sku_brand_idx"
+    assert '"sku", "brand"' in index_op.forward_sql
+
+
+def test_long_index_names_are_truncated_the_way_postgres_truncates_them():
+    """Postgres stores identifiers truncated to 63 bytes. Comparing the full
+    convention name against the catalogue finds nothing, so every long-named
+    index reads as missing and is replanned on every single run."""
+    table = "advertising_intent_entry"
+    model = _model(
+        {"advertising_intent_id": _field("big_integer"), "external_listing_id": _field("string", length=64)},
+        table=table,
+    )
+    model["composite_uniques"] = [
+        {"columns": ["advertising_intent_id", "external_listing_id"]}
+    ]
+    stored = "advertising_intent_entry_advertising_intent_id_external_listing"
+    assert len(stored) == 63
+    live = _live(
+        {"advertising_intent_id": _col("bigint", False, None), "external_listing_id": _col()},
+        indexes=[stored],
+        table=table,
+    )
+    operations, _ = plan([model], live)
+    assert [op for op in operations if op.kind == "create_index"] == []
+
+
+def test_one_index_declared_two_ways_is_planned_once():
+    """The discoverer records ``field.string(...).index()`` under both the
+    param flag and a standalone declaration. A plan that lists the same
+    CREATE INDEX twice is a plan nobody trusts."""
+    model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
+    model["composite_indexes"] = [{"columns": ["sku"]}]
+    operations, _ = plan([model], _live({"sku": _col()}))
+    index_ops = [op for op in operations if op.kind == "create_index"]
+    assert len(index_ops) == 1
+    assert index_ops[0].key == "product:product_sku_index"
