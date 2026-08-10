@@ -346,27 +346,48 @@ differ against the models; exit 0 IS the proof. Both entry points refuse when
 `APP_ENV` is production, because regeneration renumbers files an applied
 ledger references by name.
 
-In **evolve mode** (production; specified here, built at cutover) the deployed
-database is the object and nothing regenerates: changes ship as planned,
-ordered, append-only OPERATIONS. `schema:plan` derives them by diffing the
-DEPLOYED schema against the models — the same comparator `schema:check`
-already is — and classifies every operation: *additive* (new table, nullable
-column, `CREATE INDEX CONCURRENTLY`) applies without ceremony; *locking*
-(`SET NOT NULL`, type changes, plain `ADD CONSTRAINT`) must ship as its safe
-recipe (`NOT VALID` + `VALIDATE`, batched rewrites); *destructive* (drops,
-narrowing) requires an explicit flag naming the object. `schema:apply`
-executes a plan under lock timeouts, records each operation in its own
-checksummed ledger, and resumes idempotently after a crash. Data movement is
-DECLARED, not hand-written: a backfill expression lives on the field it
-fills, and a rename carries its old name on the model (`__renamed_from__`) so
-the differ emits RENAME instead of the drop+add that loses a column. Two
-gates keep plans honest: apply refuses when the deployed schema no longer
-matches the ledger's last-known state (hotfix drift must be adopted into the
-models or reverted first), and every plan is rehearsed against a
-structure-clone scratch — `schema:verify`'s machinery — before it may touch
-production. Fresh installs keep running the generated directory, which the
-regenerate-mode invariant keeps exactly equal to the models, so a fresh
-environment and an evolved one converge on the same schema by construction.
+In **evolve mode** (production) the deployed database is the object and
+nothing regenerates: changes ship as planned, ordered, append-only
+OPERATIONS. `schema:plan` derives them by diffing the DEPLOYED schema against
+the models — the same comparison `schema:check` performs — and classifies
+every operation: *additive* (new table, nullable column, `CREATE INDEX
+CONCURRENTLY`) applies without ceremony; *locking* (`SET NOT NULL`, type
+widening, a plain index build) states the lock it takes and ships as its safe
+recipe; *destructive* (drops) requires an explicit flag naming the intent, so
+a drop can never ride along unnoticed inside routine work.
+
+What the planner REFUSES is as load-bearing as what it emits. A NOT NULL
+column with no default, a type change whose `USING` clause depends on the
+data, a column declared through raw `__indexes__` SQL: each is reported with
+its reason and the plan is declared INCOMPLETE, which `schema:apply` will not
+run. A tool that guesses here is the autogenerator this replaces.
+
+Two data-loss traps are closed by construction. **A rename is DECLARED**
+(`__renamed_from__` on the model), never inferred — from a diff a rename and
+a drop-plus-add are the same two facts, and every tool that guesses emits
+DROP + ADD and throws the column away; undeclared, the planner reports both
+and lets a human judge. **Adding a NOT NULL column with a default** becomes
+the three-step expand recipe (add nullable → backfill → tighten), because the
+naive form rewrites every row of a populated table.
+
+`schema:apply` re-derives at run time — a printed plan is for humans, and
+between review and deploy the database can move. Every operation is recorded
+in the `schema_operation` ledger (a framework model, so the migration
+directory still generates it) together with the statement that reverses it,
+captured at apply time rather than re-derived later against a schema the
+operation has already changed. A re-run skips what is applied and resumes; a
+failure stops and is recorded with its error.
+
+`schema:rollback` replays those reverses newest-first and refuses by default
+what it cannot honestly undo: an operation whose reverse restores a column's
+SHAPE but not its contents, or one with no reverse at all — a backfill has no
+undo, and "reversible" and "lossless" are different claims. **Production
+rolls FORWARD**; rollback is for the minutes after a deploy, before anything
+has written to the new shape.
+
+Fresh installs keep running the generated directory, which the regenerate-mode
+invariant keeps exactly equal to the models, so a fresh environment and an
+evolved one converge on the same schema by construction.
 
 **There are no exemption files.** Every migration is generated; `MODEL_LESS`,
 `MODEL_TRANSITION` and `DROPPED_INDEXES` are banned markers that
