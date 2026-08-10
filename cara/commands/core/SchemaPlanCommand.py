@@ -55,12 +55,12 @@ class SchemaPlanCommand(CommandBase):
     def handle(self):
         """Print the derived, classified plan; never touch the database."""
         try:
-            operations, refusals = self.derive()
+            operations, refusals, notices = self.derive()
         except RuntimeError as exc:
             self.error(str(exc))
             return 2
 
-        if not operations and not refusals:
+        if not operations and not refusals and not notices:
             self.success(
                 "Nothing to do — the deployed schema already matches the models."
             )
@@ -92,6 +92,12 @@ class SchemaPlanCommand(CommandBase):
             for refusal in refusals:
                 self.warning(f"   {refusal}")
 
+        if notices:
+            self.info("")
+            self.warning(f"── found, not planned ({len(notices)})")
+            for notice in notices:
+                self.warning(f"   {notice}")
+
         self.info("")
         destructive = by_safety.get(DESTRUCTIVE) or []
         if refusals:
@@ -115,7 +121,7 @@ class SchemaPlanCommand(CommandBase):
         return 0
 
     def derive(self):
-        """The (operations, refusals) pair for the configured connection.
+        """The (operations, refusals, notices) triple for this connection.
 
         Shared with ``schema:apply``, which re-derives rather than trusting a
         printed plan: between a review and a deploy the database can move, and

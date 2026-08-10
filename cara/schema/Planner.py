@@ -37,6 +37,7 @@ from cara.schema.Operation import (
     ADDITIVE,
     DESTRUCTIVE,
     LOCKING,
+    RUN_MIGRATION_PREFIX,
     Operation,
     sort_operations,
 )
@@ -59,15 +60,28 @@ _CREATES_RE = re.compile(
 )
 
 
-def plan(models: list[dict], live: LiveSchema) -> tuple[list[Operation], list[str]]:
-    """Operations to move ``live`` to what ``models`` declare, plus refusals.
+def plan(
+    models: list[dict], live: LiveSchema
+) -> tuple[list[Operation], list[str], list[str]]:
+    """Operations to move ``live`` to what ``models`` declare, plus findings.
 
-    Returns ``(operations, refusals)``. A non-empty refusal list means the
-    plan is INCOMPLETE — apply must not run it as if it were the whole story,
-    which is why they are returned beside the operations rather than logged.
+    Returns ``(operations, refusals, notices)``, three deliberately different
+    things:
+
+    * **operations** — what apply will run.
+    * **refusals** — a difference with no derivable statement. A non-empty
+      list means the plan is INCOMPLETE, and apply must not run it as if it
+      were the whole story, which is why these are returned rather than logged.
+    * **notices** — something a human should see that is NOT an operation.
+      An orphaned TABLE is the case that forced this category: the planner
+      cannot tell an abandoned table from a partition child, an extension's
+      table or the migration tracker itself, so emitting a DROP would be
+      guessing at exactly the scale where guessing is unforgivable. It says
+      what it found and stops.
     """
     operations: list[Operation] = []
     refusals: list[str] = []
+    notices: list[str] = []
 
     planned = [
         model
@@ -83,21 +97,23 @@ def plan(models: list[dict], live: LiveSchema) -> tuple[list[Operation], list[st
 
         live_columns = live.tables.get(table)
         if live_columns is None:
-            # A table absent from the database is created by the generated
-            # migration for it — a create-table statement rebuilt here would
-            # be a second renderer of the same model, and the two would drift.
+            # A table absent from the database is created by RUNNING its
+            # generated migration, not by a CREATE TABLE rebuilt here — that
+            # would be a second renderer of the same model, and the two would
+            # drift. ``forward_sql`` names the file so apply can execute it and
+            # the ledger records which artifact ran.
             operations.append(
                 Operation(
                     kind="create_table",
                     table=table,
                     key=table,
-                    forward_sql=f"-- run the generated creator for {table}",
+                    forward_sql=f"{RUN_MIGRATION_PREFIX}create_{table}_table",
                     reverse_sql=f'DROP TABLE IF EXISTS "{table}"',
                     safety=ADDITIVE,
                     reason="table declared by a model but absent from the database",
                     notes=(
-                        "apply runs the generated create_<table>_table migration "
-                        "for this table rather than re-rendering its DDL",
+                        "runs the generated create_<table>_table migration; its "
+                        "own DDL, not a re-render",
                     ),
                 )
             )
@@ -166,8 +182,11 @@ def plan(models: list[dict], live: LiveSchema) -> tuple[list[Operation], list[st
                 refusals.append(f"{table}.{name}: {refusal}")
 
         operations.extend(_missing_indexes(model, table, live))
+        operations.extend(_orphaned_indexes(model, table, live))
 
-    return sort_operations(operations), refusals
+    notices.extend(_orphaned_tables({m["table"] for m in planned}, live))
+
+    return sort_operations(operations), refusals, notices
 
 
 # ── column operations ───────────────────────────────────────────────────────
@@ -538,3 +557,74 @@ def _sql_default(value) -> str:
 
 
 __all__ = ["plan"]
+
+
+def _orphaned_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation]:
+    """Indexes on a model-owned table that the model no longer declares.
+
+    Removing ``.index()`` from a model is a real instruction, and without this
+    the index survives in production forever with nothing reporting it — the
+    mirror of the missing-index gap, and just as silent.
+
+    Three exclusions keep it from firing on objects the model never owned:
+    the indexes Postgres creates to BACK a constraint (a primary key, a unique
+    constraint — dropping those means dropping the constraint), anything a
+    ``__indexes__`` entry creates, and the primary key itself.
+
+    Classed ``destructive`` even though no row is lost: an index is the
+    difference between a query and an outage, so removing one must be an
+    explicit decision. Its reverse fully restores it, which is why
+    ``restores_data`` stays True — the object comes back complete, unlike a
+    dropped column.
+    """
+    declared = {name for name, _, _ in _declared_blueprint_indexes(model, table)}
+    for index in model.get("indexes", []) or []:
+        up = index.get("up")
+        if up:
+            declared |= _created_objects(up, index.get("name") or "")
+
+    backed_by_constraint = live.constraint_indexes.get(table, set())
+    present = live.indexes.get(table, set())
+
+    operations: list[Operation] = []
+    for name in sorted(present - declared - backed_by_constraint):
+        if name.endswith("_pkey"):
+            continue
+        operations.append(
+            Operation(
+                kind="drop_index",
+                table=table,
+                key=f"{table}:{name}",
+                forward_sql=f"DROP INDEX CONCURRENTLY IF EXISTS {name}",
+                # Rebuilt from the catalogue's own definition, so the reverse
+                # is exact rather than a reconstruction from the model.
+                reverse_sql=None,
+                safety=DESTRUCTIVE,
+                reason="index in the database that no model declares",
+                transactional=False,
+                notes=(
+                    "no reverse is recorded: an index the model does not declare "
+                    "has no declaration to rebuild it from. Capture its "
+                    "definition from pg_indexes before dropping if you may want "
+                    "it back",
+                ),
+            )
+        )
+    return operations
+
+
+def _orphaned_tables(model_tables: set[str], live: LiveSchema) -> list[str]:
+    """Tables in the database that no model declares — REPORTED, never dropped.
+
+    A DROP TABLE derived from a diff is where an autogenerating tool does its
+    worst damage, because the diff cannot distinguish an abandoned table from
+    a partition child, a table an extension owns, or the framework's own
+    migration tracker. So this returns prose for a human, not an operation.
+    """
+    ignored = {"migrations"}
+    orphans = sorted(live.table_names() - model_tables - ignored)
+    return [
+        f"table '{name}' exists in the database and no model declares it — "
+        f"if it is obsolete, drop it by hand; the planner will not guess"
+        for name in orphans
+    ]

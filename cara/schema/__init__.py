@@ -26,10 +26,12 @@ from cara.schema.LiveSchema import (
 )
 from cara.schema.Operation import (
     ADDITIVE,
+    RUN_MIGRATION_PREFIX,
     DESTRUCTIVE,
     LOCKING,
     SAFETY_ORDER,
     Operation,
+    migration_to_run,
     sort_operations,
 )
 from cara.schema.Planner import plan
@@ -65,9 +67,11 @@ __all__ = [
     "Operation",
     "POSTGRES_TYPE_SQL",
     "PSEUDO_FIELD_EXPANSIONS",
+    "RUN_MIGRATION_PREFIX",
     "SAFETY_ORDER",
     "declared_columns",
     "introspect",
+    "migration_to_run",
     "plan",
     "postgres_type",
     "raw_sql_columns",

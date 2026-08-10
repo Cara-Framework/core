@@ -32,12 +32,13 @@ plan drops and rebuilds it, which is the trade for not locking the table.
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
 from cara.commands.core.SchemaPlanCommand import SchemaPlanCommand
 from cara.decorators import command
 from cara.facades import DB
-from cara.schema import DESTRUCTIVE
+from cara.schema import DESTRUCTIVE, migration_to_run
 
 #: Short on purpose — see the module docstring.
 DEFAULT_LOCK_TIMEOUT_MS = 5000
@@ -72,7 +73,9 @@ class SchemaApplyCommand(CommandBase):
         )
 
         try:
-            operations, refusals = planner.derive()
+            # Notices are findings for a human, not work — they never
+            # block an apply, so they are read here and not acted on.
+            operations, refusals, _notices = planner.derive()
         except RuntimeError as exc:
             self.error(str(exc))
             return 2
@@ -161,6 +164,11 @@ class SchemaApplyCommand(CommandBase):
         return {row["operation_key"] for row in rows}
 
     def _execute(self, operation, lock_timeout: int) -> None:
+        slug = migration_to_run(operation.forward_sql)
+        if slug is not None:
+            self._run_generated_migration(slug)
+            return
+
         if operation.transactional:
             DB.statement(f"SET LOCAL lock_timeout = '{lock_timeout}ms'")
             DB.statement(operation.forward_sql)
@@ -169,6 +177,46 @@ class SchemaApplyCommand(CommandBase):
         # Non-transactional (CONCURRENTLY): no SET LOCAL, no surrounding
         # transaction — the statement manages its own locking.
         DB.statement(operation.forward_sql)
+
+    def _run_generated_migration(self, slug: str) -> None:
+        """Execute the generated creator for a table the database lacks.
+
+        A new table is the second most common schema change after a new
+        column, and evolve mode could not perform it at all: the operation
+        carried a comment where its SQL should be, so apply died on "can't
+        execute an empty query" and no table could ever be added to a deployed
+        database.
+
+        Running the generated file rather than re-rendering its DDL keeps ONE
+        renderer for a table's shape. The same file is what a fresh install
+        runs, so an evolved database and a fresh one get byte-identical DDL —
+        which is the property `schema:verify` proves for the directory as a
+        whole.
+        """
+        from cara.eloquent.migrations import (  # local: heavy optional dep
+            MigrationFileManager,
+        )
+        from cara.support import paths  # local: heavy optional dep
+
+        directory = Path(paths("migrations"))
+        matches = sorted(directory.glob(f"*_{slug}.py"))
+        if not matches:
+            raise RuntimeError(
+                f"No generated migration matching '{slug}' in {directory}. "
+                f"Regenerate the directory in development and redeploy — evolve "
+                f"mode runs the generated creator, it does not render DDL."
+            )
+        if len(matches) > 1:
+            raise RuntimeError(
+                f"{len(matches)} migrations match '{slug}': "
+                f"{', '.join(path.name for path in matches)}. "
+                f"One table, one generated file — fix the directory first."
+            )
+
+        migration_class = MigrationFileManager(str(directory)).load_migration_class(
+            matches[0]
+        )
+        migration_class().up()
 
     def _record(
         self, plan_id: str, operation, status: str, error: str | None = None

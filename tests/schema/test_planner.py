@@ -7,14 +7,21 @@ to emit today.
 
 from __future__ import annotations
 
-from cara.schema import ADDITIVE, DESTRUCTIVE, LOCKING, LiveSchema, plan
+from cara.schema import (
+    ADDITIVE,
+    DESTRUCTIVE,
+    LOCKING,
+    LiveSchema,
+    migration_to_run,
+    plan,
+)
 
 
 def _col(data_type="character varying", nullable=True, max_length=255):
     return {"data_type": data_type, "is_nullable": nullable, "max_length": max_length}
 
 
-def _live(columns=None, indexes=None, checks=None, table="product"):
+def _live(columns=None, indexes=None, checks=None, table="product", constraint_indexes=None):
     """A deployed table. ``id`` is always present — every model declares it,
     so leaving it out of a fixture would put a spurious drop in every plan and
     hide the delta each test is actually about."""
@@ -24,7 +31,7 @@ def _live(columns=None, indexes=None, checks=None, table="product"):
         tables={table: {"id": _col("bigint", False, None), **columns}},
         checks={table: set(checks or ())},
         indexes={table: set(indexes or ())},
-        constraint_indexes={},
+        constraint_indexes={table: set(constraint_indexes or ())},
     )
 
 
@@ -49,7 +56,7 @@ def _model(fields, table="product", indexes=None, renamed=None):
 
 def test_new_nullable_column_is_additive_and_reversible():
     model = _model({"sku": _field("string", length=64, nullable=True)})
-    operations, refusals = plan([model], _live({}))
+    operations, refusals, _ = plan([model], _live({}))
 
     assert refusals == []
     assert len(operations) == 1
@@ -64,19 +71,25 @@ def test_new_nullable_column_is_additive_and_reversible():
 
 def test_relaxing_to_nullable_is_additive():
     model = _model({"sku": _field("string", length=64, nullable=True)})
-    operations, _ = plan([model], _live({"sku": _col(nullable=False)}))
+    operations, _, _ = plan([model], _live({"sku": _col(nullable=False)}))
     assert [op.safety for op in operations] == [ADDITIVE]
     assert operations[0].kind == "drop_not_null"
 
 
-def test_missing_table_defers_to_the_generated_creator():
+def test_missing_table_runs_its_generated_creator():
     """The generated migration already renders this table's DDL; re-rendering
-    it here would be a second renderer of one model."""
+    it here would be a second renderer of one model.
+
+    ``forward_sql`` therefore NAMES the file rather than carrying SQL — it
+    used to carry a comment, which made apply die on "can't execute an empty
+    query" and meant a new table could never reach a deployed database."""
     model = _model({"sku": _field("string", length=64)})
-    operations, _ = plan([model], _live(None))
+    operations, _, _ = plan([model], _live(None))
     assert [op.key for op in operations] == ["product"]
-    assert operations[0].kind == "create_table"
-    assert "generated creator" in operations[0].forward_sql
+    operation = operations[0]
+    assert operation.kind == "create_table"
+    assert migration_to_run(operation.forward_sql) == "create_product_table"
+    assert operation.reverse_sql == 'DROP TABLE IF EXISTS "product"'
 
 
 # ── locking ─────────────────────────────────────────────────────────────────
@@ -84,7 +97,7 @@ def test_missing_table_defers_to_the_generated_creator():
 
 def test_not_null_with_default_becomes_the_three_step_recipe():
     model = _model({"tier": _field("string", length=20, default="basic")})
-    operations, refusals = plan([model], _live({}))
+    operations, refusals, _ = plan([model], _live({}))
 
     assert refusals == []
     assert [op.kind for op in operations] == [
@@ -103,7 +116,7 @@ def test_not_null_with_default_becomes_the_three_step_recipe():
 
 def test_tightening_an_existing_column_is_locking_and_warns():
     model = _model({"sku": _field("string", length=64)})
-    operations, _ = plan([model], _live({"sku": _col(nullable=True)}))
+    operations, _, _ = plan([model], _live({"sku": _col(nullable=True)}))
     assert operations[0].kind == "set_not_null"
     assert operations[0].safety == LOCKING
     assert any("backfill first" in note for note in operations[0].notes)
@@ -111,7 +124,7 @@ def test_tightening_an_existing_column_is_locking_and_warns():
 
 def test_integer_widening_is_locking_and_its_reverse_is_not_promised():
     model = _model({"views": _field("big_integer")})
-    operations, _ = plan([model], _live({"views": _col("integer", True, None)}))
+    operations, _, _ = plan([model], _live({"views": _col("integer", True, None)}))
     widen = next(op for op in operations if op.kind == "widen_column")
     assert widen.safety == LOCKING
     assert "BIGINT" in widen.forward_sql
@@ -126,7 +139,7 @@ def test_non_concurrent_model_index_is_locking_concurrent_is_additive():
         "down": "DROP INDEX IF EXISTS product_sku_idx",
     }
     model = _model({"sku": _field("string", length=64, nullable=True)}, indexes=[entry])
-    operations, _ = plan([model], _live({"sku": _col()}))
+    operations, _, _ = plan([model], _live({"sku": _col()}))
     index_op = next(op for op in operations if op.kind == "create_index")
     assert index_op.safety == LOCKING
     assert index_op.transactional is True
@@ -134,7 +147,7 @@ def test_non_concurrent_model_index_is_locking_concurrent_is_additive():
     concurrent = dict(
         entry, up="CREATE INDEX CONCURRENTLY product_sku_idx ON product (sku)"
     )
-    operations, _ = plan(
+    operations, _, _ = plan(
         [
             _model(
                 {"sku": _field("string", length=64, nullable=True)},
@@ -155,7 +168,7 @@ def test_an_index_the_database_already_has_is_not_planned():
         "down": "DROP INDEX IF EXISTS product_sku_idx",
     }
     model = _model({"sku": _field("string", length=64, nullable=True)}, indexes=[entry])
-    operations, _ = plan([model], _live({"sku": _col()}, indexes=["product_sku_idx"]))
+    operations, _, _ = plan([model], _live({"sku": _col()}, indexes=["product_sku_idx"]))
     assert [op for op in operations if op.kind == "create_index"] == []
 
 
@@ -176,7 +189,7 @@ def test_presence_is_judged_by_what_the_sql_creates_not_the_entry_label():
     live = _live(
         {"sku": _col()}, checks=["product_attempts_check", "product_version_check"]
     )
-    operations, _ = plan([model], live)
+    operations, _, _ = plan([model], live)
     assert [op for op in operations if op.kind == "create_index"] == []
 
 
@@ -185,7 +198,7 @@ def test_presence_is_judged_by_what_the_sql_creates_not_the_entry_label():
 
 def test_column_only_in_the_database_is_destructive_and_shape_only():
     model = _model({"sku": _field("string", length=64, nullable=True)})
-    operations, _ = plan([model], _live({"sku": _col(), "legacy": _col()}))
+    operations, _, _ = plan([model], _live({"sku": _col(), "legacy": _col()}))
     drop = next(op for op in operations if op.kind == "drop_column")
     assert drop.safety == DESTRUCTIVE
     assert drop.restores_data is False
@@ -200,7 +213,7 @@ def test_declared_rename_keeps_the_data():
     model = _model(
         {"sku": _field("string", length=64, nullable=True)}, renamed={"sku": "code"}
     )
-    operations, _ = plan([model], _live({"code": _col()}))
+    operations, _, _ = plan([model], _live({"code": _col()}))
 
     assert [op.kind for op in operations] == ["rename_column"]
     operation = operations[0]
@@ -215,7 +228,7 @@ def test_undeclared_rename_is_reported_as_a_drop_and_an_add_not_guessed():
     is what loses the column's data, so the planner states both facts and
     leaves the judgement to a human."""
     model = _model({"sku": _field("string", length=64, nullable=True)})
-    operations, _ = plan([model], _live({"code": _col()}))
+    operations, _, _ = plan([model], _live({"code": _col()}))
     assert {op.kind for op in operations} == {"add_column", "drop_column"}
 
 
@@ -224,7 +237,7 @@ def test_undeclared_rename_is_reported_as_a_drop_and_an_add_not_guessed():
 
 def test_not_null_without_a_default_is_refused():
     model = _model({"tier": _field("string", length=20)})
-    operations, refusals = plan([model], _live({}))
+    operations, refusals, _ = plan([model], _live({}))
     assert operations == []
     assert len(refusals) == 1
     assert "expand/contract" in refusals[0]
@@ -232,14 +245,14 @@ def test_not_null_without_a_default_is_refused():
 
 def test_incompatible_type_change_is_refused_not_guessed():
     model = _model({"count": _field("integer")})
-    operations, refusals = plan([model], _live({"count": _col("character varying")}))
+    operations, refusals, _ = plan([model], _live({"count": _col("character varying")}))
     assert operations == []
     assert "USING clause" in refusals[0]
 
 
 def test_unmappable_type_is_refused():
     model = _model({"shape": _field("geometry")})
-    operations, refusals = plan([model], _live({}))
+    operations, refusals, _ = plan([model], _live({}))
     assert operations == []
     assert "no PostgreSQL mapping" in refusals[0]
 
@@ -255,7 +268,7 @@ def test_raw_indexes_column_is_refused_rather_than_re_rendered():
             }
         ],
     )
-    operations, refusals = plan([model], _live({}))
+    operations, refusals, _ = plan([model], _live({}))
     assert any("raw __indexes__" in refusal for refusal in refusals)
     assert not any(op.kind == "add_column" for op in operations)
 
@@ -265,7 +278,7 @@ def test_raw_indexes_column_is_refused_rather_than_re_rendered():
 
 def test_plan_is_ordered_safest_first():
     model = _model({"sku": _field("string", length=64, nullable=True)})
-    operations, _ = plan([model], _live({"legacy": _col(), "old": _col()}))
+    operations, _, _ = plan([model], _live({"legacy": _col(), "old": _col()}))
     ranks = {ADDITIVE: 0, LOCKING: 1, DESTRUCTIVE: 2}
     safeties = [ranks[op.safety] for op in operations]
     assert safeties == sorted(safeties)
@@ -279,7 +292,7 @@ def test_field_level_index_is_planned_when_the_database_lacks_it():
     ``__indexes__`` entries were compared, so an index added this way never
     reached a deployed database and nothing reported it."""
     model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
-    operations, _ = plan([model], _live({"sku": _col()}))
+    operations, _, _ = plan([model], _live({"sku": _col()}))
     index_op = next(op for op in operations if op.kind == "create_index")
     assert index_op.key == "product:product_sku_index"
     assert "CREATE INDEX CONCURRENTLY" in index_op.forward_sql
@@ -292,7 +305,7 @@ def test_field_level_index_is_planned_when_the_database_lacks_it():
 
 def test_field_level_unique_uses_the_unique_naming_convention():
     model = _model({"slug": _field("string", length=64, nullable=True, unique=True)})
-    operations, _ = plan([model], _live({"slug": _col()}))
+    operations, _, _ = plan([model], _live({"slug": _col()}))
     index_op = next(op for op in operations if op.kind == "create_index")
     assert index_op.key == "product:product_slug_unique"
     assert "CREATE UNIQUE INDEX CONCURRENTLY" in index_op.forward_sql
@@ -300,7 +313,7 @@ def test_field_level_unique_uses_the_unique_naming_convention():
 
 def test_field_level_index_the_database_already_has_is_not_planned():
     model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
-    operations, _ = plan(
+    operations, _, _ = plan(
         [model], _live({"sku": _col()}, indexes=["product_sku_index"])
     )
     assert [op for op in operations if op.kind == "create_index"] == []
@@ -311,7 +324,7 @@ def test_composite_index_declaration_is_planned_by_its_declared_name():
     model["composite_indexes"] = [
         {"columns": ["sku", "brand"], "name": "product_sku_brand_idx"}
     ]
-    operations, _ = plan([model], _live({"sku": _col(), "brand": _col()}))
+    operations, _, _ = plan([model], _live({"sku": _col(), "brand": _col()}))
     index_op = next(op for op in operations if op.kind == "create_index")
     assert index_op.key == "product:product_sku_brand_idx"
     assert '"sku", "brand"' in index_op.forward_sql
@@ -336,7 +349,7 @@ def test_long_index_names_are_truncated_the_way_postgres_truncates_them():
         indexes=[stored],
         table=table,
     )
-    operations, _ = plan([model], live)
+    operations, _, _ = plan([model], live)
     assert [op for op in operations if op.kind == "create_index"] == []
 
 
@@ -346,7 +359,78 @@ def test_one_index_declared_two_ways_is_planned_once():
     CREATE INDEX twice is a plan nobody trusts."""
     model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
     model["composite_indexes"] = [{"columns": ["sku"]}]
-    operations, _ = plan([model], _live({"sku": _col()}))
+    operations, _, _ = plan([model], _live({"sku": _col()}))
     index_ops = [op for op in operations if op.kind == "create_index"]
     assert len(index_ops) == 1
     assert index_ops[0].key == "product:product_sku_index"
+
+
+# ── objects the database has and the model does not ─────────────────────────
+
+
+def test_orphaned_index_is_planned_as_a_destructive_drop():
+    """Removing ``.index()`` from a model is a real instruction. Without this
+    the index survives in production forever and nothing reports it."""
+    model = _model({"sku": _field("string", length=64, nullable=True)})
+    operations, _, _ = plan([model], _live({"sku": _col()}, indexes=["product_stale_idx"]))
+    drop = next(op for op in operations if op.kind == "drop_index")
+    assert drop.safety == DESTRUCTIVE
+    assert "DROP INDEX CONCURRENTLY" in drop.forward_sql
+    assert drop.transactional is False
+    # No declaration exists to rebuild it from, and saying so is the point.
+    assert drop.reverse_sql is None
+
+
+def test_constraint_backed_index_is_never_dropped():
+    """The index behind a PRIMARY KEY or UNIQUE constraint belongs to the
+    constraint — dropping it means dropping the constraint, which no model
+    asked for."""
+    model = _model({"sku": _field("string", length=64, nullable=True)})
+    live = _live(
+        {"sku": _col()},
+        indexes=["product_pkey", "product_public_id_unique"],
+        constraint_indexes=["product_public_id_unique"],
+    )
+    operations, _, _ = plan([model], live)
+    assert [op for op in operations if op.kind == "drop_index"] == []
+
+
+def test_an_index_a_model_declares_is_not_dropped():
+    model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
+    operations, _, _ = plan([model], _live({"sku": _col()}, indexes=["product_sku_index"]))
+    assert [op for op in operations if op.kind == "drop_index"] == []
+
+
+def test_an_index_created_by_a_model_ddl_entry_is_not_dropped():
+    entry = {
+        "name": "product_partial_idx",
+        "up": "CREATE INDEX product_partial_idx ON product (sku) WHERE sku IS NOT NULL",
+        "down": "DROP INDEX IF EXISTS product_partial_idx",
+    }
+    model = _model({"sku": _field("string", length=64, nullable=True)}, indexes=[entry])
+    operations, _, _ = plan([model], _live({"sku": _col()}, indexes=["product_partial_idx"]))
+    assert [op for op in operations if op.kind == "drop_index"] == []
+
+
+def test_orphaned_table_is_reported_and_never_dropped():
+    """A DROP TABLE derived from a diff is where an autogenerator does its
+    worst damage: the diff cannot tell an abandoned table from a partition
+    child, an extension's table, or the migration tracker."""
+    model = _model({"sku": _field("string", length=64, nullable=True)})
+    live = LiveSchema(
+        tables={
+            "product": {"id": _col("bigint", False, None), "sku": _col()},
+            "zombie": {"id": _col("bigint", False, None)},
+            "migrations": {"id": _col("bigint", False, None)},
+        },
+        checks={},
+        indexes={},
+        constraint_indexes={},
+    )
+    operations, _, notices = plan([model], live)
+    assert not any(op.kind == "drop_table" for op in operations)
+    assert len(notices) == 1
+    assert "zombie" in notices[0]
+    # The framework's own tracker has no model by design and must never be
+    # reported as an orphan.
+    assert "migrations" not in notices[0]

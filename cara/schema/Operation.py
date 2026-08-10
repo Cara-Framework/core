@@ -42,6 +42,20 @@ DESTRUCTIVE = "destructive"
 
 SAFETY_ORDER = {ADDITIVE: 0, LOCKING: 1, DESTRUCTIVE: 2}
 
+#: ``forward_sql`` prefix meaning "this is not SQL — run the named generated
+#: migration". A new table is created by executing its own generated creator,
+#: never by a CREATE TABLE re-rendered from the model: one renderer, one truth.
+#: The prefix keeps that instruction inside the same field the ledger already
+#: records, so what ran is auditable without a second column.
+RUN_MIGRATION_PREFIX = "run-migration:"
+
+
+def migration_to_run(forward_sql: str) -> str | None:
+    """The migration slug ``forward_sql`` asks for, or None if it is SQL."""
+    if forward_sql.startswith(RUN_MIGRATION_PREFIX):
+        return forward_sql[len(RUN_MIGRATION_PREFIX):]
+    return None
+
 
 @dataclass(frozen=True)
 class Operation:
@@ -104,9 +118,11 @@ def sort_operations(operations: list[Operation]) -> list[Operation]:
 
 __all__ = [
     "ADDITIVE",
+    "RUN_MIGRATION_PREFIX",
     "DESTRUCTIVE",
     "LOCKING",
     "Operation",
     "SAFETY_ORDER",
+    "migration_to_run",
     "sort_operations",
 ]
