@@ -21,7 +21,9 @@ def _col(data_type="character varying", nullable=True, max_length=255):
     return {"data_type": data_type, "is_nullable": nullable, "max_length": max_length}
 
 
-def _live(columns=None, indexes=None, checks=None, table="product", constraint_indexes=None):
+def _live(
+    columns=None, indexes=None, checks=None, table="product", constraint_indexes=None
+):
     """A deployed table. ``id`` is always present — every model declares it,
     so leaving it out of a fixture would put a spurious drop in every plan and
     hide the delta each test is actually about."""
@@ -344,7 +346,10 @@ def test_long_index_names_are_truncated_the_way_postgres_truncates_them():
     index reads as missing and is replanned on every single run."""
     table = "advertising_intent_entry"
     model = _model(
-        {"advertising_intent_id": _field("big_integer"), "external_listing_id": _field("string", length=64)},
+        {
+            "advertising_intent_id": _field("big_integer"),
+            "external_listing_id": _field("string", length=64),
+        },
         table=table,
     )
     model["composite_uniques"] = [
@@ -353,7 +358,10 @@ def test_long_index_names_are_truncated_the_way_postgres_truncates_them():
     stored = "advertising_intent_entry_advertising_intent_id_external_listing"
     assert len(stored) == 63
     live = _live(
-        {"advertising_intent_id": _col("bigint", False, None), "external_listing_id": _col()},
+        {
+            "advertising_intent_id": _col("bigint", False, None),
+            "external_listing_id": _col(),
+        },
         indexes=[stored],
         table=table,
     )
@@ -380,7 +388,9 @@ def test_orphaned_index_is_planned_as_a_destructive_drop():
     """Removing ``.index()`` from a model is a real instruction. Without this
     the index survives in production forever and nothing reports it."""
     model = _model({"sku": _field("string", length=64, nullable=True)})
-    operations, _, _ = plan([model], _live({"sku": _col()}, indexes=["product_stale_idx"]))
+    operations, _, _ = plan(
+        [model], _live({"sku": _col()}, indexes=["product_stale_idx"])
+    )
     drop = next(op for op in operations if op.kind == "drop_index")
     assert drop.safety == DESTRUCTIVE
     assert "DROP INDEX CONCURRENTLY" in drop.forward_sql
@@ -405,7 +415,9 @@ def test_constraint_backed_index_is_never_dropped():
 
 def test_an_index_a_model_declares_is_not_dropped():
     model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
-    operations, _, _ = plan([model], _live({"sku": _col()}, indexes=["product_sku_index"]))
+    operations, _, _ = plan(
+        [model], _live({"sku": _col()}, indexes=["product_sku_index"])
+    )
     assert [op for op in operations if op.kind == "drop_index"] == []
 
 
@@ -416,7 +428,9 @@ def test_an_index_created_by_a_model_ddl_entry_is_not_dropped():
         "down": "DROP INDEX IF EXISTS product_partial_idx",
     }
     model = _model({"sku": _field("string", length=64, nullable=True)}, indexes=[entry])
-    operations, _, _ = plan([model], _live({"sku": _col()}, indexes=["product_partial_idx"]))
+    operations, _, _ = plan(
+        [model], _live({"sku": _col()}, indexes=["product_partial_idx"])
+    )
     assert [op for op in operations if op.kind == "drop_index"] == []
 
 
@@ -478,3 +492,46 @@ def test_an_added_nullable_column_needs_no_preflight():
     model = _model({"sku": _field("string", length=64, nullable=True)})
     operations, _, _ = plan([model], _live({}))
     assert operations[0].preflight_sql is None
+
+
+# ── declared backfill: what the EXISTING rows get ───────────────────────────
+
+
+def test_backfill_from_makes_a_not_null_column_derivable():
+    """A schema default says what a NEW row gets. ``session_version`` had to
+    start as each row's existing ``auth_version``, not as 1, or the rotation
+    those rows had been through would be undone — which is why a constant was
+    the wrong answer and the operation was refused outright."""
+    model = _model({"session_version": _field("integer", backfill_from='"auth_version"')})
+    operations, refusals, _ = plan(
+        [model], _live({"auth_version": _col("integer", False, None)})
+    )
+
+    assert refusals == []
+    backfill = next(op for op in operations if op.kind == "backfill_column")
+    assert '"session_version" = "auth_version"' in backfill.forward_sql
+    assert "declared backfill" in backfill.reason
+    # No constant default was declared, so nothing invents one.
+    tighten = next(op for op in operations if op.kind == "set_not_null")
+    assert "SET DEFAULT" not in tighten.forward_sql
+
+
+def test_backfill_from_wins_over_a_constant_default():
+    """When a model declares both, the backfill is the more specific
+    statement — it is there precisely because the two answers differ."""
+    model = _model(
+        {"tier": _field("string", length=20, default="basic", backfill_from="'legacy'")}
+    )
+    operations, _, _ = plan([model], _live({}))
+    backfill = next(op for op in operations if op.kind == "backfill_column")
+    assert "'legacy'" in backfill.forward_sql
+    # The default still becomes the column default for NEW rows.
+    tighten = next(op for op in operations if op.kind == "set_not_null")
+    assert "SET DEFAULT 'basic'" in tighten.forward_sql
+
+
+def test_neither_default_nor_backfill_is_still_refused():
+    model = _model({"tier": _field("string", length=20)})
+    operations, refusals, _ = plan([model], _live({}))
+    assert operations == []
+    assert "backfill_from" in refusals[0]

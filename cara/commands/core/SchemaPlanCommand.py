@@ -14,7 +14,7 @@ becomes an operation carrying its statement, its reverse, and a safety class:
                     CONCURRENTLY index). Safe on a live table.
 * ``locking``     — correct, but takes a lock that can stall a busy table.
 * ``destructive`` — removes data. Never planned as ordinary work: the command
-                    exits non-zero unless ``--allow-destructive`` names the
+                    exits non-zero unless ``--allow_destructive`` names the
                     intent, so a drop can never ride along unnoticed inside an
                     otherwise routine plan.
 
@@ -32,20 +32,40 @@ a second source of truth — and ``schema:apply --plan`` re-derives anyway and
 refuses if the database has moved since, so a stale artifact can never be
 what runs.
 
-The command only reads.
+``--rehearse`` answers the last question review cannot: *does this SQL run?*
+Classification says what an operation costs and preflight says whether the
+rows allow it, but neither executes anything, and derived SQL can still be
+rejected by the server — an index expression that is not IMMUTABLE, a default
+the type will not take, an operation ordered before the one it depends on. So
+the plan is run for real against a scratch database holding the deployed
+SHAPE (``pg_dump --schema-only``, no rows), by spawning ``schema:apply``
+itself rather than a rehearsal-flavoured copy of it. One executor, exercised
+exactly as it will be on the day. A rehearsal that used its own code path
+would prove that path works, which is not the question.
+
+The scratch is filled through the plan ARTIFACT, so ``schema:apply``'s own
+staleness gate does double duty: if the structure clone does not derive the
+same plan as production, the gate says so, and that is a finding about the
+clone rather than a rehearsal quietly testing something else.
+
+The command itself only reads. ``--rehearse`` writes only to a scratch
+database it creates and drops.
 """
 
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
+from cara.exceptions import ScratchDatabaseException
 from cara.schema import (
     ADDITIVE,
     DESTRUCTIVE,
     LOCKING,
+    Scratch,
     as_dict,
     introspect,
     plan,
@@ -59,7 +79,7 @@ from cara.schema import (
         "Derive the operations that move the DEPLOYED database to what the "
         "models declare, classified additive / locking / destructive, each "
         "with the statement that reverses it. Reads only. Exits 1 when the "
-        "plan contains destructive operations without --allow-destructive, or "
+        "plan contains destructive operations without --allow_destructive, or "
         "when the planner refused to derive part of it."
     ),
     options={
@@ -68,6 +88,7 @@ from cara.schema import (
         "--allow_destructive": "Permit destructive operations (drops) in the plan",
         "--sql": "Print the executable SQL for each operation",
         "--out=?": "Write the plan as a JSON artifact to this path (for review)",
+        "--rehearse": "Run the plan against a structure-clone scratch first",
     },
 )
 class SchemaPlanCommand(CommandBase):
@@ -144,26 +165,22 @@ class SchemaPlanCommand(CommandBase):
         if destructive and not self.option("allow_destructive"):
             self.error(
                 f"{len(destructive)} destructive operation(s) in the plan. "
-                "Re-run with --allow-destructive once you have read them; "
+                "Re-run with --allow_destructive once you have read them; "
                 "they remove data and no rollback restores it."
             )
             return 1
 
+        identifier = plan_id(operations)
         destination = self.option("out")
         if destination:
-            identifier = plan_id(operations)
-            Path(destination).write_text(
-                json.dumps(
-                    {
-                        "plan_id": identifier,
-                        "operations": [as_dict(op) for op in operations],
-                        "notices": notices,
-                    },
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
+            self._write_artifact(destination, identifier, operations, notices)
+
+        if self.option("rehearse"):
+            code = self._rehearse(identifier, operations, notices)
+            if code:
+                return code
+
+        if destination:
             self.success(
                 f"{len(operations)} operation(s) written to {destination} "
                 f"(plan {identifier}). Review it, then "
@@ -174,6 +191,88 @@ class SchemaPlanCommand(CommandBase):
         self.success(
             f"{len(operations)} operation(s) planned. Apply with 'craft schema:apply'."
         )
+        return 0
+
+    def _write_artifact(self, destination, identifier, operations, notices) -> None:
+        Path(destination).write_text(
+            json.dumps(
+                {
+                    "plan_id": identifier,
+                    "operations": [as_dict(op) for op in operations],
+                    "notices": notices,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def _rehearse(self, identifier, operations, notices) -> int:
+        """Run this plan for real against a structure clone. 0 when it ran.
+
+        The scratch is created, filled from ``pg_dump --schema-only``, handed
+        to a child ``schema:apply``, and dropped in a ``finally`` — a scratch
+        left behind after a failed rehearsal would be the next run's confusing
+        leftover, and worse, a database named after production sitting on the
+        production server.
+        """
+        from cara.configuration import config  # local: heavy optional dep
+        from cara.support import base_path  # local: heavy optional dep
+
+        try:
+            params = Scratch.connection_params(config)
+        except ValueError as exc:
+            self.error(str(exc))
+            return 2
+
+        source = params["database"]
+        name = Scratch.derive_name(source, "rehearsal")
+        try:
+            Scratch.validate_name(name, source)
+        except ScratchDatabaseException as exc:
+            self.error(str(exc))
+            return 2
+
+        self.info("")
+        self.info(f"── rehearsal (scratch: {name})")
+
+        artifact = Path(tempfile.gettempdir()) / f"cara-rehearsal-{identifier}.json"
+        self._write_artifact(artifact, identifier, operations, notices)
+
+        try:
+            try:
+                Scratch.recreate(params, name)
+                self.info(f"   cloning the shape of '{source}' (no rows)...")
+                Scratch.clone_structure(params, source, name)
+            except Exception as exc:
+                self.error(f"   could not prepare the rehearsal scratch: {exc}")
+                return 2
+
+            self.info(f"   running all {len(operations)} operation(s) for real...")
+            arguments = ["schema:apply", "--plan", str(artifact)]
+            if self.option("allow_destructive"):
+                arguments.append("--allow_destructive")
+            code = Scratch.run_craft(arguments, name, base_path())
+        finally:
+            artifact.unlink(missing_ok=True)
+            try:
+                Scratch.drop(params, name)
+            except Exception as exc:
+                self.warning(
+                    f"   could not drop the rehearsal scratch '{name}': {exc} "
+                    f"— drop it manually."
+                )
+
+        if code:
+            self.error(
+                "REHEARSAL FAILED — this plan does not execute against a copy "
+                "of the deployed schema, so it would fail partway through the "
+                "real one. The failing operation is in the output above; "
+                "nothing was applied to the deployed database."
+            )
+            return code
+
+        self.success("   rehearsal clean: every operation executed on the clone.")
         return 0
 
     def _preflight(self, operation) -> str | None:

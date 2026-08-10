@@ -9,6 +9,8 @@ lives behind three seams (``_connection_params`` / ``_admin_sql`` /
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from cara.commands.core.SchemaVerifyCommand import SchemaVerifyCommand
@@ -76,7 +78,7 @@ def test_proof_order_and_cleanup():
     # First batch prepares the scratch (drop-if-exists then create); the last
     # batch is the unconditional cleanup drop.
     assert 'CREATE DATABASE "synkronus_verify"' in command.admin_batches[0][1]
-    assert command.admin_batches[0][0].startswith('DROP DATABASE IF EXISTS')
+    assert command.admin_batches[0][0].startswith("DROP DATABASE IF EXISTS")
     assert command.admin_batches[-1] == [
         'DROP DATABASE IF EXISTS "synkronus_verify" WITH (FORCE)'
     ]
@@ -168,7 +170,7 @@ def test_non_postgres_driver_is_refused_by_the_real_params_reader(monkeypatch):
 
     command = _RealParams()
     assert command.handle() == 2
-    assert "postgres driver only" in _text(command)
+    assert "postgres driver" in _text(command)
 
 
 def test_scratch_name_is_sanitised_from_an_exotic_configured_name():
@@ -184,3 +186,49 @@ def test_scratch_name_gains_a_leading_letter_when_needed():
     command = _Verify(params={**_PARAMS, "database": "1shop"})
     assert command.handle() == 0
     assert command.craft_calls[0] == (["migrate"], "v_1shop_verify")
+
+
+def test_every_flag_a_message_recommends_actually_exists():
+    """A message naming a flag the parser rejects is worse than no message:
+    the operator types exactly what they were told and gets "No such option".
+
+    Cara's option names use underscores, so any hyphenated token whose
+    underscore form IS a real cara option is a lie by construction — which is
+    precisely how ``--allow-destructive`` reached four files and two products'
+    documentation while ``--allow_destructive`` was the only thing that ran.
+    The truth is read from the parser's own metadata so this test cannot
+    disagree with it, and external binaries' flags (``pg_dump
+    --schema-only``) stay legal because no cara option is named after them.
+    """
+    import re
+
+    from cara.commands.core import (
+        SchemaApplyCommand as apply_module,
+    )
+    from cara.commands.core import (
+        SchemaPlanCommand as plan_module,
+    )
+    from cara.commands.core import (
+        SchemaRollbackCommand as rollback_module,
+    )
+
+    modules = (plan_module, apply_module, rollback_module)
+    real: set[str] = set()
+    for module in modules:
+        for name in dir(module):
+            options = getattr(getattr(module, name), "_cli_options", None) or {}
+            for declared in options:
+                # "--c|connection=default" -> {"c", "connection"}
+                for alias in declared.lstrip("-").split("=")[0].split("|"):
+                    real.add(alias)
+    assert "allow_destructive" in real, "metadata not found — test is vacuous"
+
+    for module in modules:
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        for token in re.findall(r"--([a-z][a-z-]*[a-z])", source):
+            if "-" not in token:
+                continue
+            assert token.replace("-", "_") not in real, (
+                f"{module.__name__} tells the operator to type --{token}, "
+                f"but the parser only accepts --{token.replace('-', '_')}"
+            )

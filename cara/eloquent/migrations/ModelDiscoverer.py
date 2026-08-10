@@ -722,6 +722,12 @@ class ModelDiscoverer:
                         params["index"] = True
                     elif method_name == "use_current":
                         params["use_current"] = True
+                    elif method_name == "backfill_from":
+                        # Read by evolve-mode planning only; a generated
+                        # migration never renders it, because a fresh install
+                        # has no existing rows to fill.
+                        if current.args and isinstance(current.args[0], ast.Constant):
+                            params["backfill_from"] = current.args[0].value
                     elif method_name == "default":
                         if current.args:
                             arg = current.args[0]

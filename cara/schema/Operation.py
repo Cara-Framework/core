@@ -53,6 +53,12 @@ DESTRUCTIVE = "destructive"
 
 SAFETY_ORDER = {ADDITIVE: 0, LOCKING: 1, DESTRUCTIVE: 2}
 
+#: The applied-operations ledger. Named here rather than imported from
+#: ``cara.models`` because this module must stay importable without the ``db``
+#: extra; :func:`sort_operations` needs the name, not the model. Kept honest by
+#: a test asserting it equals ``SchemaOperation.__table__``.
+LEDGER_TABLE = "schema_operation"
+
 #: ``forward_sql`` prefix meaning "this is not SQL — run the named generated
 #: migration". A new table is created by executing its own generated creator,
 #: never by a CREATE TABLE re-rendered from the model: one renderer, one truth.
@@ -64,7 +70,7 @@ RUN_MIGRATION_PREFIX = "run-migration:"
 def migration_to_run(forward_sql: str) -> str | None:
     """The migration slug ``forward_sql`` asks for, or None if it is SQL."""
     if forward_sql.startswith(RUN_MIGRATION_PREFIX):
-        return forward_sql[len(RUN_MIGRATION_PREFIX):]
+        return forward_sql[len(RUN_MIGRATION_PREFIX) :]
     return None
 
 
@@ -172,15 +178,25 @@ def plan_id(operations: list[Operation]) -> str:
 
 
 def sort_operations(operations: list[Operation]) -> list[Operation]:
-    """Safest first, then stable by table and key.
+    """Ledger first, then safest first, then stable by table and key.
 
     Ordering by safety is not cosmetic: a plan that a reviewer stops reading
     halfway through should have shown them the harmless work first and left
     the risky work adjacent to the flag that gates it.
+
+    :data:`LEDGER_TABLE` jumping the queue is a real dependency, not a
+    preference. On the FIRST evolve run against a database that predates the
+    ledger — a production database on cutover day, the one case that matters —
+    the ledger is itself a table the plan creates, and every operation is
+    recorded the moment it succeeds. Any operation ordered ahead of it would
+    run and then fail to record, which is the worst possible failure for this
+    command: a schema that moved with no entry saying so. Sorted first, the
+    ledger's own creation becomes its first row.
     """
     return sorted(
         operations,
         key=lambda op: (
+            op.table != LEDGER_TABLE,
             SAFETY_ORDER.get(op.safety, 9),
             op.kind != "create_table",
             op.table,
@@ -191,6 +207,7 @@ def sort_operations(operations: list[Operation]) -> list[Operation]:
 
 __all__ = [
     "ADDITIVE",
+    "LEDGER_TABLE",
     "as_dict",
     "from_dict",
     "plan_id",

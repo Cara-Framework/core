@@ -226,17 +226,26 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
 
     params = declared.get("params") or {}
     default = params.get("default")
-    if default is None:
+    backfill = params.get("backfill_from")
+    if default is None and backfill is None:
         raise SchemaPlanRefused(
-            "NOT NULL with no default — an existing table has rows that would "
-            "violate it. Give the field a default, or add it nullable, "
-            "backfill, and tighten in a later deploy (expand/contract)"
+            "NOT NULL with no default and no backfill_from — an existing table "
+            "has rows that would violate it. Declare .backfill_from(<sql>) on "
+            "the field when the value comes from the row itself, give it a "
+            "constant default, or add it nullable and tighten in a later "
+            "deploy (expand/contract)"
         )
 
-    # Add nullable → backfill → tighten. Postgres can fill a default in place,
-    # but the three-step form is what stays safe on a large table and is the
-    # same shape a reviewer already knows from expand/contract.
-    literal = _sql_default(default)
+    # Add nullable → backfill → tighten. Postgres can fill a constant default
+    # in place, but the three-step form is what stays safe on a large table and
+    # is the same shape a reviewer already knows from expand/contract.
+    #
+    # ``backfill_from`` wins over ``default`` because it is the more specific
+    # statement: a default says what a NEW row gets, a backfill says what the
+    # EXISTING ones get, and when a model bothers to declare both it is
+    # because those two answers differ.
+    fill = backfill if backfill is not None else _sql_default(default)
+    literal = _sql_default(default) if default is not None else "NULL"
     return [
         Operation(
             kind="add_column",
@@ -253,11 +262,15 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
             table=table,
             key=f"{table}.{name}:backfill",
             forward_sql=(
-                f'UPDATE "{table}" SET "{name}" = {literal} WHERE "{name}" IS NULL'
+                f'UPDATE "{table}" SET "{name}" = {fill} WHERE "{name}" IS NULL'
             ),
             reverse_sql=None,
             safety=LOCKING,
-            reason="step 2/3: fill existing rows with the declared default",
+            reason=(
+                "step 2/3: fill existing rows from the declared backfill"
+                if backfill is not None
+                else "step 2/3: fill existing rows with the declared default"
+            ),
             restores_data=False,
             notes=("rewrites every existing row; batch it by hand on a large table",),
         ),
@@ -266,15 +279,18 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
             table=table,
             key=f"{table}.{name}:not_null",
             forward_sql=(
-                f'ALTER TABLE "{table}" ALTER COLUMN "{name}" SET DEFAULT {literal}, '
-                f'ALTER COLUMN "{name}" SET NOT NULL'
+                (
+                    f'ALTER TABLE "{table}" ALTER COLUMN "{name}" '
+                    f"SET DEFAULT {literal}, "
+                    f'ALTER COLUMN "{name}" SET NOT NULL'
+                )
+                if default is not None
+                else f'ALTER TABLE "{table}" ALTER COLUMN "{name}" SET NOT NULL'
             ),
             reverse_sql=f'ALTER TABLE "{table}" ALTER COLUMN "{name}" DROP NOT NULL',
             safety=LOCKING,
             reason="step 3/3: tighten to NOT NULL",
-            preflight_sql=(
-                f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1'
-            ),
+            preflight_sql=(f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1'),
             preflight_failure=(
                 f"{table}.{name} still has NULL rows — the backfill above did "
                 f"not cover them"
@@ -317,9 +333,7 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
                 ),
                 safety=LOCKING,
                 reason="model tightened the column to NOT NULL",
-                preflight_sql=(
-                    f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1'
-                ),
+                preflight_sql=(f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1'),
                 preflight_failure=(
                     f"{table}.{name} still has NULL rows — SET NOT NULL will "
                     f"fail. Backfill them first, in its own deploy"
@@ -356,9 +370,7 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
                     safety=LOCKING,
                     reason=f"model widened {live['data_type']} → {declared['type']}",
                     restores_data=False,
-                    notes=(
-                        "rewrites the table; the reverse fails on out-of-range rows",
-                    ),
+                    notes=("rewrites the table; the reverse fails on out-of-range rows",),
                 )
             )
     elif model_category and db_category and model_category != db_category:
@@ -433,7 +445,9 @@ def _blueprint_index_name(table: str, columns: list[str], unique: bool) -> str:
     return name[:_MAX_IDENTIFIER_LENGTH]
 
 
-def _declared_blueprint_indexes(model: dict, table: str) -> list[tuple[str, list[str], bool]]:
+def _declared_blueprint_indexes(
+    model: dict, table: str
+) -> list[tuple[str, list[str], bool]]:
     """``(name, columns, unique)`` for every field-level index the model declares.
 
     Covers both spellings: the per-field ``.index()`` / ``.unique()`` flags and
@@ -507,7 +521,7 @@ def _missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operatio
                 ),
                 transactional=False,
                 preflight_sql=(
-                    f"SELECT 1 FROM \"{table}\" GROUP BY {column_list} "
+                    f'SELECT 1 FROM "{table}" GROUP BY {column_list} '
                     f"HAVING COUNT(*) > 1 LIMIT 1"
                 )
                 if unique
@@ -546,9 +560,7 @@ def _missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operatio
                 transactional=not concurrent,
                 notes=()
                 if concurrent
-                else (
-                    "builds with a write lock; declare it CONCURRENTLY to avoid that",
-                ),
+                else ("builds with a write lock; declare it CONCURRENTLY to avoid that",),
             )
         )
     return operations

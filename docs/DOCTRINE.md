@@ -370,6 +370,18 @@ and lets a human judge. **Adding a NOT NULL column with a default** becomes
 the three-step expand recipe (add nullable → backfill → tighten), because the
 naive form rewrites every row of a populated table.
 
+The backfill step is where the model gets its say. A default answers "what
+should a NEW row hold", and for most columns that is also the right answer for
+the old ones. When it is not — a column whose correct value is DERIVED from
+what the row already carries — the model declares it with
+`field.backfill_from(expression)` and the planner fills existing rows from
+that SQL expression while new rows keep the default. Without it the only
+honest options are the constant or a refusal, and the constant is the quiet
+data bug: a `session_version` backfilled to `1` instead of from
+`auth_version` silently un-revokes every session that was ever rotated. Both
+halves stay declarative — the fix lives on the model that caused the problem,
+not in a hand-written migration nobody regenerates.
+
 A safety class says what an operation COSTS, never whether it works, so an
 operation that can fail on DATA carries a **preflight**: a read-only query
 that must return no rows — a NULL in a column about to become NOT NULL, a
@@ -378,6 +390,20 @@ production, because the question is about production's rows; a structure-only
 rehearsal has none and would answer it wrong. `schema:plan` reports the result
 while a human is still reading; `schema:apply` re-runs it immediately before
 each statement and stops BEFORE running, so a doomed operation costs nothing.
+
+Preflight's counterpart is the **rehearsal** (`schema:plan --rehearse`), and
+the split between them is the split between rows and shape. Classification and
+preflight both reason ABOUT the SQL; neither runs it, and the server has
+opinions a review cannot anticipate — an index expression that is not
+IMMUTABLE reads as entirely ordinary and is rejected outright. So the plan is
+executed for real against a scratch database holding the deployed shape
+(`pg_dump --schema-only`, no rows), by spawning `schema:apply` itself rather
+than a rehearsal-flavoured copy of it: one executor, exercised exactly as it
+will be on the day. It runs through the plan artifact, so apply's own
+staleness gate doubles as proof that the clone derives the same plan; and the
+scratch is dropped in a `finally`, because a database named after production,
+sitting on the production server, that nobody is watching is a worse outcome
+than the failure it was diagnosing.
 
 `schema:plan --out` writes the plan as a JSON **artifact**. That restores the
 one real advantage a hand-written migration has: the change becomes a file

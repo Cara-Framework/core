@@ -54,7 +54,7 @@ from cara.commands.CommandBase import CommandBase
 from cara.commands.core.SchemaPlanCommand import SchemaPlanCommand
 from cara.decorators import command
 from cara.facades import DB
-from cara.schema import DESTRUCTIVE, migration_to_run, plan_id
+from cara.schema import DESTRUCTIVE, LEDGER_TABLE, migration_to_run, plan_id
 
 #: Short on purpose — see the module docstring.
 DEFAULT_LOCK_TIMEOUT_MS = 5000
@@ -67,7 +67,7 @@ DEFAULT_LOCK_TIMEOUT_MS = 5000
         "recording every operation (with the statement that reverses it) in "
         "the schema_operation ledger. Re-derives the plan at run time, skips "
         "operations already applied, stops at the first failure. Destructive "
-        "operations require --allow-destructive."
+        "operations require --allow_destructive."
     ),
     options={
         "--c|connection=default": "The connection to apply to",
@@ -139,7 +139,7 @@ class SchemaApplyCommand(CommandBase):
         if destructive and not self.option("allow_destructive"):
             self.error(
                 f"{len(destructive)} destructive operation(s) in the plan; "
-                f"re-run with --allow-destructive to permit them."
+                f"re-run with --allow_destructive to permit them."
             )
             return 1
 
@@ -204,10 +204,25 @@ class SchemaApplyCommand(CommandBase):
         return approved
 
     def _already_applied(self, plan_id: str) -> set[str]:
+        """Operation keys of this plan already recorded as applied.
+
+        The ledger's own absence is a legitimate answer, not an error: on the
+        FIRST evolve run against a database that predates it — cutover day —
+        the ledger is a table this very plan creates, so "nothing has been
+        applied" is true precisely because there is nowhere it could have been
+        recorded. Asked as an explicit existence question rather than caught as
+        an exception, so a connection failure or a permission error still
+        surfaces instead of being read as an empty ledger and re-running a plan
+        that already ran.
+        """
+        exists = DB.select(f"SELECT to_regclass('{LEDGER_TABLE}') AS oid")
+        if not exists or exists[0]["oid"] is None:
+            return set()
+
         rows = (
             DB.select(
-                "SELECT operation_key FROM schema_operation "
-                "WHERE plan_id = %s AND status = 'applied'",
+                f"SELECT operation_key FROM {LEDGER_TABLE} "
+                f"WHERE plan_id = %s AND status = 'applied'",
                 [plan_id],
             )
             or []

@@ -27,6 +27,25 @@ class FieldDefinition:
         self._modifiers.append(("default", value))
         return self
 
+    def backfill_from(self, expression: str) -> Self:
+        """Declare how EXISTING rows get a value for this column.
+
+        A schema default answers "what does a new row get"; it says nothing
+        about the rows already in a deployed table. That gap is why adding a
+        NOT NULL column to a live table is refused unless a constant default
+        exists — and a constant is rarely the truthful answer. ``session_version``
+        had to start as each row's existing ``auth_version``, not as 1, or the
+        rotation those rows had already been through would be undone.
+
+        The expression is SQL evaluated per row (a sibling column, a COALESCE,
+        a CASE). It changes NOTHING about the generated migration — a fresh
+        install has no existing rows to fill — and is read only by evolve-mode
+        planning, which turns it into the backfill step between adding the
+        column and tightening it.
+        """
+        self._modifiers.append(("backfill_from", expression))
+        return self
+
     def to_blueprint_call(self, field_name):
         """Convert field definition to Blueprint method call string."""
         # Build base method call

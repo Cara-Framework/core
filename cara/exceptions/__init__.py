@@ -75,6 +75,7 @@ from .types.container import (
 )
 from .types.Eloquent import (
     SchemaPlanRefused,
+    ScratchDatabaseException,
     ConnectionNotRegisteredException,
     DatabaseUnavailableException,
     MigrationException,
@@ -220,6 +221,7 @@ __all__ = [
     "SchedulingConfigurationException",
     "SchedulingException",
     "SchemaPlanRefused",
+    "ScratchDatabaseException",
     "ServiceUnavailableException",
     "StorageConfigurationException",
     "StorageException",

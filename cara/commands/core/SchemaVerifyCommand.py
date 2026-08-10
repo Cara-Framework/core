@@ -40,34 +40,20 @@ the repository, and the place to prove it is a disposable database.
 
 from __future__ import annotations
 
-import os
-import re
-import subprocess
-import sys
-
 from cara.commands.CommandBase import CommandBase
 from cara.configuration import config
 from cara.decorators import command
+from cara.schema import Scratch
 from cara.support import base_path
 
 #: Scratch names are interpolated into DDL as identifiers; keep them boring
 #: instead of quoting our way around exotic ones.
-_SAFE_DB_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+_SAFE_DB_NAME = Scratch.SAFE_DB_NAME
 
 
 def _derive_scratch_name(configured: str) -> str:
-    """A boring scratch identifier derived from any configured name.
-
-    The CONFIGURED name is never interpolated into DDL here, so it may be as
-    exotic as the operator likes (``synkronus.io`` is real); only the scratch
-    must satisfy :data:`_SAFE_DB_NAME`. Squash everything else to ``_`` and
-    guarantee a leading letter — an explicit ``--database`` still has to pass
-    the safety check on its own.
-    """
-    plain = re.sub(r"[^a-z0-9_]", "_", configured.lower())
-    if not re.match(r"^[a-z]", plain):
-        plain = f"v_{plain}"
-    return f"{plain}_verify"
+    """A boring scratch identifier derived from any configured name."""
+    return Scratch.derive_name(configured, "verify")
 
 
 @command(
@@ -177,62 +163,12 @@ class SchemaVerifyCommand(CommandBase):
 
     def _connection_params(self) -> dict:
         """The default connection's parameters, or ValueError when unusable."""
-        name = config("database.default", "app")
-        drivers = config("database.drivers", {}) or {}
-        params = dict(drivers.get(name) or {})
-        if (params.get("driver") or "") != "postgres":
-            raise ValueError(
-                f"schema:verify supports the postgres driver only; connection "
-                f"'{name}' declares '{params.get('driver') or 'nothing'}'."
-            )
-        if not params.get("database"):
-            raise ValueError(
-                f"Connection '{name}' has no database configured — nothing to "
-                f"derive a scratch name from."
-            )
-        return params
+        return Scratch.connection_params(config)
 
     def _admin_sql(self, params: dict, statements: list[str]) -> None:
-        """Run maintenance DDL over an autocommit connection.
-
-        ``CREATE DATABASE`` / ``DROP DATABASE`` cannot run inside a
-        transaction block, and neither can they target the database being
-        dropped — so this connects to the server's ``postgres`` maintenance
-        database with the same credentials the app uses.
-        """
-        import psycopg2  # local: heavy optional dep
-
-        options = params.get("options") or {}
-        connect_kwargs = {
-            "host": params.get("host"),
-            "port": params.get("port"),
-            "user": params.get("user"),
-            "password": params.get("password"),
-            "dbname": "postgres",
-        }
-        if options.get("sslmode"):
-            connect_kwargs["sslmode"] = options["sslmode"]
-
-        connection = psycopg2.connect(**connect_kwargs)
-        try:
-            connection.autocommit = True
-            with connection.cursor() as cursor:
-                for statement in statements:
-                    cursor.execute(statement)
-        finally:
-            connection.close()
+        """Run maintenance DDL over an autocommit connection."""
+        Scratch.admin_sql(params, statements)
 
     def _run_craft(self, arguments: list[str], scratch_database: str) -> int:
-        """Run a craft subcommand in a child process aimed at the scratch.
-
-        The child inherits the parent's interpreter (the project venv) and
-        environment, with only ``DB_DATABASE`` overridden — the same knob the
-        products document for selecting a database, so the verify exercises
-        the exact configuration path production boot uses.
-        """
-        env = {**os.environ, "DB_DATABASE": scratch_database}
-        return subprocess.call(
-            [sys.executable, "craft", *arguments],
-            cwd=base_path(),
-            env=env,
-        )
+        """Run a craft subcommand in a child process aimed at the scratch."""
+        return Scratch.run_craft(arguments, scratch_database, base_path())

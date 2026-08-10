@@ -15,6 +15,8 @@ Four modules, in dependency order:
   flattening of a model's declared fields into concrete columns.
 * ``Operation`` — one change as a typed, safety-classified, reversible record.
 * ``Planner`` — the difference between the two, as ordered operations.
+* ``Scratch`` — a disposable database beside a real one, for proving both
+  the acceptance invariant and a plan before it runs.
 """
 
 from cara.schema.LiveSchema import (
@@ -26,6 +28,7 @@ from cara.schema.LiveSchema import (
 )
 from cara.schema.Operation import (
     ADDITIVE,
+    LEDGER_TABLE,
     RUN_MIGRATION_PREFIX,
     DESTRUCTIVE,
     LOCKING,
@@ -53,6 +56,11 @@ from cara.schema.Vocabulary import (
     postgres_type,
 )
 
+# Tier 4 (relative) and last by construction: bound as a MODULE OBJECT so its
+# symbols stay Scratch.-qualified rather than flattening a dozen scratch-
+# database helpers into a barrel every schema caller reads.
+from . import Scratch  # noqa: E402
+
 __all__ = [
     "ADDITIVE",
     "ADD_COLUMN_RE",
@@ -63,6 +71,7 @@ __all__ = [
     "DEFAULT_DECIMAL_SCALE",
     "DEFAULT_STRING_LENGTH",
     "DESTRUCTIVE",
+    "LEDGER_TABLE",
     "LOCKING",
     "LiveSchema",
     "MODEL_INT_RANK",
