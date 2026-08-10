@@ -21,6 +21,16 @@ rather than prose in a runbook:
   the values written into it are gone forever. Operations therefore carry
   ``restores_data``: False means "the shape returns, the contents do not". A
   rollback that pretended otherwise would be worse than no rollback.
+
+And one property the safety class CANNOT supply: **will this statement
+actually succeed against the rows that are in there right now?** Classifying
+``SET NOT NULL`` as locking says what it costs, not whether it works — on a
+column with one NULL row it fails outright, halfway through a deploy, after
+the operations before it already applied. Same for a UNIQUE index over a
+column that has duplicates. So an operation may carry ``preflight_sql``: a
+read-only query that must return NO rows for the statement to be safe. It is
+answered against production itself, because the question is about production's
+data, and a structure-only rehearsal — no rows — would answer it wrong.
 """
 
 from __future__ import annotations
@@ -80,6 +90,11 @@ class Operation:
     #: is recoverable by re-running, and is the trade Postgres offers for not
     #: locking the table.
     transactional: bool = True
+    #: A read-only query that must return NO rows for this operation to
+    #: succeed. ``None`` means the statement cannot fail on data.
+    preflight_sql: str | None = None
+    #: What a returned row MEANS, in the words the operator needs to act on.
+    preflight_failure: str | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
 
     @property

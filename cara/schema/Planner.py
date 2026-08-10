@@ -272,6 +272,13 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
             reverse_sql=f'ALTER TABLE "{table}" ALTER COLUMN "{name}" DROP NOT NULL',
             safety=LOCKING,
             reason="step 3/3: tighten to NOT NULL",
+            preflight_sql=(
+                f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1'
+            ),
+            preflight_failure=(
+                f"{table}.{name} still has NULL rows — the backfill above did "
+                f"not cover them"
+            ),
             notes=("takes an ACCESS EXCLUSIVE lock for a full scan",),
         ),
     ]
@@ -310,10 +317,14 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
                 ),
                 safety=LOCKING,
                 reason="model tightened the column to NOT NULL",
-                notes=(
-                    "fails outright if any existing row is NULL — backfill first",
-                    "takes an ACCESS EXCLUSIVE lock for a full scan",
+                preflight_sql=(
+                    f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1'
                 ),
+                preflight_failure=(
+                    f"{table}.{name} still has NULL rows — SET NOT NULL will "
+                    f"fail. Backfill them first, in its own deploy"
+                ),
+                notes=("takes an ACCESS EXCLUSIVE lock for a full scan",),
             )
         )
 
@@ -495,6 +506,18 @@ def _missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operatio
                     f"{', '.join(columns)}"
                 ),
                 transactional=False,
+                preflight_sql=(
+                    f"SELECT 1 FROM \"{table}\" GROUP BY {column_list} "
+                    f"HAVING COUNT(*) > 1 LIMIT 1"
+                )
+                if unique
+                else None,
+                preflight_failure=(
+                    f"{table} already holds duplicate {', '.join(columns)} — a "
+                    f"UNIQUE index cannot be built until they are resolved"
+                )
+                if unique
+                else None,
                 notes=(
                     "built CONCURRENTLY: cannot run in a transaction, and an "
                     "interrupted build leaves an INVALID index that re-running "

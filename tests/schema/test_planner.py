@@ -114,12 +114,20 @@ def test_not_null_with_default_becomes_the_three_step_recipe():
     assert tighten.safety == LOCKING and "SET NOT NULL" in tighten.forward_sql
 
 
-def test_tightening_an_existing_column_is_locking_and_warns():
+def test_tightening_an_existing_column_carries_a_null_preflight():
+    """Classifying this as locking says what it COSTS, not whether it works.
+    On a column with one NULL row it fails outright, halfway through a deploy,
+    after the operations before it already applied — so the operation carries
+    the read-only query that answers the question in advance."""
     model = _model({"sku": _field("string", length=64)})
     operations, _, _ = plan([model], _live({"sku": _col(nullable=True)}))
-    assert operations[0].kind == "set_not_null"
-    assert operations[0].safety == LOCKING
-    assert any("backfill first" in note for note in operations[0].notes)
+    operation = operations[0]
+    assert operation.kind == "set_not_null"
+    assert operation.safety == LOCKING
+    assert operation.preflight_sql == (
+        'SELECT 1 FROM "product" WHERE "sku" IS NULL LIMIT 1'
+    )
+    assert "NULL rows" in operation.preflight_failure
 
 
 def test_integer_widening_is_locking_and_its_reverse_is_not_promised():
@@ -434,3 +442,39 @@ def test_orphaned_table_is_reported_and_never_dropped():
     # The framework's own tracker has no model by design and must never be
     # reported as an orphan.
     assert "migrations" not in notices[0]
+
+
+# ── preflight: will this actually succeed against the rows in there? ────────
+
+
+def test_unique_index_carries_a_duplicate_preflight():
+    model = _model({"slug": _field("string", length=64, nullable=True, unique=True)})
+    operations, _, _ = plan([model], _live({"slug": _col()}))
+    operation = next(op for op in operations if op.kind == "create_index")
+    assert operation.preflight_sql == (
+        'SELECT 1 FROM "product" GROUP BY "slug" HAVING COUNT(*) > 1 LIMIT 1'
+    )
+    assert "duplicate" in operation.preflight_failure
+
+
+def test_a_plain_index_needs_no_preflight():
+    """A non-unique index cannot fail on data — claiming a check where there
+    is none would train the reader to skip the ones that matter."""
+    model = _model({"sku": _field("string", length=64, nullable=True, index=True)})
+    operations, _, _ = plan([model], _live({"sku": _col()}))
+    operation = next(op for op in operations if op.kind == "create_index")
+    assert operation.preflight_sql is None
+
+
+def test_the_not_null_recipes_third_step_checks_its_own_backfill():
+    model = _model({"tier": _field("string", length=20, default="basic")})
+    operations, _, _ = plan([model], _live({}))
+    tighten = next(op for op in operations if op.kind == "set_not_null")
+    assert tighten.preflight_sql is not None
+    assert "the backfill above did not cover them" in tighten.preflight_failure
+
+
+def test_an_added_nullable_column_needs_no_preflight():
+    model = _model({"sku": _field("string", length=64, nullable=True)})
+    operations, _, _ = plan([model], _live({}))
+    assert operations[0].preflight_sql is None

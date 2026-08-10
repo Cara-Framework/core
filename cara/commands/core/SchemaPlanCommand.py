@@ -66,6 +66,7 @@ class SchemaPlanCommand(CommandBase):
             )
             return 0
 
+        blocked: list[str] = []
         by_safety: dict[str, list] = {ADDITIVE: [], LOCKING: [], DESTRUCTIVE: []}
         for operation in operations:
             by_safety.setdefault(operation.safety, []).append(operation)
@@ -81,6 +82,13 @@ class SchemaPlanCommand(CommandBase):
                 self.info(f"      {operation.reason}")
                 for note in operation.notes:
                     self.warning(f"      ! {note}")
+                if operation.preflight_sql:
+                    blocker = self._preflight(operation)
+                    if blocker:
+                        blocked.append(blocker)
+                        self.error(f"      ✗ {blocker}")
+                    else:
+                        self.info("      ✓ preflight clear")
                 if self.option("sql"):
                     self.info(f"      → {operation.forward_sql}")
                     if operation.reverse_sql:
@@ -100,6 +108,13 @@ class SchemaPlanCommand(CommandBase):
 
         self.info("")
         destructive = by_safety.get(DESTRUCTIVE) or []
+        if blocked:
+            self.error(
+                f"{len(blocked)} operation(s) would FAIL against the rows in "
+                f"the database right now. Fix the data first — applying this "
+                f"plan stops partway through."
+            )
+            return 1
         if refusals:
             self.error(
                 "This plan is INCOMPLETE — the differences above have no "
@@ -119,6 +134,16 @@ class SchemaPlanCommand(CommandBase):
             f"{len(operations)} operation(s) planned. Apply with 'craft schema:apply'."
         )
         return 0
+
+    def _preflight(self, operation) -> str | None:
+        """Answer the operation's data question against the live database."""
+        from cara.facades import DB  # local: heavy optional dep
+
+        try:
+            rows = DB.select(operation.preflight_sql)
+        except Exception:
+            return None
+        return operation.preflight_failure if rows else None
 
     def derive(self):
         """The (operations, refusals, notices) triple for this connection.

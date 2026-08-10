@@ -17,6 +17,14 @@ Three properties make it safe to run against production:
   blocking every writer behind it. The default is deliberately short: a
   deploy that cannot get the lock now should retry, not hold the table.
 
+* **Preflight before each statement.** An operation that can fail on DATA
+  carries a read-only query that must return no rows — a NULL in a column
+  about to become NOT NULL, a duplicate under a unique index about to be
+  built. Checking immediately before running is what makes it worth anything:
+  the answer is about production's rows at this moment, and a plan reviewed an
+  hour ago cannot speak for them. A failed preflight stops the plan BEFORE
+  the statement, so the failure costs nothing.
+
 * **Stops at the first failure.** A half-applied plan is recorded as such
   (the failing operation carries its error) and the command exits non-zero.
   It does not roll back what already succeeded — those operations were
@@ -120,6 +128,15 @@ class SchemaApplyCommand(CommandBase):
             if operation.key in applied:
                 continue
             self.info(f"   {operation.describe()}")
+            blocker = self._preflight(operation)
+            if blocker:
+                self.error(
+                    f"PREFLIGHT FAILED on {operation.key}: {blocker}\n"
+                    f"   query: {operation.preflight_sql}\n"
+                    f"   {done} operation(s) applied before this; nothing was "
+                    f"attempted for this one."
+                )
+                return 1
             try:
                 self._execute(operation, lock_timeout)
             except Exception as exc:
@@ -162,6 +179,22 @@ class SchemaApplyCommand(CommandBase):
             or []
         )
         return {row["operation_key"] for row in rows}
+
+    def _preflight(self, operation) -> str | None:
+        """The reason this operation would fail, or None if it is clear.
+
+        Read-only by construction: the operation supplies a SELECT that must
+        return no rows. A query that cannot run (a table not yet created by an
+        earlier operation in this same plan) is not a blocker — it is a
+        question that does not apply yet.
+        """
+        if not operation.preflight_sql:
+            return None
+        try:
+            rows = DB.select(operation.preflight_sql)
+        except Exception:
+            return None
+        return operation.preflight_failure if rows else None
 
     def _execute(self, operation, lock_timeout: int) -> None:
         slug = migration_to_run(operation.forward_sql)
