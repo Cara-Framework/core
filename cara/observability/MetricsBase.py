@@ -570,8 +570,8 @@ def sample_db_pool_metrics(metrics_cls: type = MetricsBase) -> None:
 def init_build_info(
     metrics_cls: type = MetricsBase,
     *,
-    service: str,
-    role: str,
+    service: str | None = None,
+    role: str | None = None,
 ) -> None:
     _init_build_info(metrics_cls, _NS, service=service, role=role)
 
@@ -598,7 +598,9 @@ def bool_label(flag: object) -> str:
     return "on" if bool(flag) else "off"
 
 
-def render(*, service: str, role: str) -> tuple[bytes, str]:
+def render(
+    *, service: str | None = None, role: str | None = None
+) -> tuple[bytes, str]:
     return _render(MetricsBase, REGISTRY, _NS, service=service, role=role)
 
 

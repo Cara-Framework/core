@@ -38,15 +38,19 @@ def _always_in_use(*_args, **_kwargs):
     raise OSError(errno.EADDRINUSE, "Address already in use")
 
 
-def test_permanently_held_port_blocks_boot_after_bounded_retries(monkeypatch):
+def test_permanently_held_port_warns_and_continues_after_bounded_retries(monkeypatch):
     monkeypatch.setattr(RuntimeMetrics, "_prom_start_http_server", _always_in_use)
 
-    with pytest.raises(OSError, match="Address already in use"):
+    # The docstring's whole point: after the restart-race retries run out,
+    # the process runs WITHOUT /metrics instead of refusing to boot.
+    assert (
         Metrics.start_http_server(
             port=9400,
             service="test-services",
             role="queue-relay",
         )
+        is None
+    )
     assert RuntimeMetrics._http_server_started is False
 
 

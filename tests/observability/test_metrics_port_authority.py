@@ -13,14 +13,41 @@ def _reset_server_state(monkeypatch):
     monkeypatch.setattr(RuntimeMetrics, "_http_server_started", False)
 
 
-@pytest.mark.parametrize("value", [None, 0, -1, True, "9400", 1.5])
-def test_metrics_server_requires_an_explicit_positive_integer_port(value) -> None:
-    with pytest.raises((RuntimeError, TypeError, ValueError)):
+@pytest.mark.parametrize("value", [True, "9400", 1.5])
+def test_metrics_server_rejects_non_integer_ports(value) -> None:
+    with pytest.raises((TypeError, ValueError)):
         Metrics.start_http_server(
             port=value,
             service="test-services",
             role="worker",
         )
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_non_positive_port_is_the_silent_opt_out(value) -> None:
+    # METRICS_PORT=0 is the documented opt-out: no server, no complaint.
+    assert (
+        Metrics.start_http_server(
+            port=value,
+            service="test-services",
+            role="worker",
+        )
+        is None
+    )
+    assert RuntimeMetrics._http_server_started is False
+
+
+def test_unconfigured_port_warns_and_runs_without_metrics() -> None:
+    # No argument and no ``metrics.port`` config: observability must never
+    # be the reason work stops — warn loudly, run without /metrics.
+    assert (
+        Metrics.start_http_server(
+            service="test-services",
+            role="worker",
+        )
+        is None
+    )
+    assert RuntimeMetrics._http_server_started is False
 
 
 def test_explicit_port_and_identity_are_used(monkeypatch) -> None:
