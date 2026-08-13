@@ -166,6 +166,7 @@ class SourceShape:
                         for layer in (
                             *manifest.source_shape_edge_layers,
                             "repositories",
+                            "services",
                             "support",
                         )
                     )
@@ -185,19 +186,6 @@ class SourceShape:
                                 "adapter mixins carry public PascalCase names "
                                 "matching their file (privacy is barrel "
                                 "non-export, not an underscore prefix) (§6)",
-                            )
-                        )
-                    if class_node.name.endswith("Mixin") and _is_layer_path(
-                        relative_path,
-                        "services",
-                        manifest.roots.app_path_prefix,
-                    ):
-                        naming_findings.append(
-                            Finding(
-                                rel,
-                                class_node.lineno,
-                                "business service mixins are forbidden — domain logic "
-                                "uses explicit composition (§6)",
                             )
                         )
                 if not _is_edge_path(

@@ -114,10 +114,12 @@ def test_edge_mixin_methods_still_pay_the_endpoint_budget(tmp_path):
     assert any("edge method exceeds 3-line limit" in item.message for item in findings)
 
 
-def test_underscored_adapter_mixins_and_business_service_mixins_are_rejected(tmp_path):
+def test_underscored_adapter_mixins_are_rejected(tmp_path):
     """Adapter mixins are PUBLIC PascalCase files/classes named for each
     other — privacy is the barrel's job (they never appear in ``__all__``),
-    not an underscore prefix. Business-logic mixins stay banned outright."""
+    not an underscore prefix. A single-composer file split is the same
+    adapter idea in ANY layer, services included; the naming contract is
+    what's enforced."""
     manifest = _manifest(tmp_path)
     write(
         tmp_path / "app" / "controllers" / "orders" / "OrderEdgeMixin.py",
@@ -131,13 +133,17 @@ def test_underscored_adapter_mixins_and_business_service_mixins_are_rejected(tmp
         tmp_path / "app" / "services" / "orders" / "_OrderRulesMixin.py",
         "class _OrderRulesMixin:\n    def decide(self):\n        return True\n",
     )
+    write(
+        tmp_path / "app" / "services" / "orders" / "OrderPricingMixin.py",
+        "class OrderPricingMixin:\n    def price(self):\n        return 1\n",
+    )
 
     findings = SourceShape.scan(manifest)
 
-    # The public adapter passes; the underscored repository mixin is the
-    # naming finding; the services mixin is the composition finding.
-    assert sum("public PascalCase names" in item.message for item in findings) == 1
-    assert any("explicit composition" in item.message for item in findings)
+    # The two public adapters pass; the two underscored mixins (repository
+    # AND services) are naming findings.
+    assert sum("public PascalCase names" in item.message for item in findings) == 2
+    assert not any("explicit composition" in item.message for item in findings)
 
 
 def test_private_adapter_class_in_public_file_is_rejected(tmp_path):
