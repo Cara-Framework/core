@@ -12,10 +12,17 @@ def test_argon2id_is_the_default_and_verifies() -> None:
     assert not Hash.needs_rehash(hashed)
 
 
-def test_hash_verification_never_guesses_the_storage_algorithm() -> None:
+def test_hash_verification_follows_the_stored_artifact() -> None:
+    """The stored hash names its own algorithm; verification honors it.
+
+    The hash comes from OUR database, not from the attacker — the
+    algorithm-confusion concern belongs to attacker-supplied artifacts.
+    Guessing-from-default instead locked out every pre-migration bcrypt
+    user the day the default moved. Explicit ``algorithm=`` still wins.
+    """
     hashed = Hash.make("bcrypt password", algorithm="bcrypt", rounds=4)
 
-    assert not Hash.check("bcrypt password", hashed)
+    assert Hash.check("bcrypt password", hashed)
     assert Hash.check("bcrypt password", hashed, algorithm="bcrypt")
     assert Hash.needs_rehash(hashed, algorithm="bcrypt", rounds=12)
     assert not Hash.needs_rehash(hashed, algorithm="bcrypt", rounds=4)

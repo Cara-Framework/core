@@ -28,6 +28,27 @@ class Hash:
         "sha256": Sha256Hasher(),
     }
 
+    #: A stored hash names its own algorithm in its prefix. Verification
+    #: follows the ARTIFACT, not the write-side default — otherwise the
+    #: day the default moves (bcrypt → argon2id), every legacy hash
+    #: silently stops verifying and every existing user is locked out.
+    _FORMAT_PREFIXES = (
+        ("$argon2", "argon2id"),
+        ("$2a$", "bcrypt"),
+        ("$2b$", "bcrypt"),
+        ("$2y$", "bcrypt"),
+    )
+
+    @classmethod
+    def detect_algorithm(cls, hashed: str) -> str | None:
+        """Name the algorithm a stored hash was made with, if recognizable."""
+        if not isinstance(hashed, str):
+            return None
+        for prefix, name in cls._FORMAT_PREFIXES:
+            if hashed.startswith(prefix):
+                return name
+        return None
+
     @classmethod
     def truncation_boundary(cls, algorithm: str = DEFAULT_ALGORITHM) -> int | None:
         """Bytes after which ``algorithm`` stops reading its input, else None.
@@ -62,11 +83,18 @@ class Hash:
         cls,
         value: str,
         hashed: str,
-        algorithm: str = DEFAULT_ALGORITHM,
+        algorithm: str | None = None,
     ) -> bool:
-        driver = cls.drivers.get(algorithm)
+        """Verify ``value`` against ``hashed``.
+
+        The stored hash's own format wins when no algorithm is named:
+        the write-side default only governs :meth:`make`, so moving it
+        never strands hashes made under the previous one.
+        """
+        resolved = algorithm or cls.detect_algorithm(hashed) or cls.DEFAULT_ALGORITHM
+        driver = cls.drivers.get(resolved)
         if not driver:
-            raise InvalidArgumentException(f"Unsupported algorithm: {algorithm}")
+            raise InvalidArgumentException(f"Unsupported algorithm: {resolved}")
         return driver.check(value, hashed)
 
     @classmethod
