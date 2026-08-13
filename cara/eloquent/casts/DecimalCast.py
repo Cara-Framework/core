@@ -37,7 +37,7 @@ class DecimalCast(BaseCast):
     def get(self, value):
         if value is None:
             return None
-        if isinstance(value, bool | float):
+        if isinstance(value, bool):
             return None
         if isinstance(value, Decimal):
             return self._quantize(value)
@@ -49,8 +49,12 @@ class DecimalCast(BaseCast):
     def set(self, value):
         if value is None or str(value).strip() == "":
             return None
-        if isinstance(value, bool | float):
+        if isinstance(value, bool):
             return None
+        # A float converts through its shortest repr — exact for every
+        # literal a caller writes (1.0, 0.85). Money boundaries refuse
+        # floats loudly (require_currency/round_money); the generic cast
+        # must never turn a set value into a silent NULL.
         try:
             return self._quantize(Decimal(str(value)))
         except ValueError, TypeError, InvalidOperation:

@@ -212,7 +212,7 @@ class TestDecimalCast:
     def test_invalid_returns_none(self):
         assert DecimalCast(2).set("not a number") is None
 
-    @pytest.mark.parametrize("value", [True, False, 1.2, float("nan"), "NaN", "Infinity"])
+    @pytest.mark.parametrize("value", [True, False, float("nan"), "NaN", "Infinity"])
     def test_lossy_or_non_finite_input_is_unknown(self, value):
         assert DecimalCast(2).set(value) is None
 

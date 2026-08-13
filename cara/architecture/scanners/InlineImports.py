@@ -36,7 +36,7 @@ from cara.architecture.Manifest import Manifest
 TAG = "# local:"
 CYCLE_PREFIX = "cycle with"
 LEGAL_PREFIXES = ("envelope body", "heavy optional dep", CYCLE_PREFIX)
-SEAM_KEY = "inline_imports"
+_SEAM_KEY = "inline_imports"
 
 
 def _first_imported_name(node) -> str:
@@ -135,7 +135,7 @@ class InlineImports:
                     f"stale inline-import exemption for {imported_name!r} — delete it",
                 )
             )
-        allowlist = manifest.seam_allowlists.get(SEAM_KEY, {})
+        allowlist = manifest.seam_allowlists.get(_SEAM_KEY, {})
         for identity, hits in sorted(untagged.items()):
             rel = identity.split("::", 1)[0]
             count = len(hits)
