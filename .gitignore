@@ -29,3 +29,4 @@ logs/
 
 # Persistent advisory-lock files; the inode must survive between processes.
 database/migrations/.*.lock
+storage/
