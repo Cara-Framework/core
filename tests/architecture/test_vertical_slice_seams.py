@@ -84,6 +84,32 @@ def test_evasion_via_container_element_literal_is_caught(tmp_path):
     assert VerticalSliceSeams.scan(manifest) == []
 
 
+def test_export_manifests_are_exempt_container_positions(tmp_path):
+    """``__all__`` and a generated barrel's ``_LAZY_EXPORTS`` tuples restate
+    module names the identifier scan already counts in the modules
+    themselves — the container position must not double-charge them."""
+    manifest = make_manifest(tmp_path, plugin_tokens=TOKENS)
+    write(
+        tmp_path / "app" / "jobs" / "__init__.py",
+        '_LAZY_EXPORTS = {\n'
+        '    "PullEbayJob": (".PullEbayJob", "PullEbayJob"),\n'
+        '}\n'
+        "__all__ = [\n"
+        '    "PullEbayJob",\n'
+        "]\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
+
+    # The same token in an ORDINARY container in the same file still hits.
+    write(
+        tmp_path / "app" / "jobs" / "__init__.py",
+        '__all__ = ["PullEbayJob"]\n'
+        "LANES = ['ebay']\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert findings and "container-literal" in findings[0].message
+
+
 def test_evasion_via_default_value_literal_is_caught(tmp_path):
     manifest = make_manifest(tmp_path, plugin_tokens=TOKENS)
     write(

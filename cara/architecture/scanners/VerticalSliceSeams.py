@@ -113,8 +113,24 @@ def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[st
     branch-by-brand this scanner exists to catch, and it sat structurally
     invisible to the other four. Only whitespace-free tokens count —
     prose in containers (step descriptions, error copy) mentions brands
-    without branching on them."""
+    without branching on them.
+
+    Export manifests are exempt from the container position: an
+    ``__all__`` list and a generated barrel's ``_LAZY_EXPORTS`` value
+    tuples mechanically restate module/symbol names the identifier scan
+    already counts in the modules themselves — counting them again is a
+    double charge no fix can pay except the rename that IS the original
+    debt."""
     doc_ids = docstring_node_ids(tree)
+    export_manifest_ids: set[int] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            names = {t.id for t in targets if isinstance(t, ast.Name)}
+            if names & {"__all__", "_LAZY_EXPORTS"} and stmt.value is not None:
+                for sub in ast.walk(stmt.value):
+                    if isinstance(sub, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
+                        export_manifest_ids.add(id(sub))
 
     def literal(node: ast.AST) -> str | None:
         if (
@@ -140,6 +156,8 @@ def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[st
                 if text and token_re.search(text):
                     hits.append(f"default-literal {text!r} (line {default.lineno})")
         elif isinstance(node, ast.Dict):
+            if id(node) in export_manifest_ids:
+                continue
             for key in node.keys:
                 if key is None:
                     continue
@@ -152,6 +170,8 @@ def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[st
                 if text and token_re.search(text):
                     hits.append(f"call-arg-literal {text!r} (line {arg.lineno})")
         elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            if id(node) in export_manifest_ids:
+                continue
             for element in node.elts:
                 text = literal(element)
                 # Bare tokens only: container elements legitimately carry
