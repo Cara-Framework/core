@@ -225,6 +225,12 @@ def _seam_filter(
                 name = hit.split(" ", 2)[1]
                 if _UPPER_SNAKE.match(name):
                     continue
+            # The vocabulary seam DECLARES names: a brand-carrying column
+            # key in a model's field list or jsonb spec is the vocabulary
+            # itself, not a branch. Branching positions (compare, call-arg,
+            # default) stay flagged even here.
+            if hit.startswith(("container-literal ", "dict-key-literal ")):
+                continue
             remaining.append(hit)
         return remaining
     return hits

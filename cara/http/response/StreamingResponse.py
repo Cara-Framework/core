@@ -91,6 +91,7 @@ class StreamingResponse:
                 }
             )
             started = True
+            self.response._started = True
 
             async for chunk in generator:
                 await send(

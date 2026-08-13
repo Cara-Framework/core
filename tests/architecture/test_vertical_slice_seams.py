@@ -319,6 +319,33 @@ def test_data_vocabulary_seam_exempts_upper_snake_slug_constants(tmp_path):
     assert VerticalSliceSeams.scan(manifest) == []
 
 
+def test_data_vocabulary_seam_exempts_declaration_positions_only(tmp_path):
+    """Within the vocabulary seam, container/dict-key literals ARE the
+    vocabulary (column keys, jsonb specs). Branching positions — a compare,
+    a call argument — stay flagged even there."""
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=TOKENS,
+        seam_locations=SeamLocations(data_vocabulary_prefixes=("commons/models/",)),
+    )
+    write(
+        tmp_path / "commons" / "models" / "Listing.py",
+        "class Listing:\n"
+        "    __fillable__ = ['ebay_item_id', 'is_amazon_prime']\n"
+        "    SPECS = {'ebay_item_id': 'str'}\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
+
+    write(
+        tmp_path / "commons" / "models" / "Listing.py",
+        "class Listing:\n"
+        "    def is_ebay(self):\n"
+        "        return self.marketplace == 'ebay'\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert findings and "compare-literal" in findings[0].message
+
+
 def test_sunset_debt_within_pin_passes(tmp_path):
     # EbayThing.py hits twice: the module-path itself, and the class name.
     manifest = make_manifest(

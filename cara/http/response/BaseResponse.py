@@ -37,6 +37,12 @@ class BaseResponse:
         self.statuses: dict = HTTP_STATUS_CODES
         self.header_bag = HeaderBag()
         self._sent = False
+        # True the moment ``http.response.start`` is on the wire. From then
+        # on the status line cannot change and a SECOND start is an ASGI
+        # protocol violation (uvicorn: "Expected 'http.response.body', but
+        # got 'http.response.start'") — every error path below checks this
+        # before daring another start.
+        self._started = False
 
     def clone_from(self, other: BaseResponse) -> None:
         """Clone all attributes from another BaseResponse object."""
@@ -46,6 +52,7 @@ class BaseResponse:
         self.statuses = other.statuses.copy()
         self.header_bag = other.header_bag.copy()
         self._sent = other._sent
+        self._started = other._started
 
     def is_sent(self) -> bool:
         """Check if response has been sent."""
@@ -78,6 +85,12 @@ class BaseResponse:
                 "headers": headers,
             }
         )
+        # The start is on the wire: record it on the object AND the scope,
+        # so both this response's error path and the framework exception
+        # handler (which builds a FRESH response object) know a second
+        # ``http.response.start`` is no longer legal on this connection.
+        self._started = True
+        scope["response_started"] = True
         await send(
             {
                 "type": "http.response.body",
@@ -98,6 +111,24 @@ class BaseResponse:
         normal exceptions; this branch had been omitted.
         """
         if self._sent:
+            return
+
+        if self._started:
+            # Headers already went out — the status cannot change, and a
+            # second start would cascade into uvicorn protocol errors on a
+            # connection that is already lost. Close the body instead and
+            # let the logged exception carry the diagnosis.
+            try:
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"",
+                        "more_body": False,
+                    }
+                )
+            except Exception:  # noqa: BLE001 - the connection is already dead
+                pass
+            self._sent = True
             return
 
         try:
@@ -127,6 +158,7 @@ class BaseResponse:
                     "headers": headers,
                 }
             )
+            self._started = True
             await send(
                 {
                     "type": "http.response.body",
@@ -134,26 +166,36 @@ class BaseResponse:
                     "more_body": False,
                 }
             )
+            self._sent = True
         except Exception:
-            # Last resort fallback
-            fallback_body = b"Internal Server Error"
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 500,
-                    "headers": [
-                        (b"content-type", b"text/plain; charset=utf-8"),
-                        (b"content-length", str(len(fallback_body)).encode()),
-                    ],
-                }
-            )
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": fallback_body,
-                    "more_body": False,
-                }
-            )
+            # Last resort fallback. If OUR error start above already went
+            # out, only the body may follow — never a second start.
+            try:
+                if not self._started:
+                    fallback_body = b"Internal Server Error"
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 500,
+                            "headers": [
+                                (b"content-type", b"text/plain; charset=utf-8"),
+                                (b"content-length", str(len(fallback_body)).encode()),
+                            ],
+                        }
+                    )
+                    self._started = True
+                else:
+                    fallback_body = b""
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": fallback_body,
+                        "more_body": False,
+                    }
+                )
+                self._sent = True
+            except Exception:  # noqa: BLE001 - the connection is already dead
+                pass
 
     # =============================================================================
     # BASIC PROPERTIES AND METHODS
