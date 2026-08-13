@@ -311,6 +311,21 @@ class DefaultExceptionHandler:
         request: Any = None,
     ) -> None:
         """Send the response."""
+        if scope.get("response_started") and not scope.get("response_sent"):
+            # A response START is already on the wire (the body send then
+            # failed): the status cannot change and any new
+            # ``http.response.start`` is an ASGI protocol violation that
+            # cascades — uvicorn rejects it, the rejection lands back
+            # here, and every fallback layer repeats the offence. Close
+            # the body and let the logged exception carry the diagnosis.
+            # Guarded BEFORE header assembly: none of those headers can
+            # be sent on a started connection anyway.
+            with contextlib.suppress(Exception):
+                await send(
+                    {"type": "http.response.body", "body": b"", "more_body": False}
+                )
+            scope["response_sent"] = True
+            return
         cors = self._cors_headers_for_scope(scope)
         sec = self._security_headers_for_scope(scope)
         rid = self._request_id_header_for(request, scope)
@@ -343,19 +358,6 @@ class DefaultExceptionHandler:
         # ``getattr(exception, "retry_after", ...)`` fallback path).
         retry = self._retry_after_header_for(data)
         extras = cors + sec + rid + retry + allow
-        if scope.get("response_started") and not scope.get("response_sent"):
-            # A response START is already on the wire (the body send then
-            # failed): the status cannot change and any new
-            # ``http.response.start`` is an ASGI protocol violation that
-            # cascades — uvicorn rejects it, the rejection lands back
-            # here, and every fallback layer repeats the offence. Close
-            # the body and let the logged exception carry the diagnosis.
-            with contextlib.suppress(Exception):
-                await send(
-                    {"type": "http.response.body", "body": b"", "more_body": False}
-                )
-            scope["response_sent"] = True
-            return
         try:
             if self.application:
                 response = self.application.make("response")

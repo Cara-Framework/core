@@ -7,6 +7,7 @@ Laravel-inspired design with clean separation of concerns.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import Any
 
@@ -118,7 +119,7 @@ class BaseResponse:
             # second start would cascade into uvicorn protocol errors on a
             # connection that is already lost. Close the body instead and
             # let the logged exception carry the diagnosis.
-            try:
+            with contextlib.suppress(Exception):
                 await send(
                     {
                         "type": "http.response.body",
@@ -126,8 +127,6 @@ class BaseResponse:
                         "more_body": False,
                     }
                 )
-            except Exception:  # noqa: BLE001 - the connection is already dead
-                pass
             self._sent = True
             return
 
