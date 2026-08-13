@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pendulum
 import pytest
 
-from cara.commands.core.QueueWorkCommand import JobProcessor
+from cara.commands.core.JobProcessor import JobProcessor
 from cara.context import Tenancy
 from cara.exceptions import QueueException
 from cara.queues.contracts import Queueable, ShouldQueue

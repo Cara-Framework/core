@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
+import cara.configuration as configuration
 from cara.exceptions import QueueException
-from cara.facades import Log
+from cara.facades import Log, Queue
+
+from .RoutingKey import RoutingKey
 
 #: Wildcard standing for exactly one dot-separated word in a binding pattern.
 ONE_WORD = "*"
@@ -51,31 +52,6 @@ def patterns_overlap(one: str, other: str) -> bool:
         left == ONE_WORD or right in (ONE_WORD, left)
         for left, right in zip(one_parts, other_parts, strict=True)
     )
-
-
-@dataclass
-class RoutingKey:
-    """Parsed routing key components."""
-
-    domain: str
-    subtype: str
-    priority: str
-
-    @property
-    def key(self) -> str:
-        """Get full routing key string."""
-        return f"{self.domain}.{self.subtype}.{self.priority}"
-
-    @classmethod
-    def parse(cls, routing_key: str) -> RoutingKey:
-        """Parse routing key string into components."""
-        parts = routing_key.split(".")
-        if len(parts) != 3:
-            raise QueueException(
-                f"Invalid routing key format: {routing_key}. Expected: domain.subtype.priority"
-            )
-
-        return cls(domain=parts[0], subtype=parts[1], priority=parts[2])
 
 
 class QueueRouter:
@@ -126,9 +102,8 @@ class QueueRouter:
     def _setup_default_bindings(self):
         """Setup queue bindings from app configuration."""
         # Load app-specific bindings from config (required)
-        from cara.configuration import config
 
-        app_bindings = config("queue.queue_routing_rules", None)
+        app_bindings = configuration.config("queue.queue_routing_rules", None)
 
         if not app_bindings:
             raise QueueException("QUEUE_ROUTING_RULES not found in queue config.")
@@ -262,8 +237,6 @@ class QueueRouter:
             job_instance.queue = target_queue
         if hasattr(job_instance, "routing_key"):
             job_instance.routing_key = routing_key
-
-        from cara.facades import Queue
 
         # Queue.push/later is now a PostgreSQL transaction, not broker I/O.
         # Retrying an ambiguous DB commit would mint a second delivery ID.

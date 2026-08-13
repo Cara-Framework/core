@@ -14,17 +14,16 @@ from __future__ import annotations
 
 import ast
 import re
-from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
 # ``types/Base.py`` imports nothing, so the no-boot promise in this module's
 # docstring survives joining the taxonomy.
-from cara.exceptions.types.Base import CaraException
 
 _ACTION_FUNCTIONS = tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]
 _DECLARED_RESOURCE = re.compile(r"@resource\(\s*(\w+)\s*(\[\])?\s*\)")
+_DECLARED_META = re.compile(r"@meta\(\s*(\w+)\s*\)")
 
 # The response method that frames a payload as a page rather than a row. It is
 # framework-owned, so it means the same thing in every application.
@@ -45,31 +44,6 @@ _RESPONSE_METHODS = frozenset(
         "to_response",
     }
 )
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class ControllerResponse:
-    """One statically observed response variant for a controller action."""
-
-    status: int
-    kind: str
-
-
-@dataclass(frozen=True, slots=True)
-class ControllerContract:
-    """Request validators and response variants used by one routed action."""
-
-    requests: tuple[str, ...]
-    responses: tuple[ControllerResponse, ...]
-
-
-class UnknownDeclaredResource(CaraException, RuntimeError):
-    """An ``@resource(...)`` docstring names a resource that does not exist.
-
-    In the taxonomy (§9) so ``except CaraException`` around spec generation
-    catches it; ``RuntimeError`` stays as a SECOND base for the craft command
-    that already treats a RuntimeError as "fail this build, print the message".
-    """
 
 
 def controller_action_functions(
@@ -141,120 +115,6 @@ def controller_action_functions(
                         pending.append(methods[func.attr])
             actions.append((controller, action, tuple(resolved)))
     return actions
-
-
-class ControllerActionMapper:
-    """AST-map ``Controller@action`` -> ``(resource_name, is_list)``.
-
-    ``serializer_helpers`` lets an application register its own module-level
-    serialization helpers — ``name -> (resource_name, is_list)`` — for actions
-    that hand a collection to a helper instead of naming the resource.
-    """
-
-    def __init__(
-        self,
-        controllers_dir: Path,
-        known_resources: set[str],
-        serializer_helpers: dict[str, tuple[str, bool]] | None = None,
-    ):
-        self._dir = controllers_dir
-        self._known = known_resources
-        self._helpers = dict(serializer_helpers or {})
-
-    def map(self) -> dict[str, tuple[str, bool]]:
-        mapping: dict[str, tuple[str, bool]] = {}
-        for controller, action, functions in controller_action_functions(self._dir):
-            resolved = self._action_resource(functions)
-            if resolved is not None:
-                mapping[f"{controller}@{action}"] = resolved
-        return mapping
-
-    def _action_resource(self, functions: _ACTION_FUNCTIONS) -> tuple[str, bool] | None:
-        """Find the resource an action serializes, and whether it is a list.
-
-        Signals, strongest first:
-
-        * ``@resource(Name)`` / ``@resource(Name[])`` in the action docstring
-        * ``Resource.collection(...)``            -> (Resource, list)
-        * a registered serialization helper call  -> its declared framing
-        * ``Resource(x).to_array()/.to_dict()``   -> (Resource, single)
-        * a bare ``Resource(x)`` construction
-
-        ``response.paginated(...)`` forces list framing.
-        """
-        declared = self._declared_resource(functions[0])
-        if declared is not None:
-            return declared
-
-        list_resource: str | None = None
-        single_resource: str | None = None
-        helper_resource: tuple[str, bool] | None = None
-        paginated = False
-
-        for fn in functions:
-            for sub in ast.walk(fn):
-                if not isinstance(sub, ast.Call):
-                    continue
-                func = sub.func
-                # ``response.paginated(...)`` -> list envelope.
-                if isinstance(func, ast.Attribute) and func.attr == _PAGE_RESPONSE_METHOD:
-                    paginated = True
-                # A registered application serialization helper.
-                if isinstance(func, ast.Name) and func.id in self._helpers:
-                    candidate = self._helpers[func.id]
-                    if candidate[0] in self._known:
-                        helper_resource = candidate
-                # ``Resource.collection(...)``
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr == "collection"
-                    and isinstance(func.value, ast.Name)
-                    and func.value.id in self._known
-                ):
-                    list_resource = func.value.id
-                # ``Resource(...)`` construction (single, unless paginated).
-                if isinstance(func, ast.Name) and func.id in self._known:
-                    single_resource = func.id
-
-        if list_resource is not None:
-            return (list_resource, True)
-        if helper_resource is not None:
-            return helper_resource
-        if single_resource is not None:
-            return (single_resource, paginated)
-        return None
-
-    def _declared_resource(self, fn: ast.AST) -> tuple[str, bool] | None:
-        """Read an explicit ``@resource(...)`` declaration from the docstring.
-
-        The AST signals below can only see a resource the ACTION ITSELF names.
-        When serialization legitimately lives below the controller — a service
-        that serializes inside its own cache closure, so the cache stores a
-        codec-safe dict rather than ORM rows — the action never mentions the
-        resource and the route would silently lose its response schema. The
-        docstring declaration is the explicit source of truth for that case,
-        mirroring how the routing DSL already makes the controller docstring
-        the route source of truth.
-
-            @resource(SomeDetailResource)    -> single
-            @resource(SomeRowResource[])     -> list
-        """
-        doc = ast.get_docstring(fn)
-        if not doc:
-            return None
-        match = _DECLARED_RESOURCE.search(doc)
-        if match is None:
-            return None
-        name, is_list = match.group(1), match.group(2) is not None
-        # A declared-but-unknown resource is a typo that would emit a dangling
-        # ``$ref`` (or silently drop the schema) — exactly the drift this
-        # generator exists to catch, so fail loudly instead of degrading.
-        if name not in self._known:
-            raise UnknownDeclaredResource(
-                f"@resource({name}) declares an unknown resource. "
-                f"Known: {', '.join(sorted(self._known))}"
-            )
-        return (name, is_list)
 
 
 def cursor_paginated_actions(
@@ -350,40 +210,3 @@ def _response_statuses(call: ast.Call, method: str) -> set[int]:
     if method == "redirect":
         return {302}
     return {200}
-
-
-class ControllerContractExtractor:
-    """Statically map routed actions to their input and response variants."""
-
-    def __init__(self, controllers_dir: Path):
-        self._dir = controllers_dir
-
-    def extract(self) -> dict[str, ControllerContract]:
-        contracts: dict[str, ControllerContract] = {}
-        for controller, action, functions in controller_action_functions(self._dir):
-            requests: set[str] = set()
-            responses: set[ControllerResponse] = set()
-            for function in functions:
-                for node in ast.walk(function):
-                    if not isinstance(node, ast.Call):
-                        continue
-                    if request := _request_name(node):
-                        requests.add(request)
-                    func = node.func
-                    if not isinstance(func, ast.Attribute):
-                        continue
-                    method = func.attr
-                    if method not in _RESPONSE_METHODS:
-                        continue
-                    kind = _response_kind(method)
-                    responses.update(
-                        ControllerResponse(status, kind)
-                        for status in _response_statuses(node, method)
-                    )
-            if not responses:
-                responses.add(ControllerResponse(200, "envelope"))
-            contracts[f"{controller}@{action}"] = ControllerContract(
-                requests=tuple(sorted(requests)),
-                responses=tuple(sorted(responses)),
-            )
-        return contracts

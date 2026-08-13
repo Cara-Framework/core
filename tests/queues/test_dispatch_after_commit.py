@@ -83,7 +83,7 @@ def harness(monkeypatch):
     resolver = ConnectionResolver(database_manager=None)
     resolver._create_connection_instance = lambda name: conn
 
-    dm = DatabaseManager.get_instance()
+    dm = DatabaseManager("app", {"app": {"driver": "sqlite"}})
     monkeypatch.setattr(dm, "_resolve_connection_name", lambda c=None: "app")
     monkeypatch.setattr(dm, "_ensure_resolver", lambda: resolver)
     resolver.queue_driver = SimpleNamespace(durable_transactional_outbox=False)
@@ -95,7 +95,11 @@ def harness(monkeypatch):
         "app",
         lambda: SimpleNamespace(
             make=lambda key: (
-                queue_service if key == "queue" else (_ for _ in ()).throw(KeyError(key))
+                queue_service
+                if key == "queue"
+                else dm
+                if key == "DB"
+                else (_ for _ in ()).throw(KeyError(key))
             )
         ),
         raising=False,

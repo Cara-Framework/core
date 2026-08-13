@@ -34,7 +34,7 @@ import re
 import shutil
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 
 # ``commons.models`` collapse rewrites. Models are FLAT-copied into

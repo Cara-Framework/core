@@ -6,6 +6,7 @@ import html
 import re
 import unicodedata
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 # --- Sanitization ---------------------------------------------------------
 # These patterns target the "user-supplied free text → JSON → HTML context"
@@ -303,8 +304,6 @@ def mask_proxy_url(url: str) -> str:
     if not url:
         return "***"
     try:
-        from urllib.parse import urlparse, urlunparse
-
         parsed = urlparse(url)
         if parsed.username or parsed.password:
             # Replace netloc with masked credentials.

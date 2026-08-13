@@ -27,7 +27,7 @@ from collections.abc import Callable
 
 from cara.facades import Log
 from cara.http import Request, Response
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
 from cara.observability import MetricsBase, normalize_metric_path, status_class
 
 

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.configuration import config
+from cara.exceptions import InvalidConfigurationSetupException
+from cara.mail import render_mail_view
 from cara.view.ViewEngine import ViewEngine
 
 
@@ -25,11 +28,13 @@ class ViewRenderer:
         # production. Tie it to ``app.debug`` and fail closed to ``False``
         # if config isn't loaded yet, so production never leaks internals.
         try:
-            from cara.configuration import config
-
-            self.debug = bool(config("app.debug", False))
-        except Exception:
+            debug = config("app.debug", False)
+        except InvalidConfigurationSetupException:
             self.debug = False
+        else:
+            if not isinstance(debug, bool):
+                raise TypeError("app.debug must be boolean")
+            self.debug = debug
 
     def render(self, view: str, data: dict[str, Any] = None) -> str:
         """Render a view template."""
@@ -155,7 +160,6 @@ class ViewRenderer:
         emails never rendered. Jinja2 (autoescape on) is the correct engine for
         mail; the cara compiler stays the engine for web views.
         """
-        from cara.mail.JinjaRenderer import render_mail_view
 
         mail_data = {
             "app_name": "Cara Application",

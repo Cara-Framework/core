@@ -7,28 +7,69 @@ Following SOLID principles with clean, simple interfaces.
 
 from __future__ import annotations
 
-# Import all base components
-# (We deliberately omit ``cast_registry`` from ``.base`` here — line 98
-# below redefines the public ``cast_registry`` symbol as the
-# ``EnhancedCastRegistry`` singleton. Importing the base one would
-# shadow it twice and ruff F811 would flag the redefinition. Modules
-# that need the base singleton can import it directly.)
-from .base import BaseCast, CastRegistry
+from cara._LazyExports import _install_lazy_exports
 
-# Import collection casts
-from .Collections import ArrayCast, CollectionCast
+from .ArrayCast import ArrayCast
+from .BoolCast import BoolCast
+from .CastRegistry import CastRegistry
+from .CollectionCast import CollectionCast
+from .DateCast import DateCast
+from .DateTimeCast import DateTimeCast
+from .DecimalCast import DecimalCast
+from .EmailCast import EmailCast
+from .EncryptedCast import EncryptedCast
+from .EncryptedJsonCast import EncryptedJsonCast
+from .FloatCast import FloatCast
+from .HashCast import HashCast
+from .IntCast import IntCast
+from .JsonCast import JsonCast
+from .PhoneCast import PhoneCast
+from .SlugCast import SlugCast
+from .TimeCast import TimeCast
+from .TimestampCast import TimestampCast
+from .TokenCast import TokenCast
+from .URLCast import URLCast
+from .UUIDCast import UUIDCast
 
-# Import datetime casts
-from .DateTime import DateCast, DateTimeCast, TimestampCast, TimeCast
 
-# Import primitive casts
-from .primitives import BoolCast, DecimalCast, FloatCast, IntCast, JsonCast
+# Convenience functions
+def cast_value(cast_definition: str, value, operation: str = "get"):
+    """
+    Convenience function to cast a value.
 
-# Import security casts
-from .Security import EncryptedCast, EncryptedJsonCast, HashCast, TokenCast
+    Args:
+        cast_definition: Cast definition string
+        value: Value to cast
+        operation: 'get' or 'set'
 
-# Import validation casts
-from .Validation import EmailCast, PhoneCast, SlugCast, URLCast, UUIDCast
+    Returns:
+        Casted value
+    """
+    return cast_registry.cast_value(cast_definition, value, operation)
+
+
+def register_cast(name: str, cast_class):
+    """
+    Convenience function to register a custom cast.
+
+    Args:
+        name: Name of the cast
+        cast_class: Cast class that extends BaseCast
+    """
+    cast_registry.register(name, cast_class)
+
+
+def get_cast_instance(cast_definition: str):
+    """
+    Convenience function to get a cast instance.
+
+    Args:
+        cast_definition: Cast definition string
+
+    Returns:
+        Cast instance or None
+    """
+    return cast_registry.get_cast_instance(cast_definition)
 
 
 # Enhanced cast registry with auto-registration
@@ -113,45 +154,9 @@ class EnhancedCastRegistry(CastRegistry):
 cast_registry = EnhancedCastRegistry()
 
 
-# Convenience functions
-def cast_value(cast_definition: str, value, operation: str = "get"):
-    """
-    Convenience function to cast a value.
-
-    Args:
-        cast_definition: Cast definition string
-        value: Value to cast
-        operation: 'get' or 'set'
-
-    Returns:
-        Casted value
-    """
-    return cast_registry.cast_value(cast_definition, value, operation)
-
-
-def register_cast(name: str, cast_class):
-    """
-    Convenience function to register a custom cast.
-
-    Args:
-        name: Name of the cast
-        cast_class: Cast class that extends BaseCast
-    """
-    cast_registry.register(name, cast_class)
-
-
-def get_cast_instance(cast_definition: str):
-    """
-    Convenience function to get a cast instance.
-
-    Args:
-        cast_definition: Cast definition string
-
-    Returns:
-        Cast instance or None
-    """
-    return cast_registry.get_cast_instance(cast_definition)
-
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "BaseCast": (".BaseCast", "BaseCast"),
+}
 
 __all__ = [
     "ArrayCast",
@@ -177,8 +182,9 @@ __all__ = [
     "TokenCast",
     "URLCast",
     "UUIDCast",
-    "cast_registry",
     "cast_value",
     "get_cast_instance",
     "register_cast",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

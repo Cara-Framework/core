@@ -10,239 +10,16 @@ Supports Laravel-style cache tags and cache locks for distributed systems.
 from __future__ import annotations
 
 import logging
+import time as _time
 from collections.abc import Callable
 from typing import Any
 
 from cara.exceptions import DriverNotRegisteredException
 
+from .CacheLock import CacheLock
+from .CacheTaggedStore import CacheTaggedStore
+
 _logger = logging.getLogger("cara.cache")
-
-
-class CacheLock:
-    """
-    Distributed lock using cache.
-
-    Prevents race conditions in distributed systems using cache as storage.
-    """
-
-    def __init__(
-        self,
-        cache,
-        key: str,
-        timeout: int = 86400,
-        owner: str | None = None,
-        *,
-        exact_key: bool = False,
-    ):
-        """
-        Initialize a cache lock.
-
-        Owner default: a unique per-instance string. The previous default of
-        ``"default"`` collided across processes — process B could ``release``
-        process A's lock because both stored the literal string ``"default"``
-        as the owner field, and ``forget_if(key, "default")`` matched. Now
-        every CacheLock instance gets ``f"{pid}:{uuid}"`` so cross-process
-        ownership is unambiguous.
-
-        Args:
-            cache: Cache driver instance
-            key: Lock key
-            timeout: Lock timeout in seconds (default: 24 hours)
-            owner: Lock owner identifier (for distinguishing lock holders).
-                Pass an explicit value when multiple coroutines / threads
-                share the same lock and you want the same owner to be able
-                to re-acquire / release. Otherwise leave None for a unique
-                per-instance owner.
-            exact_key: Keep ``key`` byte-for-byte instead of adding the
-                conventional ``lock:`` namespace. Framework callers should
-                request this through :meth:`Cache.exact_lock`; ordinary
-                :meth:`Cache.lock` names remain prefixed.
-        """
-        import os
-        import uuid as _uuid
-
-        self.cache = cache
-        self.key = key if exact_key else f"lock:{key}"
-        self.timeout = timeout
-        self.owner = owner or f"{os.getpid()}:{_uuid.uuid4().hex}"
-
-    # Spin interval between failed acquires. 100ms balances:
-    # responsiveness when the lock holder finishes quickly vs. wasted
-    # cache hits while waiting. Could be made configurable per-call,
-    # but the same number is correct for every site so far.
-    _SPIN_INTERVAL_S = 0.1
-
-    def acquire(self, timeout: int = 0) -> bool:
-        """
-        Attempt to acquire the lock (sync API).
-
-        Args:
-            timeout: Max seconds to wait for lock (0 = non-blocking)
-
-        Returns:
-            True if lock acquired, False otherwise
-
-        Async callers
-        -------------
-        ``acquire`` blocks the calling thread on its retry sleep — fine
-        from sync code (CLI commands, sync workers), but in an async
-        context it would stall the event loop. Async callers should use
-        ``await acquire_async(timeout)`` instead, which yields control
-        with ``asyncio.sleep`` so other coroutines keep making progress
-        while we wait.
-        """
-        import time
-
-        start = time.time()
-
-        while True:
-            # Try to add the lock key (only succeeds if key doesn't exist)
-            if self.cache.add(self.key, self.owner, self.timeout):
-                return True
-
-            if timeout == 0 or (time.time() - start) >= timeout:
-                return False
-
-            time.sleep(self._SPIN_INTERVAL_S)
-
-    async def acquire_async(self, timeout: int = 0) -> bool:
-        """Async-safe variant of :meth:`acquire`.
-
-        Yields the event loop on each retry interval instead of
-        blocking the worker thread. The cache primitive itself
-        (``cache.add``) is sync — that's a single fast op so it's
-        acceptable to call inline.
-        """
-        import asyncio
-        import time
-
-        start = time.time()
-
-        while True:
-            if self.cache.add(self.key, self.owner, self.timeout):
-                return True
-
-            if timeout == 0 or (time.time() - start) >= timeout:
-                return False
-
-            await asyncio.sleep(self._SPIN_INTERVAL_S)
-
-    def release(self) -> bool:
-        """Release the lock if (and only if) it is still held by this owner.
-
-        Uses ``forget_if`` so the ownership check and the delete happen as
-        a single atomic step. The previous "check then delete" pattern had
-        a TOCTOU race: between ``get`` and ``forget`` the lock could
-        expire and be reacquired by another owner whose key would then be
-        wrongly deleted.
-        """
-        forget_if = getattr(self.cache, "forget_if", None)
-        if callable(forget_if):
-            return bool(forget_if(self.key, self.owner))
-        # Fallback for drivers that haven't implemented the CAS primitive
-        # yet — preserves prior behaviour but has a TOCTOU race window.
-        # Drivers should implement ``forget_if`` for safe distributed locks.
-        import logging
-
-        logging.getLogger("cara.cache").warning(
-            "CacheLock: driver %s lacks forget_if(); using non-atomic fallback. "
-            "Implement forget_if() for safe distributed lock release.",
-            type(self.cache).__name__,
-        )
-        if self.cache.get(self.key) == self.owner:
-            return self.cache.forget(self.key)
-        return False
-
-    def __enter__(self):
-        """Sync context manager entry — raises if lock cannot be
-        acquired within ``self.timeout``.
-
-        NOTE: a 24-hour default block is a footgun when used from an
-        async handler (the sync ``acquire`` ``time.sleep``s, freezing
-        the event loop). Async callers should use ``async with`` /
-        ``acquire_async``.
-        """
-        if not self.acquire(timeout=self.timeout):
-            raise TimeoutError(
-                f"Could not acquire lock '{self.key}' within {self.timeout}s"
-            )
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Sync context manager exit."""
-        self.release()
-        return False
-
-    async def __aenter__(self):
-        """Async context manager entry — uses ``acquire_async`` so the
-        event loop keeps running while we wait."""
-        if not await self.acquire_async(timeout=self.timeout):
-            raise TimeoutError(
-                f"Could not acquire lock '{self.key}' within {self.timeout}s"
-            )
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        self.release()
-        return False
-
-
-class CacheTaggedStore:
-    """
-    Tagged cache operations.
-
-    Allows grouping cache entries by tags for bulk invalidation.
-    """
-
-    def __init__(self, cache, tags: list[str]):
-        """
-        Initialize tagged cache store.
-
-        Args:
-            cache: Cache driver instance
-            tags: List of tags to apply to operations
-        """
-        self.cache = cache
-        self.tags = tags
-
-    def _build_tagged_key(self, key: str) -> str:
-        """Build a key with tag prefix."""
-        tag_prefix = ":".join(self.tags)
-        return f"{tag_prefix}:{key}"
-
-    def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
-        """Get value from tagged cache."""
-        return self.cache.get(self._build_tagged_key(key), default, strict=strict)
-
-    def put(
-        self,
-        key: str,
-        value: Any,
-        ttl: int | None = None,
-        *,
-        strict: bool = False,
-    ) -> None:
-        """Store value in tagged cache."""
-        self.cache.put(self._build_tagged_key(key), value, ttl, strict=strict)
-
-    def forever(self, key: str, value: Any) -> None:
-        """Store value permanently in tagged cache."""
-        self.cache.forever(self._build_tagged_key(key), value)
-
-    def forget(self, key: str) -> bool:
-        """Remove value from tagged cache."""
-        return self.cache.forget(self._build_tagged_key(key))
-
-    def pull(self, key: str, default: Any = None) -> Any:
-        """Atomically return and remove a tagged value."""
-        return self.cache.pull(self._build_tagged_key(key), default)
-
-    def flush(self) -> int:
-        """Flush all entries with these tags."""
-        # Flush all keys matching tag pattern
-        pattern = f"{':'.join(self.tags)}:*"
-        return self.cache.forget_pattern(pattern)
 
 
 class Cache:
@@ -284,7 +61,7 @@ class Cache:
         default: Any = None,
         driver_name: str | None = None,
         *,
-        strict: bool = False,
+        strict: bool = True,
     ) -> Any:
         """Retrieve a value from cache via the given driver (or default)."""
         return self.driver(driver_name).get(key, default, strict=strict)
@@ -296,7 +73,7 @@ class Cache:
         ttl: int | None = None,
         driver_name: str | None = None,
         *,
-        strict: bool = False,
+        strict: bool = True,
     ) -> None:
         """Store a value under `key` with optional TTL (seconds) via the given driver."""
         self.driver(driver_name).put(key, value, ttl, strict=strict)
@@ -370,6 +147,7 @@ class Cache:
         driver_name: str | None = None,
         *,
         stampede_lock_seconds: int = 30,
+        strict: bool = True,
     ) -> Any:
         """Get value from cache or execute callback and cache the result.
 
@@ -387,43 +165,41 @@ class Cache:
         for the winner's result; on timeout they fall back to running
         the callback themselves rather than serving wrong-or-empty.
 
-        Apps that don't want this behaviour (rare — only when the
-        callback is cheap and uncacheable) can pass
-        ``stampede_lock_seconds=0`` to disable the lock entirely.
+        The lock is part of the cache contract; callers cannot disable it.
+        Invalid timeouts and drivers without the atomic ``add`` primitive are
+        rejected instead of quietly reintroducing a thundering herd.
+
+        ``strict=True`` is the authority default: backend/integrity failures
+        propagate. A caller whose source of truth is the callback may choose
+        ``strict=False``; an unavailable cache then executes the callback and
+        returns its result without pretending anything was cached.
         """
+        if (
+            not isinstance(stampede_lock_seconds, int)
+            or isinstance(stampede_lock_seconds, bool)
+            or stampede_lock_seconds <= 0
+        ):
+            raise ValueError("stampede_lock_seconds must be a positive integer")
         driver = self.driver(driver_name)
+
+        def compute_without_cache() -> Any:
+            value = callback()
+            try:
+                driver.put(key, value, ttl, strict=False)
+            except Exception:
+                _logger.warning(
+                    "disposable cache write failed for %s", key, exc_info=True
+                )
+            return value
 
         # Fast path — hit. No lock needed when we have a value already.
         _missing = object()
-        cached = driver.get(key, _missing)
+        cached = driver.get(key, _missing, strict=strict)
         if cached is not _missing:
             return cached
 
-        # Drivers without ``add`` can't gate the regen with a lock.
-        # Fall back to the un-protected behaviour the original
-        # ``remember`` had.
-        if stampede_lock_seconds <= 0 or not hasattr(driver, "add"):
-            return driver.remember(key, ttl, callback)
-
-        def compute_without_stampede_lock() -> Any:
-            """Compute when the lock backend itself is unavailable.
-
-            A raised ``add`` is not lock contention. Waiting for a winner in
-            that state can never succeed and turns a cache outage into a
-            request-wide ``stampede_lock_seconds`` delay. Keep the application
-            available by computing once without the distributed lock; cache
-            writes remain best-effort because the same backend is already known
-            to be unhealthy.
-            """
-            value = callback()
-            try:
-                driver.put(key, value, ttl)
-            except Exception:
-                _logger.debug(
-                    "cache write after stampede lock failure failed",
-                    exc_info=True,
-                )
-            return value
+        if not callable(getattr(driver, "add", None)):
+            raise RuntimeError("Cache driver does not support atomic add")
 
         # Try to claim the regen slot. ``add`` is atomic on every
         # driver in this codebase (Redis SET NX, file driver O_EXCL).
@@ -431,13 +207,14 @@ class Cache:
         try:
             won = driver.add(lock_key, "1", stampede_lock_seconds)
         except Exception:
-            _logger.debug("stampede lock acquisition failed", exc_info=True)
-            return compute_without_stampede_lock()
+            if strict:
+                raise
+            return compute_without_cache()
 
         if won:
             try:
                 value = callback()
-                driver.put(key, value, ttl)
+                driver.put(key, value, ttl, strict=strict)
                 return value
             finally:
                 # Release the regen slot; another future expiry
@@ -464,11 +241,10 @@ class Cache:
         # exactly ONE loser re-claim the slot via ``add`` and become
         # the secondary winner; the other losers see the lock taken
         # again and keep polling for the secondary winner's result.
-        import time as _time
 
         deadline = _time.time() + stampede_lock_seconds
         while _time.time() < deadline:
-            cached = driver.get(key, _missing)
+            cached = driver.get(key, _missing, strict=strict)
             if cached is not _missing:
                 return cached
             # Lock state probe. ``add`` is the canonical atomic
@@ -482,12 +258,13 @@ class Cache:
             try:
                 re_won = driver.add(lock_key, "1", stampede_lock_seconds)
             except Exception:
-                _logger.debug("stampede lock acquisition failed", exc_info=True)
-                return compute_without_stampede_lock()
+                if strict:
+                    raise
+                return compute_without_cache()
             if re_won:
                 try:
                     value = callback()
-                    driver.put(key, value, ttl)
+                    driver.put(key, value, ttl, strict=strict)
                     return value
                 finally:
                     try:
@@ -502,7 +279,7 @@ class Cache:
         # rather than return None — the caller's contract is "you'll
         # get the value or this raises".
         value = callback()
-        driver.put(key, value, ttl)
+        driver.put(key, value, ttl, strict=strict)
         return value
 
     def remember_with_negative(
@@ -514,6 +291,7 @@ class Cache:
         driver_name: str | None = None,
         *,
         sentinel: Any = "",
+        strict: bool = True,
     ) -> Any | None:
         """Like remember(), but stores a sentinel on cache-miss to prevent repeated computation.
 
@@ -522,15 +300,15 @@ class Cache:
         driver = self.driver(driver_name)
 
         _missing = object()
-        cached = driver.get(key, _missing)
+        cached = driver.get(key, _missing, strict=strict)
         if cached is not _missing:
             return None if cached == sentinel else cached
 
         result = callback()
         if result is not None:
-            driver.put(key, result, hit_ttl)
+            driver.put(key, result, hit_ttl, strict=strict)
         else:
-            driver.put(key, sentinel, miss_ttl)
+            driver.put(key, sentinel, miss_ttl, strict=strict)
         return result
 
     def forget_pattern(self, pattern: str, driver_name: str | None = None) -> int:
@@ -571,20 +349,11 @@ class Cache:
         full window length regardless of when in the window the bucket
         filled.
 
-        Drivers that don't expose TTL (e.g. ``NullCacheDriver``) should
-        return ``None`` from ``ttl(...)``. The wrapper falls back to
-        ``None`` if the driver lacks the method, so callers don't need
-        to feature-detect.
+        Every registered driver implements this contract. Backend failures
+        propagate so security authorities cannot confuse an outage with a
+        legitimately absent key.
         """
-        driver = self.driver(driver_name)
-        ttl_fn = getattr(driver, "ttl", None)
-        if not callable(ttl_fn):
-            return None
-        try:
-            return ttl_fn(key)
-        except Exception:
-            _logger.warning("ttl() lookup failed", exc_info=True)
-            return None
+        return self.driver(driver_name).ttl(key)
 
     def increment(
         self,

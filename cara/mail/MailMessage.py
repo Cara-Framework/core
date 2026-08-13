@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from email.utils import formataddr
 
+from cara.facades import Log, Queue
+from cara.mail.jobs import SendMailableJob
 from cara.mail.Mailable import Mailable
 
 
@@ -107,9 +109,6 @@ class MailMessage:
         Queue the message for background processing.
         """
         try:
-            from cara.facades import Queue
-            from cara.mail.jobs import SendMailableJob
-
             # Build the mailable first to avoid references issues
             self.mailable.set_application(self.manager.application)
             self.mailable.build()
@@ -123,7 +122,5 @@ class MailMessage:
             return True
 
         except Exception as e:
-            from cara.facades import Log
-
             Log.error("Failed to queue mail message: %s", e, exc_info=True)
             return False

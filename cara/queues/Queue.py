@@ -52,22 +52,6 @@ class Queue:
         driver = self.driver(driver_name)
         return driver.push(*jobs, options=options)
 
-    def consume(
-        self,
-        driver_name: str | None = None,
-        **options: Any,
-    ) -> None:
-        driver = self.driver(driver_name)
-        driver.consume(options=options)
-
-    def retry(
-        self,
-        driver_name: str | None = None,
-        **options: Any,
-    ) -> None:
-        driver = self.driver(driver_name)
-        driver.retry(options=options)
-
     def chain(
         self,
         jobs: list,
@@ -107,10 +91,7 @@ class Queue:
         driver_name: str | None = None,
         **options: Any,
     ):
-        """Dispatch a job with a delay — Laravel ``Queue::later()`` parity.
-
-        Delegates to the active driver's ``later()`` method if available,
-        otherwise falls back to ``schedule()``/``dispatch_after()``.
+        """Dispatch a job with a delay through the driver's required primitive.
 
         Args:
             delay: Delay in seconds (or a ``pendulum.Duration``).
@@ -118,10 +99,7 @@ class Queue:
             driver_name: Optional driver name override.
         """
         drv = self.driver(driver_name)
-        if hasattr(drv, "later"):
-            return drv.later(delay, job, options)
-        # Fallback for drivers that only expose schedule()
-        return self.schedule(job, delay, driver_name=driver_name, **options)
+        return drv.later(delay, job, options)
 
     def dispatch(
         self,

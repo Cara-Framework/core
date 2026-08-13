@@ -164,7 +164,7 @@ EVENT_ORDER = {
 }
 
 
-def get_model_events(model_class) -> dict:
+def _get_model_events(model_class) -> dict:
     """
     Discover and return all event listeners for a model class.
 

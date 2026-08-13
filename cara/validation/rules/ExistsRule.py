@@ -13,7 +13,7 @@ from typing import Any
 
 from cara.exceptions import ConfigurationException
 from cara.support import ModuleManager
-from cara.validation import MessageFormatter
+from cara.validation.MessageFormatter import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
 
 # Only allow safe SQL identifiers: letters, digits, underscores.

@@ -61,37 +61,63 @@ _WRITE_SQL = re.compile(
 _SQL_NON_TABLE_TOKENS = frozenset({"returning", "set", "values", "where"})
 
 
+def _model_roots(manifest: Manifest) -> tuple[Path, ...]:
+    """Every schema-declaring model root visible to this deployable.
+
+    Product models live in the kernel during development. Cara's own queue
+    and schema-ledger models live under the framework package. Both are real
+    models and therefore pay the same ownership rule; neither needs a
+    "model-less" escape list.
+    """
+
+    roots: list[Path] = []
+    product_models = manifest.roots.kernel.get("models")
+    if product_models is not None:
+        roots.append(product_models)
+    framework_models = (
+        manifest.roots.deployable / manifest.roots.framework_root_name / "models"
+    )
+    if framework_models.is_dir():
+        roots.append(framework_models)
+    return tuple(roots)
+
+
 def _model_tables(manifest: Manifest) -> tuple[dict[str, str], dict[str, str]]:
     by_class: dict[str, str] = {}
     by_table: dict[str, str] = {}
-    root = manifest.roots.kernel.get("models")
-    if root is None or not root.is_dir():
-        return by_class, by_table
-    for path in python_files(root):
-        tree = parse(path)
-        if tree is None:
-            continue
-        for node in tree.body:
-            if not isinstance(node, ast.ClassDef):
+    seen: set[Path] = set()
+    for root in _model_roots(manifest):
+        for path in python_files(root):
+            resolved = path.resolve()
+            if resolved in seen:
                 continue
-            table: str | None = None
-            for item in node.body:
-                if not isinstance(item, (ast.Assign, ast.AnnAssign)):
-                    continue
-                targets = item.targets if isinstance(item, ast.Assign) else [item.target]
-                value = item.value
-                if not any(
-                    isinstance(target, ast.Name) and target.id == "__table__"
-                    for target in targets
-                ):
-                    continue
-                if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                    table = value.value
-                    break
-            if table is None:
+            seen.add(resolved)
+            tree = parse(path)
+            if tree is None:
                 continue
-            by_class[node.name] = table
-            by_table[table] = node.name
+            for node in tree.body:
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                table: str | None = None
+                for item in node.body:
+                    if not isinstance(item, (ast.Assign, ast.AnnAssign)):
+                        continue
+                    targets = (
+                        item.targets if isinstance(item, ast.Assign) else [item.target]
+                    )
+                    value = item.value
+                    if not any(
+                        isinstance(target, ast.Name) and target.id == "__table__"
+                        for target in targets
+                    ):
+                        continue
+                    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                        table = value.value
+                        break
+                if table is None:
+                    continue
+                by_class[node.name] = table
+                by_table[table] = node.name
     return by_class, by_table
 
 
@@ -280,9 +306,7 @@ class WriteOwnership:
                     f"model table {table!r} has no write owner",
                 )
             )
-        stale = sorted(
-            set(ownership) - set(declared_models) - manifest.model_less_write_tables
-        )
+        stale = sorted(set(ownership) - set(declared_models))
         for table in stale:
             findings.append(
                 Finding(

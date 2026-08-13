@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from cara.http import Request, Response
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
 
 
 class TrimStrings(Middleware):

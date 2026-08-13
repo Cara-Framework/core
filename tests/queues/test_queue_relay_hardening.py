@@ -7,10 +7,8 @@ from types import SimpleNamespace
 import pendulum
 import pytest
 
-from cara.commands.core.QueueRelayCommand import (
-    QueueHooksCommand,
-    QueueRelayCommand,
-)
+from cara.commands.core.QueueHooksCommand import QueueHooksCommand
+from cara.commands.core.QueueRelayCommand import QueueRelayCommand
 from cara.commands.core.QueueStatsCommand import QueueStatsCommand
 from cara.exceptions import QueueException
 from cara.queues.delivery import QueueJobDeliveryStore

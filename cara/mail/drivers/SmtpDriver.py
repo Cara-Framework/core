@@ -16,6 +16,7 @@ distinction is how a bad address turns into three duplicate deliveries.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import smtplib
 import ssl
@@ -26,7 +27,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
 
-from cara.mail.contracts import Mail
+from cara.facades import Log
+from cara.mail.contracts import MailContract
 from cara.mail.Mailable import validate_custom_header
 
 #: Failures where the message is fine and the peer is momentarily
@@ -51,7 +53,7 @@ PERMANENT_SMTP_ERRORS: tuple[type[Exception], ...] = (
 )
 
 
-class SmtpDriver(Mail):
+class SmtpDriver(MailContract):
     driver_name = "smtp"
 
     #: Total attempts for a transient failure, and the base of the
@@ -235,9 +237,5 @@ class SmtpDriver(Mail):
 
     def _log_error(self, message: str, error: Exception) -> None:
         """Log SMTP errors via the framework logger with stderr fallback."""
-        try:
-            from cara.facades import Log
-
+        with contextlib.suppress(ImportError, RuntimeError):
             Log.error("%s: %s", message, error, category="cara.mail.smtp", exc_info=True)
-        except ImportError:
-            pass

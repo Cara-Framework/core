@@ -20,25 +20,24 @@ _on_error_hooks: list[Callable[[str, Exception], None]] = []
 
 
 def command(
-    name: str, help: str = "", options: dict[str, str] | None = None
+    name: str,
+    help: str = "",
+    options: list[dict[str, Any]] | None = None,
 ) -> Callable[[type[Any]], type[Any]]:
     """
     Decorator to mark a class as a CLI command.
 
     name: command name
     help: description text
-    options: mapping of option definitions to their help text.
-             Key examples:
-               "--m|migration=all": "Migration name to run"
-               "--f|force": "Force migrations without prompt"
-               "--schema=?": "Schema to migrate, optional value"
-             Value: help description string.
+    options: explicit option metadata. Value options declare a real Python
+             ``type``; switches declare ``is_flag=True``. Defaults are
+             carried in ``default`` rather than encoded in the option name.
     """
 
     def decorator(cls: type[Any]) -> type[Any]:
         cls.name = name
         cls.help = help
-        cls._cli_options = options or {}
+        cls._cli_options = list(options or [])
         _command_registry.append(cls)
         _wrap_init(cls)
         _wrap_handle(cls)

@@ -51,9 +51,12 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from cara.commands import CommandBase, missing_optional
+from cara.commands.CommandBase import CommandBase
+from cara.commands.OptionalDependencyError import missing_optional
 from cara.configuration import config
 from cara.decorators import command
+from cara.eloquent.migrations.MigrationGenerator import _atomic_write
+from cara.support import paths
 
 
 @command(
@@ -71,15 +74,36 @@ from cara.decorators import command
         "refuse in production — the deployed schema evolves through the "
         "evolve workflow, never by regeneration."
     ),
-    options={
-        "--overwrite": (
-            "Recreate all migrations from scratch: regenerate one file per table "
-            "and DELETE every other migration"
-        ),
-        "--force": "Skip the hand-edit confirmation prompt when --overwrite clobbers files",
-        "--style=blueprint": "Migration style (blueprint is the only supported SSOT)",
-        "--dry_run": "With --overwrite: show what would be generated without creating files",
-    },
+    options=[
+        {
+            "name": "--overwrite",
+            "help": "Recreate all migrations from scratch: regenerate one file per table and DELETE every other migration",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Skip the hand-edit confirmation prompt when --overwrite clobbers files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--style",
+            "help": "Migration style (blueprint is the only supported SSOT)",
+            "type": str,
+            "default": "blueprint",
+            "is_flag": False,
+        },
+        {
+            "name": "--dry_run",
+            "help": "With --overwrite: show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MakeMigrationCommand(CommandBase):
     def __init__(self, application):
@@ -89,11 +113,13 @@ class MakeMigrationCommand(CommandBase):
         # invoked), so the module imports cleanly on a DB-less service.
         try:
             from cara.eloquent.migrations.MigrationGenerator import (
-                MigrationGenerator,
+                MigrationGenerator,  # local: heavy optional dep
             )
-            from cara.eloquent.migrations.ModelDiscoverer import ModelDiscoverer
+            from cara.eloquent.migrations.ModelDiscoverer import (
+                ModelDiscoverer,  # local: heavy optional dep
+            )
             from cara.eloquent.migrations.ModelMigrationComparator import (
-                ModelMigrationComparator,
+                ModelMigrationComparator,  # local: heavy optional dep
             )
         except ImportError as exc:
             raise missing_optional("db", exc) from exc
@@ -174,8 +200,8 @@ class MakeMigrationCommand(CommandBase):
                 continue
             drifted += 1
             if self.comparator.table_exists_in_migrations(table_name):
-                from cara.eloquent.migrations.ModelMigrationComparator import (  # local: heavy optional dep
-                    summarize_change_name,
+                from cara.eloquent.migrations.ModelMigrationComparator import (
+                    summarize_change_name,  # local: heavy optional dep
                 )
 
                 label, _ = summarize_change_name(table_name, diff)
@@ -361,8 +387,6 @@ class MakeMigrationCommand(CommandBase):
             if previous_counter is None:
                 counter_file.unlink(missing_ok=True)
             else:
-                from cara.eloquent.migrations.MigrationGenerator import _atomic_write
-
                 _atomic_write(counter_file, previous_counter.decode("utf-8"))
             self.generator.cancel_fresh_counter_batch()
             raise
@@ -373,9 +397,6 @@ class MakeMigrationCommand(CommandBase):
 
     def _migrations_dir(self):
         """Resolve the migrations directory via the paths() helper, or None."""
-        from pathlib import Path
-
-        from cara.support import paths
 
         migrations_dir = Path(paths("migrations"))
         return migrations_dir if migrations_dir.exists() else None

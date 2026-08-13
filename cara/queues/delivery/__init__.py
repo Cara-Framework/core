@@ -1,17 +1,23 @@
 """Durable AMQP delivery ledger."""
 
-from .PublicationBacklogProbe import PublicationBacklogProbe
-from .QueueJobDeliveryStore import (
-    DeliveryClaim,
-    DeliveryEnvelopeExpired,
-    DeliveryEnvelopeMismatch,
-    DeliveryLeaseLost,
-    QueueJobDeliveryStore,
-    ReplayDelivery,
-    UniqueDeliveryConflict,
-)
-from .QueueOperationsStore import QueueOperationsStore
-from .QueueOutboxHealth import QueueOutboxHealth
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "DeliveryClaim": (".DeliveryClaim", "DeliveryClaim"),
+    "DeliveryEnvelopeExpired": (".DeliveryEnvelopeExpired", "DeliveryEnvelopeExpired"),
+    "DeliveryEnvelopeMismatch": (
+        ".DeliveryEnvelopeMismatch",
+        "DeliveryEnvelopeMismatch",
+    ),
+    "DeliveryLeaseLost": (".DeliveryLeaseLost", "DeliveryLeaseLost"),
+    "PublicationBacklogProbe": (".PublicationBacklogProbe", "PublicationBacklogProbe"),
+    "QueueJobDeliveryStore": (".QueueJobDeliveryStore", "QueueJobDeliveryStore"),
+    "QueueOperationsStore": (".QueueOperationsStore", "QueueOperationsStore"),
+    "QueueOutboxHealth": (".QueueOutboxHealth", "QueueOutboxHealth"),
+    "ReplayDelivery": (".ReplayDelivery", "ReplayDelivery"),
+    "TerminalHookClaim": (".TerminalHookClaim", "TerminalHookClaim"),
+    "UniqueDeliveryConflict": (".UniqueDeliveryConflict", "UniqueDeliveryConflict"),
+}
 
 __all__ = [
     "DeliveryClaim",
@@ -23,5 +29,8 @@ __all__ = [
     "QueueOperationsStore",
     "QueueOutboxHealth",
     "ReplayDelivery",
+    "TerminalHookClaim",
     "UniqueDeliveryConflict",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

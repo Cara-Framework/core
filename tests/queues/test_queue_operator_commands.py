@@ -40,7 +40,7 @@ from cara.commands.core.QueueMonitorCommand import QueueMonitorCommand
 from cara.commands.core.QueuePurgeCommand import QueuePurgeCommand
 from cara.commands.core.QueueRetryCommand import QueueRetryCommand
 from cara.exceptions import QueueException
-from cara.queues.Topology import DEAD_LETTER_QUEUE
+from cara.queues.QueueState import DEAD_LETTER_QUEUE
 
 _STORE_MODULE = "cara.queues.delivery.QueueOperationsStore"
 

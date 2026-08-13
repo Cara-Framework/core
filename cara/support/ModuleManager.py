@@ -6,6 +6,9 @@ This module provides utilities for handling Python module imports and paths.
 
 from __future__ import annotations
 
+import importlib
+import inspect
+
 
 class ModuleManager:
     """
@@ -18,10 +21,8 @@ class ModuleManager:
     _app_module_base: str = "app"
     _routes_module_base: str = "routes"
     _config_module_base: str = "config"
-    # Models live in the shared ``commons.models`` package so both deployables
-    # (api/, services/) import IDENTICAL classes. This is therefore configured
-    # independently of the (per-deployable) app base. Config-overridable.
-    _models_module_base: str = "commons.models"
+    # Product code has one runtime namespace in development and production.
+    _models_module_base: str = "app.models"
 
     @staticmethod
     def set_app_module_base(module_path: str) -> None:
@@ -30,12 +31,7 @@ class ModuleManager:
 
     @staticmethod
     def set_models_module_base(module_path: str) -> None:
-        """Set the base module path for models (default: 'commons.models').
-
-        The shared models package is not derived from the app base — product
-        Kernels may point this elsewhere, but the framework default is the
-        cross-deployable ``commons.models``.
-        """
+        """Set the product's canonical runtime models barrel."""
         ModuleManager._models_module_base = module_path
 
     @staticmethod
@@ -67,12 +63,7 @@ class ModuleManager:
 
     @staticmethod
     def models_module() -> str:
-        """Return the models module path (default: 'commons.models').
-
-        Deliberately NOT derived from the app base: models are shared across
-        the api and services deployables via ``commons.models`` so both import
-        identical classes. Config-overridable via ``set_models_module_base``.
-        """
+        """Return the models barrel (default: ``app.models``)."""
         return ModuleManager._models_module_base
 
     @staticmethod
@@ -163,7 +154,6 @@ class ModuleManager:
     @staticmethod
     def import_module(module_path: str):
         """Dynamically import a module by its path."""
-        import importlib
 
         return importlib.import_module(module_path)
 
@@ -179,38 +169,29 @@ class ModuleManager:
     @staticmethod
     def get_module_classes(module_path: str, base_class=None):
         """Get all classes from a module, optionally filtered by base class."""
-        import inspect
 
-        try:
-            module = ModuleManager.import_module(module_path)
-            classes = []
+        module = ModuleManager.import_module(module_path)
+        classes = []
 
-            for _name, cls in inspect.getmembers(module, inspect.isclass):
-                # Include classes from this module or its submodules
-                if cls.__module__.startswith(module.__name__) and (
-                    base_class is None
-                    or (issubclass(cls, base_class) and cls != base_class)
-                ):
-                    classes.append(cls)
+        for _name, cls in inspect.getmembers(module, inspect.isclass):
+            # Include classes from this module or its submodules
+            if cls.__module__.startswith(module.__name__) and (
+                base_class is None or (issubclass(cls, base_class) and cls != base_class)
+            ):
+                classes.append(cls)
 
-            return classes
-        except ImportError:
-            return []
+        return classes
 
     @staticmethod
     def get_module_functions(module_path: str):
         """Get all functions from a module."""
-        import inspect
 
-        try:
-            module = ModuleManager.import_module(module_path)
-            functions = []
+        module = ModuleManager.import_module(module_path)
+        functions = []
 
-            for _name, func in inspect.getmembers(module, inspect.isfunction):
-                # Only include functions defined in this module
-                if func.__module__ == module.__name__:
-                    functions.append(func)
+        for _name, func in inspect.getmembers(module, inspect.isfunction):
+            # Only include functions defined in this module
+            if func.__module__ == module.__name__:
+                functions.append(func)
 
-            return functions
-        except ImportError:
-            return []
+        return functions

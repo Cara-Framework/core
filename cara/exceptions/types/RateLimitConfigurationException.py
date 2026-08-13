@@ -1,0 +1,20 @@
+"""
+Rate-limit configuration exception for the Cara framework.
+
+This module defines exception types related to rate limiting operations.
+"""
+
+from __future__ import annotations
+
+from .CaraException import CaraException
+
+
+class RateLimitConfigurationException(CaraException):
+    """Thrown when rate‐limit configuration is missing or invalid."""
+
+    pass
+
+
+__all__ = [
+    "RateLimitConfigurationException",
+]

@@ -14,8 +14,7 @@ import threading
 from typing import Any
 
 from cara.container import Container
-from cara.environment import LoadEnvironment
-from cara.exceptions.types.Base import CaraException
+from cara.environment import LoadEnvironment, PathManager
 
 # Direct module imports — NOT ``from cara.foundation import ...``. Application
 # is imported by ``cara.foundation.__init__`` BEFORE that package binds the
@@ -25,7 +24,15 @@ from cara.exceptions.types.Base import CaraException
 # immune to ``__init__`` import ordering.
 from cara.foundation.DeferredProvider import DeferredProvider
 from cara.foundation.Provider import Provider
-from cara.support.PathManager import PathManager
+
+
+def _cara_exception(message: str):
+    """Construct the framework root error after foundation boot completes."""
+    from cara.exceptions.types.CaraException import (  # local: cycle with cara.exceptions
+        CaraException,
+    )
+
+    return CaraException(message)
 
 
 class Application(Container):
@@ -208,14 +215,16 @@ class Application(Container):
         try:
             self.router = self.make("router")
         except Exception as e:
-            from cara.exceptions import CaraException, RouteRegistrationException
+            from cara.exceptions import (  # local: cycle with cara.exceptions
+                RouteRegistrationException,
+            )
 
             if isinstance(e, RouteRegistrationException):
-                raise CaraException(
+                raise _cara_exception(
                     f"Application startup failed due to route configuration: {e}"
                 ) from e
             else:
-                raise CaraException(f"Application startup failed: {e}") from e
+                raise _cara_exception(f"Application startup failed: {e}") from e
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         """ASGI application interface: delegate to HTTP or lifespan conductor."""
@@ -228,16 +237,16 @@ class Application(Container):
         # Request by string "http_conductor" → may register that deferred provider now
         self.http_conductor = self.make("http_conductor")
         if not self.http_conductor:
-            raise CaraException("HTTP conductor must be registered.")
+            raise _cara_exception("HTTP conductor must be registered.")
 
         # Request by string "lifespan_conductor" → may register that deferred provider now
         self.lifespan_conductor = self.make("lifespan_conductor")
         if not self.lifespan_conductor:
-            raise CaraException("Lifespan conductor must be registered.")
+            raise _cara_exception("Lifespan conductor must be registered.")
 
         self.websocket_conductor = self.make("websocket_conductor")
         if not self.websocket_conductor:
-            raise CaraException("Websocket conductor must be registered.")
+            raise _cara_exception("Websocket conductor must be registered.")
 
     def add_app_to_scope(self, scope: dict) -> None:
         """Attach application instance into ASGI scope for middleware/handlers."""

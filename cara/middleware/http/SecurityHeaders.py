@@ -28,44 +28,15 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from cara.configuration import config
 from cara.facades import Log
 from cara.http import Request, Response
-from cara.middleware import Middleware
-from cara.security.TrustedProxies import peer_is_trusted_proxy
+from cara.security import peer_is_trusted_proxy
 
-_DEFAULT_HEADERS: dict[str, str] = {
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-    # Disable features the JSON API has no reason to use; reduces the
-    # blast radius if an attacker ever tricks a browser into rendering a
-    # response as HTML.
-    "Permissions-Policy": (
-        "accelerometer=(), autoplay=(), camera=(), geolocation=(), "
-        "gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
-    ),
-    "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Resource-Policy": "same-site",
-    # X-XSS-Protection is legacy; explicit "0" tells old browsers to use
-    # the default CSP-based protections instead of their heuristic filter.
-    "X-XSS-Protection": "0",
-    # Strict CSP for the JSON API: the responses are never expected to
-    # be rendered as a document, so we deny every content type by
-    # default. If any path ever does return HTML (rendered error page,
-    # admin export view) and needs assets, override via the
-    # ``security.security.headers`` config block. ``frame-ancestors
-    # 'none'`` is a modern X-Frame-Options replacement.
-    "Content-Security-Policy": (
-        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-    ),
-    # Block legacy Adobe Flash / Acrobat cross-domain policy lookups
-    # — they're a tiny attack surface but the header is free.
-    "X-Permitted-Cross-Domain-Policies": "none",
-}
-
-# HSTS — only added when request is HTTPS. 6 months + includeSubDomains.
-_DEFAULT_HSTS = "max-age=15552000; includeSubDomains"
+from ..Middleware import Middleware
+from ._SecurityHeaderPolicy import (
+    _load_security_header_policy,
+    _scope_is_https,
+)
 
 
 class SecurityHeaders(Middleware):
@@ -77,32 +48,13 @@ class SecurityHeaders(Middleware):
         self._headers, self._hsts, self._hsts_preload = self._load_config()
 
     def _load_config(self):
-        headers = dict(_DEFAULT_HEADERS)
-        hsts: str | None = _DEFAULT_HSTS
-        preload = False
-
         try:
-            overrides = config("security.security.headers")
-            if isinstance(overrides, dict):
-                for k, v in overrides.items():
-                    if v is None:
-                        headers.pop(k, None)
-                    else:
-                        headers[k] = str(v)
-
-            custom_hsts = config("security.security.hsts")
-            if custom_hsts is None:
-                hsts = None
-            elif isinstance(custom_hsts, str):
-                hsts = custom_hsts
-
-            preload = bool(config("security.security.hsts_preload", False))
+            return _load_security_header_policy()
         except Exception as e:
             self._log_debug(
                 f"SecurityHeaders: failed to load config ({e.__class__.__name__}: {e})"
             )
-
-        return headers, hsts, preload
+            return _load_security_header_policy(lambda _key, default=None: default)
 
     async def handle(
         self, request: Request, next_fn: Callable[..., Awaitable[Any]]
@@ -144,20 +96,7 @@ class SecurityHeaders(Middleware):
         """
         try:
             scope = getattr(request, "scope", None) or {}
-            scheme = scope.get("scheme")
-            if isinstance(scheme, str) and scheme.lower() == "https":
-                return True
-
-            if self._peer_is_trusted_proxy(scope):
-                forwarded_proto = request.header("X-Forwarded-Proto")
-                if (
-                    isinstance(forwarded_proto, str)
-                    and forwarded_proto.split(",")[0].strip().lower() == "https"
-                ):
-                    return True
-                forwarded = request.header("Forwarded")
-                if isinstance(forwarded, str) and "proto=https" in forwarded.lower():
-                    return True
+            return _scope_is_https(scope)
         except Exception as e:
             self._log_debug(
                 f"SecurityHeaders: HTTPS detection raised ({e.__class__.__name__}: {e})"

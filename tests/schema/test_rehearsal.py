@@ -12,10 +12,15 @@ behind, and a failing rehearsal fails the command.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
+import cara.schema.Scratch as Scratch
 from cara.exceptions import ScratchDatabaseException
-from cara.schema import ADDITIVE, Operation, Scratch
+from cara.schema import ADDITIVE, Operation
+
+_PLAN_MODULE = importlib.import_module("cara.commands.core.SchemaPlanCommand")
 
 
 def _operation(key="users.phone"):
@@ -52,30 +57,30 @@ class _Plan:
         self.craft: list[list[str]] = []
 
     def install(self, monkeypatch):
-        import cara.commands.core.SchemaPlanCommand as module
-
         monkeypatch.setattr(
-            module.Scratch,
+            _PLAN_MODULE.Scratch,
             "connection_params",
             lambda config: {"database": "synkronus", "host": "h", "user": "u"},
         )
         monkeypatch.setattr(
-            module.Scratch, "recreate", lambda p, n: self.created.append(n)
+            _PLAN_MODULE.Scratch, "recreate", lambda p, n: self.created.append(n)
         )
-        monkeypatch.setattr(module.Scratch, "drop", lambda p, n: self.dropped.append(n))
+        monkeypatch.setattr(
+            _PLAN_MODULE.Scratch, "drop", lambda p, n: self.dropped.append(n)
+        )
 
         def _clone(params, source, name):
             if self.prepare_error:
                 raise ScratchDatabaseException(self.prepare_error)
             self.cloned.append((source, name))
 
-        monkeypatch.setattr(module.Scratch, "clone_structure", _clone)
+        monkeypatch.setattr(_PLAN_MODULE.Scratch, "clone_structure", _clone)
 
         def _craft(arguments, name, cwd):
             self.craft.append(arguments)
             return self.apply_exit
 
-        monkeypatch.setattr(module.Scratch, "run_craft", _craft)
+        monkeypatch.setattr(_PLAN_MODULE.Scratch, "run_craft", _craft)
         return self
 
     def rehearse(self, operations=None):

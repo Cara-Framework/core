@@ -13,7 +13,8 @@ from typing import Any
 
 from cara.context import ExecutionContext
 from cara.http import Request, Response
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
+from cara.observability import set_request_tag
 
 
 class AttachRequestID(Middleware):
@@ -36,8 +37,6 @@ class AttachRequestID(Middleware):
             ExecutionContext.set_correlation_id(request.request_id)
 
         try:
-            from cara.observability.Sentry import set_request_tag
-
             set_request_tag("request_id", request.request_id)
         except ImportError:
             pass

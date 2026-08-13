@@ -1,15 +1,23 @@
-# Import sibling classes before the Provider: AuthorizationProvider does
-# `from cara.authorization import Gate` at module load, which returns the
-# submodule (not the class) if this package is still mid-init. Bind the
-# classes first so the Provider resolves them correctly.
-from .Gate import Gate
-from .Policy import Policy
-from .AuthorizationResponse import AuthorizationResponse
-from .AuthorizationProvider import AuthorizationProvider
+"""Authorization — layer barrel (generated, DOCTRINE §5.1)."""
+
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AuthorizationProvider": (".AuthorizationProvider", "AuthorizationProvider"),
+    "AuthorizationResponse": (".AuthorizationResponse", "AuthorizationResponse"),
+    "Gate": (".Gate", "Gate"),
+    "GateContract": (".contracts", "GateContract"),
+    "Policy": (".Policy", "Policy"),
+    "PolicyContract": (".contracts", "PolicyContract"),
+}
 
 __all__ = [
     "AuthorizationProvider",
     "AuthorizationResponse",
     "Gate",
+    "GateContract",
     "Policy",
+    "PolicyContract",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

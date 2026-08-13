@@ -7,6 +7,8 @@ Provides explicit methods with priority over intelligent detection.
 
 from __future__ import annotations
 
+import mimetypes
+import os
 from typing import Any
 
 from cara.support import json_dumps
@@ -514,8 +516,6 @@ class ResponseFactory:
             content_type: Optional content type (auto-detected if not provided)
             headers: Optional additional headers
         """
-        import mimetypes
-        import os
 
         if not os.path.isfile(file_path):
             self.response.status(404)

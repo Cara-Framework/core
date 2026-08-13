@@ -6,8 +6,9 @@ Provides Laravel-style dependency injection by analyzing method signatures and a
 from __future__ import annotations
 
 import inspect
+import typing
 from collections.abc import Callable
-from typing import Any
+from typing import Any, get_type_hints
 
 from cara.exceptions import (
     ControllerMethodNotFoundException,
@@ -57,7 +58,6 @@ class RouteResolver:
             return inspect.signature(callable_obj)
         except ValueError, TypeError:
             # Handle builtin type annotation issues
-            from typing import get_type_hints
 
             # Get function code and create safe parameters
             if hasattr(callable_obj, "__code__"):
@@ -198,7 +198,6 @@ class RouteResolver:
                 return str(value)
             elif hasattr(expected_type, "__origin__"):
                 # Handle typing generics like Optional[int], List[str], etc.
-                import typing
 
                 origin = getattr(expected_type, "__origin__", None)
                 args = getattr(expected_type, "__args__", ())

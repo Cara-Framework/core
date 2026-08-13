@@ -80,6 +80,33 @@ def test_generated_migration_rejects_model_constant_default(tmp_path):
     assert violations[0].blocks_fix
 
 
+def test_model_default_drift_is_reported(tmp_path):
+    _generated(
+        tmp_path,
+        "listing",
+        extra='            table.string("currency", 3).default("USD")',
+    )
+    model = {
+        "name": "Listing",
+        "table": "listing",
+        "has_fields_method": True,
+        "fields": {
+            "currency": {"type": "string", "params": {"length": 3}},
+        },
+    }
+
+    violations = audit_migrations(
+        tmp_path,
+        {"listing": set()},
+        model_infos=[model],
+    )
+
+    drift = [item for item in violations if item.rule == "model-schema-drift"]
+    assert len(drift) == 1
+    assert "currency (default)" in drift[0].message
+    assert not drift[0].blocks_fix
+
+
 # ── rule 1: one file per table ──────────────────────────────────────────────
 
 
@@ -410,7 +437,7 @@ def test_report_exit_codes(tmp_path):
 
     assert command._report([], table_count=3) == 0
 
-    from cara.commands.core.MigrationsCheckCommand import Violation
+    from cara.commands.core.Violation import Violation
 
     violation = Violation(
         rule="incremental-migration", path="x.py", message="m", remedy="r"

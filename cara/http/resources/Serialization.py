@@ -5,9 +5,10 @@ Eliminates duplicated opt_* functions across JsonResource and BaseResource.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
 from math import isfinite
 from typing import Any
+
+from cara.support import iso_datetime
 
 
 def opt_float(value: Any) -> float | None:
@@ -115,32 +116,7 @@ def opt_datetime(value: Any) -> str | None:
     raw ``DB.select`` row) are normalised to ISO 8601 with a UTC
     suffix; Safari historically rejects the space-separated form.
     """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=UTC)
-        return value.isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    s = str(value).strip() if value else None
-    if not s:
-        return None
-    if len(s) == 10 and s[4] == "-" and s[7] == "-":
-        try:
-            date.fromisoformat(s)
-            return s
-        except ValueError:
-            pass
-    try:
-        parsed = datetime.fromisoformat(s.replace(" ", "T", 1))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        return parsed.isoformat()
-    except ValueError:
-        return s
+    return iso_datetime(value)
 
 
 def opt_bool(value: Any, default: bool | None = None) -> bool | None:

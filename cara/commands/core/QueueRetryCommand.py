@@ -21,23 +21,53 @@ from __future__ import annotations
 
 import getpass
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import QueueException
 from cara.facades import Log
-from cara.queues.delivery.QueueOperationsStore import QueueOperationsStore
+from cara.queues import QueueOperationsStore
 
 
 @command(
     name="queue:retry",
     help="Replay dead-lettered/expired deliveries via the audited ledger rail",
-    options={
-        "--job-id=?": "Ledger job_id (UUID) of one delivery to replay",
-        "--queue=?": "Replay dead-lettered deliveries for one queue",
-        "--all": "Replay dead-lettered deliveries across every queue",
-        "--limit=50": "Max deliveries to replay in one run",
-        "--reason=manual queue:retry": "Audit reason recorded on each replay",
-    },
+    options=[
+        {
+            "name": "--job-id",
+            "help": "Ledger job_id (UUID) of one delivery to replay",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--queue",
+            "help": "Replay dead-lettered deliveries for one queue",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--all",
+            "help": "Replay dead-lettered deliveries across every queue",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--limit",
+            "help": "Max deliveries to replay in one run",
+            "type": int,
+            "default": 50,
+            "is_flag": False,
+        },
+        {
+            "name": "--reason",
+            "help": "Audit reason recorded on each replay",
+            "type": str,
+            "default": "manual queue:retry",
+            "is_flag": False,
+        },
+    ],
 )
 class QueueRetryCommand(CommandBase):
     """Replay terminal ledger deliveries back onto their canonical queues."""

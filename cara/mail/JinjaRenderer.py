@@ -20,6 +20,8 @@ from typing import Any
 
 import jinja2
 
+from cara.support import paths
+
 # Cache one Environment per resolved search-path tuple. Building a
 # FileSystemLoader + parsing templates is non-trivial; mail send paths
 # (and the queue worker) render the same handful of templates repeatedly.
@@ -41,8 +43,6 @@ def _view_dirs(application) -> list[str]:
         dirs = []
     if not dirs:
         try:
-            from cara.support import paths
-
             dirs = [paths("views")]
         except Exception:
             dirs = []

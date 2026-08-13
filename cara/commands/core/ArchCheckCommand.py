@@ -17,19 +17,31 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.architecture.Manifest import Manifest
+from cara.architecture import Manifest
 from cara.architecture.scanners import REGISTRY
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 
 
 @command(
     name="arch:check",
     help="Run the DOCTRINE Guard Pack scanners against this product's architecture manifest.",
-    options={
-        "--manifest=?": "Path to architecture_manifest.py (default: app/architecture_manifest.py)",
-        "--scanner=?": "Run only these scanners (comma-separated names; default: all)",
-    },
+    options=[
+        {
+            "name": "--manifest",
+            "help": "Path to architecture_manifest.py (default: app/architecture_manifest.py)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--scanner",
+            "help": "Run only these scanners (comma-separated names; default: all)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class ArchCheckCommand(CommandBase):
     """Boot-free Guard Pack runner: manifest + pure-AST scanners only."""

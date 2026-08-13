@@ -37,6 +37,8 @@ import fnmatch
 import re
 from typing import Any
 
+import cara.configuration as configuration
+
 #: Every ``cors.cors.*`` key the framework understands, with the default it
 #: falls back to when the product ships no ``config/cors.py`` entry.
 #:
@@ -65,10 +67,10 @@ def load_cors_policy() -> dict[str, Any]:
     into a wildcard: a policy we could not read is not a policy that allows
     everyone.
     """
-    from cara.configuration import config
 
     return {
-        key: config(f"cors.cors.{key}", default) for key, default in CORS_DEFAULTS.items()
+        key: configuration.config(f"cors.cors.{key}", default)
+        for key, default in CORS_DEFAULTS.items()
     }
 
 

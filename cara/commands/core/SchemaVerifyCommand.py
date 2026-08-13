@@ -40,10 +40,10 @@ the repository, and the place to prove it is a disposable database.
 
 from __future__ import annotations
 
+import cara.schema.Scratch as Scratch
 from cara.commands.CommandBase import CommandBase
 from cara.configuration import config
 from cara.decorators import command
-from cara.schema import Scratch
 from cara.support import base_path
 
 #: Scratch names are interpolated into DDL as identifiers; keep them boring
@@ -65,10 +65,22 @@ def _derive_scratch_name(configured: str) -> str:
         "equals the models' schema. The scratch is dropped afterwards "
         "(--keep preserves it for autopsy). Development-only, Postgres-only."
     ),
-    options={
-        "--keep": "Keep the scratch database after the run (for autopsy)",
-        "--database=?": "Scratch database name (default: <configured>_verify)",
-    },
+    options=[
+        {
+            "name": "--keep",
+            "help": "Keep the scratch database after the run (for autopsy)",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--database",
+            "help": "Scratch database name (default: <configured>_verify)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class SchemaVerifyCommand(CommandBase):
     def handle(self):

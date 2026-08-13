@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
+from cara.exceptions import ConfigurationException, InvalidArgumentException
 from cara.notifications.channels.BaseChannel import BaseChannel
 from cara.notifications.UnsubscribeToken import mint as mint_unsubscribe_token
 
@@ -22,6 +23,15 @@ class MailChannel(BaseChannel):
     """
 
     channel_name = "mail"
+    _LINK_SETTINGS = frozenset(
+        {
+            "app.frontend_url",
+            "app.preferences_url",
+            "app.unsubscribe_confirm_url",
+            "app.unsubscribe_secret",
+            "app.unsubscribe_url",
+        }
+    )
 
     def __init__(
         self,
@@ -29,6 +39,8 @@ class MailChannel(BaseChannel):
         from_address: str | None = None,
         from_name: str | None = None,
         reply_to: str | None = None,
+        *,
+        link_settings: dict[str, str | None],
     ):
         """
         Initialize mail channel.
@@ -39,10 +51,30 @@ class MailChannel(BaseChannel):
             from_name: Default from name
             reply_to: Default reply-to address
         """
+        if not callable(getattr(mail_manager, "to", None)):
+            raise ConfigurationException("MailChannel requires a mail manager with to().")
         self.mail_manager = mail_manager
-        self.from_address = from_address
-        self.from_name = from_name
-        self.reply_to = reply_to
+        self.from_address = self._optional_text(from_address, "from_address")
+        self.from_name = self._optional_text(from_name, "from_name")
+        self.reply_to = self._optional_text(reply_to, "reply_to")
+        if not isinstance(link_settings, dict):
+            raise ConfigurationException(
+                "MailChannel link_settings must be a dictionary."
+            )
+        unknown = set(link_settings) - self._LINK_SETTINGS
+        if unknown:
+            raise ConfigurationException(
+                "Unknown MailChannel link settings: " + ", ".join(sorted(unknown))
+            )
+        self.link_settings: dict[str, str] = {}
+        for key, value in link_settings.items():
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationException(
+                    f"MailChannel setting {key!r} must be a non-empty string or None."
+                )
+            self.link_settings[key] = value.strip()
 
     def send(self, notifiable, notification) -> bool:
         """
@@ -55,149 +87,159 @@ class MailChannel(BaseChannel):
         Returns:
             True if sent successfully, False otherwise
         """
-        try:
-            mail_message = notification.to_mail(notifiable)
-
-            if mail_message is None:
-                return False
-
-            # Get the recipient email - try from mail data first, then from notifiable
-            recipient = mail_message.get("to") if isinstance(mail_message, dict) else None
-            if not recipient:
-                recipient = self._get_recipient(notifiable, notification)
-                if not recipient:
-                    return False
-
-            # If mail_message is a string, create a simple email
-            if isinstance(mail_message, str):
-                message = self.mail_manager.to(recipient)
-                message.subject(f"Notification: {notification.__class__.__name__}")
-                message.text(mail_message)
-                view_data: dict[str, Any] = {}
-                self._inject_default_urls(view_data, notifiable)
-                self._apply_headers(message, {}, view_data)
-
-                # Apply default settings
-                if self.from_address:
-                    message.from_(self.from_address, self.from_name)
-                if self.reply_to:
-                    message.reply_to(self.reply_to)
-
-                return message.send()
-
-            # If mail_message is a dict, use it to build the email
-            elif isinstance(mail_message, dict):
-                message = self.mail_manager.to(recipient)
-                view_data = dict(mail_message.get("data") or {})
-                self._inject_default_urls(view_data, notifiable)
-
-                if "subject" in mail_message:
-                    message.subject(mail_message["subject"])
-
-                if "text" in mail_message:
-                    message.text(mail_message["text"])
-
-                if "html" in mail_message:
-                    message.html(mail_message["html"])
-
-                if "view" in mail_message:
-                    message.view(mail_message["view"], view_data)
-
-                self._apply_headers(
-                    message,
-                    mail_message.get("headers") or {},
-                    view_data,
-                )
-
-                # Use message from or fallback to channel defaults
-                from_addr = mail_message.get("from", self.from_address)
-                if from_addr:
-                    message.from_(
-                        from_addr, mail_message.get("from_name", self.from_name)
-                    )
-
-                reply_to_addr = mail_message.get("reply_to", self.reply_to)
-                if reply_to_addr:
-                    message.reply_to(reply_to_addr)
-
-                if "attachments" in mail_message:
-                    for attachment in mail_message["attachments"]:
-                        message.attach(attachment["name"], attachment["path"])
-
-                return message.send()
-
-            # If mail_message has fluent API (like MailMessage)
-            elif hasattr(mail_message, "to_dict"):
-                message = self.mail_manager.to(recipient)
-                mail_data = mail_message.to_dict()
-                view_data = {}
-                self._inject_default_urls(view_data, notifiable)
-                self._apply_headers(
-                    message,
-                    mail_data.get("headers") or {},
-                    view_data,
-                )
-
-                if mail_data.get("subject"):
-                    message.subject(mail_data["subject"])
-
-                # Build message content
-                content_parts = []
-                if mail_data.get("greeting"):
-                    content_parts.append(mail_data["greeting"])
-
-                content_parts.extend(mail_data.get("lines", []))
-
-                if mail_data.get("salutation"):
-                    content_parts.append(mail_data["salutation"])
-
-                if content_parts:
-                    message.text("\n\n".join(content_parts))
-
-                # Apply settings
-                from_addr = mail_data.get("from_address", self.from_address)
-                from_name = mail_data.get("from_name", self.from_name)
-                if from_addr:
-                    message.from_(from_addr, from_name)
-
-                reply_to_addr = mail_data.get("reply_to", self.reply_to)
-                if reply_to_addr:
-                    message.reply_to(reply_to_addr)
-
-                for cc_addr in mail_data.get("cc", []):
-                    message.cc(cc_addr)
-
-                for bcc_addr in mail_data.get("bcc", []):
-                    message.bcc(bcc_addr)
-
-                for attachment in mail_data.get("attachments", []):
-                    if "path" in attachment:
-                        message.attach(attachment.get("name", ""), attachment["path"])
-
-                return message.send()
-
-            return False
-
-        except Exception as e:
-            self._emit_error("Mail channel error", e)
-            return False
-
-    def _emit_error(self, message: str, error: Exception) -> None:
-        """Emit mail notification errors via Log facade with stderr fallback."""
-        try:
-            from cara.facades import Log
-
-            Log.error(
-                "%s: %s",
-                message,
-                error,
-                category="cara.notifications.mail",
-                exc_info=True,
+        renderer = getattr(notification, "to_mail", None)
+        if not callable(renderer):
+            raise InvalidArgumentException("Mail notifications must implement to_mail().")
+        mail_message = renderer(notifiable)
+        if mail_message is None:
+            raise InvalidArgumentException(
+                "A notification routed to mail must render a mail payload."
             )
-        except ImportError, RuntimeError:
-            import sys
 
-            print(f"[MailChannel] {message}: {error}", file=sys.stderr)
+        recipient = mail_message.get("to") if isinstance(mail_message, dict) else None
+        recipient = recipient or self._get_recipient(notifiable, notification)
+        recipient = self._required_text(recipient, "recipient")
+
+        if isinstance(mail_message, str):
+            message = self.mail_manager.to(recipient)
+            message.subject(f"Notification: {type(notification).__name__}")
+            message.text(self._required_text(mail_message, "text"))
+            view_data: dict[str, Any] = {}
+            self._inject_default_urls(view_data, notifiable)
+            self._apply_headers(message, {}, view_data)
+            if self.from_address:
+                message.from_(self.from_address, self.from_name)
+            if self.reply_to:
+                message.reply_to(self.reply_to)
+            return self._delivery_result(message.send())
+
+        if isinstance(mail_message, dict):
+            message = self.mail_manager.to(recipient)
+            raw_view_data = mail_message.get("data", {})
+            if not isinstance(raw_view_data, dict):
+                raise InvalidArgumentException(
+                    "Mail notification data must be a dictionary."
+                )
+            view_data = dict(raw_view_data)
+            self._inject_default_urls(view_data, notifiable)
+
+            for key, method in (
+                ("subject", message.subject),
+                ("text", message.text),
+                ("html", message.html),
+            ):
+                if key in mail_message:
+                    method(self._required_text(mail_message[key], key))
+            if "view" in mail_message:
+                message.view(self._required_text(mail_message["view"], "view"), view_data)
+
+            headers = mail_message.get("headers", {})
+            if not isinstance(headers, dict) or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in headers.items()
+            ):
+                raise InvalidArgumentException(
+                    "Mail notification headers must be a string dictionary."
+                )
+            self._apply_headers(message, headers, view_data)
+
+            from_addr = mail_message.get("from", self.from_address)
+            if from_addr is not None:
+                message.from_(
+                    self._required_text(from_addr, "from"),
+                    self._optional_text(
+                        mail_message.get("from_name", self.from_name), "from_name"
+                    ),
+                )
+            reply_to_addr = mail_message.get("reply_to", self.reply_to)
+            if reply_to_addr is not None:
+                message.reply_to(self._required_text(reply_to_addr, "reply_to"))
+            self._attach_all(message, mail_message.get("attachments", []))
+            return self._delivery_result(message.send())
+
+        to_dict = getattr(mail_message, "to_dict", None)
+        if callable(to_dict):
+            mail_data = to_dict()
+            if not isinstance(mail_data, dict):
+                raise InvalidArgumentException(
+                    "MailMessage.to_dict() must return a dictionary."
+                )
+            message = self.mail_manager.to(recipient)
+            view_data = {}
+            self._inject_default_urls(view_data, notifiable)
+            headers = mail_data.get("headers", {})
+            if not isinstance(headers, dict):
+                raise InvalidArgumentException("Mail headers must be a dictionary.")
+            self._apply_headers(message, headers, view_data)
+
+            if mail_data.get("subject") is not None:
+                message.subject(self._required_text(mail_data["subject"], "subject"))
+            content_parts = [
+                self._required_text(value, "mail line")
+                for value in (
+                    [mail_data["greeting"]] if mail_data.get("greeting") else []
+                )
+                + list(mail_data.get("lines", []))
+                + ([mail_data["salutation"]] if mail_data.get("salutation") else [])
+            ]
+            if content_parts:
+                message.text("\n\n".join(content_parts))
+
+            from_addr = mail_data.get("from_address", self.from_address)
+            if from_addr is not None:
+                message.from_(
+                    self._required_text(from_addr, "from_address"),
+                    self._optional_text(
+                        mail_data.get("from_name", self.from_name), "from_name"
+                    ),
+                )
+            reply_to_addr = mail_data.get("reply_to", self.reply_to)
+            if reply_to_addr is not None:
+                message.reply_to(self._required_text(reply_to_addr, "reply_to"))
+            for field, method in (("cc", message.cc), ("bcc", message.bcc)):
+                values = mail_data.get(field, [])
+                if not isinstance(values, list):
+                    raise InvalidArgumentException(f"Mail {field} must be a list.")
+                for value in values:
+                    method(self._required_text(value, field))
+            self._attach_all(message, mail_data.get("attachments", []))
+            return self._delivery_result(message.send())
+
+        raise InvalidArgumentException(
+            "Mail notifications must render a string, dictionary, or MailMessage."
+        )
+
+    @staticmethod
+    def _delivery_result(result: Any) -> bool:
+        if not isinstance(result, bool):
+            raise InvalidArgumentException("Mail delivery must return a boolean result.")
+        return result
+
+    @classmethod
+    def _attach_all(cls, message: Any, attachments: Any) -> None:
+        if not isinstance(attachments, list):
+            raise InvalidArgumentException("Mail attachments must be a list.")
+        for attachment in attachments:
+            if not isinstance(attachment, dict) or set(attachment) != {"name", "path"}:
+                raise InvalidArgumentException(
+                    "Mail attachments require exactly name and path."
+                )
+            message.attach(
+                cls._required_text(attachment["name"], "attachment name"),
+                cls._required_text(attachment["path"], "attachment path"),
+            )
+
+    @staticmethod
+    def _required_text(value: Any, field: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise InvalidArgumentException(f"Mail {field} must be a non-empty string.")
+        return value.strip()
+
+    @classmethod
+    def _optional_text(cls, value: Any, field: str) -> str | None:
+        if value is None:
+            return None
+        return cls._required_text(value, field)
 
     def _get_recipient(self, notifiable, notification) -> str | None:
         """
@@ -264,17 +306,9 @@ class MailChannel(BaseChannel):
         stay honest-null — unset config injects nothing and the templates carry
         their own ``default('#')``.
         """
-        try:
-            from cara.configuration import config
-        except Exception:
-            # allow-silent-except: unset config injects nothing; templates carry their own defaults
-            return
 
         def setting(key: str) -> str:
-            try:
-                return (config(key, "") or "").rstrip("/")
-            except Exception:
-                return ""
+            return self.link_settings.get(key, "").rstrip("/")
 
         def offer(key: str, value: str) -> None:
             """Fill a gap without overwriting a real caller-supplied value."""
@@ -298,10 +332,7 @@ class MailChannel(BaseChannel):
             "email_address",
             None,
         )
-        try:
-            secret = config("app.unsubscribe_secret", "") or ""
-        except Exception:
-            secret = ""
+        secret = self.link_settings.get("app.unsubscribe_secret", "")
 
         query = ""
         if user_public_id and email and secret:
@@ -310,10 +341,6 @@ class MailChannel(BaseChannel):
             token = mint_unsubscribe_token(user_public_id, email, secret)
             query = urlencode({"user": user_public_id, "token": token})
         elif confirm_url or processor_url:
-            # The product declared an unsubscribe endpoint, so a link was meant
-            # to be here and could not be minted. Reaching an operator matters
-            # more than a tidy log: the reader falls back to the preferences
-            # page below, which is a weaker opt-out than the one intended.
             missing = [
                 name
                 for name, present in (
@@ -323,9 +350,8 @@ class MailChannel(BaseChannel):
                 )
                 if not present
             ]
-            self._emit_error(
-                "Unsubscribe link could not be signed; missing " + ", ".join(missing),
-                RuntimeError("unsubscribe link unsignable"),
+            raise ConfigurationException(
+                "Unsubscribe link could not be signed; missing " + ", ".join(missing)
             )
 
         if query and confirm_url:

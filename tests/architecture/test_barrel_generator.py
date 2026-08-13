@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
+
 from cara.architecture.BarrelGenerator import MAX_LINE, BarrelGenerator
 
 from ._fixtures import make_manifest, write
@@ -13,7 +16,7 @@ def test_generates_a_missing_barrel(tmp_path):
     plan = BarrelGenerator.write(manifest)
     assert "app/services/__init__.py" in plan.changed
     content = (tmp_path / "app" / "services" / "__init__.py").read_text()
-    assert "from .Foo import Foo" in content
+    assert '"Foo": (".Foo", "Foo")' in content
     assert '"Foo"' in content
 
 
@@ -55,7 +58,7 @@ def test_removed_child_symbol_is_removed_instead_of_preserved(tmp_path):
     BarrelGenerator.write(manifest)
 
     content = (tmp_path / "app" / "services" / "__init__.py").read_text()
-    assert "from .Child import Current" in content
+    assert '"Current": (".Child", "Current")' in content
     assert "Removed" not in content
     assert BarrelGenerator.write(manifest).changed == []
 
@@ -66,6 +69,68 @@ def test_check_reports_drift_without_writing(tmp_path):
     plan = BarrelGenerator.check(manifest)
     assert plan.changed
     assert not (tmp_path / "app" / "services" / "__init__.py").exists()
+
+
+def test_hand_written_marker_does_not_exempt_a_barrel(tmp_path):
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\n# barrel: hand-written\n\n__all__: list[str] = []\n',
+    )
+
+    plan = BarrelGenerator.write(manifest)
+
+    assert "app/services/__init__.py" in plan.changed
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert "# barrel: hand-written" not in content
+    assert '"Foo": (".Foo", "Foo")' in content
+
+
+def test_generated_lazy_export_loads_on_demand_and_resists_module_shadowing(
+    tmp_path, monkeypatch
+):
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(tmp_path / "app" / "__init__.py", "")
+    write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")
+    BarrelGenerator.write(manifest)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in ("app.services.Foo", "app.services", "app"):
+        sys.modules.pop(name, None)
+
+    package = importlib.import_module("app.services")
+    assert "app.services.Foo" not in sys.modules
+    exported = package.Foo
+    assert exported.__name__ == "Foo"
+
+    importlib.import_module("app.services.Foo")
+    assert package.Foo is exported
+
+    replacement = object()
+    package.Foo = replacement
+    assert package.Foo is replacement
+
+
+def test_foreign_lazy_export_remains_in_the_complete_public_contract(tmp_path):
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\n'
+        "from cara._LazyExports import _install_lazy_exports\n\n"
+        "_LAZY_EXPORTS = {\n"
+        '    "External": ("cara.exceptions.types.CaraException", "CaraException"),\n'
+        "}\n\n"
+        "__all__: list[str] = []\n\n"
+        "_install_lazy_exports(__name__, _LAZY_EXPORTS)\n",
+    )
+
+    BarrelGenerator.write(manifest)
+
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert '"External": (' in content
+    assert '__all__ = [\n    "External",\n    "Foo",\n]' in content
+    assert BarrelGenerator.write(manifest).changed == []
 
 
 def test_docstring_is_preserved_across_regeneration(tmp_path):
@@ -91,10 +156,11 @@ def test_module_object_contract_is_preserved(tmp_path):
         '"""Layer."""\n\nfrom . import Text\n\n__all__ = [\n    "Text",\n]\n',
     )
     plan = BarrelGenerator.write(manifest)
-    assert plan.changed == []  # already exactly what generation would produce
+    assert "app/services/__init__.py" in plan.changed
     content = (tmp_path / "app" / "services" / "__init__.py").read_text()
     assert "from . import Text" in content
     assert "helper" not in content  # Text's own symbols stay module-qualified
+    assert BarrelGenerator.write(manifest).changed == []
 
 
 def test_aliased_import_is_preserved(tmp_path):
@@ -215,7 +281,7 @@ def test_post_all_deliberate_late_bind_is_preserved(tmp_path):
         "from .Foo import Foo as Late  # deliberate late bind\n",
     )
     plan = BarrelGenerator.write(manifest)
-    assert plan.changed == []
+    assert "app/services/__init__.py" in plan.changed
     content = (tmp_path / "app" / "services" / "__init__.py").read_text()
     assert content.rstrip().endswith(
         "from .Foo import Foo as Late  # deliberate late bind"
@@ -236,6 +302,71 @@ def test_future_imports_are_kept_first(tmp_path):
     assert rest.startswith("from __future__ import annotations")
 
 
+def test_preserved_registry_is_emitted_after_the_imports_it_uses(tmp_path):
+    """Executable barrel metadata must never run before its symbol imports."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(
+        tmp_path / "app" / "services" / "Scanner.py",
+        "class Scanner:\n    pass\n",
+    )
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\n'
+        'REGISTRY = {"scanner": Scanner}\n\n'
+        "from .Scanner import Scanner\n\n"
+        '__all__ = ["REGISTRY", "Scanner"]\n',
+    )
+
+    BarrelGenerator.write(manifest)
+
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert content.index("from .Scanner import Scanner") < content.index("REGISTRY =")
+    assert BarrelGenerator.write(manifest).changed == []
+
+
+def test_dependency_free_helper_follows_generated_imports(tmp_path):
+    """Generated barrels keep every import before executable declarations."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(
+        tmp_path / "app" / "services" / "Configuration.py",
+        "class Configuration:\n    pass\n",
+    )
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\n'
+        "def config():\n    return Configuration()\n\n"
+        "from .Configuration import Configuration\n\n"
+        '__all__ = ["Configuration", "config"]\n',
+    )
+
+    BarrelGenerator.write(manifest)
+
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert content.index("from .Configuration import Configuration") < content.index(
+        "def config"
+    )
+    assert '"config"' in content
+    assert BarrelGenerator.write(manifest).changed == []
+
+
+def test_registry_declaration_follows_generated_symbol_imports(tmp_path):
+    """A barrel-owned registry must not reference children before they bind."""
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(tmp_path / "app" / "services" / "Foo.py", "class Foo:\n    pass\n")
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Layer."""\n\nREGISTRY = {"foo": Foo}\n\n__all__ = ["REGISTRY"]\n',
+    )
+
+    BarrelGenerator.write(manifest)
+
+    content = (tmp_path / "app" / "services" / "__init__.py").read_text()
+    assert content.index("from .Foo import Foo") < content.index(
+        'REGISTRY = {"foo": Foo}'
+    )
+    assert BarrelGenerator.write(manifest).changed == []
+
+
 def test_collision_between_two_modules_is_reported(tmp_path):
     manifest = make_manifest(tmp_path, layers=("services",))
     write(tmp_path / "app" / "services" / "Foo.py", "class Shared:\n    pass\n")
@@ -252,9 +383,9 @@ def test_kernel_package_nested_subpackage_regenerates_depth_first(tmp_path):
     assert "commons/models/core/__init__.py" in plan.changed
     assert "commons/models/__init__.py" in plan.changed
     core_content = (tmp_path / "commons" / "models" / "core" / "__init__.py").read_text()
-    assert "from .User import User" in core_content
+    assert '"User": (".User", "User")' in core_content
     root_content = (tmp_path / "commons" / "models" / "__init__.py").read_text()
-    assert "from .core import User" in root_content
+    assert '"User": (".core", "User")' in root_content
     # idempotent across the whole kernel tree too
     second = BarrelGenerator.write(manifest)
     assert second.changed == []
@@ -269,6 +400,6 @@ def test_job_root_class_pin_binds_first_in_a_job_layer(tmp_path):
     BarrelGenerator.write(manifest)
     content = (tmp_path / "app" / "jobs" / "__init__.py").read_text()
     base_idx = content.index("from .BaseJob import BaseJob")
-    other_idx = content.index("from .DoThingJob import DoThingJob")
+    other_idx = content.index('"DoThingJob": (".DoThingJob", "DoThingJob")')
     assert base_idx < other_idx
     assert '"BaseJob"' in content and '"DoThingJob"' in content

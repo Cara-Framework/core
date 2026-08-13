@@ -9,6 +9,17 @@ from loguru import logger as _loguru_logger
 from cara.logging import Logger
 
 
+def _logger() -> Logger:
+    return Logger(
+        config={
+            "default": "testing",
+            "stacks": {"testing": ["console"]},
+            "channels": {"console": {"ENABLED": True, "LEVEL": "DEBUG"}},
+            "slack": {},
+        }
+    )
+
+
 class TestInterpolateHelper:
     """The pure interpolation helper that mirrors ``LogFake._record``."""
 
@@ -56,7 +67,7 @@ class TestPublicMethodsForwardArgs:
     """Every public level method must thread ``*args`` into ``_log``."""
 
     def test_each_level_forwards_message_args(self) -> None:
-        logger = Logger()
+        logger = _logger()
         for level in ("debug", "info", "warning", "error", "critical", "exception"):
             with patch.object(logger, "_log") as log_spy:
                 getattr(logger, level)("v=%s n=%s", "x", 3, category="c")
@@ -71,7 +82,7 @@ class TestEndToEndInterpolation:
     """The fully-wired logger emits the interpolated text to its sink."""
 
     def test_emitted_message_is_interpolated(self) -> None:
-        logger = Logger()
+        logger = _logger()
         captured: list[str] = []
         sink_id = _loguru_logger.add(
             lambda m: captured.append(m.record["message"]), level="DEBUG"

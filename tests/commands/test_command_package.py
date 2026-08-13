@@ -10,7 +10,7 @@ def test_leaf_command_import_does_not_eager_load_watchdog() -> None:
         [
             sys.executable,
             "-c",
-            "import sys; import cara.commands.BootlessCommandRunner; "
+            "import sys; import cara.commands.BootlessCommandSpec; "
             "assert not any(n == 'watchdog' or n.startswith('watchdog.') "
             "for n in sys.modules)",
         ],

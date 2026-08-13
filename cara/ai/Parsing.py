@@ -13,14 +13,13 @@ import json
 import re
 from typing import Any
 
-from cara.ai.exceptions import AIResponseError
+from cara.ai.AIResponseError import AIResponseError
+from cara.facades import Log
 
 
 def _log(level: str, msg: str) -> None:
     # Logging must never break parsing.
     with contextlib.suppress(Exception):
-        from cara.facades import Log
-
         getattr(Log, level)(msg, category="cara.ai")
 
 

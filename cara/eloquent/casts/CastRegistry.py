@@ -1,0 +1,73 @@
+"""Canonical definition of ``CastRegistry``."""
+
+from __future__ import annotations
+
+from .BaseCast import BaseCast
+
+
+class CastRegistry:
+    """
+    Registry for managing cast types and their instantiation.
+
+    Supports parametrized casts and provides a clean API.
+    """
+
+    def __init__(self):
+        self._casts: dict[str, type[BaseCast]] = {}
+
+    def register(self, name: str, cast_class: type[BaseCast]) -> None:
+        """Register a cast type."""
+        self._casts[name] = cast_class
+
+    def get_cast_instance(self, cast_definition: str) -> BaseCast | None:
+        """
+        Create cast instance from definition string.
+
+        Supports formats like:
+        - "datetime"
+        - "datetime:Y-m-d H:i:s"
+        - "datetime:Y-m-d H:i:s,Europe/Istanbul"
+        - "array:int"
+        - "hash:bcrypt"
+
+        Args:
+            cast_definition: Cast definition string
+
+        Returns:
+            Cast instance or None if not found
+        """
+        if ":" in cast_definition:
+            cast_type, params = cast_definition.split(":", 1)
+            return self._create_parametrized_cast(cast_type, params)
+        else:
+            return self._create_simple_cast(cast_definition)
+
+    def _create_simple_cast(self, cast_type: str) -> BaseCast | None:
+        """Create cast without parameters."""
+        if cast_type in self._casts:
+            return self._casts[cast_type]()
+        return None
+
+    def _create_parametrized_cast(self, cast_type: str, params: str) -> BaseCast | None:
+        """Create cast with parameters."""
+        if cast_type not in self._casts:
+            return None
+
+        cast_class = self._casts[cast_type]
+
+        # Handle different parameter formats
+        if cast_type == "datetime":
+            return self._create_datetime_cast(cast_class, params)
+        # Generic single parameter (covers array, hash, and all others)
+        return cast_class(params)
+
+    def _create_datetime_cast(self, cast_class: type[BaseCast], params: str) -> BaseCast:
+        """Create datetime cast with format and timezone."""
+        parts = [p.strip() for p in params.split(",")]
+        format_str = parts[0] if parts else None
+        timezone = parts[1] if len(parts) > 1 else "UTC"
+        return cast_class(format_str, timezone)
+
+    def list_casts(self) -> dict[str, type[BaseCast]]:
+        """Get all registered casts."""
+        return self._casts.copy()

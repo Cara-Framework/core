@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.validation import MessageFormatter
+from cara.validation.MessageFormatter import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
 from cara.validation.rules.DateRule import _parse_date
 

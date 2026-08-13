@@ -10,6 +10,9 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from cara.exceptions import BadRequestException
+from cara.support import Paths
+
 
 @dataclass
 class UploadedFile:
@@ -98,8 +101,6 @@ class UploadedFile:
         truncates the path prefix and could let a caller escape into
         a sibling directory.
         """
-        from cara.exceptions import BadRequestException
-        from cara.support.Paths import paths
 
         if "\x00" in filename or "\x00" in directory:
             raise BadRequestException(
@@ -108,7 +109,7 @@ class UploadedFile:
             )
 
         # Get storage path
-        storage_base = paths("storage")
+        storage_base = Paths.paths("storage")
         full_directory = Path(storage_base) / directory
 
         # Create directory

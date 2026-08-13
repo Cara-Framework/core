@@ -9,13 +9,18 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time as _t
 import traceback
-from typing import Any
+from inspect import Parameter
+from types import UnionType
+from typing import Any, Union, get_args, get_origin
+from typing import get_type_hints as _get_type_hints
 
 import typer
 from rich import print as rprint
 
 from cara.decorators import _run_after, _run_before, _run_on_error
+from cara.observability import MetricsBase
 
 
 class CommandRunner:
@@ -54,7 +59,7 @@ class CommandRunner:
         cli_params, di_params = self._split_handle_params(sig, cmd_cls.handle)
 
         # 2) Parse decorator options
-        raw_options = getattr(cmd_cls, "_cli_options", {}) or {}
+        raw_options = getattr(cmd_cls, "_cli_options", []) or []
         parsed_options = self._parse_decorator_options(raw_options)
 
         # 3) Build Typer signature parameters
@@ -90,23 +95,16 @@ class CommandRunner:
         that uses PEP 563 — AIDiscover, DevReset, QueuePurge, etc.
         """
         primitive_types = (str, int, float, bool)
-        # Resolve PEP 563 string annotations to real types. Use the
-        # original function so get_type_hints can resolve forward refs
-        # against the right module globals/locals. Falls back to the raw
-        # signature on any failure so a single bad annotation can't take
-        # the whole CLI out.
+        # Resolve PEP 563 string annotations to real types. Use the original
+        # function so get_type_hints can resolve forward refs against the
+        # right module globals/locals. An invalid annotation is a broken
+        # command contract and must stop command registration at boot.
         resolved_hints: dict[str, Any] = {}
         target_fn = handle_fn
         if target_fn is None:
-            # Best-effort recovery for callers that didn't pass the fn.
             target_fn = getattr(sig, "__wrapped__", None)
         if target_fn is not None:
-            try:
-                from typing import get_type_hints as _get_type_hints
-
-                resolved_hints = _get_type_hints(target_fn) or {}
-            except Exception:
-                resolved_hints = {}
+            resolved_hints = _get_type_hints(target_fn) or {}
         cli_params: list[inspect.Parameter] = []
         di_params: list[inspect.Parameter] = []
         for param in sig.parameters.values():
@@ -119,15 +117,10 @@ class CommandRunner:
                 ann = resolved_hints[param.name]
             # Optional[T] / Union[T, None] should follow T's classification
             # so ``region: Optional[str] = None`` lands on the CLI side.
-            try:
-                from typing import Union, get_args, get_origin
-
-                if get_origin(ann) is Union:
-                    non_none = [a for a in get_args(ann) if a is not type(None)]
-                    if len(non_none) == 1:
-                        ann = non_none[0]
-            except OSError, RuntimeError, AttributeError, ConnectionError:
-                pass
+            if get_origin(ann) in (Union, UnionType):
+                non_none = [a for a in get_args(ann) if a is not type(None)]
+                if len(non_none) == 1:
+                    ann = non_none[0]
             if ann is inspect.Parameter.empty or ann in primitive_types:
                 # Replace the parameter's raw (PEP 563 string) annotation
                 # with the resolved type so downstream Typer/Click receive
@@ -144,151 +137,99 @@ class CommandRunner:
         return cli_params, di_params
 
     def _parse_decorator_options(
-        self, raw_options
+        self, raw_options: list[dict[str, Any]]
     ) -> list[tuple[str, list[str], Any, str, type]]:
-        """
-        Parse decorator options into a list of tuples:
+        """Parse canonical option metadata into runner tuples:
         (param_name, flags_list, default_value, help_text, annotation).
 
-        Accepts either dict format: {"--flag=default": "help text"}
-        or list format with rich metadata:
-            [{"name": "--flag", "help": "...", "type": int, "default": 5}]
-            [{"name": "--flag", "help": "...", "is_flag": True}]
-            [{"name": "--flag=24", "help": "...", "type": "integer"}]
-
-        ROOT CAUSE FIX (scenario 12 / full pipeline integration):
-        Pre-fix, the list-format ingestion path collapsed every option to
-        ``{name: help}`` and threw away ``type``, ``default``, and
-        ``is_flag``. Anything declared without ``=default`` in the name
-        string therefore landed in the legacy "bare flag → bool" branch
-        below, so e.g. a command declaring ``{"name": "--count",
-        "type": int}`` was registered as a Typer bool flag and Click
-        rejected ``--count=170`` with "Option '--count' does not
-        take a value." Same silent damage for any command with typed,
-        value-bearing options (``--limit/--min-age-hours/--batch-size/
-        --threshold/--stage/--minutes``, …) — every typed,
-        value-bearing option without an inline default registered as a
-        bool flag and rejected the value at the CLI. The fix preserves
-        list-format metadata end-to-end and propagates the resolved
-        annotation through ``_build_signature_parameters`` so Typer/Click
-        emit the right click_type for each option.
+        There is deliberately one declaration shape. Rejecting malformed
+        command metadata at boot prevents a misspelled type, implicit bool,
+        or encoded default from silently changing the CLI contract.
         """
-        # Normalize input → list of per-option dicts so we keep the
-        # rich metadata (``type``, ``default``, ``is_flag``) instead of
-        # collapsing to ``{name: help}``.
-        items: list[dict[str, Any]] = []
-        if isinstance(raw_options, list):
-            for item in raw_options:
-                if isinstance(item, dict) and item.get("name"):
-                    items.append(dict(item))
-        elif isinstance(raw_options, dict):
-            for k, v in raw_options.items():
-                items.append({"name": k, "help": v})
-        else:
-            return []
-
-        # Map ``"integer"``/``"string"``/``"bool"`` to real types so the
-        # legacy string spellings still work alongside ``type=int``.
-        type_aliases: dict[str, type] = {
-            "int": int,
-            "integer": int,
-            "str": str,
-            "string": str,
-            "text": str,
-            "float": float,
-            "double": float,
-            "number": float,
-            "bool": bool,
-            "boolean": bool,
-            "flag": bool,
-        }
+        if not isinstance(raw_options, list):
+            raise TypeError("Command options must be a list of metadata objects")
 
         sentinel = object()
         parsed: list[tuple[str, list[str], Any, str, type]] = []
-        for item in items:
-            key = item.get("name", "")
-            desc = item.get("help", "") or ""
-            explicit_type = item.get("type")
-            if isinstance(explicit_type, str):
-                explicit_type = type_aliases.get(explicit_type.strip().lower(), str)
-            explicit_default = item.get("default", sentinel)
-            is_flag = bool(item.get("is_flag", False))
+        allowed_keys = {"name", "help", "type", "default", "is_flag"}
+        seen_flags: set[str] = set()
+        seen_parameters: set[str] = set()
+        for index, item in enumerate(raw_options):
+            if not isinstance(item, dict):
+                raise TypeError(f"Command option #{index} must be a metadata object")
+            unknown_keys = set(item) - allowed_keys
+            if unknown_keys:
+                unknown = ", ".join(sorted(str(key) for key in unknown_keys))
+                raise ValueError(f"Command option #{index} has unknown keys: {unknown}")
 
+            key = item.get("name")
+            desc = item.get("help")
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(f"Command option #{index} requires a non-empty name")
             if "=" in key:
-                flags_part, default_str = key.split("=", 1)
-                if default_str == "?":
-                    inline_default: Any = None
-                else:
-                    inline_default = default_str
-                has_inline = True
-            else:
-                flags_part = key
-                inline_default = None
-                has_inline = False
+                raise ValueError(
+                    f"Command option {key!r} must declare its default explicitly"
+                )
+            if not isinstance(desc, str) or not desc.strip():
+                raise ValueError(f"Command option {key!r} requires help text")
 
-            # Resolve final annotation + default using explicit metadata
-            # first, falling back to inline ``=default`` parsing for
-            # legacy dict-format keys.
+            explicit_type = item.get("type")
+            explicit_default = item.get("default", sentinel)
+            is_flag = item.get("is_flag", False)
+            if not isinstance(is_flag, bool):
+                raise TypeError(f"Command option {key!r} is_flag must be boolean")
             if is_flag:
-                ann: type = bool
+                if explicit_type not in (None, bool):
+                    raise TypeError(f"Command flag {key!r} may only declare type=bool")
+                ann = bool
                 if explicit_default is not sentinel:
-                    final_default: Any = bool(explicit_default)
+                    if not isinstance(explicit_default, bool):
+                        raise TypeError(f"Command flag {key!r} default must be boolean")
+                    final_default: Any = explicit_default
                 else:
                     final_default = False
-            elif explicit_type is not None:
+            else:
+                if explicit_type not in (str, int, float):
+                    raise TypeError(
+                        f"Command option {key!r} requires a real primitive type"
+                    )
                 ann = explicit_type
                 if explicit_default is not sentinel:
-                    final_default = explicit_default
-                elif has_inline:
-                    try:
-                        final_default = (
-                            ann(inline_default) if inline_default is not None else None
+                    if explicit_default is not None and type(explicit_default) is not ann:
+                        raise TypeError(
+                            f"Command option {key!r} default must match its type"
                         )
-                    except Exception:
-                        final_default = inline_default
+                    final_default = explicit_default
                 else:
-                    # Typed value option with no default → expose as
-                    # ``Optional[T]`` (None) so the CLI accepts a value
-                    # and the command can detect "not provided" cleanly.
                     final_default = None
-            elif explicit_default is not sentinel:
-                ann = type(explicit_default) if explicit_default is not None else str
-                final_default = explicit_default
-            elif has_inline:
-                # Legacy dict-format: ``"--flag=24"`` keeps the string
-                # default but pre-fix consumers expect strings here, so
-                # don't auto-cast to int even if it looks numeric.
-                ann = type(inline_default) if inline_default is not None else str
-                final_default = inline_default
-            else:
-                # Bare flag (no type, no default, no inline) — preserve
-                # the legacy "implicit bool" behaviour so commands like
-                # ``QueueMonitorCommand --queue`` (intended as a string
-                # option) keep working when handle() supplies the real
-                # annotation. handle()-bound CLI params override the
-                # decorator default in ``_build_signature_parameters``,
-                # so this only affects decorator-only options.
-                ann = bool
-                final_default = False
 
-            flag_tokens = flags_part.split("|")
+            flag_tokens = key.split("|")
             flags: list[str] = []
             param_name: str | None = None
             for tok in flag_tokens:
                 tok = tok.strip()
                 if not tok:
-                    continue
+                    raise ValueError(f"Command option {key!r} contains an empty flag")
                 stripped = tok.lstrip("-")
+                if not stripped or tok == stripped:
+                    raise ValueError(f"Command option token {tok!r} must start with '-'")
                 if len(stripped) == 1:
-                    flags.append(f"-{stripped}")
+                    flag = f"-{stripped}"
                 else:
-                    flags.append(f"--{stripped}")
+                    flag = f"--{stripped}"
+                if flag in seen_flags:
+                    raise ValueError(f"Duplicate command option flag {flag!r}")
+                seen_flags.add(flag)
+                flags.append(flag)
                 if len(stripped) > 1:
                     param_name = stripped.replace("-", "_")
                 elif param_name is None:
                     param_name = stripped
             if not param_name:
-                continue
+                raise ValueError(f"Command option {key!r} has no parameter name")
+            if param_name in seen_parameters:
+                raise ValueError(f"Duplicate command option parameter {param_name!r}")
+            seen_parameters.add(param_name)
             parsed.append((param_name, flags, final_default, desc, ann))
         return parsed
 
@@ -302,7 +243,6 @@ class CommandRunner:
         with typer.Argument or typer.Option, binding decorator options where names match,
         then adding decorator-only options as keyword-only.
         """
-        from inspect import Parameter
 
         parameters: list[inspect.Parameter] = []
         existing_names = {param.name for param in cli_params}
@@ -354,16 +294,11 @@ class CommandRunner:
                 )
             )
 
-        # 2) Add decorator-only options as keyword-only. Use the
-        # decorator-provided annotation directly so typed value options
-        # (``type=int`` etc.) round-trip through Typer correctly. We
-        # only fall back to the legacy "bool if default is bool, else
-        # str" inference if the parser couldn't decide on a type.
+        # 2) Add decorator-only options as keyword-only. The canonical
+        # metadata parser has already required and validated the annotation.
         for name_opt, flags, default_val, help_text, ann in parsed_options:
             if name_opt in existing_names:
                 continue
-            if ann is None:
-                ann = bool if isinstance(default_val, bool) else str
             parameters.append(
                 Parameter(
                     name_opt,
@@ -412,16 +347,8 @@ class CommandRunner:
             # default. Bootless runners disable this dependency so pure
             # filesystem commands remain independent of observability setup.
             # Cardinality stays bounded by the static command name.
-            import time as _t
 
-            metrics = None
-            if self.instrument_commands:
-                try:
-                    from cara.observability.Metrics import MetricsBase
-
-                    metrics = MetricsBase
-                except ImportError, RuntimeError:
-                    pass
+            metrics = MetricsBase if self.instrument_commands else None
 
             _cmd_start = _t.time()
             _cmd_outcome = "success"

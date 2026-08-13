@@ -20,10 +20,18 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import builtins
+import logging
 import time
 from collections.abc import Callable
 
-from cara.exceptions.types.Base import CaraException
+from cara.exceptions import MissingContainerBindingException
+from cara.observability import counter, metric_name
+
+from .ConcurrencyBackendUnavailable import ConcurrencyBackendUnavailable
+from .ConcurrencyExceeded import ConcurrencyExceeded
+
+_logger = logging.getLogger("cara.queue.middleware")
 
 
 def _redis_fault_types() -> tuple[type[BaseException], ...]:
@@ -78,10 +86,9 @@ class ConcurrencyLimited:
       the job requeues as a throttle. No attempt is consumed, so nothing is
       dropped — but on-call should read a connector backlog during a Redis
       incident as this middleware working, not as a new bug.
-    * ABSENCE (no application container at all — early boot, a CLI without
-      the full container, isolated unit tests) runs UNLIMITED and says so
-      once per key per process. Fail-closing there livelocks every consumer
-      of this middleware in paths where no ceiling was ever configurable.
+    * ABSENCE (no application container/cache binding) is misconfiguration
+      and raises :class:`ConcurrencyBackendUnavailable`. Declaring a hard
+      ceiling in a process that cannot enforce it must never run uncapped.
     """
 
     REDIS_KEY_PREFIX = "cara:concurrency:"
@@ -94,8 +101,22 @@ class ConcurrencyLimited:
         retry_delay: int = 5,
         slot_ttl: int = DEFAULT_SLOT_TTL,
     ):
+        if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int):
+            raise TypeError("max_concurrent must be a positive integer")
+        if max_concurrent <= 0:
+            raise ValueError("max_concurrent must be a positive integer")
+        if isinstance(retry_delay, bool) or not isinstance(retry_delay, int):
+            raise TypeError("retry_delay must be a non-negative integer")
+        if retry_delay < 0:
+            raise ValueError("retry_delay must be a non-negative integer")
+        if isinstance(slot_ttl, bool) or not isinstance(slot_ttl, int):
+            raise TypeError("slot_ttl must be a positive integer")
+        if slot_ttl <= 0:
+            raise ValueError("slot_ttl must be a positive integer")
+        if key is not None and (not isinstance(key, str) or not key.strip()):
+            raise ValueError("key must be a non-empty string or None")
         self.max_concurrent = max_concurrent
-        self.key = key
+        self.key = key.strip() if key is not None else None
         self.retry_delay = retry_delay
         self.slot_ttl = slot_ttl
 
@@ -105,10 +126,10 @@ class ConcurrencyLimited:
 
         cache = self._resolve_cache()
         if cache is None:
-            # No cache service is bound at all — fall through without
-            # limiting (see the class docstring's ABSENCE case).
-            self._log_unbound(concurrency_key)
-            return await self._call_next(job, next_fn)
+            raise ConcurrencyBackendUnavailable(
+                "ConcurrencyLimited requires an application cache binding; "
+                f"cannot enforce the {concurrency_key!r} ceiling."
+            )
 
         slot_id = f"{id(job)}:{time.time()}"
         if not self._try_acquire(cache, concurrency_key, redis_key, slot_id):
@@ -122,7 +143,7 @@ class ConcurrencyLimited:
         try:
             return await self._call_next(job, next_fn)
         finally:
-            self._release(cache, redis_key, slot_id)
+            self._release(cache, concurrency_key, redis_key, slot_id)
 
     @staticmethod
     async def _call_next(job, next_fn: Callable):
@@ -209,11 +230,14 @@ class ConcurrencyLimited:
             return False
         return bool(int(result if result is not None else 0))
 
-    def _release(self, cache, redis_key: str, slot_id: str) -> None:
+    def _release(self, cache, concurrency_key: str, redis_key: str, slot_id: str) -> None:
         try:
             self._connection(cache).zrem(redis_key, slot_id)
-        except _redis_fault_types():
-            pass  # the slot carries an expiry score; TTL reclaims it
+        except _redis_fault_types() as exc:
+            # The slot carries an expiry score and is reclaimed by TTL, but
+            # an outage during release must remain observable.
+            self._log_backend_fault(concurrency_key, exc)
+            self._count_backend_fault(concurrency_key)
 
     @staticmethod
     def _connection(cache):
@@ -253,28 +277,22 @@ class ConcurrencyLimited:
     @staticmethod
     def _resolve_cache():
         try:
-            import builtins
-
             application = builtins.app()
             cache_service = application.make("cache")
             if cache_service is None:
                 return None
             return cache_service
-        except ImportError, RuntimeError, AttributeError:
+        except (
+            ImportError,
+            RuntimeError,
+            AttributeError,
+            MissingContainerBindingException,
+        ):
             return None
 
     @staticmethod
     def _log_throttled(key: str) -> None:
-        try:
-            from cara.facades import Log
-
-            Log.debug(
-                "Concurrency limit reached for %s, requeueing with delay",
-                key,
-                category="cara.queue.middleware",
-            )
-        except ImportError:
-            pass
+        _logger.debug("Concurrency limit reached for %s, requeueing with delay", key)
 
     @staticmethod
     def _log_backend_fault(key: str, exc: BaseException) -> None:
@@ -286,17 +304,12 @@ class ConcurrencyLimited:
         ceiling loss it replaced — the queue just gets deeper and nothing
         says why.
         """
-        try:
-            from cara.facades import Log
-
-            Log.warning(
-                "concurrency backend unavailable for %s — failing closed: %s",
-                key,
-                exc,
-                category="cara.queue.middleware",
-            )
-        except ImportError:
-            pass
+        _logger.warning(
+            "concurrency backend unavailable for %s — failing closed: %s",
+            key,
+            exc,
+            exc_info=exc,
+        )
 
     @staticmethod
     def _count_backend_fault(key: str) -> None:
@@ -307,11 +320,6 @@ class ConcurrencyLimited:
         the two look identical in every queue-depth gauge.
         """
         try:
-            from cara.observability.Metrics import (  # local: heavy optional dep
-                counter,
-                metric_name,
-            )
-
             counter(
                 metric_name("queue_concurrency_backend_faults_total"),
                 "Concurrency-slot acquisitions that failed closed because the "
@@ -319,62 +327,4 @@ class ConcurrencyLimited:
                 ("concurrency_key",),
             ).labels(concurrency_key=key).inc()
         except Exception:
-            # allow-silent-except: metrics emission must never break job processing
-            # Intentional: metrics emission must never break job processing.
-            pass
-
-    #: Keys already reported as running without a cache backend. One line
-    #: per key per process — the condition is static for a process's whole
-    #: life, so repeating it would only bury the rest of the log.
-    _UNBOUND_LOGGED: set[str] = set()
-
-    @classmethod
-    def _log_unbound(cls, key: str) -> None:
-        """One-shot line for the ABSENCE case (no cache service bound).
-
-        Absence is not a fault: there is no backend to be closed against,
-        and refusing here would livelock every non-Redis consumer of this
-        middleware. The line exists so a deploy that lost its cache binding
-        is greppable rather than silently uncapped.
-        """
-        if key in cls._UNBOUND_LOGGED:
-            return
-        cls._UNBOUND_LOGGED.add(key)
-        try:
-            from cara.facades import Log
-
-            Log.debug(
-                "No cache service bound — %s runs without a concurrency ceiling",
-                key,
-                category="cara.queue.middleware",
-            )
-        except ImportError:
-            pass
-
-
-class ConcurrencyExceeded(CaraException):
-    """Raised when concurrency limit is exceeded.
-
-    The queue runner should requeue the job with a delay. This exception
-    does NOT count against max_attempts since it's a transient throttle,
-    not a job failure.
-
-    The ``is_throttle`` class-attribute is the load-bearing signal —
-    ``JobProcessor._requeue_with_delay`` reads it via ``getattr`` to
-    suppress the normal ``attempts += 1`` write when republishing.
-    """
-
-    is_throttle: bool = True
-
-
-class ConcurrencyBackendUnavailable(CaraException):
-    """Raised when the configured cache driver cannot enforce a ceiling.
-
-    Deliberately NOT a throttle: this is a deployment mistake, not a
-    transient one, so it must consume attempts, reach the dead-letter queue
-    and page — the same posture as production mail refusing to boot without
-    a real mail host (§9). Silently running the job uncapped is what this
-    class exists to stop.
-    """
-
-    is_throttle: bool = False
+            _logger.debug("concurrency backend fault metric failed", exc_info=True)

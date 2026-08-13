@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from cara.commands import CommandBase, missing_optional
+from cara.commands.CommandBase import CommandBase
+from cara.commands.OptionalDependencyError import missing_optional
 from cara.decorators import command
 from cara.support import paths
 
@@ -8,18 +9,36 @@ from cara.support import paths
 @command(
     name="migrate:status",
     help="Show the status of each migration",
-    options={
-        "--c|connection=default": "The connection you want to check migrations on",
-        "--d|directory=?": "The location of the migration directory",
-        "--schema=?": "Sets the schema to be checked",
-    },
+    options=[
+        {
+            "name": "-c|--connection",
+            "help": "The connection you want to check migrations on",
+            "type": str,
+            "default": "default",
+            "is_flag": False,
+        },
+        {
+            "name": "-d|--directory",
+            "help": "The location of the migration directory",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--schema",
+            "help": "Sets the schema to be checked",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class MigrateStatusCommand(CommandBase):
     def handle(self):
         """Show migration status with enhanced UX."""
         global Migration
         try:
-            from cara.eloquent.migrations import Migration
+            from cara.eloquent.migrations import Migration  # local: heavy optional dep
         except ImportError as exc:
             raise missing_optional("db", exc) from exc
 

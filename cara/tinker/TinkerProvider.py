@@ -7,6 +7,12 @@ subsystem, including shell, REPL, and command functionality.
 
 from __future__ import annotations
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress
+from rich.syntax import Syntax
+from rich.table import Table
+
 from cara.configuration import config
 from cara.foundation import DeferredProvider
 
@@ -112,11 +118,6 @@ class TinkerProvider(DeferredProvider):
             shell = self.application.make("tinker.shell")
 
             # Import Rich components
-            from rich.console import Console
-            from rich.panel import Panel
-            from rich.progress import Progress
-            from rich.syntax import Syntax
-            from rich.table import Table
 
             # Add Rich utilities to namespace
             shell.add_to_namespace("Console", Console)
@@ -155,8 +156,4 @@ class TinkerProvider(DeferredProvider):
 
         except ImportError:
             # Rich not available, skip
-            pass
-        except Exception:
-            # allow-silent-except: REPL sugar; the shell works without it
-            # Shell not available yet, skip
             pass

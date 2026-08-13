@@ -7,9 +7,17 @@ based on execution context. Inspired by Laravel's Bus facade.
 
 from __future__ import annotations
 
+import asyncio
+import builtins
 import inspect
 import uuid
 from typing import TYPE_CHECKING, Any
+
+import cara.facades as facades
+from cara.context import ExecutionContext
+from cara.observability import MetricsBase
+from cara.queues.contracts import JobThrottledException, UniqueJob
+from cara.queues.middleware import run_through_middleware_async
 
 if TYPE_CHECKING:
     from cara.queues.contracts import Queueable
@@ -76,7 +84,6 @@ class Bus:
             >>> await Bus.dispatch(MyJob(id=123), delay=120)
         """
         # Check execution context
-        from cara.context import ExecutionContext
 
         is_sync = ExecutionContext.is_sync()
 
@@ -89,7 +96,6 @@ class Bus:
             # queue driver inserts the delivery and its unique key in one
             # transaction, so a duplicate can return the already-pollable id
             # without a Redis→database crash window.
-            from cara.queues.contracts import UniqueJob
 
             reserved_job_id: str | None = None
             unique_key: str | None = None
@@ -113,34 +119,21 @@ class Bus:
             job_id = dispatch_call.dispatch()
 
             if reserved_job_id is not None:
-                try:
-                    from cara.observability.Metrics import MetricsBase
-
-                    outcome = "fresh" if str(job_id) == reserved_job_id else "collision"
-                    MetricsBase.idempotency_total.labels(
-                        scope="unique_job", outcome=outcome
-                    ).inc()
-                except Exception:
-                    # allow-silent-except: metrics must never break dispatch
-                    pass
+                outcome = "fresh" if str(job_id) == reserved_job_id else "collision"
+                MetricsBase.safe_inc(
+                    MetricsBase.idempotency_total,
+                    {"scope": "unique_job", "outcome": outcome},
+                )
 
             # Prometheus dispatch counter — bounded by the (queue, job)
             # label pair; "unknown" covers jobs that don't carry an
             # explicit queue attribute. Guarded so a metrics hiccup never
             # breaks dispatch.
-            try:
-                from cara.observability.Metrics import MetricsBase
-
-                _queue_lbl = (
-                    queue or routing_key or getattr(job, "queue", None) or "unknown"
-                )
-                MetricsBase.queue_dispatches_total.labels(
-                    queue=str(_queue_lbl),
-                    job_class=job.__class__.__name__,
-                ).inc()
-            except Exception:
-                # allow-silent-except: metrics must never break dispatch
-                pass
+            _queue_lbl = queue or routing_key or getattr(job, "queue", None) or "unknown"
+            MetricsBase.safe_inc(
+                MetricsBase.queue_dispatches_total,
+                {"queue": str(_queue_lbl), "job_class": job.__class__.__name__},
+            )
             return job_id
 
     @staticmethod
@@ -227,11 +220,9 @@ class Bus:
         # stack starts empty but accumulates as the job dispatches its
         # own events) while letting legitimate fan-out trees run.
         try:
-            import asyncio
-
-            from cara.events.Event import fresh_dispatch_scope
-            from cara.queues.contracts import JobThrottledException
-            from cara.queues.middleware import run_through_middleware_async
+            from cara.events._DispatchScope import (
+                _fresh_dispatch_scope,  # local: cycle with cara.events._DispatchScope
+            )
 
             async def job_handler(j):
                 app = Bus._resolve_application()
@@ -264,18 +255,17 @@ class Bus:
             # not a SAVEPOINT whose release never persists — while leaving the
             # caller's levels, and the after_commit/after_rollback callbacks
             # registered at them, exactly where they were.
-            from cara.facades import DB
 
-            baseline_level = DB.transaction_level()
+            baseline_level = facades.DB.transaction_level()
 
             try:
-                with fresh_dispatch_scope():
+                with _fresh_dispatch_scope():
                     result = await run_through_middleware_async(job, job_handler)
             except BaseException:
-                DB.rollback_transactions_above(baseline_level)
+                facades.DB.rollback_transactions_above(baseline_level)
                 raise
             else:
-                DB.commit_transactions_above(baseline_level)
+                facades.DB.commit_transactions_above(baseline_level)
 
             # ``None`` is a legitimate successful return: every pipeline
             # stage routes its work through wrap_with_idempotency(_do_work) and
@@ -310,7 +300,6 @@ class Bus:
     @staticmethod
     def _resolve_application() -> Any:
         """Return the global application instance when available (sync Bus dispatch)."""
-        import builtins
 
         if not hasattr(builtins, "app"):
             return None

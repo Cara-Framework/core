@@ -27,11 +27,11 @@ import asyncio
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from cara.queues.middleware.ConcurrencyLimited import (
+from cara.queues.middleware.ConcurrencyBackendUnavailable import (
     ConcurrencyBackendUnavailable,
-    ConcurrencyExceeded,
-    ConcurrencyLimited,
 )
+from cara.queues.middleware.ConcurrencyExceeded import ConcurrencyExceeded
+from cara.queues.middleware.ConcurrencyLimited import ConcurrencyLimited
 
 
 class _Job:
@@ -41,9 +41,15 @@ class _Job:
 class _FakeRedis:
     """Records EVAL/ZREM traffic; ``eval_result`` drives the verdict."""
 
-    def __init__(self, eval_result: int | None = 1, raises: Exception | None = None):
+    def __init__(
+        self,
+        eval_result: int | None = 1,
+        raises: Exception | None = None,
+        release_raises: Exception | None = None,
+    ):
         self.eval_result = eval_result
         self.raises = raises
+        self.release_raises = release_raises
         self.evals: list[tuple] = []
         self.zrems: list[tuple[str, str]] = []
 
@@ -54,6 +60,8 @@ class _FakeRedis:
         return self.eval_result
 
     def zrem(self, key, member):
+        if self.release_raises is not None:
+            raise self.release_raises
         self.zrems.append((key, member))
         return 1
 
@@ -128,6 +136,24 @@ def test_the_slot_is_released_when_the_job_finishes() -> None:
     assert [key for key, _ in redis.zrems] == ["cara:concurrency:upstream"]
 
 
+def test_release_backend_fault_is_reported_but_ttl_owns_recovery(caplog) -> None:
+    redis = _FakeRedis(release_raises=RedisConnectionError("redis is down"))
+    middleware = ConcurrencyLimited(max_concurrent=1, key="upstream")
+    ran: list[str] = []
+
+    with caplog.at_level("WARNING"):
+        result = asyncio.run(
+            _run_with_cache(middleware, _CacheManager(_RedisLikeDriver(redis)), ran)
+        )
+
+    assert result == "done"
+    assert ran == ["body"]
+    assert any(
+        "concurrency backend unavailable for upstream" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_a_full_cap_throttles_without_running_the_body() -> None:
     redis = _FakeRedis(eval_result=0)
     middleware = ConcurrencyLimited(max_concurrent=1, key="upstream", retry_delay=0)
@@ -186,20 +212,31 @@ def test_a_non_redis_driver_refuses_instead_of_running_uncapped() -> None:
     )
 
 
-def test_no_cache_binding_at_all_still_runs_the_job() -> None:
-    """ABSENCE is not a fault.
-
-    Early boot, a CLI without the full container and isolated unit tests
-    have no cache service to be closed against; refusing there would
-    livelock every consumer of this middleware.
-    """
+def test_no_cache_binding_fails_closed() -> None:
     middleware = ConcurrencyLimited(max_concurrent=1, key="unbound-key")
     ran: list[str] = []
 
-    result = asyncio.run(_run_with_cache(middleware, None, ran))
+    with pytest.raises(ConcurrencyBackendUnavailable, match="cache binding"):
+        asyncio.run(_run_with_cache(middleware, None, ran))
 
-    assert result == "done"
-    assert ran == ["body"]
+    assert ran == []
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "exception_type"),
+    [
+        ({"max_concurrent": 0}, ValueError),
+        ({"max_concurrent": True}, TypeError),
+        ({"retry_delay": -1}, ValueError),
+        ({"retry_delay": 1.5}, TypeError),
+        ({"slot_ttl": 0}, ValueError),
+        ({"slot_ttl": False}, TypeError),
+        ({"key": "  "}, ValueError),
+    ],
+)
+def test_invalid_limiter_configuration_is_rejected(kwargs, exception_type) -> None:
+    with pytest.raises(exception_type):
+        ConcurrencyLimited(**kwargs)
 
 
 async def _run_with_cache(middleware, cache, ran: list[str]):

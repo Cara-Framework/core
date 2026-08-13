@@ -10,7 +10,7 @@ say so in the page (:func:`gen_queues` does) rather than emit an empty table.
 The directory layout the walkers probe — deployables beside a dev-only kernel,
 routes under the HTTP deployable, plug-in packages under the worker — is
 DOCTRINE layout, identical in every Cara product. Everything the layout cannot
-tell you comes from the product's :class:`~cara.docs.Manifest.DocsManifest`.
+tell you comes from the product's :class:`~cara.docs.DocsManifest.DocsManifest`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import ast
 import re
 from pathlib import Path
 
-from cara.docs.Manifest import DocsManifest
+from cara.docs.DocsManifest import DocsManifest
 from cara.docs.Support import Say, header, md_escape, read, write_if_changed
 
 # ---------------------------------------------------------------- routes

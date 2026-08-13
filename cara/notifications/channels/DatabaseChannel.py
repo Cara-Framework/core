@@ -13,6 +13,7 @@ import pendulum
 
 from cara.exceptions import ConfigurationException
 from cara.notifications.channels.BaseChannel import BaseChannel
+from cara.support import json_dumps
 
 
 class DatabaseChannel(BaseChannel):
@@ -33,13 +34,19 @@ class DatabaseChannel(BaseChannel):
             database_manager: Database manager instance (REQUIRED)
             table_name: Name of the notifications table
         """
-        if database_manager is None:
+        if database_manager is None or not callable(
+            getattr(database_manager, "table", None)
+        ):
             raise ConfigurationException(
-                "Database manager is required for DatabaseChannel"
+                "DatabaseChannel requires a database manager with table()."
+            )
+        if not isinstance(table_name, str) or not table_name.strip():
+            raise ConfigurationException(
+                "DatabaseChannel table_name must be a non-empty string."
             )
 
         self.database_manager = database_manager
-        self.table_name = table_name
+        self.table_name = table_name.strip()
 
     def send(self, notifiable, notification) -> bool:
         """
@@ -55,8 +62,10 @@ class DatabaseChannel(BaseChannel):
         data = notification.to_database(notifiable)
         if data is None:
             data = notification.to_array(notifiable)
-        if data is None:
-            data = {}
+        if not isinstance(data, dict):
+            raise ConfigurationException(
+                "Database notifications must render a dictionary payload."
+            )
 
         notification_type = notification.__class__.__name__
 
@@ -67,9 +76,9 @@ class DatabaseChannel(BaseChannel):
         now = pendulum.now("UTC")
         record = {
             "type": notification_type,
-            "notifiable_type": self._get_notifiable_type(notifiable),
-            "notifiable_id": self._get_notifiable_id(notifiable),
-            "data": self._serialize_data(data if isinstance(data, dict) else {}),
+            "notifiable_type": self.notifiable_type(notifiable),
+            "notifiable_id": self.notifiable_id(notifiable),
+            "data": self._serialize_data(data),
             "read_at": None,
             "created_at": now,
             "updated_at": now,
@@ -81,25 +90,6 @@ class DatabaseChannel(BaseChannel):
 
         return self._store_notification(record)
 
-    def _get_notifiable_id(self, notifiable) -> Any:
-        """
-        Get the notifiable entity ID.
-
-        Args:
-            notifiable: The notifiable entity
-
-        Returns:
-            Entity ID
-        """
-        if hasattr(notifiable, "get_notification_key"):
-            return notifiable.get_notification_key()
-        elif hasattr(notifiable, "id"):
-            return notifiable.id
-        elif hasattr(notifiable, "pk"):
-            return notifiable.pk
-        else:
-            return id(notifiable)
-
     def _serialize_data(self, data: dict[str, Any]) -> str:
         """
         Serialize notification data.
@@ -110,18 +100,8 @@ class DatabaseChannel(BaseChannel):
         Returns:
             Serialized data string
         """
-        import json
 
-        try:
-            return json.dumps(data, default=str)
-        except Exception:
-            return str(data)
-
-    def _get_notifiable_type(self, notifiable) -> str:
-        """Get the framework-level polymorphic recipient type."""
-        if hasattr(notifiable, "get_notification_type"):
-            return str(notifiable.get_notification_type())
-        return notifiable.__class__.__name__
+        return json_dumps(data)
 
     def _store_notification(self, record: dict[str, Any]) -> bool:
         """
@@ -151,11 +131,12 @@ class DatabaseChannel(BaseChannel):
         """
         query = (
             self.database_manager.table(self.table_name)
-            .where("notifiable_type", self._get_notifiable_type(notifiable))
-            .where("notifiable_id", self._get_notifiable_id(notifiable))
+            .where("notifiable_type", self.notifiable_type(notifiable))
+            .where("notifiable_id", self.notifiable_id(notifiable))
         )
 
-        if notification_ids:
+        if notification_ids is not None:
+            self._validate_notification_ids(notification_ids)
             query = query.where_in("id", notification_ids)
 
         query.update({"read_at": pendulum.now("UTC")})
@@ -174,10 +155,12 @@ class DatabaseChannel(BaseChannel):
         """
         query = (
             self.database_manager.table(self.table_name)
-            .where("notifiable_type", self._get_notifiable_type(notifiable))
-            .where("notifiable_id", self._get_notifiable_id(notifiable))
+            .where("notifiable_type", self.notifiable_type(notifiable))
+            .where("notifiable_id", self.notifiable_id(notifiable))
         )
 
+        if read is not None and not isinstance(read, bool):
+            raise ConfigurationException("Notification read filter must be bool or None.")
         if read is True:
             query = query.where_not_null("read_at")
         elif read is False:
@@ -189,10 +172,31 @@ class DatabaseChannel(BaseChannel):
         """Mark notifications as unread for one polymorphic recipient."""
         query = (
             self.database_manager.table(self.table_name)
-            .where("notifiable_type", self._get_notifiable_type(notifiable))
-            .where("notifiable_id", self._get_notifiable_id(notifiable))
+            .where("notifiable_type", self.notifiable_type(notifiable))
+            .where("notifiable_id", self.notifiable_id(notifiable))
         )
-        if notification_ids:
+        if notification_ids is not None:
+            self._validate_notification_ids(notification_ids)
             query = query.where_in("id", notification_ids)
         query.update({"read_at": None})
         return True
+
+    @staticmethod
+    def _validate_notification_ids(notification_ids: list) -> None:
+        if not isinstance(notification_ids, list) or not notification_ids:
+            raise ConfigurationException(
+                "Notification id filters must be non-empty lists."
+            )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (str, int))
+            or (isinstance(value, str) and not value.strip())
+            for value in notification_ids
+        ):
+            raise ConfigurationException(
+                "Notification id filters must contain non-empty string or integer ids."
+            )
+        if len(set(notification_ids)) != len(notification_ids):
+            raise ConfigurationException(
+                "Notification id filters must not contain duplicate ids."
+            )

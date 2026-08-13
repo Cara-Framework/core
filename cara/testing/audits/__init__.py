@@ -8,40 +8,48 @@ call an audit directly from a test, the way they already call
 ``audit_migrations``.
 """
 
-from .AsyncDispatchAudit import DISPATCH_CALLS, AsyncDispatchAudit, DispatchFinding
-from .CacheKeyAudit import IMPLICIT_PARAMETERS, CacheKeyAudit, CacheKeyFinding
-from .DeployTopologyAudit import (
-    OUTBOX_ALERTS,
-    PROBE_STALE_ALERT,
-    PROCESS_TYPE_ROLES,
-    READINESS_ALERTS,
-    REQUIRED_ROLES,
-    DeployTopologyAudit,
-    DeployTopologyManifest,
-    scheduled_job_ids,
-)
-from .NumericTruthinessAudit import (
-    SAFE_DEFAULTS,
-    NumericTruthinessAudit,
-    TruthinessFinding,
-)
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AsyncDispatchAudit": (".AsyncDispatchAudit", "AsyncDispatchAudit"),
+    "CacheKeyAudit": (".CacheKeyAudit", "CacheKeyAudit"),
+    "CacheKeyFinding": (".CacheKeyFinding", "CacheKeyFinding"),
+    "DISPATCH_CALLS": (".AsyncDispatchAudit", "DISPATCH_CALLS"),
+    "DeployTopologyAudit": (".DeployTopologyAudit", "DeployTopologyAudit"),
+    "DeployTopologyManifest": (".DeployTopologyManifest", "DeployTopologyManifest"),
+    "DispatchFinding": (".DispatchFinding", "DispatchFinding"),
+    "IMPLICIT_PARAMETERS": (".CacheKeyAudit", "IMPLICIT_PARAMETERS"),
+    "NO_EXPORTER": (".DeployTopologyAudit", "NO_EXPORTER"),
+    "NumericTruthinessAudit": (".NumericTruthinessAudit", "NumericTruthinessAudit"),
+    "OUTBOX_ALERTS": (".DeployTopologyAudit", "OUTBOX_ALERTS"),
+    "PROBE_STALE_ALERT": (".DeployTopologyAudit", "PROBE_STALE_ALERT"),
+    "PROCESS_TYPE_ROLES": (".DeployTopologyAudit", "PROCESS_TYPE_ROLES"),
+    "READINESS_ALERTS": (".DeployTopologyAudit", "READINESS_ALERTS"),
+    "REQUIRED_ROLES": (".DeployTopologyAudit", "REQUIRED_ROLES"),
+    "SAFE_DEFAULTS": (".NumericTruthinessAudit", "SAFE_DEFAULTS"),
+    "TruthinessFinding": (".TruthinessFinding", "TruthinessFinding"),
+    "scheduled_job_ids": (".DeployTopologyAudit", "scheduled_job_ids"),
+}
 
 __all__ = [
+    "AsyncDispatchAudit",
+    "CacheKeyAudit",
+    "CacheKeyFinding",
     "DISPATCH_CALLS",
+    "DeployTopologyAudit",
+    "DeployTopologyManifest",
+    "DispatchFinding",
     "IMPLICIT_PARAMETERS",
+    "NO_EXPORTER",
+    "NumericTruthinessAudit",
     "OUTBOX_ALERTS",
     "PROBE_STALE_ALERT",
     "PROCESS_TYPE_ROLES",
     "READINESS_ALERTS",
     "REQUIRED_ROLES",
     "SAFE_DEFAULTS",
-    "AsyncDispatchAudit",
-    "CacheKeyAudit",
-    "CacheKeyFinding",
-    "DeployTopologyAudit",
-    "DeployTopologyManifest",
-    "DispatchFinding",
-    "NumericTruthinessAudit",
     "TruthinessFinding",
     "scheduled_job_ids",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

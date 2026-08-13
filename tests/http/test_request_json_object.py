@@ -12,7 +12,7 @@ import json
 import pytest
 
 from cara.exceptions import BadRequestException
-from cara.exceptions.types.validation import ValidationException
+from cara.exceptions.types.ValidationException import ValidationException
 from cara.http.request.Request import Request
 
 

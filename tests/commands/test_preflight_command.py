@@ -16,11 +16,8 @@ from unittest.mock import MagicMock
 # ``import cara.commands.core.PreflightCommand`` would bind the class, not the
 # module, and ``monkeypatch.setattr(mod, "config", ...)`` would fail. Pull the
 # real module object out of ``sys.modules`` instead (it's there once imported).
+from cara.commands.core.CheckResult import FAIL, OK, WARN, CheckResult
 from cara.commands.core.PreflightCommand import (
-    FAIL,
-    OK,
-    WARN,
-    CheckResult,
     PreflightCommand,
     check_app_key_set,
     check_debug_off_in_prod,

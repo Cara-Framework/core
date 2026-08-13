@@ -12,22 +12,11 @@ Wire-up lives in :mod:`cara.queues.Bus`, which runs jobs through
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 from collections.abc import Callable
+from typing import Any
+from cara.context import Tenancy
 
-from .ConcurrencyLimited import ConcurrencyLimited
-from .RateLimited import RateLimited, WithoutOverlapping
-from .ThrottlesExceptions import ThrottlesExceptions
-
-__all__ = [
-    "ConcurrencyLimited",
-    "RateLimited",
-    "ThrottlesExceptions",
-    "WithoutOverlapping",
-    "run_middleware_chain_async",
-    "run_through_middleware",
-    "run_through_middleware_async",
-]
+from cara._LazyExports import _install_lazy_exports
 
 
 def _build_chain(job, handler: Callable) -> Callable:
@@ -98,7 +87,6 @@ async def run_through_middleware_async(job, handler: Callable) -> Any:
     dispatch time. An inline (sync-mode) dispatch never sets the attr —
     the job simply inherits the caller's live context.
     """
-    from cara.context import Tenancy
 
     tenant_id = getattr(job, "_tenant_id", _TENANT_UNSET)
     tenant_mode = getattr(job, "_tenant_mode", _TENANT_UNSET)
@@ -147,3 +135,34 @@ def run_through_middleware(job, handler: Callable) -> Any:
         return res
 
     return asyncio.run(run_through_middleware_async(job, async_handler))
+
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "ConcurrencyBackendUnavailable": (
+        ".ConcurrencyBackendUnavailable",
+        "ConcurrencyBackendUnavailable",
+    ),
+    "ConcurrencyExceeded": (".ConcurrencyExceeded", "ConcurrencyExceeded"),
+    "ConcurrencyLimited": (".ConcurrencyLimited", "ConcurrencyLimited"),
+    "RateLimited": (".RateLimited", "RateLimited"),
+    "ThrottlesExceptions": (".ThrottlesExceptions", "ThrottlesExceptions"),
+    "WithoutOverlapping": (".WithoutOverlapping", "WithoutOverlapping"),
+}
+
+__all__ = [
+    "Any",
+    "Callable",
+    "ConcurrencyBackendUnavailable",
+    "ConcurrencyExceeded",
+    "ConcurrencyLimited",
+    "RateLimited",
+    "Tenancy",
+    "ThrottlesExceptions",
+    "WithoutOverlapping",
+    "asyncio",
+    "run_middleware_chain_async",
+    "run_through_middleware",
+    "run_through_middleware_async",
+]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

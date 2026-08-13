@@ -1,16 +1,11 @@
+"""Foundation — layer barrel (generated, DOCTRINE §5.1)."""
+
 from __future__ import annotations
 
+import builtins
 from typing import Any, TypeVar
 
-# Import Provider (and DeferredProvider) BEFORE Application: Application's
-# import chain pulls in providers that do `from cara.foundation import Provider`
-# while this package is mid-init. Binding Provider first prevents Python from
-# returning the submodule instead of the class (circular-import at boot).
-from .Provider import Provider
-from .DeferredProvider import DeferredProvider
-from .Application import Application
-
-T = TypeVar("T")
+from cara._LazyExports import _install_lazy_exports
 
 
 def resolve(abstract: Any, *args: Any) -> Any:
@@ -26,15 +21,29 @@ def resolve(abstract: Any, *args: Any) -> Any:
     Returns:
         The resolved instance.
     """
-    import builtins
 
     application = builtins.app()
     return application.make(abstract, *args)
 
 
+T = TypeVar("T")
+
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "Application": (".Application", "Application"),
+    "DeferredProvider": (".DeferredProvider", "DeferredProvider"),
+    "Provider": (".Provider", "Provider"),
+}
+
 __all__ = [
+    "Any",
     "Application",
     "DeferredProvider",
     "Provider",
+    "T",
+    "TypeVar",
+    "builtins",
     "resolve",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

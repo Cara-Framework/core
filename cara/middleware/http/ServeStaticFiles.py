@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from cara.http import Request, Response
-from cara.middleware import Middleware
-from cara.support.Paths import public_path
+from cara.middleware.Middleware import Middleware
+from cara.support import public_path
 
 
 class ServeStaticFiles(Middleware):
@@ -68,8 +69,6 @@ class ServeStaticFiles(Middleware):
         try:
             return self._serve_file(full_path, request.method == "HEAD")
         except Exception as exc:
-            import sys
-
             print(
                 f"[cara.middleware] ServeStaticFiles failed for '{path}': {exc}",
                 file=sys.stderr,

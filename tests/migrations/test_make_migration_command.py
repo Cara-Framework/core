@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cara.commands.core.MakeMigrationCommand import MakeMigrationCommand
-from cara.support.PathManager import PathManager
+from cara.environment import PathManager
 
 
 def _make_command(options=None) -> MakeMigrationCommand:

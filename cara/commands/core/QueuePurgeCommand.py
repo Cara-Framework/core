@@ -16,25 +16,45 @@ from __future__ import annotations
 
 import pendulum
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.facades import Log
-from cara.queues.delivery.QueueOperationsStore import QueueOperationsStore
-from cara.queues.Topology import DEAD_LETTER_QUEUE, close_quietly
+from cara.queues import DEAD_LETTER_QUEUE, QueueOperationsStore, close_quietly
 
 
 @command(
     name="queue:purge",
     help="Purge failed tracker jobs and terminal delivery-ledger rows",
-    options={
-        "--queue=?": "Scope the purge to one queue",
-        "--older-than=24": "Purge rows older than N hours",
-        "--broker": (
-            "Also purge the live dead-letter queue over AMQP "
-            "(queue-wide, ignores --older-than)"
-        ),
-        "--force": "Skip the confirmation prompt",
-    },
+    options=[
+        {
+            "name": "--queue",
+            "help": "Scope the purge to one queue",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--older-than",
+            "help": "Purge rows older than N hours",
+            "type": int,
+            "default": 24,
+            "is_flag": False,
+        },
+        {
+            "name": "--broker",
+            "help": "Also purge the live dead-letter queue over AMQP (queue-wide, ignores --older-than)",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Skip the confirmation prompt",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class QueuePurgeCommand(CommandBase):
     """Reclaim terminal queue state from the tracker and the ledger."""

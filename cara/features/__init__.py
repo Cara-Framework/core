@@ -1,5 +1,19 @@
-"""Feature flags — cached, fail-open runtime gate (Pennant-lite)."""
+"""Feature flags — cached, fail-closed runtime gate (Pennant-lite)."""
 
-from .FeatureManager import ABSENT, Feature, FeatureManager, bucket
+from cara._LazyExports import _install_lazy_exports
 
-__all__ = ["ABSENT", "Feature", "FeatureManager", "bucket"]
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "ABSENT": (".FeatureManager", "ABSENT"),
+    "Feature": (".FeatureManager", "Feature"),
+    "FeatureManager": (".FeatureManager", "FeatureManager"),
+    "bucket": (".FeatureManager", "bucket"),
+}
+
+__all__ = [
+    "ABSENT",
+    "Feature",
+    "FeatureManager",
+    "bucket",
+]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

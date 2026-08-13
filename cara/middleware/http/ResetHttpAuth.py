@@ -1,0 +1,81 @@
+"""
+Authentication Cache Cleanup Middleware.
+
+CRITICAL: This terminable middleware ensures all authentication-related caches
+are cleared after each request to prevent user data leakage between requests.
+Guards are singleton instances that persist across requests.
+
+This middleware runs automatically after every HTTP response is sent.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from cara.facades import Log
+from cara.http import Request, Response
+from cara.middleware.Middleware import Middleware
+
+
+class ResetHttpAuth(Middleware):
+    """
+    CRITICAL: Terminable middleware for authentication cache cleanup.
+
+    This middleware ensures all authentication-related caches are cleared after
+    each request to prevent user data leakage between requests. Guards are
+    singleton instances that persist across requests.
+
+    Security Impact: HIGH - Prevents user authentication data from leaking
+    between different requests and users.
+    """
+
+    async def handle(
+        self, request: Request, next_fn: Callable[..., Awaitable[Any]]
+    ) -> Response:
+        """This middleware only works as terminable, no pre-processing needed."""
+        return await next_fn(request)
+
+    async def terminate(self, request: Request, response: Response):
+        """CRITICAL: Clear all authentication caches after response is sent."""
+        try:
+            # Clear Authentication facade cache
+            auth_manager = self.application.make("auth")
+            if hasattr(auth_manager, "_user"):
+                auth_manager._user = None
+
+            # Clear Request object user cache. ``request.user`` is a
+            # METHOD (returns ``self._user``); never assign to it —
+            # doing so used to shadow the method with ``None`` and
+            # break every subsequent ``request.user()`` call within the
+            # same Request instance lifetime. We clear ``_user`` and
+            # use the canonical ``set_user`` setter where available.
+            setter = getattr(request, "set_user", None)
+            if callable(setter):
+                with contextlib.suppress(
+                    OSError, RuntimeError, AttributeError, ConnectionError
+                ):
+                    setter(None)
+            elif hasattr(request, "_user"):
+                request._user = None
+
+            # Clear all registered guard caches — query the actual guard
+            # dict so new guards are always covered automatically.
+            for guard in getattr(auth_manager, "guards", {}).values():
+                if hasattr(guard, "_user"):
+                    guard._user = None
+                if hasattr(guard, "_token"):
+                    guard._token = None
+                if hasattr(guard, "_last_payload"):
+                    guard._last_payload = None
+
+        except Exception as exc:
+            # CRITICAL: Never let cache cleanup break the application,
+            # but do log so operators can diagnose cache-leak risks.
+            Log.warning(
+                "HTTP auth cleanup failed: %s",
+                exc,
+                category="cara.middleware.reset_auth",
+                exc_info=True,
+            )

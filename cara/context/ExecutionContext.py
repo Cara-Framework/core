@@ -207,7 +207,10 @@ class ExecutionContext:
             # registry for the thread. ``set`` inside ``ctx.run`` mutates only
             # this copied context, never the parent's. Imported lazily to
             # avoid an eloquent -> context import cycle.
-            from cara.eloquent.connections.ConnectionResolver import reset_registry
+
+            from cara.eloquent.connections.ConnectionResolver import (  # local: cycle with cara.eloquent.connections.ConnectionResolver
+                reset_registry,
+            )
 
             reset_registry()
             return func(*args, **kwargs)

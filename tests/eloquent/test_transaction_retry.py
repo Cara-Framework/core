@@ -12,7 +12,7 @@ and let the outermost ``atomic`` do the retrying.
 
 These tests drive the retry contract WITHOUT a real database by pinning a
 fake connection (mirroring ``PostgresConnection``'s ``transaction_level``
-math) on the singleton ``DatabaseManager``'s resolver — the same technique
+math) on an explicitly facade-bound ``DatabaseManager`` resolver — the same technique
 ``test_after_commit.py`` uses.
 
 The bare-``pgcode`` cases below are unit coverage of the vocabulary. They are
@@ -24,16 +24,21 @@ happens on the wire.
 
 from __future__ import annotations
 
+import importlib
+
 import psycopg2.errors
 import pytest
 
+from cara.eloquent.Atomic import Atomic, atomic
 from cara.eloquent.connections.ConnectionResolver import (
     _get_after_commit_registry,
     _get_registry,
 )
 from cara.eloquent.DatabaseManager import DatabaseManager
-from cara.eloquent.Transactions import Atomic, atomic
 from cara.exceptions import DatabaseUnavailableException, QueryException
+from cara.testing.FacadeSwap import swap
+
+_ATOMIC_MODULE = importlib.import_module("cara.eloquent.Atomic")
 
 
 class _FakeConnection:
@@ -84,7 +89,7 @@ class _NonRetriable(Exception):
 
 @pytest.fixture(autouse=True)
 def _fake_db(monkeypatch):
-    """Pin a fresh fake connection on the singleton DB manager's resolver.
+    """Pin a fresh fake connection on an explicitly bound DB manager.
 
     Clears the per-context transaction registry around every test so a
     pinned connection / pending callback never leaks between cases. Returns
@@ -95,15 +100,16 @@ def _fake_db(monkeypatch):
     _get_after_commit_registry().clear()
 
     conn = _FakeConnection()
-    dm = DatabaseManager.get_instance()
+    dm = DatabaseManager("app", {"app": {"driver": "sqlite"}})
     resolver = dm._ensure_resolver()
     monkeypatch.setattr(
         resolver, "_create_connection_instance", lambda name: conn, raising=False
     )
     # Don't actually sleep through the retry backoff in tests.
-    monkeypatch.setattr("cara.eloquent.Transactions.time.sleep", lambda _s: None)
+    monkeypatch.setattr(_ATOMIC_MODULE.time, "sleep", lambda _s: None)
 
-    yield conn
+    with swap("DB", dm):
+        yield conn
 
     _get_registry().clear()
     _get_after_commit_registry().clear()

@@ -3,23 +3,15 @@
 from __future__ import annotations
 
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from cara.validation import MessageFormatter
+from cara.validation.MessageFormatter import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
-
-try:
-    from zoneinfo import ZoneInfo, available_timezones
-except ImportError:  # py < 3.9 fallback (shouldn't hit in this codebase)
-    ZoneInfo = None  # type: ignore[assignment]
-
-    def available_timezones() -> set:  # type: ignore[no-redef]
-        """Fallback when ``zoneinfo`` isn't on the import path."""
-        return set()
 
 
 class TimezoneRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        if not isinstance(value, str) or ZoneInfo is None:
+        if not isinstance(value, str):
             return False
         try:
             ZoneInfo(value)

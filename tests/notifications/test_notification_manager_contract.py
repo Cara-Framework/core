@@ -68,20 +68,35 @@ def test_channel_registration_rejects_invalid_or_duplicate_entries() -> None:
         manager.add_channel("broken", object())
 
 
-def test_via_contract_is_explicit_and_duplicate_channels_send_once() -> None:
+def test_via_contract_is_explicit_and_rejects_duplicate_channels() -> None:
     manager = NotificationManager()
     channel = _Channel()
     manager.add_channel("database", channel)
 
-    assert manager.send_now(
-        _Recipient(),
-        _Notification(["database", "database"]),
-    )
-    assert len(channel.calls) == 1
+    with pytest.raises(InvalidArgumentException, match="declared more than once"):
+        manager.send_now(
+            _Recipient(),
+            _Notification(["database", "database"]),
+        )
+    assert channel.calls == []
 
-    for invalid in ("database", {"database"}, [""]):
+    for invalid in ("database", {"database"}, [""], []):
         with pytest.raises(InvalidArgumentException):
             manager.send_now(_Recipient(), _Notification(invalid))
+
+
+def test_fanout_requires_every_requested_channel_to_succeed() -> None:
+    class _RejectingChannel(BaseChannel):
+        def send(self, notifiable, notification) -> bool:
+            return False
+
+    manager = NotificationManager()
+    manager.add_channel("accepted", _Channel())
+    manager.add_channel("rejected", _RejectingChannel())
+
+    assert (
+        manager.send_now(_Recipient(), _Notification(["accepted", "rejected"])) is False
+    )
 
 
 def test_channel_receives_the_original_notification() -> None:
@@ -103,10 +118,12 @@ def test_queue_dispatch_failures_propagate(monkeypatch) -> None:
 
     monkeypatch.setattr(notification_module, "Queue", _Queue)
 
+    manager = NotificationManager()
+    manager.add_channel("database", _Channel())
     with pytest.raises(RuntimeError, match="broker unavailable"):
-        NotificationManager().send(
+        manager.send(
             _Recipient(),
-            _QueuedNotification([]),
+            _QueuedNotification(["database"]),
         )
 
 
@@ -119,9 +136,11 @@ def test_send_delayed_always_queues_even_without_should_queue(monkeypatch) -> No
         )
 
     monkeypatch.setattr(notification_module, "Queue", _Queue)
-    notification = _Notification([])
+    manager = NotificationManager()
+    manager.add_channel("database", _Channel())
+    notification = _Notification(["database"])
 
-    assert NotificationManager().send_delayed(
+    assert manager.send_delayed(
         _Recipient(),
         notification,
         45,
@@ -129,8 +148,9 @@ def test_send_delayed_always_queues_even_without_should_queue(monkeypatch) -> No
     assert dispatched[0][1] == 45
     assert notification.get_delay() == 45
 
-    with pytest.raises(InvalidArgumentException):
-        NotificationManager().send_delayed(_Recipient(), notification, 0)
+    for invalid in (0, -1, True, 1.5, "45"):
+        with pytest.raises(InvalidArgumentException):
+            manager.send_delayed(_Recipient(), notification, invalid)
 
 
 def test_notifiable_reads_propagate_storage_failures(monkeypatch) -> None:
@@ -170,3 +190,8 @@ def test_notification_fluent_metadata_rejects_ambiguous_values() -> None:
             notification.delay(value)
     with pytest.raises(InvalidArgumentException):
         notification.with_data([("key", "value")])
+    for value in (4, True, object()):
+        with pytest.raises(InvalidArgumentException):
+            notification.id(value)
+        with pytest.raises(InvalidArgumentException):
+            notification.on_queue(value)

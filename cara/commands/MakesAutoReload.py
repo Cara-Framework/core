@@ -14,10 +14,13 @@ import sys
 import time
 from typing import Any
 
+from cara.support import paths
+
 
 def _auto_reload_handler(command: Any, debounce_delay: float = 0.3) -> Any:
     """Build the optional watchdog handler only when reload is enabled."""
-    from watchdog.events import FileSystemEventHandler
+
+    from watchdog.events import FileSystemEventHandler  # local: heavy optional dep
 
     class AutoReloadHandler(FileSystemEventHandler):
         """Enhanced file watcher for universal auto-reload."""
@@ -111,7 +114,7 @@ class MakesAutoReload:
         if self._observer is not None:
             return  # Already watching
 
-        from watchdog.observers import Observer
+        from watchdog.observers import Observer  # local: heavy optional dep
 
         self._observer = Observer()
         handler = _auto_reload_handler(self)
@@ -130,7 +133,6 @@ class MakesAutoReload:
 
     def _get_default_watch_paths(self) -> list[str]:
         """Get default paths to watch for changes."""
-        from cara.support import paths
 
         watch_paths = []
 
@@ -138,13 +140,9 @@ class MakesAutoReload:
         app_dirs = ["app", "config", "routes", "database", "packages"]
 
         for app_dir in app_dirs:
-            try:
-                path = paths(app_dir)
-                if path and os.path.isdir(path):
-                    watch_paths.append(path)
-            except Exception:
-                # allow-silent-except: an unresolvable watch dir is simply not watched
-                continue
+            path = paths(app_dir)
+            if path and os.path.isdir(path):
+                watch_paths.append(path)
 
         return watch_paths
 

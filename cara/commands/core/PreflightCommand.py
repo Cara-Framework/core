@@ -38,35 +38,14 @@ DB-less service.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.configuration import config
 from cara.decorators import command
 
+from .CheckResult import FAIL, OK, WARN, CheckResult
+
 # --- Check result ----------------------------------------------------------
-
-# A check's three outcomes. ``fail`` is the only one that (absent
-# ``--warn-only``) drives a non-zero exit; ``warn`` is advisory; ``ok`` passes.
-OK = "ok"
-WARN = "warn"
-FAIL = "fail"
-
-
-@dataclass(frozen=True)
-class CheckResult:
-    """The outcome of a single preflight check."""
-
-    status: str  # OK | WARN | FAIL
-    message: str
-
-    @property
-    def failed(self) -> bool:
-        return self.status == FAIL
-
-    @property
-    def warned(self) -> bool:
-        return self.status == WARN
 
 
 def ok(message: str) -> CheckResult:
@@ -278,10 +257,22 @@ _DEFAULT_CHECKS: dict[str, Check] = {
 @command(
     name="check:deploy",
     help="Run production-readiness preflight checks; fails loudly on any problem.",
-    options={
-        "--warn-only": "Downgrade failures to warnings (exit 0) for CI inspection",
-        "--only=?": "Comma-separated check names to run (default: all)",
-    },
+    options=[
+        {
+            "name": "--warn-only",
+            "help": "Downgrade failures to warnings (exit 0) for CI inspection",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--only",
+            "help": "Comma-separated check names to run (default: all)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class PreflightCommand(CommandBase):
     """Run a registry of production-readiness checks before deploy."""

@@ -52,9 +52,9 @@ from cara.configuration import config
 from cara.context import ExecutionContext
 from cara.facades import Log
 from cara.http import Request, Response
-from cara.middleware import Middleware
 from cara.middleware.http.RequestLogStore import RequestLogStore
-from cara.support.Auth import optional_user_id
+from cara.middleware.Middleware import Middleware
+from cara.support import optional_user_id
 
 
 class PersistRequestLog(Middleware):

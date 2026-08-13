@@ -117,16 +117,13 @@ not contain a concrete plug-in token.
 | `third_party_packages` | Closed third-party import-root inventory. Empty uses a catch-all third-party tier; non-empty makes an unknown dependency a distinct final tier so it cannot enter silently. |
 | `deep_import_allowlist` | `(consumer_path, concrete_module)` pairs for dated cycle-breakers that cannot yet use a layer/domain barrel. Stale entries fail. |
 | `source_shape_hard_limit` | Hard production-source file budget; Doctrine default is 700 lines. |
-| `source_shape_edge_method_limit` | Hard public controller/job method budget; Doctrine default is 40 lines. |
+| `source_shape_edge_method_limit` | Hard public controller/job method budget; private adapter-mixin methods pay it too. Doctrine default is 40 lines. |
 | `source_shape_edge_layers` | Layer names treated as transport edges by `source_shape`; normally `controllers` and `jobs`. |
 | `flow_edge_layers` | Layer names that must reach persistence only through a use-case service; normally `controllers` and `jobs`. |
 | `atomic_repository_methods` | Exact `path::Class.method` identities for the sole §8 exception: a fully-contained atomic persistence primitive. Stale identities fail. |
 | `write_ownership` | Table → `api-owned`, `services-owned` or `shared-gate-owned`. Every model-backed table must be declared. |
-| `model_less_write_tables` | Explicit table names whose model-less schema is documented by the product; permits ownership entries without a model class. |
 | `raw_sql_homes` | POSIX path fragments that legitimately own raw SQL, matched against a contiguous run of path parts. Defaults: `repositories`, `commons/gates/persistence`. |
 | `model_import_roots` | Import roots whose names are ORM model classes. Defaults: `app.models`, `models.core`. |
-| `inline_orm_allow_tag` | Comment tag documenting a deliberate inline ORM call. Default: `allow-inline-orm`. |
-| `silent_except_allow_tag` | Comment tag documenting a deliberate silent broad-except. Default: `allow-silent-except`. |
 | `http_import_prefixes` | Import prefixes carrying HTTP transport types. Defaults: `cara.http`, `cara.request`, `cara.response`. |
 | `env_read_exempt_environ_attrs` | `os.environ` methods that snapshot the whole mapping rather than read one variable. Default: `copy`. |
 | `registry_size_bounds` | Optional `(low, high)` budget for the combined `domains` + `flows` entry count. `None` (default) leaves size a review threshold, per §3. |
@@ -466,9 +463,8 @@ tree uses the exact, shrink-only `raw_sql_home` census.
 ORM builder calls on a model imported from `model_import_roots`, anywhere the
 product declares that data access must go through a repository. The whole call
 chain counts, so `Model.without_scope().first()` cannot hide behind a
-non-ORM head. Carve-outs: a single-argument primary-key `find`, a query inside
-the row-locking statement of a `DB.transaction()`, and a
-`# allow-inline-orm: <reason>` tag. Whole-file debt is the exact, shrink-only
+non-ORM head. Carve-outs: a single-argument primary-key `find` and a query inside
+the row-locking statement of a `DB.transaction()`. Whole-file debt is the exact, shrink-only
 `model_query_discipline` census — never a silently skipped subtree.
 
 ### `http_in_business_logic`
@@ -489,8 +485,8 @@ snapshot handed to a subprocess.
 A bare `except:`, or a broad `except Exception` / `except (..., Exception)`
 whose body only passes, ellipses, states a constant or exits the block, with no
 log or re-raise anywhere in the handler. A narrow typed fallback is untouched.
-`silent_except_allow_tag` (default `# allow-silent-except`) documents a
-collect-and-log-later loop.
+There is no comment escape: broad catches report or re-raise at the catch site,
+so an alleged later report cannot drift away and leave the failure silent.
 
 ## 4. Commands
 

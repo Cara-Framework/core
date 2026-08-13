@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from cara.authorization.AuthorizationResponse import AuthorizationResponse
-from cara.authorization.contracts import Policy as PolicyContract
+from cara.authorization.contracts import PolicyContract
 
 # What an ability method or hook may return.
 PolicyResult = bool | AuthorizationResponse | None

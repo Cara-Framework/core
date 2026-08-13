@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from typing import Any
 
 import pendulum
 
 from cara.exceptions import QueueException
-from cara.observability import Trace
+from cara.observability import MetricsBase, Trace
+from cara.queues.contracts import UniqueJob
 from cara.queues.delivery import QueueJobDeliveryStore
 from cara.queues.serializers import SignedJsonJobSerializer
+
+_logger = logging.getLogger("cara.queues.delay")
 
 
 class DurableDelayedJobStore:
@@ -75,7 +79,6 @@ class DurableDelayedJobStore:
         )
         dispatched_at = now.to_iso8601_string()
         tenant_fields = self.driver._tenant_payload(job, merged)
-        from cara.queues.contracts import UniqueJob
 
         unique_key = options.get("unique_key")
         is_source_retry = (
@@ -187,16 +190,17 @@ class DurableDelayedJobStore:
     def refresh_metrics(self) -> None:
         try:
             backlog = self.delivery_store.backlog_metrics()
-            from cara.observability.Metrics import MetricsBase
-
-            MetricsBase.queue_delayed_jobs.labels(status="pending").set(backlog["count"])
-            MetricsBase.queue_delayed_jobs.labels(status="processing").set(0)
-            MetricsBase.queue_delayed_jobs.labels(status="failed").set(0)
-            MetricsBase.queue_delayed_oldest_due_age_seconds.set(backlog["age"])
         except Exception:
-            # allow-silent-except: metrics must never make the durable publisher unavailable
-            # Metrics must never make the durable publisher unavailable.
+            _logger.warning("delayed queue backlog metrics failed", exc_info=True)
             return
+        MetricsBase.safe_set(
+            MetricsBase.queue_delayed_jobs, {"status": "pending"}, backlog["count"]
+        )
+        MetricsBase.safe_set(MetricsBase.queue_delayed_jobs, {"status": "processing"}, 0)
+        MetricsBase.safe_set(MetricsBase.queue_delayed_jobs, {"status": "failed"}, 0)
+        MetricsBase.safe_set(
+            MetricsBase.queue_delayed_oldest_due_age_seconds, {}, backlog["age"]
+        )
 
     def _db(self) -> Any:
         if self.application is None or not self.application.has("DB"):
@@ -248,10 +252,8 @@ class DurableDelayedJobStore:
 
     @staticmethod
     def _transition(outcome: str, *, count: int = 1) -> None:
-        try:
-            from cara.observability.Metrics import MetricsBase
-
-            MetricsBase.queue_delayed_transitions_total.labels(outcome=outcome).inc(count)
-        except Exception:
-            # allow-silent-except: metrics must never make the durable publisher unavailable
-            return
+        MetricsBase.safe_inc(
+            MetricsBase.queue_delayed_transitions_total,
+            {"outcome": outcome},
+            count,
+        )

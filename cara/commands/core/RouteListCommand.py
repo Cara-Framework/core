@@ -10,7 +10,7 @@ import inspect
 import re
 from typing import Any
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import CaraException
 from cara.routing import RouteResolver
@@ -19,9 +19,15 @@ from cara.routing import RouteResolver
 @command(
     name="routes:list",
     help="List all application routes with basic filtering options.",
-    options={
-        "--filter=?": "Filter routes by URI or name pattern",
-    },
+    options=[
+        {
+            "name": "--filter",
+            "help": "Filter routes by URI or name pattern",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class RouteListCommand(CommandBase):
     """List application routes with enhanced display."""

@@ -12,6 +12,7 @@ from cara.exceptions import QueueConfigurationException
 from cara.foundation import DeferredProvider
 from cara.queues.drivers import AMQPDriver
 from cara.queues.Queue import Queue
+from cara.queues.tracking import JobTracker
 
 
 class QueueProvider(DeferredProvider):
@@ -161,7 +162,6 @@ class QueueProvider(DeferredProvider):
 
     def _register_job_tracker(self) -> None:
         """Register JobTracker singleton with unified Job model from container."""
-        from cara.queues.tracking import JobTracker
 
         def create_job_tracker():
             job_model = (

@@ -9,7 +9,7 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -18,13 +18,43 @@ from cara.support import paths
 @command(
     name="key:generate",
     help="Generate a new secure application key and update the .env file.",
-    options={
-        "--dry": "Show what key would be generated without updating .env file",
-        "--length=?": "Key length in bytes (default: 32, min: 16, max: 256)",
-        "--encoding=?": "Key encoding: base64, hex, or raw (default: base64)",
-        "--f|force": "Force generation without confirmation in production",
-        "--show": "Display the generated key in output",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what key would be generated without updating .env file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--length",
+            "help": "Key length in bytes (default: 32, min: 16, max: 256)",
+            "type": int,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--encoding",
+            "help": "Key encoding: base64, hex, or raw (default: base64)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "-f|--force",
+            "help": "Force generation without confirmation in production",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--show",
+            "help": "Display the generated key in output",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class GenerateKeyCommand(CommandBase):
     """Generate secure application keys with enhanced configuration options."""

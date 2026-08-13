@@ -1,154 +1,118 @@
-"""
-Cara Framework Exception System.
-
-Central exception registry. Explicit re-exports via ``__all__`` — no implicit
-wildcard imports, so every public name is visible and deterministic.
-
-**One short name, one class.** This registry used to carry "canonical
-winners preserved from the legacy wildcard order": nine exception short
-names were declared in two or three ``types.*`` modules, this barrel bound
-one copy, ``cara.exceptions.types`` bound another, and fourteen prefixed
-aliases existed purely to keep the shadowed copies reachable. The taxonomy
-was three taxonomies held together by an import ordering nobody could see
-at a call site — ``except ModelNotFoundException`` written against the
-``types`` path never matched what ``Model.find_or_fail`` raised, and the
-404 escaped as an unhandled 500. Every duplicate definition has been
-deleted and every alias with it (§5: no backward-compat shims — movers
-migrate every caller in the same change). ``tests/exceptions/`` pins both
-halves: no short name is defined twice under ``types/``, and every shared
-name resolves to the same object here and in ``cara.exceptions.types``.
-"""
+"""Canonical Cara exception registry."""
 
 from __future__ import annotations
 
-# NOTE: ``ExceptionProvider`` is intentionally NOT imported at module load
-# time — see the lazy ``__getattr__`` at the bottom. Its transitive chain
-# (foundation → Application → support → Collection) imports BOTH
-# ``cara.exceptions.InvalidArgumentException`` (needs the names below bound
-# first) AND ``cara.foundation.Provider`` (a module that is itself only
-# partially initialised whenever ``cara.exceptions`` is imported DURING
-# foundation/environment boot). Importing ExceptionProvider eagerly — at the
-# top OR the bottom — therefore deadlocks one cycle or the other depending on
-# the entry point. A PEP 562 lazy import sidesteps both: the provider (and its
-# foundation dependency) is only resolved when something actually accesses
-# ``cara.exceptions.ExceptionProvider``, never during this module's own load.
-from .types.application import (
-    AppException,
-    ControllerMethodNotFoundException,
-    RouteRegistrationException,
-)
-from .types.authentication import (
-    AccountLockedException,
-    ApiKeyInvalidException,
-    AuthenticationConfigurationException,
-    AuthenticationException,
-    InvalidTokenException,
-    TokenBlacklistedException,
-    TokenExpiredException,
-    TokenInvalidException,
-    UserNotFoundException,
-)
-from .types.authorization import (
-    AuthorizationException,
-    AuthorizationFailedException,
-)
-from .Envelopes import validate_exception_envelopes
-from .types.Base import CaraException
-from .types.broadcasting import (
-    BroadcastingChannelException,
-    BroadcastingConfigurationException,
-    BroadcastingConnectionException,
-    BroadcastingDriverNotFoundException,
-    BroadcastingException,
-)
-from .types.cache import CacheConfigurationException
-from .types.configuration import (
-    ConfigurationException,
-    InvalidConfigurationLocationException,
-    InvalidConfigurationSetupException,
-)
-from .types.container import (
-    ContainerException,
-    GenericContainerException,
-    MissingContainerBindingException,
-    StrictContainerException,
-)
-from .types.Eloquent import (
-    SchemaPlanRefused,
-    ScratchDatabaseException,
-    ConnectionNotRegisteredException,
-    DatabaseUnavailableException,
-    MigrationException,
-    ORMException,
-)
-from .types.encryption import EncryptionException
-from .types.event import (
-    EventDispatchCycleException,
-    EventNameConflictException,
-    ListenerNotFoundException,
-)
-from .types.http import (
-    BadRequestException,
-    Http404Exception,
-    HttpException,
-    InvalidCursor,
-    MethodNotAllowedException,
-    PayloadTooLargeException,
-    ResponseException,
-    RouteNotFoundException,
-    ServiceUnavailableException,
-)
-from .types.loader import (
-    LoaderException,
-    LoaderNotFoundException,
-)
-from .types.mail import (
-    MailConfigurationException,
-    MailDriverException,
-    MailException,
-    MailSendException,
-)
-from .types.middleware import (
-    MiddlewareException,
-    MiddlewareNotFoundException,
-)
-from .types.ModelExceptions import (
-    DriverNotFoundException,
-    InvalidArgumentException,
-    LazyLoadingViolation,
-    ModelException,
-    ModelNotFoundException,
-    MultipleRecordsFoundException,
-    QueryException,
-)
-from .types.queue import (
-    IdempotencyOverlapException,
-    QueueConfigurationException,
-    QueueDriverLibraryNotFoundException,
-    QueueException,
-)
-from .types.rates import RateLimitConfigurationException
-from .types.routing import (
-    RouteException,
-    RouteMiddlewareNotFoundException,
-)
-from .types.scheduling import (
-    DriverLibraryNotFoundException,
-    SchedulingConfigurationException,
-    SchedulingException,
-)
-from .types.storage import (
-    DriverNotRegisteredException,
-    KeyNotFoundException,
-    StorageConfigurationException,
-    StorageException,
-)
-from .types.validation import (
-    InvalidRuleFormatException,
-    RuleNotFoundException,
-    ValidationException,
-)
-from .types.websocket import WebSocketException
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AccountLockedException": (".types", "AccountLockedException"),
+    "ApiKeyInvalidException": (".types", "ApiKeyInvalidException"),
+    "AppException": (".types", "AppException"),
+    "AuthenticationConfigurationException": (
+        ".types",
+        "AuthenticationConfigurationException",
+    ),
+    "AuthenticationException": (".types", "AuthenticationException"),
+    "AuthorizationException": (".types", "AuthorizationException"),
+    "AuthorizationFailedException": (".types", "AuthorizationFailedException"),
+    "BadRequestException": (".types", "BadRequestException"),
+    "BroadcastingChannelException": (".types", "BroadcastingChannelException"),
+    "BroadcastingConfigurationException": (
+        ".types",
+        "BroadcastingConfigurationException",
+    ),
+    "BroadcastingConnectionException": (".types", "BroadcastingConnectionException"),
+    "BroadcastingDriverNotFoundException": (
+        ".types",
+        "BroadcastingDriverNotFoundException",
+    ),
+    "BroadcastingException": (".types", "BroadcastingException"),
+    "CacheConfigurationException": (".types", "CacheConfigurationException"),
+    "CaraException": (".types", "CaraException"),
+    "ConfigurationException": (".types", "ConfigurationException"),
+    "ConnectionNotRegisteredException": (".types", "ConnectionNotRegisteredException"),
+    "ContainerException": (".types", "ContainerException"),
+    "ControllerMethodNotFoundException": (
+        ".types",
+        "ControllerMethodNotFoundException",
+    ),
+    "DatabaseUnavailableException": (".types", "DatabaseUnavailableException"),
+    "DefaultExceptionHandler": (".handlers", "DefaultExceptionHandler"),
+    "DriverLibraryNotFoundException": (".types", "DriverLibraryNotFoundException"),
+    "DriverNotFoundException": (".types", "DriverNotFoundException"),
+    "DriverNotRegisteredException": (".types", "DriverNotRegisteredException"),
+    "EncryptionException": (".types", "EncryptionException"),
+    "EventDispatchCycleException": (".types", "EventDispatchCycleException"),
+    "EventNameConflictException": (".types", "EventNameConflictException"),
+    "FilterSchemaError": (".types", "FilterSchemaError"),
+    "FilterTreeCompileError": (".types", "FilterTreeCompileError"),
+    "FilterTreeError": (".types", "FilterTreeError"),
+    "GenericContainerException": (".types", "GenericContainerException"),
+    "Http404Exception": (".types", "Http404Exception"),
+    "HttpException": (".types", "HttpException"),
+    "IdempotencyOverlapException": (".types", "IdempotencyOverlapException"),
+    "InvalidArgumentException": (".types", "InvalidArgumentException"),
+    "InvalidConfigurationLocationException": (
+        ".types",
+        "InvalidConfigurationLocationException",
+    ),
+    "InvalidConfigurationSetupException": (
+        ".types",
+        "InvalidConfigurationSetupException",
+    ),
+    "InvalidCursor": (".types", "InvalidCursor"),
+    "InvalidRuleFormatException": (".types", "InvalidRuleFormatException"),
+    "InvalidTokenException": (".types", "InvalidTokenException"),
+    "KeyNotFoundException": (".types", "KeyNotFoundException"),
+    "LazyLoadingViolation": (".types", "LazyLoadingViolation"),
+    "ListenerNotFoundException": (".types", "ListenerNotFoundException"),
+    "LoaderException": (".types", "LoaderException"),
+    "LoaderNotFoundException": (".types", "LoaderNotFoundException"),
+    "MailConfigurationException": (".types", "MailConfigurationException"),
+    "MailDriverException": (".types", "MailDriverException"),
+    "MailException": (".types", "MailException"),
+    "MailSendException": (".types", "MailSendException"),
+    "MethodNotAllowedException": (".types", "MethodNotAllowedException"),
+    "MiddlewareException": (".types", "MiddlewareException"),
+    "MiddlewareNotFoundException": (".types", "MiddlewareNotFoundException"),
+    "MigrationException": (".types", "MigrationException"),
+    "MissingContainerBindingException": (".types", "MissingContainerBindingException"),
+    "ModelException": (".types", "ModelException"),
+    "ModelNotFoundException": (".types", "ModelNotFoundException"),
+    "MultipleRecordsFoundException": (".types", "MultipleRecordsFoundException"),
+    "ORMException": (".types", "ORMException"),
+    "PayloadTooLargeException": (".types", "PayloadTooLargeException"),
+    "QueryException": (".types", "QueryException"),
+    "QueueConfigurationException": (".types", "QueueConfigurationException"),
+    "QueueDriverLibraryNotFoundException": (
+        ".types",
+        "QueueDriverLibraryNotFoundException",
+    ),
+    "QueueException": (".types", "QueueException"),
+    "RateLimitConfigurationException": (".types", "RateLimitConfigurationException"),
+    "ResponseException": (".types", "ResponseException"),
+    "RouteException": (".types", "RouteException"),
+    "RouteMiddlewareNotFoundException": (".types", "RouteMiddlewareNotFoundException"),
+    "RouteNotFoundException": (".types", "RouteNotFoundException"),
+    "RouteRegistrationException": (".types", "RouteRegistrationException"),
+    "RuleNotFoundException": (".types", "RuleNotFoundException"),
+    "SchedulingConfigurationException": (".types", "SchedulingConfigurationException"),
+    "SchedulingException": (".types", "SchedulingException"),
+    "SchemaPlanRefused": (".types", "SchemaPlanRefused"),
+    "ScratchDatabaseException": (".types", "ScratchDatabaseException"),
+    "ServiceUnavailableException": (".types", "ServiceUnavailableException"),
+    "StorageConfigurationException": (".types", "StorageConfigurationException"),
+    "StorageException": (".types", "StorageException"),
+    "StrictContainerException": (".types", "StrictContainerException"),
+    "TokenBlacklistedException": (".types", "TokenBlacklistedException"),
+    "TokenExpiredException": (".types", "TokenExpiredException"),
+    "TokenInvalidException": (".types", "TokenInvalidException"),
+    "UnsupportedMediaTypeException": (".types", "UnsupportedMediaTypeException"),
+    "UserNotFoundException": (".types", "UserNotFoundException"),
+    "ValidationException": (".types", "ValidationException"),
+    "WebSocketException": (".types", "WebSocketException"),
+    "validate_exception_envelopes": (".Envelopes", "validate_exception_envelopes"),
+}
 
 __all__ = [
     "AccountLockedException",
@@ -171,6 +135,7 @@ __all__ = [
     "ContainerException",
     "ControllerMethodNotFoundException",
     "DatabaseUnavailableException",
+    "DefaultExceptionHandler",
     "DriverLibraryNotFoundException",
     "DriverNotFoundException",
     "DriverNotRegisteredException",
@@ -178,6 +143,9 @@ __all__ = [
     "EventDispatchCycleException",
     "EventNameConflictException",
     "ExceptionProvider",
+    "FilterSchemaError",
+    "FilterTreeCompileError",
+    "FilterTreeError",
     "GenericContainerException",
     "Http404Exception",
     "HttpException",
@@ -229,20 +197,16 @@ __all__ = [
     "TokenBlacklistedException",
     "TokenExpiredException",
     "TokenInvalidException",
+    "UnsupportedMediaTypeException",
     "UserNotFoundException",
     "ValidationException",
     "WebSocketException",
     "validate_exception_envelopes",
 ]
 
-# Eager import LAST (after every exception name above is bound). A PEP 562
-# lazy ``__getattr__`` does NOT work here: the submodule is also named
-# ``ExceptionProvider``, so the first ``from .ExceptionProvider import …``
-# registers the MODULE as ``cara.exceptions.ExceptionProvider`` and every later
-# ``from cara.exceptions import ExceptionProvider`` then resolves to the module
-# (Kernel's provider list got a module → ``issubclass() arg 1 must be a class``).
-# Binding the CLASS here overrides that. The foundation circular import this
-# used to trigger is now broken inside ``ExceptionProvider.py`` itself (it
-# imports ``cara.foundation.Provider`` directly), so this eager line is safe
-# regardless of whether ``cara.exceptions`` is loaded during foundation boot.
+_install_lazy_exports(__name__, _LAZY_EXPORTS)
+
+# Imported after every exception name is bound. ``ExceptionProvider`` itself
+# keeps the HTTP handler lazy, so this canonical class export is cold-import
+# safe and can never be shadowed by its same-named submodule.
 from .ExceptionProvider import ExceptionProvider  # noqa: E402

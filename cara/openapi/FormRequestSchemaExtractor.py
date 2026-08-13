@@ -36,6 +36,23 @@ def _static_value(node: ast.AST, values: dict[str, Any]) -> Any:
         if any(value is None for value in resolved):
             return None
         return resolved
+    if isinstance(node, ast.Dict):
+        resolved_dict: dict[Any, Any] = {}
+        for key_node, value_node in zip(node.keys, node.values, strict=True):
+            value = _static_value(value_node, values)
+            if key_node is None:
+                if not isinstance(value, dict):
+                    return None
+                resolved_dict.update(value)
+                continue
+            key = _static_value(key_node, values)
+            if key is None or value is None:
+                return None
+            try:
+                resolved_dict[key] = value
+            except TypeError:
+                return None
+        return resolved_dict
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         left = _static_value(node.left, values)
         right = _static_value(node.right, values)
@@ -47,8 +64,10 @@ def _static_value(node: ast.AST, values: dict[str, Any]) -> Any:
     return None
 
 
-def _module_values(tree: ast.Module) -> dict[str, Any]:
-    values: dict[str, Any] = {}
+def _module_values(
+    tree: ast.Module, imported_values: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    values = dict(imported_values or {})
     for node in tree.body:
         target: ast.Name | None = None
         value: ast.AST | None = None
@@ -64,6 +83,71 @@ def _module_values(tree: ast.Module) -> dict[str, Any]:
         if resolved is not None:
             values[target.id] = resolved
     return values
+
+
+def _module_name(root: Path, path: Path) -> str:
+    relative = path.relative_to(root).with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _imported_module_name(
+    root: Path,
+    path: Path,
+    node: ast.ImportFrom,
+    known_modules: frozenset[str],
+) -> str | None:
+    if node.level:
+        package = list(path.relative_to(root).parent.parts)
+        ascend = node.level - 1
+        if ascend > len(package):
+            return None
+        base = package[: len(package) - ascend]
+        if node.module:
+            base.extend(node.module.split("."))
+        candidate = ".".join(base)
+        return candidate if candidate in known_modules else None
+    if not node.module:
+        return None
+    matches = [
+        module
+        for module in known_modules
+        if node.module == module or node.module.endswith(f".{module}")
+    ]
+    return max(matches, key=len) if matches else None
+
+
+def _resolve_module_values(
+    root: Path, modules: dict[Path, ast.Module]
+) -> dict[Path, dict[str, Any]]:
+    """Resolve inert constants, including imports between request modules."""
+
+    module_paths = {_module_name(root, path): path for path in modules}
+    known_modules = frozenset(module_paths)
+    resolved = {path: _module_values(tree) for path, tree in modules.items()}
+    for _ in range(len(modules) + 1):
+        changed = False
+        for path, tree in modules.items():
+            imported: dict[str, Any] = {}
+            for node in tree.body:
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                target_name = _imported_module_name(root, path, node, known_modules)
+                if target_name is None:
+                    continue
+                target_values = resolved[module_paths[target_name]]
+                for alias in node.names:
+                    if alias.name in target_values:
+                        imported[alias.asname or alias.name] = target_values[alias.name]
+            current = _module_values(tree, imported)
+            if current != resolved[path]:
+                resolved[path] = current
+                changed = True
+        if not changed:
+            break
+    return resolved
 
 
 def _rule_expression(node: ast.AST, values: dict[str, Any]) -> tuple[str, bool]:
@@ -115,7 +199,9 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
     names = {token.partition(":")[0] for token in tokens}
     schema: dict[str, Any] = {"x-cara-rule": rule}
 
-    if "integer" in names:
+    if "decimal_text" in names:
+        schema["type"] = "string"
+    elif "integer" in names:
         schema["type"] = "integer"
     elif "numeric" in names:
         schema["type"] = "number"
@@ -170,6 +256,34 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
             )
         elif name == "dateformat":
             schema["x-cara-date-format"] = argument
+        elif name == "decimal_text":
+            parts = argument.split(",")
+            try:
+                precision, scale = (int(part) for part in parts)
+            except TypeError, ValueError:
+                continue
+            if precision < 1 or scale < 0 or scale > precision:
+                continue
+            integer_digits = precision - scale
+            if integer_digits == 0:
+                whole = "0"
+            elif integer_digits == 1:
+                whole = "(?:0|[1-9])"
+            else:
+                whole = f"(?:0|[1-9][0-9]{{0,{integer_digits - 1}}})"
+            fraction = f"(?:\\.[0-9]{{1,{scale}}})?" if scale else ""
+            schema.update(
+                {
+                    "pattern": f"^{whole}{fraction}$",
+                    "maxLength": (
+                        scale + 2
+                        if integer_digits == 0
+                        else precision + (1 if scale else 0)
+                    ),
+                    "x-cara-decimal-precision": precision,
+                    "x-cara-decimal-scale": scale,
+                }
+            )
         elif name in {"gt", "lt"}:
             schema[f"x-cara-{name}"] = argument
 
@@ -186,6 +300,7 @@ def _rule_schema(rule: str | None) -> dict[str, Any]:
             "boolean",
             "date",
             "dateformat",
+            "decimal_text",
             "dict",
             "email",
             "gt",
@@ -227,12 +342,11 @@ def _node_schema(node: _RuleNode) -> dict[str, Any]:
     schema = _rule_schema(node.rule)
     wildcard = node.children.get("*")
     named = {name: child for name, child in node.children.items() if name != "*"}
-    if wildcard is not None:
-        schema["type"] = "array"
-        schema["items"] = _node_schema(wildcard)
     if named:
         schema["type"] = "object"
-        schema["additionalProperties"] = True
+        schema["additionalProperties"] = (
+            _node_schema(wildcard) if wildcard is not None else False
+        )
         properties: dict[str, Any] = {}
         required: list[str] = []
         forbidden: list[str] = []
@@ -248,7 +362,49 @@ def _node_schema(node: _RuleNode) -> dict[str, Any]:
             schema["required"] = required
         if forbidden:
             schema["x-cara-forbidden-fields"] = forbidden
+    elif wildcard is not None:
+        wildcard_schema = _node_schema(wildcard)
+        if schema.get("type") == "object":
+            schema["additionalProperties"] = wildcard_schema
+        else:
+            schema["type"] = "array"
+            schema["items"] = wildcard_schema
     return schema
+
+
+def _schema_rules(schema: dict[str, Any]) -> dict[str, str]:
+    """Recover every nested rule from an inherited request schema."""
+
+    rules: dict[str, str] = {}
+
+    def visit(current: dict[str, Any], prefix: str) -> None:
+        for forbidden in current.get("x-cara-forbidden-fields", []):
+            name = f"{prefix}.{forbidden}" if prefix else forbidden
+            rules[name] = "prohibited"
+        additional = current.get("additionalProperties")
+        if isinstance(additional, dict):
+            wildcard_name = f"{prefix}.*" if prefix else "*"
+            wildcard_rule = additional.get("x-cara-rule")
+            if isinstance(wildcard_rule, str):
+                rules[wildcard_name] = wildcard_rule
+            visit(additional, wildcard_name)
+        for name, child in current.get("properties", {}).items():
+            field_name = f"{prefix}.{name}" if prefix else name
+            raw = child.get("x-cara-rule")
+            if isinstance(raw, str):
+                rules[field_name] = raw
+            if child.get("type") == "array" and isinstance(child.get("items"), dict):
+                item_name = f"{field_name}.*"
+                item = child["items"]
+                item_rule = item.get("x-cara-rule")
+                if isinstance(item_rule, str):
+                    rules[item_name] = item_rule
+                visit(item, item_name)
+            else:
+                visit(child, field_name)
+
+    visit(schema, "")
+    return rules
 
 
 def _cursor_rules(call: ast.Call) -> dict[str, str] | None:
@@ -278,12 +434,15 @@ class FormRequestSchemaExtractor:
         self._dir = requests_dir
 
     def extract(self) -> dict[str, dict[str, Any]]:
-        classes: dict[str, tuple[ast.ClassDef, dict[str, Any]]] = {}
+        modules: dict[Path, ast.Module] = {}
         for path in sorted(self._dir.rglob("*.py")):
-            if path.name == "__init__.py":
-                continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            values = _module_values(tree)
+            modules[path] = tree
+
+        module_values = _resolve_module_values(self._dir, modules)
+        classes: dict[str, tuple[ast.ClassDef, dict[str, Any]]] = {}
+        for path, tree in modules.items():
+            values = module_values[path]
             for node in tree.body:
                 if isinstance(node, ast.ClassDef) and node.name.endswith("Request"):
                     classes[node.name] = (node, values)
@@ -305,12 +464,7 @@ class FormRequestSchemaExtractor:
             for base in cls.bases:
                 if isinstance(base, ast.Name) and base.id in classes:
                     inherited = resolve(base.id)
-                    for field_name, field_schema in inherited.get(
-                        "properties", {}
-                    ).items():
-                        raw = field_schema.get("x-cara-rule")
-                        if isinstance(raw, str):
-                            rules[field_name] = raw
+                    rules.update(_schema_rules(inherited))
                     partial = partial or bool(inherited.get("x-cara-rules-partial"))
 
             rules_method = next(
@@ -396,6 +550,16 @@ class FormRequestSchemaExtractor:
                         cursor := _cursor_rules(rule_node)
                     ):
                         rules.update(cursor)
+                    elif isinstance(
+                        spread := _static_value(rule_node, local_values), dict
+                    ):
+                        for key, spread_rule in spread.items():
+                            if not isinstance(key, str) or not isinstance(
+                                spread_rule, str
+                            ):
+                                partial = True
+                                continue
+                            rules[key] = spread_rule
                     else:
                         partial = True
                     continue

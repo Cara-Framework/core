@@ -83,13 +83,10 @@ scanned with a ``{}`` pin rather than carried as debt:
   mismatch.
 * ``barrel_mid_load`` — ``ConnectionResolver`` and ``AMQPDriver`` stopped
   reaching through their own package barrels (§5.1).
-* ``silent_except_swallow`` — every one of the 23 handlers turned out to be a
-  deliberate best-effort path (telemetry that must not break the work it
-  measures, logging during bootstrap before the Log facade is bound, optional
-  dependencies, advisory headers). None was a hidden failure, so each carries
-  a ``# allow-silent-except:`` tag stating WHY rather than a pinned debt
-  implying it needs fixing. Pinning a correct handler as debt is a lie in the
-  other direction.
+* ``silent_except_swallow`` — broad best-effort paths report at the catch site;
+  typed fallbacks name the exceptions they can handle. The scanner deliberately
+  has no comment escape, so an alleged later report cannot drift away from the
+  catch and turn it silent.
 
 An empty pin is stronger than an exclusion: the scanner runs on every commit,
 so the FIRST new violation fails the build instead of quietly joining a
@@ -123,7 +120,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from cara.architecture.Finding import Finding
-from cara.architecture.Manifest import Manifest, ManifestRoots
+from cara.architecture.Manifest import Manifest
+from cara.architecture.ManifestRoots import ManifestRoots
 from cara.architecture.scanners import REGISTRY
 
 #: Repository root — the "deployable" for a cara-rooted scan. ``tests/`` is
@@ -153,7 +151,11 @@ SELF_SCANNED: tuple[str, ...] = (
 NOT_APPLICABLE: dict[str, str] = {
     "domain_registry": "§3 domains/flows — cara has no business domains",
     "domain_ownership": "§3 cross-domain service door — no domains to cross",
-    "write_ownership": "§7 table ownership — cara owns no tables",
+    "write_ownership": (
+        "§7 runtime ownership belongs to each product topology — product scans "
+        "discover cara.models alongside kernel models and require every framework "
+        "table in that product's ownership manifest"
+    ),
     "transaction_ownership": "§8 who opens a transaction — no product services",
     "raw_sql_home": "§5 SQL lives in repositories — cara ships the ORM",
     "model_query_discipline": "§5 model reach — cara defines Model itself",

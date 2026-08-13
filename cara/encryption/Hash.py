@@ -64,7 +64,6 @@ class Hash:
         hashed: str,
         algorithm: str = DEFAULT_ALGORITHM,
     ) -> bool:
-        algorithm = cls._detect_algorithm(hashed, fallback=algorithm)
         driver = cls.drivers.get(algorithm)
         if not driver:
             raise InvalidArgumentException(f"Unsupported algorithm: {algorithm}")
@@ -77,20 +76,9 @@ class Hash:
         algorithm: str = DEFAULT_ALGORITHM,
         rounds: int = 12,
     ) -> bool:
-        stored_algorithm = cls._detect_algorithm(hashed, fallback=algorithm)
-        if stored_algorithm != algorithm:
-            return True
-        driver = cls.drivers.get(stored_algorithm)
+        driver = cls.drivers.get(algorithm)
         if not driver:
             raise InvalidArgumentException(f"Unsupported algorithm: {algorithm}")
-        if stored_algorithm == "bcrypt":
+        if algorithm == "bcrypt":
             return driver.needs_rehash(hashed, rounds)
         return driver.needs_rehash(hashed)
-
-    @staticmethod
-    def _detect_algorithm(hashed: str, *, fallback: str) -> str:
-        if hashed and hashed.startswith("$argon2id$"):
-            return "argon2id"
-        if hashed and hashed.startswith(("$2b$", "$2a$", "$2y$")):
-            return "bcrypt"
-        return fallback

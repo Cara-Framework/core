@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .Controllers import ControllerContract, ControllerResponse
+from .ControllerContract import ControllerContract
+from .ControllerResponse import ControllerResponse
+from .EnvelopeNames import EnvelopeNames
 from .FormRequestSchemaExtractor import request_query_parameters
 from .Inference import resource_ref
 from .Routes import openapi_path, path_params
+from .SpecInfo import SpecInfo
 
 # Query parameters every cursor-paged operation accepts. Bounds mirror the
 # framework's own cursor rules, so a route cannot advertise a page size the
@@ -40,29 +42,6 @@ CURSOR_PAGE_PARAMETERS: tuple[dict[str, Any], ...] = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class SpecInfo:
-    """The ``info`` block and document version of a generated spec."""
-
-    title: str
-    description: str
-    version: str = "1.0.0"
-    openapi_version: str = "3.0.3"
-
-
-@dataclass(frozen=True, slots=True)
-class EnvelopeNames:
-    """Component-schema names the envelope refers to.
-
-    Applications supply the component bodies themselves; only the names are
-    needed here, to build the ``$ref`` on each operation.
-    """
-
-    meta: str = "_Meta"
-    cursor_meta: str = "_CursorMeta"
-    error: str = "ApiErrorBody"
-
-
 def build_spec(
     *,
     info: SpecInfo,
@@ -70,6 +49,7 @@ def build_spec(
     mapping: dict[str, tuple[str, bool]],
     routes: list[dict[str, Any]],
     envelope_components: dict[str, Any],
+    meta_mapping: dict[str, str] | None = None,
     cursor_actions: set[str] | frozenset[str] = frozenset(),
     envelope: EnvelopeNames = EnvelopeNames(),
     generation_extra: dict[str, Any] | None = None,
@@ -91,6 +71,7 @@ def build_spec(
     controller_contracts = controller_contracts or {}
     middleware_security = middleware_security or {}
     middleware_error_statuses = middleware_error_statuses or {}
+    meta_mapping = meta_mapping or {}
 
     components: dict[str, Any] = dict(sorted(schemas.items()))
     components.update(dict(sorted(request_schemas.items())))
@@ -181,14 +162,25 @@ def build_spec(
             # Still document the envelope shape with a permissive payload.
             data_schema = {"type": "array", "items": {}} if is_cursor_page else {}
 
+        mapped_meta = meta_mapping.get(action_key)
+        if is_cursor_page and mapped_meta is not None:
+            meta_schema: dict[str, Any] = {
+                "allOf": [
+                    resource_ref(envelope.cursor_meta),
+                    resource_ref(mapped_meta),
+                ]
+            }
+        else:
+            meta_schema = resource_ref(
+                mapped_meta or (envelope.cursor_meta if is_cursor_page else envelope.meta)
+            )
+
         body_schema = {
             "type": "object",
             "required": ["data", "meta"] if is_cursor_page else ["data"],
             "properties": {
                 "data": data_schema,
-                "meta": resource_ref(
-                    envelope.cursor_meta if is_cursor_page else envelope.meta
-                ),
+                "meta": meta_schema,
             },
         }
 

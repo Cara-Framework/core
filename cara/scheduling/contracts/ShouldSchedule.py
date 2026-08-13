@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from cara.scheduling import Scheduling
+from cara.scheduling.Scheduling import Scheduling
 
 
 class ShouldSchedule(ABC):

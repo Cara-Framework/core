@@ -11,10 +11,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import cara.facades as facades
 from cara.exceptions import RateLimitConfigurationException
-from cara.facades import Log, RateLimiter
 from cara.http import Request, Response
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
+from cara.rates import Limit, attempt_rate_limit
 
 
 class ThrottleRequests(Middleware):
@@ -159,9 +160,7 @@ class ThrottleRequests(Middleware):
         The lowercase path is the only canonical post-load shape.
         """
         try:
-            from cara.facades import Config
-
-            trusted = Config.get("rate.trusted_ips", [])
+            trusted = facades.Config.get("rate.trusted_ips", [])
             if not trusted:
                 return False
             client_ip = (
@@ -171,7 +170,7 @@ class ThrottleRequests(Middleware):
             )
             return str(client_ip) in trusted
         except Exception as e:
-            Log.warning("ThrottleRequests internal failure: %s", e)
+            facades.Log.warning("ThrottleRequests internal failure: %s", e)
             return False
 
     def _resolve_limit_config(self, request: Request):
@@ -203,11 +202,10 @@ class ThrottleRequests(Middleware):
         because ``_attempt_limit`` reads ``max_attempts == 0`` as UNLIMITED
         — the "fail-closed" sentinel would have been maximally fail-open.
         """
-        from cara.rates import Limit
 
         # Check if custom_limit is actually a limiter name (string)
         if isinstance(self.custom_limit, str):
-            resolved = RateLimiter.resolve_limiter(self.custom_limit, request)
+            resolved = facades.RateLimiter.resolve_limiter(self.custom_limit, request)
             if resolved is None:
                 raise RateLimitConfigurationException(
                     f"throttle:{self.custom_limit} names an unregistered rate "
@@ -305,15 +303,9 @@ class ThrottleRequests(Middleware):
         window_seconds = int(limit_config.decay_minutes * 60)
         cache_key = f"throttle_{key}"
 
-        # Atomic increment + Redis-down fallback handled by the shared
-        # helper. ``RateLimiter.attempt`` uses the same helper so the
-        # fallback policy (memory / open / closed), the
-        # once-per-transition warning latch, and the recovery sweep
-        # apply uniformly across both surfaces. See
-        # ``cara.rates.MemoryRateStore.attempt_with_fallback``.
-        from cara.rates.MemoryRateStore import attempt_with_fallback
-
-        allowed, remaining, reset_in, _backend = attempt_with_fallback(
+        # Shared authoritative accounting keeps HTTP and direct callers on
+        # one fail-closed outage policy.
+        allowed, remaining, reset_in = attempt_rate_limit(
             cache_key=cache_key,
             window_seconds=window_seconds,
             max_attempts=limit_config.max_attempts,

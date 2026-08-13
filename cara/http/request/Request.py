@@ -12,14 +12,15 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from cara.http.request.Context import current_request
-from cara.http.request.Header import HeaderBag
-from cara.http.request.Input import InputBag
+from cara.http.request.HeaderBag import HeaderBag
+from cara.http.request.InputBag import InputBag
 from cara.http.request.mixins import (
     MakesBodyParsing,
     MakesRequestHelpers,
     MakesValidationHelpers,
 )
 from cara.http.request.UploadedFile import UploadedFile
+from cara.security import is_trusted_proxy
 
 
 def _is_trusted_proxy(addr: str) -> bool:
@@ -37,7 +38,6 @@ def _is_trusted_proxy(addr: str) -> bool:
     boundary at whatever the first request observed; the shared resolver caches
     on the raw config value instead, so a reload still takes effect.
     """
-    from cara.security.TrustedProxies import is_trusted_proxy
 
     return is_trusted_proxy(addr)
 

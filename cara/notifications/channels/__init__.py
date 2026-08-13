@@ -5,11 +5,15 @@ This module provides various notification channels for delivering notifications
 through different mediums like email, database, Slack, etc.
 """
 
-from .BaseChannel import BaseChannel
-from .MailChannel import MailChannel
-from .DatabaseChannel import DatabaseChannel
-from .SlackChannel import SlackChannel
-from .LogChannel import LogChannel
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "BaseChannel": (".BaseChannel", "BaseChannel"),
+    "DatabaseChannel": (".DatabaseChannel", "DatabaseChannel"),
+    "LogChannel": (".LogChannel", "LogChannel"),
+    "MailChannel": (".MailChannel", "MailChannel"),
+    "SlackChannel": (".SlackChannel", "SlackChannel"),
+}
 
 __all__ = [
     "BaseChannel",
@@ -18,3 +22,5 @@ __all__ = [
     "MailChannel",
     "SlackChannel",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

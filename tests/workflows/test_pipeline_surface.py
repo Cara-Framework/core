@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import pytest
 
-from cara.workflows.Pipeline import ConditionalPipeline, Pipeline, PipelineType
+from cara.workflows.ConditionalPipeline import ConditionalPipeline
+from cara.workflows.Pipeline import Pipeline
+from cara.workflows.PipelineType import PipelineType
 
 
 class _Ok:

@@ -40,10 +40,13 @@ _throttle_module = sys.modules["cara.middleware.http.ThrottleRequests"]
 def _real_rate_limiter(**limiters) -> RateLimiter:
     """A genuine ``RateLimiter`` with genuine ``for_`` registrations.
 
-    ``options={}`` keeps the constructor on its documented defaults and
-    touches no cache — nothing here reaches ``attempt``.
+    Explicit fixed-driver options keep the test on the same validated
+    contract production uses; nothing here reaches ``attempt``.
     """
-    limiter = RateLimiter(application=None, options={})
+    limiter = RateLimiter(
+        application=None,
+        options={"limit": 60, "window_seconds": 60, "cache_prefix": "rate_"},
+    )
     for name, callback in limiters.items():
         limiter.for_(name, callback)
     return limiter
@@ -56,6 +59,37 @@ def _middleware(limit=None, window=None) -> ThrottleRequests:
     middleware.custom_limit = limit
     middleware.custom_window_minutes = window
     return middleware
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},
+        {"limit": 0, "window_seconds": 60, "cache_prefix": "rate_"},
+        {"limit": 60, "window_seconds": 0, "cache_prefix": "rate_"},
+        {"limit": 60, "window_seconds": 60, "cache_prefix": ""},
+    ],
+)
+def test_fixed_driver_rejects_incomplete_or_nonpositive_options(options) -> None:
+    with pytest.raises(RateLimitConfigurationException):
+        RateLimiter(application=None, options=options)
+
+
+@pytest.mark.parametrize(
+    ("factory", "exception_type"),
+    [
+        (lambda: Limit.per_minute(0), ValueError),
+        (lambda: Limit(-1, 1), ValueError),
+        (lambda: Limit(True, 1), TypeError),
+        (lambda: Limit.none().by(""), ValueError),
+        (lambda: Limit.none().response(None), TypeError),
+    ],
+)
+def test_limit_builder_rejects_ambiguous_or_invalid_shapes(
+    factory, exception_type
+) -> None:
+    with pytest.raises(exception_type):
+        factory()
 
 
 class TestTheListFormWasNeverImplemented:
@@ -74,7 +108,7 @@ class TestTheListFormWasNeverImplemented:
         """Fails closed at the resolve step, before the middleware can turn
         it into an unattributable AttributeError deeper in the stack."""
         monkeypatch.setattr(
-            _throttle_module,
+            _throttle_module.facades,
             "RateLimiter",
             _real_rate_limiter(
                 login=lambda _r: [Limit.per_minute(5), Limit.per_hour(100)]
@@ -93,7 +127,7 @@ class TestTheListFormWasNeverImplemented:
         """An operator reading a 500 log line has to be able to find the
         registration — the AttributeError named nothing."""
         monkeypatch.setattr(
-            _throttle_module,
+            _throttle_module.facades,
             "RateLimiter",
             _real_rate_limiter(api=lambda _r: 60),
         )
@@ -111,7 +145,7 @@ class TestTheListFormWasNeverImplemented:
         diagnosis, and it would be a silent bypass if that refusal were ever
         relaxed."""
         monkeypatch.setattr(
-            _throttle_module,
+            _throttle_module.facades,
             "RateLimiter",
             _real_rate_limiter(admin=lambda _r: None),
         )
@@ -126,7 +160,7 @@ class TestTheSupportedShapeIsUntouched:
     ) -> None:
         expected = Limit.per_minute(5).by("ip:127.0.0.1")
         monkeypatch.setattr(
-            _throttle_module,
+            _throttle_module.facades,
             "RateLimiter",
             _real_rate_limiter(login=lambda _r: expected),
         )
@@ -142,7 +176,7 @@ class TestTheSupportedShapeIsUntouched:
         reads as UNLIMITED. The shape check must not mistake a falsy budget
         for a missing attribute."""
         monkeypatch.setattr(
-            _throttle_module,
+            _throttle_module.facades,
             "RateLimiter",
             _real_rate_limiter(internal=lambda _r: Limit.none()),
         )
@@ -156,7 +190,7 @@ class TestTheSupportedShapeIsUntouched:
     ) -> None:
         """The new shape refusal must not swallow the pre-existing
         unregistered-limiter refusal — different fault, different message."""
-        monkeypatch.setattr(_throttle_module, "RateLimiter", _real_rate_limiter())
+        monkeypatch.setattr(_throttle_module.facades, "RateLimiter", _real_rate_limiter())
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
             _middleware(limit="never_registered")._resolve_limit_config(request=object())
@@ -186,7 +220,7 @@ class TestTheDocumentedContractIsTheEnforcedOne:
         self, monkeypatch: pytest.MonkeyPatch, returned
     ) -> None:
         monkeypatch.setattr(
-            _throttle_module,
+            _throttle_module.facades,
             "RateLimiter",
             _real_rate_limiter(api=lambda _r: returned),
         )

@@ -41,6 +41,7 @@ import socket
 from collections.abc import Callable, Iterable
 from urllib.parse import urlsplit
 
+from cara.context import ExecutionContext
 from cara.security.UnsafeOutboundUrl import UnsafeOutboundUrl
 
 #: Per-call DNS budget for the async variants. ``getaddrinfo`` has no
@@ -322,7 +323,6 @@ async def outbound_url_reason_async(
     the event loop for the system DNS timeout. Runs the gate in a worker
     thread and caps the wall clock, surfacing a rejection on timeout.
     """
-    from cara.context import ExecutionContext  # local: cycle with cara.context
 
     def _check() -> str | None:
         return outbound_url_reason(url, **kwargs)

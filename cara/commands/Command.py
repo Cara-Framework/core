@@ -11,6 +11,8 @@ import os
 import time
 from typing import Any
 
+from cara.support import paths
+
 from .CommandLoader import CommandLoader
 from .CommandRegistry import CommandRegistry
 from .CommandRunner import CommandRunner
@@ -18,7 +20,8 @@ from .CommandRunner import CommandRunner
 
 def _reload_handler(command):
     """Build the optional watchdog handler only when watch mode is enabled."""
-    from watchdog.events import FileSystemEventHandler
+
+    from watchdog.events import FileSystemEventHandler  # local: heavy optional dep
 
     class SimpleReloadHandler(FileSystemEventHandler):
         def __init__(self):
@@ -96,10 +99,11 @@ class Command:
 
     def _start_watcher(self):
         """Start file watcher for hot reloading during development."""
-        from watchdog.observers import Observer
 
         if self.observer is not None:
             return  # Already watching
+
+        from watchdog.observers import Observer  # local: heavy optional dep
 
         self.observer = Observer()
         handler = _reload_handler(self)
@@ -117,7 +121,6 @@ class Command:
 
     def _get_watch_paths(self):
         """Get all paths that should be watched for changes."""
-        from cara.support import paths
 
         watch_paths = []
 
@@ -130,13 +133,9 @@ class Command:
         app_dirs = ["app", "config", "routes", "database/migrations"]
 
         for app_dir in app_dirs:
-            try:
-                path = paths(app_dir)
-                if path and os.path.isdir(path):
-                    watch_paths.append(path)
-            except Exception:
-                # allow-silent-except: an unresolvable watch dir is simply not watched
-                continue
+            path = paths(app_dir)
+            if path and os.path.isdir(path):
+                watch_paths.append(path)
 
         return watch_paths
 

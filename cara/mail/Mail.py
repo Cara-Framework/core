@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from cara.exceptions import DriverNotFoundException
 from cara.facades import Queue
+from cara.mail.jobs import SendMailableJob
 from cara.mail.Mailable import Mailable
+from cara.mail.MailMessage import MailMessage
+from cara.mail.MailPendingSend import MailPendingSend
 from cara.queues.contracts import ShouldQueue
 
 
@@ -136,7 +139,6 @@ class Mail:
         was never queued must be loud at the dispatch site.
         """
         # Create a job to send the mailable
-        from cara.mail.jobs import SendMailableJob
 
         job = SendMailableJob(mailable, driver_name)
 
@@ -180,7 +182,6 @@ class Mail:
         Returns:
             MailPendingSend instance for chaining
         """
-        from cara.mail.MailPendingSend import MailPendingSend
 
         return MailPendingSend(self, mailable)
 
@@ -194,7 +195,6 @@ class Mail:
         Returns:
             MailMessage instance for chaining
         """
-        from cara.mail.MailMessage import MailMessage
 
         return MailMessage(self).to(addresses)
 

@@ -14,89 +14,24 @@ Supports:
 from __future__ import annotations
 
 import asyncio
+import builtins
+import contextlib
+import fnmatch
 import inspect
+import sys
+import time
 from collections.abc import Callable
-from contextvars import ContextVar
 from threading import RLock
 
+from cara.context import ExecutionContext
 from cara.events.contracts import Listener
 from cara.exceptions import EventDispatchCycleException, EventNameConflictException
 from cara.facades import Log
-from cara.queues.contracts import ShouldQueue
+from cara.observability import MetricsBase
+from cara.queues.contracts import PendingDispatch, ShouldQueue
 
-# Per-task stack of event names currently being dispatched. Used to
-# detect re-entrant dispatch of an event whose handler is still on
-# the stack, which would otherwise recurse until the Python stack
-# overflows. ContextVar (not threadlocal) so the chain follows the
-# asyncio task that drives dispatch, including nested ``await``s.
-_dispatch_stack: ContextVar[tuple[str, ...]] = ContextVar(
-    "cara_event_dispatch_stack", default=()
-)
-
-
-def fresh_dispatch_scope():
-    """Context manager that clears the in-flight event-dispatch stack
-    for the duration of the ``with`` block, then restores the prior
-    stack on exit.
-
-    Use at natural job boundaries (e.g. ``Bus._run_sync_with_tracking``)
-    so a sync-dispatched child job doesn't inherit its caller's
-    listener-context stack. Without this, a listener that dispatches
-    a child job whose own ``handle()`` fires the same event type (for
-    a different entity) trips the cycle guard — even though it's a
-    legitimate fan-out tree, not a recursive loop. Queued mode doesn't
-    need this because each worker has its own contextvar context;
-    sync mode reuses the caller's context and that's where the leak
-    happens.
-
-    Cycle protection is preserved WITHIN the wrapped block — the
-    fresh stack starts empty but accumulates as the inner code
-    dispatches its own events, so a genuine self-recursive listener
-    inside the job still raises.
-    """
-    import contextlib
-
-    @contextlib.contextmanager
-    def _scope():
-        token = _dispatch_stack.set(())
-        try:
-            yield
-        finally:
-            _dispatch_stack.reset(token)
-
-    return _scope()
-
-
-class EventSubscriber:
-    """
-    Base class for event subscribers.
-
-    Group related event listeners together by extending this class
-    and implementing the subscribe() method.
-
-    Example:
-        class UserEventSubscriber(EventSubscriber):
-            def subscribe(self, dispatcher):
-                dispatcher.listen('user.created', self.on_user_created)
-                dispatcher.listen('user.updated', self.on_user_updated)
-
-            def on_user_created(self, event):
-                # Handle user created
-                pass
-
-            def on_user_updated(self, event):
-                # Handle user updated
-                pass
-    """
-
-    def subscribe(self, dispatcher: Event) -> None:
-        """
-        Subscribe to events in the dispatcher.
-
-        Args:
-            dispatcher: The Event dispatcher instance
-        """
-        raise NotImplementedError("Subscriber must implement subscribe() method")
+from ._DispatchScope import _dispatch_stack
+from .EventSubscriber import EventSubscriber
 
 
 class Event:
@@ -162,8 +97,6 @@ class Event:
         if cls._app is not None:
             return cls._app
         try:
-            import builtins
-
             application = builtins.app()
             cls._app = application
             return application
@@ -307,26 +240,13 @@ class Event:
             return False
 
     def listen(self, event_name: str, callback: Callable) -> None:
-        """
-        Alias for subscribe that accepts a callback function.
+        """Register a simple callback without requiring a Listener class."""
 
-        Useful for registering simple callback handlers without creating Listener classes.
-
-        Example:
-            dispatcher.listen('user.created', lambda event: print(f"User created: {event.user}"))
-
-        Args:
-            event_name: Event name to listen for
-            callback: Function to call when event is dispatched
-        """
-
-        # Create a simple listener wrapper for the callback
         class CallbackListener(Listener):
             def handle(self, event):
                 return callback(event)
 
-        listener = CallbackListener()
-        self.subscribe(event_name, listener)
+        self.subscribe(event_name, CallbackListener())
 
     def has_listeners(self, event_name: str) -> bool:
         """
@@ -470,8 +390,6 @@ class Event:
             # in the queue" divergence. In sync mode we fall through to the
             # in-process await path so the listener (and everything it dispatches)
             # runs inline. Sync = fully inline, identical outcome to async.
-            from cara.context import ExecutionContext
-
             if self._should_queue(listener) and not ExecutionContext.is_sync():
                 self._queue_listener(listener, event)
                 continue
@@ -488,25 +406,13 @@ class Event:
             # detached tasks mid-execution — dropping downstream work
             # (e.g. cascading job dispatches) without error.
             #
-            # Prometheus instrumentation — import lazily so the
-            # events module stays usable in contexts that don't boot
-            # the services application (e.g. cara tests). Records
-            # invocation count + duration keyed on the listener's
-            # class name; bounded cardinality regardless of event
-            # volume.
-            import time as _t
-
-            try:
-                from cara.observability.Metrics import MetricsBase
-
-                metrics = MetricsBase
-            except ImportError, RuntimeError:
-                metrics = None
+            # Invocation count + duration use bounded listener-class labels.
+            metrics = MetricsBase
 
             _lst_name = listener.__class__.__name__
-            _lst_start = _t.time()
+            _lst_start = time.time()
             _lst_outcome = "success"
-            _lst_propagate = bool(getattr(listener, "propagate_failures", False))
+            _lst_propagate = bool(getattr(listener, "propagate_failures", True))
             try:
                 app = self._resolve_application()
                 if app is not None and hasattr(app, "call"):
@@ -519,9 +425,7 @@ class Event:
                     listener.handle(event)
             except Exception as _listener_exc:
                 _lst_outcome = "failure"
-                try:
-                    from cara.facades import Log
-
+                with contextlib.suppress(ImportError, RuntimeError):
                     Log.error(
                         "Event listener %s failed: %s: %s",
                         _lst_name,
@@ -530,18 +434,10 @@ class Event:
                         category="cara.events",
                         exc_info=True,
                     )
-                except ImportError, RuntimeError:
-                    pass
-                # Pipeline-critical listeners opt in via
-                # ``propagate_failures = True``. Re-raising lets the
-                # upstream job/queue treat the dispatch as failed and
-                # retry instead of marking success and silently halting
-                # the chain. Observability listeners (metrics, search
-                # indexing, broadcasts) keep the legacy permissive
-                # default so a flaky third-party can't take down the
-                # whole pipeline. Metrics are recorded in ``finally``
-                # below regardless of which branch we take, so the
-                # raise is enough on its own here.
+                # Failures propagate by default so callers cannot mark work
+                # successful after a required side effect failed. A genuinely
+                # best-effort observer must declare
+                # ``propagate_failures = False`` explicitly.
                 if _lst_propagate:
                     raise
             finally:
@@ -553,7 +449,7 @@ class Event:
                         ).inc()
                         metrics.listener_duration_seconds.labels(
                             listener=_lst_name,
-                        ).observe(_t.time() - _lst_start)
+                        ).observe(time.time() - _lst_start)
                     except ImportError, AttributeError:
                         pass
 
@@ -592,8 +488,6 @@ class Event:
         Returns:
             True if event_name matches the pattern, False otherwise
         """
-        import fnmatch
-
         return fnmatch.fnmatch(event_name, pattern)
 
     def _should_queue(self, listener: Listener) -> bool:
@@ -640,7 +534,9 @@ class Event:
         )
 
         # Create a HandleListenerJob
-        from cara.events.jobs import HandleListenerJob
+        from cara.events.jobs.HandleListenerJob import (  # local: cycle with cara.events.jobs.HandleListenerJob
+            HandleListenerJob,
+        )
 
         job = HandleListenerJob(
             listener_class=listener.__class__.__name__,
@@ -648,8 +544,6 @@ class Event:
             event_class=event.__class__.__name__,
         )
         job.queue = queue_name
-
-        from cara.queues.contracts.Queueable import PendingDispatch
 
         pending = PendingDispatch(job)
         pending.with_routing_key(routing_key)
@@ -689,9 +583,7 @@ class Event:
             return
         except Exception as e:
             try:
-                from cara.facades import Log as _Log
-
-                _Log.error(
+                Log.error(
                     "Fire-and-forget listener failed with exception: %s: %s",
                     e.__class__.__name__,
                     e,
@@ -703,8 +595,6 @@ class Event:
                 # context (cara unit tests). Re-raise to ``stderr``
                 # as a last resort so the exception isn't fully
                 # swallowed.
-                import sys
-
                 print(
                     f"[cara.events] fire-and-forget task raised "
                     f"{e.__class__.__name__}: {e}",

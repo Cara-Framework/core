@@ -7,12 +7,14 @@ logging notifications instead of sending them, useful for debugging.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pendulum
 
+from cara.exceptions import ConfigurationException
+from cara.facades import Log
 from cara.notifications.channels.BaseChannel import BaseChannel
+from cara.support import json_dumps
 
 
 class LogChannel(BaseChannel):
@@ -23,16 +25,20 @@ class LogChannel(BaseChannel):
     """
 
     channel_name = "log"
+    _LEVELS = frozenset({"critical", "debug", "error", "info", "warning"})
 
-    def __init__(self, log_file: str = "notifications.log", log_level: str = "info"):
+    def __init__(self, log_level: str = "info"):
         """
         Initialize log channel.
 
         Args:
-            log_file: Path to log file
             log_level: Log level
         """
-        self.log_file = log_file
+        if not isinstance(log_level, str) or log_level not in self._LEVELS:
+            raise ConfigurationException(
+                "Notification log level must be one of: "
+                + ", ".join(sorted(self._LEVELS))
+            )
         self.log_level = log_level
 
     def send(self, notifiable, notification) -> bool:
@@ -44,144 +50,33 @@ class LogChannel(BaseChannel):
             notification: The notification instance
 
         Returns:
-            True (always successful for logging)
+            True after the logger accepts the record
         """
-        try:
-            # Prepare log data
-            log_data = {
-                "timestamp": pendulum.now("UTC").isoformat(),
-                "notification_type": notification.__class__.__name__,
-                "notifiable_type": notifiable.__class__.__name__,
-                "notifiable_id": self._get_notifiable_id(notifiable),
-                "channels": notification.via(notifiable),
-                "data": notification.to_array(notifiable),
-            }
-
-            # Add specific channel data if available
-            if hasattr(notification, "to_mail") and notification.to_mail(notifiable):
-                log_data["mail_data"] = self._serialize_data(
-                    notification.to_mail(notifiable)
+        renderer = getattr(notification, "to_log", None)
+        data = renderer(notifiable) if callable(renderer) else None
+        if data is None:
+            fallback = getattr(notification, "to_array", None)
+            if not callable(fallback):
+                raise ConfigurationException(
+                    "Log notifications must implement to_log() or to_array()."
                 )
-
-            if hasattr(notification, "to_database") and notification.to_database(
-                notifiable
-            ):
-                log_data["database_data"] = notification.to_database(notifiable)
-
-            if hasattr(notification, "to_slack") and notification.to_slack(notifiable):
-                log_data["slack_data"] = notification.to_slack(notifiable)
-
-            # Log the notification
-            self._log_notification(log_data)
-
-            return True
-
-        except Exception as e:
-            self._emit_error("Log channel error", e)
-            return True  # Don't fail for logging errors
-
-    def _get_notifiable_id(self, notifiable) -> Any:
-        """
-        Get the notifiable entity ID.
-
-        Args:
-            notifiable: The notifiable entity
-
-        Returns:
-            Entity ID
-        """
-        if hasattr(notifiable, "get_notification_key"):
-            return notifiable.get_notification_key()
-        elif hasattr(notifiable, "id"):
-            return notifiable.id
-        elif hasattr(notifiable, "pk"):
-            return notifiable.pk
-        else:
-            return id(notifiable)
-
-    def _serialize_data(self, data: Any) -> Any:
-        """
-        Serialize data for logging.
-
-        Args:
-            data: Data to serialize
-
-        Returns:
-            Serialized data
-        """
-        if isinstance(data, (dict, list, str, int, float, bool)) or data is None:
-            return data
-        elif hasattr(data, "__dict__"):
-            return data.__dict__
-        else:
-            return str(data)
-
-    def _log_notification(self, log_data: dict[str, Any]) -> None:
-        """
-        Log the notification data.
-
-        Args:
-            log_data: Data to log
-        """
-        try:
-            log_message = f"[NOTIFICATION] {json.dumps(log_data, indent=2, default=str)}"
-
-            # Try to use Cara's logging if available
-            try:
-                from cara.facades import Log
-
-                Log.info(log_message)
-            except ImportError:
-                if self.log_file:
-                    try:
-                        with open(self.log_file, "a", encoding="utf-8") as f:
-                            f.write(f"{log_message}\n")
-                    except OSError, RuntimeError, AttributeError, ConnectionError:
-                        pass  # Ignore file write errors
-
-        except Exception as e:
-            self._emit_error("Log write error", e)
-
-    def _emit_error(self, message: str, error: Exception) -> None:
-        """Emit notification-channel errors via Log facade with stderr fallback."""
-        try:
-            from cara.facades import Log
-
-            Log.error(
-                "%s: %s", message, error, category="cara.notifications.log", exc_info=True
+            data = fallback(notifiable)
+        if not isinstance(data, dict):
+            raise ConfigurationException(
+                "Log notifications must render a dictionary payload."
             )
-        except ImportError, RuntimeError:
-            import sys
 
-            print(f"[LogChannel] {message}: {error}", file=sys.stderr)
-
-    def clear_log(self) -> bool:
-        """
-        Clear the notification log file.
-
-        Returns:
-            True if cleared successfully, False otherwise
-        """
-        try:
-            if self.log_file:
-                with open(self.log_file, "w", encoding="utf-8") as f:
-                    f.write("")
-                return True
-            return False
-        except OSError:
-            return False
-
-    def get_log_contents(self) -> str:
-        """
-        Get the contents of the log file.
-
-        Returns:
-            Log file contents
-        """
-        try:
-            if self.log_file:
-                with open(self.log_file, "r", encoding="utf-8") as f:
-                    return f.read()
-            return ""
-        except OSError:
-            return ""
+        log_data: dict[str, Any] = {
+            "timestamp": pendulum.now("UTC").isoformat(),
+            "notification_type": type(notification).__name__,
+            "notifiable_type": self.notifiable_type(notifiable),
+            "notifiable_id": self.notifiable_id(notifiable),
+            "data": data,
+        }
+        writer = getattr(Log, self.log_level)
+        writer(
+            "[NOTIFICATION] %s",
+            json_dumps(log_data, sort_keys=True),
+            category="cara.notifications.log",
+        )
+        return True

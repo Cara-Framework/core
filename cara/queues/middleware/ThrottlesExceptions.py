@@ -16,11 +16,13 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
+from cara.facades import Log
 from cara.queues.contracts import JobThrottledException
 
 _exception_buckets: dict = {}
@@ -64,9 +66,7 @@ class ThrottlesExceptions:
             gate_time = _throttle_gates.get(throttle_key)
             if gate_time is not None:
                 if now - gate_time < self.retry_after:
-                    try:
-                        from cara.facades import Log
-
+                    with contextlib.suppress(ImportError, RuntimeError):
                         Log.warning(
                             "Job %s throttled (%s/%ss, retry in %ss)",
                             throttle_key,
@@ -75,8 +75,6 @@ class ThrottlesExceptions:
                             self.retry_after,
                             category="cara.queue.middleware",
                         )
-                    except ImportError:
-                        pass
                     raise JobThrottledException(
                         f"Job {throttle_key} throttled",
                         key=throttle_key,
@@ -98,9 +96,7 @@ class ThrottlesExceptions:
 
                 if len(bucket) >= self.max_exceptions:
                     _throttle_gates[throttle_key] = now
-                    try:
-                        from cara.facades import Log
-
+                    with contextlib.suppress(ImportError, RuntimeError):
                         Log.warning(
                             "Job %s throttled after %s exceptions in %ss",
                             throttle_key,
@@ -108,8 +104,6 @@ class ThrottlesExceptions:
                             self.decay_seconds,
                             category="cara.queue.middleware",
                         )
-                    except ImportError:
-                        pass
             raise
 
         # Success — prune the bucket.

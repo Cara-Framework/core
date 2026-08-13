@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cara.exceptions.types.http import HttpException
+from cara.exceptions.types.HttpException import HttpException
 from cara.support.Auth import (
     authenticated_user,
     gate_allows,

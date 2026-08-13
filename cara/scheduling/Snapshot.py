@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from cara.facades import Cache
+
 SCHEDULE_SNAPSHOT_CACHE_KEY = "scheduler:snapshot"
 SCHEDULE_SNAPSHOT_EVERY_SECONDS = 30
 SCHEDULE_SNAPSHOT_TTL_SECONDS = 120
@@ -38,7 +40,6 @@ def read_schedule_snapshot() -> dict[str, Any] | None:
     missing: a scheduler running an older revision publishes entries
     without it. Cara never interprets the contents.
     """
-    from cara.facades import Cache
 
     raw = Cache.get(SCHEDULE_SNAPSHOT_CACHE_KEY)
     if not raw:

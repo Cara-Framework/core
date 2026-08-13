@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from cara.facades.Facade import Facade as _FacadeMeta
+from cara.facades import Facade as _FacadeMeta
 
 # Class-level dict of ``key -> fake instance``. Empty in normal runs.
 _FAKES: dict[str, Any] = {}

@@ -54,6 +54,7 @@ class RowResource:
         }
         # An expression the extractor cannot read is permissive, NOT invented.
         assert row["properties"]["raw"] == {}
+        assert row["required"] == ["id", "name", "score", "created_at", "raw"]
         assert "additionalProperties" not in row
 
     def test_captures_the_literal_that_built_a_returned_variable(self, tmp_path: Path):
@@ -81,7 +82,73 @@ class DetailResource:
 
         detail = schemas["DetailResource"]
         assert list(detail["properties"]) == ["id", "title", "extra"]
+        assert detail["required"] == ["id", "title", "extra"]
         assert "additionalProperties" not in detail
+
+    def test_nested_literals_are_closed_typed_required_objects(self, tmp_path: Path):
+        schemas = ResourceSchemaExtractor(
+            _resources(
+                tmp_path,
+                ParentResource="""
+class ParentResource:
+    def to_array(self, request=None):
+        return {
+            "pricing": {
+                "model": "subscription",
+                "amount": str(self.resource.amount),
+            },
+        }
+""",
+            )
+        ).extract()
+
+        assert schemas["ParentResource"]["properties"]["pricing"] == {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "enum": ["subscription"]},
+                "amount": {"type": "string"},
+            },
+            "required": ["model", "amount"],
+        }
+
+    def test_distinct_return_shapes_are_discriminated_variants(self, tmp_path: Path):
+        schemas = ResourceSchemaExtractor(
+            _resources(
+                tmp_path,
+                PricingResource="""
+class PricingResource:
+    def to_array(self, request=None):
+        if self.resource.is_free:
+            return {"model": "free"}
+        return {
+            "model": "subscription",
+            "amount": str(self.resource.amount),
+            "currency": str(self.resource.currency),
+        }
+""",
+            )
+        ).extract()
+
+        pricing = schemas["PricingResource"]
+        assert pricing["oneOf"] == [
+            {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string", "enum": ["free"]},
+                },
+                "required": ["model"],
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string", "enum": ["subscription"]},
+                    "amount": {"type": "string"},
+                    "currency": {"type": "string"},
+                },
+                "required": ["model", "amount", "currency"],
+            },
+        ]
+        assert pricing["x-resource"] == "PricingResource"
 
     def test_resolves_a_key_through_an_earlier_typed_local(self, tmp_path: Path):
         schemas = ResourceSchemaExtractor(
@@ -193,6 +260,35 @@ class HouseResource:
 """,
             ),
             {"opt_dict": {"type": "object", "nullable": True}},
+        ).extract()
+
+        assert schemas["HouseResource"]["properties"]["blob"] == {
+            "type": "object",
+            "nullable": True,
+        }
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "self.opt_dict(self.resource.blob) if self.resource.visible else None",
+            "None if self.resource.hidden else self.opt_dict(self.resource.blob)",
+        ],
+    )
+    def test_a_registered_helper_in_a_nullable_conditional_keeps_its_type(
+        self,
+        tmp_path: Path,
+        expression: str,
+    ):
+        schemas = ResourceSchemaExtractor(
+            _resources(
+                tmp_path,
+                HouseResource=f"""
+class HouseResource:
+    def to_array(self, request=None):
+        return {{"blob": {expression}}}
+""",
+            ),
+            {"opt_dict": {"type": "object"}},
         ).extract()
 
         assert schemas["HouseResource"]["properties"]["blob"] == {

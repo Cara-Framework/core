@@ -207,12 +207,24 @@ def test_route_registration_failures_share_one_class() -> None:
 @pytest.mark.parametrize(
     ("name", "expected_module"),
     [
-        ("DriverNotRegisteredException", "cara.exceptions.types.storage"),
-        ("DriverLibraryNotFoundException", "cara.exceptions.types.scheduling"),
-        ("QueueException", "cara.exceptions.types.queue"),
-        ("RouteMiddlewareNotFoundException", "cara.exceptions.types.routing"),
-        ("RouteRegistrationException", "cara.exceptions.types.application"),
-        ("Http404Exception", "cara.exceptions.types.http"),
+        (
+            "DriverNotRegisteredException",
+            "cara.exceptions.types.DriverNotRegisteredException",
+        ),
+        (
+            "DriverLibraryNotFoundException",
+            "cara.exceptions.types.DriverLibraryNotFoundException",
+        ),
+        ("QueueException", "cara.exceptions.types.QueueException"),
+        (
+            "RouteMiddlewareNotFoundException",
+            "cara.exceptions.types.RouteMiddlewareNotFoundException",
+        ),
+        (
+            "RouteRegistrationException",
+            "cara.exceptions.types.RouteRegistrationException",
+        ),
+        ("Http404Exception", "cara.exceptions.types.Http404Exception"),
     ],
 )
 def test_each_surviving_name_lives_where_its_raisers_expect(

@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from cara.validation import MessageFormatter
+from cara.validation.MessageFormatter import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
 
 # Only allow safe SQL identifiers: letters, digits, underscores.
@@ -45,7 +45,7 @@ class UniqueRule(BaseRule):
                 return False
 
         try:
-            from cara.facades import DB
+            from cara.facades import DB  # local: cycle with cara.facades
 
             sql = f'SELECT 1 FROM "{table}" WHERE "{column}" = %s LIMIT 1'
             sql_params = [value]
@@ -57,7 +57,7 @@ class UniqueRule(BaseRule):
             return len(rows) == 0
         except Exception as exc:
             try:
-                from cara.facades import Log
+                from cara.facades import Log  # local: cycle with cara.facades
 
                 Log.error(
                     "UniqueRule: DB query failed for %s.%s: %s: %s",

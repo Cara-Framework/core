@@ -7,7 +7,7 @@ lets an editor hook run it on every session start and a CI job run it without
 credentials.
 
 Subclass it in a product and bind ``manifest`` to that product's
-:class:`~cara.docs.Manifest.DocsManifest`; everything else is the framework's.
+:class:`~cara.docs.DocsManifest.DocsManifest`; everything else is the framework's.
 The subclass exists so the product's command inventory still lists the command
 under its own name — it carries configuration, never logic.
 """
@@ -17,10 +17,15 @@ from __future__ import annotations
 import time
 
 from cara.commands.core.DocsCommand import DocsCommand
-from cara.docs.Claims import claims_report, verify_claims
-from cara.docs.Freshness import freshness, gen_nav
-from cara.docs.Inventory import generate_reference
-from cara.docs.Support import Say, write_if_changed
+from cara.docs import (
+    Say,
+    claims_report,
+    freshness,
+    gen_nav,
+    generate_reference,
+    verify_claims,
+    write_if_changed,
+)
 
 
 class DocsGenerateCommand(DocsCommand):

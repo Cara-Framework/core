@@ -7,6 +7,7 @@ This module provides a clean, simple logger with style-based formatting.
 from __future__ import annotations
 
 import inspect
+import logging
 import sys
 import traceback
 import uuid
@@ -14,12 +15,18 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
+import cara.context as context
+import cara.http as http
+from cara.exceptions import ConfigurationException
 from cara.logging.CategoryFilter import CategoryFilter
-from cara.logging.contracts import Logger
+from cara.logging.contracts import LoggerContract
 from cara.logging.HttpColorizer import HttpColorizer
 
+from .ChannelConfigurator import ChannelConfigurator
+from .ContextualLogger import ContextualLogger
 
-class Logger(Logger):
+
+class Logger(LoggerContract):
     """
     Clean Logger implementation with style-based formatting.
 
@@ -61,18 +68,13 @@ class Logger(Logger):
         # Remove all existing handlers
         _loguru_logger.remove()
 
-        # Setup channels using ChannelConfigurator
-        from cara.logging.ChannelConfigurator import ChannelConfigurator
-
-        configurator = ChannelConfigurator(_loguru_logger)
+        configurator = ChannelConfigurator(_loguru_logger, Logger._config or None)
         configurator.configure()
 
         Logger._initialized = True
 
     def _configure_third_party_logging(self) -> None:
         """Configure third-party library logging levels to avoid log pollution."""
-        import logging
-
         # Disable ALL httpx related logging
         httpx_loggers = [
             "httpx",
@@ -104,32 +106,26 @@ class Logger(Logger):
 
     def _get_console_log_level(self) -> str:
         """Get console log level from configuration."""
-        try:
-            from cara.configuration import config
-
-            # Get console channel configuration
-            level = config("logging.channels.console.LEVEL", "DEBUG")
-            return level.upper()
-        except Exception:
-            # Fallback to DEBUG if config is not available
-            return "DEBUG"
+        channels = self._config.get("channels")
+        if not isinstance(channels, dict):
+            raise ConfigurationException("logging.channels must be a dictionary")
+        console = channels.get("console", {})
+        if not isinstance(console, dict):
+            raise ConfigurationException("logging.channels.console must be a dictionary")
+        level = console.get("LEVEL", "DEBUG")
+        if not isinstance(level, str) or not isinstance(
+            getattr(logging, level.upper(), None), int
+        ):
+            raise ConfigurationException("logging console LEVEL is invalid")
+        return level.upper()
 
     def _should_log_level(self, level: str) -> bool:
         """Check if a log level should be logged based on console configuration."""
-        try:
-            import logging as pylogging
-
-            # Get current console log level
-            console_level = self._get_console_log_level()
-
-            # Convert to numeric levels for comparison
-            current_levelno = getattr(pylogging, level.upper(), 0)
-            console_levelno = getattr(pylogging, console_level.upper(), 0)
-
-            return current_levelno >= console_levelno
-        except Exception:
-            # If anything fails, allow logging
-            return True
+        console_level = self._get_console_log_level()
+        current_levelno = getattr(logging, level.upper(), None)
+        if not isinstance(current_levelno, int):
+            raise ValueError(f"Unknown log level: {level!r}")
+        return current_levelno >= getattr(logging, console_level)
 
     # Class names that belong to the logging infrastructure itself and
     # should be skipped when walking up the call stack to find the real caller.
@@ -204,17 +200,13 @@ class Logger(Logger):
           3. A fresh short UUID so logs always carry *something*.
         """
         try:
-            from cara.context import ExecutionContext
-
-            corr = ExecutionContext.get_correlation_id()
+            corr = context.ExecutionContext.get_correlation_id()
             if corr:
                 return str(corr)
         except OSError, RuntimeError, AttributeError, ConnectionError:
             pass
         try:
-            from cara.http.request.Context import current_request
-
-            req = current_request.get()
+            req = http.current_request.get()
             return getattr(req, "request_id", str(uuid.uuid4())[:8])
         except Exception:
             return str(uuid.uuid4())[:8]
@@ -228,7 +220,7 @@ class Logger(Logger):
         opentelemetry isn't installed or no span is active, returns ''.
         """
         try:
-            from opentelemetry import trace as _otel_trace
+            from opentelemetry import trace as _otel_trace  # local: heavy optional dep
 
             ctx = _otel_trace.get_current_span().get_span_context()
             if getattr(ctx, "is_valid", False) and ctx.trace_id:
@@ -582,37 +574,3 @@ class Logger(Logger):
     def database(self, message: str, level: str = "DEBUG") -> None:
         """Log a database query (muted style)."""
         self._log(level.upper(), message, "db.queries")
-
-
-class ContextualLogger:
-    """Scoped logger that appends context tags to every message."""
-
-    __slots__ = ("_parent", "_context", "_suffix")
-
-    def __init__(self, parent: Logger, context: dict) -> None:
-        self._parent = parent
-        self._context = context
-        self._suffix = (
-            " ".join(f"[{k}={v}]" for k, v in context.items()) if context else ""
-        )
-
-    def _fmt(self, message: str) -> str:
-        return f"{message} {self._suffix}" if self._suffix else message
-
-    def debug(self, message: str, *a: Any, **kw: Any) -> None:
-        self._parent.debug(self._fmt(message), *a, **kw)
-
-    def info(self, message: str, *a: Any, **kw: Any) -> None:
-        self._parent.info(self._fmt(message), *a, **kw)
-
-    def warning(self, message: str, *a: Any, **kw: Any) -> None:
-        self._parent.warning(self._fmt(message), *a, **kw)
-
-    def error(self, message: str, *a: Any, **kw: Any) -> None:
-        self._parent.error(self._fmt(message), *a, **kw)
-
-    def critical(self, message: str, *a: Any, **kw: Any) -> None:
-        self._parent.critical(self._fmt(message), *a, **kw)
-
-    def exception(self, message: str, *a: Any, **kw: Any) -> None:
-        self._parent.exception(self._fmt(message), *a, **kw)

@@ -9,11 +9,15 @@ lives behind three seams (``_connection_params`` / ``_admin_sql`` /
 
 from __future__ import annotations
 
+import importlib
+import inspect
 from pathlib import Path
 
 import pytest
 
 from cara.commands.core.SchemaVerifyCommand import SchemaVerifyCommand
+
+_MODULE = importlib.import_module("cara.commands.core.SchemaVerifyCommand")
 
 _PARAMS = {
     "driver": "postgres",
@@ -145,7 +149,8 @@ def test_refuses_unsafe_scratch_names(name):
 def test_refuses_in_production(monkeypatch):
     # ``config`` is bound at the command module's top — patch that name.
     monkeypatch.setattr(
-        "cara.commands.core.SchemaVerifyCommand.config",
+        _MODULE,
+        "config",
         lambda key, default=None: "production" if key == "app.env" else default,
     )
     command = _Verify()
@@ -161,7 +166,8 @@ def test_non_postgres_driver_is_refused_by_the_real_params_reader(monkeypatch):
         "database.drivers": {"app": {"driver": "sqlite", "database": "cara.sqlite3"}},
     }
     monkeypatch.setattr(
-        "cara.commands.core.SchemaVerifyCommand.config",
+        _MODULE,
+        "config",
         lambda key, default=None: values.get(key, default),
     )
 
@@ -202,24 +208,21 @@ def test_every_flag_a_message_recommends_actually_exists():
     """
     import re
 
-    from cara.commands.core import (
-        SchemaApplyCommand as apply_module,
-    )
-    from cara.commands.core import (
-        SchemaPlanCommand as plan_module,
-    )
-    from cara.commands.core import (
-        SchemaRollbackCommand as rollback_module,
-    )
+    apply_module = importlib.import_module("cara.commands.core.SchemaApplyCommand")
+    plan_module = importlib.import_module("cara.commands.core.SchemaPlanCommand")
+    rollback_module = importlib.import_module("cara.commands.core.SchemaRollbackCommand")
 
     modules = (plan_module, apply_module, rollback_module)
     real: set[str] = set()
     for module in modules:
         for name in dir(module):
-            options = getattr(getattr(module, name), "_cli_options", None) or {}
+            value = getattr(module, name)
+            options = inspect.getattr_static(value, "_cli_options", None) or []
             for declared in options:
-                # "--c|connection=default" -> {"c", "connection"}
-                for alias in declared.lstrip("-").split("=")[0].split("|"):
+                # {"name": "--c|--connection", ...} -> {"c", "connection"}
+                option_name = declared["name"]
+                for alias in option_name.split("|"):
+                    alias = alias.lstrip("-")
                     real.add(alias)
     assert "allow_destructive" in real, "metadata not found — test is vacuous"
 

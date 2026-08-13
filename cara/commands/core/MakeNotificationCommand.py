@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -15,11 +15,29 @@ from cara.support import paths
 @command(
     name="make:notification",
     help="Generate a new Notification class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--force": "Overwrite existing notification file",
-        "--channels=?": "Comma-separated list of notification channels (mail,database,slack)",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing notification file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--channels",
+            "help": "Comma-separated list of notification channels (mail,database,slack)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class MakeNotificationCommand(CommandBase):
     """Generate Notification classes with enhanced configuration."""

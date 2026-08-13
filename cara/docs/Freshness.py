@@ -16,7 +16,7 @@ import json
 import re
 from pathlib import Path
 
-from cara.docs.Manifest import DocsManifest
+from cara.docs.DocsManifest import DocsManifest
 from cara.docs.Support import (
     Say,
     newest_change,

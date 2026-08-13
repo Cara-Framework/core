@@ -43,8 +43,11 @@ from __future__ import annotations
 
 import re
 
-from cara.commands import CommandBase, missing_optional
 from cara.decorators import command
+
+from ..CommandBase import CommandBase
+from ..OptionalDependencyError import missing_optional
+from ._LiveSchemaInspection import _LIVE_SCHEMA_INSPECTION
 
 # Harvest ``ADD COLUMN [IF NOT EXISTS] <name>`` from raw-SQL ``__indexes__``
 # ``up`` clauses. Models declare GENERATED columns (e.g. a tsvector
@@ -211,11 +214,29 @@ _PSEUDO_FIELD_EXPANSIONS = {
 @command(
     name="schema:check",
     help="Check for drift between model declarations and the live database schema.",
-    options={
-        "--c|connection=default": "The connection to introspect",
-        "--schema=?": "The Postgres schema to introspect (defaults to the connection's)",
-        "--allow_unavailable": "Explicitly skip when the target database is unavailable",
-    },
+    options=[
+        {
+            "name": "-c|--connection",
+            "help": "The connection to introspect",
+            "type": str,
+            "default": "default",
+            "is_flag": False,
+        },
+        {
+            "name": "--schema",
+            "help": "The Postgres schema to introspect (defaults to the connection's)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--allow_unavailable",
+            "help": "Explicitly skip when the target database is unavailable",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class SchemaCheckCommand(CommandBase):
     def handle(self):
@@ -224,8 +245,10 @@ class SchemaCheckCommand(CommandBase):
         # 'db' extra). Defer it so a DB-less service still imports this module,
         # and fail LOUD + actionable here if the extra isn't installed.
         try:
-            from cara.eloquent.migrations import ModelDiscoverer
-            from cara.eloquent.schema import Schema
+            from cara.eloquent.migrations import (  # local: heavy optional dep
+                ModelDiscoverer,
+            )
+            from cara.eloquent.schema import Schema  # local: heavy optional dep
         except ImportError as exc:
             raise missing_optional("db", exc) from exc
 
@@ -329,115 +352,18 @@ class SchemaCheckCommand(CommandBase):
     # --- introspection -----------------------------------------------------
 
     def _introspect_live_tables(self, live_schema, schema_name) -> dict[str, dict]:
-        """Read every column of every table in the target schema (read-only).
-
-        Returns ``{table_name: {column_name: {"data_type", "is_nullable"}}}``.
-        """
-        target_schema = schema_name or live_schema.get_schema() or "public"
-
-        sql = (
-            "SELECT table_name, column_name, data_type, is_nullable, "
-            "character_maximum_length "
-            "FROM information_schema.columns "
-            f"WHERE table_schema = '{self._sql_literal(target_schema)}' "
-            "ORDER BY table_name, ordinal_position"
-        )
-
-        rows = live_schema.query_executor.get_query_result(sql) or []
-
-        tables: dict[str, dict] = {}
-        for row in rows:
-            table_name = row["table_name"]
-            tables.setdefault(table_name, {})[row["column_name"]] = {
-                "data_type": (row["data_type"] or "").lower(),
-                "is_nullable": (row["is_nullable"] or "").upper() == "YES",
-                # None for unbounded types (text, jsonb, …).
-                "max_length": row.get("character_maximum_length"),
-            }
-        return tables
+        return _LIVE_SCHEMA_INSPECTION.tables(live_schema, schema_name)
 
     def _introspect_live_checks(self, live_schema, schema_name) -> dict[str, set[str]]:
-        """Read every CHECK constraint NAME per table (read-only).
-
-        ``pg_constraint.contype = 'c'`` is a CHECK constraint. NOT-NULL columns
-        also surface as system CHECKs with auto-generated names; we only keep
-        constraints whose name doesn't look auto-generated, and in practice we
-        only DIFF the names a model explicitly DECLARES, so a stray system
-        constraint never produces a false drift. Returns
-        ``{table_name: {constraint_name, ...}}``.
-        """
-        target_schema = schema_name or live_schema.get_schema() or "public"
-
-        sql = (
-            "SELECT c.relname AS table_name, con.conname AS constraint_name "
-            "FROM pg_constraint con "
-            "JOIN pg_class c ON c.oid = con.conrelid "
-            "JOIN pg_namespace n ON n.oid = c.relnamespace "
-            f"WHERE n.nspname = '{self._sql_literal(target_schema)}' "
-            "AND con.contype = 'c' "
-            "ORDER BY c.relname, con.conname"
-        )
-
-        rows = live_schema.query_executor.get_query_result(sql) or []
-
-        checks: dict[str, set[str]] = {}
-        for row in rows:
-            checks.setdefault(row["table_name"], set()).add(row["constraint_name"])
-        return checks
+        return _LIVE_SCHEMA_INSPECTION.checks(live_schema, schema_name)
 
     def _introspect_live_indexes(self, live_schema, schema_name) -> dict[str, set[str]]:
-        """Read every index NAME per table (read-only).
-
-        ``pg_indexes`` lists all indexes (unique + non-unique) by name. We diff
-        only the names a model DECLARES as unique in ``__indexes__``, so listing
-        every index here is harmless — a declared unique index simply must
-        appear in this set. Returns ``{table_name: {index_name, ...}}``.
-        """
-        target_schema = schema_name or live_schema.get_schema() or "public"
-
-        sql = (
-            "SELECT tablename AS table_name, indexname AS index_name "
-            "FROM pg_indexes "
-            f"WHERE schemaname = '{self._sql_literal(target_schema)}' "
-            "ORDER BY tablename, indexname"
-        )
-
-        rows = live_schema.query_executor.get_query_result(sql) or []
-
-        indexes: dict[str, set[str]] = {}
-        for row in rows:
-            indexes.setdefault(row["table_name"], set()).add(row["index_name"])
-        return indexes
+        return _LIVE_SCHEMA_INSPECTION.indexes(live_schema, schema_name)
 
     def _introspect_constraint_indexes(
         self, live_schema, schema_name
     ) -> dict[str, set[str]]:
-        """Index names Postgres created IMPLICITLY to back a constraint.
-
-        A PRIMARY KEY / UNIQUE / EXCLUDE constraint owns an index
-        (``pg_constraint.conindid``) that no model ever names. Excluding these
-        from the full index diff is what keeps "extra index in database"
-        reporting free of false positives. Returns ``{table_name: {name, ...}}``.
-        """
-        target_schema = schema_name or live_schema.get_schema() or "public"
-
-        sql = (
-            "SELECT c.relname AS table_name, i.relname AS index_name "
-            "FROM pg_constraint con "
-            "JOIN pg_class c ON c.oid = con.conrelid "
-            "JOIN pg_class i ON i.oid = con.conindid "
-            "JOIN pg_namespace n ON n.oid = c.relnamespace "
-            f"WHERE n.nspname = '{self._sql_literal(target_schema)}' "
-            "AND con.conindid <> 0 "
-            "ORDER BY c.relname, i.relname"
-        )
-
-        rows = live_schema.query_executor.get_query_result(sql) or []
-
-        owned: dict[str, set[str]] = {}
-        for row in rows:
-            owned.setdefault(row["table_name"], set()).add(row["index_name"])
-        return owned
+        return _LIVE_SCHEMA_INSPECTION.constraint_indexes(live_schema, schema_name)
 
     # --- model side --------------------------------------------------------
 

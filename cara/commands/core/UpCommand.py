@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import CaraException, StorageException
 from cara.support import paths
@@ -19,10 +19,22 @@ from cara.support import paths
 @command(
     name="up",
     help="Bring the application out of maintenance mode with enhanced feedback.",
-    options={
-        "--dry": "Show current maintenance status without making changes",
-        "--f|force": "Force disable without confirmation in production",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show current maintenance status without making changes",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "-f|--force",
+            "help": "Force disable without confirmation in production",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class UpCommand(CommandBase):
     """Disable maintenance mode with enhanced user experience and safety checks."""
@@ -87,9 +99,6 @@ class UpCommand(CommandBase):
             if maintenance_info.get("secret"):
                 self.info("   Bypass Secret: Configured")
 
-            if maintenance_info.get("file_type") == "legacy":
-                self.info("   File Type: Legacy (simple text file)")
-
         self.info(f"   File Location: {self.maintenance_file}")
         self.info("\n🔓 Would deactivate maintenance mode by removing the file")
 
@@ -112,9 +121,6 @@ class UpCommand(CommandBase):
         if maintenance_info:
             self.info(f"   Message: {maintenance_info.get('message', 'N/A')}")
             self.info(f"   Active since: {maintenance_info.get('created_at', 'Unknown')}")
-
-            if maintenance_info.get("file_type") == "legacy":
-                self.info("   Type: Legacy maintenance file")
 
         self.info("⚡ Deactivating maintenance mode...")
 
@@ -148,14 +154,12 @@ class UpCommand(CommandBase):
 
         try:
             with open(self.maintenance_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError, Exception:
-            # Fallback for simple text files
-            return {
-                "message": "Application is in maintenance mode",
-                "created_at": "Unknown",
-                "file_type": "legacy",
-            }
+                value = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise StorageException("Maintenance state is not valid JSON") from exc
+        if not isinstance(value, dict):
+            raise StorageException("Maintenance state must be a JSON object")
+        return value
 
     def _remove_maintenance_file(self) -> None:
         """Remove maintenance file to deactivate maintenance mode."""

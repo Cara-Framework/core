@@ -89,5 +89,6 @@ class CacheProvider(DeferredProvider):
             ssl_cert_reqs=config("cache.drivers.redis.ssl_cert_reqs", "required"),
             signing_key=config("cache.drivers.redis.signing_key", ""),
             max_nodes=config("cache.drivers.redis.max_nodes", None),
+            large_value_bytes=config("cache.large_value_bytes", 262144),
         )
         cache_manager.add_driver(RedisCacheDriver.driver_name, driver)

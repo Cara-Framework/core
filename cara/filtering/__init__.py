@@ -1,47 +1,91 @@
 """Composable filter framework — Laravel-inspired filter / sort / paginate primitives.
 
-Generic, domain-free building blocks. Apps compose concrete
-filters / sorters into ``FilterSet`` / ``SortRegistry`` instances
-and pass an opaque ``ctx`` (typically a small dataclass with
-SQL-alias expressions) so the same filter renders against any
-table layout.
+Two families share this package:
 
-Usage:
-    from cara.filtering import (
-        Filter, FilterSet, FilterPipeline, pipeline,
-        Sorter, SortRegistry,
-        RelationSet, relations,
-        FilteredFormRequest, PAGING_RULES,
-        UI_CONTROL_TOGGLE, FILTER_GROUP_PRICE,
-    )
+* **Facet dimensions** (``Filter`` / ``FilterSet`` / ``FilterPipeline``)
+  — independent, AND-composed dimensions with wizard metadata; the
+  storefront sidebar shape. Apps compose concrete filters / sorters and
+  pass an opaque ``ctx`` so the same filter renders against any table
+  layout.
+* **Boolean trees** (``TreeField`` / ``TreeSchema`` / ``FilterTree`` /
+  ``compile_tree``) — one typed boolean expression (AND of conditions
+  and OR/AND groups) accepted as a single ``filters`` parameter,
+  validated by the ``filter_tree:<schema>`` rule and compiled to a
+  self-contained ``(sql, params)`` predicate. The index-table shape.
 
-App side defines its own ``FilterContext`` (e.g.
-``app/filtering/FilterContext.py``) carrying domain-specific column
-aliases. Concrete filter subclasses tighten the ``ctx`` type hint at
-the override site.
+Both keep the same division of labor: the framework owns grammar,
+validation, determinism, and SQL honesty; the app owns vocabulary
+(fields, options, columns) and authorization.
 """
 
-from .Filter import (
-    FILTER_GROUP_AVAILABILITY,
-    FILTER_GROUP_BRAND,
-    FILTER_GROUP_PRICE,
-    FILTER_GROUP_QUALITY,
-    FILTER_GROUP_SCOPE,
-    FILTER_GROUP_SPECS,
-    UI_CONTROL_CHECKBOX_LIST,
-    UI_CONTROL_HIDDEN,
-    UI_CONTROL_NUMERIC_INPUT,
-    UI_CONTROL_RADIO_LIST,
-    UI_CONTROL_RANGE_SLIDER,
-    UI_CONTROL_TEXT_INPUT,
-    UI_CONTROL_TOGGLE,
-    Filter,
-)
-from .FilterSet import FilterSet
-from .Pipeline import FilterPipeline, pipeline
-from .Relations import RelationSet, relations
-from .Request import FilteredFormRequest, PAGING_RULES
-from .Sorter import Sorter, SortRegistry
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "FILTER_GROUP_AVAILABILITY": (".Filter", "FILTER_GROUP_AVAILABILITY"),
+    "FILTER_GROUP_BRAND": (".Filter", "FILTER_GROUP_BRAND"),
+    "FILTER_GROUP_PRICE": (".Filter", "FILTER_GROUP_PRICE"),
+    "FILTER_GROUP_QUALITY": (".Filter", "FILTER_GROUP_QUALITY"),
+    "FILTER_GROUP_SCOPE": (".Filter", "FILTER_GROUP_SCOPE"),
+    "FILTER_GROUP_SPECS": (".Filter", "FILTER_GROUP_SPECS"),
+    "Filter": (".Filter", "Filter"),
+    "FilterPipeline": (".FilterPipeline", "FilterPipeline"),
+    "FilterSet": (".FilterSet", "FilterSet"),
+    "FilterTree": (".FilterTree", "FilterTree"),
+    "FilteredFormRequest": (".FilteredFormRequest", "FilteredFormRequest"),
+    "GROUP_ALL": (".TreeGroup", "GROUP_ALL"),
+    "GROUP_ANY": (".TreeGroup", "GROUP_ANY"),
+    "KINDS": (".TreeField", "KINDS"),
+    "KIND_BOOLEAN": (".TreeField", "KIND_BOOLEAN"),
+    "KIND_DATE": (".TreeField", "KIND_DATE"),
+    "KIND_ENTITY": (".TreeField", "KIND_ENTITY"),
+    "KIND_NUMBER": (".TreeField", "KIND_NUMBER"),
+    "KIND_SELECT": (".TreeField", "KIND_SELECT"),
+    "KIND_TEXT": (".TreeField", "KIND_TEXT"),
+    "LAST_DAYS_MAX": (".TreeField", "LAST_DAYS_MAX"),
+    "MAX_CONDITIONS": (".TreeSchema", "MAX_CONDITIONS"),
+    "MAX_GROUP_CHILDREN": (".TreeSchema", "MAX_GROUP_CHILDREN"),
+    "MAX_ROOT_NODES": (".TreeSchema", "MAX_ROOT_NODES"),
+    "OPERATOR_ARITY": (".TreeField", "OPERATOR_ARITY"),
+    "OP_AFTER": (".TreeField", "OP_AFTER"),
+    "OP_BEFORE": (".TreeField", "OP_BEFORE"),
+    "OP_BETWEEN": (".TreeField", "OP_BETWEEN"),
+    "OP_CONTAINS": (".TreeField", "OP_CONTAINS"),
+    "OP_EMPTY": (".TreeField", "OP_EMPTY"),
+    "OP_GT": (".TreeField", "OP_GT"),
+    "OP_GTE": (".TreeField", "OP_GTE"),
+    "OP_IN": (".TreeField", "OP_IN"),
+    "OP_IS": (".TreeField", "OP_IS"),
+    "OP_IS_NOT": (".TreeField", "OP_IS_NOT"),
+    "OP_LAST_DAYS": (".TreeField", "OP_LAST_DAYS"),
+    "OP_LT": (".TreeField", "OP_LT"),
+    "OP_LTE": (".TreeField", "OP_LTE"),
+    "OP_NOT_CONTAINS": (".TreeField", "OP_NOT_CONTAINS"),
+    "OP_NOT_EMPTY": (".TreeField", "OP_NOT_EMPTY"),
+    "OP_NOT_IN": (".TreeField", "OP_NOT_IN"),
+    "PAGING_RULES": (".FilteredFormRequest", "PAGING_RULES"),
+    "RAW_LENGTH_CAP": (".FilterTree", "RAW_LENGTH_CAP"),
+    "RelationSet": (".RelationSet", "RelationSet"),
+    "SortRegistry": (".SortRegistry", "SortRegistry"),
+    "Sorter": (".Sorter", "Sorter"),
+    "TreeCondition": (".TreeCondition", "TreeCondition"),
+    "TreeField": (".TreeField", "TreeField"),
+    "TreeGroup": (".TreeGroup", "TreeGroup"),
+    "TreeSchema": (".TreeSchema", "TreeSchema"),
+    "UI_CONTROL_CHECKBOX_LIST": (".Filter", "UI_CONTROL_CHECKBOX_LIST"),
+    "UI_CONTROL_HIDDEN": (".Filter", "UI_CONTROL_HIDDEN"),
+    "UI_CONTROL_NUMERIC_INPUT": (".Filter", "UI_CONTROL_NUMERIC_INPUT"),
+    "UI_CONTROL_RADIO_LIST": (".Filter", "UI_CONTROL_RADIO_LIST"),
+    "UI_CONTROL_RANGE_SLIDER": (".Filter", "UI_CONTROL_RANGE_SLIDER"),
+    "UI_CONTROL_TEXT_INPUT": (".Filter", "UI_CONTROL_TEXT_INPUT"),
+    "UI_CONTROL_TOGGLE": (".Filter", "UI_CONTROL_TOGGLE"),
+    "VALUES_HARD_CAP": (".TreeField", "VALUES_HARD_CAP"),
+    "compile_tree": (".TreeCompiler", "compile_tree"),
+    "evaluate_tree": (".TreeEvaluator", "evaluate_tree"),
+    "pipeline": (".FilterPipeline", "pipeline"),
+    "register_tree_schema": (".TreeSchema", "register_tree_schema"),
+    "relations": (".RelationSet", "relations"),
+    "tree_schema": (".TreeSchema", "tree_schema"),
+}
 
 __all__ = [
     "FILTER_GROUP_AVAILABILITY",
@@ -53,11 +97,47 @@ __all__ = [
     "Filter",
     "FilterPipeline",
     "FilterSet",
+    "FilterTree",
     "FilteredFormRequest",
+    "GROUP_ALL",
+    "GROUP_ANY",
+    "KINDS",
+    "KIND_BOOLEAN",
+    "KIND_DATE",
+    "KIND_ENTITY",
+    "KIND_NUMBER",
+    "KIND_SELECT",
+    "KIND_TEXT",
+    "LAST_DAYS_MAX",
+    "MAX_CONDITIONS",
+    "MAX_GROUP_CHILDREN",
+    "MAX_ROOT_NODES",
+    "OPERATOR_ARITY",
+    "OP_AFTER",
+    "OP_BEFORE",
+    "OP_BETWEEN",
+    "OP_CONTAINS",
+    "OP_EMPTY",
+    "OP_GT",
+    "OP_GTE",
+    "OP_IN",
+    "OP_IS",
+    "OP_IS_NOT",
+    "OP_LAST_DAYS",
+    "OP_LT",
+    "OP_LTE",
+    "OP_NOT_CONTAINS",
+    "OP_NOT_EMPTY",
+    "OP_NOT_IN",
     "PAGING_RULES",
+    "RAW_LENGTH_CAP",
     "RelationSet",
     "SortRegistry",
     "Sorter",
+    "TreeCondition",
+    "TreeField",
+    "TreeGroup",
+    "TreeSchema",
     "UI_CONTROL_CHECKBOX_LIST",
     "UI_CONTROL_HIDDEN",
     "UI_CONTROL_NUMERIC_INPUT",
@@ -65,6 +145,13 @@ __all__ = [
     "UI_CONTROL_RANGE_SLIDER",
     "UI_CONTROL_TEXT_INPUT",
     "UI_CONTROL_TOGGLE",
+    "VALUES_HARD_CAP",
+    "compile_tree",
+    "evaluate_tree",
     "pipeline",
+    "register_tree_schema",
     "relations",
+    "tree_schema",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

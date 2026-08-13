@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -17,11 +17,29 @@ from cara.support import paths
 @command(
     name="make:job",
     help="Generate a new Job class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--force": "Overwrite existing job file",
-        "--sync": "Generate a synchronous job (without ShouldQueue)",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing job file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--sync",
+            "help": "Generate a synchronous job (without ShouldQueue)",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MakeJobCommand(CommandBase):
     """Generate Job classes with enhanced configuration."""
@@ -190,7 +208,7 @@ class MakeJobCommand(CommandBase):
             self.info("")
             self.info("   Traditional queue dispatch:")
             self.info(
-                f"     {class_name}.dispatch().with_routing_key('processing.high').send()"
+                f"     {class_name}.dispatch().with_routing_key('processing.high').dispatch()"
             )
             self.info("")
             self.info("   Explicit sync (testing/debugging):")

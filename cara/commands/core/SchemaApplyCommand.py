@@ -55,6 +55,7 @@ from cara.commands.core.SchemaPlanCommand import SchemaPlanCommand
 from cara.decorators import command
 from cara.facades import DB
 from cara.schema import DESTRUCTIVE, LEDGER_TABLE, migration_to_run, plan_id
+from cara.support import paths
 
 #: Short on purpose — see the module docstring.
 DEFAULT_LOCK_TIMEOUT_MS = 5000
@@ -69,14 +70,50 @@ DEFAULT_LOCK_TIMEOUT_MS = 5000
         "operations already applied, stops at the first failure. Destructive "
         "operations require --allow_destructive."
     ),
-    options={
-        "--c|connection=default": "The connection to apply to",
-        "--schema=?": "The Postgres schema to inspect (defaults to the connection's)",
-        "--allow_destructive": "Permit destructive operations (drops)",
-        "--lock_timeout=5000": "Per-statement lock timeout in milliseconds",
-        "--dry_run": "Show what would run without executing or recording anything",
-        "--plan=?": "Apply a reviewed plan artifact; refuses if the database has moved",
-    },
+    options=[
+        {
+            "name": "-c|--connection",
+            "help": "The connection to apply to",
+            "type": str,
+            "default": "default",
+            "is_flag": False,
+        },
+        {
+            "name": "--schema",
+            "help": "The Postgres schema to inspect (defaults to the connection's)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--allow_destructive",
+            "help": "Permit destructive operations (drops)",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--lock_timeout",
+            "help": "Per-statement lock timeout in milliseconds",
+            "type": int,
+            "default": 5000,
+            "is_flag": False,
+        },
+        {
+            "name": "--dry_run",
+            "help": "Show what would run without executing or recording anything",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--plan",
+            "help": "Apply a reviewed plan artifact; refuses if the database has moved",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class SchemaApplyCommand(CommandBase):
     def handle(self):
@@ -275,10 +312,9 @@ class SchemaApplyCommand(CommandBase):
         which is the property `schema:verify` proves for the directory as a
         whole.
         """
-        from cara.eloquent.migrations import (  # local: heavy optional dep
-            MigrationFileManager,
+        from cara.eloquent.migrations import (
+            MigrationFileManager,  # local: heavy optional dep
         )
-        from cara.support import paths  # local: heavy optional dep
 
         directory = Path(paths("migrations"))
         matches = sorted(directory.glob(f"*_{slug}.py"))

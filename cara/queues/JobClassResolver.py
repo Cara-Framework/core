@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Iterable
 
+from cara.configuration import config
 from cara.exceptions import QueueException
 from cara.queues.contracts import ShouldQueue
 
@@ -27,16 +28,11 @@ class JobClassResolver:
         if explicit is not None:
             prefixes = explicit
         else:
-            try:
-                from cara.configuration import config
-
-                prefixes = (
-                    config("queue.drivers.amqp.allowed_job_prefixes", None)
-                    or config("queue.job_allowed_prefixes", None)
-                    or cls._DEFAULT_JOB_PREFIXES
-                )
-            except Exception:
-                prefixes = cls._DEFAULT_JOB_PREFIXES
+            prefixes = (
+                config("queue.drivers.amqp.allowed_job_prefixes", None)
+                or config("queue.job_allowed_prefixes", None)
+                or cls._DEFAULT_JOB_PREFIXES
+            )
 
         if isinstance(prefixes, str):
             prefixes = (prefixes,)

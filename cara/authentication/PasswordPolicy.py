@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from cara.configuration import config
 from cara.encryption import Hash
+from cara.exceptions import AuthenticationConfigurationException, InvalidArgumentException
 
 # Cost bound (see the module docstring). Generous on purpose: the point is to
 # refuse a megabyte, not to argue with a passphrase.
@@ -72,8 +73,18 @@ def password_max_bytes() -> int:
     use THIS, not ``MAX_PASSWORD_BYTES`` — the constant is only the default
     for the configurable half.
     """
-    ceiling = _positive_int(config("auth.password_max_bytes"), MAX_PASSWORD_BYTES)
-    boundary = Hash.truncation_boundary(_storage_algorithm())
+    ceiling = _configured_positive_int(
+        "auth.password_max_bytes",
+        config("auth.password_max_bytes"),
+        MAX_PASSWORD_BYTES,
+    )
+    algorithm = _storage_algorithm()
+    try:
+        boundary = Hash.truncation_boundary(algorithm)
+    except InvalidArgumentException as exc:
+        raise AuthenticationConfigurationException(
+            f"auth.password_hash_algorithm names unsupported algorithm {algorithm!r}"
+        ) from exc
     if boundary is None:
         return ceiling
     return min(ceiling, boundary)
@@ -81,6 +92,8 @@ def password_max_bytes() -> int:
 
 def check_password_strength(password: str) -> str | None:
     """Return a user-facing error for a weak or oversized password, else None."""
+    if not isinstance(password, str):
+        raise TypeError("password must be text")
     ceiling = password_max_bytes()
     if len(password.encode("utf-8")) > ceiling:
         return (
@@ -100,13 +113,21 @@ def denied_prefixes() -> tuple[str, ...]:
     """The framework deny-list, plus anything ``auth.password_denied_prefixes``
     adds. A product extends the list; it cannot shrink it, because a shorter
     deny-list is never the fix for a rejected password."""
-    extra = config("auth.password_denied_prefixes") or ()
-    if isinstance(extra, str):
-        extra = (extra,)
-    normalized = tuple(
-        str(prefix).strip().lower() for prefix in extra if str(prefix).strip()
-    )
-    return COMMON_PASSWORD_PREFIXES + normalized
+    extra = config("auth.password_denied_prefixes")
+    if extra is None:
+        return COMMON_PASSWORD_PREFIXES
+    if not isinstance(extra, (list, tuple)):
+        raise AuthenticationConfigurationException(
+            "auth.password_denied_prefixes must be a list of non-empty strings"
+        )
+    normalized: list[str] = []
+    for prefix in extra:
+        if not isinstance(prefix, str) or not prefix.strip():
+            raise AuthenticationConfigurationException(
+                "auth.password_denied_prefixes must contain only non-empty strings"
+            )
+        normalized.append(prefix.strip().lower())
+    return tuple(dict.fromkeys((*COMMON_PASSWORD_PREFIXES, *normalized)))
 
 
 def _storage_algorithm() -> str:
@@ -117,23 +138,31 @@ def _storage_algorithm() -> str:
     truncating storage, which is precisely the failure this module exists to
     prevent.
     """
-    return str(config("auth.password_hash_algorithm") or Hash.DEFAULT_ALGORITHM)
+    algorithm = config("auth.password_hash_algorithm")
+    if algorithm is None:
+        return Hash.DEFAULT_ALGORITHM
+    if not isinstance(algorithm, str) or not algorithm.strip():
+        raise AuthenticationConfigurationException(
+            "auth.password_hash_algorithm must be a non-empty string"
+        )
+    return algorithm.strip().lower()
 
 
 def _min_unique_chars() -> int:
-    return _positive_int(config("auth.password_min_unique_chars"), MIN_UNIQUE_CHARS)
+    return _configured_positive_int(
+        "auth.password_min_unique_chars",
+        config("auth.password_min_unique_chars"),
+        MIN_UNIQUE_CHARS,
+    )
 
 
-def _positive_int(value: object, fallback: int) -> int:
-    """Coerce a configured threshold, ignoring anything that is not a usable
-    positive integer. A malformed value must not disable the bound."""
-    if isinstance(value, bool) or value is None:
-        return fallback
-    try:
-        parsed = int(value)  # type: ignore[arg-type]
-    except TypeError, ValueError:
-        return fallback
-    return parsed if parsed > 0 else fallback
+def _configured_positive_int(name: str, value: object, default: int) -> int:
+    """Use the default only when absent; reject malformed security policy."""
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise AuthenticationConfigurationException(f"{name} must be a positive integer")
+    return value
 
 
 __all__ = [

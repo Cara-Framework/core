@@ -18,7 +18,7 @@ takes the vhost name the deployable must own.
 from __future__ import annotations
 
 from cara.environment import env
-from cara.security.SigningKeys import require_signing_keyring
+from cara.security import require_signing_keyring
 
 __all__ = [
     "AMQP_MAX_PRIORITY",

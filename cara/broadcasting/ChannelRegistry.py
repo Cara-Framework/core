@@ -31,7 +31,10 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from cara.exceptions import InvalidArgumentException
+from cara.exceptions import (
+    BroadcastingConfigurationException,
+    InvalidArgumentException,
+)
 
 # A channel auth callback receives (user, **placeholders) and returns
 # bool / dict / None / Awaitable[same].
@@ -178,10 +181,10 @@ class ChannelRegistry:
             return True
         if isinstance(result, dict):
             return result
-        # Any other truthy → coerce to bool to match Laravel's
-        # "any truthy means allowed" semantics. dict-not-bool already
-        # handled above so this is defensive.
-        return bool(result)
+        raise BroadcastingConfigurationException(
+            "Channel authorization callbacks must return bool, dict, or None; "
+            f"got {type(result).__name__}."
+        )
 
 
 __all__ = ["ChannelRegistry", "ChannelAuthCallback"]

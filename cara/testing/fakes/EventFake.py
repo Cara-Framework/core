@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
-
-@dataclass
-class DispatchedEvent:
-    event: Any
-    payload: dict | None = None
+from .DispatchedEvent import DispatchedEvent
 
 
 class EventFake:

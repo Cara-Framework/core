@@ -1,37 +1,31 @@
-from .Auth import Auth
-from .Broadcast import Broadcast
-from .Cache import Cache
-from .Config import Config
-from .Crypt import Crypt
-from .DB import DB
-from .Event import Event
-from .Facade import Facade
-from .AI import AI
-from .Feature import Feature
-from .Gate import Gate
-from .Hash import Hash
-from .Http import Http
-from .Loader import Loader
-from .Log import Log
-from .Mail import Mail
-from .Notification import Notification
-from .Queue import Queue
-from .RateLimiter import RateLimiter
-from .Schedule import Schedule
-from .Validation import Validation
-from .View import View
+"""Facades — layer barrel (generated, DOCTRINE §5.1)."""
 
-# NOTE: ``atomic`` (DB transaction context manager) intentionally lives
-# in ``cara.eloquent.Transactions`` — NOT here. Re-exporting it from
-# ``cara.facades`` would force ``cara.facades`` to import
-# ``cara.eloquent`` at module load, which closes a circular dependency:
-#
-#   cara.configuration  → cara.facades  → cara.eloquent → cara.configuration
-#
-# (``EloquentProvider`` does a top-level ``from cara.configuration
-# import config``.) All callers already use ``from
-# cara.eloquent.Transactions import atomic`` directly, so the facades
-# surface stays free of eloquent-side state and the cycle stays broken.
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AI": (".AI", "AI"),
+    "Auth": (".Auth", "Auth"),
+    "Broadcast": (".Broadcast", "Broadcast"),
+    "Cache": (".Cache", "Cache"),
+    "Config": (".Config", "Config"),
+    "Crypt": (".Crypt", "Crypt"),
+    "DB": (".DB", "DB"),
+    "Event": (".Event", "Event"),
+    "Facade": (".Facade", "Facade"),
+    "Feature": (".Feature", "Feature"),
+    "Gate": (".Gate", "Gate"),
+    "Hash": (".Hash", "Hash"),
+    "Http": (".Http", "Http"),
+    "Loader": (".Loader", "Loader"),
+    "Log": (".Log", "Log"),
+    "Mail": (".Mail", "Mail"),
+    "Notification": (".Notification", "Notification"),
+    "Queue": (".Queue", "Queue"),
+    "RateLimiter": (".RateLimiter", "RateLimiter"),
+    "Schedule": (".Schedule", "Schedule"),
+    "Validation": (".Validation", "Validation"),
+    "View": (".View", "View"),
+}
 
 __all__ = [
     "AI",
@@ -57,3 +51,5 @@ __all__ = [
     "Validation",
     "View",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

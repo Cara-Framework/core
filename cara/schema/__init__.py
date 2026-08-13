@@ -21,53 +21,53 @@ Four modules, in dependency order:
   the acceptance invariant and a plan before it runs.
 """
 
-from cara.schema.LiveSchema import (
-    LiveSchema,
-    declared_columns,
-    introspect,
-    raw_sql_columns,
-    sql_literal,
-)
-from cara.schema.Operation import (
-    ADDITIVE,
-    LEDGER_TABLE,
-    RUN_MIGRATION_PREFIX,
-    DESTRUCTIVE,
-    LOCKING,
-    SAFETY_ORDER,
-    Operation,
-    as_dict,
-    from_dict,
-    migration_to_run,
-    plan_id,
-    sort_operations,
-)
-from cara.schema.Objects import (
-    created_objects,
-    missing_indexes,
-    orphaned_indexes,
-    orphaned_tables,
-)
-from cara.schema.Planner import plan
-from cara.schema.Vocabulary import (
-    ADD_COLUMN_RE,
-    DATETIME_CATEGORIES,
-    DB_INT_RANK,
-    DB_TYPE_CATEGORY,
-    DEFAULT_DECIMAL_PRECISION,
-    DEFAULT_DECIMAL_SCALE,
-    DEFAULT_STRING_LENGTH,
-    MODEL_INT_RANK,
-    MODEL_TYPE_CATEGORY,
-    POSTGRES_TYPE_SQL,
-    PSEUDO_FIELD_EXPANSIONS,
-    postgres_type,
-)
+from cara._LazyExports import _install_lazy_exports
 
-# Tier 4 (relative) and last by construction: bound as a MODULE OBJECT so its
-# symbols stay Scratch.-qualified rather than flattening a dozen scratch-
-# database helpers into a barrel every schema caller reads.
-from . import Scratch  # noqa: E402
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "ADDITIVE": (".Operation", "ADDITIVE"),
+    "ADD_COLUMN_RE": (".Vocabulary", "ADD_COLUMN_RE"),
+    "DATETIME_CATEGORIES": (".Vocabulary", "DATETIME_CATEGORIES"),
+    "DB_INT_RANK": (".Vocabulary", "DB_INT_RANK"),
+    "DB_TYPE_CATEGORY": (".Vocabulary", "DB_TYPE_CATEGORY"),
+    "DEFAULT_DECIMAL_PRECISION": (".Vocabulary", "DEFAULT_DECIMAL_PRECISION"),
+    "DEFAULT_DECIMAL_SCALE": (".Vocabulary", "DEFAULT_DECIMAL_SCALE"),
+    "DEFAULT_STRING_LENGTH": (".Vocabulary", "DEFAULT_STRING_LENGTH"),
+    "DESTRUCTIVE": (".Operation", "DESTRUCTIVE"),
+    "LEDGER_TABLE": (".Operation", "LEDGER_TABLE"),
+    "LOCKING": (".Operation", "LOCKING"),
+    "LiveSchema": (".LiveSchema", "LiveSchema"),
+    "MODEL_INT_RANK": (".Vocabulary", "MODEL_INT_RANK"),
+    "MODEL_TYPE_CATEGORY": (".Vocabulary", "MODEL_TYPE_CATEGORY"),
+    "Operation": (".Operation", "Operation"),
+    "POSTGRES_TYPE_SQL": (".Vocabulary", "POSTGRES_TYPE_SQL"),
+    "PSEUDO_FIELD_EXPANSIONS": (".Vocabulary", "PSEUDO_FIELD_EXPANSIONS"),
+    "RUN_MIGRATION_PREFIX": (".Operation", "RUN_MIGRATION_PREFIX"),
+    "SAFETY_ORDER": (".Operation", "SAFETY_ORDER"),
+    "SAFE_DB_NAME": (".Scratch", "SAFE_DB_NAME"),
+    "admin_sql": (".Scratch", "admin_sql"),
+    "as_dict": (".Operation", "as_dict"),
+    "clone_structure": (".Scratch", "clone_structure"),
+    "connection_params": (".Scratch", "connection_params"),
+    "created_objects": (".Objects", "created_objects"),
+    "declared_columns": (".LiveSchema", "declared_columns"),
+    "derive_name": (".Scratch", "derive_name"),
+    "drop": (".Scratch", "drop"),
+    "from_dict": (".Operation", "from_dict"),
+    "introspect": (".LiveSchema", "introspect"),
+    "migration_to_run": (".Operation", "migration_to_run"),
+    "missing_indexes": (".Objects", "missing_indexes"),
+    "orphaned_indexes": (".Objects", "orphaned_indexes"),
+    "orphaned_tables": (".Objects", "orphaned_tables"),
+    "plan": (".Planner", "plan"),
+    "plan_id": (".Operation", "plan_id"),
+    "postgres_type": (".Vocabulary", "postgres_type"),
+    "raw_sql_columns": (".LiveSchema", "raw_sql_columns"),
+    "recreate": (".Scratch", "recreate"),
+    "run_craft": (".Scratch", "run_craft"),
+    "sort_operations": (".Operation", "sort_operations"),
+    "sql_literal": (".LiveSchema", "sql_literal"),
+    "validate_name": (".Scratch", "validate_name"),
+}
 
 __all__ = [
     "ADDITIVE",
@@ -89,9 +89,15 @@ __all__ = [
     "PSEUDO_FIELD_EXPANSIONS",
     "RUN_MIGRATION_PREFIX",
     "SAFETY_ORDER",
+    "SAFE_DB_NAME",
+    "admin_sql",
     "as_dict",
+    "clone_structure",
+    "connection_params",
     "created_objects",
     "declared_columns",
+    "derive_name",
+    "drop",
     "from_dict",
     "introspect",
     "migration_to_run",
@@ -102,6 +108,11 @@ __all__ = [
     "plan_id",
     "postgres_type",
     "raw_sql_columns",
+    "recreate",
+    "run_craft",
     "sort_operations",
     "sql_literal",
+    "validate_name",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

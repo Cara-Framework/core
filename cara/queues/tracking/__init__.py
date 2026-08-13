@@ -4,7 +4,16 @@ Queue Tracking Package.
 Advanced job tracking and monitoring for Cara Framework.
 """
 
-from .JobTracker import JobTracker
-from .Trackable import Trackable
+from cara._LazyExports import _install_lazy_exports
 
-__all__ = ["JobTracker", "Trackable"]
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "JobTracker": (".JobTracker", "JobTracker"),
+    "Trackable": (".Trackable", "Trackable"),
+}
+
+__all__ = [
+    "JobTracker",
+    "Trackable",
+]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

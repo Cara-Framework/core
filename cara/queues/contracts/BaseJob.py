@@ -7,9 +7,11 @@ that need to be queued for background processing.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from cara.exceptions import InvalidArgumentException
+from cara.facades import Log
 
 from .BaseQueueable import BaseQueueable
 
@@ -153,18 +155,13 @@ class BaseJob(BaseQueueable):
         }
 
         # Log progress
-        try:
-            from cara.facades import Log
-
+        with contextlib.suppress(ImportError, RuntimeError):
             Log.info(
                 "Job %s progress: %s%% - %s",
                 self.__class__.__name__,
                 progress_data["percentage"],
                 message,
             )
-        except ImportError:
-            # Silently fail if Log facade not available - this is a framework component
-            pass
 
         return progress_data
 
@@ -206,8 +203,6 @@ class BaseJob(BaseQueueable):
         )
 
         try:
-            from cara.facades import Log
-
             if getattr(self, "tags", None):
                 Log.error("Job %s tags: %s", self.__class__.__name__, self.tags)
         except ImportError:

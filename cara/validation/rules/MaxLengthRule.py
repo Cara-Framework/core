@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.validation import MessageFormatter
+from cara.validation.MessageFormatter import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
 
 
@@ -38,7 +38,7 @@ class MaxLengthRule(BaseRule):
             # through (which would be the alternative for a MAX
             # rule that pass-through'd on a misconfigured cap).
             try:
-                from cara.facades import Log
+                from cara.facades import Log  # local: cycle with cara.facades
 
                 Log.warning(
                     "MaxLengthRule: non-numeric max_length parameter %s on field %s; failing value as defensive default",

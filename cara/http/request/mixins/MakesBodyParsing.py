@@ -7,7 +7,9 @@ and multipart file uploads with Laravel-like validation and error handling.
 
 from __future__ import annotations
 
+import base64
 import json
+import logging
 from functools import lru_cache
 from typing import Any
 
@@ -17,8 +19,10 @@ from python_multipart.multipart import parse_options_header
 from cara.exceptions import (
     BadRequestException,
     PayloadTooLargeException,
+    UnsupportedMediaTypeException,
     ValidationException,
 )
+from cara.http.BodyLimits import BodyLimits
 
 # Import the class directly from its submodule, NOT via the ``cara.http.request``
 # package barrel. The barrel's ``__init__`` imports ``.Request`` first, which pulls
@@ -29,36 +33,27 @@ from cara.exceptions import (
 # not callable" — aborting every multipart parse. The direct submodule import is
 # immune to that load order.
 from cara.http.request.UploadedFile import UploadedFile
+from cara.http.request.utils.QueryStringParser import QueryStringParser
 
 
 # ---------------------------------------------------------------------
 # Configurable size limits — read once per process so a hot-path call
-# doesn't re-walk the config tree on every request. Raise/lower via
-# ``app.body.MAX_BODY_SIZE`` / ``app.body.MAX_FILE_SIZE`` /
-# ``app.body.MAX_FILES`` at boot.
+# doesn't re-walk the config tree on every request.
 # ---------------------------------------------------------------------
 @lru_cache(maxsize=1)
 def _body_limits() -> dict[str, int]:
-    """Resolve body-parsing limits from config with sane fallbacks.
+    """Resolve body-parsing limits from the application config.
 
     Cached for the life of the process — the values come from boot
     config, so refreshing after a config reload requires
     ``_body_limits.cache_clear()``.
     """
-    try:
-        from cara.configuration import config
-
-        return {
-            "MAX_BODY_SIZE": int(config("app.body.MAX_BODY_SIZE", 10 * 1024 * 1024)),
-            "MAX_FILE_SIZE": int(config("app.body.MAX_FILE_SIZE", 10 * 1024 * 1024)),
-            "MAX_FILES": int(config("app.body.MAX_FILES", 20)),
-        }
-    except Exception:
-        return {
-            "MAX_BODY_SIZE": 10 * 1024 * 1024,
-            "MAX_FILE_SIZE": 10 * 1024 * 1024,
-            "MAX_FILES": 20,
-        }
+    limits = BodyLimits.configured()
+    return {
+        "MAX_BODY_SIZE": limits.body_bytes,
+        "MAX_FILE_SIZE": limits.file_bytes,
+        "MAX_FILES": limits.files,
+    }
 
 
 class MakesBodyParsing:
@@ -69,37 +64,18 @@ class MakesBodyParsing:
     and caching following Laravel patterns.
     """
 
-    # Class attributes kept for backwards compat. Subclasses still
-    # override these directly (some app code does); the runtime
-    # accessors below prefer the class attribute when it diverges
-    # from the config default — that way an ``app/Request.py`` setting
-    # wins over the global config knob.
-    MAX_BODY_SIZE = 10 * 1024 * 1024
-    MAX_FILES = 20
-    MAX_FILE_SIZE = 10 * 1024 * 1024
-
     @classmethod
     def _max_body_size(cls) -> int:
-        """Resolved per-request max body size. Class override beats config default."""
-        cfg = _body_limits()["MAX_BODY_SIZE"]
-        # If the subclass overrode the class attribute, honour it.
-        if cls.MAX_BODY_SIZE != MakesBodyParsing.MAX_BODY_SIZE:
-            return cls.MAX_BODY_SIZE
-        return cfg
+        """Resolved process-wide body-size ceiling."""
+        return _body_limits()["MAX_BODY_SIZE"]
 
     @classmethod
     def _max_file_size(cls) -> int:
-        cfg = _body_limits()["MAX_FILE_SIZE"]
-        if cls.MAX_FILE_SIZE != MakesBodyParsing.MAX_FILE_SIZE:
-            return cls.MAX_FILE_SIZE
-        return cfg
+        return _body_limits()["MAX_FILE_SIZE"]
 
     @classmethod
     def _max_files(cls) -> int:
-        cfg = _body_limits()["MAX_FILES"]
-        if cls.MAX_FILES != MakesBodyParsing.MAX_FILES:
-            return cls.MAX_FILES
-        return cfg
+        return _body_limits()["MAX_FILES"]
 
     @classmethod
     def _body_size_limit(cls, max_bytes: int | None) -> int:
@@ -176,7 +152,10 @@ class MakesBodyParsing:
                             try:
                                 message = await self.receive()
                             except Exception:
-                                # allow-silent-except: drain-and-discard; PayloadTooLarge is raised right after
+                                logging.getLogger("cara.http.body").debug(
+                                    "request body drain failed after size cap",
+                                    exc_info=True,
+                                )
                                 break
                             total_size += len(message.get("body", b""))
                         raise self._payload_too_large(max_body, total_size)
@@ -327,10 +306,6 @@ class MakesBodyParsing:
         if "application/x-www-form-urlencoded" in content_type.lower():
             raw = await self._read_body()
             if raw:
-                from cara.http.request.utils.QueryStringParser import (
-                    QueryStringParser,
-                )
-
                 self._form_params = QueryStringParser().parse(
                     raw.decode("utf-8", errors="replace")
                 )
@@ -443,8 +418,6 @@ class MakesBodyParsing:
                             # downstream code expects a plain string but
                             # gets base64 — can cause silent data corruption
                             # in validation or DB writes.
-                            import base64
-                            import logging
 
                             logging.getLogger("cara.http.body").warning(
                                 "Form field '%s' could not be decoded as "
@@ -597,8 +570,6 @@ class MakesBodyParsing:
                 if form_data:
                     result.update(form_data)
             except BadRequestException as exc:
-                import logging
-
                 logging.getLogger("cara.http.body").debug(
                     "MakesBodyParsing.all(): form parse swallowed "
                     "for content-type %r — caller will see query "
@@ -606,7 +577,7 @@ class MakesBodyParsing:
                     content_type,
                     exc,
                 )
-        elif "application/json" in content_type:
+        elif self._is_json_media_type(content_type):
             # Handle as JSON data. The previous version swallowed
             # invalid-JSON errors silently which made
             # ``Validation.make(request.input(), {...})`` look like
@@ -620,34 +591,23 @@ class MakesBodyParsing:
             if isinstance(json_data, dict):
                 result.update(json_data)
         else:
-            # No Content-Type → speculative parse. Try JSON first,
-            # then form as fallback. Both failures are swallowed
-            # (the caller likely has no body at all, e.g. a GET
-            # with query params only), but the second swallow MUST
-            # be logged so a request whose body genuinely was
-            # malformed JSON AND malformed form data leaves a
-            # breadcrumb in the logs — pre-fix the bare ``pass``
-            # made this case completely invisible to telemetry.
-            try:
-                json_data = await self.json()
-                if isinstance(json_data, dict):
-                    result.update(json_data)
-            except BadRequestException as json_exc:
-                # If JSON fails, try form data.
-                try:
-                    form_data = await self.form()
-                    if form_data:
-                        result.update(form_data)
-                except BadRequestException as form_exc:
-                    import logging
-
-                    logging.getLogger("cara.http.body").debug(
-                        "MakesBodyParsing.all(): both JSON and form "
-                        "parse failed on a no-Content-Type request — "
-                        "caller will see query params only. "
-                        "json_cause=%s form_cause=%s",
-                        json_exc,
-                        form_exc,
-                    )
+            # A body without a declared, supported representation is not
+            # speculative JSON. Accepting text/plain JSON made the wire
+            # contract depend on parser luck and let proxy/client mistakes
+            # perform real mutations. Empty-body GET/query requests remain
+            # valid; 415 applies only when there is an actual representation.
+            raw = await self._read_body()
+            if raw:
+                declared = content_type.split(";", 1)[0].strip() or "missing"
+                raise UnsupportedMediaTypeException(
+                    "Request body must use application/json, a +json media type, "
+                    "application/x-www-form-urlencoded, or multipart/form-data.",
+                    received_media_type=declared,
+                )
 
         return result
+
+    @staticmethod
+    def _is_json_media_type(content_type: str) -> bool:
+        media_type = content_type.split(";", 1)[0].strip().lower()
+        return media_type == "application/json" or media_type.endswith("+json")

@@ -15,7 +15,8 @@ def test_load_reads_the_module_level_manifest(tmp_path):
     manifest_file = write(
         deployable / "app" / "architecture_manifest.py",
         "from pathlib import Path\n\n"
-        "from cara.architecture.Manifest import Manifest, ManifestRoots\n\n"
+        "from cara.architecture.Manifest import Manifest\n"
+        "from cara.architecture.ManifestRoots import ManifestRoots\n\n"
         "ROOT = Path(__file__).resolve().parents[1]\n\n"
         "MANIFEST = Manifest(\n"
         "    product='acme',\n"
@@ -48,7 +49,8 @@ def test_load_is_boot_free_no_app_config_required(tmp_path):
     manifest_file = write(
         tmp_path / "architecture_manifest.py",
         "from pathlib import Path\n\n"
-        "from cara.architecture.Manifest import Manifest, ManifestRoots\n\n"
+        "from cara.architecture.Manifest import Manifest\n"
+        "from cara.architecture.ManifestRoots import ManifestRoots\n\n"
         "MANIFEST = Manifest(\n"
         "    product='acme', deployable='api',\n"
         "    roots=ManifestRoots(deployable=Path('.'), app=Path('./app')),\n"

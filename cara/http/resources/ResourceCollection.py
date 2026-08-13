@@ -52,7 +52,9 @@ class ResourceCollection:
 
     def resolve(self, request=None) -> dict:
         """Build the full response payload."""
-        from .JsonResource import JsonResource
+        from .JsonResource import (
+            JsonResource,  # local: cycle with cara.http.resources.JsonResource
+        )
 
         data = [JsonResource._filter_missing(item) for item in self.to_array(request)]
 

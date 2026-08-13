@@ -26,74 +26,9 @@ import os
 import subprocess
 from collections.abc import Mapping, Sequence
 
-from cara.exceptions import CaraException, InvalidArgumentException
+from cara.exceptions import InvalidArgumentException
 
-
-class ProcessResult:
-    """Structured result of a subprocess run — Laravel ``ProcessResult`` parity."""
-
-    __slots__ = ("_command", "_exit_code", "_stdout", "_stderr")
-
-    def __init__(
-        self,
-        command: Sequence[str],
-        exit_code: int,
-        stdout: str,
-        stderr: str,
-    ) -> None:
-        self._command = list(command)
-        self._exit_code = exit_code
-        self._stdout = stdout
-        self._stderr = stderr
-
-    def command(self) -> list:
-        return list(self._command)
-
-    def exit_code(self) -> int:
-        return self._exit_code
-
-    def output(self) -> str:
-        """stdout — Laravel ``output()``."""
-        return self._stdout
-
-    def error_output(self) -> str:
-        """stderr — Laravel ``errorOutput()``."""
-        return self._stderr
-
-    def successful(self) -> bool:
-        return self._exit_code == 0
-
-    def failed(self) -> bool:
-        return self._exit_code != 0
-
-    def throw_on_failure(self) -> ProcessResult:
-        """Raise :class:`ProcessFailedException` if the process failed."""
-        if self.failed():
-            raise ProcessFailedException(self)
-        return self
-
-    def __repr__(self) -> str:  # pragma: no cover — debug aid
-        return f"ProcessResult(exit={self._exit_code}, cmd={self._command!r})"
-
-
-class ProcessFailedException(CaraException, RuntimeError):
-    """Raised by :meth:`ProcessResult.throw_on_failure` for non-zero exits.
-
-    Inside the taxonomy (§9), with ``RuntimeError`` kept as a SECOND base:
-    craft commands and jobs that shell out already write
-    ``except RuntimeError`` around ``throw_on_failure``, and dropping that
-    base would convert their handled failure into an unhandled one. Rooted
-    only at ``RuntimeError`` it was invisible to ``except CaraException``,
-    which is how a subprocess failure reached the handler as an
-    unclassified 500 instead of a framework error with a mapping.
-    """
-
-    def __init__(self, result: ProcessResult) -> None:
-        self.result = result
-        super().__init__(
-            f"Process {result.command()!r} exited with code {result.exit_code()}: "
-            f"{result.error_output().strip() or '<no stderr>'}"
-        )
+from .ProcessResult import ProcessResult as _ProcessResult
 
 
 class Process:
@@ -158,7 +93,7 @@ class Process:
 
     # ── Terminals ───────────────────────────────────────────────────
 
-    def run(self) -> ProcessResult:
+    def run(self) -> _ProcessResult:
         """Run the process synchronously and return a :class:`ProcessResult`."""
         try:
             completed = subprocess.run(
@@ -175,7 +110,7 @@ class Process:
             # Surface timeouts as a failed result so callers can branch
             # uniformly through ``failed()`` instead of catching two
             # different exception types.
-            return ProcessResult(
+            return _ProcessResult(
                 self._command,
                 exit_code=124,  # GNU timeout convention
                 stdout=(
@@ -184,14 +119,14 @@ class Process:
                 stderr=f"Timeout after {self._timeout}s",
             )
 
-        return ProcessResult(
+        return _ProcessResult(
             self._command,
             exit_code=completed.returncode,
             stdout=completed.stdout or "",
             stderr=completed.stderr or "",
         )
 
-    def must_run(self) -> ProcessResult:
+    def must_run(self) -> _ProcessResult:
         """Run and raise on failure — Laravel ``mustRun()``."""
         return self.run().throw_on_failure()
 
@@ -201,4 +136,4 @@ class Process:
         return f"Process(cmd={self._command!r}, cwd={self._path!r})"
 
 
-__all__ = ["Process", "ProcessResult", "ProcessFailedException"]
+__all__ = ["Process"]

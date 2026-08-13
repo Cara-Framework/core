@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cara.architecture.Manifest import SeamLocations
 from cara.architecture.scanners import VerticalSliceSeams
+from cara.architecture.SeamLocations import SeamLocations
 
 from ._fixtures import make_manifest, write
 
@@ -62,6 +62,26 @@ def test_evasion_via_call_arg_literal_is_caught(tmp_path):
     )
     findings = VerticalSliceSeams.scan(manifest)
     assert findings and "call-arg-literal" in findings[0].message
+
+
+def test_evasion_via_container_element_literal_is_caught(tmp_path):
+    """The fifth position: a brand token as a bare list/tuple element —
+    a ``where_in`` list or capability tuple sat structurally invisible
+    to the other four positions. Prose elements mentioning a brand stay
+    legal: a description is a word, not a branch."""
+    manifest = make_manifest(tmp_path, plugin_tokens=TOKENS)
+    write(
+        tmp_path / "app" / "services" / "Funnel.py",
+        "LANES = ['ebay', 'other']\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert findings and "container-literal" in findings[0].message
+
+    write(
+        tmp_path / "app" / "services" / "Funnel.py",
+        "STEPS = ['sync the eBay catalog once']\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
 
 
 def test_evasion_via_default_value_literal_is_caught(tmp_path):

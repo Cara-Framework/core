@@ -12,7 +12,7 @@ from typing import Any
 
 import pendulum
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import CaraException, InvalidArgumentException, StorageException
 from cara.support import paths
@@ -21,14 +21,50 @@ from cara.support import paths
 @command(
     name="down",
     help="Put the application into maintenance mode with advanced options.",
-    options={
-        "--dry": "Show what would be configured without creating maintenance file",
-        "--message=?": "Custom maintenance message to display",
-        "--retry=?": "Retry-After header value in seconds (default: 3600)",
-        "--allow=?": "Comma-separated list of allowed IP addresses",
-        "--secret=?": "Secret key to bypass maintenance mode",
-        "--f|force": "Force enable even if already in maintenance mode",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be configured without creating maintenance file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--message",
+            "help": "Custom maintenance message to display",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--retry",
+            "help": "Retry-After header value in seconds (default: 3600)",
+            "type": int,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--allow",
+            "help": "Comma-separated list of allowed IP addresses",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--secret",
+            "help": "Secret key to bypass maintenance mode",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "-f|--force",
+            "help": "Force enable even if already in maintenance mode",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class DownCommand(CommandBase):
     """Put application into maintenance mode with enhanced configuration options."""
@@ -188,12 +224,12 @@ class DownCommand(CommandBase):
 
         try:
             with open(self.maintenance_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError, Exception:
-            return {
-                "message": "Application is in maintenance mode",
-                "created_at": "Unknown",
-            }
+                value = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise StorageException("Maintenance state is not valid JSON") from exc
+        if not isinstance(value, dict):
+            raise StorageException("Maintenance state must be a JSON object")
+        return value
 
     def _create_file(self, config: dict[str, Any]) -> None:
         """Create maintenance file with configuration."""

@@ -6,7 +6,6 @@ This module provides utilities for configuring and managing logging channels.
 
 from __future__ import annotations
 
-import os
 from inspect import signature
 from pathlib import Path
 from typing import Any
@@ -18,8 +17,15 @@ from cara.logging.channels import ConsoleChannel, FileChannel, SlackChannel
 class ChannelConfigurator:
     """Reads `config("logging")` and adds Loguru handlers for each channel in the active stack."""
 
-    def __init__(self, loguru_logger: Any) -> None:
+    def __init__(self, loguru_logger: Any, settings: dict | None = None) -> None:
         self._logger = loguru_logger
+        self._settings = settings
+
+    def _config(self, key: str) -> object:
+        if self._settings is None:
+            return config(key)
+        leaf = key.removeprefix("logging.")
+        return self._settings.get(leaf)
 
     def configure(self) -> None:
         """
@@ -27,45 +33,63 @@ class ChannelConfigurator:
         2. Determine which channels are enabled for that stack.
         3. Instantiate each channel's "sink" and call `_logger.add(...)`.
         """
-        default_stack: str = config("logging.default", "daily")
-        stacks: dict[str, Any] = config("logging.stacks", {})
-        channels_cfg: dict[str, Any] = config("logging.channels", {})
-        slack_cfg: dict[str, Any] = config("logging.slack", {})
+        default_stack = self._config("logging.default")
+        stacks = self._config("logging.stacks")
+        channels_cfg = self._config("logging.channels")
+        slack_cfg = self._config("logging.slack")
+        if not isinstance(default_stack, str) or not default_stack.strip():
+            raise ValueError("logging.default must be a non-empty stack name")
+        if not isinstance(stacks, dict) or not isinstance(channels_cfg, dict):
+            raise TypeError("logging.stacks and logging.channels must be dictionaries")
+        if not isinstance(slack_cfg, dict):
+            raise TypeError("logging.slack must be a dictionary")
 
         # 1) Which channels belong to the default stack?
-        if default_stack and default_stack in stacks:
-            enabled_channels = stacks[default_stack]
-        else:
-            # Fallback: enable any channel whose config.ENABLED=True
-            enabled_channels = [
-                name for name, opts in channels_cfg.items() if opts.get("ENABLED", False)
-            ]
+        if default_stack not in stacks:
+            raise ValueError(f"logging stack {default_stack!r} is not configured")
+        enabled_channels = stacks[default_stack]
+        if not isinstance(enabled_channels, list) or any(
+            not isinstance(name, str) or name not in channels_cfg
+            for name in enabled_channels
+        ):
+            raise ValueError(
+                f"logging stack {default_stack!r} must list configured channel names"
+            )
 
-        # 2) If "slack" is in that stack, register a Slack sink first (ERROR+)
-        if "slack" in enabled_channels:
+        # 2) Register an enabled Slack sink first (ERROR+). A stack may list
+        # Slack while the channel is deliberately disabled; in that state a
+        # webhook is not required because no outbound handler is constructed.
+        slack_options = channels_cfg.get("slack")
+        if (
+            "slack" in enabled_channels
+            and isinstance(slack_options, dict)
+            and slack_options.get("ENABLED") is True
+        ):
             webhook = slack_cfg.get("WEBHOOK_URL")
             if not webhook:
-                try:
-                    webhook = config("logging.slack.WEBHOOK_URL")
-                except Exception:
-                    webhook = os.getenv("SLACK_WEBHOOK_URL")
-            if webhook:
-                slack_level = channels_cfg.get("slack", {}).get("LEVEL", "ERROR")
-                slack_sink = SlackChannel(slack_cfg, webhook)
-                self._safe_add(
-                    slack_sink,
-                    level=slack_level,
-                    backtrace=True,
-                    diagnose=True,
-                    enqueue=True,
+                raise ValueError(
+                    "logging stack enables slack without logging.slack.WEBHOOK_URL"
                 )
+            slack_level = slack_options.get("LEVEL", "ERROR")
+            slack_sink = SlackChannel(slack_cfg, webhook)
+            self._safe_add(
+                slack_sink,
+                level=slack_level,
+                backtrace=True,
+                diagnose=True,
+                enqueue=True,
+            )
 
         add_sig = signature(self._logger.add)
 
         # 3) Loop through each enabled channel and call logger.add(...)
         for channel_name in enabled_channels:
-            opts: dict[str, Any] = channels_cfg.get(channel_name, {})
-            if not opts.get("ENABLED", False):
+            opts = channels_cfg[channel_name]
+            if not isinstance(opts, dict) or not isinstance(opts.get("ENABLED"), bool):
+                raise TypeError(
+                    f"logging channel {channel_name!r} must define boolean ENABLED"
+                )
+            if not opts["ENABLED"]:
                 continue
 
             level = opts.get("LEVEL", "DEBUG")
@@ -83,9 +107,9 @@ class ChannelConfigurator:
             elif sink_spec:
                 # Ensure directory exists for any file template
                 # e.g. "storage/logs/app_{time:YYYY-MM-DD}.log"
-                base_dir = sink_spec.split("{time")[0]
+                base_dir = Path(sink_spec.split("{time")[0]).parent
                 if base_dir:
-                    Path(os.path.dirname(base_dir)).mkdir(parents=True, exist_ok=True)
+                    base_dir.mkdir(parents=True, exist_ok=True)
                 sink_obj = FileChannel(sink_spec)
 
             else:

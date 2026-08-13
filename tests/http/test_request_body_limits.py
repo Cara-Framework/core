@@ -1,13 +1,27 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from importlib import import_module
 
 import pytest
 
+from cara.configuration import Configuration
 from cara.exceptions import PayloadTooLargeException
 from cara.http import Request
+from cara.http.BodyLimits import BodyLimits
+
+body_parsing_module = import_module("cara.http.request.mixins.MakesBodyParsing")
 
 _WEBHOOK_CAP = 256 * 1024
+
+
+@pytest.fixture(autouse=True)
+def _body_limit_config(monkeypatch) -> None:
+    monkeypatch.setattr(Configuration, "_instance", None)
+    configuration = Configuration.empty()
+    configuration.set("server.max_body_size", BodyLimits.DEFAULT_BODY_BYTES)
+    configuration.set("server.max_file_size", BodyLimits.DEFAULT_FILE_BYTES)
+    configuration.set("server.max_files", BodyLimits.DEFAULT_FILES)
 
 
 def _request_for_chunks(
@@ -73,11 +87,13 @@ async def test_chunked_body_is_drained_without_caching_bytes_beyond_cap() -> Non
 
 
 @pytest.mark.asyncio
-async def test_global_body_cap_uses_payload_too_large_exception() -> None:
-    class FourByteRequest(Request):
-        MAX_BODY_SIZE = 4
-
-    request, calls = _request_for_chunks([b"12345"], FourByteRequest)
+async def test_global_body_cap_uses_payload_too_large_exception(monkeypatch) -> None:
+    monkeypatch.setattr(
+        body_parsing_module,
+        "_body_limits",
+        lambda: {"MAX_BODY_SIZE": 4, "MAX_FILE_SIZE": 4, "MAX_FILES": 20},
+    )
+    request, calls = _request_for_chunks([b"12345"])
 
     with pytest.raises(PayloadTooLargeException) as caught:
         await request.body(max_bytes=100)

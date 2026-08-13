@@ -50,6 +50,21 @@ def test_a_receiver_that_is_not_an_imported_model_is_left_alone(tmp_path: Path) 
     assert _messages(tmp_path) == []
 
 
+def test_a_nested_declared_repository_home_is_not_policed(tmp_path: Path) -> None:
+    write(
+        tmp_path / "app" / "gates" / "persistence" / "WidgetRepository.py",
+        IMPORT + "\n\ndef all_rows():\n    return Widget.where('active', True).get()\n",
+    )
+
+    assert (
+        _messages(
+            tmp_path,
+            raw_sql_homes=frozenset({"app/gates/persistence"}),
+        )
+        == []
+    )
+
+
 def test_a_single_argument_primary_key_lookup_is_the_documented_carve_out(
     tmp_path: Path,
 ) -> None:
@@ -98,7 +113,7 @@ def test_the_same_query_without_a_row_lock_is_still_a_finding(tmp_path: Path) ->
     assert _messages(tmp_path) != []
 
 
-def test_the_allow_tag_opts_one_call_out(tmp_path: Path) -> None:
+def test_an_allow_comment_cannot_create_a_local_exception(tmp_path: Path) -> None:
     write(
         tmp_path / "app" / "services" / "Report.py",
         IMPORT + "\n"
@@ -108,17 +123,6 @@ def test_the_allow_tag_opts_one_call_out(tmp_path: Path) -> None:
         "    return Widget.where('status', 'active').get()\n",
     )
 
-    assert _messages(tmp_path) == []
-
-
-def test_an_untagged_allow_comment_does_not_opt_out(tmp_path: Path) -> None:
-    write(
-        tmp_path / "app" / "services" / "Report.py",
-        IMPORT + "\n\ndef run():\n    # allow-inline-orm\n"
-        "    return Widget.where('status', 'active').get()\n",
-    )
-
-    # The tag must carry a reason; a bare marker documents nothing.
     assert _messages(tmp_path) != []
 
 

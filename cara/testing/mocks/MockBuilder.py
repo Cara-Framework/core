@@ -227,30 +227,4 @@ class _MockBase:
         return _dispatch
 
 
-class Mock(_MockBase):
-    """Strict mock — undeclared methods raise."""
-
-    def __init__(self, contract: type[Any] | None = None) -> None:
-        super().__init__(contract)
-        self._strict = True
-
-
-class Spy(_MockBase):
-    """Permissive mock — any attribute is a no-op recorder."""
-
-    def __init__(self, contract: type[Any] | None = None) -> None:
-        super().__init__(contract)
-        self._strict = False
-
-
 # ── Module-level helpers ─────────────────────────────────────────────
-
-
-def when(mock: _MockBase, method: str) -> _Behavior:
-    """``when(mock, "x").returns(1)`` reads as ``when(...) returns ...``."""
-    return mock.expects(method)
-
-
-def returning(mock: _MockBase, **mapping: Any) -> _MockBase:
-    """Functional alias for ``mock.returning(...)``."""
-    return mock.returning(**mapping)

@@ -7,10 +7,12 @@ Similar to Laravel's job tracking but integrated into the Cara framework.
 
 from __future__ import annotations
 
+import builtins
 import uuid
 from typing import Any
 
 from cara.facades import Log
+from cara.queues.contracts.JobCancelledException import JobCancelledException
 
 
 class Trackable:
@@ -189,9 +191,6 @@ class Trackable:
             # string form did not match, the cancellation was downgraded to
             # a WARNING, this method RETURNED NORMALLY and the explicitly
             # cancelled job ran to completion.
-            from cara.queues.contracts.CancellableJob import (  # local: cycle with cara.queues.contracts
-                JobCancelledException,
-            )
 
             if isinstance(e, JobCancelledException):
                 raise
@@ -235,7 +234,6 @@ class Trackable:
             return self._job_tracker
 
         # Resolve from container using global app() helper
-        import builtins
 
         if not hasattr(builtins, "app"):
             return None

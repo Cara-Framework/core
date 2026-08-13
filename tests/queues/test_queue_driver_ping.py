@@ -25,6 +25,7 @@ def test_amqp_ping_performs_isolated_bounded_handshake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = importlib.import_module("cara.queues.drivers.AMQPDriver")
+    broker = importlib.import_module("cara.queues.drivers._AMQPBroker")
     parameters = SimpleNamespace()
     channel = MagicMock()
     connection = MagicMock()
@@ -35,6 +36,7 @@ def test_amqp_ping_performs_isolated_bounded_handshake(
         exceptions=SimpleNamespace(AMQPError=RuntimeError),
     )
     monkeypatch.setattr(module, "pika", fake_pika)
+    monkeypatch.setattr(broker, "pika", fake_pika)
 
     driver = object.__new__(AMQPDriver)
     driver.options = {
@@ -63,12 +65,14 @@ def test_amqp_ping_propagates_connection_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = importlib.import_module("cara.queues.drivers.AMQPDriver")
+    broker = importlib.import_module("cara.queues.drivers._AMQPBroker")
     fake_pika = SimpleNamespace(
         URLParameters=MagicMock(return_value=SimpleNamespace()),
         BlockingConnection=MagicMock(side_effect=ConnectionRefusedError("down")),
         exceptions=SimpleNamespace(AMQPError=RuntimeError),
     )
     monkeypatch.setattr(module, "pika", fake_pika)
+    monkeypatch.setattr(broker, "pika", fake_pika)
     driver = object.__new__(AMQPDriver)
     driver.options = {}
 

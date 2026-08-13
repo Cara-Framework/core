@@ -48,10 +48,6 @@ class HasRelationships:
         """Get a loaded relationship."""
         return self._relations.get(relation)
 
-    def related(self, relation: str) -> Any:
-        """Alias for get_related."""
-        return self.get_related(relation)
-
     def set_relation(self, relation: str, value: Any) -> HasRelationships:
         """Set a relationship value."""
         if not hasattr(self, "_relations"):

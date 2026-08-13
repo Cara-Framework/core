@@ -5,9 +5,8 @@ Subclass this when you want to broadcast a payload without writing
 a full ``ShouldBroadcast`` boilerplate. Most broadcastable events
 extend this directly.
 
-Channel arguments accept strings *and* ``Channel`` instances (and
-lists of either). Wire-form normalization happens at dispatch time
-so subclasses can declare channels however reads naturally.
+Channel arguments are typed ``Channel`` instances. Wire-form normalization
+happens at dispatch time.
 """
 
 from __future__ import annotations
@@ -15,10 +14,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from cara.broadcasting.Channel import Channel, channel_name
+from cara.broadcasting.Channel import Channel
 from cara.broadcasting.contracts import ShouldBroadcast
-
-ChannelLike = str | Channel
 
 
 class BroadcastEvent(ShouldBroadcast):
@@ -31,7 +28,7 @@ class BroadcastEvent(ShouldBroadcast):
         class ThingUpdated(BroadcastEvent):
             def __init__(self, record_id: int, value: float):
                 super().__init__(
-                    channels=[f"record.{record_id}"],
+                    channels=[Channel(f"record.{record_id}")],
                     event_name="record.updated",
                 )
                 self._payload = {"record_id": record_id, "value": value}
@@ -42,11 +39,11 @@ class BroadcastEvent(ShouldBroadcast):
 
     def __init__(
         self,
-        channels: ChannelLike | Sequence[ChannelLike],
+        channels: Channel | Sequence[Channel],
         event_name: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
-        self.channels: list[str] = self._normalize_channels(channels)
+        self.channels: list[Channel] = self._normalize_channels(channels)
         self.event_name: str = event_name or self.__class__.__name__
         self.data: dict[str, Any] = data or {}
         # Consumers set this to the value of the inbound HTTP request's
@@ -60,16 +57,18 @@ class BroadcastEvent(ShouldBroadcast):
     # ------------------------------------------------------------------
     @staticmethod
     def _normalize_channels(
-        channels: ChannelLike | Sequence[ChannelLike],
-    ) -> list[str]:
-        """Flatten a string / Channel / list-of-either into a list of
-        canonical wire-form strings."""
-        if isinstance(channels, (str, Channel)):
-            return [channel_name(channels)]
+        channels: Channel | Sequence[Channel],
+    ) -> list[Channel]:
+        """Normalize one channel or a channel sequence."""
+        if isinstance(channels, Channel):
+            return [channels]
         if isinstance(channels, (list, tuple)):
-            return [channel_name(c) for c in channels]
+            if not all(isinstance(channel, Channel) for channel in channels):
+                raise TypeError("every broadcast channel must be a Channel object")
+            return list(channels)
         raise TypeError(
-            f"channels must be str, Channel, or sequence of either; got {type(channels).__name__}"
+            "channels must be Channel or a sequence of Channel objects; "
+            f"got {type(channels).__name__}"
         )
 
     # ------------------------------------------------------------------
@@ -93,7 +92,7 @@ class BroadcastEvent(ShouldBroadcast):
     # ------------------------------------------------------------------
     # ShouldBroadcast contract
     # ------------------------------------------------------------------
-    def broadcast_on(self) -> list[str]:
+    def broadcast_on(self) -> list[Channel]:
         return self.channels
 
     def broadcast_as(self) -> str:

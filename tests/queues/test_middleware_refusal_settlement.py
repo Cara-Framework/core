@@ -18,11 +18,9 @@ import asyncio
 
 import pytest
 
-from cara.commands.core.QueueWorkCommand import JobProcessor
-from cara.queues.contracts.CancellableJob import (
-    JobCancelledException,
-    JobThrottledException,
-)
+from cara.commands.core.JobProcessor import JobProcessor
+from cara.queues.contracts.JobCancelledException import JobCancelledException
+from cara.queues.contracts.JobThrottledException import JobThrottledException
 from cara.queues.middleware.RateLimited import RateLimited
 
 

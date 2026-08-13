@@ -12,6 +12,8 @@ from typing import Any
 
 import pendulum
 
+from cara.configuration import config
+
 
 class DateManager:
     """
@@ -391,12 +393,7 @@ class DateManager:
         if date_value is None:
             return None
 
-        try:
-            from cara.configuration import config
-
-            user_timezone = user_timezone or config("app.timezone", "UTC")
-        except Exception:
-            user_timezone = user_timezone or "UTC"
+        user_timezone = user_timezone or config("app.timezone", "UTC")
 
         parsed_date = cls.parse(date_value, "UTC")
         if not parsed_date:
@@ -422,12 +419,7 @@ class DateManager:
         if date_value is None:
             return None
 
-        try:
-            from cara.configuration import config
-
-            user_timezone = user_timezone or config("app.timezone", "UTC")
-        except Exception:
-            user_timezone = user_timezone or "UTC"
+        user_timezone = user_timezone or config("app.timezone", "UTC")
 
         parsed_date = cls.parse(date_value, user_timezone)
         if not parsed_date:

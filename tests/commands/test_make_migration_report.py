@@ -15,15 +15,19 @@ sibling command. These tests pin the replacement contract:
 from __future__ import annotations
 
 import contextlib
+import importlib
 
 import pytest
 
 from cara.commands.core.MakeMigrationCommand import MakeMigrationCommand
-from cara.eloquent.migrations.ModelMigrationComparator import Column, FieldDiff
+from cara.eloquent.migrations.FieldDiff import FieldDiff
+from cara.eloquent.migrations.MigrationColumn import MigrationColumn
+
+_MODULE = importlib.import_module("cara.commands.core.MakeMigrationCommand")
 
 
 def _added(name: str) -> FieldDiff:
-    return FieldDiff("added", name, column=Column(name, "string"))
+    return FieldDiff("added", name, column=MigrationColumn(name, "string"))
 
 
 def _model(name: str, table: str, has_fields: bool = True) -> dict:
@@ -180,7 +184,8 @@ def test_production_refuses_before_taking_the_lock(monkeypatch, env_name):
     # The command binds ``config`` at module top, so the patch must land on
     # the command module's name, not on ``cara.configuration``.
     monkeypatch.setattr(
-        "cara.commands.core.MakeMigrationCommand.config",
+        _MODULE,
+        "config",
         lambda key, default=None: env_name if key == "app.env" else default,
     )
     command = _Report(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from cara.support import paths
 from cara.view.ViewCompiler import ViewCompiler
 from cara.view.ViewDirectives import ViewDirectives
 from cara.view.ViewDirectivesRegistry import ViewDirectivesRegistry
@@ -21,7 +22,6 @@ class ViewEngine:
         self, view_paths: list[str] | None = None, cache_path: str | None = None
     ):
         """Initialize view engine."""
-        from cara.support import paths
 
         self.view_paths = view_paths or [paths("views")]
         self.cache_path = cache_path or paths("cache")
@@ -134,7 +134,9 @@ class ViewEngine:
 
     def get_renderer(self, factory=None):
         """Get renderer instance."""
-        from cara.view.ViewRenderer import ViewRenderer
+        from cara.view.ViewRenderer import (
+            ViewRenderer,  # local: cycle with cara.view.ViewRenderer
+        )
 
         return ViewRenderer(self, factory)
 

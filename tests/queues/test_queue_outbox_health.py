@@ -141,7 +141,18 @@ def test_no_read_model_site_restates_the_due_predicate() -> None:
     """
     import inspect
 
-    source = inspect.getsource(QueueJobDeliveryStore)
+    from cara.queues.delivery import (
+        _DeliveryConfiguration,
+        _DeliveryPublishing,
+    )
+
+    source = "\n".join(
+        (
+            inspect.getsource(QueueJobDeliveryStore),
+            inspect.getsource(_DeliveryConfiguration),
+            inspect.getsource(_DeliveryPublishing),
+        )
+    )
     occurrences = source.count("available_at <=")
     # 1 × template declaration, 1 × _claim_publish, 1 × _claim_next_publish.
     assert occurrences == 3, (

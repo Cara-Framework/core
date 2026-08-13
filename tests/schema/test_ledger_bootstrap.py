@@ -10,7 +10,11 @@ database it exists for.
 
 from __future__ import annotations
 
+import importlib
+
 from cara.schema import ADDITIVE, DESTRUCTIVE, LEDGER_TABLE, Operation, sort_operations
+
+_APPLY_MODULE = importlib.import_module("cara.commands.core.SchemaApplyCommand")
 
 
 def _operation(table, kind="create_table", safety=ADDITIVE):
@@ -80,14 +84,12 @@ def test_a_missing_ledger_reads_as_nothing_applied_not_as_an_error():
             return [{"oid": None}]
 
     command = SchemaApplyCommand.__new__(SchemaApplyCommand)
-    import cara.commands.core.SchemaApplyCommand as module
-
-    original = module.DB
-    module.DB = _NoLedger()
+    original = _APPLY_MODULE.DB
+    _APPLY_MODULE.DB = _NoLedger()
     try:
         assert command._already_applied("plan123") == set()
     finally:
-        module.DB = original
+        _APPLY_MODULE.DB = original
 
     # It ASKED whether the table exists rather than discovering it by failing.
     assert len(queries) == 1
@@ -108,12 +110,10 @@ def test_a_broken_connection_is_not_read_as_an_empty_ledger():
             raise RuntimeError("connection refused")
 
     command = SchemaApplyCommand.__new__(SchemaApplyCommand)
-    import cara.commands.core.SchemaApplyCommand as module
-
-    original = module.DB
-    module.DB = _Broken()
+    original = _APPLY_MODULE.DB
+    _APPLY_MODULE.DB = _Broken()
     try:
         with pytest.raises(RuntimeError, match="connection refused"):
             command._already_applied("plan123")
     finally:
-        module.DB = original
+        _APPLY_MODULE.DB = original

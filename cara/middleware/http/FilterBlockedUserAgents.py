@@ -39,8 +39,8 @@ from collections.abc import Awaitable, Callable, Iterable
 from cara.configuration import config
 from cara.facades import Log
 from cara.http import Request, Response
-from cara.middleware import Middleware
 from cara.middleware.http.HandleCors import apply_cors_headers_to_response
+from cara.middleware.Middleware import Middleware
 
 
 class FilterBlockedUserAgents(Middleware):

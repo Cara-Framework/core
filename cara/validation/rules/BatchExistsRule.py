@@ -23,8 +23,10 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from cara.validation import MessageFormatter
+from cara.validation.MessageFormatter import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
+
+from .ExistsRule import ExistsRule
 
 # Only allow safe SQL identifiers: letters, digits, underscores.
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -83,8 +85,6 @@ class BatchExistsRule(BaseRule):
         # we fall through using the raw table string.
         resolved_table = table
         try:
-            from .ExistsRule import ExistsRule  # reuse model discovery
-
             model_class = ExistsRule()._discover_model(table)
             if model_class is not None:
                 resolved_table = getattr(model_class, "__table__", table)
@@ -100,7 +100,7 @@ class BatchExistsRule(BaseRule):
         # pass.  COUNT(DISTINCT column) returns the number of distinct
         # matching VALUES which is the semantically correct check.
         try:
-            from cara.facades import DB
+            from cara.facades import DB  # local: cycle with cara.facades
 
             placeholders = ", ".join(["%s"] * len(unique))
             sql = (
@@ -130,7 +130,7 @@ class BatchExistsRule(BaseRule):
     def _log_debug(msg: str) -> None:
         """Best-effort debug log; survives when Log facade isn't yet booted."""
         try:
-            from cara.facades import Log
+            from cara.facades import Log  # local: cycle with cara.facades
 
             Log.debug(msg, category="cara.validation.batch_exists")
         except ImportError:  # pragma: no cover

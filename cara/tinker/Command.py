@@ -6,6 +6,7 @@ This file contains the main tinker console command with Typer and Rich integrati
 
 from __future__ import annotations
 
+import traceback
 from pathlib import Path
 
 import typer
@@ -68,8 +69,6 @@ class Command:
         except Exception as e:
             self.console.print(f"❌ [bold red]Tinker error:[/bold red] {e}")
             if verbose:
-                import traceback
-
                 traceback.print_exc()
             raise typer.Exit(1)
 

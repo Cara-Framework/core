@@ -42,7 +42,7 @@ def _make_guard(monkeypatch: pytest.MonkeyPatch) -> Any:
 
     class _StubUserClass:
         @classmethod
-        def find(cls, _id: Any) -> None:
+        def authenticate_jwt(cls, _id: Any, _claims: dict) -> None:
             return None
 
     monkeypatch.setattr(JWTGuard, "_load_user_class", lambda self, _model: _StubUserClass)

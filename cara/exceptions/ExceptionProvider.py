@@ -7,7 +7,7 @@ escaping the HTTP conductor is forwarded to that handler.
 
 from __future__ import annotations
 
-from cara.exceptions.handlers import DefaultExceptionHandler
+import importlib
 
 # Direct submodule import — NOT ``from cara.foundation import Provider``.
 # ``cara.exceptions`` is pulled in DURING ``cara.foundation`` boot (via
@@ -17,7 +17,19 @@ from cara.exceptions.handlers import DefaultExceptionHandler
 # raise "module() takes at most 2 arguments". Importing the submodule directly
 # loads ``Provider`` (which only depends on ``abc``) regardless of the
 # foundation package's init state.
-from cara.foundation.Provider import Provider
+from cara.foundation import Provider
+
+
+def _default_handler(application):
+    """Resolve HTTP response machinery only when the binding is consumed.
+
+    Importing the exception taxonomy is foundational and must not eagerly boot
+    middleware, configuration, support utilities and conductors. The handler
+    is an application-edge collaborator, so its module belongs at container
+    resolution time after those packages have completed initialization.
+    """
+    module = importlib.import_module("cara.exceptions.handlers.DefaultExceptionHandler")
+    return module.DefaultExceptionHandler(application)
 
 
 class ExceptionProvider(Provider):
@@ -28,12 +40,14 @@ class ExceptionProvider(Provider):
         # Bind DefaultExceptionHandler under "exception.handler"
         self.application.bind(
             "exception.handler",
-            lambda: DefaultExceptionHandler(self.application),
+            lambda: _default_handler(self.application),
         )
 
     def boot(self) -> None:
         # Monkey-patch HttpConductor._handle_request
-        from cara.conductors.http import HttpConductor
+        from cara.conductors.http import (
+            HttpConductor,  # local: cycle with cara.conductors.http.HttpConductor
+        )
 
         original_handle_request = HttpConductor._handle_request
 

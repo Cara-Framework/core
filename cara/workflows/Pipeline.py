@@ -7,7 +7,7 @@ from the two other pipelines in the framework:
 
 * :mod:`cara.support.Pipeline` — Laravel's ``Illuminate\\Pipeline``: push one
   payload through a chain of middleware-shaped pipes.
-* :mod:`cara.filtering.Pipeline` — ``FilterPipeline``: compose filter / sort /
+* :mod:`cara.filtering.FilterPipeline` — ``FilterPipeline``: compose filter / sort /
   paginate over a query builder.
 
 Only synchronous execution is supported. Queue-backed chain and batch
@@ -22,64 +22,15 @@ import asyncio
 import inspect
 import uuid
 from collections.abc import Callable
-from enum import Enum
 from typing import Any
 
-from cara.exceptions import CaraException, InvalidArgumentException
+from cara.exceptions import InvalidArgumentException
 from cara.facades import Log
 
-
-class StepFailed(CaraException):
-    """A pipeline step signalled failure via a non-zero exit code.
-
-    Raised internally so a step whose ``handle()`` RETURNS a non-zero
-    craft exit code flows into the same failure path as one that raised —
-    it must not be counted as a completed step.
-
-    Inside the taxonomy (§9) rather than rooted at bare ``Exception``:
-    an orphan carries no ``status_code``, so if one ever escapes a
-    command into the ASGI handler ``get_status_code`` takes its
-    "default to 500 for unknown exceptions" branch and the framework
-    reports somebody else's step failure as an unclassified server
-    fault. One taxonomy means one mapping.
-    """
-
-
-class PipelineType(Enum):
-    """Pipeline execution types."""
-
-    SYNC = "sync"  # Execute immediately (commands)
-
-
-class PipelineStep:
-    """Individual step in a pipeline."""
-
-    def __init__(
-        self,
-        step_class,
-        args: tuple = (),
-        kwargs: dict | None = None,
-        condition: Callable | None = None,
-        on_success: Callable | None = None,
-        on_failure: Callable | None = None,
-    ):
-        """
-        Initialize pipeline step.
-
-        Args:
-            step_class: Command or Job class to execute
-            args: Arguments to pass to step
-            kwargs: Keyword arguments to pass to step
-            condition: Optional condition function to determine if step should run
-            on_success: Callback on step success
-            on_failure: Callback on step failure
-        """
-        self.step_class = step_class
-        self.args = args or ()
-        self.kwargs = kwargs or {}
-        self.condition = condition
-        self.on_success = on_success
-        self.on_failure = on_failure
+from .ConditionalPipeline import ConditionalPipeline
+from .PipelineStep import PipelineStep
+from .PipelineType import PipelineType
+from .StepFailed import StepFailed
 
 
 class Pipeline:
@@ -307,15 +258,3 @@ class Pipeline:
             return await func(*args, **kwargs)
         else:
             return func(*args, **kwargs)
-
-
-class ConditionalPipeline:
-    """Helper for conditional pipeline steps."""
-
-    def __init__(self, pipeline: Pipeline, condition: Callable):
-        self.pipeline = pipeline
-        self.condition = condition
-
-    def add(self, step_class, *args, **kwargs) -> Pipeline:
-        """Add conditional step."""
-        return self.pipeline.add(step_class, *args, condition=self.condition, **kwargs)

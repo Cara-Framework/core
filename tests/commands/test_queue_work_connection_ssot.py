@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cara.commands.core.QueueWorkCommand import AMQPConnectionManager
+from cara.commands.core.AMQPConnectionManager import AMQPConnectionManager
 from cara.exceptions import ConfigurationException
 
 

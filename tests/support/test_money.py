@@ -25,7 +25,33 @@ from decimal import Decimal
 
 import pytest
 
-from cara.support import CurrencyMismatch, Money, margin_ratio, markup_ratio
+from cara.support import (
+    CurrencyMismatch,
+    Money,
+    format_money,
+    margin_ratio,
+    markup_ratio,
+    normalize_currency_code,
+    parse_decimal_text,
+    require_currency_code,
+)
+
+
+def test_currency_codes_are_ascii_canonical_and_fail_closed() -> None:
+    assert normalize_currency_code(" usd ") == "USD"
+    assert normalize_currency_code(None) is None
+    assert normalize_currency_code("ÜSD") is None
+    with pytest.raises(ValueError, match="currency code"):
+        require_currency_code("dollars", context="Invoice")
+
+
+@pytest.mark.parametrize("value", [19.99, True, "01.00", "+1", "1e2", " NaN "])
+def test_exact_decimal_text_parser_rejects_non_contract_values(value) -> None:
+    assert parse_decimal_text(value) is None
+
+
+def test_exact_decimal_text_parser_preserves_scale() -> None:
+    assert parse_decimal_text("19.9900") == Decimal("19.9900")
 
 
 class TestConstruction:
@@ -44,6 +70,16 @@ class TestConstruction:
             Money("45", "")
         with pytest.raises(CurrencyMismatch):
             Money("45", None)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("amount", [None, True, "bad", "NaN", "Infinity"])
+    def test_invalid_or_non_finite_amount_rejected(self, amount) -> None:
+        with pytest.raises(ValueError, match="finite numeric"):
+            Money(amount, "USD")
+
+    @pytest.mark.parametrize("currency", ["US", "ÜSD", "US1"])
+    def test_malformed_currency_rejected(self, currency) -> None:
+        with pytest.raises(CurrencyMismatch):
+            Money("45", currency)
 
     def test_is_frozen_immutable(self) -> None:
         m = Money("45", "GBP")
@@ -250,3 +286,13 @@ class TestFormatting:
     def test_zero_decimal_currency(self) -> None:
         # JPY is zero-decimal — no trailing cents.
         assert Money("1500", "JPY").format() == "¥1,500"
+
+    @pytest.mark.parametrize("amount", [None, "bad", "NaN", "Infinity"])
+    def test_format_rejects_unknown_or_non_finite_amount(self, amount: object) -> None:
+        with pytest.raises(ValueError, match="numeric|finite"):
+            format_money(amount, "USD")
+
+    @pytest.mark.parametrize("currency", [None, "", "US", "US1"])
+    def test_format_rejects_missing_or_malformed_currency(self, currency: object) -> None:
+        with pytest.raises(ValueError, match="currency code"):
+            format_money("1.00", currency)  # type: ignore[arg-type]

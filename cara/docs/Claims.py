@@ -20,16 +20,14 @@ import re
 from pathlib import Path
 
 from cara.docs.ClaimSources import (
+    _owned_markdowns,
     check_path_claim,
     declared_ports,
     sibling_roots,
     strip_fences,
 )
-from cara.docs.ClaimSources import (
-    owned_markdowns as find_owned_markdowns,
-)
+from cara.docs.DocsManifest import DocsManifest
 from cara.docs.Inventory import command_rows
-from cara.docs.Manifest import DocsManifest
 from cara.docs.Support import Say, md_escape, read
 
 IGNORE_FILE = "docs-check: ignore-file"
@@ -66,7 +64,7 @@ def command_names(root: Path) -> set[str]:
 
 def owned_markdowns(manifest: DocsManifest) -> list[Path]:
     """Hand-maintained markdown this product is answerable for."""
-    return find_owned_markdowns(
+    return _owned_markdowns(
         manifest.root, manifest.docs, manifest.reference, manifest.product
     )
 

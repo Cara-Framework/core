@@ -22,29 +22,12 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
+
+from .CacheKeyFinding import CacheKeyFinding
 
 #: Parameters that carry no dimension of their own.
 IMPLICIT_PARAMETERS: frozenset[str] = frozenset({"self", "cls"})
-
-
-@dataclass(frozen=True, slots=True)
-class CacheKeyFinding:
-    """One constant key in a parameterized function."""
-
-    path: str
-    line: int
-    key: str
-    function: str
-    parameters: tuple[str, ...]
-
-    def __str__(self) -> str:
-        return (
-            f"{self.path}:{self.line}: {self.function}({', '.join(self.parameters)}) "
-            f"caches under the constant key {self.key!r} — every argument serves "
-            f"the first caller's answer"
-        )
 
 
 def _varying_parameters(

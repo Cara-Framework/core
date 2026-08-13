@@ -15,6 +15,7 @@ import asyncio
 from typing import Any
 
 from cara.facades import Log
+from cara.queues.Bus import Bus
 
 
 async def safe_dispatch(
@@ -52,7 +53,6 @@ async def safe_dispatch(
     # importing it at module top would force ``cara.queues.__init__``
     # callers to pay for the queue runtime even if they only ever use
     # ``safe_dispatch``.  This pattern matches the original app helper.
-    from cara.queues.Bus import Bus
 
     last_exc: Exception | None = None
     for attempt in range(max_retries):

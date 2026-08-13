@@ -14,7 +14,7 @@ from cara.routing.RouteCompiler import RouteCompiler
 from cara.routing.RouteGroup import RouteGroup
 from cara.routing.RouteParameterValidator import RouteParameterValidator
 from cara.routing.RouteResolver import RouteResolver
-from cara.support.Collection import flatten
+from cara.support import flatten
 
 
 class Route:
@@ -281,17 +281,6 @@ class Route:
         if "destroy" in actions:
             routes.append(cls.delete(base + param_segment, f"{controller}@destroy"))
         return routes
-
-    @classmethod
-    def resource(
-        cls,
-        base: str,
-        controller: Any,
-        **kwargs,
-    ) -> list[Route]:
-        """Alias for :meth:`api_resource` (Laravel uses ``resource`` for
-        web-side routes; for API-only apps the semantics are identical)."""
-        return cls.api_resource(base, controller, **kwargs)
 
     @classmethod
     def _join_paths(cls, *paths: str) -> str:

@@ -1,4 +1,4 @@
-"""``cara.support.Console`` must not ship orphan stub classes.
+"""``cara.support.HasColoredOutput`` must not ship orphan stub classes.
 
 What was here pre-fix
 ~~~~~~~~~~~~~~~~~~~~~
@@ -40,7 +40,10 @@ from pathlib import Path
 import pytest
 
 CONSOLE_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "cara" / "support" / "Console.py"
+    Path(__file__).resolve().parent.parent.parent
+    / "cara"
+    / "support"
+    / "HasColoredOutput.py"
 )
 
 # Classes that ARE expected to live in Console.py. Everything else
@@ -62,7 +65,7 @@ def test_console_file_is_readable():
     """Smoke check — pin the discovery path so a directory move
     fires here instead of letting the next test pass vacuously."""
     assert CONSOLE_PATH.is_file(), (
-        f"Console.py missing at {CONSOLE_PATH}; did the support/ layout change?"
+        f"HasColoredOutput.py missing at {CONSOLE_PATH}; did the support/ layout change?"
     )
 
 
@@ -71,7 +74,7 @@ def test_console_exports_only_the_expected_classes():
     names = {c.name for c in classes}
     unexpected = names - EXPECTED_CLASSES
     assert not unexpected, (
-        f"Console.py declared unexpected class(es): {sorted(unexpected)}. "
+        f"HasColoredOutput.py declared unexpected class(es): {sorted(unexpected)}. "
         f"The previous AddCommandColors stub called self.line(...) — a "
         f"method the class never defined — so any instantiated user "
         f"crashed at first call. If you genuinely need a new helper "
@@ -80,7 +83,7 @@ def test_console_exports_only_the_expected_classes():
     )
     missing = EXPECTED_CLASSES - names
     assert not missing, (
-        f"Console.py is missing expected class(es): {sorted(missing)}. "
+        f"HasColoredOutput.py is missing expected class(es): {sorted(missing)}. "
         f"Did the file get accidentally truncated?"
     )
 

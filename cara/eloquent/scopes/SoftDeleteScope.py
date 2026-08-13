@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pendulum
+
 from .BaseScope import BaseScope
 
 
@@ -132,8 +134,6 @@ class SoftDeleteScope(BaseScope):
         if hasattr(builder, "_model") and builder._model:
             timestamp = builder._model.get_new_datetime_string()
         else:
-            import pendulum
-
             timestamp = pendulum.now("UTC").to_datetime_string()
 
         builder._updates = ()

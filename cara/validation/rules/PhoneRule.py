@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from cara.validation import MessageFormatter
+from cara.validation.MessageFormatter import MessageFormatter
 
 from .BaseRule import BaseRule
 

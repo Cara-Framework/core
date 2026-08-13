@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 try:
     from typing import Self
 except ImportError:  # Python <3.11
@@ -28,6 +30,7 @@ _pool_lock = threading.Lock()
 CONNECTION_POOL = []
 _pool_initialized = False
 _pool_semaphore = None
+_pool_max_size = None
 
 
 class PostgresConnection(BaseConnection):
@@ -58,9 +61,33 @@ class PostgresConnection(BaseConnection):
 
         self.prefix = prefix
         self.full_details = full_details or {}
-        self.connection_pool_size = self.full_details.get(
-            "connection_pooling_max_size", 100
-        )
+        pooling_enabled = self.full_details.get("connection_pooling_enabled", False)
+        if not isinstance(pooling_enabled, bool):
+            raise InvalidArgumentException(
+                "connection_pooling_enabled must be a boolean."
+            )
+        configured_max = self.full_details.get("connection_pooling_max_size")
+        configured_min = self.full_details.get("connection_pooling_min_size", 0)
+        if pooling_enabled and (
+            isinstance(configured_max, bool)
+            or not isinstance(configured_max, int)
+            or configured_max <= 0
+        ):
+            raise InvalidArgumentException(
+                "Enabled PostgreSQL pooling requires a positive integer "
+                "connection_pooling_max_size."
+            )
+        if (
+            isinstance(configured_min, bool)
+            or not isinstance(configured_min, int)
+            or configured_min < 0
+            or (configured_max is not None and configured_min > configured_max)
+        ):
+            raise InvalidArgumentException(
+                "connection_pooling_min_size must be an integer between zero and "
+                "connection_pooling_max_size."
+            )
+        self.connection_pool_size = configured_max
         self.options = options or {}
         self._cursor = None
         self.transaction_level = 0
@@ -71,13 +98,6 @@ class PostgresConnection(BaseConnection):
 
     def make_connection(self):
         """This sets the connection on the connection class."""
-        try:
-            import psycopg2  # noqa F401
-        except ModuleNotFoundError:
-            raise DriverNotFoundException(
-                "You must have the 'psycopg2' package installed to make a connection to Postgres. Please install it using 'pip install psycopg2-binary'"
-            )
-
         if self.has_global_connection():
             return self.get_global_connection()
 
@@ -177,16 +197,17 @@ class PostgresConnection(BaseConnection):
         return {k: v for k, v in kw.items() if v is not None}
 
     def _ensure_pool_initialized(self):
-        global _pool_initialized, _pool_semaphore
+        global _pool_initialized, _pool_max_size, _pool_semaphore
         if _pool_initialized:
             return
         with _pool_lock:
             if _pool_initialized:
                 return
             _pool_semaphore = threading.Semaphore(self.connection_pool_size)
+            _pool_max_size = self.connection_pool_size
             min_size = self.full_details.get("connection_pooling_min_size", 0)
             if min_size:
-                import psycopg2
+                import psycopg2  # local: heavy optional dep
 
                 for _ in range(min_size):
                     try:
@@ -198,7 +219,6 @@ class PostgresConnection(BaseConnection):
                         # connections (lazy connect recovers later, so no hang/
                         # leak) — but log it, or a boot-against-a-dead-DB is
                         # completely invisible.
-                        import logging
 
                         logging.getLogger("cara.database.pool").warning(
                             "Pool warm-up connect failed (%s pre-warmed); "
@@ -219,7 +239,12 @@ class PostgresConnection(BaseConnection):
             self._pool_slot_acquired = False
 
     def create_connection(self):
-        import psycopg2
+        try:
+            import psycopg2  # local: heavy optional dep
+        except ModuleNotFoundError as exc:
+            raise DriverNotFoundException(
+                "The PostgreSQL driver is not installed; install psycopg2-binary."
+            ) from exc
 
         if not self.full_details.get("connection_pooling_enabled"):
             return self._connect_with_retry(psycopg2)
@@ -463,7 +488,7 @@ class PostgresConnection(BaseConnection):
         return self.transaction_level
 
     def set_cursor(self):
-        from psycopg2.extras import RealDictCursor
+        from psycopg2.extras import RealDictCursor  # local: heavy optional dep
 
         self._cursor = self._connection.cursor(cursor_factory=RealDictCursor)
         return self._cursor
@@ -527,7 +552,7 @@ class PostgresConnection(BaseConnection):
             if isinstance(e, DatabaseUnavailableException):
                 raise
             try:
-                import psycopg2  # local import — psycopg2 may not be installed
+                import psycopg2  # local: heavy optional dep
             except ModuleNotFoundError:
                 psycopg2 = None  # type: ignore[assignment]
             if psycopg2 is not None and isinstance(e, psycopg2.OperationalError):

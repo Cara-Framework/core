@@ -8,6 +8,7 @@ purely tracked so ``forever``/``put(ttl=...)`` round-trip correctly.
 
 from __future__ import annotations
 
+import fnmatch
 from collections.abc import Callable
 from typing import Any
 
@@ -18,7 +19,7 @@ class CacheFake:
         self._ttls: dict[str, int | None] = {}
 
     # Production-side surface
-    def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
+    def get(self, key: str, default: Any = None, *, strict: bool = True) -> Any:
         return self._store.get(key, default)
 
     def put(
@@ -27,7 +28,7 @@ class CacheFake:
         value: Any,
         ttl: int | None = None,
         *,
-        strict: bool = False,
+        strict: bool = True,
     ) -> None:
         # Contract returns None — Redis/File drivers all return None on
         # put. The fake used to return ``True`` so any test asserting
@@ -107,7 +108,15 @@ class CacheFake:
         self._store.clear()
         self._ttls.clear()
 
-    def remember(self, key: str, ttl: int | None, factory: Callable[[], Any]) -> Any:
+    def remember(
+        self,
+        key: str,
+        ttl: int | None,
+        factory: Callable[[], Any],
+        *,
+        strict: bool = True,
+    ) -> Any:
+        del strict
         if key in self._store:
             return self._store[key]
         value = factory()
@@ -124,8 +133,15 @@ class CacheFake:
         applies on first creation only; subsequent increments do not
         refresh the TTL, mirroring Redis ``INCRBY`` semantics.
         """
+        if isinstance(amount, bool) or not isinstance(amount, int):
+            raise TypeError("Cache counter amount must be an integer")
+        if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0:
+            raise ValueError("Cache counters require a positive integer expiration")
         existed = key in self._store
-        value = int(self._store.get(key, 0)) + amount
+        current = self._store.get(key, 0)
+        if isinstance(current, bool) or not isinstance(current, int):
+            raise ValueError(f"Cache counter '{key}' contains a non-integer value")
+        value = current + amount
         self._store[key] = value
         if not existed:
             self._ttls[key] = ttl
@@ -143,7 +159,6 @@ class CacheFake:
         ``?`` / character classes are not used in callers and aren't
         worth modelling here.
         """
-        import fnmatch
 
         keys = [k for k in self._store if fnmatch.fnmatchcase(k, pattern)]
         for k in keys:

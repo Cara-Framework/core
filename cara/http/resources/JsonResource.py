@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .MissingValue import MissingValue
+from .ResourceCollection import ResourceCollection
 from .Serialization import (
     opt_bool,
     opt_datetime,
@@ -30,9 +31,9 @@ class JsonResource:
                 return {
                     "id": self.resource.public_id,
                     "title": self.resource.title,
-                    "price": self.when(
-                        self.resource.price,
-                        lambda: float(self.resource.price.amount_min),
+                    "score": self.when(
+                        self.resource.score is not None,
+                        lambda: self.opt_float(self.resource.score),
                     ),
                 }
 
@@ -131,8 +132,8 @@ class JsonResource:
 
     # ── Type coercion helpers ────────────────────────────────────────────
     #
-    # Resources repeatedly write ``float(x) if x is not None else None``
-    # for every numeric field. These helpers eliminate that noise.
+    # Resources repeatedly coerce non-money measurements. Money stays Decimal
+    # and is emitted as exact text at the JSON boundary.
 
     opt_float = staticmethod(opt_float)
     opt_int = staticmethod(opt_int)
@@ -179,7 +180,6 @@ class JsonResource:
         meta: dict[str, Any] = None,
     ) -> ResourceCollection:
         """Create a ResourceCollection using this resource class."""
-        from .ResourceCollection import ResourceCollection
 
         coll = ResourceCollection(items, cls)
         if meta:

@@ -15,18 +15,24 @@ Refused in production: it discards in-flight work.
 
 from __future__ import annotations
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.facades import Log
-from cara.queues.Topology import DEAD_LETTER_QUEUE, close_quietly
+from cara.queues import DEAD_LETTER_QUEUE, close_quietly
 
 
 @command(
     name="queue:flush",
     help="Purge ALL messages from every canonical queue (reset hygiene)",
-    options={
-        "--force": "Skip the confirmation prompt (required for non-interactive use)",
-    },
+    options=[
+        {
+            "name": "--force",
+            "help": "Skip the confirmation prompt (required for non-interactive use)",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class QueueFlushCommand(CommandBase):
     """Purge every canonical queue and the dead-letter queue."""

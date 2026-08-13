@@ -74,25 +74,27 @@ class BroadcastingProvider(DeferredProvider):
 
         self.application.bind("broadcasting", manager)
 
-        # Load app-level channel auth callbacks. Best-effort; a missing
-        # module is normal for apps that haven't migrated yet.
+        self._load_channel_routes()
+
+    @staticmethod
+    def _load_channel_routes() -> None:
+        """Load optional app channel policy without hiding a broken module."""
         try:
             importlib.import_module("routes.broadcasting")
             Log.debug(
                 "Loaded routes.broadcasting (channel auth callbacks)",
                 category="cara.broadcasting",
             )
-        except ModuleNotFoundError:
-            pass
-        except Exception as e:
-            # Real syntax/import error — surface it so apps don't ship
-            # broken auth silently.
-            Log.error(
-                "Failed to import routes.broadcasting: %s",
-                e,
-                category="cara.broadcasting",
-                exc_info=True,
-            )
+        except ModuleNotFoundError as exc:
+            if exc.name in {"routes", "routes.broadcasting"}:
+                return
+            raise BroadcastingConfigurationException(
+                f"routes.broadcasting has a missing dependency: {exc.name}"
+            ) from exc
+        except Exception as exc:
+            raise BroadcastingConfigurationException(
+                f"Failed to load routes.broadcasting: {exc}"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Driver registration helpers

@@ -46,7 +46,7 @@ from collections.abc import Callable
 from typing import Any
 
 from cara.configuration import config
-from cara.facades import Log
+from cara.facades import Log, Queue
 
 
 class PublicationBacklogProbe:
@@ -79,7 +79,6 @@ class PublicationBacklogProbe:
         transient failure to reach it. Neither is something a startup
         advisory may escalate.
         """
-        from cara.facades import Queue
 
         store = Queue.driver("amqp").delivery_store
         return store.backlog_metrics_if_installed()

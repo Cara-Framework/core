@@ -10,3 +10,5 @@ from __future__ import annotations
 import contextvars
 
 current_request = contextvars.ContextVar("current_request")
+
+__all__ = ["current_request"]

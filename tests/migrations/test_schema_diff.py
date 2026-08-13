@@ -7,9 +7,9 @@ and carrying a removed column's real definition for a lossless down().
 
 from __future__ import annotations
 
+from cara.eloquent.migrations.FieldDiff import FieldDiff
+from cara.eloquent.migrations.MigrationColumn import MigrationColumn
 from cara.eloquent.migrations.ModelMigrationComparator import (
-    Column,
-    FieldDiff,
     ModelMigrationComparator,
     summarize_change_name,
 )
@@ -35,8 +35,10 @@ def test_parse_column_line_captures_type_length_modifiers():
 
 
 def test_added_and_removed():
-    model = {"new_col": Column("new_col", "integer")}
-    migration = {"old_col": Column("old_col", "text", raw_line='table.text("old_col")')}
+    model = {"new_col": MigrationColumn("new_col", "integer")}
+    migration = {
+        "old_col": MigrationColumn("old_col", "text", raw_line='table.text("old_col")')
+    }
     diffs = _diff(model, migration)
     kinds = {d.kind for d in diffs}
     assert kinds == {"added", "removed"}
@@ -46,23 +48,27 @@ def test_added_and_removed():
 
 
 def test_altered_detects_length_and_nullable_change():
-    model = {"title": Column("title", "string", length=2000, nullable=True)}
-    migration = {"title": Column("title", "string", length=255, nullable=False)}
+    model = {"title": MigrationColumn("title", "string", length=2000, nullable=True)}
+    migration = {"title": MigrationColumn("title", "string", length=255, nullable=False)}
     diffs = _diff(model, migration)
     assert len(diffs) == 1 and diffs[0].kind == "altered"
     assert set(diffs[0].changed_attrs) == {"length", "nullable"}
 
 
 def test_unchanged_column_produces_no_diff():
-    same = lambda: {"x": Column("x", "string", length=50, nullable=True)}  # noqa: E731
+    same = lambda: {  # noqa: E731
+        "x": MigrationColumn("x", "string", length=50, nullable=True)
+    }
     assert _diff(same(), same()) == []
 
 
 def test_rename_detected_instead_of_drop_add():
     # one removed + one added with the SAME parsed signature => a rename
-    model = {"full_name": Column("full_name", "string", length=255)}
+    model = {"full_name": MigrationColumn("full_name", "string", length=255)}
     migration = {
-        "name": Column("name", "string", length=255, raw_line='table.string("name", 255)')
+        "name": MigrationColumn(
+            "name", "string", length=255, raw_line='table.string("name", 255)'
+        )
     }
     diffs = _diff(model, migration)
     assert len(diffs) == 1 and diffs[0].kind == "renamed"
@@ -91,10 +97,12 @@ def test_intent_revealing_names():
 
 def test_default_and_scalar_index_changes_are_detected():
     model = {
-        "state": Column("state", "string", default="active", has_default=True, index=True)
+        "state": MigrationColumn(
+            "state", "string", default="active", has_default=True, index=True
+        )
     }
     migration = {
-        "state": Column(
+        "state": MigrationColumn(
             "state", "string", default="'pending'", has_default=True, index=False
         )
     }
@@ -158,7 +166,7 @@ def test_named_single_column_index_is_applied_to_the_column():
     The name kwarg's value used to be swept into the column-name scrape, so a
     NAMED single-column index looked multi-column, was skipped, and the model
     side reported a phantom ``index`` diff on every regenerate."""
-    cols = {"expires_at": Column("expires_at", "datetime")}
+    cols = {"expires_at": MigrationColumn("expires_at", "datetime")}
     ModelMigrationComparator._apply_standalone_indexes(
         'table.index(["expires_at"], name="product_event_expires_at_idx")', cols
     )
@@ -166,7 +174,7 @@ def test_named_single_column_index_is_applied_to_the_column():
 
 
 def test_named_single_column_unique_is_applied_to_the_column():
-    cols = {"selector": Column("selector", "string", length=64)}
+    cols = {"selector": MigrationColumn("selector", "string", length=64)}
     ModelMigrationComparator._apply_standalone_indexes(
         'table.unique(["selector"], name="session_selector_unique")', cols
     )
@@ -175,8 +183,8 @@ def test_named_single_column_unique_is_applied_to_the_column():
 
 def test_composite_index_marks_no_single_column():
     cols = {
-        "name": Column("name", "string"),
-        "occurred_at": Column("occurred_at", "datetime"),
+        "name": MigrationColumn("name", "string"),
+        "occurred_at": MigrationColumn("occurred_at", "datetime"),
     }
     ModelMigrationComparator._apply_standalone_indexes(
         'table.index(["name", "occurred_at"], name="product_event_name_time_idx")',

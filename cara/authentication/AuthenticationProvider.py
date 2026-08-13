@@ -6,7 +6,7 @@ Service provider that registers authentication guards.
 from __future__ import annotations
 
 from cara.authentication.Authentication import Authentication
-from cara.authentication.guards import ApiKeyGuard, JWTGuard
+from cara.authentication.guards import JWTGuard
 from cara.configuration import config
 from cara.exceptions import AuthenticationConfigurationException
 from cara.foundation import DeferredProvider
@@ -33,10 +33,13 @@ class AuthenticationProvider(DeferredProvider):
     def register(self) -> None:
         """Register authentication services."""
         default_guard = config("auth.default", "jwt")
+        if default_guard != "jwt":
+            raise AuthenticationConfigurationException(
+                "auth.default must name the supported jwt guard"
+            )
         auth_manager = Authentication(self.application, default_guard)
 
         self._register_jwt_guard(auth_manager)
-        self._register_api_key_guard(auth_manager)
 
         self.application.bind("auth", auth_manager)
         # Also bind under the class so the container's direct-lookup
@@ -66,25 +69,3 @@ class AuthenticationProvider(DeferredProvider):
         )
 
         auth_manager.add_guard("jwt", jwt_guard)
-
-    def _register_api_key_guard(self, auth_manager: Authentication) -> None:
-        """Register API Key guard."""
-        if not config("auth.guards.api_key"):
-            return
-
-        api_key_guard = ApiKeyGuard(
-            application=self.application,
-            user_model=config("auth.guards.api_key.user_model", "app.models.User"),
-            api_key_field=config("auth.guards.api_key.api_key_field", "api_key"),
-            header_name=config("auth.guards.api_key.header_name", "X-API-Key"),
-            header_prefix=config("auth.guards.api_key.header_prefix", ""),
-            rate_limit_enabled=config("auth.guards.api_key.rate_limit_enabled", False),
-            rate_limit_max_attempts=config(
-                "auth.guards.api_key.rate_limit_max_attempts", 100
-            ),
-            rate_limit_window=config("auth.guards.api_key.rate_limit_window", 3600),
-            cache_enabled=config("auth.guards.api_key.cache_enabled", True),
-            cache_ttl=config("auth.guards.api_key.cache_ttl", 3600),
-        )
-
-        auth_manager.add_guard("api_key", api_key_guard)

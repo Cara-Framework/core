@@ -38,8 +38,7 @@ from typing import Any
 import pendulum
 
 from cara.configuration import config
-from cara.context import ExecutionContext
-from cara.exceptions.types.queue import IdempotencyOverlapException
+from cara.exceptions import IdempotencyOverlapException
 from cara.facades import Cache, Log
 
 
@@ -94,11 +93,6 @@ class MakesIdempotentBase:
     #: round-trip it identically. Lives for ``IDEMPOTENCY_NONE_TTL``
     #: only — see that knob for why a None must not poison 24h.
     _NONE_SENTINEL = "__cara_idempotent_none__"
-
-    #: Keep idempotency semantics identical between queue workers and
-    #: sync paths. Legacy jobs can opt out by setting
-    #: ``enforce_sync_idempotency = False``.
-    enforce_sync_idempotency = True
 
     #: Whether this job participates in the 24h *result cache* dedup.
     #: Per-entity pipeline jobs keep this True (re-dispatching the same
@@ -198,12 +192,6 @@ class MakesIdempotentBase:
             IdempotencyOverlapException: When a durable-intent job opted into
                 redelivery and another callback owns the same lease.
         """
-        if ExecutionContext.is_sync() and not getattr(
-            self, "enforce_sync_idempotency", True
-        ):
-            Log.debug("Sync mode idempotency bypass enabled", category="idempotency")
-            return await callback()
-
         self._idempotency_key = self.generate_idempotency_key()
         Log.debug(
             "Job idempotency key: %s", self._idempotency_key, category="idempotency"
@@ -267,15 +255,6 @@ class MakesIdempotentBase:
 
         self._emit_idempotency_metric("fresh")
         return await self._execute_with_lock(callback)
-
-    async def idempotent_execute(
-        self,
-        callback: Callable[[], Awaitable[Any]],
-        *,
-        force_execution: bool = False,
-    ) -> Any:
-        """Alias for :meth:`wrap_with_idempotency`."""
-        return await self.wrap_with_idempotency(callback, force_execution=force_execution)
 
     # ── Key generation + parameter normalization ───────────────────
 

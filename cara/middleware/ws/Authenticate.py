@@ -3,11 +3,12 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import parse_qs
 
 from cara.configuration import config
-from cara.exceptions.types.websocket import WebSocketException
+from cara.exceptions import WebSocketException
 from cara.facades import Log
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
 from cara.websocket import Socket
 
 
@@ -42,7 +43,7 @@ class Authenticate(Middleware):
             with contextlib.suppress(
                 OSError, RuntimeError, AttributeError, ConnectionError
             ):
-                await socket.send({"type": "websocket.close", "code": 4003})
+                await socket.close(code=4003)
             raise WebSocketException("Origin not allowed", 4003)
 
         try:
@@ -57,7 +58,7 @@ class Authenticate(Middleware):
 
         # If we get here authentication failed
         try:
-            await socket.send({"type": "websocket.close", "code": 4006})
+            await socket.close(code=4006)
         except Exception as e:
             # Connection might already be closed, just log and continue
             Log.debug(
@@ -189,7 +190,6 @@ class Authenticate(Middleware):
 
     @staticmethod
     def _extract_ticket(socket: Socket) -> str | None:
-        from urllib.parse import parse_qs
 
         query = socket.scope.get("query_string", b"").decode()
         if not query:

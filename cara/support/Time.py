@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime as _datetime
+
 import pendulum
 
 #: One day in seconds. Named because ``86400`` sitting in a TTL or a
@@ -66,7 +68,6 @@ def to_pendulum(dt):
         A timezone-aware ``pendulum.DateTime`` (UTC for naive inputs)
         or ``None`` when coercion fails or input is None.
     """
-    from datetime import datetime as _datetime
 
     # Lazy import: avoids pulling cara.facades into the module-load
     # path of ``cara.support.Time`` (Time is imported very early during
@@ -83,7 +84,7 @@ def to_pendulum(dt):
         return pendulum.parse(str(dt), tz="UTC")
     except Exception as e:
         try:
-            from cara.facades import Log
+            from cara.facades import Log  # local: cycle with cara.facades
 
             Log.warning(
                 "[Time.to_pendulum] coercion failed for value=%s: %s: %s",

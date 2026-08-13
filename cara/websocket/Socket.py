@@ -37,8 +37,9 @@ import uuid
 from typing import Any
 from urllib.parse import parse_qs
 
-from cara.exceptions.types.websocket import WebSocketException
-from cara.facades import Broadcast, Log
+from cara.broadcasting import Channel, channel_from_wire
+from cara.exceptions import InvalidArgumentException, WebSocketException
+from cara.facades import Broadcast, Config, Log
 from cara.support import json_dumps
 
 
@@ -85,13 +86,13 @@ class Socket:
         # lock — is what serialises the coroutines.)
         self._send_lock = asyncio.Lock()
 
-        self._subscribed_channels: set[str] = set()
+        self._subscribed_channels: set[Channel] = set()
         # channel → the presence member identity (the dict the auth callback
         # returned) for presence channels this socket joined. Remembered so we
         # can emit the matching ``presence.left`` on unsubscribe/disconnect —
         # without it a dropped member lingers in every other client's roster
         # forever (only ``presence.joined`` was ever broadcast).
-        self._presence_members: dict[str, Any] = {}
+        self._presence_members: dict[Channel, Any] = {}
         self._connection_registered: bool = False
 
         # Cached broadcast driver reference. Resolved lazily on first
@@ -182,7 +183,7 @@ class Socket:
     @property
     def subscribed_channels(self) -> set[str]:
         """Read-only view of channels this socket is subscribed to."""
-        return set(self._subscribed_channels)
+        return {str(channel) for channel in self._subscribed_channels}
 
     # ------------------------------------------------------------------
     # Connection lifecycle (ASGI verbs).
@@ -366,7 +367,7 @@ class Socket:
             {"event": "connection.established", "data": {"socket_id": self._socket_id}}
         )
 
-    async def subscribe_channel(self, channel: str) -> bool:
+    async def subscribe_channel(self, channel: Channel) -> bool:
         """Subscribe this connection to ``channel``.
 
         Channel-auth gating: ``private-`` / ``presence-`` channels
@@ -430,7 +431,7 @@ class Socket:
                     )
         return success
 
-    async def _broadcast_presence_left(self, channel: str) -> None:
+    async def _broadcast_presence_left(self, channel: Channel) -> None:
         """Emit ``presence.left`` to the remaining members of a presence
         channel this socket had joined. No-op for non-presence channels (those
         never recorded a member identity). Idempotent — pops the identity so a
@@ -448,7 +449,7 @@ class Socket:
                 category="cara.websocket",
             )
 
-    async def unsubscribe_channel(self, channel: str) -> bool:
+    async def unsubscribe_channel(self, channel: Channel) -> bool:
         success = await Broadcast.unsubscribe(self._connection_id, channel)
         if success:
             self._subscribed_channels.discard(channel)
@@ -464,12 +465,22 @@ class Socket:
             return {"error": "Invalid request format"}
 
         action = data.get("action")
-        channel = data.get("channel")
 
         if action == "pong":
+            if set(data) != {"action"}:
+                return {"error": "Pong accepts only the action field"}
             return {"event": "pong_received"}
 
-        if not action or not channel:
+        if action not in ("subscribe", "unsubscribe"):
+            return {"error": f"Unknown action: {action}"}
+        if set(data) != {"action", "channel"}:
+            return {"error": "Subscription requests require only action and channel"}
+        try:
+            channel = channel_from_wire(data.get("channel"))
+        except InvalidArgumentException:
+            return {"error": "Invalid channel"}
+
+        if not channel:
             return {"error": "Missing action or channel"}
 
         if action == "subscribe":
@@ -483,12 +494,12 @@ class Socket:
             success = await self.subscribe_channel(channel)
             return {
                 "event": "subscribed" if success else "subscription_failed",
-                "channel": channel,
+                "channel": str(channel),
             }
         if action == "unsubscribe":
             await self.unsubscribe_channel(channel)
-            return {"event": "unsubscribed", "channel": channel}
-        return {"error": f"Unknown action: {action}"}
+            return {"event": "unsubscribed", "channel": str(channel)}
+        raise AssertionError("validated subscription action was not handled")
 
     async def cleanup_broadcasting(self) -> None:
         """Idempotent broadcasting tear-down — leave every channel,
@@ -548,8 +559,6 @@ class Socket:
 
     def _max_subscriptions(self) -> int:
         try:
-            from cara.facades import Config
-
             # Configuration.load lower-cases module attribute names, so the
             # WEBSOCKET dict lives under "broadcasting.websocket" — the old
             # uppercase lookup always missed and pinned the hardcoded 25.
@@ -557,19 +566,6 @@ class Socket:
             return int(ws_cfg.get("max_subscriptions_per_connection", 25))
         except Exception:
             return 25
-
-    # Compatibility surface for code that still uses the old name.
-    async def send(self, message: dict[str, Any]) -> None:
-        """Direct ASGI send. Use ``send_text`` / ``send_json`` /
-        ``close`` instead — kept to avoid breaking custom middleware
-        that expects the raw send. Still serialized through the per-socket
-        send lock so a direct caller can't interleave with a broadcast."""
-        await self._guarded_send(message)
-
-    @property
-    def receive(self) -> Any:
-        """Direct ASGI receive callable. Same caveat as ``send``."""
-        return self._receive
 
 
 __all__ = ["Socket"]

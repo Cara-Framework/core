@@ -6,6 +6,8 @@ This file provides the interactive shell functionality with Rich integration.
 
 from __future__ import annotations
 
+import builtins
+import code
 import os
 import sys
 from typing import Any
@@ -15,6 +17,13 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+import cara.facades as facades
+from cara.foundation import Application
+from cara.routing import Route
+from cara.support import Collection, ModuleManager
+
+from ._IPythonShell import _IPythonShell
+
 
 class Shell:
     """Interactive shell for Cara Tinker with Rich integration."""
@@ -23,6 +32,7 @@ class Shell:
         """Initialize shell with Rich console."""
         self.namespace = {}
         self.console = Console()
+        self._ipython_shell = _IPythonShell(self)
         self.setup_namespace()
 
     def setup_namespace(self):
@@ -120,63 +130,21 @@ class Shell:
             )
 
     def _load_models(self):
-        """Load all models from app/models directory."""
-        from pathlib import Path
-
-        from cara.support import ModuleManager, paths
-
+        """Load models through the configured runtime barrel."""
         loaded_models = []
-
-        # Try different model locations. The configured models package
-        # (``commons.models`` by default) comes FIRST so tinker preloads the
-        # shared model surface; ``app.models`` stays as a back-compat fallback.
-        model_paths = [
-            ModuleManager.models_module(),  # commons.models by default
-            "commons.models",
-            "app.models",
-            paths("models"),  # Use paths() helper instead of hardcoded path
-            "models",
-        ]
-        # De-duplicate while preserving order (models_module() may equal a literal).
-        _seen: set[str] = set()
-        model_paths = [p for p in model_paths if not (p in _seen or _seen.add(p))]
-
-        for model_path in model_paths:
-            try:
-                if "." in model_path:
-                    # Python module import
-                    module = __import__(model_path, fromlist=[""])
-
-                    for attr_name in dir(module):
-                        if not attr_name.startswith("_"):
-                            attr = getattr(module, attr_name)
-                            if isinstance(attr, type) and hasattr(attr, "__table__"):
-                                self.namespace[attr_name] = attr
-                                loaded_models.append(attr_name)
-                else:
-                    # Directory scan
-                    model_dir = Path(model_path)
-                    if model_dir.exists():
-                        for py_file in model_dir.glob("*.py"):
-                            if py_file.name.startswith("__"):
-                                continue
-
-                            model_name = py_file.stem
-                            try:
-                                spec = __import__(
-                                    f"{model_path.replace('/', '.')}.{model_name}"
-                                )
-                                model_class = getattr(spec, model_name, None)
-                                if model_class and isinstance(model_class, type):
-                                    self.namespace[model_name] = model_class
-                                    loaded_models.append(model_name)
-                            except Exception as e:
-                                print(
-                                    f"[tinker] swallowed model-load error for {model_name}: {e}"
-                                )
-
-            except ImportError:
+        model_path = ModuleManager.models_module()
+        try:
+            module = __import__(model_path, fromlist=[""])
+        except ImportError as exc:
+            self.console.print(f"[red]Model barrel failed to load:[/red] {exc}")
+            return
+        for attr_name in dir(module):
+            if attr_name.startswith("_"):
                 continue
+            attr = getattr(module, attr_name)
+            if isinstance(attr, type) and hasattr(attr, "__table__"):
+                self.namespace[attr_name] = attr
+                loaded_models.append(attr_name)
 
         if loaded_models:
             self.console.print(
@@ -271,15 +239,7 @@ class Shell:
         """Load application instance and helper functions."""
         helpers = {}
 
-        # Try to get application instance
-        try:
-            from cara.foundation import Application
-
-            # This would be the actual app instance in a real scenario
-            # helpers["app"] = Application.getInstance()
-            helpers["Application"] = Application
-        except ImportError:
-            pass
+        helpers["Application"] = Application
 
         # Add Laravel-style helper functions
         def app(service_name=None):
@@ -287,8 +247,6 @@ class Shell:
             try:
                 # Resolve via the framework-native accessor — SupportProvider
                 # registers ``builtins.app`` at boot, so no app import needed.
-                import builtins
-
                 if hasattr(builtins, "app"):
                     app_instance = builtins.app()
                     if service_name:
@@ -301,23 +259,17 @@ class Shell:
         def config(key, default=None):
             """Get configuration value."""
             try:
-                from cara.facades import Config
-
-                return Config.get(key, default)
+                return facades.Config.get(key, default)
             except Exception:
                 return default
 
         def env(key, default=None):
             """Get environment variable."""
-            import os
-
             return os.getenv(key, default)
 
         def collect(items=None):
             """Create a collection."""
             try:
-                from cara.support import Collection
-
                 return Collection(items or [])
             except Exception:
                 return items or []
@@ -325,30 +277,24 @@ class Shell:
         def cache(key=None, value=None, ttl=None):
             """Cache helper function."""
             try:
-                from cara.facades import Cache
-
                 if value is not None:
-                    return Cache.put(key, value, ttl)
+                    return facades.Cache.put(key, value, ttl)
                 elif key is not None:
-                    return Cache.get(key)
+                    return facades.Cache.get(key)
                 else:
-                    return Cache
+                    return facades.Cache
             except ImportError, ConnectionError, TimeoutError, OSError, RuntimeError:
                 return None
 
         def route(name, parameters=None):
             """Generate route URL."""
             try:
-                from cara.facades import Route
-
                 return Route.url(name, parameters or {})
             except Exception:
                 return f"/{name}"
 
         # Add helpers to namespace
         # Check if app() is already available in builtins (from SupportProvider)
-        import builtins
-
         if hasattr(builtins, "app"):
             helpers["app"] = builtins.app
         else:
@@ -497,379 +443,19 @@ class Shell:
 
     def start_ipython(self):
         """Start IPython shell with enhanced autocomplete."""
-        try:
-            from IPython import embed
-
-            # Configure IPython with custom completers
-            self._setup_ipython_completers()
-
-            embed(user_ns=self.namespace, colors="neutral")
-        except ImportError as e:
-            raise ImportError("IPython not available") from e
+        return self._ipython_shell.start_ipython()
 
     def _setup_ipython_completers(self):
-        """Setup custom autocompletion for Cara framework."""
-        try:
-            from IPython import get_ipython
-
-            # Get IPython instance
-            ip = get_ipython()
-            if ip is None:
-                return
-
-            # Enable better tab completion
-            ip.Completer.use_jedi = True
-            ip.Completer.greedy = True
-
-            # Add custom attribute completer for facades and models
-            original_attr_matches = ip.Completer.attr_matches
-
-            def enhanced_attr_matches(self, text):
-                """Enhanced attribute matching for Cara objects."""
-                matches = original_attr_matches(text)
-
-                # Add Cara-specific completions
-                if "." in text:
-                    obj_name, attr_prefix = text.rsplit(".", 1)
-
-                    # Facade method completions
-                    facade_completions = {
-                        "Auth": [
-                            "user",
-                            "check",
-                            "guest",
-                            "id",
-                            "login",
-                            "logout",
-                            "attempt",
-                            "once",
-                            "loginUsingId",
-                        ],
-                        "DB": [
-                            "table",
-                            "select",
-                            "insert",
-                            "update",
-                            "delete",
-                            "raw",
-                            "transaction",
-                            "beginTransaction",
-                            "commit",
-                            "rollback",
-                        ],
-                        "Cache": [
-                            "get",
-                            "put",
-                            "forget",
-                            "flush",
-                            "remember",
-                            "forever",
-                            "increment",
-                            "decrement",
-                            "pull",
-                        ],
-                        "Config": [
-                            "get",
-                            "set",
-                            "has",
-                            "all",
-                            "forget",
-                            "push",
-                            "prepend",
-                        ],
-                        "Mail": ["send", "queue", "later", "raw", "plain"],
-                        "Queue": ["push", "later", "bulk", "pushOn", "laterOn"],
-                        "Storage": [
-                            "disk",
-                            "get",
-                            "put",
-                            "delete",
-                            "exists",
-                            "size",
-                            "lastModified",
-                            "copy",
-                            "move",
-                        ],
-                        "View": [
-                            "make",
-                            "share",
-                            "composer",
-                            "creator",
-                            "exists",
-                            "file",
-                            "first",
-                        ],
-                        "Session": [
-                            "get",
-                            "put",
-                            "push",
-                            "flash",
-                            "forget",
-                            "flush",
-                            "regenerate",
-                            "invalidate",
-                        ],
-                        "Request": [
-                            "all",
-                            "input",
-                            "get",
-                            "post",
-                            "query",
-                            "file",
-                            "hasFile",
-                            "header",
-                            "ip",
-                            "userAgent",
-                        ],
-                        "Response": [
-                            "make",
-                            "json",
-                            "jsonp",
-                            "stream",
-                            "download",
-                            "file",
-                            "redirectTo",
-                            "redirectToRoute",
-                        ],
-                    }
-
-                    if obj_name in facade_completions:
-                        cara_matches = [
-                            f"{obj_name}.{method}"
-                            for method in facade_completions[obj_name]
-                            if method.startswith(attr_prefix)
-                        ]
-                        matches.extend(cara_matches)
-
-                    # Model method completions for any model
-                    model_methods = [
-                        "all",
-                        "find",
-                        "first",
-                        "get",
-                        "create",
-                        "update",
-                        "delete",
-                        "destroy",
-                        "where",
-                        "orWhere",
-                        "whereIn",
-                        "whereNotIn",
-                        "whereBetween",
-                        "whereNull",
-                        "whereNotNull",
-                        "orderBy",
-                        "orderByDesc",
-                        "groupBy",
-                        "having",
-                        "limit",
-                        "offset",
-                        "skip",
-                        "take",
-                        "count",
-                        "sum",
-                        "avg",
-                        "min",
-                        "max",
-                        "exists",
-                        "doesntExist",
-                        "with",
-                        "withCount",
-                        "has",
-                        "doesntHave",
-                        "whereHas",
-                        "whereDoesntHave",
-                        "join",
-                        "leftJoin",
-                        "rightJoin",
-                        "crossJoin",
-                        "union",
-                        "unionAll",
-                        "distinct",
-                        "select",
-                        "addSelect",
-                    ]
-
-                    # Check if it's a model (has __table__ attribute)
-                    try:
-                        obj = eval(obj_name, ip.user_ns)
-                        if hasattr(obj, "__table__") or (
-                            hasattr(obj, "__name__") and obj.__name__ in ["User", "Post"]
-                        ):
-                            model_matches = [
-                                f"{obj_name}.{method}"
-                                for method in model_methods
-                                if method.startswith(attr_prefix)
-                            ]
-                            matches.extend(model_matches)
-                    except Exception as e:
-                        print(f"[tinker] swallowed completer error for {obj_name}: {e}")
-
-                return matches
-
-            # Replace the original method
-            ip.Completer.attr_matches = enhanced_attr_matches.__get__(
-                ip.Completer, ip.Completer.__class__
-            )
-
-            # Register magic commands for better UX
-            self._register_magic_commands(ip)
-
-        except ImportError:
-            pass
+        return self._ipython_shell._setup_ipython_completers()
 
     def _cara_completer(self, self_obj, event):
-        """Custom completer for Cara framework objects."""
-        completions = []
-
-        # Get the current line and cursor position
-        text_until_cursor = event.text_until_cursor
-
-        # Facade completions
-        if any(
-            facade in text_until_cursor
-            for facade in ["Auth.", "DB.", "Cache.", "Config."]
-        ):
-            facade_methods = {
-                "Auth.": ["user", "check", "guest", "id", "login", "logout", "attempt"],
-                "DB.": [
-                    "table",
-                    "select",
-                    "insert",
-                    "update",
-                    "delete",
-                    "raw",
-                    "transaction",
-                ],
-                "Cache.": ["get", "put", "forget", "flush", "remember", "forever"],
-                "Config.": ["get", "set", "has", "all"],
-                "Mail.": ["send", "queue", "later"],
-                "Queue.": ["push", "later", "bulk"],
-                "Storage.": ["disk", "get", "put", "delete", "exists"],
-                "View.": ["make", "share", "composer"],
-            }
-
-            for facade, methods in facade_methods.items():
-                if facade in text_until_cursor:
-                    completions.extend(methods)
-
-        # Model method completions
-        model_methods = [
-            "all",
-            "find",
-            "first",
-            "get",
-            "create",
-            "update",
-            "delete",
-            "where",
-            "orWhere",
-            "whereIn",
-            "whereNotIn",
-            "whereBetween",
-            "orderBy",
-            "groupBy",
-            "having",
-            "limit",
-            "offset",
-            "count",
-            "sum",
-            "avg",
-            "min",
-            "max",
-            "exists",
-            "doesntExist",
-        ]
-
-        if any(model in text_until_cursor for model in ["User.", "Post."]):
-            completions.extend(model_methods)
-
-        # Collection method completions
-        collection_methods = [
-            "map",
-            "filter",
-            "reduce",
-            "each",
-            "pluck",
-            "sort",
-            "sortBy",
-            "reverse",
-            "shuffle",
-            "chunk",
-            "split",
-            "take",
-            "skip",
-            "first",
-            "last",
-            "count",
-            "isEmpty",
-            "isNotEmpty",
-            "contains",
-        ]
-
-        if "collect(" in text_until_cursor or ".map(" in text_until_cursor:
-            completions.extend(collection_methods)
-
-        return completions
+        return self._ipython_shell._cara_completer(self_obj, event)
 
     def _register_magic_commands(self, ip):
-        """Register custom magic commands for Cara."""
-        from IPython.core.magic import Magics, line_magic, magics_class
-
-        @magics_class
-        class CaraMagics(Magics):
-            @line_magic
-            def models(self, line):
-                """List all available models."""
-                models = [
-                    name
-                    for name, obj in ip.user_ns.items()
-                    if isinstance(obj, type) and hasattr(obj, "__table__")
-                ]
-
-                if models:
-                    print("📦 Available Models:")
-                    for model in sorted(models):
-                        print(f"  • {model}")
-                else:
-                    print("No models found")
-
-            @line_magic
-            def facades(self, line):
-                """List all available facades."""
-                facades = [
-                    name
-                    for name, obj in ip.user_ns.items()
-                    if hasattr(obj, "key") and isinstance(getattr(obj, "key", None), str)
-                ]
-
-                if facades:
-                    print("🎭 Available Facades:")
-                    for facade in sorted(facades):
-                        print(f"  • {facade}")
-                else:
-                    print("No facades found")
-
-            @line_magic
-            def helpers(self, line):
-                """List all available helper functions."""
-                helpers = ["app", "config", "env", "collect", "cache", "route"]
-                print("🛠️  Available Helpers:")
-                for helper in helpers:
-                    if helper in ip.user_ns:
-                        func = ip.user_ns[helper]
-                        doc = getattr(func, "__doc__", "No documentation")
-                        print(f"  • {helper}() - {doc}")
-
-        # Register the magic commands
-        ip.register_magic_function(CaraMagics(ip).models, "line", "models")
-        ip.register_magic_function(CaraMagics(ip).facades, "line", "facades")
-        ip.register_magic_function(CaraMagics(ip).helpers, "line", "helpers")
+        return self._ipython_shell._register_magic_commands(ip)
 
     def start_basic_shell(self):
         """Start basic Python shell."""
-        import code
-
         # Create console
         console = code.InteractiveConsole(locals=self.namespace)
 

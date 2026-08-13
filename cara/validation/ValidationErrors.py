@@ -6,6 +6,7 @@ This module provides the ValidationErrors class to handle validation errors in L
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 
 
@@ -26,17 +27,9 @@ class ValidationErrors:
                 return field_errors[0]
         return ""
 
-    def first_error(self) -> str:
-        """Get the first error message overall (alias for first() without field)."""
-        return self.first()
-
     def all(self) -> dict[str, list[str]]:
         """Get all error messages."""
         return self._errors.copy()
-
-    def errors(self) -> dict[str, list[str]]:
-        """Get all error messages (Laravel-style alias for all())."""
-        return self.all()
 
     def has(self, field: str) -> bool:
         """Check if field has errors."""
@@ -89,13 +82,8 @@ class ValidationErrors:
             field: errors for field, errors in self._errors.items() if field not in fields
         }
 
-    def to_dict(self) -> dict[str, list[str]]:
-        """Convert to dictionary (alias for all())."""
-        return self.all()
-
     def to_json(self) -> str:
         """Convert errors to JSON string."""
-        import json
 
         return json.dumps(self._errors)
 

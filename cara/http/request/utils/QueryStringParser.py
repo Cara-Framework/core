@@ -12,6 +12,8 @@ from collections import defaultdict
 from typing import Any
 from urllib.parse import unquote_plus
 
+from .KeyPart import KeyPart
+
 # Upper bound on a bracket array index (e.g. ``items[5]``). A larger
 # index is NOT treated as a list position — the nested-fill loops in
 # _set_nested_value pre-size the list up to the index, so an
@@ -224,23 +226,3 @@ class QueryStringParser:
                 parts.append(KeyPart(index_str, is_array_key=False))
 
         return parts
-
-
-class KeyPart:
-    """
-    Represents a part of a key path in query string parsing.
-
-    Examples:
-    - 'foo' -> KeyPart(name='foo', is_array_key=False)
-    - 'items[0]' -> KeyPart(name='items', is_array_key=True, index=0)
-    """
-
-    def __init__(self, name: str, is_array_key: bool = False, index: int = 0):
-        self.name = name
-        self.is_array_key = is_array_key
-        self.index = index
-
-    def __repr__(self) -> str:
-        if self.is_array_key:
-            return f"KeyPart(name='{self.name}', array[{self.index}])"
-        return f"KeyPart(name='{self.name}', object)"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 try:
     from typing import Self
 except ImportError:  # Python <3.11
@@ -8,7 +10,7 @@ except ImportError:  # Python <3.11
 import contextlib
 import re
 
-from cara.exceptions import DriverNotFoundException, QueryException
+from cara.exceptions import QueryException
 
 from ..query.grammars import SQLiteGrammar
 from ..query.processors import SQLitePostProcessor
@@ -62,12 +64,6 @@ class SQLiteConnection(BaseConnection):
 
     def make_connection(self):
         """This sets the connection on the connection class."""
-        try:
-            import sqlite3
-        except ModuleNotFoundError:
-            raise DriverNotFoundException(
-                "You must have the 'sqlite3' package installed to make a connection to SQLite."
-            )
 
         if self.has_global_connection():
             return self.get_global_connection()

@@ -17,20 +17,31 @@ from __future__ import annotations
 
 import pendulum
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.facades import Log
-from cara.queues.delivery.QueueOperationsStore import QueueOperationsStore
-from cara.queues.Topology import DEAD_LETTER_QUEUE, close_quietly
+from cara.queues import DEAD_LETTER_QUEUE, QueueOperationsStore, close_quietly
 
 
 @command(
     name="queue:monitor",
     help="Display queue health metrics and dead-letter ledger stats",
-    options={
-        "--queue=?": "Monitor one queue only",
-        "--limit=20": "Jobs to sample per category",
-    },
+    options=[
+        {
+            "name": "--queue",
+            "help": "Monitor one queue only",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--limit",
+            "help": "Jobs to sample per category",
+            "type": int,
+            "default": 20,
+            "is_flag": False,
+        },
+    ],
 )
 class QueueMonitorCommand(CommandBase):
     """Display per-queue tracker health and audited dead-letter ledger stats."""

@@ -22,6 +22,7 @@ the ORM suite; see ``tests/cara/eloquent/test_concurrent_transactions.py``.
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from typing import Self
@@ -31,6 +32,12 @@ from cara.exceptions import (
     DriverNotFoundException,
     InvalidArgumentException,
 )
+
+from ..connections.ConnectionFactory import ConnectionFactory
+from ..connections.PostgresConnection import PostgresConnection
+from ..connections.SQLiteConnection import SQLiteConnection
+from ..query import QueryBuilder
+from ..schema import Schema
 
 # Per-context registry of "currently inside-transaction" connections.
 # Keyed by connection name (``"app"``, ``"analytics"``, …) so a single
@@ -136,7 +143,6 @@ class ConnectionResolver:
 
     def __init__(self, database_manager=None):
         """Initialize ConnectionResolver with DatabaseManager dependency"""
-        from ..connections.ConnectionFactory import ConnectionFactory
 
         self.connection_factory = ConnectionFactory()
         self.database_manager = database_manager
@@ -149,8 +155,6 @@ class ConnectionResolver:
 
     def _register_default_connections(self):
         """Register default connection types - Open/Closed principle"""
-        from ..connections.PostgresConnection import PostgresConnection
-        from ..connections.SQLiteConnection import SQLiteConnection
 
         connection_types = [
             SQLiteConnection,
@@ -403,7 +407,6 @@ class ConnectionResolver:
             # Log close failures so pool exhaustion leaks are detectable.
             # Silent pass here previously hid connection leaks that
             # eventually starved the pool.
-            import logging
 
             logging.getLogger("cara.database.pool").warning(
                 "Connection close failed (potential pool leak): %s", exc
@@ -453,11 +456,8 @@ class ConnectionResolver:
 
     def get_schema_builder(self, connection_name, schema=None):
         """Factory method for schema builder - Interface segregation"""
-        from ..schema import Schema
 
-        # Create connection instance for schema operations
-        connection = self._create_connection_instance(connection_name)
-        return Schema(connection=connection, schema=schema)
+        return Schema(connection=connection_name, schema=schema)
 
     def get_query_builder(self, connection_name):
         """Factory method for query builder - Interface segregation
@@ -477,9 +477,11 @@ class ConnectionResolver:
         reclaimed the orphan. Under burst load this exhausted
         ``max_connections`` within seconds.
         """
-        from ..query import QueryBuilder
 
-        return QueryBuilder(connection=connection_name)
+        return QueryBuilder(
+            connection=connection_name,
+            database_manager=self.database_manager,
+        )
 
     def statement(self, query, bindings=(), connection_name=None):
         """Execute raw SQL statement - Delegation to appropriate builder"""

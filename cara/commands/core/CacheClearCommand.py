@@ -7,18 +7,36 @@ This module provides a CLI command to clear the application cache with enhanced 
 from __future__ import annotations
 
 from cara.cache import Cache
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 
 
 @command(
     name="cache:clear",
     help="Flush all cache entries with detailed feedback.",
-    options={
-        "--dry": "Show what would be cleared without actually clearing",
-        "--f|force": "Force clear without confirmation in production",
-        "--tags=?": "Clear only specific cache tags (comma-separated)",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be cleared without actually clearing",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "-f|--force",
+            "help": "Force clear without confirmation in production",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--tags",
+            "help": "Clear only specific cache tags (comma-separated)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class CacheClearCommand(CommandBase):
     def handle(self, tags: str | None = None):

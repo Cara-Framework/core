@@ -43,7 +43,7 @@ class BetweenRule(BaseRule):
         # legitimate exact-equality spec.
         if min_val > max_val:
             try:
-                from cara.facades import Log
+                from cara.facades import Log  # local: cycle with cara.facades
 
                 Log.warning(
                     "BetweenRule misconfig: field=%s has inverted bounds (min=%s > max=%s) — every input fails by design. Check the rule spec.",

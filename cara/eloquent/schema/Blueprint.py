@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .Table import Table
+
 try:
     from typing import Self
 except ImportError:  # Python <3.11
@@ -29,7 +31,6 @@ class Blueprint:
         dry=False,
     ):
         """Initialize Blueprint with composition pattern"""
-        from .Table import Table
 
         self.grammar = grammar
         self.table = Table(table)

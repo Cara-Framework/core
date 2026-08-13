@@ -7,8 +7,12 @@ Professional exception handler using proper exception hierarchy.
 from __future__ import annotations
 
 import contextlib
+import importlib
+import json
 import traceback
 from typing import Any
+
+from ._ExceptionResponseHeaders import _EXCEPTION_RESPONSE_HEADERS
 
 
 class DefaultExceptionHandler:
@@ -223,12 +227,12 @@ class DefaultExceptionHandler:
         genuine server faults and log at ERROR with a full traceback.
         """
         try:
-            from cara.facades import Log
+            facades = importlib.import_module("cara.facades")
 
             status = self.get_status_code(exception)
             exc_type = exception.__class__.__name__
             if status < 500:
-                Log.warning(
+                facades.Log.warning(
                     "%s: %s",
                     exc_type,
                     exception,
@@ -239,7 +243,7 @@ class DefaultExceptionHandler:
                     },
                 )
             else:
-                Log.error(
+                facades.Log.error(
                     "%s: %s",
                     exc_type,
                     exception,
@@ -254,74 +258,10 @@ class DefaultExceptionHandler:
             pass
 
     def _cors_headers_for_scope(self, scope: dict[str, Any]) -> list:
-        """Build CORS header pairs for an error response.
-
-        Reads the policy from ``cara.middleware.http.Cors`` instead of
-        restating it. The restated copy had drifted OPEN: it never
-        consulted ``cors.cors.paths``, so a route the operator excluded
-        from CORS answered a 200 with no ``Access-Control-Allow-Origin``
-        but its 401/403/404/500 with ``Access-Control-Allow-Origin: *``
-        — an attacker's page could read status and body cross-origin by
-        provoking an error. And any configuration failure fell back to a
-        wildcard, granting the most in the case where we knew least.
-        Both are fixed by reading the single source: out of scope and
-        unreadable policy both emit NO CORS headers (§9, fail closed).
-        """
-        try:
-            # Imported here, inside the guard: resolving the policy module
-            # pulls the middleware package, and an exception handler is the
-            # one place that must never explode. An unimportable policy is
-            # an unreadable policy.
-            from cara.middleware.http.Cors import (
-                load_cors_policy,
-                path_in_cors_scope,
-                resolve_allow_origin,
-            )
-
-            policy = load_cors_policy()
-        except Exception:
-            # Fail closed. A policy we could not read is not a policy
-            # that allows everyone — emitting nothing degrades the JS
-            # client to a visible CORS error, which is strictly better
-            # than handing an arbitrary origin a readable response.
-            self._log_cors_policy_unavailable()
-            return []
-
-        if not path_in_cors_scope(scope.get("path", ""), policy.get("paths")):
-            return []
-
-        raw_headers = dict(scope.get("headers", []))
-        origin = raw_headers.get(b"origin", b"").decode()
-        allow_origin = resolve_allow_origin(origin, policy)
-
-        headers: list = []
-
-        if allow_origin is not None:
-            headers.append([b"access-control-allow-origin", allow_origin.encode()])
-            if allow_origin != "*":
-                # When the ACAO value depends on the Origin header,
-                # proxies and CDNs must key their cache by it —
-                # otherwise one origin's response is served to another.
-                headers.append([b"vary", b"Origin"])
-
-        allowed_methods = policy.get("allowed_methods")
-        allowed_headers = policy.get("allowed_headers")
-        max_age = policy.get("max_age")
-
-        if allowed_methods:
-            headers.append(
-                [b"access-control-allow-methods", ", ".join(allowed_methods).encode()]
-            )
-        if allowed_headers:
-            headers.append(
-                [b"access-control-allow-headers", ", ".join(allowed_headers).encode()]
-            )
-        if policy.get("supports_credentials"):
-            headers.append([b"access-control-allow-credentials", b"true"])
-        if max_age:
-            headers.append([b"access-control-max-age", str(max_age).encode()])
-
-        return headers
+        return _EXCEPTION_RESPONSE_HEADERS.cors(
+            scope,
+            on_policy_unavailable=self._log_cors_policy_unavailable,
+        )
 
     @staticmethod
     def _log_cors_policy_unavailable() -> None:
@@ -333,259 +273,33 @@ class DefaultExceptionHandler:
         absence must not replace the original failure.
         """
         try:
-            from cara.facades import Log
+            facades = importlib.import_module("cara.facades")
 
-            Log.warning(
+            facades.Log.warning(
                 "CORS policy unreadable on the error path — emitting no CORS headers",
                 category="cara.exceptions",
                 exc_info=True,
             )
-        except Exception:
-            # allow-silent-except: logging the error path cannot itself raise on the error path
+        except ImportError, RuntimeError:
             pass
 
     def _security_headers_for_scope(self, scope: dict[str, Any]) -> list:
-        """Build defense-in-depth header pairs for an error response.
-
-        ROOT-CAUSE (stress test scenario 7 / cycle 1): every error
-        response (404 route-not-found, 405 method-not-allowed, 422
-        validation, 401/403 auth, 5xx) bypassed the
-        ``SecurityHeaders`` middleware because the exception path
-        unwinds the middleware stack. The header sweep observed:
-
-          * 200/204 success responses had nosniff / DENY / Permissions-
-            Policy / CSP / COOP / CORP / Referrer-Policy / X-XSS-
-            Protection / X-Permitted-Cross-Domain-Policies — every
-            baseline header.
-          * 404 / 405 / 422 / 4xx error responses had ZERO of those.
-            ``curl /api/no-such-endpoint`` came back with only CORS
-            and content-type. A browser landing on a 404 JSON URL
-            would happily MIME-sniff it as HTML.
-
-        Mirroring the SecurityHeaders middleware here means the
-        baseline applies on every code path, not just the happy path.
-        Config overrides (``security.security.headers``) honour the
-        same dict and ``None`` values still suppress a header.
-        """
-        from cara.middleware.http.SecurityHeaders import (
-            _DEFAULT_HEADERS as _SH_DEFAULT_HEADERS,
-        )
-        from cara.middleware.http.SecurityHeaders import (
-            _DEFAULT_HSTS as _SH_DEFAULT_HSTS,
-        )
-
-        headers_dict: dict[str, str] = dict(_SH_DEFAULT_HEADERS)
-        hsts: str | None = _SH_DEFAULT_HSTS
-        hsts_preload = False
-        try:
-            from cara.configuration import config
-
-            overrides = config("security.security.headers")
-            if isinstance(overrides, dict):
-                for k, v in overrides.items():
-                    if v is None:
-                        headers_dict.pop(k, None)
-                    else:
-                        headers_dict[k] = str(v)
-
-            # HSTS opt-out parity with ``SecurityHeaders._load_config``.
-            # Pre-fix this branch tried to distinguish "explicit None"
-            # from "absent config" via ``getattr(config, "loaded_keys",
-            # set())`` — but the ``config`` callable has no such
-            # attribute, so the ``and`` half was always False and the
-            # opt-out path NEVER fired. Result: a deployment that set
-            # ``SECURITY_HSTS=`` (empty env → ``security.security.hsts
-            # = None``) had the success-path middleware strip HSTS on
-            # 200s while the error path silently kept stamping
-            # ``_DEFAULT_HSTS`` on 4xx / 5xx. Mixed coverage caches the
-            # error-path pin in the browser and confuses every later
-            # debug session ("HSTS is set sometimes?").
-            #
-            # Use a real sentinel so "absent config" preserves the
-            # baseline default (defence-in-depth) AND explicit None
-            # strips (operator's documented opt-out path). Mirrors the
-            # config-loader-shaped semantics across both code paths.
-            _unset = object()
-            custom_hsts = config("security.security.hsts", _unset)
-            if custom_hsts is _unset:
-                # Unconfigured — keep ``_SH_DEFAULT_HSTS`` already set above.
-                pass
-            elif custom_hsts is None:
-                hsts = None  # explicit opt-out
-            elif isinstance(custom_hsts, str):
-                hsts = custom_hsts
-            hsts_preload = bool(config("security.security.hsts_preload", False))
-        except OSError, RuntimeError, AttributeError, ConnectionError:
-            pass
-
-        out: list = [
-            [k.lower().encode(), str(v).encode()] for k, v in headers_dict.items()
-        ]
-
-        # HSTS only on HTTPS — must mirror ``SecurityHeaders._is_https``
-        # exactly, otherwise success vs. error responses ship
-        # inconsistent HSTS coverage. Real failure mode: a TLS-terminating
-        # load balancer (ALB / Cloudflare / nginx) gives the worker
-        # ``scope.scheme == "http"`` but ``X-Forwarded-Proto: https``.
-        # The success path's middleware honours the forwarded proto
-        # (when peer is in ``trustedproxies.proxies``), so it stamps HSTS
-        # on the 200. The error path used to compare ``scope.scheme``
-        # only — the matching 404 came back without HSTS. Mixed coverage
-        # is worse than uniform absence: the browser cache keeps the
-        # success-path pin while error responses look "downgraded",
-        # making the asymmetry hard to spot.
-        try:
-            if hsts and self._is_https_for_scope(scope):
-                value = hsts
-                if hsts_preload and "preload" not in value:
-                    value = f"{value}; preload"
-                out.append([b"strict-transport-security", value.encode()])
-        except OSError, RuntimeError, AttributeError, ConnectionError:
-            pass
-
-        return out
+        return _EXCEPTION_RESPONSE_HEADERS.security(scope)
 
     @staticmethod
     def _is_https_for_scope(scope: Any) -> bool:
-        """Mirror ``SecurityHeaders._is_https`` for the error-response path.
-
-        Order of trust:
-          1. ``scope["scheme"] == "https"`` (direct TLS at the worker).
-          2. When the immediate peer is a configured trusted proxy, honour
-             ``X-Forwarded-Proto`` and RFC 7239 ``Forwarded``.
-
-        Any signal from an untrusted peer is ignored so a public client
-        cannot forge HSTS by setting ``X-Forwarded-Proto: https``.
-
-        The trust decision belongs to :mod:`cara.security.TrustedProxies`. This
-        method used to carry a verbatim copy of ``SecurityHeaders``' lookup,
-        including its read of two config keys no product defines — so it always
-        saw an empty proxy list and this branch was dead in every environment.
-        """
-        if not isinstance(scope, dict):
-            return False
-        scheme = scope.get("scheme")
-        if isinstance(scheme, str) and scheme.lower() == "https":
-            return True
-
-        # Imported inline like the rest of this module's cara dependencies:
-        # the exception handler is constructed during boot, ahead of the
-        # security package.
-        from cara.security.TrustedProxies import peer_is_trusted_proxy
-
-        if not peer_is_trusted_proxy(scope):
-            return False
-
-        raw_headers = {
-            (
-                k.decode().lower()
-                if isinstance(k, (bytes, bytearray))
-                else str(k).lower()
-            ): (v.decode() if isinstance(v, (bytes, bytearray)) else str(v))
-            for k, v in scope.get("headers", []) or []
-        }
-        forwarded_proto = raw_headers.get("x-forwarded-proto")
-        if (
-            isinstance(forwarded_proto, str)
-            and forwarded_proto.split(",")[0].strip().lower() == "https"
-        ):
-            return True
-        forwarded = raw_headers.get("forwarded")
-        return bool(isinstance(forwarded, str) and "proto=https" in forwarded.lower())
+        return _EXCEPTION_RESPONSE_HEADERS.is_https(scope)
 
     def _request_id_header_for(self, request: Any, scope: dict[str, Any]) -> list:
-        """Return the X-Request-ID header pair for the error response.
-
-        The ``AttachRequestID`` middleware sets this on success
-        responses, but on the exception path the middleware never
-        wraps a response, so the header is missing. Same scenario 7
-        finding as the security headers above — without the request
-        id, an ops engineer correlating a user complaint to a Sentry
-        event has to fall back to timestamp matching.
-        """
-        rid: str | None = None
-        try:
-            rid = getattr(request, "request_id", None) if request is not None else None
-        except Exception:
-            rid = None
-        if not rid:
-            try:
-                raw = dict(scope.get("headers", []) if isinstance(scope, dict) else [])
-                rid = raw.get(b"x-request-id", b"").decode() or None
-            except Exception:
-                rid = None
-        if not rid:
-            try:
-                import uuid
-
-                rid = str(uuid.uuid4())
-            except Exception:
-                rid = ""
-        return [[b"x-request-id", rid.encode()]] if rid else []
+        return _EXCEPTION_RESPONSE_HEADERS.request_id(request, scope)
 
     @staticmethod
     def _retry_after_header_for(data: dict[str, Any]) -> list:
-        """Return the ``Retry-After`` header pair when ``data`` carries
-        a positive ``retry_after`` value, else empty list.
-
-        Coerces to a positive integer per RFC 7231 §7.1.3 (the
-        delta-seconds form). Anything non-numeric, non-positive, or
-        out-of-int-range is silently dropped — the client falls back
-        to its default backoff strategy, same as if the header had
-        never been set. The body-side ``retry_after`` value stays
-        regardless so the JSON contract is unchanged.
-        """
-        raw = data.get("retry_after") if isinstance(data, dict) else None
-        if raw is None:
-            return []
-        try:
-            seconds = int(raw)
-        except TypeError, ValueError:
-            return []
-        if seconds <= 0:
-            return []
-        return [[b"retry-after", str(seconds).encode()]]
+        return _EXCEPTION_RESPONSE_HEADERS.retry_after(data)
 
     @staticmethod
     def _allow_header_for(data: dict[str, Any]) -> list:
-        """Return the ``Allow`` header pair when ``data`` carries a
-        non-empty ``allowed`` method list, else empty list.
-
-        Per RFC 9110 §15.5.6, a 405 Method Not Allowed response MUST
-        include an ``Allow`` field listing the methods the target
-        resource actually supports. The router stamps this list on
-        ``MethodNotAllowedException(..., allowed=[...])`` and
-        ``format_response`` propagates it into ``data['allowed']``
-        (see the parallel ``retry_after`` lift). Here we emit the
-        HTTP header.
-
-        Method names are upper-cased to match the RFC's
-        token-case convention (``GET`` / ``POST`` / etc.) regardless of
-        whether the route registered them as lower-case strings
-        (``Route.get`` stores ``["get", "head"]``).  Non-token chars
-        and empty entries are filtered defensively so a malformed
-        runtime injection can't produce a malformed header line.
-        """
-        raw = data.get("allowed") if isinstance(data, dict) else None
-        if not raw:
-            return []
-        try:
-            methods = [str(m).upper().strip() for m in raw if str(m).strip()]
-        except TypeError:
-            return []
-        if not methods:
-            return []
-        # Drop anything that doesn't look like an HTTP token (RFC 9110
-        # §5.6.2 / RFC 7230 §3.2.6). Belt-and-braces: should never
-        # fire in practice because the router populates from a fixed
-        # vocabulary, but cheap to enforce here.
-        import re as _re
-
-        _token = _re.compile(r"^[A-Z][A-Z0-9_-]*$")
-        safe = [m for m in methods if _token.fullmatch(m)]
-        if not safe:
-            return []
-        return [[b"allow", ", ".join(safe).encode()]]
+        return _EXCEPTION_RESPONSE_HEADERS.allow(data)
 
     async def send_response(
         self,
@@ -656,8 +370,6 @@ class DefaultExceptionHandler:
         extra_headers: list | None = None,
     ) -> None:
         """Manual response fallback."""
-        import json
-
         response_body = json.dumps(data).encode("utf-8")
 
         # Match the success-path content-type (includes charset) so a
@@ -688,7 +400,9 @@ class DefaultExceptionHandler:
     def is_debug_mode(self) -> bool:
         """Check if in debug mode."""
         try:
-            from cara.configuration import config
+            from cara.configuration import (  # local: cycle with cara.configuration
+                config,
+            )
 
             return config("app.debug", False)
         except ImportError, RuntimeError, TypeError:

@@ -9,12 +9,22 @@ without needing to know the canonical module path of each helper.
 
 from __future__ import annotations
 
+import builtins
+import html
+import sys
 from collections.abc import Callable
 from typing import Any
 
 from cara.configuration import config
-from cara.environment.Environment import env
-from cara.exceptions.types.http import HttpException
+from cara.encryption import Hash
+from cara.environment import env
+from cara.exceptions import HttpException
+from cara.facades import Cache, Event, Log
+from cara.queues import Bus
+from cara.support import collect as _collect
+
+from .support.Date import Date
+from .support.HtmlString import HtmlString
 
 
 def route(name: str, params: dict[str, Any] | None = None) -> str:
@@ -23,7 +33,6 @@ def route(name: str, params: dict[str, Any] | None = None) -> str:
     Resolves the application router through the container and delegates to
     ``Router.url()``. Raises ``RouteNotFoundException`` if the name is unknown.
     """
-    import builtins
 
     application = builtins.app()
 
@@ -103,8 +112,6 @@ def safe_call[T](
             raise
         if log_message is not None:
             try:
-                from cara.facades import Log
-
                 msg = (
                     log_message.format(error=error)
                     if "{error}" in log_message
@@ -115,7 +122,6 @@ def safe_call[T](
                 # The Log facade itself failed — re-invoking it (the old
                 # "fallback") just re-raised the same failure. Fall back
                 # to stderr so the swallow is still visible somewhere.
-                import sys
 
                 msg = (
                     log_message.format(error=error)
@@ -238,7 +244,6 @@ def dispatch(
     for call sites that just want a one-liner. Returns the awaitable
     so callers ``await dispatch(MyJob(...))`` directly.
     """
-    from cara.queues import Bus
 
     kwargs: dict[str, Any] = {}
     if routing_key is not None:
@@ -258,28 +263,24 @@ def now(tz: str = "UTC") -> Any:
     in tests without each call site needing to know about the freeze
     machinery.
     """
-    from .support.Date import Date
 
     return Date.now(tz)
 
 
 def today(tz: str = "UTC") -> Any:
     """Return today at midnight — Laravel ``today()`` parity."""
-    from .support.Date import Date
 
     return Date.today(tz)
 
 
 def yesterday(tz: str = "UTC") -> Any:
     """Return yesterday at midnight — Laravel ``yesterday()`` parity."""
-    from .support.Date import Date
 
     return Date.yesterday(tz)
 
 
 def tomorrow(tz: str = "UTC") -> Any:
     """Return tomorrow at midnight — Laravel ``tomorrow()`` parity."""
-    from .support.Date import Date
 
     return Date.tomorrow(tz)
 
@@ -398,8 +399,6 @@ def report(exception: BaseException) -> None:
     to ``stderr`` if the Log facade itself fails.
     """
     try:
-        from cara.facades import Log
-
         Log.error(
             "%s: %s",
             exception.__class__.__name__,
@@ -410,7 +409,6 @@ def report(exception: BaseException) -> None:
         # The Log facade itself failed — re-invoking it (the old
         # "fallback") just re-raised the same failure and the report was
         # lost. Deliver on the documented stderr fallback instead.
-        import sys
 
         print(
             f"cara.helpers.report: Log facade failed ({log_err}); "
@@ -436,7 +434,6 @@ def app(name: str | None = None) -> Any:
     bootstrap ``application``; with ``name``, returns
     ``application.make(name)``.
     """
-    import builtins
 
     application = builtins.app()
 
@@ -451,7 +448,6 @@ def event(event_obj: Any) -> Any:
     Mirrors Laravel's ``event()`` global. Returns the awaitable from
     ``Event.fire`` so callers ``await event(MyEvent(...))`` directly.
     """
-    from cara.facades import Event
 
     return Event.fire(event_obj)
 
@@ -464,14 +460,12 @@ def cache() -> Any:
 
         cached = cache().remember(key, ttl, callback)
     """
-    from cara.facades import Cache
 
     return Cache
 
 
 def logger() -> Any:
     """Return the Log facade — Laravel ``logger()`` parity."""
-    from cara.facades import Log
 
     return Log
 
@@ -483,7 +477,6 @@ def auth(guard: str | None = None) -> Any:
     the auth manager when no guard is given; otherwise returns the
     named guard.
     """
-    import builtins
 
     application = builtins.app()
 
@@ -500,7 +493,6 @@ def bcrypt(password: str, *, rounds: int = 12) -> str:
     selection live with the rest of the encryption stack rather than
     being hard-coded at every call site.
     """
-    from cara.encryption import Hash
 
     return Hash.make(password, algorithm="bcrypt", rounds=rounds)
 
@@ -530,9 +522,6 @@ def e(text: Any) -> str:
     the same rules as ``html.escape(quote=True)`` (``&`` ``<`` ``>``
     ``"`` ``'``).
     """
-    import html
-
-    from .support.HtmlString import HtmlString
 
     if text is None:
         return ""
@@ -549,7 +538,6 @@ def collect(items: Any = None) -> Any:
     so application code can do ``from cara.helpers import collect``
     alongside the rest of the Laravel-style globals.
     """
-    from cara.support import collect as _collect
 
     return _collect(items)
 

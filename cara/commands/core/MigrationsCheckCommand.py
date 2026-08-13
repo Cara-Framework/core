@@ -51,12 +51,18 @@ from __future__ import annotations
 
 import ast
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
-from cara.commands import CommandBase, missing_optional
+from cara.commands.CommandBase import CommandBase
 from cara.commands.core.MakeMigrationCommand import MakeMigrationCommand
+from cara.commands.core.SchemaCheckCommand import SchemaCheckCommand
+from cara.commands.OptionalDependencyError import missing_optional
 from cara.decorators import command
+from cara.eloquent.migrations import ModelDiscoverer
+from cara.support import paths
+
+from .MigrationFile import MigrationFile
+from .Violation import Violation
 
 # Filenames the generator authors: ``NNNN_01_01_NNNNNN_create_<table>_table.py``.
 # The middle segments are vestigial Laravel date padding that keeps the
@@ -100,35 +106,6 @@ _NAIVE_TIMESTAMP_RE = re.compile(
     r"(?<![A-Za-z0-9_])TIMESTAMP(?!TZ)(?!\s+WITH\s+TIME\s+ZONE)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
-
-
-@dataclass(frozen=True)
-class Violation:
-    """One convention breach, with the file it lives in and its one-line remedy.
-
-    ``blocks_fix`` marks a violation that ``--fix`` must not run THROUGH:
-    regenerating would erase the evidence (a hand-added index) rather than
-    repair it. ``human_only`` marks one regeneration simply cannot address.
-    """
-
-    rule: str
-    path: str
-    message: str
-    remedy: str
-    human_only: bool = False
-    blocks_fix: bool = False
-
-
-@dataclass(frozen=True)
-class MigrationFile:
-    """A parsed migration file: classification + the SQL text it contains."""
-
-    path: Path
-    generated_table: str | None
-    banned_markers: tuple[str, ...]
-    docstring: str | None
-    sql_constants: tuple[tuple[int, str], ...]
-    syntax_error: str | None
 
 
 def _string_constants(tree: ast.AST) -> list[tuple[int, str]]:
@@ -230,7 +207,10 @@ def parse_migration_file(path: Path) -> MigrationFile:
 
 
 def audit_migrations(
-    migrations_dir: Path, model_indexes: dict[str, set[str]]
+    migrations_dir: Path,
+    model_indexes: dict[str, set[str]],
+    *,
+    model_infos: list[dict] | None = None,
 ) -> list[Violation]:
     """Audit a migrations directory against the convention. Pure — no DB, no imports.
 
@@ -359,6 +339,50 @@ def audit_migrations(
         violations.extend(_audit_indexes(entry, model_indexes))
 
     violations.extend(_audit_table_coverage(creators, generated_files, model_indexes))
+    if model_infos is not None:
+        violations.extend(_audit_model_projection(migrations_dir, model_infos))
+    return violations
+
+
+def _audit_model_projection(
+    migrations_dir: Path, model_infos: list[dict]
+) -> list[Violation]:
+    """Require each generated table projection to equal its model schema.
+
+    Directory-shape checks alone cannot see a changed column modifier. A
+    removed model default, for example, previously stayed in the generated
+    migration while ``migrations:check`` reported clean. The same structured
+    comparator used by ``make:migration`` is the single source of truth here.
+    """
+    from cara.eloquent.migrations.ModelMigrationComparator import (
+        ModelMigrationComparator,  # local: heavy optional dep
+    )
+
+    comparator = ModelMigrationComparator()
+    comparator.migrations_dir = migrations_dir
+    violations: list[Violation] = []
+    for model_info in model_infos:
+        if not model_info.get("has_fields_method") or not model_info.get("table"):
+            continue
+        table = str(model_info["table"])
+        generated = sorted(migrations_dir.glob(f"*_create_{table}_table.py"))
+        # Missing/duplicate creators already have precise convention findings.
+        if len(generated) != 1:
+            continue
+        diffs = comparator.compare_model_with_migrations(model_info)
+        if not diffs:
+            continue
+        details = ", ".join(
+            f"{diff.name} ({'/'.join(diff.changed_attrs) or diff.kind})" for diff in diffs
+        )
+        violations.append(
+            Violation(
+                rule="model-schema-drift",
+                path=generated[0].name,
+                message=f"model table '{table}' differs from its projection: {details}",
+                remedy="regenerate (craft make:migration --overwrite --force)",
+            )
+        )
     return violations
 
 
@@ -477,17 +501,19 @@ def _audit_table_coverage(
         "generated file per model table and nothing else — no incremental "
         "files, no escape markers (MODEL_LESS and friends are banned), "
         "TIMESTAMPTZ everywhere, no duplicate or orphan table creations, and "
-        "no index living only in a migration. "
+        "no index living only in a migration; every column definition must "
+        "equal its model projection. "
         "Exits non-zero on any violation so CI can gate on it."
     ),
-    options={
-        "--fix": (
-            "Regenerate the directory from the models (the make:migration "
-            "--overwrite --force path) and re-audit. Naive timestamps are "
-            "reported, never auto-fixed (fix the model); a hand-added index "
-            "or duplicate table blocks the fix."
-        ),
-    },
+    options=[
+        {
+            "name": "--fix",
+            "help": "Regenerate the directory from the models (the make:migration --overwrite --force path) and re-audit. Naive timestamps are reported, never auto-fixed (fix the model); a hand-added index or duplicate table blocks the fix.",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MigrationsCheckCommand(CommandBase):
     def handle(self):
@@ -509,7 +535,11 @@ class MigrationsCheckCommand(CommandBase):
             return 0
 
         self.info(f"Auditing {migrations_dir} against the migration convention...")
-        violations = audit_migrations(migrations_dir, model_indexes)
+        violations = audit_migrations(
+            migrations_dir,
+            model_indexes,
+            model_infos=getattr(self, "_discovered_models", None),
+        )
 
         if self.option("fix"):
             violations = self._run_fix(migrations_dir, model_indexes, violations)
@@ -551,7 +581,11 @@ class MigrationsCheckCommand(CommandBase):
         after = {path.name for path in migrations_dir.glob("*.py")}
         self._report_changes(before, after)
 
-        return audit_migrations(migrations_dir, model_indexes)
+        return audit_migrations(
+            migrations_dir,
+            model_indexes,
+            model_infos=getattr(self, "_discovered_models", None),
+        )
 
     def _report_changes(self, before: set[str], after: set[str]):
         """State what --fix actually changed on disk — never a silent sweep."""
@@ -601,7 +635,6 @@ class MigrationsCheckCommand(CommandBase):
 
     def _migrations_dir(self) -> Path | None:
         """Resolve the migrations directory via the paths() helper, or None."""
-        from cara.support import paths
 
         migrations_dir = Path(paths("migrations"))
         return migrations_dir if migrations_dir.exists() else None
@@ -613,11 +646,11 @@ class MigrationsCheckCommand(CommandBase):
         DB-less service still imports this module. Discovery reads model
         SOURCE, not the database — the audit itself never connects.
         """
-        from cara.commands.core.SchemaCheckCommand import SchemaCheckCommand
-        from cara.eloquent.migrations import ModelDiscoverer
 
         indexes: dict[str, set[str]] = {}
-        for model in ModelDiscoverer().discover_models():
+        models = ModelDiscoverer().discover_models()
+        self._discovered_models = models
+        for model in models:
             table = model.get("table")
             if not table or not model.get("has_fields_method"):
                 continue

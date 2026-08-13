@@ -34,18 +34,8 @@ class Guard(ABC):
         pass
 
     @abstractmethod
-    def attempt(self, credentials: dict[str, Any]) -> bool:
-        """Attempt to authenticate using credentials."""
-        pass
-
-    @abstractmethod
     def logout(self) -> None:
         """Log the user out."""
-        pass
-
-    @abstractmethod
-    def login(self, user) -> str:
-        """Log a user in and return token."""
         pass
 
     @abstractmethod

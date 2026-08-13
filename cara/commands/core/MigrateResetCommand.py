@@ -6,21 +6,46 @@ This module provides a CLI command to completely reset the database schema.
 
 from __future__ import annotations
 
-from cara.commands import CommandBase, missing_optional
+import cara.facades as facades
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException
-from cara.queues.idempotency.MakesIdempotentBase import MakesIdempotentBase
+from cara.queues import MakesIdempotentBase
 
 
 @command(
     name="migrate:reset",
     help="Drop all tables and reset the database schema completely.",
-    options={
-        "--c|connection=default": "The connection key from config to run reset on",
-        "--f|force": "Force reset without prompt in production",
-        "--schema=public": "Sets the schema to be reset (PostgreSQL only)",
-        "--confirm": "Additional confirmation flag for safety",
-    },
+    options=[
+        {
+            "name": "-c|--connection",
+            "help": "The connection key from config to run reset on",
+            "type": str,
+            "default": "default",
+            "is_flag": False,
+        },
+        {
+            "name": "-f|--force",
+            "help": "Force reset without prompt in production",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--schema",
+            "help": "Sets the schema to be reset (PostgreSQL only)",
+            "type": str,
+            "default": "public",
+            "is_flag": False,
+        },
+        {
+            "name": "--confirm",
+            "help": "Additional confirmation flag for safety",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MigrateResetCommand(CommandBase):
     """Database reset command with enhanced safety and database-specific operations."""
@@ -35,12 +60,6 @@ class MigrateResetCommand(CommandBase):
         production guard (``_should_block_execution``) still applies
         either way.
         """
-        global get_database_manager
-        try:
-            from cara.eloquent import get_database_manager
-        except ImportError as exc:
-            raise missing_optional("db", exc) from exc
-
         self._display_warning()
 
         if self._should_block_execution():
@@ -89,11 +108,9 @@ class MigrateResetCommand(CommandBase):
         responses) don't collide and are kept.
         """
         try:
-            from cara.facades import Cache
-
             removed = 0
             for prefix in MakesIdempotentBase.RESET_FLUSHABLE_KEY_PREFIXES:
-                removed += Cache.forget_by_prefix(prefix)
+                removed += facades.Cache.forget_by_prefix(prefix)
             self.info(f"🧹 Flushed {removed} job idempotency cache entries")
         except Exception as e:
             self.warning(f"⚠️  Could not flush job idempotency cache: {e}")
@@ -152,7 +169,7 @@ class MigrateResetCommand(CommandBase):
 
     def _get_database_connection(self, connection_name: str):
         """Get database connection."""
-        db_manager = get_database_manager()
+        db_manager = self.application.make("DB")
         return db_manager.create_connection_instance(connection_name)
 
     def _get_database_type(self, connection) -> str:

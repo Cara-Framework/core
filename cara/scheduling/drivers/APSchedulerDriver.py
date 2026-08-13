@@ -16,13 +16,17 @@ from __future__ import annotations
 import contextlib
 import inspect
 import logging
+import os
 import time as _time
+import uuid as _uuid
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from cara.exceptions import InvalidArgumentException
+from cara.facades import Cache as _Cache
 from cara.facades import Log
-from cara.scheduling.contracts import Scheduling
+from cara.observability import MetricsBase
+from cara.scheduling.contracts import SchedulingContract
 
 _logger = logging.getLogger("cara.scheduling")
 
@@ -32,8 +36,6 @@ _logger = logging.getLogger("cara.scheduling")
 def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
     """Wrap a scheduled callback with Prometheus counter + histogram."""
     try:
-        from cara.observability.Metrics import MetricsBase
-
         metrics = MetricsBase
     except ImportError:
         metrics = None
@@ -113,10 +115,6 @@ def _wrap_without_overlapping(
     ``finally`` — letting a third fire start while two were already running. The
     token makes release delete ONLY our own still-held lock.
     """
-    import os
-    import uuid as _uuid
-
-    from cara.facades import Cache as _Cache
 
     lock_key = f"scheduler:lock:{identifier}"
 
@@ -196,7 +194,7 @@ def _job_error_listener(event) -> None:
 # ── Driver ────────────────────────────────────────────────────────────
 
 
-class APSchedulerDriver(Scheduling):
+class APSchedulerDriver(SchedulingContract):
     """APScheduler driver — always BackgroundScheduler, auto-reload safe."""
 
     driver_name = "apscheduler"
@@ -221,7 +219,6 @@ class APSchedulerDriver(Scheduling):
     # ── Scheduler creation ────────────────────────────────────────────
 
     def _configure_logging(self) -> None:
-        import logging
 
         # Let warnings through so misfire notices are visible.
         logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -230,7 +227,9 @@ class APSchedulerDriver(Scheduling):
         logging.getLogger("apscheduler.executors").setLevel(logging.ERROR)
 
     def _create_scheduler(self):
-        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.schedulers.background import (
+            BackgroundScheduler,  # local: heavy optional dep
+        )
 
         kwargs: dict[str, Any] = {}
         for key in ("jobstores", "executors", "job_defaults", "timezone"):
@@ -248,7 +247,10 @@ class APSchedulerDriver(Scheduling):
 
         # Wire error listener so job failures appear in Cara logs.
         try:
-            from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+            from apscheduler.events import (  # local: heavy optional dep
+                EVENT_JOB_ERROR,
+                EVENT_JOB_EXECUTED,
+            )
 
             scheduler.add_listener(
                 _job_error_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR
@@ -423,9 +425,11 @@ class APSchedulerDriver(Scheduling):
         if not sched_type:
             raise InvalidArgumentException("schedule_spec must include 'type' key.")
 
-        from apscheduler.triggers.cron import CronTrigger
-        from apscheduler.triggers.date import DateTrigger
-        from apscheduler.triggers.interval import IntervalTrigger
+        from apscheduler.triggers.cron import CronTrigger  # local: heavy optional dep
+        from apscheduler.triggers.date import DateTrigger  # local: heavy optional dep
+        from apscheduler.triggers.interval import (
+            IntervalTrigger,  # local: heavy optional dep
+        )
 
         # Fall back to the scheduler-configured timezone (e.g. "UTC") when a
         # job spec doesn't set its own. Pre-fix this was bare

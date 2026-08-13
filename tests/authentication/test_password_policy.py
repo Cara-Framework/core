@@ -21,7 +21,7 @@ from cara.authentication.PasswordPolicy import (
     password_max_bytes,
 )
 from cara.configuration import Configuration
-from cara.exceptions import InvalidArgumentException
+from cara.exceptions import AuthenticationConfigurationException
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def policy_config(monkeypatch: pytest.MonkeyPatch):
     ``monkeypatch.setitem`` restores the singleton's dict after each test, so
     nothing leaks between cases.
     """
-    Configuration()  # ensure the bare singleton exists
+    Configuration.empty()
     store = Configuration._instance._config
 
     def _set(**values: object) -> None:
@@ -94,13 +94,10 @@ class TestUniqueCharacters:
         assert check_password_strength("abcdef") is None
 
     @pytest.mark.parametrize("bad", ["not-a-number", 0, -3, True, ""])
-    def test_an_unusable_configured_floor_falls_back_to_the_default(
-        self, bad, policy_config
-    ):
-        """A malformed threshold must not silently switch the bound off."""
+    def test_an_unusable_configured_floor_is_rejected(self, bad, policy_config):
         policy_config(password_min_unique_chars=bad)
-        assert check_password_strength("aaaa") is not None
-        assert check_password_strength("abcd") is None
+        with pytest.raises(AuthenticationConfigurationException):
+            check_password_strength("abcd")
 
 
 class TestCommonPrefixes:
@@ -123,9 +120,16 @@ class TestCommonPrefixes:
         policy_config(password_denied_prefixes=["hunter2"])
         assert set(COMMON_PASSWORD_PREFIXES) <= set(denied_prefixes())
 
-    def test_a_single_string_is_accepted_as_a_one_entry_list(self, policy_config):
+    def test_a_single_string_is_not_a_list(self, policy_config):
         policy_config(password_denied_prefixes="hunter2")
-        assert check_password_strength("hunter2Xy!") is not None
+        with pytest.raises(AuthenticationConfigurationException):
+            denied_prefixes()
+
+    @pytest.mark.parametrize("bad", [["valid", ""], ["valid", 42], {}])
+    def test_malformed_deny_list_is_rejected(self, bad, policy_config):
+        policy_config(password_denied_prefixes=bad)
+        with pytest.raises(AuthenticationConfigurationException):
+            denied_prefixes()
 
 
 class TestTruncationClamp:
@@ -162,11 +166,10 @@ class TestTruncationClamp:
         assert check_password_strength("aBcD" * 65) is not None
 
     @pytest.mark.parametrize("bad", ["nope", 0, -1, True])
-    def test_an_unusable_configured_ceiling_falls_back_to_the_default(
-        self, bad, policy_config
-    ):
+    def test_an_unusable_configured_ceiling_is_rejected(self, bad, policy_config):
         policy_config(password_max_bytes=bad)
-        assert password_max_bytes() == MAX_PASSWORD_BYTES
+        with pytest.raises(AuthenticationConfigurationException):
+            password_max_bytes()
 
     def test_an_unknown_storage_algorithm_raises_rather_than_guessing(
         self, policy_config
@@ -175,7 +178,13 @@ class TestTruncationClamp:
         storage whose limits we do not know — the exact failure this clamp
         exists to prevent."""
         policy_config(password_hash_algorithm="rot13")
-        with pytest.raises(InvalidArgumentException):
+        with pytest.raises(AuthenticationConfigurationException):
+            password_max_bytes()
+
+    @pytest.mark.parametrize("bad", ["", True, 42])
+    def test_malformed_storage_algorithm_is_rejected(self, bad, policy_config):
+        policy_config(password_hash_algorithm=bad)
+        with pytest.raises(AuthenticationConfigurationException):
             password_max_bytes()
 
 

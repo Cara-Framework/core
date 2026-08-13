@@ -27,14 +27,14 @@ legacy string protocol is gone. ``table_exists_in_migrations`` is preserved.
 
 from __future__ import annotations
 
-import ast
 import logging
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from cara.support import paths
+
+from .FieldDiff import FieldDiff
+from .MigrationColumn import _COMPARED_ATTRS, MigrationColumn
 
 _logger = logging.getLogger("cara.migrations.comparator")
 
@@ -50,17 +50,6 @@ _FRAMEWORK_FIELDS = frozenset(
 )
 _FRAMEWORK_TYPES = frozenset(
     {"increments", "big_increments", "timestamps", "soft_deletes"}
-)
-
-# Attributes that round-trip through generated blueprint migrations.
-_COMPARED_ATTRS = (
-    "type",
-    "length",
-    "precision",
-    "scale",
-    "nullable",
-    "unique",
-    "index",
 )
 
 
@@ -93,77 +82,6 @@ def migration_table_actions(content: str, table_name: str) -> tuple[bool, bool]:
     )
     alters = bool(re.search(rf"\bself\.schema\.table\(\s*{quoted}\s*\)", up))
     return creates, alters
-
-
-@dataclass
-class Column:
-    """A parsed column definition — the same shape for model + migration sides."""
-
-    name: str
-    type: str = "string"
-    length: int | None = None
-    precision: int | None = None
-    scale: int | None = None
-    nullable: bool = False
-    unique: bool = False
-    index: bool = False
-    default: Any = None
-    has_default: bool = False
-    # The verbatim ``table.<...>`` source line (migration side) so ``down()`` can
-    # recreate a removed column losslessly. Empty for model-derived columns
-    # (the generator renders those from the structured attrs).
-    raw_line: str = ""
-
-    def signature(self) -> tuple:
-        """Identity used for ALTER + RENAME detection (the reliably-parsed
-        attrs only — see ``_COMPARED_ATTRS``)."""
-        return tuple(getattr(self, a) for a in _COMPARED_ATTRS) + (
-            self.default_signature(),
-        )
-
-    def default_signature(self) -> tuple[bool, Any]:
-        """Canonical default value across model objects and parsed source."""
-        if not self.has_default:
-            return False, None
-        value = self.default
-        if isinstance(value, str):
-            source = value.strip()
-            try:
-                value = ast.literal_eval(source)
-            except SyntaxError, ValueError:
-                value = source
-        if isinstance(value, (dict, list, set, tuple)):
-            value = repr(value)
-        return True, value
-
-
-@dataclass
-class FieldDiff:
-    """One typed schema change. ``kind`` is the discriminator the generator
-    branches on."""
-
-    kind: str  # "added" | "removed" | "altered" | "renamed"
-    name: str
-    column: Column | None = None  # added / removed / altered(new) / renamed(new)
-    old: Column | None = None  # altered(previous) / renamed(previous)
-    old_name: str | None = None  # renamed: the previous column name
-    changed_attrs: list[str] = field(default_factory=list)  # altered: which attrs
-
-    @property
-    def is_destructive(self) -> bool:
-        """A removed column drops data; the generator marks/guards these."""
-        return self.kind == "removed"
-
-    def __str__(self) -> str:  # human-readable line for the command's diff print
-        if self.kind == "added":
-            return f"+ add column {self.name} ({self.column.type})"
-        if self.kind == "removed":
-            return f"- DROP column {self.name} (DESTRUCTIVE)"
-        if self.kind == "altered":
-            return f"~ alter column {self.name}: {', '.join(self.changed_attrs)}"
-        if self.kind == "renamed":
-            return f"> rename column {self.old_name} -> {self.name}"
-        return f"{self.kind} {self.name}"
 
 
 def summarize_change_name(table: str, diffs: list[FieldDiff]) -> tuple[str, str]:
@@ -232,7 +150,9 @@ class ModelMigrationComparator:
     # ── The diff ────────────────────────────────────────────────────────
 
     def _diff(
-        self, model_cols: dict[str, Column], migration_cols: dict[str, Column]
+        self,
+        model_cols: dict[str, MigrationColumn],
+        migration_cols: dict[str, MigrationColumn],
     ) -> list[FieldDiff]:
         # Framework columns (id/created_at/updated_at/deleted_at) are excluded
         # on BOTH sides: the model side records them as pseudo-fields
@@ -295,14 +215,14 @@ class ModelMigrationComparator:
 
     # ── Model side ──────────────────────────────────────────────────────
 
-    def _model_columns(self, model_info: dict) -> dict[str, Column]:
-        cols: dict[str, Column] = {}
+    def _model_columns(self, model_info: dict) -> dict[str, MigrationColumn]:
+        cols: dict[str, MigrationColumn] = {}
         for name, info in model_info.get("fields", {}).items():
             ftype = info.get("type", "string")
             if name in _FRAMEWORK_FIELDS or ftype in _FRAMEWORK_TYPES:
                 continue
             params = info.get("params", {}) or {}
-            cols[name] = Column(
+            cols[name] = MigrationColumn(
                 name=name,
                 type=ftype,
                 length=params.get("length"),
@@ -332,8 +252,10 @@ class ModelMigrationComparator:
 
     # ── Migration side ──────────────────────────────────────────────────
 
-    def _migration_columns(self, table_name: str) -> tuple[dict[str, Column], bool]:
-        cols: dict[str, Column] = {}
+    def _migration_columns(
+        self, table_name: str
+    ) -> tuple[dict[str, MigrationColumn], bool]:
+        cols: dict[str, MigrationColumn] = {}
         exists = False
         if not self.migrations_dir.exists():
             return cols, exists
@@ -354,7 +276,7 @@ class ModelMigrationComparator:
                 self._apply_update(content, cols)
         return cols, exists
 
-    def _apply_create(self, content: str, cols: dict[str, Column]) -> None:
+    def _apply_create(self, content: str, cols: dict[str, MigrationColumn]) -> None:
         up = self._method_body(content, "up")
         for line in self._blueprint_column_lines(up):
             col = self._parse_column_line(line)
@@ -362,10 +284,10 @@ class ModelMigrationComparator:
                 cols[col.name] = col
         self._apply_standalone_indexes(up, cols)
         if "table.timestamps()" in content:
-            cols.setdefault("created_at", Column("created_at", "datetime"))
-            cols.setdefault("updated_at", Column("updated_at", "datetime"))
+            cols.setdefault("created_at", MigrationColumn("created_at", "datetime"))
+            cols.setdefault("updated_at", MigrationColumn("updated_at", "datetime"))
 
-    def _apply_update(self, content: str, cols: dict[str, Column]) -> None:
+    def _apply_update(self, content: str, cols: dict[str, MigrationColumn]) -> None:
         up = self._method_body(content, "up")
         # Adds (and the modern ``change_column`` / ``rename_column`` ALTERs).
         for line in self._blueprint_column_lines(up):
@@ -391,7 +313,7 @@ class ModelMigrationComparator:
         return _method_body_text(content, which)
 
     @staticmethod
-    def _apply_standalone_indexes(body: str, cols: dict[str, Column]) -> None:
+    def _apply_standalone_indexes(body: str, cols: dict[str, MigrationColumn]) -> None:
         """Apply scalar/list-of-one table.index/unique declarations.
 
         Only the COLUMN argument decides which column the flag lands on — a
@@ -449,14 +371,14 @@ class ModelMigrationComparator:
         return out
 
     @staticmethod
-    def _parse_column_line(line: str) -> Column | None:
+    def _parse_column_line(line: str) -> MigrationColumn | None:
         """Parse ``table.string("x", 50).nullable().default("y").unique()`` into a
-        structured :class:`Column` (keeps the verbatim line for lossless down)."""
+        structured :class:`MigrationColumn` (keeps the verbatim line for lossless down)."""
         head = re.match(r'table\.(\w+)\(\s*["\'](\w+)["\']\s*(.*)', line)
         if not head:
             return None
         method, name, rest = head.group(1), head.group(2), head.group(3)
-        col = Column(name=name, type=method, raw_line=line)
+        col = MigrationColumn(name=name, type=method, raw_line=line)
 
         # Positional size args before the first ``)`` of the type call.
         size_args = re.match(r",?\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)", rest)

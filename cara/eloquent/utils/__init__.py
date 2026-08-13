@@ -1,4 +1,3 @@
-# Eloquent Utilities - Shared, clean, DRY utilities
 """
 Eloquent Utilities Package
 
@@ -19,8 +18,14 @@ than reconciled: two engines is the defect. ``DateManager`` stays — it is
 the live one.
 """
 
-from .DateManager import DateManager
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "DateManager": (".DateManager", "DateManager"),
+}
 
 __all__ = [
     "DateManager",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

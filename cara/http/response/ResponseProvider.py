@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from cara.foundation import DeferredProvider
+from cara.http.response.Response import Response
 
 
 class ResponseProvider(DeferredProvider):
@@ -15,6 +16,5 @@ class ResponseProvider(DeferredProvider):
 
     def register(self):
         """Register HTTP Response."""
-        from cara.http import Response
 
         self.application.bind("response", lambda: Response(self.application))

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from cara.facades import Log
+
 try:
     from typing import Self
 except ImportError:  # Python <3.11
@@ -43,7 +45,6 @@ class BaseConnection:
         bindings,
         query_time=0,
     ):
-        from cara.facades import Log
 
         Log.database(
             "Running query %s, %s. Executed in %sms",
@@ -97,8 +98,6 @@ class BaseConnection:
             "slow_query_threshold_ms", self.SLOW_QUERY_THRESHOLD_MS
         )
         if elapsed_ms >= threshold:
-            from cara.facades import Log
-
             # Annotate with binding count + transaction level so an
             # operator can tell at a glance whether this was a fat
             # batched insert (binding count high), a single statement

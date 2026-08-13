@@ -24,11 +24,6 @@ def test_first_without_field():
     assert errors.first() == "The email field is required."
 
 
-def test_first_error_alias():
-    errors = _sample_errors()
-    assert errors.first_error() == errors.first()
-
-
 def test_all_returns_copy():
     errors = _sample_errors()
     result = errors.all()

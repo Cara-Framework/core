@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from cara.foundation import DeferredProvider
+from cara.http.request.Request import Request
+from cara.support import Image
 
 
 class RequestProvider(DeferredProvider):
@@ -15,8 +17,6 @@ class RequestProvider(DeferredProvider):
 
     def register(self):
         """Register HTTP Request and Image processing."""
-        from cara.http import Request
-        from cara.support.Image import Image
 
         self.application.bind("request", lambda: Request(self.application))
         self.application.bind("image", Image())

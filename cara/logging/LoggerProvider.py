@@ -13,6 +13,8 @@ from typing import Any
 from cara.configuration import config
 from cara.exceptions import ConfigurationException
 from cara.foundation import Provider
+from cara.logging.Logger import Logger
+from cara.logging.PythonLoggerAdapter import install_cara_loggers
 
 
 class LoggerProvider(Provider):
@@ -70,7 +72,6 @@ class LoggerProvider(Provider):
         Args:
             logging_config: Configuration from config/logging.py
         """
-        from cara.logging.Logger import Logger
 
         # Set configuration for Logger class
         Logger.set_config(logging_config)
@@ -88,7 +89,6 @@ class LoggerProvider(Provider):
         Instead of silencing external libraries, we inject Cara Logger into them.
         This ensures all logs go through Cara's formatting system consistently.
         """
-        from cara.logging.PythonLoggerAdapter import install_cara_loggers
 
         # Install Cara loggers for all external libraries
         # This replaces their Python loggers with Cara-compatible adapters

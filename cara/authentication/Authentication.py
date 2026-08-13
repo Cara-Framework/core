@@ -10,14 +10,14 @@ import logging
 from contextvars import ContextVar
 from typing import Any
 
-from cara.authentication.contracts import Authenticatable
 from cara.exceptions import ConfigurationException
+from cara.http import current_request
 
 # The Authentication manager is bound to the IoC container as a
 # process-wide singleton (see ``AuthenticationProvider.register``).
 # Storing the resolved user on ``self._user`` therefore leaked the
-# first-resolved identity to every subsequent request that hit any
-# ``auth_manager.user()`` / ``auth_manager.login()`` call before its
+# first-resolved identity to every subsequent request that hit
+# ``auth_manager.user()`` before its
 # own guard could re-authenticate — the exact cross-request identity
 # leak that ``JWTGuard`` was already fixed for via a ContextVar.
 # This mirrors that fix one layer up so the wrapper API is safe even
@@ -66,8 +66,6 @@ class Authentication:
     def _detect_guard_from_request(self) -> str | None:
         """Detect which guard should be used from route middleware, not headers."""
         try:
-            from cara.http.request.Context import current_request
-
             request = current_request.get()
 
             # Get guard from route middleware (secure way)
@@ -107,29 +105,12 @@ class Authentication:
     def id(self) -> Any | None:
         """Get the ID of the authenticated user."""
         user = self.user()
-        if user and hasattr(user, "get_auth_id"):
-            return user.get_auth_id()
-        elif user and hasattr(user, "get_auth_identifier"):
-            return user.get_auth_identifier()
-        return None
-
-    def attempt(self, credentials: dict[str, Any]) -> bool:
-        """Attempt to authenticate using credentials."""
-        return self.guard().attempt(credentials)
+        return user.get_auth_id() if user is not None else None
 
     def logout(self) -> None:
         """Log the user out."""
         self.guard().logout()
         self._user = None
-
-    def login(self, user: Authenticatable) -> str:
-        """Log a user in."""
-        if not isinstance(user, Authenticatable):
-            raise TypeError("User must implement Authenticatable")
-
-        token = self.guard().login(user)
-        self._user = user
-        return token
 
     def validate_token(self, token: str) -> bool:
         """Validate a token."""

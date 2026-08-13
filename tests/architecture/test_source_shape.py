@@ -24,6 +24,22 @@ def test_hard_line_limit_is_enforced(tmp_path):
     assert any("hard 5-line limit" in finding.message for finding in findings)
 
 
+def test_private_package_parts_are_charged_to_the_public_owner(tmp_path):
+    manifest = _manifest(tmp_path, source_shape_hard_limit=5)
+    write(tmp_path / "app" / "services" / "Large.py", "class Large:\n    pass\n")
+    write(
+        tmp_path / "app" / "services" / "Large" / "_Operations.py",
+        "\n".join(f"VALUE_{index} = {index}" for index in range(4)),
+    )
+
+    findings = SourceShape.scan(manifest)
+
+    assert any(
+        finding.path == "app/services/Large.py" and "(6)" in finding.message
+        for finding in findings
+    )
+
+
 def test_exact_line_debt_blocks_growth_and_stale_pin(tmp_path):
     path = tmp_path / "app" / "services" / "Large.py"
     write(path, "\n".join(f"VALUE_{index} = {index}" for index in range(6)))
@@ -80,6 +96,60 @@ def test_edge_method_limit_is_exact_debt(tmp_path):
         },
     )
     assert SourceShape.scan(pinned) == []
+
+
+def test_edge_mixin_methods_still_pay_the_endpoint_budget(tmp_path):
+    manifest = _manifest(tmp_path, source_shape_edge_method_limit=3)
+    write(
+        tmp_path / "app" / "controllers" / "orders" / "OrderEdgeMixin.py",
+        "class OrderEdgeMixin:\n"
+        "    def index(self):\n"
+        "        first = 1\n"
+        "        second = 2\n"
+        "        return first + second\n",
+    )
+
+    findings = SourceShape.scan(manifest)
+
+    assert any("edge method exceeds 3-line limit" in item.message for item in findings)
+
+
+def test_underscored_adapter_mixins_and_business_service_mixins_are_rejected(tmp_path):
+    """Adapter mixins are PUBLIC PascalCase files/classes named for each
+    other — privacy is the barrel's job (they never appear in ``__all__``),
+    not an underscore prefix. Business-logic mixins stay banned outright."""
+    manifest = _manifest(tmp_path)
+    write(
+        tmp_path / "app" / "controllers" / "orders" / "OrderEdgeMixin.py",
+        "class OrderEdgeMixin:\n    def index(self):\n        return []\n",
+    )
+    write(
+        tmp_path / "app" / "repositories" / "orders" / "_OrderReadMixin.py",
+        "class _OrderReadMixin:\n    def get(self):\n        return None\n",
+    )
+    write(
+        tmp_path / "app" / "services" / "orders" / "_OrderRulesMixin.py",
+        "class _OrderRulesMixin:\n    def decide(self):\n        return True\n",
+    )
+
+    findings = SourceShape.scan(manifest)
+
+    # The public adapter passes; the underscored repository mixin is the
+    # naming finding; the services mixin is the composition finding.
+    assert sum("public PascalCase names" in item.message for item in findings) == 1
+    assert any("explicit composition" in item.message for item in findings)
+
+
+def test_private_adapter_class_in_public_file_is_rejected(tmp_path):
+    manifest = _manifest(tmp_path)
+    write(
+        tmp_path / "app" / "repositories" / "orders" / "OrderReadMixin.py",
+        "class _OrderReadMixin:\n    pass\n",
+    )
+
+    findings = SourceShape.scan(manifest)
+
+    assert any("public PascalCase names" in item.message for item in findings)
 
 
 def test_generated_barrels_are_excluded(tmp_path):

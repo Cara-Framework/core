@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cara.events import Event as EventDispatcher
-from cara.events.Event import EventSubscriber
+from cara.events.EventSubscriber import EventSubscriber
 
 
 class UserRegisteredEvent:
@@ -456,7 +456,7 @@ async def test_listener_chain_to_distinct_event_does_not_trip_cycle_guard(dispat
 
 @pytest.mark.asyncio
 async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
-    """``fresh_dispatch_scope`` resets the in-flight event stack so a
+    """``_fresh_dispatch_scope`` resets the in-flight event stack so a
     sync-dispatched child job (whose own ``handle()`` fires events) is
     treated as a fresh top-level dispatch — not a continuation of the
     parent listener's event chain.
@@ -476,12 +476,12 @@ async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
          though the two dispatches are for DIFFERENT entities — a
          legitimate fan-out tree, not a recursive loop.
 
-    The fix exposes a public ``fresh_dispatch_scope()`` that callers
-    crossing a job boundary use to clear the stack. ``Bus._run_sync_with_tracking``
-    wraps job execution in this scope; queued mode is already fine
-    because each worker has its own contextvar context.
+    The implementation uses a private ``_fresh_dispatch_scope()`` at the job
+    boundary; it is not part of the events barrel. ``Bus._run_sync_with_tracking``
+    wraps job execution in this scope; queued mode is already isolated because
+    each worker has its own contextvar context.
     """
-    from cara.events.Event import fresh_dispatch_scope
+    from cara.events._DispatchScope import _fresh_dispatch_scope
 
     log = []
 
@@ -493,7 +493,7 @@ async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
         fires the same event type for a sibling record."""
 
         async def handle(self, sibling_id):
-            with fresh_dispatch_scope():
+            with _fresh_dispatch_scope():
                 await dispatcher.dispatch(
                     UserRegisteredEvent(
                         user_id=sibling_id, email=f"sib{sibling_id}@x.com"
@@ -538,7 +538,7 @@ async def test_fresh_dispatch_scope_isolates_child_event_chain(dispatcher):
     assert "audit:1" in log
     assert "audit:2" in log, (
         f"FAIL: sibling-style event dispatch was suppressed. log={log!r}. "
-        "Likely ``fresh_dispatch_scope`` isn't isolating the child "
+        "Likely ``_fresh_dispatch_scope`` isn't isolating the child "
         "dispatch — the cycle detector still sees the parent's "
         "in-flight ``user.registered`` and the child's listeners "
         "never run."
@@ -552,17 +552,17 @@ async def test_fresh_dispatch_scope_restores_outer_stack_on_exit():
     the helper would leak an empty stack back into its caller and
     break the cycle detector for the rest of the caller's listener
     chain."""
-    from cara.events.Event import _dispatch_stack, fresh_dispatch_scope
+    from cara.events._DispatchScope import _dispatch_stack, _fresh_dispatch_scope
 
     token = _dispatch_stack.set(("outer.event",))
     try:
         assert _dispatch_stack.get() == ("outer.event",)
-        with fresh_dispatch_scope():
+        with _fresh_dispatch_scope():
             assert _dispatch_stack.get() == (), (
-                "fresh_dispatch_scope must clear the stack inside the block"
+                "_fresh_dispatch_scope must clear the stack inside the block"
             )
         assert _dispatch_stack.get() == ("outer.event",), (
-            "fresh_dispatch_scope must restore the prior stack on exit"
+            "_fresh_dispatch_scope must restore the prior stack on exit"
         )
     finally:
         _dispatch_stack.reset(token)
@@ -656,11 +656,12 @@ async def test_concurrent_subscribe_during_dispatch_does_not_raise(dispatcher):
 
 @pytest.mark.asyncio
 async def test_non_propagating_listener_failure_does_not_block_chain(dispatcher):
-    """Default isolation: when an observability-style listener raises
-    (no ``propagate_failures``), subsequent listeners still run."""
+    """An explicitly best-effort observer does not block later listeners."""
     log = []
 
     class BoomListener:
+        propagate_failures = False
+
         def handle(self, event):
             raise RuntimeError("boom")
 
@@ -679,15 +680,10 @@ async def test_non_propagating_listener_failure_does_not_block_chain(dispatcher)
 
 @pytest.mark.asyncio
 async def test_propagating_listener_failure_short_circuits(dispatcher):
-    """Pipeline-critical listeners opt in via ``propagate_failures =
-    True``. When such a listener raises, the dispatcher re-raises
-    immediately so the upstream queue job retries — subsequent
-    listeners must NOT run with stale post-failure state."""
+    """Required listeners fail closed by default and short-circuit the chain."""
     log = []
 
     class CriticalBoom:
-        propagate_failures = True
-
         def handle(self, event):
             log.append("critical")
             raise RuntimeError("critical-failure")

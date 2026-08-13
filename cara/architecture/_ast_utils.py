@@ -79,6 +79,23 @@ def relpath(path: Path, root: Path) -> str:
         return path.name
 
 
+def _path_has_fragment(relative: str, fragments: Iterable[str]) -> bool:
+    """Whether a POSIX path contains one declared contiguous path fragment."""
+
+    parts = relative.split("/")
+    for fragment in fragments:
+        segments = [segment for segment in fragment.split("/") if segment]
+        if not segments:
+            continue
+        span = len(segments)
+        if any(
+            parts[index : index + span] == segments
+            for index in range(len(parts) - span + 1)
+        ):
+            return True
+    return False
+
+
 def read_source(path: Path) -> str | None:
     """A file's text, or ``None`` when it cannot be read as UTF-8 source.
 

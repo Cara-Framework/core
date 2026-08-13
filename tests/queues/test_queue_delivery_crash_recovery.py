@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pendulum
 import pytest
 
+from cara.commands.core.JobProcessor import JobProcessor
 from cara.queues.contracts import Queueable, ShouldQueue
 from cara.queues.delivery import DeliveryClaim, QueueJobDeliveryStore
 from cara.queues.serializers import SignedJsonJobSerializer
@@ -346,7 +347,7 @@ def test_durable_recovery_outcomes_are_acked_without_quorum_redelivery_loop(
     monkeypatch,
     claim_outcome,
 ):
-    module = importlib.import_module("cara.commands.core.QueueWorkCommand")
+    execution = importlib.import_module("cara.commands.core._JobExecution")
     payload = {
         "job_id": _JOB_ID,
         "db_job_id": 91,
@@ -356,7 +357,7 @@ def test_durable_recovery_outcomes_are_acked_without_quorum_redelivery_loop(
         claim_execution=lambda **_kwargs: DeliveryClaim(claim_outcome)
     )
     monkeypatch.setattr(
-        module.SignedJsonJobSerializer,
+        execution.SignedJsonJobSerializer,
         "inspect_envelope",
         lambda *_args, **_kwargs: {"payload": payload},
     )
@@ -378,7 +379,7 @@ def test_durable_recovery_outcomes_are_acked_without_quorum_redelivery_loop(
     acks: list[int] = []
     channel = SimpleNamespace(basic_ack=lambda *, delivery_tag: acks.append(delivery_tag))
 
-    result = module.JobProcessor.process_message(
+    result = JobProcessor.process_message(
         channel,
         SimpleNamespace(delivery_tag=19),
         b"signed-envelope",
@@ -412,7 +413,7 @@ def test_retry_progress_repair_is_monotonic(
 def test_retry_source_redelivery_repairs_tracker_and_acks_without_deserializing(
     monkeypatch,
 ):
-    module = importlib.import_module("cara.commands.core.QueueWorkCommand")
+    execution = importlib.import_module("cara.commands.core._JobExecution")
     payload = {
         "job_id": _JOB_ID,
         "db_job_id": 91,
@@ -424,12 +425,12 @@ def test_retry_source_redelivery_repairs_tracker_and_acks_without_deserializing(
     model = _RetryTrackerModel("pending")
     tracker = JobTracker(model)
     monkeypatch.setattr(
-        module.SignedJsonJobSerializer,
+        execution.SignedJsonJobSerializer,
         "inspect_envelope",
         lambda *_args, **_kwargs: {"payload": payload},
     )
     monkeypatch.setattr(
-        module.SignedJsonJobSerializer,
+        execution.SignedJsonJobSerializer,
         "deserialize_verified",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("retry source must not deserialize or execute")
@@ -457,7 +458,7 @@ def test_retry_source_redelivery_repairs_tracker_and_acks_without_deserializing(
     acks: list[int] = []
     channel = SimpleNamespace(basic_ack=lambda *, delivery_tag: acks.append(delivery_tag))
 
-    result = module.JobProcessor.process_message(
+    result = JobProcessor.process_message(
         channel,
         SimpleNamespace(delivery_tag=23),
         b"signed-envelope",

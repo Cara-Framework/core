@@ -12,22 +12,21 @@ builder call does. The whole CHAIN counts: ``Model.without_scope().first()``
 is the same reach as ``Model.first()``, and a scanner that only looked at the
 head of the chain would miss it.
 
-Three carve-outs, each narrow and each earned:
+Two carve-outs, each narrow and each earned:
 
 * a single-argument primary-key lookup (``Model.find(pk)``) — the documented
   central-model read, with no filter to relocate;
 * an ORM call inside the row-locking statement of a ``DB.transaction()`` —
   an owner fence must stay beside the transaction whose atomicity it
-  protects, or it is not a fence;
-* a ``manifest.inline_orm_allow_tag`` comment (``# allow-inline-orm: why``)
-  on or just above the call — the documented, shrink-only local opt-out.
+  protects, or it is not a fence.
 
-Scope is ``roots.scan_dirs("model_query_discipline")``: a product declares
-which layers must go through a repository. Repository trees are excluded by
-not being declared, never by a special case.
+Scope is ``roots.scan_dirs("model_query_discipline")``. Declared repository
+homes are excluded through ``manifest.raw_sql_homes``: ORM and raw SQL share
+one persistence-boundary vocabulary, including a nested kernel repository
+inside a broader scanned gate tree.
 
 A whole file the product has not yet moved behind a repository is pinned in
-``seam_allowlists[ALLOWLIST_KEY]`` as ``path -> call count`` — exact and
+``seam_allowlists[_ALLOWLIST_KEY]`` as ``path -> call count`` — exact and
 shrink-only (:mod:`cara.architecture._ratchet`). This replaces the shape a
 product guard reached for first: silently skipping a subtree inside the
 iterator, which left the exemption invisible, unbounded and unable to expire.
@@ -36,15 +35,14 @@ iterator, which left the exemption invisible, unbounded and unable to expire.
 from __future__ import annotations
 
 import ast
-import re
 
-from cara.architecture._ast_utils import iter_modules, read_source
-from cara.architecture._ratchet import ratchet
+from cara.architecture._ast_utils import _path_has_fragment, iter_modules
+from cara.architecture._ratchet import _ratchet
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
 #: ``seam_allowlists`` key holding ``path -> inline ORM call count``.
-ALLOWLIST_KEY = "model_query_discipline"
+_ALLOWLIST_KEY = "model_query_discipline"
 
 #: Builder/mutation methods that mean "this is a query", not plain attribute use.
 ORM_METHODS = frozenset(
@@ -88,9 +86,6 @@ ORM_METHODS = frozenset(
 )
 TRANSACTION_METHOD = "transaction"
 ROW_LOCK_METHOD = "lock_for_update"
-#: How far above a call the allow tag may sit (the call's own line, plus the
-#: two above it, so a wrapped call keeps the tag readable).
-TAG_LOOKBEHIND = 3
 
 
 def _imported_model_names(tree: ast.Module, roots: tuple[str, ...]) -> set[str]:
@@ -164,22 +159,18 @@ class ModelQueryDiscipline:
 
     @staticmethod
     def scan(manifest: Manifest) -> list[Finding]:
-        allow = re.compile(rf"#\s*{re.escape(manifest.inline_orm_allow_tag)}:\s*(\S.*)$")
-        pinned = manifest.seam_allowlists.get(ALLOWLIST_KEY, {})
+        pinned = manifest.seam_allowlists.get(_ALLOWLIST_KEY, {})
         findings: list[Finding] = []
         counts: dict[str, int] = {}
-        for path, rel, tree in iter_modules(
+        for _path, rel, tree in iter_modules(
             manifest.roots.scan_dirs("model_query_discipline"),
             manifest.roots.deployable,
         ):
+            if _path_has_fragment(rel, manifest.raw_sql_homes):
+                continue
             models = _imported_model_names(tree, manifest.model_import_roots)
             if not models:
                 continue
-            # ``iter_modules`` already proved the file parses, so this cannot
-            # normally fail; going through ``read_source`` keeps a
-            # mid-change tree (a file deleted between glob and read) a
-            # skipped file rather than a crashed pack.
-            lines = (read_source(path) or "").splitlines()
             parents = {
                 child: parent
                 for parent in ast.walk(tree)
@@ -198,10 +189,6 @@ class ModelQueryDiscipline:
                     continue
                 if _locking_transaction_owns(node, parents):
                     continue
-                start = max(0, node.lineno - TAG_LOOKBEHIND)
-                end = min(len(lines), node.end_lineno or node.lineno)
-                if any(allow.search(line) for line in lines[start:end]):
-                    continue
                 hits.append(
                     Finding(
                         rel,
@@ -216,8 +203,8 @@ class ModelQueryDiscipline:
                 counts[rel] = len(hits)
             else:
                 findings.extend(hits)
-        return findings + ratchet(
-            key=ALLOWLIST_KEY,
+        return findings + _ratchet(
+            key=_ALLOWLIST_KEY,
             current=counts,
             pinned=pinned,
             message="inline model query outside a repository",

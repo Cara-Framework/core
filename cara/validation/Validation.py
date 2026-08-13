@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
+import re as _re
 from collections.abc import Iterable
 from typing import Any
 
@@ -19,9 +20,7 @@ from cara.exceptions import (
 )
 from cara.validation.contracts import (
     Rule,
-)
-from cara.validation.contracts import (
-    Validation as ValidationContract,
+    ValidationContract,
 )
 from cara.validation.ValidationErrors import ValidationErrors
 
@@ -126,7 +125,6 @@ class Validation(ValidationContract):
     @staticmethod
     def _camel_to_snake(name: str) -> str:
         """CamelCase → snake_case (e.g. ``RequiredIf`` → ``required_if``)."""
-        import re as _re
 
         s1 = _re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
         return _re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
@@ -187,18 +185,24 @@ class Validation(ValidationContract):
         instance._validated.clear()
 
         custom_messages = messages or {}
+        for field in instance._closed_object_violations(data, rules):
+            instance._errors.setdefault(field, []).append(
+                f"The {field} field is not allowed."
+            )
 
         # Expand wildcard rule keys (e.g. "slugs.*") into concrete paths
         # against the incoming data. Non-wildcard keys pass through
         # unchanged so existing semantics (including data.get(field)
         # returning None for missing fields) are preserved.
-        rule_plan: list[tuple[str, str, str, Any, bool, bool]] = []
+        rule_plan: list[tuple[str, str, str, Any, bool]] = []
         for field, rule_string in rules.items():
             if instance._WILDCARD in field.split("."):
                 any_expansion = False
-                for concrete_field, value in instance._expand_wildcard_field(field, data):
+                for concrete_field, value, provided in instance._expand_wildcard_field(
+                    field, data
+                ):
                     rule_plan.append(
-                        (field, concrete_field, rule_string, value, True, True)
+                        (field, concrete_field, rule_string, value, provided)
                     )
                     any_expansion = True
                 # If the wildcard produced no concrete paths (e.g. the
@@ -208,16 +212,18 @@ class Validation(ValidationContract):
                 if not any_expansion:
                     continue
             else:
-                rule_plan.append(
-                    (field, field, rule_string, data.get(field), False, field in data)
+                resolved = next(
+                    instance._walk_segments(field.split("."), data, []),
+                    (field, None, False),
                 )
+                concrete_field, value, provided = resolved
+                rule_plan.append((field, concrete_field, rule_string, value, provided))
 
         for (
             original_field,
             concrete_field,
             rule_string,
             value,
-            is_wildcard,
             was_provided,
         ) in rule_plan:
             field_passed = True
@@ -257,7 +263,7 @@ class Validation(ValidationContract):
             if "nullable" in _chain and (
                 value is None or (isinstance(value, str) and value.strip() == "")
             ):
-                if not is_wildcard and was_provided:
+                if was_provided:
                     instance._validated[concrete_field] = None
                 continue
 
@@ -335,13 +341,14 @@ class Validation(ValidationContract):
                     if bail:
                         break
 
-            if field_passed and not is_wildcard and was_provided:
-                # All rules for this field passed. Wildcard-expanded
-                # entries are not added to validated() individually; the
-                # parent field (if declared) already carries the full
-                # structure. Omitted optional fields stay omitted rather
-                # than being reintroduced as synthetic ``None`` values.
+            if field_passed and was_provided:
+                # Keep concrete paths until every rule has run. The final
+                # projection below nests them and gives a declared parent
+                # sole ownership of its subtree. Omitted optional fields stay
+                # omitted rather than becoming synthetic ``None`` values.
                 instance._validated[concrete_field] = value
+
+        instance._validated = instance._nest_validated(instance._validated, data)
 
         # After-callbacks (registered via .after()) run lazily on the first
         # call to fails()/passes() so callers can chain registration after
@@ -354,12 +361,7 @@ class Validation(ValidationContract):
             return
         self._after_ran = True
         for cb in self._after_callbacks:
-            try:
-                cb(self)
-            except Exception:
-                from cara.facades import Log
-
-                Log.error("Validation after-hook raised", exc_info=True)
+            cb(self)
 
     def fails(self) -> bool:
         """Returns True if validation failed."""
@@ -394,7 +396,100 @@ class Validation(ValidationContract):
         return all_messages
 
     def validated(self) -> dict[str, Any]:
+        """Return validated input in its original nested shape."""
+
         return self._validated.copy()
+
+    @staticmethod
+    def _nest_validated(flat: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+        """Project concrete rule paths into one nested payload.
+
+        A declared parent owns the subtree's output location. Child results
+        are overlaid inside that subtree so validator-owned normalization
+        (for example, ``nullable`` blank-to-``None``) is preserved without
+        leaking duplicate dotted top-level keys. When no parent rule exists,
+        concrete dotted and wildcard paths are rebuilt using the source
+        container types, including list indices.
+        """
+
+        nested: dict[str, Any] = {}
+        for path, value in sorted(
+            flat.items(),
+            key=lambda item: (item[0].count("."), item[0]),
+        ):
+            Validation._set_validated_path(nested, source, path.split("."), value)
+        return nested
+
+    @staticmethod
+    def _set_validated_path(
+        target: dict[str, Any],
+        source: Any,
+        segments: list[str],
+        value: Any,
+    ) -> None:
+        current_target: dict[str, Any] | list[Any] = target
+        current_source = source
+        for index, segment in enumerate(segments):
+            leaf = index == len(segments) - 1
+            if isinstance(current_source, list):
+                try:
+                    position = int(segment)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"validated list path segment is not an index: {segment}"
+                    ) from exc
+                if position < 0 or position >= len(current_source):
+                    raise ValueError(f"validated list path index is invalid: {position}")
+                if not isinstance(current_target, list):
+                    raise ValueError("validated path container differs from source")
+                while len(current_target) <= position:
+                    current_target.append(None)
+                if leaf:
+                    current_target[position] = Validation._copy_validated_value(value)
+                    return
+                next_source = current_source[position]
+                child: dict[str, Any] | list[Any] = (
+                    [] if isinstance(next_source, list) else {}
+                )
+                if current_target[position] is None:
+                    current_target[position] = child
+                elif not isinstance(current_target[position], type(child)):
+                    raise ValueError(
+                        "validated path container conflicts with another rule"
+                    )
+                current_target = current_target[position]
+                current_source = next_source
+                continue
+
+            if not isinstance(current_source, dict) or not isinstance(
+                current_target, dict
+            ):
+                raise ValueError("validated path traverses a non-container value")
+            if segment not in current_source:
+                raise ValueError(f"validated path is absent from source: {segment}")
+            if leaf:
+                current_target[segment] = Validation._copy_validated_value(value)
+                return
+            next_source = current_source[segment]
+            child = [] if isinstance(next_source, list) else {}
+            existing = current_target.setdefault(segment, child)
+            if not isinstance(existing, type(child)):
+                raise ValueError("validated path container conflicts with another rule")
+            current_target = existing
+            current_source = next_source
+
+    @staticmethod
+    def _copy_validated_value(value: Any) -> Any:
+        """Copy JSON containers while preserving opaque validated leaf objects."""
+
+        if isinstance(value, dict):
+            return {
+                key: Validation._copy_validated_value(child)
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [Validation._copy_validated_value(child) for child in value]
+        return value
 
     def _split_token(self, token: str) -> tuple[str, dict[str, Any]]:
         """Given "min:5" or "required", returns ("min", {"min": "5"}) or ("required", {})."""
@@ -407,11 +502,13 @@ class Validation(ValidationContract):
     # Wildcard helpers                                                   #
     # ------------------------------------------------------------------ #
 
-    def _expand_wildcard_field(self, field: str, data: Any) -> Iterable[tuple[str, Any]]:
+    def _expand_wildcard_field(
+        self, field: str, data: Any
+    ) -> Iterable[tuple[str, Any, bool]]:
         """
         Expand a wildcard field pattern against ``data``.
 
-        Yields ``(concrete_field, value)`` pairs. The concrete field is a
+        Yields ``(concrete_field, value, provided)`` tuples. The concrete field is a
         dot-delimited path with numeric indices in place of each ``*``,
         e.g. ``"slugs.*"`` with ``{"slugs": ["a","b"]}`` yields
         ``("slugs.0","a")`` and ``("slugs.1","b")``.
@@ -423,19 +520,64 @@ class Validation(ValidationContract):
         segments = field.split(".")
         yield from self._walk_segments(segments, data, [])
 
+    def _closed_object_violations(
+        self, data: dict[str, Any], rules: dict[str, str]
+    ) -> list[str]:
+        """Return undeclared keys inside dicts with named child rules."""
+        fields = {tuple(field.split(".")): rule for field, rule in rules.items()}
+        parents: dict[tuple[str, ...], set[str] | None] = {}
+        for path, rule in fields.items():
+            names = {token.partition(":")[0] for token in rule.split("|")}
+            if "dict" in names:
+                parents[path] = set()
+
+        for parent in tuple(parents):
+            for child in fields:
+                if len(child) != len(parent) + 1:
+                    continue
+                if all(
+                    expected == actual
+                    for expected, actual in zip(parent, child[: len(parent)], strict=True)
+                ):
+                    if child[-1] == "*":
+                        parents[parent] = None
+                        break
+                    assert parents[parent] is not None
+                    parents[parent].add(child[-1])
+
+        violations: list[str] = []
+        for parent, allowed in parents.items():
+            if not allowed:
+                continue
+            pattern = ".".join(parent)
+            if "*" in parent:
+                values = self._expand_wildcard_field(pattern, data)
+            else:
+                values = self._walk_segments(list(parent), data, [])
+            for concrete, value, _provided in values:
+                if not isinstance(value, dict):
+                    continue
+                violations.extend(
+                    f"{concrete}.{key}" for key in sorted(set(value) - allowed)
+                )
+        return violations
+
     def _walk_segments(
         self,
         segments: list[str],
         current: Any,
         path_so_far: list[str],
-    ) -> Iterable[tuple[str, Any]]:
+        provided: bool = True,
+    ) -> Iterable[tuple[str, Any, bool]]:
         if not segments:
-            yield ".".join(path_so_far), current
+            yield ".".join(path_so_far), current, provided
             return
 
         head, rest = segments[0], segments[1:]
 
         if head == self._WILDCARD:
+            if not provided:
+                return
             if isinstance(current, list):
                 for index, item in enumerate(current):
                     yield from self._walk_segments(rest, item, path_so_far + [str(index)])
@@ -448,16 +590,21 @@ class Validation(ValidationContract):
 
         # Regular (non-wildcard) path segment.
         if isinstance(current, dict):
+            child_provided = provided and head in current
             child = current.get(head)
         elif isinstance(current, list):
             try:
                 child = current[int(head)]
             except ValueError, IndexError:
-                return
+                child = None
+                child_provided = False
+            else:
+                child_provided = provided
         else:
-            return
+            child = None
+            child_provided = False
 
-        yield from self._walk_segments(rest, child, path_so_far + [head])
+        yield from self._walk_segments(rest, child, path_so_far + [head], child_provided)
 
     def _resolve_custom_message(
         self,

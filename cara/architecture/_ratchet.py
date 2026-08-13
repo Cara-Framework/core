@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from cara.architecture.Finding import Finding
 
 
-def ratchet(
+def _ratchet(
     *,
     key: str,
     current: Mapping[str, int],

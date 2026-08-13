@@ -30,6 +30,8 @@ def _driver() -> RedisCacheDriver:
     driver._counter_prefix = "test_cache:j1:c:"
     driver._codec = JsonCacheCodec(_KEY)
     driver._default_ttl = 60
+    driver._large_value_bytes = 262144
+    driver._large_value_warned = set()
     driver._client = MagicMock()
     return driver
 
@@ -62,17 +64,40 @@ def test_constructor_never_falls_back_to_app_key(monkeypatch) -> None:
         )
 
 
-def test_legacy_pickle_is_deleted_as_a_miss_without_execution() -> None:
+@pytest.mark.parametrize("threshold", [True, False, 0, -1, 1.5, "1024"])
+def test_constructor_rejects_ambiguous_large_value_threshold(threshold) -> None:
+    with pytest.raises(CacheConfigurationException, match="positive integer"):
+        RedisCacheDriver(
+            host="127.0.0.1",
+            port=6379,
+            db=0,
+            password=None,
+            signing_key=_KEY,
+            large_value_bytes=threshold,
+        )
+
+
+def test_noncanonical_pickle_is_deleted_and_rejected_without_execution() -> None:
     global _PICKLE_EXECUTED
     _PICKLE_EXECUTED = False
     driver = _driver()
     driver._client.get.return_value = pickle.dumps(_PickleGadget())
 
-    assert driver.get("auth", "missing") == "missing"
+    with pytest.raises(CacheConfigurationException, match="Corrupt cache value"):
+        driver.get("auth", "missing", strict=True)
 
     driver._client.get.assert_called_once_with("test_cache:j1:v:auth")
     driver._client.delete.assert_called_once_with("test_cache:j1:v:auth")
     assert _PICKLE_EXECUTED is False
+
+
+def test_disposable_corruption_is_deleted_and_read_as_a_miss() -> None:
+    driver = _driver()
+    driver._client.get.return_value = b"tampered"
+
+    assert driver.get("acceleration", "missing", strict=False) == "missing"
+
+    driver._client.delete.assert_called_once_with("test_cache:j1:v:acceleration")
 
 
 def test_strict_get_deletes_tampered_value_before_raising() -> None:
@@ -81,7 +106,7 @@ def test_strict_get_deletes_tampered_value_before_raising() -> None:
     payload[-1] ^= 1
     driver._client.get.return_value = bytes(payload)
 
-    with pytest.raises(CacheConfigurationException, match="security-sensitive"):
+    with pytest.raises(CacheConfigurationException, match="Corrupt cache value"):
         driver.get("oauth-state", strict=True)
 
     driver._client.delete.assert_called_once_with("test_cache:j1:v:oauth-state")
@@ -97,6 +122,58 @@ def test_put_writes_authenticated_envelope_only() -> None:
     assert payload.startswith(JsonCacheCodec.MAGIC)
     assert driver._codec.decode(payload) == {"role": "viewer"}
     assert driver._client.set.call_args.kwargs == {"ex": 30}
+
+
+def test_backend_read_failure_raises_by_default() -> None:
+    driver = _driver()
+    driver._client.get.side_effect = ConnectionError("redis unavailable")
+
+    with pytest.raises(ConnectionError, match="redis unavailable"):
+        driver.get("authority")
+
+
+def test_disposable_read_must_explicitly_opt_into_backend_miss() -> None:
+    driver = _driver()
+    driver._client.get.side_effect = ConnectionError("redis unavailable")
+
+    assert driver.get("acceleration", "miss", strict=False) == "miss"
+
+
+def test_disposable_write_must_explicitly_opt_into_backend_drop() -> None:
+    driver = _driver()
+    driver._client.set.side_effect = ConnectionError("redis unavailable")
+
+    driver.put("acceleration", {"value": 1}, ttl=30, strict=False)
+
+    with pytest.raises(ConnectionError, match="redis unavailable"):
+        driver.put("authority", {"value": 1}, ttl=30)
+
+
+@pytest.mark.parametrize("ttl", [-1, True, 2.5, "30"])
+def test_ttl_rejects_coercive_values(ttl) -> None:
+    driver = _driver()
+
+    with pytest.raises(CacheConfigurationException, match="TTL"):
+        driver.put("authority", "value", ttl=ttl)
+
+
+def test_counter_requires_expiry_and_exact_integer_amount() -> None:
+    driver = _driver()
+
+    with pytest.raises(CacheConfigurationException, match="expiration"):
+        driver.increment("rate", 1)
+    with pytest.raises(TypeError, match="amount"):
+        driver.increment("rate", True, ttl=60)
+
+
+def test_corrupt_counter_is_never_reset() -> None:
+    driver = _driver()
+    driver._client.incrby.side_effect = RuntimeError("WRONGTYPE")
+
+    with pytest.raises(RuntimeError, match="WRONGTYPE"):
+        driver.increment("rate", 1, ttl=60)
+
+    driver._client.pipeline.assert_not_called()
 
 
 def test_counter_namespace_never_overlaps_authenticated_values() -> None:

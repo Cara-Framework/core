@@ -7,7 +7,9 @@ Uses BaseJob which includes SerializesModels for proper serialization.
 
 from __future__ import annotations
 
-from cara.exceptions.types.Base import CaraException
+from cara.context import ExecutionContext
+from cara.exceptions import CaraException
+from cara.facades import Notification
 from cara.queues.contracts import BaseJob
 
 
@@ -54,8 +56,6 @@ class SendNotificationJob(BaseJob):
         """
         # Objects are automatically reconstructed by SerializesModels
         # Get the notification service from container
-        from cara.context import ExecutionContext
-        from cara.facades import Notification
 
         # Send the notification immediately (bypass queue check)
         result = await ExecutionContext.run_in_thread(

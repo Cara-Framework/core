@@ -22,8 +22,8 @@ import asyncio
 
 import pytest
 
-from cara.queues.contracts.CancellableJob import JobThrottledException
-from cara.queues.middleware.RateLimited import WithoutOverlapping
+from cara.queues.contracts.JobThrottledException import JobThrottledException
+from cara.queues.middleware.WithoutOverlapping import WithoutOverlapping
 from cara.testing.fakes.CacheFake import CacheFake
 
 

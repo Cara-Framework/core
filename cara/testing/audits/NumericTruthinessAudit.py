@@ -36,24 +36,12 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
+
+from .TruthinessFinding import TruthinessFinding
 
 #: Default operands that cannot corrupt a genuine zero.
 SAFE_DEFAULTS: frozenset[object] = frozenset({0})
-
-
-@dataclass(frozen=True, slots=True)
-class TruthinessFinding:
-    """One zero-corrupting site, reported against a product-relative path."""
-
-    path: str
-    line: int
-    field: str
-    message: str
-
-    def __str__(self) -> str:
-        return f"{self.path}:{self.line}: {self.message}"
 
 
 def _is_safe_default(node: ast.expr) -> bool:

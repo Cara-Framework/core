@@ -20,7 +20,7 @@ class _Connection:
 
 
 def test_rollback_open_transactions_unwinds_and_releases_pinned_connection() -> None:
-    database = DatabaseManager()
+    database = DatabaseManager("app", {"app": {"driver": "sqlite"}})
     connection = _Connection(level=3)
     database._ensure_resolver()
     registry = _get_registry()

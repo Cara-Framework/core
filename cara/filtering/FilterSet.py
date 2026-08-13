@@ -215,16 +215,6 @@ class FilterSet:
                 out[key] = encoded
         return out
 
-    def decode(self, query: dict[str, Any]) -> dict[str, Any]:
-        """Parse a raw query-string dict back into canonical parsed form.
-
-        Convenience alias for ``parse`` named to mirror ``encode``.
-        Frontends use this seam to say ``set.decode(request.query)``
-        without first thinking about whether the raw dict is
-        "payload" or "query".
-        """
-        return self.parse(query)
-
     # ── Introspection / wizard schema ───────────────────────────────
 
     def describe(self) -> dict[str, Any]:

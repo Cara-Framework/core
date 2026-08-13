@@ -19,8 +19,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cara.ai.Client import AIClient
-from cara.ai.exceptions import AIConfigurationError, AIException
+from cara.ai.AIClient import AIClient
+from cara.ai.AIConfigurationError import AIConfigurationError
+from cara.ai.AIException import AIException
 
 
 def _response(content="hi"):
@@ -40,19 +41,42 @@ def test_openrouter_carries_no_framework_model_default():
     assert "mistral" not in str(client.model)
 
 
-def test_construction_never_raises_so_boot_survives():
-    # AIServiceProvider.register() does exactly this at container-register
-    # time. It must not be able to kill the application.
+def test_explicit_client_construction_does_not_depend_on_global_config():
     client = AIClient(provider="openrouter", api_key="k")
 
     assert client.get_config()["model"] == ""
+
+
+def test_unknown_provider_is_not_silently_replaced_with_openrouter():
+    with pytest.raises(AIConfigurationError, match="Unknown AI provider"):
+        AIClient(provider="typo")
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [
+        ("timeout", True),
+        ("timeout", 0),
+        ("timeout", "60"),
+        ("max_retries", True),
+        ("max_retries", -1),
+        ("default_temperature", float("nan")),
+        ("default_temperature", 3),
+        ("default_max_tokens", 0),
+        ("default_top_p", 0),
+        ("default_top_p", "0.9"),
+    ],
+)
+def test_ambiguous_client_configuration_is_rejected(parameter, value):
+    with pytest.raises(AIConfigurationError):
+        AIClient(provider="openrouter", **{parameter: value})
 
 
 def test_chat_without_a_model_fails_loudly_naming_the_key():
     client = AIClient(provider="openrouter", api_key="k", max_retries=0)
 
     with (
-        patch("cara.ai.Client.requests.post") as post,
+        patch("cara.ai.AIClient.requests.post") as post,
         pytest.raises(AIConfigurationError) as excinfo,
     ):
         client.chat("hi")
@@ -71,7 +95,7 @@ def test_configuration_error_is_an_ai_exception():
 def test_per_call_model_still_works_without_configuration():
     client = AIClient(provider="openrouter", api_key="k", max_retries=0)
 
-    with patch("cara.ai.Client.requests.post", return_value=_response()) as post:
+    with patch("cara.ai.AIClient.requests.post", return_value=_response()) as post:
         response = client.chat("hi", model="vendor/some-model")
 
     assert response.model == "vendor/some-model"

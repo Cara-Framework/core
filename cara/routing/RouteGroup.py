@@ -8,7 +8,7 @@ multiple routes, making route management more efficient and maintainable.
 
 from __future__ import annotations
 
-from cara.support.Collection import flatten
+from cara.support import flatten
 
 
 class RouteGroup:
@@ -37,7 +37,7 @@ class RouteGroup:
         and duplicate the group middleware. Uses the same per-route
         ledger as ``Route.group``.
         """
-        from cara.routing.Route import Route
+        from cara.routing.Route import Route  # local: cycle with cara.routing.Route
 
         marker = Route._group_marker(self._prefix, None, self._middleware)
         flattened = flatten(routes)

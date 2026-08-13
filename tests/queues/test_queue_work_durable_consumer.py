@@ -4,12 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from cara.commands.core.QueueWorkCommand import (
-    AMQPConnectionManager,
-    JobProcessor,
-    QueueWorkCommand,
-    ThreadSafeAMQPAckChannel,
-)
+from cara.commands.core.AMQPConnectionManager import AMQPConnectionManager
+from cara.commands.core.JobProcessor import JobProcessor
+from cara.commands.core.QueueWorkCommand import QueueWorkCommand
+from cara.commands.core.ThreadSafeAMQPAckChannel import ThreadSafeAMQPAckChannel
 from cara.exceptions import ConfigurationException
 
 
@@ -280,7 +278,7 @@ def test_oversized_payload_is_dead_lettered_instead_of_acked_and_lost():
 
 
 def test_async_handler_arms_and_cancels_hard_timeout_watchdog(monkeypatch):
-    module = importlib.import_module("cara.commands.core.QueueWorkCommand")
+    module = importlib.import_module("cara.commands.core.JobProcessor")
     timers = []
 
     class _Timer:
@@ -318,7 +316,7 @@ def test_async_handler_arms_and_cancels_hard_timeout_watchdog(monkeypatch):
 
 
 def test_uncooperative_timeout_watchdog_hard_exits_worker(monkeypatch):
-    module = importlib.import_module("cara.commands.core.QueueWorkCommand")
+    module = importlib.import_module("cara.commands.core.JobProcessor")
     exits = []
     monkeypatch.setattr(
         module.os,

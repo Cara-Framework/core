@@ -47,7 +47,7 @@ class MaxRule(BaseRule):
         # only warn outside that branch.
         if max_threshold < 0 and not numeric_context:
             try:
-                from cara.facades import Log
+                from cara.facades import Log  # local: cycle with cara.facades
 
                 Log.warning(
                     "MaxRule misconfig: field=%s has a negative max threshold (%s) in a length context — every input fails by design. Check the rule spec.",

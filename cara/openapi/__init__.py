@@ -49,54 +49,60 @@ Usage::
     )
 """
 
-from .Controllers import (
-    ControllerActionMapper,
-    ControllerContract,
-    ControllerContractExtractor,
-    ControllerResponse,
-    UnknownDeclaredResource,
-    controller_action_functions,
-    cursor_paginated_actions,
-)
-from .Errors import (
-    FRAMEWORK_ERROR_ROOTS,
-    STATUS_HINTS,
-    ConflictingErrorStatus,
-    ErrorContractExtractor,
-    ErrorDiscriminator,
-    UntypedErrorResponse,
-)
-from .Inference import (
-    ANY_SCHEMA,
-    CALL_TYPE,
-    CAST_TYPE,
-    OPT_TYPE,
-    const_schema,
-    dict_payload,
-    infer_value_schema,
-    resource_ref,
-    unify,
-)
-from .Resources import ResourceSchemaExtractor
-from .FormRequestSchemaExtractor import (
-    FormRequestSchemaExtractor,
-    request_query_parameters,
-)
-from .Routes import (
-    openapi_path,
-    parse_routes,
-    path_params,
-    route_shard_paths,
-    route_shard_source,
-)
-from .Spec import (
-    CURSOR_PAGE_PARAMETERS,
-    EnvelopeNames,
-    SpecInfo,
-    build_spec,
-    emit,
-    render,
-)
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "ANY_SCHEMA": (".Inference", "ANY_SCHEMA"),
+    "CALL_TYPE": (".Inference", "CALL_TYPE"),
+    "CAST_TYPE": (".Inference", "CAST_TYPE"),
+    "CURSOR_PAGE_PARAMETERS": (".Spec", "CURSOR_PAGE_PARAMETERS"),
+    "ConflictingErrorStatus": (".ConflictingErrorStatus", "ConflictingErrorStatus"),
+    "ControllerActionMapper": (".ControllerActionMapper", "ControllerActionMapper"),
+    "ControllerContract": (".ControllerContract", "ControllerContract"),
+    "ControllerContractExtractor": (
+        ".ControllerContractExtractor",
+        "ControllerContractExtractor",
+    ),
+    "ControllerMetaMapper": (".ControllerMetaMapper", "ControllerMetaMapper"),
+    "ControllerResponse": (".ControllerResponse", "ControllerResponse"),
+    "DYNAMIC_BASE_CALLS": (".Inference", "DYNAMIC_BASE_CALLS"),
+    "EnvelopeNames": (".EnvelopeNames", "EnvelopeNames"),
+    "ErrorContractExtractor": (".ErrorContractExtractor", "ErrorContractExtractor"),
+    "ErrorDiscriminator": (".ErrorDiscriminator", "ErrorDiscriminator"),
+    "FRAMEWORK_ERROR_ROOTS": (".Errors", "FRAMEWORK_ERROR_ROOTS"),
+    "FormRequestSchemaExtractor": (
+        ".FormRequestSchemaExtractor",
+        "FormRequestSchemaExtractor",
+    ),
+    "OPT_TYPE": (".Inference", "OPT_TYPE"),
+    "PASSTHROUGH_WRAPPERS": (".Inference", "PASSTHROUGH_WRAPPERS"),
+    "ResourceSchemaExtractor": (".ResourceSchemaExtractor", "ResourceSchemaExtractor"),
+    "SERIALIZER_METHODS": (".Inference", "SERIALIZER_METHODS"),
+    "STATUS_HINTS": (".Errors", "STATUS_HINTS"),
+    "SpecInfo": (".SpecInfo", "SpecInfo"),
+    "UnknownDeclaredResource": (".UnknownDeclaredResource", "UnknownDeclaredResource"),
+    "UntypedErrorResponse": (".UntypedErrorResponse", "UntypedErrorResponse"),
+    "build_spec": (".Spec", "build_spec"),
+    "const_schema": (".Inference", "const_schema"),
+    "controller_action_functions": (".Controllers", "controller_action_functions"),
+    "cursor_paginated_actions": (".Controllers", "cursor_paginated_actions"),
+    "dict_payload": (".Inference", "dict_payload"),
+    "emit": (".Spec", "emit"),
+    "infer_value_schema": (".Inference", "infer_value_schema"),
+    "openapi_path": (".Routes", "openapi_path"),
+    "parse_routes": (".Routes", "parse_routes"),
+    "passthrough_var": (".Inference", "passthrough_var"),
+    "path_params": (".Routes", "path_params"),
+    "render": (".Spec", "render"),
+    "request_query_parameters": (
+        ".FormRequestSchemaExtractor",
+        "request_query_parameters",
+    ),
+    "resource_ref": (".Inference", "resource_ref"),
+    "route_shard_paths": (".Routes", "route_shard_paths"),
+    "route_shard_source": (".Routes", "route_shard_source"),
+    "unify": (".Inference", "unify"),
+}
 
 __all__ = [
     "ANY_SCHEMA",
@@ -107,14 +113,18 @@ __all__ = [
     "ControllerActionMapper",
     "ControllerContract",
     "ControllerContractExtractor",
+    "ControllerMetaMapper",
     "ControllerResponse",
+    "DYNAMIC_BASE_CALLS",
     "EnvelopeNames",
     "ErrorContractExtractor",
     "ErrorDiscriminator",
     "FRAMEWORK_ERROR_ROOTS",
     "FormRequestSchemaExtractor",
     "OPT_TYPE",
+    "PASSTHROUGH_WRAPPERS",
     "ResourceSchemaExtractor",
+    "SERIALIZER_METHODS",
     "STATUS_HINTS",
     "SpecInfo",
     "UnknownDeclaredResource",
@@ -128,6 +138,7 @@ __all__ = [
     "infer_value_schema",
     "openapi_path",
     "parse_routes",
+    "passthrough_var",
     "path_params",
     "render",
     "request_query_parameters",
@@ -136,3 +147,5 @@ __all__ = [
     "route_shard_source",
     "unify",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

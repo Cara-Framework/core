@@ -107,8 +107,8 @@ class _FakeResponse:
     pass
 
 
-class _StubResetAuth:
-    """Stand-in for the conductor's hardcoded ``ResetAuth`` cleanup
+class _StubResetHttpAuth:
+    """Stand-in for the conductor's hardcoded ``ResetHttpAuth`` cleanup
     call. The real one needs an application instance + auth cache
     facade; we just want a no-op that doesn't blow up the test."""
 
@@ -134,12 +134,12 @@ class _StubPipeline:
 def _conductor(monkeypatch: pytest.MonkeyPatch):
     """Build a minimal HttpConductor bypassing __init__ so we don't
     need the application's full DI graph for these tests. Stub
-    ``ResetAuth`` so the hardcoded auth-cache cleanup call doesn't
+    ``ResetHttpAuth`` so the hardcoded auth-cache cleanup call doesn't
     crash."""
-    monkeypatch.setattr(_conductor_mod, "ResetAuth", _StubResetAuth)
+    monkeypatch.setattr(_conductor_mod, "ResetHttpAuth", _StubResetHttpAuth)
     HttpConductor = _conductor_mod.HttpConductor
     conductor = HttpConductor.__new__(HttpConductor)
-    conductor.application = None  # ResetAuth stub doesn't use it
+    conductor.application = None  # ResetHttpAuth stub doesn't use it
     return conductor
 
 

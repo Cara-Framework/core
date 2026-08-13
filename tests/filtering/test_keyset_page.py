@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from cara.configuration import Configuration
 from cara.filtering import FilterPipeline
 from cara.http.Cursor import cursor_fingerprint, decode_cursor
 
@@ -20,7 +21,9 @@ _SCOPE = "tests.rows"
 
 @pytest.fixture(autouse=True)
 def _cursor_key(monkeypatch) -> None:
-    monkeypatch.setenv("APP_KEY", "cursor-test-key-" * 3)
+    monkeypatch.setattr(Configuration, "_instance", None)
+    configuration = Configuration.empty()
+    configuration.set("app.key", "cursor-test-key-" * 3)
 
 
 class _Row:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.exceptions.types.validation import ValidationException
+from cara.exceptions import ValidationException
 from cara.validation import Validation
 
 

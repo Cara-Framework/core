@@ -1,4 +1,4 @@
-"""Currency helpers — symbol-aware amount rendering + default fallback.
+"""Currency helpers — strict codes and symbol-aware amount rendering.
 
 Formatting prices as ``"$19.99"`` shows up across notifications, email
 templates, SEO copy, and any other surface that echoes a numeric price
@@ -8,10 +8,6 @@ $45" for an EUR amount is wrong on its face.
 
 This module wraps the symbol → format pipeline once so:
 
-* ``default_currency()`` resolves the app-wide fallback from
-  ``config("app.default_currency", "USD")`` and caches the result
-  per-process (currency choice is set at boot, doesn't change at
-  runtime).
 * ``currency_symbol(code)`` maps known ISO codes to their canonical
   symbols, falling back to a "<CODE> " prefix for unknowns instead
   of silently picking ``$`` (better visible-unfamiliar than
@@ -19,26 +15,12 @@ This module wraps the symbol → format pipeline once so:
 * ``format_money(amount, currency, *, decimals)`` is the typical
   call site — pass a float, get back a formatted string.
 
-Generic, no app coupling: the only outside read is the
-``app.default_currency`` config key, a convention every cara app
-follows. Callers can pass ``currency`` explicitly to bypass it.
+Generic, no app coupling: every amount carries its unit explicitly.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
-
-# NOTE: ``cara.configuration`` is imported lazily inside ``default_currency``
-# to avoid a circular import — ``cara.support`` is imported during
-# ``cara.foundation.Application`` boot (via ``PathManager``), which itself is
-# pulled in by ``cara.configuration.Configuration``. Importing ``config`` at
-# module top-level here re-enters a partially-initialised
-# ``cara.configuration`` package.
-
-
-# Cache the default per-process so we don't pay a config lookup on
-# every render that formats a price.
-_DEFAULT_CACHE: str | None = None
 
 # Symbol map for the currencies the app actually serves. Adding a new
 # currency = one entry here. Codes not listed render with the ISO
@@ -91,33 +73,37 @@ _ZERO_DECIMAL_CURRENCIES = frozenset(
 )
 
 
-def default_currency() -> str:
-    """Return the app-wide fallback currency (``"USD"`` unless overridden).
+def normalize_currency_code(value: object) -> str | None:
+    """Return one canonical three-letter ASCII code, else ``None``.
 
-    Reads ``config("app.default_currency")`` once and caches the result
-    for the rest of the process lifetime. Currency choice is set via
-    env at boot — changing it requires a redeploy anyway, so the cache
-    is safe.
+    This validates shape, not membership in a stale local ISO catalog. Unknown
+    real codes remain usable; absent or malformed values remain unknown.
     """
-    global _DEFAULT_CACHE
-    if _DEFAULT_CACHE is None:
-        from cara.configuration import config  # lazy: see module docstring note
 
-        _DEFAULT_CACHE = str(config("app.default_currency", "USD") or "USD").upper()
-    return _DEFAULT_CACHE
+    if value is None:
+        return None
+    code = str(value).strip().upper()
+    if len(code) != 3 or not code.isascii() or not code.isalpha():
+        return None
+    return code
 
 
-def currency_symbol(currency: str | None = None) -> str:
+def require_currency_code(value: object, *, context: str = "Money") -> str:
+    """Return a canonical code or fail before an amount loses its unit."""
+
+    code = normalize_currency_code(value)
+    if code is None:
+        raise ValueError(f"{context} requires a 3-letter currency code.")
+    return code
+
+
+def currency_symbol(currency: str) -> str:
     """Return the symbol prefix for ``currency``.
 
-    Unknown / missing codes render as ``"<CODE> "`` (e.g. ``"PLN "``)
-    instead of ``"$"`` — better visible-unfamiliar than
-    silently-wrong. Empty / ``None`` falls back to
-    :func:`default_currency`.
+    Unknown valid codes render as ``"<CODE> "`` (e.g. ``"PLN "``).
+    Missing/malformed codes fail before the amount can lose its unit.
     """
-    code = (currency or default_currency() or "").strip().upper()
-    if not code:
-        return ""
+    code = require_currency_code(currency)
     if code in _CURRENCY_SYMBOLS:
         return _CURRENCY_SYMBOLS[code]
     return f"{code} "
@@ -125,7 +111,7 @@ def currency_symbol(currency: str | None = None) -> str:
 
 def format_money(
     amount: object,
-    currency: str | None = None,
+    currency: str,
     *,
     decimals: int | None = None,
 ) -> str:
@@ -137,10 +123,8 @@ def format_money(
             EXACT decimal value is formatted — never the binary-float
             approximation ``float(amount)`` would introduce (a stored
             ``Decimal('1234.50')`` must not display as ``1234.49``).
-            Non-numeric / ``None`` collapses to ``0`` so callers can
-            chain without guards.
-        currency: ISO 4217 code (``"USD"``, ``"EUR"``, …). Empty /
-            ``None`` falls back to :func:`default_currency`.
+            Non-numeric, missing and non-finite values are rejected.
+        currency: Required ISO 4217 code (``"USD"``, ``"EUR"``, …).
         decimals: Trailing-precision digits. ``None`` (default) auto-
             detects from the currency: 0 for zero-decimal currencies
             (JPY, KRW, …), 2 for everything else. Pass an explicit
@@ -152,7 +136,7 @@ def format_money(
 
     Examples::
 
-        >>> format_money(19.99)
+        >>> format_money(19.99, "USD")
         '$19.99'
         >>> format_money(1234.5, "EUR")
         '€1,234.50'
@@ -161,20 +145,29 @@ def format_money(
         >>> format_money(50, "PLN")
         'zł 50.00'
     """
-    if isinstance(amount, Decimal):
-        value = amount
-    else:
-        try:
+    try:
+        if isinstance(amount, Decimal):
+            value = amount
+        else:
             value = Decimal(str(amount))
-        except InvalidOperation, TypeError, ValueError:
-            value = Decimal("0")
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("Money formatting requires a numeric amount.") from exc
+    if not value.is_finite():
+        raise ValueError("Money formatting requires a finite amount.")
+    code = require_currency_code(currency)
     if decimals is None:
-        code = (currency or default_currency() or "").strip().upper()
         decimals = 0 if code in _ZERO_DECIMAL_CURRENCIES else 2
+    if isinstance(decimals, bool) or not isinstance(decimals, int) or decimals < 0:
+        raise ValueError("Money formatting decimals must be a non-negative integer.")
     # ``,`` groups thousands; ``.{decimals}f`` fixes the precision and
     # rounds at the display boundary using Decimal's context (ROUND_HALF_EVEN
     # by default), so the formatted string matches the stored value.
-    return f"{currency_symbol(currency)}{value:,.{decimals}f}"
+    return f"{currency_symbol(code)}{value:,.{decimals}f}"
 
 
-__all__ = ["default_currency", "currency_symbol", "format_money"]
+__all__ = [
+    "currency_symbol",
+    "format_money",
+    "normalize_currency_code",
+    "require_currency_code",
+]

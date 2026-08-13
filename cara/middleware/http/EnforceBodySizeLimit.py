@@ -34,17 +34,12 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from cara.configuration import config
+from cara.exceptions import BadRequestException
 from cara.facades import Log
-from cara.http import Request, Response
-from cara.middleware import Middleware
+from cara.http import BodyLimits, Request, Response
 from cara.middleware.http.HandleCors import apply_cors_headers_to_response
 
-# 10 MiB — matches ``config("server.max_body_size")``'s default.
-# Stays in sync via the ``config(...)`` call at request time; this
-# constant is only the fallback when the config key is missing or
-# coerces to an invalid value (operator typo).
-_DEFAULT_MAX_BODY_SIZE = 10 * 1024 * 1024
+from ..Middleware import Middleware
 
 
 class EnforceBodySizeLimit(Middleware):
@@ -56,14 +51,6 @@ class EnforceBodySizeLimit(Middleware):
         next_fn: Callable[..., Awaitable[Response]],
     ) -> Response:
         limit = self._max_body_size()
-        if limit <= 0:
-            # ``<= 0`` is a documented "disable the check" knob —
-            # operators set ``SERVER_MAX_BODY_SIZE=0`` to bypass
-            # this middleware while keeping it in the chain. Same
-            # idea as the empty-list disabler used by RequireAdminIp
-            # / FilterBlockedUserAgents.
-            return await next_fn(request)
-
         length = self._content_length(request)
         if length is None:
             # Chunked transfer (no ``Content-Length``) — let it
@@ -98,10 +85,7 @@ class EnforceBodySizeLimit(Middleware):
 
     @staticmethod
     def _max_body_size() -> int:
-        try:
-            return int(config("server.max_body_size", _DEFAULT_MAX_BODY_SIZE))
-        except TypeError, ValueError:
-            return _DEFAULT_MAX_BODY_SIZE
+        return BodyLimits.configured().body_bytes
 
     @staticmethod
     def _content_length(request: Request) -> int | None:
@@ -113,37 +97,22 @@ class EnforceBodySizeLimit(Middleware):
         otherwise; the comparison against the limit happens in the
         caller.
         """
-        raw: str | None = None
-        try:
-            getter = getattr(request, "header", None)
-            if callable(getter):
-                raw = getter("Content-Length") or getter("content-length")
-        except Exception as e:
-            # Header accessor missing or crashed on this transport →
-            # treat as "no Content-Length", let the request through
-            # (the streaming-body / chunked-encoding fallback below
-            # owns that case). Convention check requires the swallow
-            # be logged; ``debug`` keeps prod logs quiet.
-            Log.debug(
-                f"EnforceBodySizeLimit: header(...) accessor failed: {e}",
-                category="security.body_size",
-            )
-            raw = None
+        raw: object = None
+        getter = getattr(request, "header", None)
+        if callable(getter):
+            raw = getter("Content-Length")
         if raw is None:
-            try:
-                headers = getattr(request, "headers", None)
-                if headers is not None and hasattr(headers, "get"):
-                    raw = headers.get("Content-Length") or headers.get("content-length")
-            except Exception as e:
-                Log.debug(
-                    f"EnforceBodySizeLimit: headers.get(...) accessor failed: {e}",
-                    category="security.body_size",
-                )
-                raw = None
-        if not isinstance(raw, str) or not raw.strip():
+            headers = getattr(request, "headers", None)
+            if headers is not None and hasattr(headers, "get"):
+                raw = headers.get("Content-Length")
+        if raw is None:
             return None
+        if not isinstance(raw, str) or not raw.strip():
+            raise BadRequestException("Invalid Content-Length header")
         try:
             length = int(raw.strip())
-        except TypeError, ValueError:
-            return None
-        return length if length >= 0 else None
+        except ValueError as exc:
+            raise BadRequestException("Invalid Content-Length header") from exc
+        if length < 0:
+            raise BadRequestException("Invalid Content-Length header")
+        return length

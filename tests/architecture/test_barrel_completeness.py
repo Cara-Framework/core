@@ -69,6 +69,20 @@ def test_complete_sorted_barrel_passes(tmp_path):
     assert BarrelCompleteness.scan(manifest) == []
 
 
+def test_hand_written_marker_does_not_skip_the_superset_rule(tmp_path):
+    manifest = make_manifest(tmp_path, layers=("services",))
+    write(tmp_path / "app" / "services" / "Heavy.py", "class Heavy:\n    pass\n")
+    write(
+        tmp_path / "app" / "services" / "__init__.py",
+        '"""Lazy public surface."""\n\n'
+        "# barrel: hand-written\n\n"
+        "__all__: list[str] = []\n",
+    )
+
+    findings = BarrelCompleteness.scan(manifest)
+    assert any("Heavy" in finding.message for finding in findings)
+
+
 def test_module_object_child_is_exempt_from_the_superset(tmp_path):
     manifest = make_manifest(tmp_path, layers=("services",))
     write(

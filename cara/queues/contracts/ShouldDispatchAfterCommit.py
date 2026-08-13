@@ -11,7 +11,7 @@ class ShouldDispatchAfterCommit:
     transaction commits (the row it needs doesn't exist yet), and if the
     transaction rolls back the job still runs against undone work
     (a "ghost job"). Marking the job class with this contract (or terminating a
-    PendingDispatch with ``.after_commit().send()``) routes the actual push
+      PendingDispatch with ``.after_commit().dispatch()``) routes the actual push
     through ``DB.after_commit``:
 
     * inside a transaction → pushed right after the OUTERMOST commit

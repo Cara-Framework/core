@@ -5,8 +5,12 @@ excluded; every other Python source file is governed by three rules:
 
 * files above the hard line limit are refactoring debt;
 * a file declares at most one public top-level class, named for the file;
-* public methods on controller/job edge classes stay within the edge-method
-  limit.
+* public methods on controller/job edge classes and their adapter mixins
+  stay within the edge-method limit;
+* adapter mixins carry public PascalCase names, matching their file, and
+  stay off package barrels (privacy is barrel non-export, never an
+  underscore prefix), while business services use composition rather than
+  mixin inheritance.
 
 Existing violations are exact, shrink-only debts in ``seam_allowlists``:
 
@@ -25,13 +29,40 @@ import ast
 from pathlib import Path
 
 from cara.architecture._ast_utils import parse, python_files, read_source, relpath
-from cara.architecture._ratchet import ratchet as _ratchet
+from cara.architecture._ratchet import _ratchet
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
 LINES_KEY = "source_shape_lines"
 CLASSES_KEY = "source_shape_classes"
 EDGE_METHODS_KEY = "source_shape_edge_methods"
+
+
+def _module_line_counts(root: Path) -> dict[Path, int]:
+    """Count one logical module split across a package directory.
+
+    A large public class may keep its canonical ``Class.py`` facade while
+    composing private sibling modules under ``Class/``. Counting only the
+    facade made the hard limit gameable by moving every body verbatim into a
+    private directory; counting every private helper individually made the
+    same logical module evade the budget in smaller pieces. Aggregate each
+    ``<stem>/`` directory back into its owning ``<stem>.py`` and let the owner
+    pay the real total.
+    """
+    files = python_files(root)
+    counts = {
+        path.resolve(): len((read_source(path) or "").splitlines()) for path in files
+    }
+    for owner in files:
+        implementation = owner.with_suffix("")
+        if not implementation.is_dir():
+            continue
+        counts[owner.resolve()] += sum(
+            counts[path.resolve()]
+            for path in python_files(implementation)
+            if path.name != "__init__.py"
+        )
+    return counts
 
 
 def _is_edge_path(path: Path, edge_layers: frozenset[str], app_root: str) -> bool:
@@ -50,6 +81,17 @@ def _is_edge_path(path: Path, edge_layers: frozenset[str], app_root: str) -> boo
             or parts[index - 1] in {app_root, "packages"}
             or "packages" in parts[:index]
         )
+        for index, part in enumerate(parts)
+    )
+
+
+def _is_layer_path(path: Path, layer: str, app_root: str) -> bool:
+    """Whether ``path`` sits in an app or plugin-owned layer directory."""
+
+    parts = path.parts
+    return any(
+        part == layer
+        and (index == 0 or parts[index - 1] == app_root or "packages" in parts[:index])
         for index, part in enumerate(parts)
     )
 
@@ -78,6 +120,7 @@ class SourceShape:
         seen: set[Path] = set()
 
         for root in roots:
+            module_line_counts = _module_line_counts(root)
             for path in python_files(root):
                 resolved = path.resolve()
                 if resolved in seen or path.name == "__init__.py":
@@ -93,13 +136,12 @@ class SourceShape:
                 source = read_source(path)
                 if tree is None or source is None:
                     continue
-                line_count = len(source.splitlines())
+                line_count = module_line_counts.get(resolved, len(source.splitlines()))
                 if line_count > hard_limit:
                     oversized[rel] = line_count
+                classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
                 public_classes = [
-                    node
-                    for node in tree.body
-                    if isinstance(node, ast.ClassDef) and not node.name.startswith("_")
+                    node for node in classes if not node.name.startswith("_")
                 ]
                 if len(public_classes) > 1:
                     multiclass[rel] = len(public_classes)
@@ -114,13 +156,63 @@ class SourceShape:
                     )
 
                 relative_path = Path(rel)
+                for class_node in classes:
+                    is_adapter_mixin = class_node.name.endswith("Mixin") and any(
+                        _is_layer_path(
+                            relative_path,
+                            layer,
+                            manifest.roots.app_path_prefix,
+                        )
+                        for layer in (
+                            *manifest.source_shape_edge_layers,
+                            "repositories",
+                            "support",
+                        )
+                    )
+                    if is_adapter_mixin and (
+                        class_node.name.startswith("_")
+                        or path.stem.startswith("_")
+                        or class_node.name != path.stem
+                    ):
+                        # Privacy is the BARREL's job (BarrelCompleteness keeps
+                        # ``*Mixin`` names off the package surface); the file
+                        # and class stay public PascalCase like every other
+                        # module — underscore-prefixed filenames are banned.
+                        naming_findings.append(
+                            Finding(
+                                rel,
+                                class_node.lineno,
+                                "adapter mixins carry public PascalCase names "
+                                "matching their file (privacy is barrel "
+                                "non-export, not an underscore prefix) (§6)",
+                            )
+                        )
+                    if class_node.name.endswith("Mixin") and _is_layer_path(
+                        relative_path,
+                        "services",
+                        manifest.roots.app_path_prefix,
+                    ):
+                        naming_findings.append(
+                            Finding(
+                                rel,
+                                class_node.lineno,
+                                "business service mixins are forbidden — domain logic "
+                                "uses explicit composition (§6)",
+                            )
+                        )
                 if not _is_edge_path(
                     relative_path,
                     manifest.source_shape_edge_layers,
                     manifest.roots.app_path_prefix,
                 ):
                     continue
-                for class_node in public_classes:
+                edge_classes = list(public_classes)
+                for class_node in classes:
+                    if class_node.name.startswith("_") and class_node.name.endswith(
+                        "Mixin"
+                    ):
+                        edge_classes.append(class_node)
+                for class_node in edge_classes:
                     for node in class_node.body:
                         if not isinstance(
                             node, (ast.FunctionDef, ast.AsyncFunctionDef)

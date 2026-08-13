@@ -18,7 +18,7 @@ from decimal import Decimal
 
 import pytest
 
-from cara.exceptions.types.websocket import WebSocketException
+from cara.exceptions.types.WebSocketException import WebSocketException
 from cara.websocket.Socket import Socket
 
 # NUMERIC(17,6) ceiling — ``float(MONEY)`` is ``100000000000.0``.

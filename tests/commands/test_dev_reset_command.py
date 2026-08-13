@@ -14,12 +14,15 @@ And one thing it must never own: the truncate statement. The base declares
 from __future__ import annotations
 
 import ast
+import importlib
 import pathlib
 
 import pytest
 
 from cara.commands.core.DevResetCommand import DevResetCommand
 from cara.decorators import get_registered_commands
+
+_MODULE = importlib.import_module("cara.commands.core.DevResetCommand")
 
 
 class _RecordingReset(DevResetCommand):
@@ -77,7 +80,8 @@ class _RecordingReset(DevResetCommand):
 @pytest.fixture
 def _dev_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "cara.commands.core.DevResetCommand.config",
+        _MODULE,
+        "config",
         lambda key, default=None: "local" if key == "app.env" else default,
     )
 
@@ -127,7 +131,8 @@ def test_production_refuses_the_truncate_even_with_yes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "cara.commands.core.DevResetCommand.config",
+        _MODULE,
+        "config",
         lambda key, default=None: "production" if key == "app.env" else default,
     )
     command = _RecordingReset()
@@ -172,7 +177,7 @@ def test_dlx_queue_names_default_to_the_purge_set() -> None:
 
 
 def test_canonical_dlx_defaults_to_the_framework_dead_letter_exchange() -> None:
-    from cara.queues.Topology import DEAD_LETTER_EXCHANGE
+    from cara.queues.QueueState import DEAD_LETTER_EXCHANGE
 
     assert _RecordingReset().canonical_dlx() == DEAD_LETTER_EXCHANGE
 

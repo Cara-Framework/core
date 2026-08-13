@@ -13,14 +13,8 @@ from cara.exceptions import (
     InvalidConfigurationLocationException,
     InvalidConfigurationSetupException,
 )
-
-# Import the Loader facade from its submodule (not ``from cara.facades import
-# Loader``): config loads during early boot, and if another import has
-# ``cara.facades`` mid-initialisation, the package-level name can still be the
-# submodule rather than the facade class. The submodule path always resolves to
-# the class.
-from cara.facades.Loader import Loader
-from cara.support.Structures import data
+from cara.loader import Loader
+from cara.support import data
 
 
 class Configuration:
@@ -42,18 +36,27 @@ class Configuration:
         "session",
     ]
 
-    def __init__(self, application=None):
+    def __init__(self, application):
+        if application is None:
+            raise InvalidConfigurationSetupException(
+                "Configuration requires an application; tests must use Configuration.empty()"
+            )
         with Configuration._lock:
-            if application:
-                self.application = application
-                self._config = data()
-                Configuration._instance = self
-            else:
-                if not Configuration._instance:
-                    self._config = data()
-                    Configuration._instance = self
-                else:
-                    self._config = Configuration._instance._config
+            self.application = application
+            self._config = data()
+            Configuration._instance = self
+        self._loader = application.make("loader")
+
+    @classmethod
+    def empty(cls) -> Configuration:
+        """Install an explicit empty authority for isolated framework tests."""
+        with cls._lock:
+            instance = object.__new__(cls)
+            instance.application = None
+            instance._config = data()
+            instance._loader = Loader()
+            cls._instance = instance
+            return instance
 
     def load(self):
         """
@@ -63,10 +66,10 @@ class Configuration:
         Each file yields a mapping of settings.
         """
         config_root = self.application.make("config.location")
-        for module_name, module in Loader.get_modules(
+        for module_name, module in self._loader.get_modules(
             config_root, raise_exception=True
         ).items():
-            params = Loader.get_parameters(module)
+            params = self._loader.get_parameters(module)
             for name, value in params.items():
                 # store under "<filename>.<lowercase_key>"
                 self._config[f"{module_name}.{name.lower()}"] = value
@@ -88,7 +91,7 @@ class Configuration:
                 f"{path} is a reserved configuration key name. Please use another key."
             )
         if isinstance(external_config, str):
-            params = Loader.get_parameters(external_config)
+            params = self._loader.get_parameters(external_config)
         else:
             params = external_config
 
@@ -110,7 +113,6 @@ class Configuration:
 
     def get(self, path, default=None):
         try:
-            config_at_path = self._config[path]
-            return config_at_path
+            return self._config[path]
         except KeyError:
             return default

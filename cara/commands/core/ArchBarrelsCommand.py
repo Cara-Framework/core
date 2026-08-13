@@ -14,20 +14,37 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.architecture.BarrelGenerator import BarrelGenerator
-from cara.architecture.Manifest import Manifest
-from cara.commands import CommandBase
+from cara.architecture import BarrelGenerator, Manifest
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 
 
 @command(
     name="arch:barrels",
     help="Generate or verify this product's barrels from its architecture manifest.",
-    options={
-        "--manifest=?": "Path to architecture_manifest.py (default: app/architecture_manifest.py)",
-        "--check": "Report drift without writing (default)",
-        "--write": "Regenerate every managed barrel in place",
-    },
+    options=[
+        {
+            "name": "--manifest",
+            "help": "Path to architecture_manifest.py (default: app/architecture_manifest.py)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--check",
+            "help": "Report drift without writing (default)",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--write",
+            "help": "Regenerate every managed barrel in place",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class ArchBarrelsCommand(CommandBase):
     """Boot-free barrel generation: manifest + pure-AST regeneration only."""

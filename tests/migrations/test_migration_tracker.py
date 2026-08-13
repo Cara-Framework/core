@@ -121,6 +121,39 @@ def test_ensure_table_creates_with_if_not_exists_clause():
     )
 
 
+def test_checksum_probe_uses_catalogue_instead_of_failed_select_control_flow():
+    queries: list[str] = []
+
+    def handler(sql, *_args, **_kwargs):
+        queries.append(sql.strip())
+        if "information_schema.columns" in sql:
+            return [{"present": 1}]
+        return []
+
+    manager, _, _ = _fake_db_manager(query_handler=handler)
+    MigrationTracker(manager).ensure_migrations_table()
+
+    assert any("information_schema.columns" in query for query in queries)
+    assert not any(query.startswith("ALTER TABLE") for query in queries)
+
+
+def test_checksum_catalogue_failure_is_not_misclassified_as_missing_column():
+    queries: list[str] = []
+
+    def handler(sql, *_args, **_kwargs):
+        queries.append(sql.strip())
+        if "information_schema.columns" in sql:
+            raise QueryException("catalogue unavailable")
+        return []
+
+    manager, _, _ = _fake_db_manager(query_handler=handler)
+
+    with pytest.raises(MigrationException, match="Could not initialize migrations table"):
+        MigrationTracker(manager).ensure_migrations_table()
+
+    assert not any(query.startswith("ALTER TABLE") for query in queries)
+
+
 def test_ensure_table_no_drop_on_fresh_install():
     """Fresh DB: both probes fail. ensure must NOT issue a DROP
     (there's nothing to drop, and emitting one logs a confusing

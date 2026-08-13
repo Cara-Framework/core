@@ -8,9 +8,14 @@ Extracted from Model.py to follow SRP and DRY principles.
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 from typing import Any
 
+from cara.configuration import config
+from cara.eloquent.casts import cast_registry
+from cara.eloquent.utils.DateManager import DateManager
+from cara.facades import Log
 from cara.support import Collection, json_dumps
 
 _logger = logging.getLogger("cara.eloquent.attributes")
@@ -48,9 +53,9 @@ class HasAttributes:
         self.__dict__["_appends_cache"] = set()
         self.__dict__["_without_timestamps"] = False
 
-        # Fill with provided attributes
-        if kwargs:
-            self.fill(kwargs)
+        # ``Model`` owns storage initialization and fills only after the three
+        # attribute stores exist. Filling here would write before that state is
+        # constructed, then Model would fill the same payload a second time.
 
     # ===== Attribute Access =====
     #
@@ -114,8 +119,6 @@ class HasAttributes:
         dropped = [key for key in attributes if key not in cls.__fillable__]
         if dropped:
             try:
-                from cara.facades import Log
-
                 model_name = cls.__name__ if hasattr(cls, "__name__") else str(cls)
                 Log.warning(
                     "[MassAssignment] %s: dropped non-fillable keys %s",
@@ -170,24 +173,7 @@ class HasAttributes:
         return data
 
     def to_json(self, **kwargs) -> str:
-        """Convert to JSON through ``cara.support.JsonEncoding``.
-
-        The encoder is the shared wire rule, so ``allow_nan`` is off and
-        an unknown object raises instead of arriving at the client as
-        ``"<Order object at 0x10c3f2a10>"`` behind a 200 — which is what
-        the previous bare ``default=str`` did.
-
-        **Two honest caveats, because the first version of this docstring
-        claimed a fix it does not deliver.** ``Model`` overrides this
-        method, so no ORM model reaches this body at all; and
-        ``Model.serialize`` rewrites every ``Decimal`` as ``float`` while
-        building the dict, so ``to_array()`` has already spent the
-        precision before any encoder runs. Model money therefore leaves
-        as a JSON number while a hand-built payload leaves as an exact
-        string. That divergence, and why closing it is a coordinated
-        product change rather than a framework one, is written down in
-        ``cara/support/JsonEncoding.py``.
-        """
+        """Convert to JSON through the one strict Cara wire encoder."""
         return json_dumps(self.to_array(), **kwargs)
 
     # ===== Visibility Control =====
@@ -308,26 +294,13 @@ class HasAttributes:
 
     def _format_date_for_api(self, attribute: str, value: Any) -> str:
         """Format date attribute for API response with timezone conversion."""
-        try:
-            from cara.eloquent.utils.DateManager import DateManager
-
-            # Get user timezone from config
-            user_timezone = self._get_user_timezone()
-
-            # Convert UTC database value to user timezone
-            return DateManager.format_for_api(value, user_timezone) or value
-        except ImportError:
-            # Fallback if DateManager not available
-            return str(value) if value else value
+        del attribute
+        user_timezone = self._get_user_timezone()
+        return DateManager.format_for_api(value, user_timezone) or value
 
     def _get_user_timezone(self) -> str:
         """Get user timezone from config or request context."""
-        try:
-            from cara.configuration import config
-
-            return config("app.timezone", "UTC")
-        except Exception:
-            return "UTC"
+        return config("app.timezone", "UTC")
 
     def _serialize_relations(self) -> dict[str, Any]:
         """Serialize model relationships."""
@@ -348,7 +321,6 @@ class HasAttributes:
 
     def _clone_for_visibility(self) -> HasAttributes:
         """Create a shallow clone for visibility modifications."""
-        import copy
 
         clone = copy.copy(self)
         clone.__dict__["_hidden_cache"] = getattr(self, "_hidden_cache", set()).copy()
@@ -371,7 +343,6 @@ class HasAttributes:
         if attribute in self.__casts__:
             cast_type = self.__casts__[attribute]
             # Get cast instance and use set method
-            from cara.eloquent.casts import cast_registry
 
             cast_instance = cast_registry.get_cast_instance(cast_type)
             if cast_instance:
@@ -386,8 +357,6 @@ class HasAttributes:
             cast_type = cls.__casts__[attribute]
 
         if cast_type:
-            from cara.eloquent.casts import cast_registry
-
             cast_instance = cast_registry.get_cast_instance(cast_type)
             if cast_instance:
                 return cast_instance.get(value)

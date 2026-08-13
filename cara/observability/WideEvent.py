@@ -31,6 +31,10 @@ import threading
 import time
 from typing import Any
 
+import requests
+
+from cara.configuration import config
+
 _QUEUE: queue.Queue = queue.Queue(maxsize=10000)
 _worker_started = False
 _start_lock = threading.Lock()
@@ -38,8 +42,6 @@ _start_lock = threading.Lock()
 
 def _env(key: str, default: str = "") -> str:
     try:
-        from cara.configuration import config
-
         val = config(key)
         if val is not None:
             return str(val)
@@ -63,11 +65,10 @@ def emit(event: dict[str, Any]) -> None:
     try:
         _ensure_worker()
         _QUEUE.put_nowait(event)
-    except Exception:
-        # allow-silent-except: analytics may never back-pressure the job path
-        # Queue full or anything else → drop. Analytics are never
-        # allowed to back-pressure or break the job path.
-        pass
+    except queue.Full, RuntimeError:
+        # A full buffer or a process shutting down drops analytics without
+        # back-pressuring the job path. Programming errors still surface.
+        return
 
 
 def _ensure_worker() -> None:
@@ -92,12 +93,6 @@ def _run() -> None:
         flush_secs = float(_env("wide_events.batch_secs", "5") or 5)
     except Exception:
         flush_rows, flush_secs = 200, 5.0
-
-    try:
-        import requests
-    except Exception:
-        # allow-silent-except: no HTTP client available means nothing to ship to
-        return  # no HTTP client available → nothing to write to
 
     buf: list[dict] = []
     last = time.monotonic()

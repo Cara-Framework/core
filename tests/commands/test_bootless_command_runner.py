@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
 import pytest
 
-from cara.commands.BootlessCommandRunner import (
+from cara.commands.BootlessCommandSpec import (
     BootlessCommandSpec,
     dispatch_architecture,
     dispatch_bootless,
 )
+from cara.commands.CommandRunner import CommandRunner
 
 
 def _command_module(tmp_path: Path, handle_signature: str, body: str) -> Path:
@@ -95,3 +97,72 @@ def test_container_dependency_is_rejected_before_execution(tmp_path: Path) -> No
 
     with pytest.raises(TypeError, match="container dependencies: repository"):
         dispatch_bootless(["probe"], specs)
+
+
+def test_command_options_require_canonical_explicit_metadata() -> None:
+    runner = CommandRunner.__new__(CommandRunner)
+
+    assert runner._parse_decorator_options(
+        [
+            {
+                "name": "-c|--count",
+                "help": "Number of records",
+                "type": int,
+                "default": 10,
+                "is_flag": False,
+            },
+            {
+                "name": "--force",
+                "help": "Run without prompting",
+                "is_flag": True,
+            },
+        ]
+    ) == [
+        ("count", ["-c", "--count"], 10, "Number of records", int),
+        ("force", ["--force"], False, "Run without prompting", bool),
+    ]
+
+
+@pytest.mark.parametrize(
+    "metadata, error",
+    [
+        ({"--count=10": "Number of records"}, TypeError),
+        (
+            [{"name": "--count=10", "help": "Number of records", "type": int}],
+            ValueError,
+        ),
+        ([{"name": "--count", "help": "Number of records", "type": "int"}], TypeError),
+        ([{"name": "--force", "help": "Run", "default": False}], TypeError),
+        (
+            [
+                {
+                    "name": "--count",
+                    "help": "Number of records",
+                    "type": int,
+                    "default": "10",
+                }
+            ],
+            TypeError,
+        ),
+    ],
+)
+def test_command_options_reject_legacy_or_ambiguous_metadata(
+    metadata: object,
+    error: type[Exception],
+) -> None:
+    runner = CommandRunner.__new__(CommandRunner)
+
+    with pytest.raises(error):
+        runner._parse_decorator_options(metadata)  # type: ignore[arg-type]
+
+
+def test_invalid_command_annotation_fails_registration() -> None:
+    runner = CommandRunner.__new__(CommandRunner)
+
+    def broken(value):
+        return value
+
+    broken.__annotations__ = {"value": "MissingCommandType"}
+
+    with pytest.raises(NameError, match="MissingCommandType"):
+        runner._split_handle_params(inspect.signature(broken), broken)

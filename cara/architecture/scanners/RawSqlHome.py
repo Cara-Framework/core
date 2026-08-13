@@ -29,7 +29,7 @@ deployable-relative path parts, so ``"repositories"`` exempts a repository at
 any depth while ``"commons/gates/persistence"`` exempts only that package.
 
 A product adopting this guard over a tree that is not yet clean pins the
-debt in ``seam_allowlists[ALLOWLIST_KEY]`` as ``path -> site count``: exact,
+debt in ``seam_allowlists[_ALLOWLIST_KEY]`` as ``path -> site count``: exact,
 shrink-only, and stale-loud (see :mod:`cara.architecture._ratchet`). That is
 the only sanctioned way to widen scope without weakening the rule.
 
@@ -44,14 +44,18 @@ from __future__ import annotations
 import ast
 import re
 
-from cara.architecture._ast_utils import docstring_node_ids, iter_modules
-from cara.architecture._ratchet import ratchet
+from cara.architecture._ast_utils import (
+    _path_has_fragment,
+    docstring_node_ids,
+    iter_modules,
+)
+from cara.architecture._ratchet import _ratchet
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
 #: ``seam_allowlists`` key holding ``path -> raw-SQL site count`` for a tree a
 #: product adopted the guard over before cleaning it. Shrink-only.
-ALLOWLIST_KEY = "raw_sql_home"
+_ALLOWLIST_KEY = "raw_sql_home"
 
 #: Docstring marker that opts a class into being THE product's query compiler.
 QUERY_COMPILER_MARKER = "Doctrine §5 query compiler"
@@ -75,17 +79,26 @@ SQL_START = re.compile(
 _SCHEMA_METADATA_NAMES = frozenset({"__indexes__", "__views__"})
 
 
+def _bound_name(node: ast.AST | None) -> str | None:
+    """Return a stable dotted name for a local/attribute expression."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        owner = _bound_name(node.value)
+        return f"{owner}.{node.attr}" if owner else None
+    return None
+
+
 def _bound_database_names(tree: ast.Module) -> set[str]:
     """Every local name that reaches the database driver directly.
 
     Covers the facade under any alias (``from cara.facades import DB as D``)
-    and a manager instance bound from ``DatabaseManager.get_instance()`` or
-    ``get_database_manager()`` — the two ways product code has historically
-    re-acquired the connection while looking like a plain object.
+    and explicit manager instances obtained from constructor injection,
+    ``resolve("DB")`` or an application/container ``make("DB")`` call.
     """
     facades: set[str] = set()
     managers: set[str] = set()
-    factories: set[str] = set()
+    resolvers: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom) or not node.module:
             continue
@@ -98,26 +111,59 @@ def _bound_database_names(tree: ast.Module) -> set[str]:
                 bound = alias.asname or alias.name
                 if alias.name == "DatabaseManager":
                     managers.add(bound)
-                elif alias.name == "get_database_manager":
-                    factories.add(bound)
+        elif node.module == "cara.foundation":
+            resolvers.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "resolve"
+            )
 
-    instances: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        value = node.value
-        if not isinstance(value, ast.Call):
-            continue
-        is_instance = (
-            isinstance(value.func, ast.Attribute)
-            and value.func.attr == "get_instance"
-            and isinstance(value.func.value, ast.Name)
-            and value.func.value.id in managers
-        ) or (isinstance(value.func, ast.Name) and value.func.id in factories)
-        if not is_instance:
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        instances.update(target.id for target in targets if isinstance(target, ast.Name))
+    instances: set[str] = {
+        argument.arg
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+        if isinstance(argument.annotation, ast.Name)
+        and argument.annotation.id in managers
+    }
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for assignment in assignments:
+            value = assignment.value
+            resolves_manager = _bound_name(value) in instances
+            if isinstance(value, ast.Call):
+                first_arg = value.args[0] if value.args else None
+                resolves_manager = resolves_manager or (
+                    isinstance(first_arg, ast.Constant)
+                    and first_arg.value == "DB"
+                    and (
+                        isinstance(value.func, ast.Name)
+                        and value.func.id in resolvers
+                        or isinstance(value.func, ast.Attribute)
+                        and value.func.attr in {"make", "resolve"}
+                    )
+                )
+                resolves_manager = resolves_manager or (
+                    isinstance(value.func, ast.Name) and value.func.id in managers
+                )
+            if not resolves_manager:
+                continue
+            targets = (
+                assignment.targets
+                if isinstance(assignment, ast.Assign)
+                else [assignment.target]
+            )
+            for target in targets:
+                name = _bound_name(target)
+                if name and name not in instances:
+                    instances.add(name)
+                    changed = True
     return facades | instances
 
 
@@ -188,9 +234,7 @@ def raw_sql_findings(tree: ast.Module, rel: str) -> list[Finding]:
             continue
         receiver = node.func.value
         method = node.func.attr
-        receiver_is_database = (
-            isinstance(receiver, ast.Name) and receiver.id in database_names
-        )
+        receiver_is_database = _bound_name(receiver) in database_names
         if method in COMPOSE_METHODS or (
             method in EXEC_METHODS
             and (receiver_is_database or _contains_sql_literal(node))
@@ -215,31 +259,19 @@ def raw_sql_findings(tree: ast.Module, rel: str) -> list[Finding]:
     return findings
 
 
-def _is_home(rel: str, homes: frozenset[str]) -> bool:
-    parts = rel.split("/")
-    for home in homes:
-        segments = [segment for segment in home.split("/") if segment]
-        if not segments:
-            continue
-        span = len(segments)
-        if any(parts[i : i + span] == segments for i in range(len(parts) - span + 1)):
-            return True
-    return False
-
-
 class RawSqlHome:
     """Raw SQL only inside a declared repository home (DOCTRINE §5)."""
 
     @staticmethod
     def scan(manifest: Manifest) -> list[Finding]:
-        pinned = manifest.seam_allowlists.get(ALLOWLIST_KEY, {})
+        pinned = manifest.seam_allowlists.get(_ALLOWLIST_KEY, {})
         findings: list[Finding] = []
         counts: dict[str, int] = {}
         compilers: list[str] = []
         for _path, rel, tree in iter_modules(
             manifest.roots.scan_dirs("raw_sql_home"), manifest.roots.deployable
         ):
-            if _is_home(rel, manifest.raw_sql_homes):
+            if _path_has_fragment(rel, manifest.raw_sql_homes):
                 continue
             compilers.extend(
                 f"{rel}:{node.lineno} {node.name}"
@@ -257,8 +289,8 @@ class RawSqlHome:
             else:
                 findings.extend(hits)
         findings.extend(
-            ratchet(
-                key=ALLOWLIST_KEY,
+            _ratchet(
+                key=_ALLOWLIST_KEY,
                 current=counts,
                 pinned=pinned,
                 message="raw SQL outside a repository home",

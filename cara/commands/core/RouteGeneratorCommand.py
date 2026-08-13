@@ -18,29 +18,54 @@ Features:
 
 from __future__ import annotations
 
-import ast
-import re
+import shutil
 import tempfile
 import traceback
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import CaraException, StorageException
 from cara.support import paths
+
+from . import _RouteParsing, _RouteRendering
 
 
 @command(
     name="routes:generate",
     help="Generate routes files (api.py, web.py, websocket.py) from enhanced controller docstring annotations",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--overwrite": "Overwrite existing routes files",
-        "--type=?": "Generate specific route type only (api, web, websocket)",
-        "--validate": "Only validate syntax without generating files",
-        "--backup": "Create backup before overwriting",
-        "--verbose": "Show detailed parsing information",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "is_flag": True,
+        },
+        {
+            "name": "--overwrite",
+            "help": "Overwrite existing routes files",
+            "is_flag": True,
+        },
+        {
+            "name": "--type",
+            "help": "Generate specific route type only (api, web, websocket)",
+            "type": str,
+        },
+        {
+            "name": "--validate",
+            "help": "Only validate syntax without generating files",
+            "is_flag": True,
+        },
+        {
+            "name": "--backup",
+            "help": "Create backup before overwriting",
+            "is_flag": True,
+        },
+        {
+            "name": "--verbose",
+            "help": "Show detailed parsing information",
+            "is_flag": True,
+        },
+    ],
 )
 class RouteGeneratorCommand(CommandBase):
     """Generate robust route definitions from enhanced controller docstrings."""
@@ -182,329 +207,6 @@ class RouteGeneratorCommand(CommandBase):
 
         return 0
 
-    def _generate_route_artifacts(
-        self,
-        route_data: list[dict],
-        route_type: str,
-    ) -> dict[str, str]:
-        """Return a bounded route aggregator plus any generated shards."""
-        monolith = self._generate_routes_content_by_type(route_data, route_type)
-        if len(monolith.splitlines()) <= self.MAX_ROUTE_SHARD_LINES:
-            return {f"routes/{route_type}.py": monolith}
-
-        groups = [
-            group
-            for controller_info in route_data
-            for group in self._generate_controller_route_groups(controller_info)
-        ]
-        chunks = self._chunk_route_groups(groups)
-        artifacts: dict[str, str] = {}
-        shard_paths: list[str] = []
-        for index, chunk in enumerate(chunks):
-            path = f"routes/generated/{route_type}/group_{index:03d}.py"
-            artifacts[path] = self._generate_route_shard_content(
-                chunk,
-                route_type=route_type,
-            )
-            shard_paths.append(path)
-        artifacts[f"routes/{route_type}.py"] = self._generate_route_aggregator_content(
-            route_data,
-            route_type=route_type,
-            shard_paths=shard_paths,
-        )
-        return artifacts
-
-    def _chunk_route_groups(self, groups: list[str]) -> list[list[str]]:
-        """Partition complete route groups without splitting their semantics."""
-        chunks: list[list[str]] = []
-        current: list[str] = []
-        current_lines = 7
-        for group in groups:
-            group_lines = len(group.splitlines()) + 1
-            if current and current_lines + group_lines > self.MAX_ROUTE_SHARD_LINES:
-                chunks.append(current)
-                current = []
-                current_lines = 7
-            current.append(group)
-            current_lines += group_lines
-        if current:
-            chunks.append(current)
-        return chunks
-
-    @staticmethod
-    def _generate_route_shard_content(
-        groups: list[str],
-        *,
-        route_type: str,
-    ) -> str:
-        lines = [
-            f'"""Auto-generated {route_type.upper()} route groups. Do not edit manually."""',
-            "",
-            "from cara.routing import Route",
-            "",
-            "",
-            "def route_groups():",
-            '    """Build this bounded shard\'s route groups."""',
-            "    return (",
-        ]
-        for group in groups:
-            lines.append(f"        {group},")
-        lines.extend(("    )", ""))
-        return "\n".join(lines)
-
-    def _generate_route_aggregator_content(
-        self,
-        route_data: list[dict],
-        *,
-        route_type: str,
-        shard_paths: list[str],
-    ) -> str:
-        title = route_type.title()
-        lines = [
-            '"""',
-            f"{title} Routes - Auto-generated by enhanced routes:generate command",
-            "",
-            f"This file contains all {route_type} routes parsed from controller docstrings.",
-            "DO NOT EDIT MANUALLY - Use controller docstring annotations instead.",
-            '"""',
-            "",
-            "from cara.routing import Route",
-            "",
-        ]
-        lines.extend(self._generate_compiler_lines(route_data))
-        if lines[-1] != "":
-            lines.append("")
-
-        loader_names: list[str] = []
-        for index, shard_path in enumerate(shard_paths):
-            loader = f"_route_groups_{index:03d}"
-            module = "." + shard_path.removeprefix("routes/").removesuffix(".py").replace(
-                "/", "."
-            )
-            lines.append(f"from {module} import route_groups as {loader}")
-            loader_names.append(loader)
-
-        lines.extend(("", "_ROUTE_GROUP_LOADERS = ("))
-        lines.extend(f"    {loader}," for loader in loader_names)
-        lines.extend((")", "", "", "def register_routes():"))
-        lines.append(
-            f'    """Register {route_type} routes from bounded generated shards."""'
-        )
-        lines.append(
-            "    groups = [group for loader in _ROUTE_GROUP_LOADERS for group in loader()]"
-        )
-        if route_type == "api":
-            lines.append('    return Route.prefix("/api").routes(*groups)')
-        else:
-            lines.append("    return groups")
-        lines.append("")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _generate_compiler_lines(route_data: list[dict]) -> list[str]:
-        lines = ["# Route Parameter Configuration"]
-        for controller_info in route_data:
-            for var_name, constraints in controller_info["compiler_vars"].items():
-                rules = [rule.strip() for rule in constraints.split("|")]
-                regex_rules = [
-                    rule
-                    for rule in rules
-                    if rule
-                    in {
-                        "int",
-                        "integer",
-                        "string",
-                        "alpha",
-                        "alphanum",
-                        "slug",
-                        "uuid",
-                        "bool",
-                        "any",
-                    }
-                    or rule.startswith("regex:")
-                ]
-                validation_rules = [rule for rule in rules if rule not in regex_rules]
-                if regex_rules:
-                    regex_pattern = regex_rules[0]
-                    if regex_pattern.startswith("regex:"):
-                        lines.append(
-                            f'Route.compile("{var_name}", r"{regex_pattern[6:]}")'
-                        )
-                    else:
-                        lines.append(f'Route.compile("{var_name}", "{regex_pattern}")')
-                if validation_rules:
-                    lines.append(
-                        f'Route.validate("{var_name}", "{"|".join(validation_rules)}")'
-                    )
-        return lines
-
-    def _remove_stale_route_shards(
-        self,
-        route_type: str,
-        *,
-        keep: set[str],
-    ) -> None:
-        """Delete only obsolete generator-owned shard files."""
-        base = Path(paths("base"))
-        shard_dir = base / "routes" / "generated" / route_type
-        if not shard_dir.is_dir():
-            return
-        kept_paths = {base / path for path in keep}
-        for path in shard_dir.glob("group_[0-9][0-9][0-9].py"):
-            if path not in kept_paths:
-                path.unlink()
-
-    def _filter_routes_by_type(
-        self, route_data: list[dict], route_type: str
-    ) -> list[dict]:
-        """Filter routes by type (api, web, websocket)."""
-        filtered_data = []
-
-        for controller_info in route_data:
-            filtered_controller = {
-                "class_name": controller_info["class_name"],
-                "file_path": controller_info["file_path"],
-                "compiler_vars": controller_info["compiler_vars"],
-                "route_groups": [],
-                "global_middleware": controller_info["global_middleware"],
-                "global_prefix": controller_info["global_prefix"],
-            }
-
-            # Filter route groups by type
-            for group in controller_info["route_groups"]:
-                group_type = group.get("type", "api")  # Default to api if not specified
-                if group_type == route_type:
-                    filtered_controller["route_groups"].append(group)
-
-            # Only include controller if it has routes of this type
-            if filtered_controller["route_groups"]:
-                filtered_data.append(filtered_controller)
-
-        return filtered_data
-
-    def _generate_routes_content_by_type(
-        self, route_data: list[dict], route_type: str
-    ) -> str:
-        """Generate routes content for specific type."""
-        content_lines = []
-
-        # Header
-        route_type_title = route_type.title()
-        header = [
-            '"""',
-            f"{route_type_title} Routes - Auto-generated by enhanced routes:generate command",
-            "",
-            f"This file contains all {route_type} routes parsed from controller docstrings.",
-            "DO NOT EDIT MANUALLY - Use controller docstring annotations instead.",
-            "",
-            "Generated routes support:",
-            "- Route groups with prefixes and middleware",
-            "- Named routes and aliases",
-            "- Parameter constraints and validation",
-            "- Middleware (simple and parametered)",
-            '"""',
-            "",
-            "from cara.routing import Route",
-            "",
-        ]
-
-        content_lines.extend(header)
-
-        # Generate route parameter validation and compilation
-        content_lines.append("# Route Parameter Configuration")
-        for controller_info in route_data:
-            if controller_info["compiler_vars"]:
-                for var_name, constraints in controller_info["compiler_vars"].items():
-                    # Same compiler logic as before
-                    rules = constraints.split("|")
-                    regex_rules = []
-                    validation_rules = []
-
-                    for rule in rules:
-                        if rule.strip() in [
-                            "int",
-                            "integer",
-                            "string",
-                            "alpha",
-                            "alphanum",
-                            "slug",
-                            "uuid",
-                            "bool",
-                            "any",
-                        ] or rule.strip().startswith("regex:"):
-                            regex_rules.append(rule.strip())
-                        else:
-                            validation_rules.append(rule.strip())
-
-                    if regex_rules:
-                        regex_pattern = regex_rules[0]
-                        if regex_pattern.startswith("regex:"):
-                            pattern = regex_pattern[6:]
-                            content_lines.append(
-                                f'Route.compile("{var_name}", r"{pattern}")'
-                            )
-                        else:
-                            content_lines.append(
-                                f'Route.compile("{var_name}", "{regex_pattern}")'
-                            )
-
-                    if validation_rules:
-                        validation_chain = "|".join(validation_rules)
-                        content_lines.append(
-                            f'Route.validate("{var_name}", "{validation_chain}")'
-                        )
-
-        content_lines.append("")
-
-        # Generate register_routes function
-        content_lines.append("def register_routes():")
-        content_lines.append(f'    """Register {route_type} routes."""')
-
-        if not route_data:
-            content_lines.append("    return []")
-        elif len(route_data) == 1:
-            # Single controller - use same nested structure as multiple controllers
-            controller_info = route_data[0]
-            route_groups = self._generate_controller_route_groups(controller_info)
-            if route_groups:
-                if route_type == "api":
-                    content_lines.append('    return Route.prefix("/api").routes(')
-                    for group in route_groups:
-                        content_lines.append(f"        {group}")
-                    content_lines.append("    )")
-                else:
-                    # For websocket and web routes, return as list
-                    if len(route_groups) == 1:
-                        content_lines.append(f"    return {route_groups[0]}")
-                    else:
-                        content_lines.append("    return [")
-                        for group in route_groups:
-                            content_lines.append(f"        {group},")
-                        content_lines.append("    ]")
-            else:
-                content_lines.append("    return []")
-        else:
-            # Multiple controllers
-            if route_type == "api":
-                content_lines.append('    return Route.prefix("/api").routes(')
-                all_groups = []
-                for controller_info in route_data:
-                    route_groups = self._generate_controller_route_groups(controller_info)
-                    all_groups.extend(route_groups)
-                for group in all_groups:
-                    content_lines.append(f"        {group},")
-                content_lines.append("    )")
-            else:
-                content_lines.append("    return [")
-                for controller_info in route_data:
-                    route_groups = self._generate_controller_route_groups(controller_info)
-                    for group in route_groups:
-                        content_lines.append(f"        {group},")
-                content_lines.append("    ]")
-
-        content_lines.append("")
-        return "\n".join(content_lines)
-
     def _show_dry_run(
         self, output_file: str, content: str, route_data: list[dict], route_type: str
     ):
@@ -531,742 +233,6 @@ class RouteGeneratorCommand(CommandBase):
             return False
 
         return True
-
-    def _find_controllers(self) -> list[Path]:
-        """Find all controller files in app/controllers directory."""
-        controllers_dir = Path(paths("controllers"))
-
-        if not controllers_dir.exists():
-            return []
-
-        controllers = []
-        for file_path in controllers_dir.rglob("*.py"):
-            if file_path.name != "__init__.py":
-                controllers.append(file_path)
-
-        return controllers
-
-    def _parse_controllers_enhanced(self, controller_files: list[Path]) -> list[dict]:
-        """Parse controller files with enhanced validation."""
-        route_data = []
-
-        for controller_file in controller_files:
-            try:
-                controller_info = self._parse_controller_file_enhanced(controller_file)
-                if controller_info:
-                    route_data.append(controller_info)
-                    # Count total routes
-                    total_routes = sum(
-                        len(route["methods"])
-                        for group in controller_info.get("route_groups", [])
-                        for route in group.get("routes", [])
-                    )
-                    if self.option("verbose"):
-                        self.info(f"  ✓ {controller_file.stem} -> {total_routes} routes")
-                    else:
-                        self.info(f"  ✓ {controller_file.stem}")
-
-            except Exception as e:
-                error_msg = f"Failed to parse {controller_file.stem}: {e}"
-                self.errors.append(error_msg)
-                if self.option("verbose"):
-                    self.error(f"  ❌ {error_msg}")
-                    self.error(f"     Stack trace: {traceback.format_exc()}")
-
-        return route_data
-
-    def _parse_controller_file_enhanced(self, file_path: Path) -> dict | None:
-        """Parse a single controller file with enhanced features."""
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except Exception as e:
-            raise StorageException(f"Cannot read file: {e}") from e
-
-        # Parse AST to find class
-        try:
-            tree = ast.parse(content)
-        except SyntaxError as e:
-            raise CaraException(f"Python syntax error in file: {e}") from e
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name.endswith("Controller"):
-                docstring = ast.get_docstring(node)
-                if docstring:
-                    route_info = self._parse_enhanced_docstring(
-                        docstring, node.name, file_path
-                    )
-                    if route_info:
-                        # Validate controller methods exist
-                        self._validate_controller_methods(route_info, content, file_path)
-                        return route_info
-
-        return None
-
-    def _parse_enhanced_docstring(
-        self, docstring: str, class_name: str, file_path: Path
-    ) -> dict | None:
-        """Parse enhanced docstring format with full Laravel-style features."""
-        original_lines = docstring.split("\n")
-
-        result = {
-            "class_name": class_name,
-            "file_path": file_path,
-            "compiler_vars": {},
-            "route_groups": [],
-            "global_middleware": [],
-            "global_prefix": "",
-        }
-
-        current_section = None
-        current_group = None
-        current_route = None
-
-        for line_num, original_line in enumerate(original_lines, 1):
-            line = original_line.strip()
-            if not line:
-                continue
-
-            try:
-                # Calculate indent level
-                len(original_line) - len(original_line.lstrip())
-
-                # Parse sections based on markers
-                if line.startswith("@Compiler"):
-                    current_section = "compiler"
-                    current_group = None
-                    current_route = None
-                    if self.option("verbose"):
-                        self.info("    Found @Compiler section")
-                    continue
-
-                elif line.startswith("@routes."):
-                    current_section = "route_group"
-                    current_group = self._parse_routes_group(line, line_num, file_path)
-                    result["route_groups"].append(current_group)
-                    current_route = None
-                    if self.option("verbose"):
-                        self.info(
-                            f"    Found @routes.{current_group['type']}: {current_group['prefix']}"
-                        )
-                    continue
-
-                elif line.startswith("@Route") and current_section == "route_group":
-                    # Legacy @Route support
-                    current_route = self._parse_route_definition(
-                        line, line_num, file_path
-                    )
-                    if current_group:
-                        current_group["routes"].append(current_route)
-                        if self.option("verbose"):
-                            self.info(f"      Found @Route: {current_route['name']}")
-                    continue
-
-                elif (
-                    line.startswith("@")
-                    and current_section == "route_group"
-                    and current_group
-                ):
-                    # Check if it's a direct HTTP method (new syntax)
-                    if self._is_http_method_line(line):
-                        method_info = self._parse_http_method(line, line_num, file_path)
-                        if method_info:
-                            # Create a temporary route container for the method
-                            temp_route = {
-                                "name": "",
-                                "middleware": [],
-                                "methods": [method_info],
-                                "line_num": line_num,
-                            }
-                            current_group["routes"].append(temp_route)
-                            if self.option("verbose"):
-                                self.info(
-                                    f"        Found HTTP method: {method_info['http_method']} -> {method_info['controller_method']}"
-                                )
-                        continue
-
-                    # Legacy: HTTP method definition within a @Route
-                    elif current_route:
-                        method_info = self._parse_http_method(line, line_num, file_path)
-                        if method_info:
-                            current_route["methods"].append(method_info)
-                            if self.option("verbose"):
-                                self.info(
-                                    f"        Found HTTP method: {method_info['http_method']} -> {method_info['controller_method']}"
-                                )
-                        continue
-
-                # Parse compiler variables
-                if current_section == "compiler" and ":" in line:
-                    self._parse_compiler_variable(
-                        line, result["compiler_vars"], line_num, file_path
-                    )
-
-            except Exception as e:
-                error_msg = f"Error parsing line {line_num} in {file_path.name}: {e}"
-                self.errors.append(error_msg)
-                if self.option("verbose"):
-                    self.error(f"    Parse error: {error_msg}")
-
-        # Validate parsed data
-        self._validate_parsed_data(result, file_path)
-
-        return result if result["route_groups"] else None
-
-    def _is_http_method_line(self, line: str) -> bool:
-        """Check if a line contains a valid HTTP method or WebSocket method."""
-        method_match = re.match(r"@(\w+)\(", line)
-        if not method_match:
-            return False
-
-        method = method_match.group(1).lower()
-        valid_methods = [
-            "get",
-            "post",
-            "put",
-            "patch",
-            "delete",
-            "head",
-            "options",
-            "ws",
-            "connect",
-        ]
-        return method in valid_methods
-
-    def _parse_routes_group(self, line: str, line_num: int, file_path: Path) -> dict:
-        """Parse @routes.api(prefix="/api", middleware=["auth"]) definition."""
-        group = {
-            "type": "api",  # Default to api
-            "prefix": "",
-            "middleware": [],
-            "routes": [],
-            "line_num": line_num,
-        }
-
-        # Extract route type from @routes.TYPE(...)
-        type_match = re.search(r"@routes\.(\w+)\(", line)
-        if type_match:
-            group["type"] = type_match.group(1)
-
-        # Extract prefix
-        prefix_match = re.search(r'prefix=["\']([^"\']+)["\']', line)
-        if prefix_match:
-            group["prefix"] = prefix_match.group(1)
-
-        # Extract middleware
-        middleware_match = re.search(r"middleware=\[([^\]]+)\]", line)
-        if middleware_match:
-            middleware_str = middleware_match.group(1)
-            # Parse middleware list: ["auth", "throttle:60,1"]
-            middleware_items = re.findall(r'["\']([^"\']+)["\']', middleware_str)
-            group["middleware"] = middleware_items
-
-        return group
-
-    def _parse_route_group(self, line: str, line_num: int, file_path: Path) -> dict:
-        """Parse @RouteGroup(type="api", prefix="/api", middleware=["auth"]) definition. (Legacy support)"""
-        group = {
-            "type": "api",  # Default to api
-            "prefix": "",
-            "middleware": [],
-            "routes": [],
-            "line_num": line_num,
-        }
-
-        # Extract type
-        type_match = re.search(r'type=["\']([^"\']+)["\']', line)
-        if type_match:
-            group["type"] = type_match.group(1)
-
-        # Extract prefix
-        prefix_match = re.search(r'prefix=["\']([^"\']+)["\']', line)
-        if prefix_match:
-            group["prefix"] = prefix_match.group(1)
-
-        # Extract middleware
-        middleware_match = re.search(r"middleware=\[([^\]]+)\]", line)
-        if middleware_match:
-            middleware_str = middleware_match.group(1)
-            # Parse middleware list: ["auth", "throttle:60,1"]
-            middleware_items = re.findall(r'["\']([^"\']+)["\']', middleware_str)
-            group["middleware"] = middleware_items
-
-        return group
-
-    def _parse_route_definition(self, line: str, line_num: int, file_path: Path) -> dict:
-        """Parse @Route(name="/users/{id}", middleware=["auth"]) definition."""
-        route = {
-            "name": "",
-            "middleware": [],
-            "methods": [],
-            "line_num": line_num,
-        }
-
-        # Extract name (path)
-        name_match = re.search(r'name=["\']([^"\']+)["\']', line)
-        if name_match:
-            route["name"] = name_match.group(1)
-        else:
-            self.errors.append(
-                f"Missing 'name' in @Route at line {line_num} in {file_path.name}"
-            )
-
-        # Extract middleware
-        middleware_match = re.search(r"middleware=\[([^\]]+)\]", line)
-        if middleware_match:
-            middleware_str = middleware_match.group(1)
-            middleware_items = re.findall(r'["\']([^"\']+)["\']', middleware_str)
-            route["middleware"] = middleware_items
-
-        # Note: constraints are handled by compile method, not where parameter
-
-        return route
-
-    def _parse_http_method(
-        self, line: str, line_num: int, file_path: Path
-    ) -> dict | None:
-        """Parse @get(path="/path", method="method", as="route.name") or @connect(path="/path", method="method", as="ws.name") definition."""
-
-        # Extract and validate HTTP method
-        http_method = self._extract_http_method(line, line_num, file_path)
-        if not http_method:
-            return None
-
-        # Parse route parameters
-        params = self._parse_route_parameters(line, line_num, file_path)
-        if not params:
-            return None
-
-        # Convert connect to ws for route generation
-        if http_method == "connect":
-            http_method = "ws"
-
-        return {
-            "http_method": http_method,
-            "controller_method": params["method"],
-            "path": params["path"],
-            "as": params.get("as"),
-            "middleware": params.get("middleware", []),
-            "line_num": line_num,
-        }
-
-    def _extract_http_method(
-        self, line: str, line_num: int, file_path: Path
-    ) -> str | None:
-        """Extract and validate HTTP method from decorator line."""
-        method_match = re.match(r"@(\w+)\(", line)
-        if not method_match:
-            self.errors.append(
-                f"Invalid route method format at line {line_num} in {file_path.name}"
-            )
-            return None
-
-        http_method = method_match.group(1).lower()
-
-        # Validate method types
-        valid_methods = [
-            "get",
-            "post",
-            "put",
-            "patch",
-            "delete",
-            "head",
-            "options",
-            "ws",
-            "connect",
-        ]
-
-        if http_method not in valid_methods:
-            self.errors.append(
-                f"Invalid route method '{http_method}' at line {line_num} in {file_path.name}"
-            )
-            return None
-
-        return http_method
-
-    def _parse_route_parameters(
-        self, line: str, line_num: int, file_path: Path
-    ) -> dict | None:
-        """Parse explicit route parameters: path="/path", method="method", as="name", middleware=["auth"]"""
-        params = {}
-
-        # Extract path parameter
-        path_match = re.search(r'path\s*=\s*["\']([^"\']*)["\']', line)
-        if path_match:
-            params["path"] = path_match.group(1)
-        else:
-            self.errors.append(
-                f"Missing 'path' parameter at line {line_num} in {file_path.name}"
-            )
-            return None
-
-        # Extract method parameter
-        method_match = re.search(r'method\s*=\s*["\']([^"\']+)["\']', line)
-        if method_match:
-            params["method"] = method_match.group(1)
-        else:
-            self.errors.append(
-                f"Missing 'method' parameter at line {line_num} in {file_path.name}"
-            )
-            return None
-
-        # Extract optional as parameter
-        as_match = re.search(r'as\s*=\s*["\']([^"\']+)["\']', line)
-        if as_match:
-            params["as"] = as_match.group(1)
-
-        # Extract optional middleware parameter
-        middleware_match = re.search(r"middleware\s*=\s*\[([^\]]+)\]", line)
-        if middleware_match:
-            middleware_str = middleware_match.group(1)
-            params["middleware"] = re.findall(r'["\']([^"\']+)["\']', middleware_str)
-
-        return params
-
-    def _parse_compiler_variable(
-        self, line: str, compiler_vars: dict, line_num: int, file_path: Path
-    ):
-        """Parse compiler variable: user_id: (int|min:1)"""
-        var_match = re.match(r"(\w+):\s*\(([^)]+)\)", line)
-        if var_match:
-            var_name, constraints = var_match.groups()
-            compiler_vars[var_name] = constraints
-        else:
-            self.warnings.append(
-                f"Invalid compiler variable format at line {line_num} in {file_path.name}: {line}"
-            )
-
-    def _validate_controller_methods(
-        self, route_info: dict, file_content: str, file_path: Path
-    ):
-        """Validate route handlers across the controller's static MRO."""
-        try:
-            existing_methods = self._class_methods(
-                file_path,
-                route_info["class_name"],
-                source=file_content,
-            )
-
-            # Check all route methods
-            for group in route_info["route_groups"]:
-                for route in group["routes"]:
-                    for method in route["methods"]:
-                        method_name = method["controller_method"]
-                        if method_name not in existing_methods:
-                            self.errors.append(
-                                f"Method '{method_name}' not found in controller {route_info['class_name']} "
-                                f"at line {method['line_num']} in {file_path.name}"
-                            )
-
-        except Exception as e:
-            self.warnings.append(f"Could not validate methods in {file_path.name}: {e}")
-
-    def _class_methods(
-        self,
-        file_path: Path,
-        class_name: str,
-        *,
-        source: str | None = None,
-        seen: set[tuple[Path, str]] | None = None,
-    ) -> set[str]:
-        """Collect methods declared by one class and resolvable local bases.
-
-        Controllers intentionally keep route docstrings on the thin edge class
-        while cohesive handlers live in imported mixins. Validation therefore
-        follows only the class's explicit bases; scanning every function in an
-        imported module would let unrelated helpers satisfy a route by accident.
-        """
-        path = file_path.resolve()
-        visited = seen if seen is not None else set()
-        identity = (path, class_name)
-        if identity in visited or not path.is_file():
-            return set()
-        visited.add(identity)
-
-        tree = ast.parse(source if source is not None else path.read_text())
-        classes = {
-            node.name: node for node in tree.body if isinstance(node, ast.ClassDef)
-        }
-        target = classes.get(class_name)
-        if target is None:
-            return set()
-
-        methods = {
-            node.name
-            for node in target.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-        imports = self._imported_classes(tree, path)
-        for base in target.bases:
-            if not isinstance(base, ast.Name):
-                continue
-            if base.id in classes:
-                methods.update(
-                    self._class_methods(path, base.id, source=source, seen=visited)
-                )
-                continue
-            imported = imports.get(base.id)
-            if imported is not None:
-                base_path, imported_name = imported
-                methods.update(
-                    self._class_methods(base_path, imported_name, seen=visited)
-                )
-        return methods
-
-    @staticmethod
-    def _imported_classes(
-        tree: ast.Module, file_path: Path
-    ) -> dict[str, tuple[Path, str]]:
-        """Resolve direct ``from module import Class`` bases to source files."""
-        resolved: dict[str, tuple[Path, str]] = {}
-        project_root = Path(paths("base")).resolve()
-        for node in tree.body:
-            if not isinstance(node, ast.ImportFrom) or node.module is None:
-                continue
-            if node.level:
-                module_root = file_path.parent
-                for _ in range(node.level - 1):
-                    module_root = module_root.parent
-                module_path = module_root.joinpath(*node.module.split("."))
-            else:
-                module_path = project_root.joinpath(*node.module.split("."))
-            source_path = module_path.with_suffix(".py")
-            if not source_path.is_file():
-                source_path = module_path / "__init__.py"
-            if not source_path.is_file():
-                continue
-            for alias in node.names:
-                resolved[alias.asname or alias.name] = (source_path, alias.name)
-        return resolved
-
-    def _validate_parsed_data(self, result: dict, file_path: Path):
-        """Validate the parsed route data for consistency."""
-        # Check for duplicate route names
-        route_names = set()
-
-        for group in result["route_groups"]:
-            for route in group["routes"]:
-                for method in route["methods"]:
-                    if method.get("as"):
-                        route_name = method["as"]
-                        if route_name in route_names:
-                            self.errors.append(
-                                f"Duplicate route name '{route_name}' in {file_path.name}"
-                            )
-                        route_names.add(route_name)
-
-    def _generate_enhanced_routes_content(self, route_data: list[dict]) -> str:
-        """Generate enhanced routes content with route groups."""
-        content_lines = []
-
-        # Header
-        header = [
-            '"""',
-            "API Routes - Auto-generated by enhanced routes:generate command",
-            "",
-            "This file contains all application routes parsed from controller docstrings.",
-            "DO NOT EDIT MANUALLY - Use controller docstring annotations instead.",
-            "",
-            "Generated routes support:",
-            "- Route groups with prefixes and middleware",
-            "- Named routes and aliases",
-            "- Parameter constraints and validation",
-            "- Middleware (simple and parametered)",
-            '"""',
-            "",
-            "from cara.routing import Route",
-            "",
-        ]
-
-        content_lines.extend(header)
-
-        # Generate route parameter validation and compilation
-        content_lines.append("# Route Parameter Configuration")
-        for controller_info in route_data:
-            if controller_info["compiler_vars"]:
-                for var_name, constraints in controller_info["compiler_vars"].items():
-                    # Separate regex patterns from validation rules
-                    rules = constraints.split("|")
-                    regex_rules = []
-                    validation_rules = []
-
-                    for rule in rules:
-                        if rule.strip() in [
-                            "int",
-                            "integer",
-                            "string",
-                            "alpha",
-                            "alphanum",
-                            "slug",
-                            "uuid",
-                            "bool",
-                            "any",
-                        ] or rule.strip().startswith("regex:"):
-                            regex_rules.append(rule.strip())
-                        else:
-                            validation_rules.append(rule.strip())
-
-                    # Set regex pattern if any
-                    if regex_rules:
-                        # Use the first regex rule for Route.compile
-                        regex_pattern = regex_rules[0]
-                        if regex_pattern.startswith("regex:"):
-                            pattern = regex_pattern[6:]  # Remove "regex:" prefix
-                            content_lines.append(
-                                f'Route.compile("{var_name}", r"{pattern}")'
-                            )
-                        else:
-                            content_lines.append(
-                                f'Route.compile("{var_name}", "{regex_pattern}")'
-                            )
-
-                    # Set validation rules if any
-                    if validation_rules:
-                        validation_chain = "|".join(validation_rules)
-                        content_lines.append(
-                            f'Route.validate("{var_name}", "{validation_chain}")'
-                        )
-
-        content_lines.append("")
-
-        # Generate register_routes function
-        content_lines.append("def register_routes():")
-        content_lines.append('    """Register all application routes."""')
-
-        if len(route_data) == 1:
-            # Single controller - return the route group directly
-            controller_info = route_data[0]
-            route_groups = self._generate_controller_route_groups(controller_info)
-            if route_groups:
-                content_lines.append(f"    return {route_groups[0]}")
-        else:
-            # Multiple controllers - wrap in a common prefix
-            content_lines.append('    return Route.prefix("/api").routes(')
-
-            # Generate route groups for each controller
-            all_groups = []
-            for controller_info in route_data:
-                route_groups = self._generate_controller_route_groups(controller_info)
-                all_groups.extend(route_groups)
-
-            for group in all_groups:
-                content_lines.append(f"        {group},")
-
-            content_lines.append("    )")
-
-        content_lines.append("")
-
-        return "\n".join(content_lines)
-
-    def _generate_controller_route_groups(self, controller_info: dict):
-        """Generate route groups for a single controller."""
-        class_name = controller_info["class_name"]
-        route_groups = []
-
-        for group in controller_info["route_groups"]:
-            group_instance = self._generate_route_group(group, class_name)
-            route_groups.append(group_instance)
-
-        return route_groups
-
-    def _generate_route_group(self, group: dict, class_name: str):
-        """Generate a single route group instance."""
-        prefix = group["prefix"]
-        middleware = group["middleware"]
-
-        # Generate routes within the group
-        group_routes = []
-        for route in group["routes"]:
-            route_methods = self._generate_route_methods_for_group(
-                route, class_name, middleware or []
-            )
-            group_routes.extend(route_methods)
-
-        # Build route group string
-        group_parts = []
-        if prefix:
-            group_parts.append(f'Route.prefix("{prefix}")')
-
-        if middleware:
-            middleware_str = ", ".join(f'"{m}"' for m in middleware)
-            if group_parts:
-                group_parts.append(f".middleware([{middleware_str}])")
-            else:
-                # No prefix but group-level middleware: ``Route.middleware``
-                # is an INSTANCE method (chaining helper), not a classmethod,
-                # so ``Route.middleware([...])`` raises TypeError at import.
-                # Emit an empty-prefix ``RouteGroup`` instead — it applies
-                # the middleware and (empty prefix) leaves the URL untouched.
-                group_parts.append(f'Route.prefix("").middleware([{middleware_str}])')
-
-        if not group_parts:
-            group_parts.append("Route")
-
-        # Add routes using Cara's syntax - pass routes as individual arguments, not a list
-        routes_str = ",\n            ".join(group_routes)
-        group_str = (
-            "".join(group_parts) + f".routes(\n            {routes_str}\n        )"
-        )
-
-        return group_str
-
-    def _generate_route_methods_for_group(
-        self,
-        route: dict,
-        class_name: str,
-        group_middleware: list[str],
-    ):
-        """Generate HTTP/WebSocket methods for a route within a group."""
-        return [
-            self._build_route_instance(method, class_name) for method in route["methods"]
-        ]
-
-    def _build_route_instance(self, method: dict, class_name: str) -> str:
-        """Build a single Route instance string."""
-        http_method = method["http_method"].lower()
-        controller_method = method["controller_method"]
-        route_path = self._normalize_route_path(method.get("path", ""))
-
-        # Build route parameters
-        params = self._build_route_params(
-            path=route_path,
-            controller=f"{class_name}@{controller_method}",
-            name=method.get("as"),
-            middleware=method.get("middleware", []),
-        )
-
-        # Generate route instance
-        params_str = ", ".join(params)
-        route_method = "ws" if http_method == "ws" else http_method
-
-        return f"Route.{route_method}({params_str})"
-
-    def _normalize_route_path(self, path: str) -> str:
-        """Convert {param} to @param format for Cara routing."""
-        if not path:
-            return ""
-        return re.sub(r"\{(\w+)\}", r"@\1", path)
-
-    def _build_route_params(
-        self,
-        path: str,
-        controller: str,
-        name: str | None = None,
-        middleware: list[str] | None = None,
-    ) -> list[str]:
-        """Build route parameters list."""
-        params = [f'"{path}"', f'"{controller}"']
-
-        # Add optional middleware
-        if middleware:
-            middleware_str = ", ".join(f'"{m}"' for m in middleware)
-            params.append(f"middleware=[{middleware_str}]")
-
-        # Add optional route name
-        if name:
-            params.append(f'name="{name}"')
-
-        return params
 
     def _validate_generated_syntax(self, content: str) -> bool:
         """Validate the generated Python syntax."""
@@ -1332,8 +298,6 @@ class RouteGeneratorCommand(CommandBase):
         if output_path.exists() and self.option("backup"):
             self.backup_file = output_path.with_suffix(".py.backup")
             try:
-                import shutil
-
                 shutil.copy2(output_path, self.backup_file)
                 self.info(f"📦 Backup created: {self.backup_file}")
             except Exception as e:
@@ -1386,8 +350,6 @@ class RouteGeneratorCommand(CommandBase):
             # Rollback if we have a backup
             if self.backup_file and self.backup_file.exists():
                 try:
-                    import shutil
-
                     shutil.copy2(self.backup_file, output_path)
                     self.info("🔄 Rolled back to backup file")
                 except OSError, RuntimeError, AttributeError, ConnectionError:
@@ -1426,3 +388,48 @@ class RouteGeneratorCommand(CommandBase):
         self.info("   • Use --backup to create safety backups")
         self.info("   • Run 'craft routes:list' to view all registered routes")
         self.info("   • Check controller methods exist before adding to docstrings")
+
+    _class_methods = _RouteParsing._route_class_methods
+    _extract_http_method = _RouteParsing._route_extract_http_method
+    _find_controllers = _RouteParsing._route_find_controllers
+    _imported_classes = staticmethod(_RouteParsing._route_imported_classes)
+    _is_http_method_line = _RouteParsing._route_is_http_method_line
+    _parse_compiler_variable = _RouteParsing._route_parse_compiler_variable
+    _parse_controller_file_enhanced = _RouteParsing._route_parse_controller_file_enhanced
+    _parse_controllers_enhanced = _RouteParsing._route_parse_controllers_enhanced
+    _parse_enhanced_docstring = _RouteParsing._route_parse_enhanced_docstring
+    _parse_http_method = _RouteParsing._route_parse_http_method
+    _parse_route_parameters = _RouteParsing._route_parse_route_parameters
+    _parse_routes_group = _RouteParsing._route_parse_routes_group
+    _validate_controller_methods = _RouteParsing._route_validate_controller_methods
+    _validate_parsed_data = _RouteParsing._route_validate_parsed_data
+
+    _build_route_instance = _RouteRendering._route_build_route_instance
+    _build_route_params = _RouteRendering._route_build_route_params
+    _chunk_route_groups = _RouteRendering._route_chunk_route_groups
+    _filter_routes_by_type = _RouteRendering._route_filter_routes_by_type
+    _generate_compiler_lines = staticmethod(
+        _RouteRendering._route_generate_compiler_lines
+    )
+    _generate_controller_route_groups = (
+        _RouteRendering._route_generate_controller_route_groups
+    )
+    _generate_enhanced_routes_content = (
+        _RouteRendering._route_generate_enhanced_routes_content
+    )
+    _generate_route_aggregator_content = (
+        _RouteRendering._route_generate_route_aggregator_content
+    )
+    _generate_route_artifacts = _RouteRendering._route_generate_route_artifacts
+    _generate_route_group = _RouteRendering._route_generate_route_group
+    _generate_route_methods_for_group = (
+        _RouteRendering._route_generate_route_methods_for_group
+    )
+    _generate_route_shard_content = staticmethod(
+        _RouteRendering._route_generate_route_shard_content
+    )
+    _generate_routes_content_by_type = (
+        _RouteRendering._route_generate_routes_content_by_type
+    )
+    _normalize_route_path = _RouteRendering._route_normalize_route_path
+    _remove_stale_route_shards = _RouteRendering._route_remove_stale_route_shards

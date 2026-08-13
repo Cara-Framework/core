@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -15,11 +15,29 @@ from cara.support import paths
 @command(
     name="make:mail",
     help="Generate a new Mail class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--force": "Overwrite existing mail file",
-        "--markdown": "Generate a markdown-based mail template",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing mail file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--markdown",
+            "help": "Generate a markdown-based mail template",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MakeMailCommand(CommandBase):
     """Generate Mail classes with enhanced configuration."""

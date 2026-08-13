@@ -23,10 +23,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from cara.commands.core.QueueRelayCommand import (
-    QueueHooksCommand,
-    QueueRelayCommand,
-)
+from cara.commands.core.QueueHooksCommand import QueueHooksCommand
+from cara.commands.core.QueueRelayCommand import QueueRelayCommand
 from cara.commands.core.QueueWorkCommand import QueueWorkCommand
 from cara.commands.core.ScheduleWorkCommand import ScheduleWorkCommand
 from cara.queues.delivery import (

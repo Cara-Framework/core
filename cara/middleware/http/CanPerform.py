@@ -9,7 +9,7 @@ from typing import Any
 
 from cara.exceptions import AuthorizationFailedException
 from cara.http import Request, Response
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
 
 
 class CanPerform(Middleware):

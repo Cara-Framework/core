@@ -33,6 +33,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cara.eloquent.models import Model
 from cara.eloquent.scopes import SoftDeleteScope
 
 # ── Signature lock-in ────────────────────────────────────────────────
@@ -75,6 +76,18 @@ def test_soft_delete_query_keeps_builder_only_signature():
     assert params == ["builder"], (
         f"_soft_delete_query must stay (builder)-only; got {params!r}"
     )
+
+
+def test_soft_delete_macros_are_on_the_static_model_surface():
+    """The metaclass gate must allow documented ``Model.macro()`` calls."""
+
+    assert {
+        "with_trashed",
+        "only_trashed",
+        "restore",
+        "force_delete",
+        "force_delete_query",
+    } <= Model.__passthrough__
 
 
 # ── Macro dispatch behavior (with mock builder) ──────────────────────

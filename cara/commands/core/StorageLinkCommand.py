@@ -9,18 +9,30 @@ from __future__ import annotations
 
 import os
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
-from cara.support.Paths import public_path, storage_path
+from cara.support import base_path, public_path, storage_path
 
 
 @command(
     name="storage:link",
     help="Create symbolic links from public/storage to storage/app/public (Laravel style).",
-    options={
-        "--force": "Force the creation of symlinks even if they already exist",
-        "--relative": "Create relative symbolic links instead of absolute",
-    },
+    options=[
+        {
+            "name": "--force",
+            "help": "Force the creation of symlinks even if they already exist",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--relative",
+            "help": "Create relative symbolic links instead of absolute",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class StorageLinkCommand(CommandBase):
     """Create Laravel-style storage symbolic links."""
@@ -140,8 +152,6 @@ class StorageLinkCommand(CommandBase):
     def _get_relative_path(self, path: str) -> str:
         """Get path relative to project root for display."""
         try:
-            from cara.support.Paths import base_path
-
             return os.path.relpath(path, base_path())
         except Exception:
             return path

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -15,11 +15,29 @@ from cara.support import paths
 @command(
     name="make:policy",
     help="Generate a new Policy class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--force": "Overwrite existing policy file",
-        "--model=?": "The model this policy should authorize",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing policy file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--model",
+            "help": "The model this policy should authorize",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class MakePolicyCommand(CommandBase):
     """Generate Policy classes with enhanced configuration."""

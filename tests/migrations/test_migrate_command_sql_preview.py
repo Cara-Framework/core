@@ -26,12 +26,16 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from cara.commands.core.MigrateCommand import MigrateCommand
+from cara.container import Container
+from cara.eloquent import DatabaseManager
 from cara.eloquent.schema.SchemaQueryExecutor import SchemaQueryExecutor
 
 
 def _make_command() -> MigrateCommand:
     """Build a MigrateCommand without going through Typer wiring."""
-    cmd = MigrateCommand(application=None)
+    application = Container()
+    application.bind("DB", DatabaseManager("app", {"app": {"driver": "sqlite"}}))
+    cmd = MigrateCommand(application=application)
     cmd.set_parsed_options({})
     # Silence Rich console output during the test run.
     cmd.console = MagicMock()
@@ -111,12 +115,12 @@ def test_collect_migration_sql_records_db_facade_statements_without_executing():
     """Migrations that bypass ``self.schema`` and run raw SQL through the
     ``DB`` facade (``DB.statement(...)``) must have that SQL CAPTURED but NOT
     executed during a dry preview — the facade has no dry-run awareness."""
-    from cara.eloquent.DatabaseManager import DatabaseManager
     from cara.facades import DB
+    from cara.testing.FacadeSwap import swap
 
     cmd = _make_command()
 
-    db = DatabaseManager.get_instance()
+    db = cmd.application.make("DB")
     # Make the real ``statement`` blow up if it's ever actually called — the
     # guard must intercept it before that happens.
     original_statement = db.statement
@@ -142,13 +146,14 @@ def test_collect_migration_sql_records_db_facade_statements_without_executing():
     migration_manager.file_manager.load_migration_class.return_value = _FacadeMigration
 
     try:
-        statements = cmd._collect_migration_sql(
-            migration_manager,
-            "/fake/0099_facade_migration.py",
-            connection="default",
-            directory="/fake/migrations",
-            schema=None,
-        )
+        with swap("DB", db):
+            statements = cmd._collect_migration_sql(
+                migration_manager,
+                "/fake/0099_facade_migration.py",
+                connection="default",
+                directory="/fake/migrations",
+                schema=None,
+            )
     finally:
         db.statement = original_statement
 

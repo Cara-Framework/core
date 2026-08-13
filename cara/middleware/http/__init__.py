@@ -1,30 +1,47 @@
-from .AttachRequestID import AttachRequestID
-from .AuthenticateUser import AuthenticateUser
-from .AuthenticateUserOptional import AuthenticateUserOptional
-from .CanPerform import CanPerform
-from .CheckMaintenanceMode import CheckMaintenanceMode
-from .CompressResponses import CompressResponses
-from .ConditionalGet import ConditionalGet
-from .EnforceBodySizeLimit import EnforceBodySizeLimit
-from .FilterBlockedUserAgents import FilterBlockedUserAgents
-from .HandleCors import HandleCors
-from .LogHttpRequests import LogHttpRequests
-from .PersistRequestLog import PersistRequestLog
-from .RecordPrometheusMetrics import RecordPrometheusMetrics
-from .RecordRequestMetrics import RecordRequestMetrics
-from .RequestLogStore import RequestLogStore
-from .ResetAuth import ResetAuth
-from .SecurityHeaders import SecurityHeaders
-from .ServeStaticFiles import ServeStaticFiles
-from .ShouldAuthenticate import ShouldAuthenticate
-from .ThrottleRequests import ThrottleRequests
-from .TraceRequests import TraceRequests
-from .TrimStrings import TrimStrings
+"""Middleware — layer barrel (generated, DOCTRINE §5.1). — http subpackage."""
+
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AttachRequestID": (".AttachRequestID", "AttachRequestID"),
+    "AuthenticateUser": (".AuthenticateUser", "AuthenticateUser"),
+    "AuthenticateUserOptional": (
+        ".AuthenticateUserOptional",
+        "AuthenticateUserOptional",
+    ),
+    "CORS_DEFAULTS": (".Cors", "CORS_DEFAULTS"),
+    "CanPerform": (".CanPerform", "CanPerform"),
+    "CheckMaintenanceMode": (".CheckMaintenanceMode", "CheckMaintenanceMode"),
+    "CompressResponses": (".CompressResponses", "CompressResponses"),
+    "ConditionalGet": (".ConditionalGet", "ConditionalGet"),
+    "EnforceBodySizeLimit": (".EnforceBodySizeLimit", "EnforceBodySizeLimit"),
+    "FilterBlockedUserAgents": (".FilterBlockedUserAgents", "FilterBlockedUserAgents"),
+    "HandleCors": (".HandleCors", "HandleCors"),
+    "LogHttpRequests": (".LogHttpRequests", "LogHttpRequests"),
+    "PersistRequestLog": (".PersistRequestLog", "PersistRequestLog"),
+    "RecordPrometheusMetrics": (".RecordPrometheusMetrics", "RecordPrometheusMetrics"),
+    "RecordRequestMetrics": (".RecordRequestMetrics", "RecordRequestMetrics"),
+    "RequestLogStore": (".RequestLogStore", "RequestLogStore"),
+    "ResetHttpAuth": (".ResetHttpAuth", "ResetHttpAuth"),
+    "SecurityHeaders": (".SecurityHeaders", "SecurityHeaders"),
+    "ServeStaticFiles": (".ServeStaticFiles", "ServeStaticFiles"),
+    "ShouldAuthenticate": (".ShouldAuthenticate", "ShouldAuthenticate"),
+    "ThrottleRequests": (".ThrottleRequests", "ThrottleRequests"),
+    "TraceRequests": (".TraceRequests", "TraceRequests"),
+    "TrimStrings": (".TrimStrings", "TrimStrings"),
+    "apply_cors_headers_to_response": (".HandleCors", "apply_cors_headers_to_response"),
+    "denial_status": (".ShouldAuthenticate", "denial_status"),
+    "load_cors_policy": (".Cors", "load_cors_policy"),
+    "origin_explicitly_allowed": (".Cors", "origin_explicitly_allowed"),
+    "path_in_cors_scope": (".Cors", "path_in_cors_scope"),
+    "resolve_allow_origin": (".Cors", "resolve_allow_origin"),
+}
 
 __all__ = [
     "AttachRequestID",
     "AuthenticateUser",
     "AuthenticateUserOptional",
+    "CORS_DEFAULTS",
     "CanPerform",
     "CheckMaintenanceMode",
     "CompressResponses",
@@ -37,11 +54,19 @@ __all__ = [
     "RecordPrometheusMetrics",
     "RecordRequestMetrics",
     "RequestLogStore",
-    "ResetAuth",
+    "ResetHttpAuth",
     "SecurityHeaders",
     "ServeStaticFiles",
     "ShouldAuthenticate",
     "ThrottleRequests",
     "TraceRequests",
     "TrimStrings",
+    "apply_cors_headers_to_response",
+    "denial_status",
+    "load_cors_policy",
+    "origin_explicitly_allowed",
+    "path_in_cors_scope",
+    "resolve_allow_origin",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

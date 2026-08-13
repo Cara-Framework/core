@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.validation import MessageFormatter
 from cara.validation.contracts import Rule
+from cara.validation.MessageFormatter import MessageFormatter
 
 
 class BaseRule(Rule):

@@ -180,7 +180,7 @@ def declared_ports(root: Path, source_dirs: tuple[str, ...]) -> set[str]:
     return {port for file in files for port in re.findall(r"\b(\d{4})\b", _read(file))}
 
 
-def owned_markdowns(
+def _owned_markdowns(
     root: Path,
     docs: Path,
     reference: Path,
@@ -218,7 +218,6 @@ __all__ = [
     "check_path_claim",
     "declared_ports",
     "forget_path_index",
-    "owned_markdowns",
     "path_index",
     "sibling_roots",
     "strip_fences",

@@ -7,17 +7,11 @@ Laravel's ``Queue::fake()``.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
-
-@dataclass
-class QueuedJob:
-    job: Any
-    queue: str | None = None
-    delay: float | None = None
-    payload: dict | None = None
+from .QueuedJob import QueuedJob
 
 
 class QueueFake:
@@ -37,7 +31,6 @@ class QueueFake:
     # round-trip.
     @staticmethod
     def _next_id() -> str:
-        import uuid
 
         return f"fake-job-{uuid.uuid4().hex[:12]}"
 

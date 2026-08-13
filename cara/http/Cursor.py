@@ -8,7 +8,7 @@ using ``APP_KEY``.
 Unsigned base64 JSON is not an opaque cursor: callers can edit it, reuse it
 against another endpoint/tenant/filter set, or feed an invalid comparand into
 the database.  This codec therefore validates every claim and fails closed by
-raising :class:`~cara.exceptions.types.http.InvalidCursor`, which this module
+raising :class:`~cara.exceptions.types.InvalidCursor.InvalidCursor`, which this module
 IMPORTS as an ordinary consumer.
 
 ``InvalidCursor`` lives in the exception taxonomy rather than in this module
@@ -33,12 +33,12 @@ import hashlib
 import hmac
 import json
 import math
-import os
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from cara.exceptions.types.http import InvalidCursor
+from cara.configuration import config
+from cara.exceptions import InvalidCursor
 
 SortDirection = Literal["asc", "desc"]
 CursorPayload = dict[str, Any]
@@ -229,12 +229,7 @@ def cursor_rules(*, max_limit: int = 100, min_limit: int = 1) -> dict[str, str]:
 
 def _key(secret: str | bytes | None) -> bytes:
     if secret is None:
-        try:
-            from cara.configuration import config
-
-            secret = config("app.key", "") or os.environ.get("APP_KEY", "")
-        except Exception:
-            secret = os.environ.get("APP_KEY", "")
+        secret = config("app.key", "")
     raw = secret if isinstance(secret, bytes) else str(secret or "").encode("utf-8")
     if len(raw) < 32:
         raise RuntimeError("APP_KEY must contain at least 32 bytes for cursor signing.")

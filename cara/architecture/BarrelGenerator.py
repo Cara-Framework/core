@@ -4,8 +4,12 @@
 generator: for every domain-partitioned layer (``manifest.layers``) and
 every dev-only kernel package (``manifest.roots.kernel``, recursing into
 nested subpackages — e.g. ``commons/models/core/``), it regenerates each
-package's ``__init__.py`` as the alphabetical, superset re-export of its
-direct children's public names.
+package's ``__init__.py`` as the alphabetical, complete re-export of its
+direct children's public names. Generated targets are lazy by default. A
+target is imported eagerly only when preserved barrel-owned code references
+it, because function globals and executable registries need a real binding.
+This keeps optional dependencies out of unrelated imports without weakening
+the barrel surface or introducing per-package escape markers.
 
 A second run over unchanged sources is a no-op (idempotence) because the
 generator PRESERVES everything a hand-author may have deliberately added
@@ -13,7 +17,8 @@ to an existing barrel:
 
 * the module docstring, verbatim;
 * ``__future__`` imports, kept first, never exported;
-* non-import top-level statements (constants) right after the docstring;
+* non-import top-level statements after imports, so the result obeys Python's
+  import-at-top rule and executable registries never run against missing names;
 * a MODULE-OBJECT bind (``from . import X``) — ``X``'s own symbols stay
   module-qualified and are exempt from name-level generation (the
   module-object contract);
@@ -39,7 +44,6 @@ and ``ruff format`` from fighting — see ``MAX_LINE``.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from cara.architecture._ast_utils import (
@@ -49,6 +53,8 @@ from cara.architecture._ast_utils import (
     public_names,
 )
 from cara.architecture.Manifest import Manifest
+
+from .BarrelPlan import BarrelPlan
 
 # Width EVERY emitted import is rendered against. The generator and
 # ``ruff format`` have to be fixed points of each other: whatever the
@@ -121,11 +127,14 @@ class _Preserved:
 
     def __init__(self, init: Path, self_dotted: str | None):
         self.future_stmts: list[str] = []
-        self.const_stmts: list[str] = []
+        self.after_import_stmts: list[str] = []
         self.doc: str | None = None
         self.post_stmts: list[str] = []
-        self.stmts: list[str] = []
+        self.pre_runtime_stmts: list[str] = []
+        self.post_runtime_stmts: list[str] = []
         self.names: list[str] = []
+        self.referenced_names: set[str] = set()
+        self.foreign_lazy_targets: dict[str, tuple[str, str]] = {}
         self.module_objects: set[str] = set()
         self.existing_all: set[str] = set()
         if not init.exists():
@@ -136,14 +145,12 @@ class _Preserved:
         tree = ast.parse(source)
         lines = source.splitlines()
         pkg = init.parent
+        local_roots = {"app", "config", "routes", "packages"}
+        if self_dotted:
+            root = self_dotted.split(".", 1)[0]
+            if root not in {"cara", "commons"}:
+                local_roots.add(root)
         body = tree.body
-        if (
-            body
-            and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(body[0].value.value, str)
-        ):
-            self.doc = "\n".join(lines[body[0].lineno - 1 : body[0].end_lineno])
 
         def is_all_stmt(node: ast.stmt) -> bool:
             if isinstance(node, ast.Assign):
@@ -165,12 +172,63 @@ class _Preserved:
                         e.value for e in node.value.elts if isinstance(e, ast.Constant)
                     }
 
+        for node in body:
+            targets: list[ast.expr] = []
+            value: ast.expr | None = None
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+                value = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            if not any(
+                isinstance(target, ast.Name) and target.id == "_LAZY_EXPORTS"
+                for target in targets
+            ) or not isinstance(value, ast.Dict):
+                continue
+            for key, target in zip(value.keys, value.values, strict=True):
+                if (
+                    not isinstance(key, ast.Constant)
+                    or not isinstance(key.value, str)
+                    or not isinstance(target, (ast.Tuple, ast.List))
+                    or len(target.elts) != 2
+                    or not all(
+                        isinstance(part, ast.Constant) and isinstance(part.value, str)
+                        for part in target.elts
+                    )
+                ):
+                    continue
+                module_name = target.elts[0].value
+                attribute = target.elts[1].value
+                if (
+                    self_dotted
+                    and not module_name.startswith(".")
+                    and module_name != self_dotted
+                    and not module_name.startswith(f"{self_dotted}.")
+                ):
+                    self.foreign_lazy_targets[key.value] = (
+                        module_name,
+                        attribute,
+                    )
+                    self.names.append(key.value)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            self.doc = "\n".join(lines[body[0].lineno - 1 : body[0].end_lineno])
+
         def with_leading_comments(node: ast.stmt) -> str:
             start = node.lineno - 1
             i = start - 1
             while i >= 0 and lines[i].strip().startswith("#"):
                 i -= 1
-            return "\n".join(lines[i + 1 : node.end_lineno])
+            return "\n".join(
+                line
+                for line in lines[i + 1 : node.end_lineno]
+                if line.strip() != "# barrel: hand-written"
+            )
 
         for index, node in enumerate(body):
             if (
@@ -182,10 +240,57 @@ class _Preserved:
                 continue
             if (
                 isinstance(node, ast.ImportFrom)
+                and node.module == "cara._LazyExports"
+                and any(alias.name == "_install_lazy_exports" for alias in node.names)
+            ):
+                continue
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+                isinstance(target, ast.Name) and target.id == "_LAZY_EXPORTS"
+                for target in (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+            ):
+                continue
+            if (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "_install_lazy_exports"
+            ):
+                continue
+            if (
+                isinstance(node, ast.ImportFrom)
                 and node.level >= 1
                 and node.module
                 and not _relative_source_exists(pkg, node.level, node.module)
             ):
+                continue
+            # Non-import declarations follow imports. Child modules that need a
+            # sibling during package initialization must import its defining
+            # module directly; barrel statement ordering is never a cycle seam.
+            if not isinstance(node, (ast.Import, ast.ImportFrom)) and not is_all_stmt(
+                node
+            ):
+                self.after_import_stmts.append(with_leading_comments(node))
+                self.referenced_names.update(
+                    child.id
+                    for child in ast.walk(node)
+                    if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+                )
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name) and is_upper_const(target.id):
+                            self.names.append(target.id)
+                elif (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and is_upper_const(node.target.id)
+                ):
+                    self.names.append(node.target.id)
+                elif isinstance(
+                    node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and not node.name.startswith("_"):
+                    self.names.append(node.name)
                 continue
             if is_all_stmt(node):
                 continue
@@ -221,25 +326,38 @@ class _Preserved:
                     relmod = "." + node.module[len(self_dotted) :].lstrip(".")
                     for alias in node.names:
                         if alias.asname and alias.asname != alias.name:
-                            self.stmts.append(
+                            self.post_runtime_stmts.append(
                                 _fmt_from(relmod, [f"{alias.name} as {alias.asname}"])
                             )
                             self.names.append(alias.asname)
                         elif alias.name.startswith("_"):
-                            self.stmts.append(_fmt_from(relmod, [alias.name]))
+                            self.post_runtime_stmts.append(
+                                _fmt_from(relmod, [alias.name])
+                            )
                             if alias.name in self.existing_all:
                                 self.names.append(alias.name)
                     continue
-                self.stmts.append(with_leading_comments(node))
+                target = (
+                    self.post_runtime_stmts
+                    if (node.module or "").split(".", 1)[0] in local_roots
+                    else self.pre_runtime_stmts
+                )
+                target.append(with_leading_comments(node))
                 for alias in node.names:
                     bound = alias.asname or alias.name
-                    if not bound.startswith("_"):
+                    if not bound.startswith("_") and bound in self.existing_all:
                         self.names.append(bound)
             elif isinstance(node, ast.Import):
-                self.stmts.append(with_leading_comments(node))
+                roots = {alias.name.split(".", 1)[0] for alias in node.names}
+                target = (
+                    self.post_runtime_stmts
+                    if roots & local_roots
+                    else self.pre_runtime_stmts
+                )
+                target.append(with_leading_comments(node))
                 for alias in node.names:
                     bound = (alias.asname or alias.name).split(".")[0]
-                    if not bound.startswith("_"):
+                    if not bound.startswith("_") and bound in self.existing_all:
                         self.names.append(bound)
             elif isinstance(node, ast.ImportFrom) and node.level >= 1:
                 base_parts = (node.module or "").split(".") if node.module else []
@@ -257,30 +375,22 @@ class _Preserved:
                 ]
                 rel = "." * node.level + (node.module or "")
                 if mod_objs:
-                    self.stmts.append(_fmt_from(rel, [a.name for a in mod_objs]))
+                    self.post_runtime_stmts.append(
+                        _fmt_from(rel, [a.name for a in mod_objs])
+                    )
                     for a in mod_objs:
                         self.names.append(a.name)
                         if node.level == 1 and not node.module:
                             self.module_objects.add(a.name)
                 for a in aliases:
-                    self.stmts.append(_fmt_from(rel, [f"{a.name} as {a.asname}"]))
+                    self.post_runtime_stmts.append(
+                        _fmt_from(rel, [f"{a.name} as {a.asname}"])
+                    )
                     self.names.append(a.asname)
                 for a in unders:
-                    self.stmts.append(_fmt_from(rel, [a.name]))
+                    self.post_runtime_stmts.append(_fmt_from(rel, [a.name]))
                     if a.name in self.existing_all:
                         self.names.append(a.name)
-            else:
-                self.const_stmts.append(with_leading_comments(node))
-                if isinstance(node, ast.Assign):
-                    for t in node.targets:
-                        if isinstance(t, ast.Name) and is_upper_const(t.id):
-                            self.names.append(t.id)
-                elif (
-                    isinstance(node, ast.AnnAssign)
-                    and isinstance(node.target, ast.Name)
-                    and is_upper_const(node.target.id)
-                ):
-                    self.names.append(node.target.id)
 
 
 def _descend(base: Path, parts: list[str]) -> Path:
@@ -317,6 +427,27 @@ def _pin_block(pin_name: str) -> str:
     )
 
 
+def _fmt_lazy_exports(targets: dict[str, tuple[str, str]]) -> str:
+    if not targets:
+        return "_LAZY_EXPORTS: dict[str, tuple[str, str]] = {}"
+    lines = ["_LAZY_EXPORTS: dict[str, tuple[str, str]] = {"]
+    for name, (module, attribute) in sorted(targets.items()):
+        one = f'    "{name}": ("{module}", "{attribute}"),'
+        if len(one) <= MAX_LINE:
+            lines.append(one)
+        else:
+            lines.extend(
+                (
+                    f'    "{name}": (',
+                    f'        "{module}",',
+                    f'        "{attribute}",',
+                    "    ),",
+                )
+            )
+    lines.append("}")
+    return "\n".join(lines)
+
+
 def _compose_init(
     preserved: _Preserved,
     exports: dict[str, list[str]],
@@ -333,30 +464,44 @@ def _compose_init(
     preserved_names = set(preserved.names)
     dropped: list[str] = []
     gen_imports: list[str] = []
+    lazy_targets = dict(preserved.foreign_lazy_targets)
     exported: list[str] = []
     for relmod in sorted(exports):
         dropped.extend(f"{relmod}:{n}" for n in exports[relmod] if n in preserved_names)
         names = [n for n in exports[relmod] if n not in preserved_names]
         if not names:
             continue
-        gen_imports.append(_fmt_import(relmod, names))
+        eager = sorted(set(names) & preserved.referenced_names)
+        lazy = sorted(set(names) - set(eager))
+        if eager:
+            gen_imports.append(_fmt_import(relmod, eager))
+        lazy_targets.update({name: (relmod, name) for name in lazy})
         exported.extend(names)
 
     parts = [preserved.doc if preserved.doc else f'"""{default_doc}"""']
     if preserved.future_stmts:
         parts.append("\n".join(preserved.future_stmts))
-    if preserved.const_stmts:
-        parts.append("\n\n".join(preserved.const_stmts))
+    if preserved.pre_runtime_stmts:
+        parts.append(_join_stmts(preserved.pre_runtime_stmts))
+    parts.append("from cara._LazyExports import _install_lazy_exports")
     if pin_name:
         parts.append(_pin_block(pin_name))
-    if preserved.stmts:
-        parts.append(_join_stmts(preserved.stmts))
+    if preserved.post_runtime_stmts:
+        parts.append(_join_stmts(preserved.post_runtime_stmts))
     if gen_imports:
         parts.append("\n".join(gen_imports))
+    if preserved.after_import_stmts:
+        # Ruff requires two blank lines around top-level declarations. The
+        # outer composer already contributes one separator newline on each
+        # side, so this block supplies the remaining one and uses three
+        # newlines between declarations.
+        parts.append("\n" + "\n\n\n".join(preserved.after_import_stmts) + "\n")
 
     all_names = set(exported) | preserved_names | ({pin_name} if pin_name else set())
     all_names_sorted = sorted(all_names)
+    parts.append(_fmt_lazy_exports(lazy_targets))
     parts.append(_fmt_all(all_names_sorted))
+    parts.append("_install_lazy_exports(__name__, _LAZY_EXPORTS)")
     if preserved.post_stmts:
         parts.append(_join_stmts(preserved.post_stmts))
     return "\n\n".join(parts) + "\n", all_names_sorted, dropped
@@ -386,14 +531,6 @@ def _dotted_name(path: Path, root: Path, prefix: str) -> str:
     if path == root:
         return prefix
     return prefix + "." + ".".join(path.relative_to(root).parts)
-
-
-@dataclass(slots=True)
-class BarrelPlan:
-    """Result of one generator pass."""
-
-    changed: list[str] = field(default_factory=list)
-    collisions: list[str] = field(default_factory=list)
 
 
 def _regenerate_tree(

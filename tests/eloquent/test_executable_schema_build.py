@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from cara.eloquent.schema.Schema import FieldBuilder, Schema
+from cara.eloquent.schema.FieldBuilder import FieldBuilder
+from cara.eloquent.schema.Schema import Schema
 
 
 def test_schema_build_executes_composite_unique_and_index_declarations() -> None:
@@ -50,6 +51,24 @@ def test_schema_build_executes_column_index_and_timestamp_modifiers() -> None:
 
     assert indexed.to_dict()["params"]["index"] is True
     assert timestamp.to_dict()["params"]["use_current"] is True
+
+
+def test_schema_build_rejects_duplicate_explicit_and_expanded_columns() -> None:
+    with pytest.raises(ValueError, match="duplicate column.*tenant_id"):
+        Schema.build(
+            lambda field: (
+                field.unsigned_big_integer("tenant_id"),
+                field.string("tenant_id"),
+            )
+        )
+
+    with pytest.raises(ValueError, match="duplicate column.*created_at"):
+        Schema.build(
+            lambda field: (
+                field.datetime("created_at"),
+                field.timestamps(),
+            )
+        )
 
 
 @pytest.mark.parametrize(

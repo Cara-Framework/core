@@ -28,15 +28,17 @@ import pytest
 
 from cara.eloquent import DatabaseManager
 from cara.eloquent.models.Model import Model
+from cara.testing.FacadeSwap import swap
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _register_memory_connection():
     """Instantiating a model validates its connection; no query is executed."""
-    DatabaseManager.get_instance().set_database_config(
+    manager = DatabaseManager(
         "app", {"app": {"driver": "sqlite", "database": ":memory:"}}
     )
-    yield
+    with swap("DB", manager):
+        yield
 
 
 class _Row(Model):

@@ -17,10 +17,13 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import sys
+import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from cara.exceptions import CaraException
 
 
 def _find_project_root() -> Path:
@@ -35,7 +38,6 @@ def _find_project_root() -> Path:
     for candidate in [here, *here.parents]:
         if (candidate / "pytest.ini").exists() and (candidate / "app").is_dir():
             return candidate
-    from cara.exceptions import CaraException
 
     raise CaraException(
         "Could not locate the app project root from "
@@ -114,7 +116,6 @@ def stub_modules(*dotted_names: str) -> None:
     Prefer :func:`stub_modules_scoped` in tests — that one cleans up
     after itself so test order doesn't matter.
     """
-    import types
 
     for name in dotted_names:
         if name in sys.modules:

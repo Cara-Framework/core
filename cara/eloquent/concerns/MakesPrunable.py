@@ -119,7 +119,7 @@ class MakesPrunable:
         total = 0
 
         while True:
-            ids = list(self.prunable().take(batch_size).pluck(primary_key))
+            ids = list(self.prunable().limit(batch_size).pluck(primary_key))
             if not ids:
                 break
 

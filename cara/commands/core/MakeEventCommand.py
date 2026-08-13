@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -15,10 +15,22 @@ from cara.support import paths
 @command(
     name="make:event",
     help="Generate a new Event class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--force": "Overwrite existing event file",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing event file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MakeEventCommand(CommandBase):
     """Generate Event classes with enhanced configuration."""

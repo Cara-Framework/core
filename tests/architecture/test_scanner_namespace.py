@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.architecture.Manifest import Manifest, ManifestRoots
+from cara.architecture.Manifest import Manifest
+from cara.architecture.ManifestRoots import ManifestRoots
 from cara.architecture.scanners import ImportForm, SourceShape
 from tests.architecture._fixtures import write
 

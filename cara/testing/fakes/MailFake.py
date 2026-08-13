@@ -7,20 +7,9 @@ who got what without touching SMTP.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
 from typing import Any
 
-
-@dataclass
-class SentMail:
-    to: list[str] = field(default_factory=list)
-    cc: list[str] = field(default_factory=list)
-    bcc: list[str] = field(default_factory=list)
-    subject: str | None = None
-    body: str | None = None
-    template: str | None = None
-    context: dict = field(default_factory=dict)
-    mailable: Any | None = None
+from .SentMail import SentMail
 
 
 def _as_list(x: None | str | Iterable[str]) -> list[str]:

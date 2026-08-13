@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from cara.eloquent.casts.primitives import DecimalCast
+from cara.eloquent.casts.DecimalCast import DecimalCast
 
 
 def test_decimal_get_returns_none_for_unparseable_input():

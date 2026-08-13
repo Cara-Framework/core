@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -15,12 +15,36 @@ from cara.support import paths
 @command(
     name="make:controller",
     help="Generate a new Controller class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--force": "Overwrite existing controller file",
-        "--resource": "Generate a resource controller with CRUD methods",
-        "--api": "Generate an API controller with JSON responses",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing controller file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--resource",
+            "help": "Generate a resource controller with CRUD methods",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--api",
+            "help": "Generate an API controller with JSON responses",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MakeControllerCommand(CommandBase):
     """Generate Controller classes with enhanced configuration."""

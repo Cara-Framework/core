@@ -1,4 +1,12 @@
-"""The one JSON encode rule for every wire cara writes.
+"""The one JSON encode rule for every wire Cara writes.
+
+Every outbound JSON boundary uses this encoder: buffered and streaming HTTP,
+SSE, websockets, broadcasts and ``Model.to_json``. ``Model.to_array`` keeps a
+``Decimal`` exact; the actual wire emits its digits as a JSON string. The
+boundary tests exercise those real paths so a float projection cannot return.
+
+Historical incident record
+--------------------------
 
 Before this module a single ``Decimal`` left the framework as four
 different things depending on which door it walked out of, and the
@@ -14,15 +22,12 @@ boundary                                     wire value
 ``StreamingResponse._format_sse_event``      ``"19.99"``
 ``Socket.send_json``                         ``19.99``     (IEEE-754 double)
 ``RedisBroadcaster`` publish                 ``19.99``     (IEEE-754 double)
-``Model.to_json`` / ``Model.to_array``       ``19.99``     (IEEE-754 double)
+``Model.to_json`` / ``Model.to_array``       ``"19.99"`` / ``Decimal``
 ``JsonCacheCodec``                           ``{"t": "decimal", "v": "19.99"}``
 ``SignedJsonJobSerializer``                  ``QueueException`` — refused
 ===========================================  ==============================
 
-This module closed the first two float rows. **The model row is still
-open and is not this module's to close** — see "The model boundary
-still disagrees" below. Read that section before trusting a money field
-that came out of a model.
+All float rows and the model pre-encoding downgrade are closed.
 
 The table is not taken on trust: ``tests/support/test_json_encoding.py``
 re-measures every row through its real send path, so an edit to any
@@ -64,35 +69,12 @@ accident, via ``default=str``, but they emitted it). This module moves
 the websocket and broadcast dissenters onto that incumbent contract; it
 does not invent a new behaviour.
 
-The model boundary still disagrees — deliberately, for now
-----------------------------------------------------------
-``Model.serialize`` walks its own attributes and rewrites every
-``Decimal`` as ``float(value)`` **before** any encoder is reached
-(``cara/eloquent/models/Model.py``, in the "Handle remaining datetime and
-decimal types" loop). ``to_array`` is that method, and ``to_json`` is
-``to_array`` plus an encoder — so by the time this module sees a model's
-money it is already a double, and no change here can recover the digits.
-The result is a live split that an endpoint shows in one response:
-
-    response.json({"total": Decimal("19.99")})      -> {"total": "19.99"}
-    response.json(order.to_array())                 -> {"total": 19.99}
-
-That is not left standing because it is right. It is left standing
-because it is a **product wire contract**, not a framework one: both
-frontends type model-sourced money as a TypeScript ``number`` and do
-arithmetic on it (dashboard ``lib/api/{orders,billing,products,profit}``
-and storefront ``types/api.ts`` are the dense cases). Flipping
-``serialize`` to string money is a coordinated product change — API
-resources, generated contracts and every consumer in the same change,
-per §5's no-shims rule — and a framework lane that flipped it
-unilaterally would break two dashboards to fix a rounding error nobody
-had measured yet. ``cara.support.Decimals`` documents the same trade
-from the opt-in side.
-
-Until that migration happens: hand this module a ``Decimal`` and it
-survives; hand it a model's ``to_array()`` and the money was already
-spent. Resources that care about exact money must read the attribute
-(``order.total`` is still a ``Decimal``) rather than the serialized dict.
+Model boundary
+--------------
+``Model.serialize`` preserves ``Decimal`` and ``Model.to_json`` calls this
+encoder. Consequently a model attribute and a hand-built resource share the
+same exact-string wire rule; ``to_array`` remains a Python-domain structure,
+not a covert lossy serialization boundary.
 
 Timestamps
 ----------

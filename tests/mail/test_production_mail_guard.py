@@ -47,7 +47,7 @@ def mail_config(monkeypatch: pytest.MonkeyPatch):
     """Seed the Configuration singleton with a mail section and return a
     setter for the default driver. ``monkeypatch.setitem`` restores the
     singleton's dict after each test, so no cross-test pollution."""
-    Configuration()  # ensure the bare singleton exists
+    Configuration.empty()
     config_store = Configuration._instance._config
 
     def _set(default_driver: str) -> None:

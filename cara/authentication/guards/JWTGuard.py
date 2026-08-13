@@ -7,22 +7,27 @@ Clean, focused JWT authentication with all functionality in a single class.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import logging
 import secrets
 import time
 from contextvars import ContextVar
 from typing import Any
 
-from cara.authentication.contracts import Authenticatable, Guard
+from cara.authentication.contracts import Guard
 from cara.authentication.SessionPolicy import AUTH_SECURITY_MAX_WINDOW
 from cara.exceptions import (
     AuthenticationConfigurationException,
+    ServiceUnavailableException,
     TokenBlacklistedException,
     TokenExpiredException,
     TokenInvalidException,
     UserNotFoundException,
 )
 from cara.facades import Cache
+from cara.http import current_request
+
+from . import _JWTTokenLifecycle
 
 # Per-request cache for the resolved user / consumed token. Lives in a
 # ContextVar so each asyncio task (one per HTTP request / WS connection)
@@ -96,47 +101,61 @@ class JWTGuard(Guard):
     ):
         # Validate PyJWT dependency
         try:
-            global jwt
-            import jwt
+            import jwt as jwt_module  # local: heavy optional dep
         except ImportError as e:
             raise AuthenticationConfigurationException(
                 "PyJWT is required for JWT authentication. "
                 "Please install it with: pip install PyJWT"
             ) from e
+        self._jwt = jwt_module
 
-        if len(secret.encode("utf-8")) < 32:
+        if not isinstance(secret, str) or len(secret.encode("utf-8")) < 32:
             raise AuthenticationConfigurationException(
                 "JWT signing secret must contain at least 32 bytes"
             )
-        if algorithm not in _ALLOWED_ALGORITHMS:
+        if not isinstance(algorithm, str) or algorithm not in _ALLOWED_ALGORITHMS:
             raise AuthenticationConfigurationException(
                 f"JWT algorithm must be one of {sorted(_ALLOWED_ALGORITHMS)}"
             )
-        if not 0 < int(ttl) <= 3600:
+        if isinstance(ttl, bool) or not isinstance(ttl, int) or not 0 < ttl <= 3600:
             raise AuthenticationConfigurationException(
                 "JWT access-token TTL must be between 1 and 3600 seconds"
             )
-        if int(refresh_ttl) <= int(ttl):
+        if (
+            isinstance(refresh_ttl, bool)
+            or not isinstance(refresh_ttl, int)
+            or refresh_ttl <= ttl
+        ):
             raise AuthenticationConfigurationException(
                 "JWT refresh-token TTL must be longer than the access-token TTL"
             )
-        if int(refresh_ttl) > int(AUTH_SECURITY_MAX_WINDOW.total_seconds()):
+        if refresh_ttl > int(AUTH_SECURITY_MAX_WINDOW.total_seconds()):
             raise AuthenticationConfigurationException(
                 "JWT refresh-token TTL must not exceed 30 days"
             )
-        if int(blacklist_grace_period) < 0:
+        if (
+            isinstance(blacklist_grace_period, bool)
+            or not isinstance(blacklist_grace_period, int)
+            or blacklist_grace_period < 0
+        ):
             raise AuthenticationConfigurationException(
                 "JWT blacklist grace period cannot be negative"
             )
-        if not blacklist_enabled:
+        if blacklist_enabled is not True:
             raise AuthenticationConfigurationException(
                 "JWT refresh-token rotation requires blacklist support"
             )
-        if not issuer or not audience:
-            raise AuthenticationConfigurationException(
-                "JWT issuer and audience must be configured"
-            )
-
+        for name, value in (
+            ("issuer", issuer),
+            ("audience", audience),
+            ("user_model", user_model),
+            ("header_name", header_name),
+            ("header_prefix", header_prefix),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise AuthenticationConfigurationException(
+                    f"JWT {name} must be a non-empty string"
+                )
         # Configuration
         self.application = application
         self.secret = secret
@@ -155,6 +174,13 @@ class JWTGuard(Guard):
         # User model
         self.user_model = user_model
         self._user_class = self._load_user_class(user_model)
+        if not callable(getattr(self._user_class, "authenticate_jwt", None)):
+            raise AuthenticationConfigurationException(
+                "JWT user model must implement authenticate_jwt(user_id, claims)"
+            )
+        self._user = None
+        self._token = None
+        self._last_payload = None
 
         # Authentication state is stored in module-level ContextVars
         # (see top of file). ``self._user`` / ``self._token`` are
@@ -200,12 +226,17 @@ class JWTGuard(Guard):
         except _AUTH_FAILURES:
             _logger.debug("JWT authentication check failed", exc_info=True)
             return False
-        except Exception:
+        except ServiceUnavailableException:
+            raise
+        except Exception as exc:
             _logger.warning(
                 "JWT authentication check failed unexpectedly",
                 exc_info=True,
             )
-            return False
+            raise ServiceUnavailableException(
+                "Authentication temporarily unavailable",
+                retry_after=5,
+            ) from exc
 
     def guest(self) -> bool:
         """Check if the current request is a guest."""
@@ -236,46 +267,7 @@ class JWTGuard(Guard):
     def id(self) -> Any | None:
         """Get the ID of the authenticated user."""
         user = self.user()
-        if user and hasattr(user, "get_auth_id"):
-            return user.get_auth_id()
-        elif user and hasattr(user, "get_auth_identifier"):
-            return user.get_auth_identifier()
-        return None
-
-    def attempt(self, credentials: dict[str, Any]) -> bool:
-        """Attempt to authenticate using credentials."""
-        username = credentials.get("email") or credentials.get("username")
-        password = credentials.get("password")
-
-        if not username or not password:
-            return False
-
-        try:
-            # Find user by email/username
-            user = self._user_class.where("email", username).first()
-            if not user:
-                return False
-
-            # Validate password
-            if self._validate_password(user, password):
-                self._user = user
-                return True
-
-            return False
-        except Exception:
-            _logger.warning(
-                "JWT credential authentication failed unexpectedly",
-                exc_info=True,
-            )
-            return False
-
-    def login(self, user: Authenticatable) -> str:
-        """Log a user in and return JWT token."""
-        if not isinstance(user, Authenticatable):
-            raise TypeError("User must implement Authenticatable")
-
-        self._user = user
-        return self._generate_token(user)
+        return user.get_auth_id() if user is not None else None
 
     def logout(self) -> None:
         """Log the user out and blacklist current token."""
@@ -300,12 +292,17 @@ class JWTGuard(Guard):
         except _AUTH_FAILURES:
             _logger.debug("JWT token validation failed", exc_info=True)
             return False
-        except Exception:
+        except ServiceUnavailableException:
+            raise
+        except Exception as exc:
             _logger.warning(
                 "JWT token validation failed unexpectedly",
                 exc_info=True,
             )
-            return False
+            raise ServiceUnavailableException(
+                "Authentication temporarily unavailable",
+                retry_after=5,
+            ) from exc
 
     def resolve_refresh_token_user(self, token: str) -> Any | None:
         """Decode a refresh token and return the associated user (or None)."""
@@ -321,12 +318,17 @@ class JWTGuard(Guard):
         except _AUTH_FAILURES:
             _logger.debug("Refresh token user resolution failed", exc_info=True)
             return None
-        except Exception:
+        except ServiceUnavailableException:
+            raise
+        except Exception as exc:
             _logger.warning(
                 "Refresh token user resolution failed unexpectedly",
                 exc_info=True,
             )
-            return None
+            raise ServiceUnavailableException(
+                "Authentication temporarily unavailable",
+                retry_after=5,
+            ) from exc
 
     def consume_refresh_token_user(self, token: str) -> Any | None:
         """Atomically claim a refresh token and resolve its current user.
@@ -352,13 +354,14 @@ class JWTGuard(Guard):
         except _AUTH_FAILURES:
             _logger.debug("Refresh token claim failed", exc_info=True)
             return None
-        except Exception:
+        except ServiceUnavailableException:
+            raise
+        except Exception as exc:
             _logger.warning("Refresh token claim failed unexpectedly", exc_info=True)
-            return None
-
-    def blacklist_token(self, token: str) -> None:
-        """Public wrapper around _blacklist_token for external callers."""
-        self._blacklist_token(token)
+            raise ServiceUnavailableException(
+                "Authentication temporarily unavailable",
+                retry_after=5,
+            ) from exc
 
     def issue_websocket_ticket(self, access_token: str) -> str:
         """Exchange a valid access JWT for a short-lived one-time WS ticket.
@@ -460,7 +463,7 @@ class JWTGuard(Guard):
                     str(payload["fid"]), ttl=max(ttl, self.refresh_ttl)
                 )
             return won
-        except jwt.InvalidTokenError, jwt.ExpiredSignatureError:
+        except self._jwt.InvalidTokenError, self._jwt.ExpiredSignatureError:
             _logger.debug("Refresh token consume failed", exc_info=True)
             return False
 
@@ -510,8 +513,6 @@ class JWTGuard(Guard):
         every token invalid).
         """
         try:
-            from cara.http.request.Context import current_request
-
             request = current_request.get()
             header_value = request.header(self.header_name)
 
@@ -531,12 +532,17 @@ class JWTGuard(Guard):
         except LookupError, RuntimeError:
             _logger.debug("No request context for JWT extraction", exc_info=True)
             return None
-        except Exception:
+        except ServiceUnavailableException:
+            raise
+        except Exception as exc:
             _logger.warning(
                 "JWT token extraction failed unexpectedly",
                 exc_info=True,
             )
-            return None
+            raise ServiceUnavailableException(
+                "Authentication request state temporarily unavailable",
+                retry_after=5,
+            ) from exc
 
     def _resolve_user_from_token(self, token: str) -> Any | None:
         """Resolve user from JWT token payload.
@@ -568,27 +574,24 @@ class JWTGuard(Guard):
         except _AUTH_FAILURES:
             _logger.debug("JWT user resolution from token failed", exc_info=True)
             return None
-        except Exception:
+        except ServiceUnavailableException:
+            raise
+        except Exception as exc:
             _logger.warning(
                 "JWT user resolution from token failed unexpectedly",
                 exc_info=True,
             )
-            return None
+            raise ServiceUnavailableException(
+                "Authentication temporarily unavailable",
+                retry_after=5,
+            ) from exc
 
     def _resolve_user_by_id(
         self, user_id: str, context: dict[str, Any] = None
     ) -> Any | None:
         """Resolve user by ID with optional context - Generic JWT authentication."""
         try:
-            # Generic JWT authentication - call authenticate_jwt if available
-            if hasattr(self._user_class, "authenticate_jwt"):
-                user = self._user_class.authenticate_jwt(user_id, context or {})
-            else:
-                user = None
-                if hasattr(self._user_class, "where"):
-                    user = self._user_class.where("user_id", user_id).first()
-                if user is None:
-                    user = self._user_class.find(user_id)
+            user = self._user_class.authenticate_jwt(user_id, context or {})
 
             if user is None:
                 return None
@@ -602,12 +605,38 @@ class JWTGuard(Guard):
                 return None
             return user
 
-        except Exception:
+        except AuthenticationConfigurationException, ServiceUnavailableException:
+            raise
+        except Exception as exc:
             _logger.warning(
                 "JWT user resolution by ID failed unexpectedly",
                 exc_info=True,
             )
-            return None
+            raise ServiceUnavailableException(
+                "Identity store temporarily unavailable",
+                retry_after=5,
+            ) from exc
+
+    @staticmethod
+    def _require_auth_id(user: Any) -> str | int:
+        """Return a stable scalar subject or reject the model contract."""
+        try:
+            identifier = user.get_auth_id()
+        except (AttributeError, NotImplementedError, TypeError, ValueError) as exc:
+            raise AuthenticationConfigurationException(
+                "Authenticatable users must expose a stable auth id"
+            ) from exc
+        if isinstance(identifier, bool) or not isinstance(identifier, (str, int)):
+            raise AuthenticationConfigurationException(
+                "Authenticatable auth id must be a non-empty string or positive integer"
+            )
+        if (isinstance(identifier, int) and identifier < 1) or (
+            isinstance(identifier, str) and not identifier.strip()
+        ):
+            raise AuthenticationConfigurationException(
+                "Authenticatable auth id must be a non-empty string or positive integer"
+            )
+        return identifier
 
     @staticmethod
     def _require_auth_version(user: Any) -> int:
@@ -629,337 +658,17 @@ class JWTGuard(Guard):
             )
         return version
 
-    def _validate_password(self, user: Any, password: str) -> bool:
-        """Validate user password."""
-        try:
-            if hasattr(user, "verify_password"):
-                return user.verify_password(password)
-            elif hasattr(user, "get_auth_password"):
-                from cara.encryption import Hash
-
-                return Hash.check(password, user.get_auth_password())
-            return False
-        except Exception:
-            _logger.warning(
-                "JWT password validation failed unexpectedly",
-                exc_info=True,
-            )
-            return False
-
-    def _decode_token(
-        self,
-        token: str,
-        verify_exp: bool = True,
-        *,
-        check_token_blacklist: bool = True,
-    ) -> dict[str, Any]:
-        """
-        Decode and validate JWT token.
-
-        Args:
-            token: JWT token string
-            verify_exp: Whether to verify expiration
-
-        Returns:
-            Dict containing token payload
-
-        Raises:
-            TokenBlacklistedException: If token is blacklisted
-            TokenExpiredException: If token is expired
-            TokenInvalidException: If token is invalid
-        """
-        try:
-            payload = self._decode_signed_token(token, verify_exp=verify_exp)
-        except jwt.ExpiredSignatureError:
-            raise TokenExpiredException("Token expired")
-        except jwt.InvalidTokenError:
-            raise TokenInvalidException("Invalid token")
-
-        # Verify the signature and mandatory registered claims BEFORE touching
-        # cache. Invalid attacker-controlled strings must not become Redis I/O.
-        if (
-            check_token_blacklist
-            and self.blacklist_enabled
-            and self._is_blacklisted(token)
-        ):
-            raise TokenBlacklistedException("Token has been blacklisted")
-        if self._is_family_revoked(str(payload["fid"])):
-            raise TokenBlacklistedException("Token family has been revoked")
-
-        # Per-user revocation cutoff. After a security-sensitive change
-        # (password reset, email change, "log out all sessions"), the
-        # caller bumps ``jwt_user_revoke:{sub}`` to ``now``. Any token
-        # with ``iat`` at or before that cutoff is treated as
-        # revoked even though its signature is still valid. This is the
-        # missing primitive that lets ``change_email`` actually expire
-        # outstanding sessions instead of leaving stolen tokens live
-        # for the full refresh-TTL window.
-        #
-        # Fail-closed contract on cache backend errors (round 30):
-        #   * ``Cache.get`` returning ``None`` / ``0`` is the legitimate
-        #     "no revocation event recorded for this user" branch — fall
-        #     through normally and accept the token.
-        #   * A cache backend EXCEPTION (Redis down, connection reset,
-        #     serialization error) MUST NOT silently bypass the check.
-        #     Pre-fix the bare ``except Exception: pass`` swallowed
-        #     these and let a revoked JWT keep authenticating during a
-        #     Redis outage — exactly the wrong direction for a
-        #     security/availability trade-off. A user who is
-        #     accidentally locked out can recover by re-logging in;
-        #     a leaked token that keeps working has no recovery path
-        #     because the legitimate owner doesn't know the token was
-        #     ever stolen.
-        sub = payload.get("sub")
-        iat = payload.get("iat")
-        if sub and iat is not None:
-            try:
-                cutoff = Cache.get(f"jwt_user_revoke:{sub}", 0, strict=True)
-            except Exception as exc:
-                # Cache backend failure — fail CLOSED. We don't know
-                # whether this user's tokens were revoked; treat them
-                # as if they were. Log at ERROR so ops can spot the
-                # Redis outage in the dashboards. A user who is
-                # accidentally locked out can recover by re-logging in;
-                # a leaked token that keeps working has no recovery
-                # path because the legitimate owner doesn't know the
-                # token was ever stolen.
-                try:
-                    from cara.facades import Log
-
-                    Log.error(
-                        "JWTGuard._decode_token: revocation-cutoff cache read failed for sub=%s; failing closed: %s: %s",
-                        sub,
-                        type(exc).__name__,
-                        exc,
-                        category="cara.auth.jwt",
-                        exc_info=True,
-                    )
-                except ImportError:
-                    pass
-                raise TokenBlacklistedException(
-                    "Token revocation status unavailable; failing closed."
-                ) from exc
-
-            # Cache.get(..., 0) returning ``None`` / ``0`` is the
-            # legitimate "no revocation event recorded" branch — fall
-            # through and accept the token. Only a positive cutoff
-            # whose value equals or exceeds the token's ``iat`` rejects.
-            if cutoff and float(iat) <= float(cutoff):
-                raise TokenBlacklistedException(
-                    "Token revoked: issued before user-level revocation cutoff"
-                )
-
-        return payload
-
-    def revoke_user_sessions(self, user_id: Any, ttl: int | None = None) -> None:
-        """Revoke every JWT issued before now for the given user.
-
-        Sets a per-user ``iat`` cutoff in cache so any token (access or
-        refresh) issued before this call is rejected by ``_decode_token``.
-        TTL defaults to ``refresh_ttl`` because once the longest-lived
-        token type expires naturally, the cutoff is no longer needed.
-        """
-        cache_ttl = ttl if ttl is not None else max(self.refresh_ttl, self.ttl)
-        Cache.put(
-            f"jwt_user_revoke:{user_id}",
-            time.time(),
-            cache_ttl,
-            strict=True,
-        )
-
-    def revoke_token_family(self, family_id: str, ttl: int | None = None) -> None:
-        """Revoke one login/refresh family without signing out other devices."""
-        if not family_id:
-            raise ValueError("family_id is required")
-        cache_ttl = ttl if ttl is not None else self.refresh_ttl
-        Cache.put(
-            f"jwt_family_revoke:{family_id}",
-            True,
-            cache_ttl,
-            strict=True,
-        )
-
-    def _is_family_revoked(self, family_id: str) -> bool:
-        return bool(
-            Cache.get(
-                f"jwt_family_revoke:{family_id}",
-                False,
-                strict=True,
-            )
-        )
-
-    def _decode_signed_token(
-        self, token: str, *, verify_exp: bool = True
-    ) -> dict[str, Any]:
-        return jwt.decode(
-            token,
-            self.secret,
-            algorithms=[self.algorithm],
-            audience=self.audience,
-            issuer=self.issuer,
-            options={
-                "verify_exp": verify_exp,
-                "require": list(_REQUIRED_CLAIMS),
-            },
-        )
-
-    def generate_token_with_ttl(
-        self,
-        user: Authenticatable,
-        ttl: int,
-        token_type: str = TOKEN_TYPE_ACCESS,
-        extra_claims: dict | None = None,
-        *,
-        family_id: str | None = None,
-    ) -> str:
-        """Generate JWT token for user with custom TTL and type.
-
-        The `token_type` becomes the `typ` claim — used by refresh() and
-        validate_refresh_token() to ensure access tokens can't be swapped
-        in for refresh tokens or vice versa.
-
-        ``extra_claims`` are merged into the payload LAST-BUT-PROTECTED:
-        reserved claims (sub/iat/exp/typ) always win, so a caller can add
-        markers (e.g. an impersonation ``imp`` claim) but can never forge
-        identity or lifetime.
-        """
-        now = time.time()
-        subject = str(
-            user.get_auth_id()
-            if hasattr(user, "get_auth_id")
-            else user.get_auth_identifier()
-        )
-        reserved = {
-            "sub": subject,
-            "iat": now,
-            "exp": now + ttl,
-            "typ": token_type,
-            "jti": secrets.token_urlsafe(24),
-            "fid": family_id or secrets.token_urlsafe(24),
-            "iss": self.issuer,
-            "aud": self.audience,
-            "ver": self._require_auth_version(user),
-        }
-
-        # Use user's custom payload if available
-        if hasattr(user, "to_jwt_payload") and callable(user.to_jwt_payload):
-            payload = dict(user.to_jwt_payload() or {})
-            if extra_claims:
-                payload.update(extra_claims)
-            payload.update(reserved)
-        else:
-            payload = {**(extra_claims or {}), **reserved}
-
-        return jwt.encode(payload, self.secret, algorithm=self.algorithm)
-
-    def generate_access_token(
-        self,
-        user: Authenticatable,
-        extra_claims: dict | None = None,
-        *,
-        family_id: str | None = None,
-    ) -> str:
-        """Generate access token with configured TTL."""
-        return self.generate_token_with_ttl(
-            user,
-            self.ttl,
-            TOKEN_TYPE_ACCESS,
-            extra_claims=extra_claims,
-            family_id=family_id,
-        )
-
-    def generate_refresh_token(
-        self,
-        user: Authenticatable,
-        extra_claims: dict | None = None,
-        *,
-        family_id: str | None = None,
-    ) -> str:
-        """Generate refresh token with configured refresh TTL."""
-        return self.generate_token_with_ttl(
-            user,
-            self.refresh_ttl,
-            TOKEN_TYPE_REFRESH,
-            extra_claims=extra_claims,
-            family_id=family_id,
-        )
-
-    def generate_token_pair(
-        self,
-        user: Authenticatable,
-        extra_claims: dict | None = None,
-        *,
-        family_id: str | None = None,
-    ) -> dict[str, str]:
-        """Mint an access/refresh pair bound to one rotation family."""
-        family = family_id or secrets.token_urlsafe(24)
-        return {
-            "access_token": self.generate_access_token(
-                user, extra_claims=extra_claims, family_id=family
-            ),
-            "refresh_token": self.generate_refresh_token(
-                user, extra_claims=extra_claims, family_id=family
-            ),
-        }
-
-    def _generate_token(self, user: Authenticatable) -> str:
-        """Generate JWT access token for user."""
-        return self.generate_token_with_ttl(user, self.ttl, TOKEN_TYPE_ACCESS)
-
-    def _blacklist_token(self, token: str) -> None:
-        """Add token to blacklist.
-
-        We store a SHA-256 hash rather than the raw token so a cache dump
-        or log line can't be replayed as a bearer token. Collision risk is
-        negligible for SHA-256 over the token space.
-        """
-        if not self.blacklist_enabled:
-            return
-
-        try:
-            payload = self._decode_signed_token(token, verify_exp=False)
-        except jwt.InvalidTokenError:
-            _logger.warning("Refusing to blacklist an invalid JWT", exc_info=True)
-            return
-
-        exp = payload.get("exp", 0)
-        ttl = max(0, int(exp - time.time()) + self.blacklist_grace_period)
-        if ttl > 0:
-            # Security state writes are fail-closed. Callers must know when a
-            # logout/revocation did not reach the backing store; reporting
-            # success while a bearer token remains live is unsafe.
-            Cache.put(
-                f"jwt_blacklist:{_hash_token(token)}",
-                True,
-                ttl,
-                strict=True,
-            )
-
-    def _is_blacklisted(self, token: str) -> bool:
-        """Check if token is blacklisted (by hash — see _blacklist_token).
-
-        Fails CLOSED: if the cache is unavailable, we treat the token
-        as blacklisted (reject). This aligns with the revocation cutoff
-        fail-closed policy and prevents revoked tokens from authenticating
-        during Redis outages.
-        """
-        if not self.blacklist_enabled:
-            return False
-
-        try:
-            return bool(
-                Cache.get(
-                    f"jwt_blacklist:{_hash_token(token)}",
-                    False,
-                    strict=True,
-                )
-            )
-        except Exception:
-            _logger.warning(
-                "JWT blacklist check failed — failing closed (treating as blacklisted)",
-                exc_info=True,
-            )
-            return True
+    _decode_token = _JWTTokenLifecycle._decode_token
+    revoke_user_sessions = _JWTTokenLifecycle._revoke_user_sessions
+    revoke_token_family = _JWTTokenLifecycle._revoke_token_family
+    _is_family_revoked = _JWTTokenLifecycle._is_family_revoked
+    _decode_signed_token = _JWTTokenLifecycle._decode_signed_token
+    generate_token_with_ttl = _JWTTokenLifecycle._generate_token_with_ttl
+    generate_access_token = _JWTTokenLifecycle._generate_access_token
+    generate_refresh_token = _JWTTokenLifecycle._generate_refresh_token
+    generate_token_pair = _JWTTokenLifecycle._generate_token_pair
+    _blacklist_token = _JWTTokenLifecycle._blacklist_token
+    _is_blacklisted = _JWTTokenLifecycle._is_blacklisted
 
     def _load_user_class(self, user_model: str):
         """Load user model class safely."""
@@ -968,9 +677,9 @@ class JWTGuard(Guard):
             module_name = ".".join(parts[:-1])
             class_name = parts[-1]
 
-            import importlib
-
             module = importlib.import_module(module_name)
             return getattr(module, class_name)
-        except Exception as e:
-            raise ImportError(f"Cannot import user model: {user_model}") from e
+        except (AttributeError, ImportError, TypeError, ValueError) as exc:
+            raise AuthenticationConfigurationException(
+                f"Cannot import auth user model {user_model!r}"
+            ) from exc

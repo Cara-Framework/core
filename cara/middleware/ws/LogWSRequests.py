@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from cara.facades import Log
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
 from cara.support import mask_ip
 from cara.websocket import Socket
 

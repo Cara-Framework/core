@@ -6,6 +6,7 @@ Laravel-style middleware management with parameter parsing support.
 from __future__ import annotations
 
 import contextlib
+import inspect as _inspect
 from collections.abc import Iterator
 
 from cara.exceptions import RouteMiddlewareNotFoundException
@@ -49,10 +50,6 @@ class MiddlewareCapsule:
             self._global_middleware.append(middleware)
         return self
 
-    def add(self, middleware: MiddlewareType) -> MiddlewareCapsule:
-        """Add global middleware (alias for add_global)."""
-        return self.add_global(middleware)
-
     def create_group(self, name: str) -> MiddlewareCapsule:
         """Create a new middleware group."""
         if name not in self._route_middleware:
@@ -67,10 +64,6 @@ class MiddlewareCapsule:
         if middleware not in self._route_middleware[group]:
             self._route_middleware[group].append(middleware)
         return self
-
-    def add_route_middleware(self, group: str, mw: MiddlewareType) -> MiddlewareCapsule:
-        """Add route middleware (alias for add_to_group)."""
-        return self.add_to_group(group, mw)
 
     def add_alias(self, name: str, middleware: MiddlewareType) -> MiddlewareCapsule:
         """Add middleware alias for easier reference in routes."""
@@ -186,7 +179,6 @@ class MiddlewareCapsule:
                     # broad except and logged as an opaque error,
                     # silently skipping cleanup. Inspect the return
                     # and await ONLY when awaitable.
-                    import inspect as _inspect
 
                     result = self._instance.terminate(request, response)
                     if _inspect.isawaitable(result):

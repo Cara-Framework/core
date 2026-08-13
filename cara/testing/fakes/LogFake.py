@@ -12,18 +12,9 @@ Supports both direct string messages and printf-style format strings:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
-
-@dataclass
-class LogRecord:
-    """One captured log call."""
-
-    level: str
-    message: str
-    category: str | None = None
-    extra: dict = field(default_factory=dict)
+from .LogRecord import LogRecord
 
 
 class LogFake:

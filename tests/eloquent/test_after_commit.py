@@ -140,7 +140,7 @@ def test_nested_transactions_fire_on_outermost_commit_only():
 def test_db_manager_after_commit_delegates_and_defers():
     """``DatabaseManager.after_commit`` (the DB facade target) defers
     inside a txn and runs immediately outside one."""
-    dm = DatabaseManager()
+    dm = DatabaseManager("app", {"app": {"driver": "sqlite"}})
     conn = _FakeConnection()
     # Pin our fake on the manager's resolver so transactions use it.
     resolver = dm._ensure_resolver()

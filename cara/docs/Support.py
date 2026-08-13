@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
 
-from cara.docs.Manifest import DocsManifest
+from cara.docs.DocsManifest import DocsManifest
 
 Say = Callable[[str], None]
 

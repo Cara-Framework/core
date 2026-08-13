@@ -8,7 +8,10 @@ handling.
 
 from __future__ import annotations
 
-from cara.http import Request, Response
+import builtins
+
+from cara.http.request.Request import Request
+from cara.http.response.Response import Response
 
 
 class Controller:
@@ -17,7 +20,6 @@ class Controller:
         # ``SupportProvider`` registers ``builtins.app`` at boot — importing
         # ``cara.helpers`` here instead would re-enter ``cara.configuration``
         # mid-initialization (circular import through the facades loader).
-        import builtins
 
         self.application = builtins.app()
         self.request: Request = None  # Populated when the controller is invoked

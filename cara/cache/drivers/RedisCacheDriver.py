@@ -9,42 +9,20 @@ from __future__ import annotations
 
 import logging
 
-# Payloads above this size emit a one-time warning per key so operators
-# notice runaway cache-as-blob patterns (e.g. caching a full search
-# response that ballooned past 1 MB). Configurable via the
-# ``cache.large_value_bytes`` config key; default 256 KB.
+# Payloads above the configured driver threshold emit a one-time warning per
+# key so operators notice runaway cache-as-blob patterns.
 from typing import Any
 
 from cara.cache.codecs import JsonCacheCodec
-from cara.cache.contracts import Cache
+from cara.cache.contracts import CacheContract
 from cara.cache.Observer import notify_cache_event
 from cara.exceptions import CacheConfigurationException
 from cara.facades import Log
 
 _logger = logging.getLogger("cara.cache.redis")
 
-# Resolved lazily on first cache write — NOT at import time. The driver
-# module is imported during bootstrap, before ``load_dotenv`` populates
-# ``load_dotenv`` from ``.env``, so an import-time read would freeze the
-# default and silently ignore ``cache.large_value_bytes``. Reading on
-# first use (job-processing time) guarantees the configured value wins.
-_LARGE_VALUE_BYTES: int | None = None
-_LARGE_VALUE_WARNED: set[str] = set()
 
-
-def _large_value_threshold() -> int:
-    global _LARGE_VALUE_BYTES
-    if _LARGE_VALUE_BYTES is None:
-        try:
-            from cara.configuration import config
-
-            _LARGE_VALUE_BYTES = int(config("cache.large_value_bytes", 262144))
-        except TypeError, ValueError:
-            _LARGE_VALUE_BYTES = 262144
-    return _LARGE_VALUE_BYTES
-
-
-class RedisCacheDriver(Cache):
+class RedisCacheDriver(CacheContract):
     """
     Stores cache entries in Redis.
 
@@ -85,7 +63,16 @@ class RedisCacheDriver(Cache):
         ssl_cert_reqs: str = "required",
         signing_key: str | bytes | None = None,
         max_nodes: int | None = None,
+        large_value_bytes: int = 262144,
     ):
+        if (
+            isinstance(large_value_bytes, bool)
+            or not isinstance(large_value_bytes, int)
+            or large_value_bytes < 1
+        ):
+            raise CacheConfigurationException(
+                "cache.large_value_bytes must be a positive integer"
+            )
         self._base_prefix = prefix or ""
         self._codec = JsonCacheCodec(
             self._resolve_signing_key(signing_key), max_nodes=max_nodes
@@ -96,10 +83,12 @@ class RedisCacheDriver(Cache):
         self._prefix = f"{self._base_prefix}{separator}{self._codec.NAMESPACE}:"
         self._value_prefix = f"{self._prefix}v:"
         self._counter_prefix = f"{self._prefix}c:"
-        self._default_ttl = default_ttl
+        self._default_ttl = self._resolve_ttl(None, default_ttl)
+        self._large_value_bytes = large_value_bytes
+        self._large_value_warned: set[str] = set()
         self._validate_connection_params(host, port, db)
         try:
-            import redis
+            import redis  # local: heavy optional dep
         except ImportError as e:
             raise CacheConfigurationException(
                 "redis is required for RedisCacheDriver. "
@@ -192,7 +181,7 @@ class RedisCacheDriver(Cache):
     def _counter_key(self, key: str) -> str:
         return f"{self._counter_prefix}{key}"
 
-    def get(self, key: str, default: Any = None, *, strict: bool = False) -> Any:
+    def get(self, key: str, default: Any = None, *, strict: bool = True) -> Any:
         redis_key = self._value_key(key)
         try:
             raw_data = self._client.get(redis_key)
@@ -214,9 +203,8 @@ class RedisCacheDriver(Cache):
             notify_cache_event("get", "hit", key, len(raw_data))
             return value
         except CacheConfigurationException as decode_error:
-            # Old pickle/raw-string values and corrupt/tampered envelopes are
-            # never deserialized. Delete on first read so remember() can
-            # repopulate under the clean codec-versioned namespace.
+            # Corrupt/tampered envelopes are never deserialized. Delete on
+            # first read so remember() can repopulate clean state.
             Log.warning(
                 "[RedisCacheDriver] codec validation failed for '%s' (entry deleted): %s",
                 key,
@@ -228,11 +216,11 @@ class RedisCacheDriver(Cache):
             except Exception:
                 _logger.warning("self-heal delete failed", exc_info=True)
             notify_cache_event("get", "error", key, None)
-            if strict:
-                raise CacheConfigurationException(
-                    f"Corrupt cache value for security-sensitive key '{key}'"
-                ) from decode_error
-            return default
+            if not strict:
+                return default
+            raise CacheConfigurationException(
+                f"Corrupt cache value for key '{key}'"
+            ) from decode_error
 
     def put(
         self,
@@ -240,31 +228,34 @@ class RedisCacheDriver(Cache):
         value: Any,
         ttl: int | None = None,
         *,
-        strict: bool = False,
+        strict: bool = True,
     ) -> None:
         redis_key = self._value_key(key)
         try:
             payload = self._codec.encode(value)
         except CacheConfigurationException as e:
-            # Silently swallowing serialisation failures was the
-            # original bug — callers using ``Cache.add(key, True,
-            # ttl)`` as a flight-claim got a silent False back, which
-            # they (correctly) read as "another worker won the claim",
-            # so the in-flight job never ran. Surface the real cause.
+            if not strict:
+                Log.warning(
+                    "[RedisCacheDriver] disposable value for '%s' is not cacheable: %s",
+                    key,
+                    e,
+                    category="cache",
+                )
+                notify_cache_event("put", "error", key, None)
+                return
             raise CacheConfigurationException(
                 f"Cannot encode value for cache key '{key}' ({type(value).__name__}): {e}"
             ) from e
 
-        ttl_seconds = ttl if (ttl is not None) else self._default_ttl
+        ttl_seconds = self._resolve_ttl(ttl, self._default_ttl)
         payload_size = len(payload)
-        _threshold = _large_value_threshold()
-        if payload_size > _threshold and key not in _LARGE_VALUE_WARNED:
-            _LARGE_VALUE_WARNED.add(key)
+        if payload_size > self._large_value_bytes and key not in self._large_value_warned:
+            self._large_value_warned.add(key)
             Log.warning(
                 "[RedisCacheDriver] large cache value: key='%s' size=%sB threshold=%sB — consider normalising or sharding the payload",
                 key,
                 payload_size,
-                _threshold,
+                self._large_value_bytes,
                 category="cache",
             )
         try:
@@ -299,7 +290,7 @@ class RedisCacheDriver(Cache):
                 "[RedisCacheDriver] forget failed for '%s': %s", key, e, category="cache"
             )
             notify_cache_event("forget", "error", key, None)
-            return False
+            raise
 
     def pull(self, key: str, default: Any = None) -> Any:
         """Atomically return and delete ``key`` using Redis ``GETDEL``."""
@@ -323,14 +314,16 @@ class RedisCacheDriver(Cache):
 
         try:
             value = self._codec.decode(raw_data)
-        except CacheConfigurationException:
+        except CacheConfigurationException as exc:
             Log.warning(
-                "[RedisCacheDriver] pulled corrupt/legacy value for '%s'",
+                "[RedisCacheDriver] pulled corrupt value for '%s'",
                 key,
                 category="cache",
             )
             notify_cache_event("pull", "error", key, len(raw_data))
-            return default
+            raise CacheConfigurationException(
+                f"Corrupt one-time cache value for key '{key}'"
+            ) from exc
 
         notify_cache_event("pull", "hit", key, len(raw_data))
         return value
@@ -359,14 +352,11 @@ class RedisCacheDriver(Cache):
                     break
         except Exception as e:
             Log.warning("[RedisCacheDriver] flush failed: %s", e, category="cache")
+            raise
 
     def has(self, key: str) -> bool:
         """Check if a key exists in cache."""
-        try:
-            return self._client.exists(self._value_key(key), self._counter_key(key)) > 0
-        except Exception:
-            _logger.warning("redis operation failed", exc_info=True)
-            return False
+        return self._client.exists(self._value_key(key), self._counter_key(key)) > 0
 
     def add(
         self,
@@ -398,7 +388,7 @@ class RedisCacheDriver(Cache):
                 f"Cannot encode flight-claim value for key '{key}': {e}"
             ) from e
 
-        ttl_seconds = ttl if (ttl is not None) else self._default_ttl
+        ttl_seconds = self._resolve_ttl(ttl, self._default_ttl)
         payload_size = len(payload)
         try:
             if ttl_seconds > 0:
@@ -419,27 +409,6 @@ class RedisCacheDriver(Cache):
             notify_cache_event("add", "error", key, payload_size)
             raise
 
-    def remember(
-        self,
-        key: str,
-        ttl: int,
-        callback,
-    ) -> Any:
-        """
-        Get value from cache or execute callback and cache the result.
-
-        If the key exists and hasn't expired, return the cached value.
-        Otherwise, execute the callback, cache its result, and return it.
-        """
-        _missing = object()
-        cached = self.get(key, _missing)
-        if cached is not _missing:
-            return cached
-
-        value = callback()
-        self.put(key, value, ttl)
-        return value
-
     # Lua: compare the stored payload against the expected one and
     # delete only on equality. EVAL is single-threaded on the Redis
     # server, which is what makes the CAS atomic — non-atomic
@@ -457,12 +426,22 @@ class RedisCacheDriver(Cache):
     def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
         """Atomically increment via Redis INCRBY.
 
-        Counters use their own codec-versioned namespace. If a counter key is
-        corrupt/non-integer, delete it first and start fresh.
+        Counters use their own codec-versioned namespace. Invalid input,
+        corrupt state and backend failures raise; resetting a damaged
+        security counter would weaken every limit that consumes it.
         """
         redis_key = self._counter_key(key)
-        amount = int(amount)
-        ttl = int(ttl) if ttl is not None else None
+        if isinstance(amount, bool) or not isinstance(amount, int):
+            raise TypeError("Cache counter amount must be an integer")
+        if ttl is None:
+            raise CacheConfigurationException(
+                "Cache counters require a positive expiration"
+            )
+        ttl = self._resolve_ttl(ttl, self._default_ttl)
+        if ttl == 0:
+            raise CacheConfigurationException(
+                "Cache counters require a positive expiration"
+            )
         try:
             new_val = self._client.incrby(redis_key, amount)
             # Set TTL on first creation OR refresh TTL if the key
@@ -477,42 +456,20 @@ class RedisCacheDriver(Cache):
                 self._client.expire(redis_key, ttl)
             return new_val
         except Exception as exc:
-            import redis
-
-            if not isinstance(exc, redis.exceptions.ResponseError):
-                # Infra failure (connection refused, timeout, auth) —
-                # PROPAGATE. Swallowing it returned ``amount``, which
-                # silently reset every counter to 1 while Redis was
-                # down: rate limiting, brute-force lockouts and
-                # fail-closed budget caps all read "fresh counter",
-                # and the rate-store's fallback modes (closed/memory/
-                # open) never engaged because they key off this raise.
-                raise
-            # WRONGTYPE — the counter key holds non-integer data. Nuke and
-            # reinitialise; a failure here is an infra failure and propagates.
-            Log.warning(
-                "[RedisCacheDriver] increment WRONGTYPE recovery for '%s'",
+            Log.error(
+                "[RedisCacheDriver] counter increment failed for '%s': %s",
                 key,
+                exc,
                 category="cache",
+                exc_info=True,
             )
-            pipe = self._client.pipeline(transaction=True)
-            pipe.delete(redis_key)
-            if ttl and ttl > 0:
-                pipe.set(redis_key, str(amount), ex=ttl)
-            else:
-                pipe.set(redis_key, str(amount))
-            pipe.execute()
-            return amount
+            raise
 
     def forget_if(self, key: str, expected_value: Any) -> bool:
         redis_key = self._value_key(key)
         owner_token = self._codec.encode(expected_value)
-        try:
-            result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, owner_token)
-            return bool(result) and int(result) > 0
-        except Exception as e:
-            Log.warning("[RedisCacheDriver] forget_if failed: %s", e, category="cache")
-            return False
+        result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, owner_token)
+        return bool(result) and int(result) > 0
 
     def ttl(self, key: str) -> int | None:
         """Remaining time-to-live for ``key`` in seconds.
@@ -525,13 +482,9 @@ class RedisCacheDriver(Cache):
         """
         counter_key = self._counter_key(key)
         value_key = self._value_key(key)
-        try:
-            t = self._client.ttl(counter_key)
-            if t == -2:
-                t = self._client.ttl(value_key)
-        except Exception:
-            _logger.warning("redis operation failed", exc_info=True)
-            return None
+        t = self._client.ttl(counter_key)
+        if t == -2:
+            t = self._client.ttl(value_key)
         if t is None or t < 0:
             return None
         return int(t)
@@ -551,23 +504,19 @@ class RedisCacheDriver(Cache):
         """
         deleted_count = 0
 
-        try:
-            for namespace_prefix in (self._value_prefix, self._counter_prefix):
-                cursor = 0
-                while True:
-                    cursor, keys = self._client.scan(
-                        cursor=cursor,
-                        match=f"{namespace_prefix}{pattern}",
-                        count=100,
-                    )
+        for namespace_prefix in (self._value_prefix, self._counter_prefix):
+            cursor = 0
+            while True:
+                cursor, keys = self._client.scan(
+                    cursor=cursor,
+                    match=f"{namespace_prefix}{pattern}",
+                    count=100,
+                )
 
-                    if keys:
-                        deleted_count += self._client.delete(*keys)
+                if keys:
+                    deleted_count += self._client.delete(*keys)
 
-                    if cursor == 0:
-                        break
+                if cursor == 0:
+                    break
 
-            return deleted_count
-        except Exception:
-            _logger.warning("redis operation failed", exc_info=True)
-            return 0
+        return deleted_count

@@ -12,7 +12,9 @@ from typing import Any
 
 import pendulum
 
+from cara.context import ExecutionContext
 from cara.facades import Log
+from cara.queues.contracts.JobCancelledException import JobCancelledException
 
 
 class JobTracker:
@@ -115,7 +117,6 @@ class JobTracker:
                         job_record.entity_id = entity_id
 
                     # Merge metadata with pipeline_id
-                    from cara.context import ExecutionContext
 
                     enriched_metadata = job_record.metadata or {}
                     enriched_metadata.update(metadata or {})
@@ -275,7 +276,6 @@ class JobTracker:
         """
         if not self.should_job_continue(job_uid, entity_id):
             # Lazy import to avoid circular dependency
-            from cara.queues.contracts.CancellableJob import JobCancelledException
 
             raise JobCancelledException(
                 f"Job {job_uid} cancelled during {operation} for entity {entity_id}"
@@ -505,7 +505,6 @@ class JobTracker:
                 job_uid = str(uuid.uuid4())
 
             # Enrich metadata with pipeline_id from ExecutionContext
-            from cara.context import ExecutionContext
 
             enriched_metadata = dict(metadata or {})
             pipeline_id = ExecutionContext.get_job_id()

@@ -7,6 +7,8 @@ Similar to Laravel facades - services are resolved on first access.
 
 from __future__ import annotations
 
+import builtins
+import logging
 from typing import TYPE_CHECKING, Any
 
 from cara.exceptions import CaraException
@@ -34,20 +36,19 @@ class Facade(type):
             The attribute from the resolved service
 
         Raises:
-            CaraException: If bootstrap is unavailable and no fallback exists
-            AttributeError: If service cannot be resolved or attribute doesn't exist
+            CaraException: If bootstrap or the requested service is unavailable.
+            AttributeError: For private introspection probes only.
         """
+        if cls._is_private_method(attribute):
+            raise AttributeError(
+                f"'{cls.__name__}' object has no attribute '{attribute}'"
+            )
+
         try:
-            import builtins
-
             application = builtins.app()
-        except ImportError, ModuleNotFoundError, TypeError, AttributeError:
-            # Handle application-not-booted with targeted fallbacks
-            # (e.g. running stress tests outside the full Cara framework,
-            # or Python version mismatch causing TypeError on 3.10+ syntax)
+        except AttributeError:
+            # Logging must remain available while boot itself is failing.
             if cls.key == "logger":
-                import logging
-
                 _fallback = logging.getLogger("cara.fallback")
                 if not _fallback.handlers:
                     _h = logging.StreamHandler()
@@ -73,36 +74,25 @@ class Facade(type):
                     return _orig_fn(*args, **safe_kwargs)
 
                 return _safe_log
-            if cls.key == "DB":
-                # Fallback: use DatabaseManager directly when bootstrap fails
-                from cara.eloquent.DatabaseManager import DatabaseManager
-
-                _db = DatabaseManager.get_instance()
-                return getattr(_db, attribute)
-            if cls.key == "validation":
-                # Fallback: use Validation directly when bootstrap fails (common in scripts)
-                from cara.validation import Validation
-
-                return getattr(Validation, attribute)
-            # No fallback available - raise clear error
             raise CaraException(
                 f"Facade '{cls.key}' is unavailable: application container not bootstrapped. "
                 f"Ensure the application is initialized (SupportProvider registers it)."
-            )
-
-        # Handle IPython introspection methods
-        if cls._is_private_method(attribute):
-            raise AttributeError(
-                f"'{cls.__name__}' object has no attribute '{attribute}'"
             )
 
         try:
             service = application.make(cls.key)
             return getattr(service, attribute)
         except Exception as e:
-            logger = cls.get_logger()
-            logger.error("Facade resolution failed for '%s': %s", cls.key, str(e))
-            raise AttributeError(
+            if isinstance(e, CaraException):
+                raise
+            try:
+                logger = cls.get_logger()
+                logger.error("Facade resolution failed for '%s': %s", cls.key, str(e))
+            except Exception:
+                logging.getLogger("cara.facade").exception(
+                    "Facade resolution and structured logging failed"
+                )
+            raise CaraException(
                 f"Facade '{cls.key}' could not resolve '{attribute}': {str(e)}"
             ) from e
 
@@ -133,7 +123,7 @@ class Facade(type):
             "_is_coroutine",
         }
         return (
-            attribute.startswith("_ipython_")
+            attribute.startswith("_")
             or attribute.startswith("_repr_")
             or attribute in private_methods
             # Any dunder (``__partialmethod__``, ``__func__``, ``__wrapped__``,
@@ -162,12 +152,6 @@ class Facade(type):
         Returns:
             A logger instance configured for this facade
         """
-        try:
-            from cara.logging import Logger
+        from cara.logging import Logger  # local: cycle with cara.logging
 
-            return Logger(name=cls.key)
-        except ImportError:
-            # Fallback if logging is not available
-            import logging
-
-            return logging.getLogger(cls.key)
+        return Logger(name=cls.key)

@@ -10,18 +10,34 @@ directly via ``Mail.fake()`` once the testing module patches the
 facade.
 """
 
-from .LogFake import LogFake
-from .MailFake import MailFake
-from .QueueFake import QueueFake
-from .EventFake import EventFake
-from .CacheFake import CacheFake
-from .NotificationFake import NotificationFake
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "CacheFake": (".CacheFake", "CacheFake"),
+    "DispatchedEvent": (".DispatchedEvent", "DispatchedEvent"),
+    "EventFake": (".EventFake", "EventFake"),
+    "LogFake": (".LogFake", "LogFake"),
+    "LogRecord": (".LogRecord", "LogRecord"),
+    "MailFake": (".MailFake", "MailFake"),
+    "NotificationFake": (".NotificationFake", "NotificationFake"),
+    "QueueFake": (".QueueFake", "QueueFake"),
+    "QueuedJob": (".QueuedJob", "QueuedJob"),
+    "SentMail": (".SentMail", "SentMail"),
+    "SentNotification": (".SentNotification", "SentNotification"),
+}
 
 __all__ = [
     "CacheFake",
+    "DispatchedEvent",
     "EventFake",
     "LogFake",
+    "LogRecord",
     "MailFake",
     "NotificationFake",
     "QueueFake",
+    "QueuedJob",
+    "SentMail",
+    "SentNotification",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

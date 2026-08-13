@@ -51,8 +51,6 @@ ANY_SCHEMA: dict[str, Any] = {}
 # want is their first positional argument.
 PASSTHROUGH_WRAPPERS = frozenset(
     {
-        "sanitize_decimals",
-        "_sanitize_decimals",
         "normalize",
         "_sanitize",
         "_filter_missing",
@@ -83,7 +81,10 @@ def const_schema(node: ast.Constant) -> dict[str, Any]:
     if isinstance(value, float):
         return {"type": "number"}
     if isinstance(value, str):
-        return {"type": "string"}
+        # A literal in a wire resource is a discriminator/value contract, not
+        # merely an arbitrary string. OpenAPI 3.0 represents that with a
+        # singleton enum (``const`` only arrived in later JSON Schema dialects).
+        return {"type": "string", "enum": [value]}
     return dict(ANY_SCHEMA)
 
 
@@ -148,12 +149,49 @@ def infer_value_schema(
         return const_schema(node)
     if isinstance(node, (ast.List, ast.Tuple)):
         return {"type": "array", "items": ANY_SCHEMA}
-    if isinstance(node, (ast.Dict, ast.DictComp)):
-        return {"type": "object"}
+    if isinstance(node, ast.Dict):
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        open_schema = False
+        for key, value in zip(node.keys, node.values, strict=False):
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                properties[key.value] = infer_value_schema(
+                    value,
+                    locals_map,
+                    call_types,
+                )
+                required.append(key.value)
+            else:
+                # ``{**bundle}`` / a computed key carries members this AST
+                # cannot name. Keep the visible literal keys, but stay open.
+                open_schema = True
+        schema: dict[str, Any] = {
+            "type": "object",
+            "properties": properties,
+        }
+        if required:
+            schema["required"] = required
+        if open_schema:
+            schema["additionalProperties"] = True
+            schema["x-fields-partial"] = True
+        return schema
+    if isinstance(node, ast.DictComp):
+        return {"type": "object", "additionalProperties": True}
     if isinstance(node, ast.ListComp):
         return {"type": "array", "items": ANY_SCHEMA}
     # ``a if cond else b`` — unify the two branches.
     if isinstance(node, ast.IfExp):
+        # ``None`` is not an unknowable expression here; it is an explicit
+        # nullable branch. Preserve the other branch's registered helper/ref
+        # schema instead of letting the generic ``{}`` sentinel erase it.
+        if _is_none_literal(node.body):
+            return _nullable(
+                infer_value_schema(node.orelse, locals_map, call_types),
+            )
+        if _is_none_literal(node.orelse):
+            return _nullable(
+                infer_value_schema(node.body, locals_map, call_types),
+            )
         return unify(
             infer_value_schema(node.body, locals_map, call_types),
             infer_value_schema(node.orelse, locals_map, call_types),
@@ -168,6 +206,18 @@ def infer_value_schema(
     return dict(ANY_SCHEMA)
 
 
+def _is_none_literal(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
+    if schema == ANY_SCHEMA:
+        return dict(ANY_SCHEMA)
+    out = dict(schema)
+    out["nullable"] = True
+    return out
+
+
 def unify(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     """Merge two candidate schemas for the same key (ternary branches)."""
     if a == b:
@@ -179,18 +229,14 @@ def unify(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
         if a.get("nullable") or b.get("nullable"):
             out["nullable"] = True
         return out
-    # One branch is None/permissive -> keep the typed one but nullable.
-    typed = a if a != ANY_SCHEMA else b
-    out = dict(typed)
-    out["nullable"] = True
-    return out
+    return dict(ANY_SCHEMA)
 
 
 def dict_payload(node: ast.AST) -> ast.Dict | None:
     """Return the payload ``Dict`` a ``return`` statement produces.
 
-    Handles a bare ``return {...}`` and the pass-through wrappers
-    (``return sanitize_decimals({...})``). The ``return self._sanitize(data)``
+    Handles a bare ``return {...}`` and registered pass-through wrappers. The
+    ``return self._sanitize(data)``
     variable case is resolved by the extractor, which tracks the variable.
     """
     if isinstance(node, ast.Dict):

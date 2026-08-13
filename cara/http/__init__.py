@@ -1,78 +1,129 @@
-"""HTTP public API with dependency-isolated lazy exports.
-
-Importing an HTTP client must not eagerly load request body parsing or its
-optional multipart dependency. Server-side types are imported only when a
-consumer asks for the corresponding public symbol.
-"""
+"""Dependency-isolated HTTP public API."""
 
 from __future__ import annotations
 
-from importlib import import_module
-from typing import Any
+from cara._LazyExports import _install_lazy_exports
 
-# EAGER — and it must stay eager. ``Pagination`` names BOTH this package's
-# submodule (cara/http/Pagination.py) and the class inside it. The moment any
-# code imports the submodule, Python binds it as an attribute of this package,
-# which shadows ``__getattr__`` and makes ``from cara.http import Pagination``
-# hand back the MODULE instead of the class — an import-order-dependent break
-# that surfaces as ``module has no attribute 'from_validated'``. Binding the
-# class here wins that race permanently; the dataclass is dependency-free, so
-# nothing is deferred by lazying it anyway.
-from cara.http.Pagination import Pagination as Pagination
-
-# EAGER for the reason directly above: ``ReturnPath`` also names both this
-# package's submodule and the class inside it, so a lazy entry would bind the
-# MODULE the first time ``import_module`` ran and hand every later importer
-# a module where they asked for a class. Pure stdlib, nothing deferred by it.
-from cara.http.ReturnPath import ReturnPath as ReturnPath
-
-_EXPORTS = {
-    "Controller": ("cara.http.controllers", "Controller"),
-    "FormRequest": ("cara.http.requests", "FormRequest"),
-    # The class lives in the taxonomy (§9), so this entry names the taxonomy.
-    # It used to name ``cara.http.Cursor``, which forced that module to keep an
-    # ``import InvalidCursor as InvalidCursor`` re-export alive purely to be
-    # re-imported from here — a backward-compat shim §5 bans outright, and one
-    # that quietly made ``cara.http`` the second place a reader had to look to
-    # find where an exception is defined.
-    "InvalidCursor": ("cara.exceptions.types.http", "InvalidCursor"),
-    "JsonResource": ("cara.http.resources", "JsonResource"),
-    "MissingValue": ("cara.http.resources", "MissingValue"),
-    "Request": ("cara.http.request.Request", "Request"),
-    "ResourceCollection": ("cara.http.resources", "ResourceCollection"),
-    "Response": ("cara.http.response.Response", "Response"),
-    "apply_no_cache": ("cara.http.CacheHeaders", "apply_no_cache"),
-    "apply_private_cache": ("cara.http.CacheHeaders", "apply_private_cache"),
-    "apply_public_swr_cache": (
-        "cara.http.CacheHeaders",
-        "apply_public_swr_cache",
-    ),
-    "assert_editable_fields": ("cara.http.Payload", "assert_editable_fields"),
-    "cursor_fingerprint": ("cara.http.Cursor", "cursor_fingerprint"),
-    "cursor_rules": ("cara.http.Cursor", "cursor_rules"),
-    "decode_cursor": ("cara.http.Cursor", "decode_cursor"),
-    "encode_cursor": ("cara.http.Cursor", "encode_cursor"),
-    "paging_rules": ("cara.http.Pagination", "paging_rules"),
-    "slice_page_with_lookahead": (
-        "cara.http.Cursor",
-        "slice_page_with_lookahead",
-    ),
-    "strip_none_values": ("cara.http.Payload", "strip_none_values"),
-    "validated_query_int": ("cara.http.Payload", "validated_query_int"),
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "BaseResponse": (".response", "BaseResponse"),
+    "BodyLimits": (".BodyLimits", "BodyLimits"),
+    "ContentTypeDetector": (".response", "ContentTypeDetector"),
+    "Controller": (".controllers", "Controller"),
+    "FakeExhaustedError": (".client", "FakeExhaustedError"),
+    "FormRequest": (".requests", "FormRequest"),
+    "Header": (".request", "Header"),
+    "HeaderBag": (".request", "HeaderBag"),
+    "HeaderManager": (".response", "HeaderManager"),
+    "HttpFacade": (".client", "HttpFacade"),
+    "HttpFakeState": (".client", "HttpFakeState"),
+    "Input": (".request", "Input"),
+    "InputBag": (".request", "InputBag"),
+    "InvalidCursor": ("cara.exceptions.types.InvalidCursor", "InvalidCursor"),
+    "InvalidHTTPStatusCode": (".InvalidHTTPStatusCode", "InvalidHTTPStatusCode"),
+    "JsonResource": (".resources", "JsonResource"),
+    "KeyPart": (".request", "KeyPart"),
+    "MakesBodyParsing": (".request", "MakesBodyParsing"),
+    "MakesRequestHelpers": (".request", "MakesRequestHelpers"),
+    "MakesValidationHelpers": (".request", "MakesValidationHelpers"),
+    "MissingValue": (".resources", "MissingValue"),
+    "Pagination": (".Pagination", "Pagination"),
+    "PendingRequest": (".client", "PendingRequest"),
+    "QueryStringParser": (".request", "QueryStringParser"),
+    "Request": (".request", "Request"),
+    "RequestProvider": (".request", "RequestProvider"),
+    "ResourceCollection": (".resources", "ResourceCollection"),
+    "Response": (".response", "Response"),
+    "ResponseFactory": (".response", "ResponseFactory"),
+    "ResponseProvider": (".response", "ResponseProvider"),
+    "StrayHttpRequestError": (".client", "StrayHttpRequestError"),
+    "StreamingResponse": (".response", "StreamingResponse"),
+    "T": (".request", "T"),
+    "UploadedFile": (".request", "UploadedFile"),
+    "activate": (".client", "activate"),
+    "apply_no_cache": (".CacheHeaders", "apply_no_cache"),
+    "apply_private_cache": (".CacheHeaders", "apply_private_cache"),
+    "apply_public_swr_cache": (".CacheHeaders", "apply_public_swr_cache"),
+    "assert_editable_fields": (".Payload", "assert_editable_fields"),
+    "coerce": (".client", "coerce"),
+    "current": (".client", "current"),
+    "current_request": (".request", "current_request"),
+    "cursor_fingerprint": (".Cursor", "cursor_fingerprint"),
+    "cursor_rules": (".Cursor", "cursor_rules"),
+    "deactivate": (".client", "deactivate"),
+    "decode_cursor": (".Cursor", "decode_cursor"),
+    "encode_cursor": (".Cursor", "encode_cursor"),
+    "make_response": (".client", "make_response"),
+    "opt_bool": (".resources", "opt_bool"),
+    "opt_datetime": (".resources", "opt_datetime"),
+    "opt_float": (".resources", "opt_float"),
+    "opt_int": (".resources", "opt_int"),
+    "opt_list": (".resources", "opt_list"),
+    "opt_str": (".resources", "opt_str"),
+    "paging_rules": (".Pagination", "paging_rules"),
+    "slice_page_with_lookahead": (".Cursor", "slice_page_with_lookahead"),
+    "strip_none_values": (".Payload", "strip_none_values"),
+    "validated_query_int": (".Payload", "validated_query_int"),
 }
 
-__all__ = sorted({*_EXPORTS, "Pagination", "ReturnPath"})
+__all__ = [
+    "BaseResponse",
+    "BodyLimits",
+    "ContentTypeDetector",
+    "Controller",
+    "FakeExhaustedError",
+    "FormRequest",
+    "Header",
+    "HeaderBag",
+    "HeaderManager",
+    "HttpFacade",
+    "HttpFakeState",
+    "Input",
+    "InputBag",
+    "InvalidCursor",
+    "InvalidHTTPStatusCode",
+    "JsonResource",
+    "KeyPart",
+    "MakesBodyParsing",
+    "MakesRequestHelpers",
+    "MakesValidationHelpers",
+    "MissingValue",
+    "Pagination",
+    "PendingRequest",
+    "QueryStringParser",
+    "Request",
+    "RequestProvider",
+    "ResourceCollection",
+    "Response",
+    "ResponseFactory",
+    "ResponseProvider",
+    "StrayHttpRequestError",
+    "StreamingResponse",
+    "T",
+    "UploadedFile",
+    "activate",
+    "apply_no_cache",
+    "apply_private_cache",
+    "apply_public_swr_cache",
+    "assert_editable_fields",
+    "coerce",
+    "current",
+    "current_request",
+    "cursor_fingerprint",
+    "cursor_rules",
+    "deactivate",
+    "decode_cursor",
+    "encode_cursor",
+    "make_response",
+    "opt_bool",
+    "opt_datetime",
+    "opt_float",
+    "opt_int",
+    "opt_list",
+    "opt_str",
+    "paging_rules",
+    "slice_page_with_lookahead",
+    "strip_none_values",
+    "validated_query_int",
+]
 
-
-def __getattr__(name: str) -> Any:
-    target = _EXPORTS.get(name)
-    if target is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module_name, attribute = target
-    value = getattr(import_module(module_name), attribute)
-    globals()[name] = value
-    return value
-
-
-def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(__all__))
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

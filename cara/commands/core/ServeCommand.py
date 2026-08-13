@@ -12,15 +12,17 @@ import logging
 import os
 import platform
 import signal
+import socket
 import subprocess
 import sys
 import time
 from multiprocessing import cpu_count
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.configuration import config
 from cara.decorators import command
+from cara.environment import LoadEnvironment
 from cara.exceptions import InvalidArgumentException
 from cara.support import LogColors
 
@@ -30,13 +32,43 @@ _logger = logging.getLogger("cara.serve")
 @command(
     name="serve",
     help="Start the development server with enhanced configuration options.",
-    options={
-        "--host=?": "Server host address (default: 127.0.0.1)",
-        "--port=?": "Server port number (default: 8000)",
-        "--reload": "Enable auto-reload on file changes",
-        "--debug": "Enable debug mode",
-        "--workers=?": "Number of worker processes (default: 1)",
-    },
+    options=[
+        {
+            "name": "--host",
+            "help": "Server host address (default: 127.0.0.1)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--port",
+            "help": "Server port number (default: 8000)",
+            "type": int,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--reload",
+            "help": "Enable auto-reload on file changes",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--debug",
+            "help": "Enable debug mode",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--workers",
+            "help": "Number of worker processes (default: 1)",
+            "type": int,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class ServeCommand(CommandBase):
     """Start development server with enhanced configuration and monitoring."""
@@ -209,8 +241,6 @@ class ServeCommand(CommandBase):
         # Network URL (if not localhost)
         if host == "0.0.0.0":
             try:
-                import socket
-
                 hostname = socket.gethostname()
                 local_ip = socket.gethostbyname(hostname)
                 self.console.print(
@@ -223,7 +253,6 @@ class ServeCommand(CommandBase):
 
     def _show_environment_files(self) -> None:
         """Show loaded environment files."""
-        from cara.environment.Environment import LoadEnvironment
 
         if LoadEnvironment.loaded_files:
             self.console.print()
@@ -246,7 +275,6 @@ class ServeCommand(CommandBase):
         for a live listener up front turns that silent roulette into a
         loud refusal.
         """
-        import socket
 
         probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
         try:

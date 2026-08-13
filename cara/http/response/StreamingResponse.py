@@ -7,6 +7,10 @@ Handles chunked transfers and real-time data streaming.
 
 from __future__ import annotations
 
+import asyncio
+import csv
+import io
+import logging
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
@@ -97,8 +101,6 @@ class StreamingResponse:
                     }
                 )
         except Exception as e:
-            import logging
-
             logging.getLogger("cara.http.stream").error(
                 "Stream generator raised: %s",
                 e,
@@ -147,9 +149,6 @@ class StreamingResponse:
         rows are coalesced up to ``chunk_size`` to avoid one ASGI event per row
         while keeping memory flat for arbitrarily large exports.
         """
-        import asyncio
-        import csv
-        import io
 
         output = io.StringIO(newline="")
         writer = csv.writer(output)

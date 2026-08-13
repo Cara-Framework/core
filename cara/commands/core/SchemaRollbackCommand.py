@@ -45,11 +45,29 @@ _APPLY_LOCK_TIMEOUT_MS = 5000
         "at all) unless --force. Production normally rolls FORWARD; this is "
         "for the window right after a deploy."
     ),
-    options={
-        "--plan=?": "Plan id to reverse (defaults to the most recent applied plan)",
-        "--force": "Reverse even operations that cannot restore the data they removed",
-        "--dry_run": "Show what would be reversed without executing anything",
-    },
+    options=[
+        {
+            "name": "--plan",
+            "help": "Plan id to reverse (defaults to the most recent applied plan)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--force",
+            "help": "Reverse even operations that cannot restore the data they removed",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--dry_run",
+            "help": "Show what would be reversed without executing anything",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class SchemaRollbackCommand(CommandBase):
     def handle(self):

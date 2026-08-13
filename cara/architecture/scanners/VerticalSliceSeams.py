@@ -55,7 +55,7 @@ from cara.architecture._ast_utils import docstring_node_ids, parse, python_files
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
-SEAM_KEY = "vertical_slice_seams"
+_SEAM_KEY = "vertical_slice_seams"
 _UPPER_SNAKE = re.compile(r"^[A-Z0-9_]+$")
 
 
@@ -105,8 +105,15 @@ def _identifier_hits(rel: str, tree: ast.Module, token_re: re.Pattern[str]) -> l
 
 def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[str]:
     """Closing a known evasion: brand tokens smuggled as bare string
-    literals in the four positions a branch/lookup can hide one — never
-    prose, docstrings or comments (structurally out of AST reach here)."""
+    literals in the five positions a branch/lookup can hide one — never
+    prose, docstrings or comments (structurally out of AST reach here).
+
+    Container elements are the fifth position: a ``["amazon", "ebay"]``
+    argument to ``where_in`` or a capability tuple is exactly the
+    branch-by-brand this scanner exists to catch, and it sat structurally
+    invisible to the other four. Only whitespace-free tokens count —
+    prose in containers (step descriptions, error copy) mentions brands
+    without branching on them."""
     doc_ids = docstring_node_ids(tree)
 
     def literal(node: ast.AST) -> str | None:
@@ -144,6 +151,22 @@ def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[st
                 text = literal(arg)
                 if text and token_re.search(text):
                     hits.append(f"call-arg-literal {text!r} (line {arg.lineno})")
+        elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            for element in node.elts:
+                text = literal(element)
+                # Bare tokens only: container elements legitimately carry
+                # prose (step descriptions, error copy) where a brand name
+                # is a word, not a branch. A token has no whitespace —
+                # ``'amazon'`` or ``'feature.ebay-growth'`` — and THAT is
+                # the shape a ``where_in`` list or capability set smuggles.
+                if (
+                    text
+                    and not any(ch.isspace() for ch in text)
+                    and token_re.search(text)
+                ):
+                    hits.append(
+                        f"container-literal {text!r} (line {element.lineno})"
+                    )
     return hits
 
 
@@ -229,7 +252,7 @@ class VerticalSliceSeams:
                 )
             ]
         found = _scan(manifest)
-        allowlist = manifest.seam_allowlists.get(SEAM_KEY, {})
+        allowlist = manifest.seam_allowlists.get(_SEAM_KEY, {})
         findings: list[Finding] = []
         for rel, hits in sorted(found.items()):
             pinned = allowlist.get(rel)

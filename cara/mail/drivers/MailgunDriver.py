@@ -7,17 +7,19 @@ supporting all Mailgun features including regions and attachments.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import Any
 
 import requests
 
 from cara.exceptions import ConfigurationException
-from cara.mail.contracts import Mail
+from cara.facades import Log
+from cara.mail.contracts import MailContract
 from cara.mail.Mailable import validate_custom_header
 
 
-class MailgunDriver(Mail):
+class MailgunDriver(MailContract):
     """Mailgun driver for sending emails via Mailgun API."""
 
     driver_name = "mailgun"
@@ -230,9 +232,5 @@ class MailgunDriver(Mail):
 
     def _log_error(self, message: str, exc_info: bool = False) -> None:
         """Log Mailgun errors via the framework logger with stderr fallback."""
-        try:
-            from cara.facades import Log
-
+        with contextlib.suppress(ImportError, RuntimeError):
             Log.error(message, category="cara.mail.mailgun", exc_info=exc_info)
-        except ImportError:
-            pass

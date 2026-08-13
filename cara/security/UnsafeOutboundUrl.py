@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cara.exceptions.types.Base import CaraException
+from cara.exceptions import CaraException
 
 
 class UnsafeOutboundUrl(CaraException, ValueError):
@@ -16,7 +16,7 @@ class UnsafeOutboundUrl(CaraException, ValueError):
     Also a ``CaraException``, because §9 has ONE taxonomy and an SSRF
     rejection outside it is invisible to ``except CaraException`` — the
     clause a worker wraps around an outbound hop when it wants to fail the
-    job cleanly rather than let an unexpected fault escape. ``types.Base``
+    job cleanly rather than let an unexpected fault escape. ``types.CaraException``
     is imported directly: the security gate is reachable from very early
     boot paths and the ``cara.exceptions`` barrel drags in the foundation.
     """

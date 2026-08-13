@@ -26,8 +26,8 @@ The implementation mirrors ``ThrottleRequests`` for parity:
   * Per-bucket limits come from ``rate.<name>`` config keys
     (e.g. ``rate.ws_connect``) so ops can tune without a code change.
   * Cache failure defaults to fail-CLOSED (reject the handshake).
-    Operators can explicitly select ``rate.fallback_mode = "open"``
-    when availability outweighs abuse protection.
+    The only availability mode is a bounded per-process in-memory counter;
+    there is no uncounted fail-open mode.
   * Limit-exceeded rejects with WebSocket close code 4008, which
     the framework already documents in
     :class:`cara.exceptions.types.websocket.WebSocketException` as
@@ -45,10 +45,11 @@ from collections.abc import Callable
 from typing import Any
 
 from cara.configuration import config
-from cara.exceptions.types.websocket import WebSocketException
+from cara.exceptions import ServiceUnavailableException, WebSocketException
 from cara.facades import Log
 from cara.http.request.Request import _is_trusted_proxy
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
+from cara.rates import attempt_rate_limit
 from cara.support import mask_ip
 from cara.websocket import Socket
 
@@ -73,14 +74,11 @@ class Throttle(Middleware):
         path = self._path(socket)
         key = f"throttle:ws:{self.name}:{ip}:{path}"
 
-        # Shared counting + Redis-down fallback via the same helper the
-        # HTTP throttle uses so both transports honour
-        # the canonical ``rate.fallback_mode`` uniformly.
-        from cara.exceptions import ServiceUnavailableException
-        from cara.rates.MemoryRateStore import attempt_with_fallback
+        # Shared counting + Redis-down denial via the same helper the HTTP
+        # throttle uses so both transports fail closed uniformly.
 
         try:
-            allowed, _remaining, _reset_in, _backend = attempt_with_fallback(
+            allowed, _remaining, _reset_in = attempt_rate_limit(
                 cache_key=key,
                 window_seconds=window,
                 max_attempts=limit,
@@ -95,12 +93,7 @@ class Throttle(Middleware):
             with contextlib.suppress(
                 OSError, RuntimeError, AttributeError, ConnectionError
             ):
-                await socket.send(
-                    {
-                        "type": "websocket.close",
-                        "code": _RATE_LIMIT_CLOSE_CODE,
-                    }
-                )
+                await socket.close(code=_RATE_LIMIT_CLOSE_CODE)
             raise WebSocketException(
                 "WebSocket rate limiter temporarily unavailable",
                 _RATE_LIMIT_CLOSE_CODE,
@@ -118,12 +111,7 @@ class Throttle(Middleware):
             with contextlib.suppress(
                 OSError, RuntimeError, AttributeError, ConnectionError
             ):
-                await socket.send(
-                    {
-                        "type": "websocket.close",
-                        "code": _RATE_LIMIT_CLOSE_CODE,
-                    }
-                )
+                await socket.close(code=_RATE_LIMIT_CLOSE_CODE)
             raise WebSocketException(
                 f"WebSocket connect rate exceeded (>{limit} per {window}s)",
                 _RATE_LIMIT_CLOSE_CODE,

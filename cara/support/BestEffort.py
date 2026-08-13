@@ -37,7 +37,7 @@ def _log_facade():
     ``cara.facades.Facade`` is imported first (e.g. by the test harness's
     ``facade_swap``). Resolving at call time keeps the layering acyclic.
     """
-    from cara.facades import Log
+    from cara.facades import Log  # local: cycle with cara.facades
 
     return Log
 

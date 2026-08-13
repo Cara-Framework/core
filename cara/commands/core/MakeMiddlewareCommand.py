@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -15,10 +15,22 @@ from cara.support import paths
 @command(
     name="make:middleware",
     help="Generate a new Middleware class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--force": "Overwrite existing middleware file",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing middleware file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MakeMiddlewareCommand(CommandBase):
     """Generate Middleware classes with enhanced configuration."""
@@ -129,6 +141,6 @@ class MakeMiddlewareCommand(CommandBase):
         self.info("   Register middleware in Kernel.py:")
         self.info(f"     middleware = ['{class_name}']")
         self.info("   Apply to route:")
-        self.info(f"     @Route(middleware=['{class_name.lower()}'])")
+        self.info(f"     @get(..., middleware=['{class_name.lower()}'])")
         self.info("   Apply to controller:")
-        self.info(f"     @RouteGroup(middleware=['{class_name.lower()}'])")
+        self.info(f"     @routes.api(..., middleware=['{class_name.lower()}'])")

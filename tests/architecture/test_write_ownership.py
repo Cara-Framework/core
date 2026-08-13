@@ -29,6 +29,26 @@ def test_model_tables_require_valid_declared_owner(tmp_path):
     assert any("invalid write owner" in item.message for item in findings)
 
 
+def test_framework_models_are_real_owned_tables_not_exemptions(tmp_path):
+    write(
+        tmp_path / "cara/models/FailedJob.py",
+        'class FailedJob:\n    __table__ = "failed_job"\n',
+    )
+    manifest = replace(
+        _manifest(tmp_path),
+        write_ownership={"product": "api-owned", "failed_job": "services-owned"},
+    )
+
+    assert WriteOwnership.scan(manifest) == []
+
+    missing = replace(manifest, write_ownership={"product": "api-owned"})
+    findings = WriteOwnership.scan(missing)
+    assert any(
+        "failed_job" in item.message and "has no write owner" in item.message
+        for item in findings
+    )
+
+
 def test_owner_deployable_may_write_model(tmp_path):
     write(
         tmp_path / "app/repositories/ProductRepository.py",

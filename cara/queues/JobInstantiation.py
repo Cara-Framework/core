@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import inspect
+import sys
+
+from cara.facades import Log
 
 
 def instantiate_job(application, raw, init_args=(), init_kwargs=None):
@@ -48,8 +51,6 @@ def instantiate_job(application, raw, init_args=(), init_kwargs=None):
 def _emit_make_failure(job_class, error: Exception) -> None:
     """Log a container-resolution failure with stderr fallback."""
     try:
-        from cara.facades import Log
-
         Log.warning(
             "queues.instantiate_job: container.make(%s) failed (%s: %s); falling back to no-arg constructor",
             job_class.__name__,
@@ -58,8 +59,6 @@ def _emit_make_failure(job_class, error: Exception) -> None:
             category="queues",
         )
     except Exception:
-        import sys
-
         print(
             f"queues.instantiate_job: container.make({job_class.__name__}) "
             f"failed ({error.__class__.__name__}: {error}); "

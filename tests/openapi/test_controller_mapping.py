@@ -14,6 +14,7 @@ import pytest
 
 from cara.openapi import (
     ControllerActionMapper,
+    ControllerMetaMapper,
     UnknownDeclaredResource,
     cursor_paginated_actions,
 )
@@ -168,6 +169,22 @@ class ThingController:
 
         with pytest.raises(UnknownDeclaredResource):
             mapper.map()
+
+    def test_meta_declaration_maps_an_action_specific_envelope_resource(
+        self, tmp_path: Path
+    ):
+        controllers = _controllers(
+            tmp_path,
+            ThingController='''
+class ThingController:
+    async def index(self, request, response):
+        """@resource(RowResource[]) @meta(ThingIndexMetaResource)"""
+        return response.paginated(rows)
+''',
+        )
+        assert ControllerMetaMapper(
+            controllers, {"RowResource", "ThingIndexMetaResource"}
+        ).map() == {"ThingController@index": "ThingIndexMetaResource"}
 
 
 class TestCursorDetection:

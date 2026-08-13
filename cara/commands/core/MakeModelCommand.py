@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -17,12 +17,36 @@ from cara.support import paths
 @command(
     name="make:model",
     help="Generate a new Eloquent model class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--table=?": "Specify the database table name",
-        "--fillable=?": "Comma-separated list of fillable attributes",
-        "--force": "Overwrite existing model file",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--table",
+            "help": "Specify the database table name",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--fillable",
+            "help": "Comma-separated list of fillable attributes",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing model file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MakeModelCommand(CommandBase):
     """Generate Eloquent model classes with enhanced configuration."""
@@ -215,14 +239,8 @@ class {class_name}(Model):
         """Show helpful usage tips after model creation."""
         class_name = model_info["class_name"]
 
-        # Models are written to the configured models package (commons.models
-        # by default), not app.models — surface the accurate import path.
-        from cara.support import ModuleManager
-
-        models_mod = ModuleManager.models_module()
-
         self.info("\n💡 Usage Tips:")
-        self.info(f"   • Import: from {models_mod}.{class_name} import {class_name}")
+        self.info(f"   • Import: from app.models import {class_name}")
         self.info(f"   • Create: {class_name}.create({{'name': 'value'}})")
         self.info(f"   • Find: {class_name}.find(1)")
         self.info(f"   • All: {class_name}.all()")

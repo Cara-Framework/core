@@ -41,7 +41,7 @@ from cara.architecture._ast_utils import parse, python_files, relpath
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
-SEAM_KEY = "kernel_direction"
+_SEAM_KEY = "kernel_direction"
 _MUTATION_METHODS = frozenset(
     {
         "create",
@@ -57,6 +57,7 @@ _MUTATION_METHODS = frozenset(
         "upsert",
     }
 )
+_ATOMIC_INVARIANT_METHODS = frozenset({"lock_for_update"})
 _MUTATING_SQL = re.compile(r"\b(?:INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM)\b")
 
 
@@ -96,7 +97,9 @@ def _contains_persistence_mutation(tree: ast.Module) -> bool:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if isinstance(node.func, ast.Attribute) and node.func.attr in _MUTATION_METHODS:
+        if isinstance(node.func, ast.Attribute) and node.func.attr in (
+            _MUTATION_METHODS | _ATOMIC_INVARIANT_METHODS
+        ):
             return True
         sql_fragments = [
             part.value
@@ -184,7 +187,7 @@ class KernelMembership:
     @staticmethod
     def _direction(manifest: Manifest) -> list[Finding]:
         kernel = manifest.roots.kernel
-        allowlist = manifest.seam_allowlists.get(SEAM_KEY, {})
+        allowlist = manifest.seam_allowlists.get(_SEAM_KEY, {})
         hits: dict[str, list[str]] = {}
         if "models" in kernel:
             forbidden = manifest.kernel_packages - {"models"}

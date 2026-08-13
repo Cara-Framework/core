@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.exceptions import CaraException
-from cara.notifications.contracts import Notifiable as NotifiableContract
+from cara.exceptions import CaraException, DriverNotRegisteredException
+from cara.facades import Notification as NotificationFacade
+from cara.notifications.contracts import NotifiableContract
 
 
 class Notifiable(NotifiableContract):
@@ -21,27 +22,25 @@ class Notifiable(NotifiableContract):
     following Laravel's notification pattern.
     """
 
-    def notify(self, notification) -> None:
+    def notify(self, notification) -> bool:
         """
         Send the given notification.
 
         Args:
             notification: Notification instance to send
         """
-        from cara.facades import Notification as NotificationFacade
 
-        NotificationFacade.send(self, notification)
+        return NotificationFacade.send(self, notification)
 
-    def notify_now(self, notification) -> None:
+    def notify_now(self, notification) -> bool:
         """
         Send the given notification immediately.
 
         Args:
             notification: Notification instance to send
         """
-        from cara.facades import Notification as NotificationFacade
 
-        NotificationFacade.send_now(self, notification)
+        return NotificationFacade.send_now(self, notification)
 
     def route_notification_for(self, channel: str) -> Any | None:
         """
@@ -97,10 +96,8 @@ class Notifiable(NotifiableContract):
     def _database_notification_channel():
         """Resolve Cara's conventional polymorphic notification store."""
         try:
-            from cara.facades import Notification as NotificationFacade
-
             channel = NotificationFacade.channel("database")
-        except Exception as exc:
+        except DriverNotRegisteredException as exc:
             raise CaraException(
                 "The database notification channel is not registered."
             ) from exc

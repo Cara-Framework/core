@@ -12,7 +12,7 @@ class MakesTenantScope:
 
     def scope_without_tenant(self, query):
         """Remove tenant filtering only inside an explicit central scope."""
-        from cara.context import Tenancy
+        from cara.context import Tenancy  # local: cycle with cara.context
 
         if not Tenancy.is_central():
             raise RuntimeError(

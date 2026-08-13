@@ -35,17 +35,9 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from .Currency import format_money
+from .Currency import format_money, normalize_currency_code
+from .CurrencyMismatch import CurrencyMismatch as _CurrencyMismatch
 from .Number import to_decimal
-
-
-class CurrencyMismatch(ValueError):
-    """Raised when an operation would mix or silently replace currencies.
-
-    A subclass of ``ValueError`` so callers that don't care about the
-    distinction still catch it with the usual numeric-coercion guards,
-    while currency-aware callers can branch on the precise type.
-    """
 
 
 def _normalize_currency(currency: Any) -> str:
@@ -55,9 +47,9 @@ def _normalize_currency(currency: Any) -> str:
     enforces the same normalisation at its boundary — ``"gbp"`` and ``"GBP"``
     are the same currency and must never be treated as a swap.
     """
-    code = str(currency or "").strip().upper()
-    if not code:
-        raise CurrencyMismatch("Money requires a non-empty currency code")
+    code = normalize_currency_code(currency)
+    if code is None:
+        raise _CurrencyMismatch("Money requires a three-letter ASCII currency code")
     return code
 
 
@@ -112,7 +104,7 @@ class Money:
         """
         new_code = _normalize_currency(currency)
         if new_code != self.currency:
-            raise CurrencyMismatch(
+            raise _CurrencyMismatch(
                 f"Refusing to silently re-denominate {self.currency} as "
                 f"{new_code}; build a new Money explicitly if this is intended"
             )
@@ -123,9 +115,11 @@ class Money:
     def assert_same_currency(self, other: Money) -> None:
         """Raise :class:`CurrencyMismatch` unless ``other`` shares this currency."""
         if not isinstance(other, Money):
-            raise CurrencyMismatch(f"Cannot compare Money against {type(other).__name__}")
+            raise _CurrencyMismatch(
+                f"Cannot compare Money against {type(other).__name__}"
+            )
         if other.currency != self.currency:
-            raise CurrencyMismatch(
+            raise _CurrencyMismatch(
                 f"Currency mismatch: {self.currency} vs {other.currency}"
             )
 
@@ -227,7 +221,7 @@ def _share_of(profit: Any, base: Any, base_label: str) -> Decimal | None:
     if p_amount is None or b_amount is None:
         return None
     if p_currency and b_currency and p_currency != b_currency:
-        raise CurrencyMismatch(
+        raise _CurrencyMismatch(
             f"Cannot express {p_currency} profit as a share of {b_currency} {base_label}"
         )
     if b_amount == 0:
@@ -270,4 +264,4 @@ def markup_ratio(*, profit: Any, cost: Any) -> Decimal | None:
     return _share_of(profit, cost, "cost")
 
 
-__all__ = ["CurrencyMismatch", "Money", "margin_ratio", "markup_ratio"]
+__all__ = ["Money", "margin_ratio", "markup_ratio"]

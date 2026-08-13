@@ -28,6 +28,7 @@ from cara.eloquent import DatabaseManager
 from cara.eloquent.models.Model import Model
 from cara.eloquent.relationships import belongs_to, has_many
 from cara.exceptions import LazyLoadingViolation
+from cara.testing.FacadeSwap import swap
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -35,9 +36,9 @@ def _register_memory_connection():
     """Register an in-memory sqlite connection so models can instantiate
     (building a model touches the query builder, which validates the
     connection). No query is ever executed in these tests."""
-    dm = DatabaseManager.get_instance()
-    dm.set_database_config("app", {"app": {"driver": "sqlite", "database": ":memory:"}})
-    yield
+    dm = DatabaseManager("app", {"app": {"driver": "sqlite", "database": ":memory:"}})
+    with swap("DB", dm):
+        yield
 
 
 @pytest.fixture(autouse=True)

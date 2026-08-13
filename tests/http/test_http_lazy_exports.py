@@ -9,7 +9,7 @@ import sys
 def test_http_client_import_does_not_load_request_stack() -> None:
     code = """
 import sys
-from cara.http.client.HttpClient import HttpFacade
+from cara.http.client.HttpFacade import HttpFacade
 assert HttpFacade is not None
 assert 'cara.http.request.Request' not in sys.modules
 assert 'cara.http.request.mixins.MakesBodyParsing' not in sys.modules

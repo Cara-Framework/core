@@ -3,15 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 from typing import Any
 
-
-@dataclass
-class SentNotification:
-    notifiable: Any
-    notification: Any
-    channels: list[str] | None = None
+from .SentNotification import SentNotification
 
 
 class NotificationFake:

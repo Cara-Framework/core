@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 import contextlib
 import inspect
 from decimal import Decimal
+from typing import Self
 
 from cara.facades import DB
 
 from .Blueprint import Blueprint
+from .BlueprintExecutor import BlueprintExecutor
+from .FieldBuilder import FieldBuilder
 from .SchemaConnectionManager import SchemaConnectionManager
 from .SchemaQueryExecutor import SchemaQueryExecutor
 from .Table import Table
@@ -103,16 +101,12 @@ class Schema:
         self,
         dry=False,
         connection=None,
-        connection_class=None,
-        platform=None,
         grammar=None,
-        connection_details=None,
         schema=None,
     ):
         """Initialize Schema with dependency injection - follows Dependency Inversion Principle"""
         self._dry = dry
         self.grammar = grammar
-        self.connection_details = connection_details or {}
         self._blueprint = None
         self.schema = schema
 
@@ -120,15 +114,7 @@ class Schema:
         self.connection_manager = SchemaConnectionManager(DB)
         self.query_executor = SchemaQueryExecutor(self.connection_manager, dry)
 
-        # Set up connection if provided
-        if connection or connection_class or platform:
-            # Legacy support - use provided values
-            self.connection_manager.connection = connection
-            self.connection_manager.connection_class = connection_class
-            self.connection_manager.platform = platform or DB.get_platform(connection)
-        else:
-            # Use default connection
-            self.on(connection)
+        self.on(connection)
 
     def on(self, connection_key) -> Self:
         """
@@ -205,30 +191,15 @@ class Schema:
         sql = self.connection_manager.platform.compile_column_exists(table, column)
         return self.query_executor.execute_query(sql)
 
-    def drop_table(self, table, query_only=False):
-        """Drop table - delegates to query executor"""
+    def drop(self, table, query_only=False):
+        """Drop a table through the query executor."""
         sql = self.connection_manager.platform.compile_drop_table(table)
         return self.query_executor.execute_query(sql)
 
-    def drop(self, *args, **kwargs):
-        """Alias for drop_table - Interface segregation"""
-        return self.drop_table(*args, **kwargs)
-
-    def drop_table_if_exists(self, table, exists=False, query_only=False):
-        """Drop table if exists - delegates to query executor"""
+    def drop_if_exists(self, table, exists=False, query_only=False):
+        """Drop a table when it exists through the query executor."""
         sql = self.connection_manager.platform.compile_drop_table_if_exists(table)
         return self.query_executor.execute_query(sql)
-
-    def drop_if_exists(self, *args, **kwargs):
-        """Alias for drop_table_if_exists - Laravel-style naming (``dropIfExists``).
-
-        Migrations (and the make:migration generator output) call
-        ``schema.drop_if_exists(table)``; without this alias every such
-        migration died with ``'Schema' object has no attribute
-        'drop_if_exists'`` and ``migrate`` aborted mid-run. Mirrors the
-        existing ``drop`` → ``drop_table`` alias above.
-        """
-        return self.drop_table_if_exists(*args, **kwargs)
 
     def rename(self, table, new_name):
         """Rename table - delegates to query executor"""
@@ -267,11 +238,6 @@ class Schema:
         Blueprint DSL does not cover (e.g. ``CREATE EXTENSION``, trigram/GIN
         indexes, custom ``ALTER TABLE`` constraints).
         """
-        return self.query_executor.execute_query(sql, bindings)
-
-    def statement(self, sql, bindings=()):
-        """Alias for raw — mirrors the Laravel ``DB::statement`` naming so
-        migrations reading Laravel docs feel natural."""
         return self.query_executor.execute_query(sql, bindings)
 
     # === Postgres-specific index helpers ==========================================
@@ -397,187 +363,27 @@ class Schema:
         # Call the lambda function to get field definitions
         field_definitions = field_builder_func(field_builder)
 
+        # Downstream model schemas are keyed by column name, so a duplicate
+        # would silently overwrite the earlier declaration. Expanded helpers
+        # pay the same invariant as explicit columns.
+        expanded_names: list[str] = []
+        for definition in field_definitions:
+            if definition.field_type == "timestamps":
+                expanded_names.extend(("created_at", "updated_at"))
+            elif definition.field_type == "soft_deletes":
+                expanded_names.append("deleted_at")
+            elif definition.name is not None:
+                expanded_names.append(str(definition.name))
+        duplicates = sorted(
+            {name for name in expanded_names if expanded_names.count(name) > 1}
+        )
+        if duplicates:
+            raise ValueError(
+                "Schema declares duplicate column(s): " + ", ".join(duplicates)
+            )
+
         # Convert to the expected format for ModelDiscoverer
         return field_definitions
-
-
-class BlueprintExecutor:
-    """Wrapper that executes Blueprint SQL after context manager exits"""
-
-    def __init__(self, blueprint, schema):
-        self.blueprint = blueprint
-        self.schema = schema
-
-    def __enter__(self):
-        return self.blueprint.__enter__()
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        # First let blueprint store its SQL
-        result = self.blueprint.__exit__(exc_type, exc_value, exc_traceback)
-
-        # If no exception, execute the SQL using schema's query executor
-        if exc_type is None:
-            sql_statements = self.blueprint.get_sql()
-            if isinstance(sql_statements, list):
-                for sql in sql_statements:
-                    if sql and sql.strip():
-                        self.schema.query_executor.execute_query(sql.strip())
-            elif sql_statements and sql_statements.strip():
-                self.schema.query_executor.execute_query(sql_statements.strip())
-
-        return result
-
-
-class FieldBuilder:
-    """Field builder for new Schema.build syntax."""
-
-    @staticmethod
-    def _constraint(
-        kind: str,
-        columns: str | list[str],
-        name: str | None,
-    ) -> FieldDefinition:
-        """Build a standalone index/constraint declaration.
-
-        ``Schema.build`` is executable framework API, not merely syntax for
-        the migration AST parser. Keep its runtime shape aligned with the
-        parser so model fields can be inspected without special-casing.
-        """
-        if not isinstance(columns, str | list):
-            raise ValueError(f"{kind} columns must be a string or list of strings")
-        normalized = [columns] if isinstance(columns, str) else list(columns)
-        if not normalized or any(
-            not isinstance(column, str) or not column for column in normalized
-        ):
-            raise ValueError(f"{kind} columns must be non-empty strings")
-        if name is not None and (not isinstance(name, str) or not name):
-            raise ValueError(f"{kind} name must be a non-empty string")
-        definition = FieldDefinition(kind, None, columns=normalized)
-        definition.params["name"] = name
-        return definition
-
-    def string(self, name, length=255):
-        return FieldDefinition("string", name, length=length)
-
-    def text(self, name):
-        return FieldDefinition("text", name)
-
-    def integer(self, name):
-        return FieldDefinition("integer", name)
-
-    def tiny_integer(self, name):
-        return FieldDefinition("tiny_integer", name)
-
-    def small_integer(self, name):
-        return FieldDefinition("small_integer", name)
-
-    def medium_integer(self, name):
-        return FieldDefinition("medium_integer", name)
-
-    def big_integer(self, name):
-        return FieldDefinition("big_integer", name)
-
-    def unsigned_integer(self, name):
-        return FieldDefinition("unsigned_integer", name)
-
-    def unsigned_big_integer(self, name):
-        return FieldDefinition("unsigned_big_integer", name)
-
-    def decimal(self, name, precision=10, scale=2):
-        return FieldDefinition("decimal", name, precision=precision, scale=scale)
-
-    def boolean(self, name):
-        return FieldDefinition("boolean", name)
-
-    def enum(self, name, options):
-        return FieldDefinition("enum", name, options=options)
-
-    def uuid(self, name):
-        return FieldDefinition("uuid", name)
-
-    def json(self, name):
-        return FieldDefinition("json", name)
-
-    def jsonb(self, name):
-        # Postgres-native binary JSON. Several models call
-        # ``field.jsonb("metadata")``; without this method the call
-        # raised ``AttributeError`` inside ``Schema.build``,
-        # ``MakeMigrationCommand`` swallowed it as a generic ValueError,
-        # and the column quietly disappeared from every generated
-        # migration (every ``metadata`` JSONB field across all tables).
-        return FieldDefinition("jsonb", name)
-
-    def timestamp(self, name):
-        return FieldDefinition("timestamp", name)
-
-    def datetime(self, name):
-        return FieldDefinition("datetime", name)
-
-    def date(self, name):
-        return FieldDefinition("date", name)
-
-    def time(self, name):
-        return FieldDefinition("time", name)
-
-    def float(self, name):
-        return FieldDefinition("float", name)
-
-    def double(self, name):
-        # The drift ran the other way for this one: ``ColumnFactory.double``,
-        # ``PostgresPlatform`` DOUBLE PRECISION and the migration emitter all
-        # speak ``double`` already, but the builder a model actually calls did
-        # not, so ``field.double(...)`` raised AttributeError inside
-        # ``Schema.build`` and the column vanished.
-        return FieldDefinition("double", name)
-
-    def binary(self, name):
-        return FieldDefinition("binary", name)
-
-    def char(self, name, length=255):
-        return FieldDefinition("char", name, length=length)
-
-    def increments(self, name):
-        return FieldDefinition("increments", name)
-
-    def big_increments(self, name):
-        return FieldDefinition("big_increments", name)
-
-    def timestamps(self):
-        """Create timestamps fields (created_at, updated_at)."""
-        return FieldDefinition("timestamps", None)
-
-    def soft_deletes(self):
-        """Create soft delete field (deleted_at)."""
-        return FieldDefinition("soft_deletes", None)
-
-    def foreign(self, field_name):
-        """Create a standalone foreign key definition."""
-        fk_definition = FieldDefinition("foreign_key", None)
-        fk_definition._is_foreign = True
-        fk_definition._foreign_key_config = {
-            "field": field_name,
-            "references": None,
-            "on": None,
-            "on_delete": None,
-            "on_update": None,
-        }
-        return fk_definition
-
-    def unique(
-        self,
-        columns: str | list[str],
-        name: str | None = None,
-    ) -> FieldDefinition:
-        """Declare a standalone single- or multi-column unique constraint."""
-        return self._constraint("unique", columns, name)
-
-    def index(
-        self,
-        columns: str | list[str],
-        name: str | None = None,
-    ) -> FieldDefinition:
-        """Declare a standalone single- or multi-column index."""
-        return self._constraint("index", columns, name)
 
 
 # --- The model field-type vocabulary, derived from the builder above --------
@@ -655,101 +461,3 @@ def _derive_builder_parameters() -> tuple[
 #: ``<field type>`` -> its extra parameter names in positional order.
 #: ``<field type>`` -> ``{parameter: default}`` for the ones that have one.
 FIELD_TYPE_PARAMETERS, FIELD_TYPE_DEFAULTS = _derive_builder_parameters()
-
-
-class FieldDefinition:
-    """Represents a field definition in the new syntax."""
-
-    def __init__(self, field_type, name, **kwargs):
-        self.field_type = field_type
-        self.name = name
-        self.params = kwargs
-        self._nullable = False
-        self._default = None
-        self._unique = False
-        self._index = False
-        self._use_current = False
-        # Foreign key properties
-        self._is_foreign = False
-        self._foreign_key_config = {}
-
-    def nullable(self) -> Self:
-        self._nullable = True
-        return self
-
-    def default(self, value) -> Self:
-        self._default = value
-        return self
-
-    def unique(self) -> Self:
-        """Mark this field as unique."""
-        self._unique = True
-        return self
-
-    def index(self) -> Self:
-        """Index this field."""
-        self._index = True
-        return self
-
-    def use_current(self) -> Self:
-        """Use the database's current timestamp as this field's default."""
-        self._use_current = True
-        return self
-
-    def foreign(self) -> Self:
-        """Mark this field as a foreign key."""
-        self._is_foreign = True
-        self._foreign_key_config = {
-            "field": self.name,
-            "references": None,
-            "on": None,
-            "on_delete": None,
-            "on_update": None,
-        }
-        return self
-
-    def references(self, column) -> Self:
-        """Set the referenced column for foreign key."""
-        if self._is_foreign:
-            self._foreign_key_config["references"] = column
-        return self
-
-    def on(self, table) -> Self:
-        """Set the referenced table for foreign key."""
-        if self._is_foreign:
-            self._foreign_key_config["on"] = table
-        return self
-
-    def on_delete(self, action) -> Self:
-        """Set the ON DELETE action for foreign key."""
-        if self._is_foreign:
-            self._foreign_key_config["on_delete"] = action
-        return self
-
-    def on_update(self, action) -> Self:
-        """Set the ON UPDATE action for foreign key."""
-        if self._is_foreign:
-            self._foreign_key_config["on_update"] = action
-        return self
-
-    def to_dict(self):
-        """Convert to the format expected by ModelDiscoverer."""
-        params = self.params.copy()
-        if self._nullable:
-            params["nullable"] = True
-        if self._default is not None:
-            params["default"] = self._default
-        if self._unique:
-            params["unique"] = True
-        if self._index:
-            params["index"] = True
-        if self._use_current:
-            params["use_current"] = True
-
-        result = {"type": self.field_type, "params": params}
-
-        # Add foreign key information if this is a foreign key
-        if self._is_foreign:
-            result["foreign_key"] = self._foreign_key_config
-
-        return result

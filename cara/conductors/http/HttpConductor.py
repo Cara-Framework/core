@@ -23,7 +23,7 @@ from typing import Any
 from cara.exceptions import MiddlewareNotFoundException
 from cara.facades import Log
 from cara.http import Request, Response
-from cara.middleware.http import ResetAuth
+from cara.middleware.http import ResetHttpAuth
 from cara.support import Pipeline
 
 
@@ -135,7 +135,7 @@ class HttpConductor:
             # including the exception path. Previously the terminate
             # block lived after the try/except, so any exception in the
             # pipeline (auth guard rejecting a request, route not found,
-            # body parse error, ...) skipped terminate entirely. ResetAuth
+            # body parse error, ...) skipped terminate entirely. ResetHttpAuth
             # is the most-impactful one — without it, the next request on
             # the same worker observes the previous request's user state
             # because the auth singleton's ``_user`` field is still set.
@@ -214,7 +214,7 @@ class HttpConductor:
         per-request isolation.
         """
         # CRITICAL: Always run auth cache cleanup first
-        reset_auth_middleware = ResetAuth(self.application)
+        reset_auth_middleware = ResetHttpAuth(self.application)
         try:
             await reset_auth_middleware.terminate(request, response)
         except Exception as e:
@@ -234,8 +234,8 @@ class HttpConductor:
                 continue
             seen_ids.add(id(instance))
 
-            # Skip ResetAuth — already handled above.
-            if isinstance(instance, ResetAuth):
+            # Skip ResetHttpAuth — already handled above.
+            if isinstance(instance, ResetHttpAuth):
                 continue
 
             terminate_fn = getattr(instance, "terminate", None)
@@ -255,7 +255,7 @@ class HttpConductor:
                 # ``cara.support.Pipeline`` async loop: call first,
                 # await ONLY if the result is awaitable. Allows
                 # both ``async def terminate`` (built-in
-                # ``ResetAuth``) and ``def terminate`` (user-land
+                # ``ResetHttpAuth``) and ``def terminate`` (user-land
                 # middleware that does only synchronous cleanup
                 # — closing a request-scoped resource, decrementing
                 # an in-process counter, etc.).

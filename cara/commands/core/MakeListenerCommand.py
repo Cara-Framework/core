@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException, StorageException
 from cara.support import paths
@@ -15,11 +15,29 @@ from cara.support import paths
 @command(
     name="make:listener",
     help="Generate a new Listener class with enhanced options.",
-    options={
-        "--dry": "Show what would be generated without creating files",
-        "--force": "Overwrite existing listener file",
-        "--event=?": "The event class this listener should handle",
-    },
+    options=[
+        {
+            "name": "--dry",
+            "help": "Show what would be generated without creating files",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--force",
+            "help": "Overwrite existing listener file",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--event",
+            "help": "The event class this listener should handle",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class MakeListenerCommand(CommandBase):
     """Generate Listener classes with enhanced configuration."""
@@ -134,9 +152,9 @@ class MakeListenerCommand(CommandBase):
         self.info("\n💡 Usage Tips:")
         self.info(f"   Import: from app.listeners import {class_name}")
         self.info("   Register listener:")
-        self.info(f"     Event.listen('event.name', {class_name})")
+        self.info(f"     Event.subscribe('event.name', {class_name}())")
         if listener_info["event_class"]:
             self.info(f"   For {listener_info['event_class']} events:")
             self.info(
-                f"     Event.listen('{listener_info['event_class'].lower()}', {class_name})"
+                f"     Event.subscribe('{listener_info['event_class'].lower()}', {class_name}())"
             )

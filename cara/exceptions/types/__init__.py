@@ -1,119 +1,213 @@
-"""Exception types package — explicit re-exports.
+"""Canonical Cara exception type barrel."""
 
-Every short name here resolves to the SAME class as the identically named
-attribute on ``cara.exceptions``. That used to be false for nine names:
-this barrel re-exported one copy while the parent barrel re-exported
-another, so ``from cara.exceptions.types import ModelNotFoundException``
-bound a class nothing ever raised and the ``except`` clause written
-against it silently never fired. Duplicate definitions are gone (one
-short name, one home) and ``tests/exceptions/test_exception_registry.py``
-pins the identity, so a re-introduced copy fails a guard instead of
-producing a handler that catches nothing.
-"""
+from cara._LazyExports import _install_lazy_exports
 
-from .application import (
-    AppException,
-    ControllerMethodNotFoundException,
-    RouteRegistrationException,
-)
-from .authentication import (
-    ApiKeyInvalidException,
-    AuthenticationConfigurationException,
-    AuthenticationException,
-    InvalidTokenException,
-    TokenBlacklistedException,
-    TokenExpiredException,
-    TokenInvalidException,
-    UserNotFoundException,
-)
-from .authorization import AuthorizationException, AuthorizationFailedException
-from .Base import CaraException
-from .broadcasting import (
-    BroadcastingChannelException,
-    BroadcastingConfigurationException,
-    BroadcastingConnectionException,
-    BroadcastingDriverNotFoundException,
-    BroadcastingException,
-)
-from .cache import CacheConfigurationException
-from .configuration import (
-    ConfigurationException,
-    InvalidConfigurationLocationException,
-    InvalidConfigurationSetupException,
-)
-from .container import (
-    ContainerException,
-    GenericContainerException,
-    MissingContainerBindingException,
-    StrictContainerException,
-)
-from .Eloquent import (
-    ConnectionNotRegisteredException,
-    DatabaseUnavailableException,
-    MigrationException,
-    ORMException,
-)
-from .encryption import EncryptionException
-from .event import (
-    EventDispatchCycleException,
-    EventNameConflictException,
-    ListenerNotFoundException,
-)
-from .http import (
-    BadRequestException,
-    Http404Exception,
-    HttpException,
-    InvalidCursor,
-    MethodNotAllowedException,
-    PayloadTooLargeException,
-    ResponseException,
-    RouteNotFoundException,
-    ServiceUnavailableException,
-)
-from .loader import LoaderException, LoaderNotFoundException
-from .mail import (
-    MailConfigurationException,
-    MailDriverException,
-    MailException,
-    MailSendException,
-)
-from .middleware import MiddlewareException, MiddlewareNotFoundException
-from .ModelExceptions import (
-    DriverNotFoundException,
-    InvalidArgumentException,
-    LazyLoadingViolation,
-    ModelException,
-    ModelNotFoundException,
-    MultipleRecordsFoundException,
-    QueryException,
-)
-from .queue import (
-    IdempotencyOverlapException,
-    QueueConfigurationException,
-    QueueDriverLibraryNotFoundException,
-    QueueException,
-)
-from .rates import RateLimitConfigurationException
-from .routing import RouteException, RouteMiddlewareNotFoundException
-from .scheduling import (
-    DriverLibraryNotFoundException,
-    SchedulingConfigurationException,
-    SchedulingException,
-)
-from .storage import (
-    DriverNotRegisteredException,
-    KeyNotFoundException,
-    StorageConfigurationException,
-    StorageException,
-)
-from .validation import (
-    InvalidRuleFormatException,
-    RuleNotFoundException,
-    ValidationException,
-)
-from .websocket import WebSocketException
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AccountLockedException": (".AccountLockedException", "AccountLockedException"),
+    "ApiKeyInvalidException": (".ApiKeyInvalidException", "ApiKeyInvalidException"),
+    "AppException": (".AppException", "AppException"),
+    "AuthenticationConfigurationException": (
+        ".AuthenticationConfigurationException",
+        "AuthenticationConfigurationException",
+    ),
+    "AuthenticationException": (".AuthenticationException", "AuthenticationException"),
+    "AuthorizationException": (".AuthorizationException", "AuthorizationException"),
+    "AuthorizationFailedException": (
+        ".AuthorizationFailedException",
+        "AuthorizationFailedException",
+    ),
+    "BadRequestException": (".BadRequestException", "BadRequestException"),
+    "BroadcastingChannelException": (
+        ".BroadcastingChannelException",
+        "BroadcastingChannelException",
+    ),
+    "BroadcastingConfigurationException": (
+        ".BroadcastingConfigurationException",
+        "BroadcastingConfigurationException",
+    ),
+    "BroadcastingConnectionException": (
+        ".BroadcastingConnectionException",
+        "BroadcastingConnectionException",
+    ),
+    "BroadcastingDriverNotFoundException": (
+        ".BroadcastingDriverNotFoundException",
+        "BroadcastingDriverNotFoundException",
+    ),
+    "BroadcastingException": (".BroadcastingException", "BroadcastingException"),
+    "CacheConfigurationException": (
+        ".CacheConfigurationException",
+        "CacheConfigurationException",
+    ),
+    "CaraException": (".CaraException", "CaraException"),
+    "ConfigurationException": (".ConfigurationException", "ConfigurationException"),
+    "ConnectionNotRegisteredException": (
+        ".ConnectionNotRegisteredException",
+        "ConnectionNotRegisteredException",
+    ),
+    "ContainerException": (".ContainerException", "ContainerException"),
+    "ControllerMethodNotFoundException": (
+        ".ControllerMethodNotFoundException",
+        "ControllerMethodNotFoundException",
+    ),
+    "DatabaseUnavailableException": (
+        ".DatabaseUnavailableException",
+        "DatabaseUnavailableException",
+    ),
+    "DriverLibraryNotFoundException": (
+        ".DriverLibraryNotFoundException",
+        "DriverLibraryNotFoundException",
+    ),
+    "DriverNotFoundException": (".DriverNotFoundException", "DriverNotFoundException"),
+    "DriverNotRegisteredException": (
+        ".DriverNotRegisteredException",
+        "DriverNotRegisteredException",
+    ),
+    "EncryptionException": (".EncryptionException", "EncryptionException"),
+    "EventDispatchCycleException": (
+        ".EventDispatchCycleException",
+        "EventDispatchCycleException",
+    ),
+    "EventNameConflictException": (
+        ".EventNameConflictException",
+        "EventNameConflictException",
+    ),
+    "FilterSchemaError": (".FilterSchemaError", "FilterSchemaError"),
+    "FilterTreeCompileError": (".FilterTreeCompileError", "FilterTreeCompileError"),
+    "FilterTreeError": (".FilterTreeError", "FilterTreeError"),
+    "GenericContainerException": (
+        ".GenericContainerException",
+        "GenericContainerException",
+    ),
+    "Http404Exception": (".Http404Exception", "Http404Exception"),
+    "HttpException": (".HttpException", "HttpException"),
+    "IdempotencyOverlapException": (
+        ".IdempotencyOverlapException",
+        "IdempotencyOverlapException",
+    ),
+    "InvalidArgumentException": (
+        ".InvalidArgumentException",
+        "InvalidArgumentException",
+    ),
+    "InvalidConfigurationLocationException": (
+        ".InvalidConfigurationLocationException",
+        "InvalidConfigurationLocationException",
+    ),
+    "InvalidConfigurationSetupException": (
+        ".InvalidConfigurationSetupException",
+        "InvalidConfigurationSetupException",
+    ),
+    "InvalidCursor": (".InvalidCursor", "InvalidCursor"),
+    "InvalidRuleFormatException": (
+        ".InvalidRuleFormatException",
+        "InvalidRuleFormatException",
+    ),
+    "InvalidTokenException": (".InvalidTokenException", "InvalidTokenException"),
+    "KeyNotFoundException": (".KeyNotFoundException", "KeyNotFoundException"),
+    "LazyLoadingViolation": (".LazyLoadingViolation", "LazyLoadingViolation"),
+    "ListenerNotFoundException": (
+        ".ListenerNotFoundException",
+        "ListenerNotFoundException",
+    ),
+    "LoaderException": (".LoaderException", "LoaderException"),
+    "LoaderNotFoundException": (".LoaderNotFoundException", "LoaderNotFoundException"),
+    "MailConfigurationException": (
+        ".MailConfigurationException",
+        "MailConfigurationException",
+    ),
+    "MailDriverException": (".MailDriverException", "MailDriverException"),
+    "MailException": (".MailException", "MailException"),
+    "MailSendException": (".MailSendException", "MailSendException"),
+    "MethodNotAllowedException": (
+        ".MethodNotAllowedException",
+        "MethodNotAllowedException",
+    ),
+    "MiddlewareException": (".MiddlewareException", "MiddlewareException"),
+    "MiddlewareNotFoundException": (
+        ".MiddlewareNotFoundException",
+        "MiddlewareNotFoundException",
+    ),
+    "MigrationException": (".MigrationException", "MigrationException"),
+    "MissingContainerBindingException": (
+        ".MissingContainerBindingException",
+        "MissingContainerBindingException",
+    ),
+    "ModelException": (".ModelException", "ModelException"),
+    "ModelNotFoundException": (".ModelNotFoundException", "ModelNotFoundException"),
+    "MultipleRecordsFoundException": (
+        ".MultipleRecordsFoundException",
+        "MultipleRecordsFoundException",
+    ),
+    "ORMException": (".ORMException", "ORMException"),
+    "PayloadTooLargeException": (
+        ".PayloadTooLargeException",
+        "PayloadTooLargeException",
+    ),
+    "QueryException": (".QueryException", "QueryException"),
+    "QueueConfigurationException": (
+        ".QueueConfigurationException",
+        "QueueConfigurationException",
+    ),
+    "QueueDriverLibraryNotFoundException": (
+        ".QueueDriverLibraryNotFoundException",
+        "QueueDriverLibraryNotFoundException",
+    ),
+    "QueueException": (".QueueException", "QueueException"),
+    "RateLimitConfigurationException": (
+        ".RateLimitConfigurationException",
+        "RateLimitConfigurationException",
+    ),
+    "ResponseException": (".ResponseException", "ResponseException"),
+    "RouteException": (".RouteException", "RouteException"),
+    "RouteMiddlewareNotFoundException": (
+        ".RouteMiddlewareNotFoundException",
+        "RouteMiddlewareNotFoundException",
+    ),
+    "RouteNotFoundException": (".RouteNotFoundException", "RouteNotFoundException"),
+    "RouteRegistrationException": (
+        ".RouteRegistrationException",
+        "RouteRegistrationException",
+    ),
+    "RuleNotFoundException": (".RuleNotFoundException", "RuleNotFoundException"),
+    "SchedulingConfigurationException": (
+        ".SchedulingConfigurationException",
+        "SchedulingConfigurationException",
+    ),
+    "SchedulingException": (".SchedulingException", "SchedulingException"),
+    "SchemaPlanRefused": (".SchemaPlanRefused", "SchemaPlanRefused"),
+    "ScratchDatabaseException": (
+        ".ScratchDatabaseException",
+        "ScratchDatabaseException",
+    ),
+    "ServiceUnavailableException": (
+        ".ServiceUnavailableException",
+        "ServiceUnavailableException",
+    ),
+    "StorageConfigurationException": (
+        ".StorageConfigurationException",
+        "StorageConfigurationException",
+    ),
+    "StorageException": (".StorageException", "StorageException"),
+    "StrictContainerException": (
+        ".StrictContainerException",
+        "StrictContainerException",
+    ),
+    "TokenBlacklistedException": (
+        ".TokenBlacklistedException",
+        "TokenBlacklistedException",
+    ),
+    "TokenExpiredException": (".TokenExpiredException", "TokenExpiredException"),
+    "TokenInvalidException": (".TokenInvalidException", "TokenInvalidException"),
+    "UnsupportedMediaTypeException": (
+        ".UnsupportedMediaTypeException",
+        "UnsupportedMediaTypeException",
+    ),
+    "UserNotFoundException": (".UserNotFoundException", "UserNotFoundException"),
+    "ValidationException": (".ValidationException", "ValidationException"),
+    "WebSocketException": (".WebSocketException", "WebSocketException"),
+}
 
 __all__ = [
+    "AccountLockedException",
     "ApiKeyInvalidException",
     "AppException",
     "AuthenticationConfigurationException",
@@ -139,6 +233,9 @@ __all__ = [
     "EncryptionException",
     "EventDispatchCycleException",
     "EventNameConflictException",
+    "FilterSchemaError",
+    "FilterTreeCompileError",
+    "FilterTreeError",
     "GenericContainerException",
     "Http404Exception",
     "HttpException",
@@ -181,6 +278,8 @@ __all__ = [
     "RuleNotFoundException",
     "SchedulingConfigurationException",
     "SchedulingException",
+    "SchemaPlanRefused",
+    "ScratchDatabaseException",
     "ServiceUnavailableException",
     "StorageConfigurationException",
     "StorageException",
@@ -188,7 +287,10 @@ __all__ = [
     "TokenBlacklistedException",
     "TokenExpiredException",
     "TokenInvalidException",
+    "UnsupportedMediaTypeException",
     "UserNotFoundException",
     "ValidationException",
     "WebSocketException",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

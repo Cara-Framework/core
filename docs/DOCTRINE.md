@@ -1,6 +1,6 @@
 # The Cara Product Doctrine
 
-**Version 2.0 — 2026-07-26.** This document is LAW for every product built on
+**Version 2.1 — 2026-08-13.** This document is LAW for every product built on
 Cara. It travels with the framework: cloning `cara` into a product delivers the
 doctrine with it. A product's `CLAUDE.md` is its atlas (ports, quirks, domain
 registry); *this* file is the invariant architecture. Where the two disagree,
@@ -505,7 +505,7 @@ gain product prefixes, semantics may not):
 |---|---|
 | `test_layering_guards` | purity allowlist, kernel-membership counts (single-consumer eviction), kernel import direction, app↛gates/persistence, plus whatever a product's own layout genuinely adds |
 | `raw_sql_home` | raw SQL only inside a declared repository home; docstring / schema-metadata / one-query-compiler exemptions (§5) |
-| `model_query_discipline` | model queries go through a repository; PK-find, locking-transaction fence and tagged carve-outs only (§5) |
+| `model_query_discipline` | model queries go through a repository; only PK-find and the locking-transaction fence are structural carve-outs (§5) |
 | `http_in_business_logic` | transport types and `abort()` stop at the edge (§5) |
 | `env_read_discipline` | the process environment is read in `config/` only (§5) |
 | `silent_except_swallow` | no bare or broad `except` swallowing a failure without log or re-raise (§5) |
@@ -767,7 +767,7 @@ scanners: `raw_sql_home`, `model_query_discipline`, `http_in_business_logic`,
 `env_read_discipline`, `silent_except_swallow`. The raw-SQL rule converged on
 the strictest reading (docstring + schema-metadata + one-documented-compiler
 exemptions); the ORM rule converged on whole-chain detection with the
-locking-transaction and allow-tag carve-outs. Adoption over an unclean or
+locking-transaction carve-outs. Adoption over an unclean or
 previously unscanned tree rides `seam_allowlists` as an exact, shrink-only
 count — replacing the invisible tree-skip a product guard had reached for.
 The barrel-mid-load footgun (§5.1) and the §3 registry-shape rules (key order,
@@ -776,6 +776,13 @@ budget) became the `barrel_mid_load` scanner and four new `domain_registry`
 checks on the same grounds — the registry-shape rules existed in only ONE of
 the two products, and the master atlas asserted both had them.
 No rule was weakened: this is an extraction, not an amendment.*
+
+*Changelog — 2.1 (2026-08-13): §5/§11 remove comment-based escape hatches
+from `model_query_discipline` and `silent_except_swallow`. A comment cannot
+prove repository ownership or failure reporting and cannot expire when the
+code it justified moves. Model access now has only its two structural
+carve-outs; broad catches report or re-raise at the catch site. Exact
+shrink-only censuses remain the sole migration mechanism for pre-rule debt.*
 
 *Changelog — 2.0 (2026-07-26): §12 now governs every frontend surface with
 one-way data flow, Query-owned server state, Zustand UI-only, contract/domain

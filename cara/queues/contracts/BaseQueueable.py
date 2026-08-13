@@ -7,7 +7,10 @@ and other queueable classes by providing common functionality.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
+
+from cara.facades import Log
 
 from .Queueable import Queueable
 from .ShouldQueue import ShouldQueue
@@ -130,11 +133,5 @@ class BaseQueueable(Queueable, ShouldQueue):
         """
         if not isinstance(idempotency_key, str) or not idempotency_key:
             raise ValueError("failed() requires a non-empty idempotency_key.")
-        # Import here to avoid circular imports
-        try:
-            from cara.facades import Log
-
+        with contextlib.suppress(ImportError, RuntimeError):
             Log.error("%s failed: %s", self.__class__.__name__, str(error))
-        except ImportError:
-            # Silently fail if Log facade not available - this is a framework component
-            pass

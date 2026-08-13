@@ -1,18 +1,39 @@
-from .BaseNotification import BaseNotification
-from .Notifiable import Notifiable
-from .Notification import Notification
-from .NotificationProvider import NotificationProvider
+"""Notifications — layer barrel (generated, DOCTRINE §5.1)."""
 
-# ``UnsubscribeToken`` is deliberately NOT re-exported here. Exporting a
-# name that is also a submodule is the barrel-shadowing trap
-# ``tests/http/test_http_lazy_exports.py`` guards: the exported name starts
-# handing back the MODULE for whoever imports in the unlucky order. Its two
-# functions are imported from the defining module —
-# ``from cara.notifications.UnsubscribeToken import mint`` — by both the
-# framework's own MailChannel and every product verifier.
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "BaseChannel": (".channels", "BaseChannel"),
+    "BaseNotification": (".BaseNotification", "BaseNotification"),
+    "DatabaseChannel": (".channels", "DatabaseChannel"),
+    "LogChannel": (".channels", "LogChannel"),
+    "MailChannel": (".channels", "MailChannel"),
+    "Notifiable": (".Notifiable", "Notifiable"),
+    "NotifiableContract": (".contracts", "NotifiableContract"),
+    "Notification": (".Notification", "Notification"),
+    "NotificationChannel": (".contracts", "NotificationChannel"),
+    "NotificationProvider": (".NotificationProvider", "NotificationProvider"),
+    "SendNotificationJob": (".jobs", "SendNotificationJob"),
+    "SlackChannel": (".channels", "SlackChannel"),
+    "matches": (".UnsubscribeToken", "matches"),
+    "mint": (".UnsubscribeToken", "mint"),
+}
+
 __all__ = [
+    "BaseChannel",
     "BaseNotification",
+    "DatabaseChannel",
+    "LogChannel",
+    "MailChannel",
     "Notifiable",
+    "NotifiableContract",
     "Notification",
+    "NotificationChannel",
     "NotificationProvider",
+    "SendNotificationJob",
+    "SlackChannel",
+    "matches",
+    "mint",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

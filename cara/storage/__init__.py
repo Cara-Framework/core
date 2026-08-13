@@ -1,7 +1,19 @@
-from .Storage import Storage
-from .StorageProvider import StorageProvider
+"""Storage — layer barrel (generated, DOCTRINE §5.1)."""
+
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "FileDriver": (".drivers", "FileDriver"),
+    "Storage": (".Storage", "Storage"),
+    "StorageContract": (".contracts", "StorageContract"),
+    "StorageProvider": (".StorageProvider", "StorageProvider"),
+}
 
 __all__ = [
+    "FileDriver",
     "Storage",
+    "StorageContract",
     "StorageProvider",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

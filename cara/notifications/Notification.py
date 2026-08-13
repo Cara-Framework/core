@@ -10,6 +10,7 @@ from __future__ import annotations
 from cara.exceptions import DriverNotRegisteredException, InvalidArgumentException
 from cara.facades import Queue
 from cara.notifications.contracts import NotificationChannel
+from cara.notifications.jobs import SendNotificationJob
 from cara.queues.contracts import ShouldQueue
 
 
@@ -26,11 +27,11 @@ class Notification:
 
     def add_channel(self, name: str, channel: NotificationChannel) -> None:
         """Register a channel instance under `name`."""
-        name = str(name).strip()
-        if not name:
+        if not isinstance(name, str) or not name.strip():
             raise InvalidArgumentException(
                 "Notification channel name must be a non-empty string."
             )
+        name = name.strip()
         if not callable(getattr(channel, "send", None)):
             raise InvalidArgumentException(
                 f"Notification channel {name!r} must implement send()."
@@ -48,7 +49,7 @@ class Notification:
         Raises DriverNotRegisteredException if missing.
         """
         channel = self._channels.get(channel_name)
-        if not channel:
+        if channel is None:
             raise DriverNotRegisteredException(
                 f"Notification channel '{channel_name}' is not registered."
             )
@@ -98,7 +99,12 @@ class Notification:
         Returns:
             True if queued successfully, False otherwise
         """
-        from cara.notifications.jobs import SendNotificationJob
+
+        # Reject malformed/unknown delivery topology before acknowledging the
+        # enqueue. Otherwise the caller receives True for a job that can only
+        # fail after it leaves the request boundary.
+        for channel_name in self._get_channels(notifiable, notification):
+            self.channel(channel_name)
 
         job = SendNotificationJob(notifiable, notification)
 
@@ -107,10 +113,16 @@ class Notification:
         # survive into the dispatched job, not just sit on the
         # notification object.
         queue_override = getattr(notification, "_queue", None)
-        if queue_override:
+        if queue_override is not None:
+            if not isinstance(queue_override, str) or not queue_override.strip():
+                raise InvalidArgumentException(
+                    "Notification queue must be a non-empty string."
+                )
+            queue_override = queue_override.strip()
             job.on_queue(queue_override)
-        delay_seconds = getattr(notification, "_delay", None) or 0
-        if delay_seconds:
+        delay_seconds = getattr(notification, "_delay", None)
+        if delay_seconds is not None:
+            self._require_positive_delay(delay_seconds)
             Queue.dispatch_after(job, delay_seconds)
         else:
             Queue.dispatch(job)
@@ -142,10 +154,15 @@ class Notification:
             if not self._should_send(notifiable, notification, channel_name):
                 continue
             result = channel.send(notifiable, notification)
+            if not isinstance(result, bool):
+                raise InvalidArgumentException(
+                    f"Notification channel {channel_name!r} send() must return a boolean."
+                )
             results.append(result)
 
-        # Return True if at least one channel succeeded
-        return any(results) if results else False
+        # Every requested, eligible delivery must succeed. Treating one success
+        # as success for the whole fan-out loses the failed delivery forever.
+        return all(results) if results else False
 
     def send_now(self, notifiable, notification) -> bool:
         """
@@ -172,8 +189,7 @@ class Notification:
         Returns:
             True if queued successfully, False otherwise
         """
-        if delay_seconds <= 0:
-            raise InvalidArgumentException("Notification delay must be positive.")
+        self._require_positive_delay(delay_seconds)
         delay = getattr(notification, "delay", None)
         if not callable(delay):
             raise InvalidArgumentException(
@@ -183,6 +199,17 @@ class Notification:
         # This method is an explicit queueing API: unlike send(), it must not
         # turn a non-ShouldQueue notification into an immediate delivery.
         return self._queue_notification(notifiable, notification)
+
+    @staticmethod
+    def _require_positive_delay(delay_seconds: int) -> None:
+        if (
+            isinstance(delay_seconds, bool)
+            or not isinstance(delay_seconds, int)
+            or delay_seconds <= 0
+        ):
+            raise InvalidArgumentException(
+                "Notification delay must be a positive integer number of seconds."
+            )
 
     def _get_channels(self, notifiable, notification) -> list[str]:
         """
@@ -213,9 +240,16 @@ class Notification:
                     "Notification channel names must be non-empty strings."
                 )
             name = channel.strip()
-            if name not in seen:
-                channels.append(name)
-                seen.add(name)
+            if name in seen:
+                raise InvalidArgumentException(
+                    f"Notification channel {name!r} is declared more than once."
+                )
+            channels.append(name)
+            seen.add(name)
+        if not channels:
+            raise InvalidArgumentException(
+                "Notification via() must declare at least one channel."
+            )
         return channels
 
     def _should_send(self, notifiable, notification, channel_name: str) -> bool:
@@ -231,7 +265,12 @@ class Notification:
             True if should send, False otherwise
         """
         if hasattr(notification, "should_send") and callable(notification.should_send):
-            return notification.should_send(notifiable, channel_name)
+            decision = notification.should_send(notifiable, channel_name)
+            if not isinstance(decision, bool):
+                raise InvalidArgumentException(
+                    "Notification should_send() must return a boolean."
+                )
+            return decision
         return True
 
     def available_channels(self) -> list[str]:

@@ -14,19 +14,16 @@ A handler is a finding when ALL of these hold:
   (``continue`` / ``break`` / bare ``return``).
 
 A NARROW handler (``except (ValueError, TypeError): return None``) is a typed
-fallback, not a swallow, and is left alone.
-
-The escape hatch is a comment tag (``manifest.silent_except_allow_tag``, by
-default ``# allow-silent-except``) anywhere in the handler's line span — for
-the collect-and-log-later loop, where the log happens after the loop rather
-than never.
+fallback, not a swallow, and is left alone. There is deliberately no comment
+escape: a broad failure must be reported or re-raised at the catch site so a
+future edit cannot silently separate the catch from an alleged later report.
 """
 
 from __future__ import annotations
 
 import ast
 
-from cara.architecture._ast_utils import iter_modules, read_source
+from cara.architecture._ast_utils import iter_modules
 from cara.architecture.Finding import Finding
 from cara.architecture.Manifest import Manifest
 
@@ -86,21 +83,12 @@ class SilentExceptSwallow:
 
     @staticmethod
     def scan(manifest: Manifest) -> list[Finding]:
-        tag = manifest.silent_except_allow_tag
         findings: list[Finding] = []
-        for path, rel, tree in iter_modules(
+        for _path, rel, tree in iter_modules(
             manifest.roots.scan_dirs("silent_except_swallow"), manifest.roots.deployable
         ):
-            # ``iter_modules`` already proved the file parses, so this cannot
-            # normally fail; going through ``read_source`` keeps a
-            # mid-change tree (a file deleted between glob and read) a
-            # skipped file rather than a crashed pack.
-            lines = (read_source(path) or "").splitlines()
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ExceptHandler):
-                    continue
-                span = lines[node.lineno - 1 : (node.end_lineno or node.lineno)]
-                if any(tag in line for line in span):
                     continue
                 if node.type is None:
                     findings.append(
@@ -117,8 +105,8 @@ class SilentExceptSwallow:
                     Finding(
                         rel,
                         node.lineno,
-                        f"broad `except` swallows the failure with no log or re-raise "
-                        f"— log it, re-raise, or annotate `# {tag}: <why>`",
+                        "broad `except` swallows the failure with no log or re-raise "
+                        "— log it, report it, or re-raise",
                     )
                 )
         return findings

@@ -214,25 +214,12 @@ def test_queue_serializer_still_refuses_a_decimal_rather_than_guessing() -> None
     assert "Decimal" in str(raised.value)
 
 
-def test_model_serialization_is_the_documented_exception_not_a_new_one() -> None:
-    """The ORM boundary still emits a double, and the encoder is not why.
-
-    ``Model.serialize`` rewrites every ``Decimal`` as ``float`` while it
-    builds the dict, so the value is already spent before any encoder
-    runs — which is why routing ``to_json`` through the shared rule did
-    not, and could not, close this row of the table. Closing it means
-    migrating ``serialize`` together with both products' API resources
-    and generated contracts, which type model money as ``number``.
-
-    This test exists so that stays a stated deferral rather than a
-    surprise. **When ``serialize`` is migrated, re-pin these assertions
-    to the exact string** and delete the corresponding section of
-    ``cara/support/JsonEncoding.py``.
-    """
+def test_model_money_stays_decimal_until_the_exact_string_wire() -> None:
     from cara.eloquent import DatabaseManager
     from cara.eloquent.models.Model import Model
+    from cara.testing.FacadeSwap import swap
 
-    DatabaseManager.get_instance().set_database_config(
+    manager = DatabaseManager(
         "app", {"app": {"driver": "sqlite", "database": ":memory:"}}
     )
 
@@ -242,12 +229,11 @@ def test_model_serialization_is_the_documented_exception_not_a_new_one() -> None
         # ``serialize`` ever saw it, hiding the defect under a second one.
         __table__ = "test_json_encoding_priced"
 
-    row = _Priced()
-    row.total = MONEY
+    with swap("DB", manager):
+        row = _Priced()
+        row.total = MONEY
 
-    # The attribute itself is untouched — exact money is still available.
-    assert row.total == MONEY
-    # The serialized dict is where it is spent, before any encoder.
-    assert isinstance(row.to_array()["total"], float)
-    assert row.to_array()["total"] == 100000000000.0
-    assert json.loads(row.to_json())["total"] == 100000000000.0
+        # The attribute itself is untouched — exact money is still available.
+        assert row.total == MONEY
+        assert row.to_array()["total"] == MONEY
+        assert json.loads(row.to_json())["total"] == str(MONEY)

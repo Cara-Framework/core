@@ -1,11 +1,17 @@
 """Cara AI subsystem — provider-agnostic LLM client + robust JSON parsing."""
 
-from .AIProvider import AIProvider
-from .AIResponse import AIResponse
-from .AIServiceProvider import AIServiceProvider
-from .Client import AIClient
-from .exceptions import AIConfigurationError, AIException, AIResponseError
-from .Parsing import parse_json
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AIClient": (".AIClient", "AIClient"),
+    "AIConfigurationError": (".AIConfigurationError", "AIConfigurationError"),
+    "AIException": (".AIException", "AIException"),
+    "AIProvider": (".AIProvider", "AIProvider"),
+    "AIResponse": (".AIResponse", "AIResponse"),
+    "AIResponseError": (".AIResponseError", "AIResponseError"),
+    "AIServiceProvider": (".AIServiceProvider", "AIServiceProvider"),
+    "parse_json": (".Parsing", "parse_json"),
+}
 
 __all__ = [
     "AIClient",
@@ -17,3 +23,5 @@ __all__ = [
     "AIServiceProvider",
     "parse_json",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

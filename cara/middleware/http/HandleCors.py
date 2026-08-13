@@ -23,12 +23,12 @@ from typing import Any
 
 from cara.facades import Log
 from cara.http import Request, Response
-from cara.middleware import Middleware
 from cara.middleware.http.Cors import (
     load_cors_policy,
     path_in_cors_scope,
     resolve_allow_origin,
 )
+from cara.middleware.Middleware import Middleware
 
 
 class HandleCors(Middleware):

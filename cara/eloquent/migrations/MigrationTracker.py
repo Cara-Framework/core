@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
 import tempfile
 import threading
-import time
 from contextlib import contextmanager
 from pathlib import Path
 
 from cara.exceptions import MigrationException
+from cara.support import ProcessFileLock
 
 _logger = logging.getLogger("cara.migrations")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -131,21 +130,34 @@ class MigrationTracker:
             ) from exc
 
     def _ensure_checksum_column(self, connection) -> None:
-        try:
-            connection.query(self._select_one("checksum"))
+        if self._has_checksum_column(connection):
             return
-        except Exception:
-            # allow-silent-except: column-existence probe; a real fault re-raises from the ALTER below
-            pass
         try:
-            connection.query(
-                f"ALTER TABLE {self.table_name} ADD COLUMN checksum VARCHAR(64) NULL"
+            clause = (
+                "ADD COLUMN IF NOT EXISTS"
+                if self._get_driver_type() in {"postgres", "postgresql"}
+                else "ADD COLUMN"
             )
-            connection.query(self._select_one("checksum"))
+            connection.query(
+                f"ALTER TABLE {self.table_name} {clause} checksum VARCHAR(64) NULL"
+            )
         except Exception as exc:
             raise MigrationException(
                 f"Could not add checksum tracking to '{self.table_name}'."
             ) from exc
+
+    def _has_checksum_column(self, connection) -> bool:
+        """Read the system catalogue without using query failure as control flow."""
+        if self._get_driver_type() == "sqlite":
+            rows = connection.query(f"PRAGMA table_info({self.table_name})") or []
+            return any(_row_value(row, "name", 1) == "checksum" for row in rows)
+        rows = connection.query(
+            "SELECT 1 AS present FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = %s AND column_name = 'checksum'",
+            (self.table_name,),
+        )
+        return bool(rows)
 
     def _ensure_unique_migration_index(self, connection) -> None:
         index_name = f"{self.table_name}_migration_unique"
@@ -218,51 +230,15 @@ class MigrationTracker:
 
         digest = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()[:24]
         lock_path = Path(tempfile.gettempdir()) / f"cara-migrations-{digest}.lock"
-        handle = None
-        process_locked = False
         try:
-            handle = lock_path.open("a+b")
-            handle.seek(0)
-            if handle.read(1) == b"":
-                handle.write(b"\0")
-                handle.flush()
-            deadline = time.monotonic() + timeout_seconds
-            while True:
-                try:
-                    if os.name == "nt":  # pragma: no cover - Windows CI only
-                        import msvcrt
-
-                        handle.seek(0)
-                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    else:
-                        import fcntl
-
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    process_locked = True
-                    break
-                except BlockingIOError, OSError:
-                    if time.monotonic() >= deadline:
-                        raise MigrationException(
-                            "Timed out waiting for the SQLite migration lock."
-                        ) from None
-                    time.sleep(0.05)
-            yield
+            try:
+                with ProcessFileLock(lock_path, timeout_seconds=timeout_seconds):
+                    yield
+            except TimeoutError as exc:
+                raise MigrationException(
+                    "Timed out waiting for the SQLite migration lock."
+                ) from exc
         finally:
-            if handle is not None:
-                if process_locked:
-                    try:
-                        if os.name == "nt":  # pragma: no cover - Windows CI only
-                            import msvcrt
-
-                            handle.seek(0)
-                            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                        else:
-                            import fcntl
-
-                            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                    except OSError:
-                        _logger.debug("SQLite migration unlock failed", exc_info=True)
-                handle.close()
             thread_lock.release()
 
     # ── Read APIs ────────────────────────────────────────────────────

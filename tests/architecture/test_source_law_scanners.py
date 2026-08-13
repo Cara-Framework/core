@@ -197,7 +197,7 @@ def test_logging_or_re_raising_clears_the_handler(tmp_path: Path) -> None:
         assert _messages(SilentExceptSwallow, root) == [], handler
 
 
-def test_the_allow_tag_documents_a_collect_and_log_later_loop(tmp_path: Path) -> None:
+def test_a_comment_cannot_bypass_the_reporting_requirement(tmp_path: Path) -> None:
     write(
         tmp_path / "app" / "services" / "Report.py",
         "def run(items, work, failures):\n"
@@ -208,4 +208,7 @@ def test_the_allow_tag_documents_a_collect_and_log_later_loop(tmp_path: Path) ->
         "            continue\n",
     )
 
-    assert _messages(SilentExceptSwallow, tmp_path) == []
+    assert any(
+        "swallows the failure" in message
+        for message in _messages(SilentExceptSwallow, tmp_path)
+    )

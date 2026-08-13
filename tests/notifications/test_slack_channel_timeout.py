@@ -75,12 +75,28 @@ def test_send_passes_timeout_to_urlopen(channel: SlackChannel):
     assert timeout_val <= 30, "timeout should be reasonable (<=30s)"
 
 
-def test_send_timeout_on_unreachable_does_not_hang(channel: SlackChannel):
-    """When urlopen raises TimeoutError the channel returns False, not hang."""
-    with patch(
-        "urllib.request.urlopen",
-        side_effect=TimeoutError("timed out"),
+def test_send_timeout_on_unreachable_propagates_for_retry(channel: SlackChannel):
+    """A timeout must reach the queue worker so it can retry the delivery."""
+    with (
+        patch(
+            "urllib.request.urlopen",
+            side_effect=TimeoutError("timed out"),
+        ),
+        pytest.raises(TimeoutError, match="timed out"),
     ):
-        result = channel.send(_FakeNotifiable(), _FakeNotification())
+        channel.send(_FakeNotifiable(), _FakeNotification())
 
-    assert result is False
+
+def test_non_success_http_status_is_not_reported_as_delivered(
+    channel: SlackChannel,
+) -> None:
+    fake_response = MagicMock()
+    fake_response.status = 503
+    fake_response.__enter__ = MagicMock(return_value=fake_response)
+    fake_response.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("urllib.request.urlopen", return_value=fake_response),
+        pytest.raises(Exception, match="HTTP 503"),
+    ):
+        channel.send(_FakeNotifiable(), _FakeNotification())

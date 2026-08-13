@@ -18,6 +18,7 @@ from cara.exceptions import (
 )
 from cara.facades import Log
 from cara.middleware import Middleware
+from cara.middleware.ws import ResetWebSocketAuth
 from cara.support import Pipeline
 from cara.websocket import Socket
 
@@ -230,14 +231,9 @@ class WebsocketConductor:
         """
         # Always run auth cleanup first — even on the failure path
         # where the auth middleware may not have completed. Mirrors
-        # HttpConductor's ResetAuth handling.
+        # HttpConductor's ResetHttpAuth handling.
         try:
-            from cara.middleware.ws import ResetAuth
-
-            await ResetAuth(self.application).terminate(self.socket)
-        except ImportError:
-            # ResetAuth ws variant not present in this build — fine.
-            pass
+            await ResetWebSocketAuth(self.application).terminate(self.socket)
         except Exception as e:
             Log.error(
                 "Critical error in WebSocket auth cache cleanup: %s",
@@ -257,20 +253,15 @@ class WebsocketConductor:
 
         # Deduplicate by identity — the same instance (e.g. one that
         # appears in both global and route lists) must not terminate
-        # twice. Skip ResetAuth, already handled above.
+        # twice. Skip ResetWebSocketAuth, already handled above.
         seen: set = set()
         for instance in executed:
             if id(instance) in seen:
                 continue
             seen.add(id(instance))
 
-            try:
-                from cara.middleware.ws import ResetAuth as _ResetAuth
-
-                if isinstance(instance, _ResetAuth):
-                    continue
-            except ImportError:
-                pass
+            if isinstance(instance, ResetWebSocketAuth):
+                continue
 
             terminate_fn = getattr(instance, "terminate", None)
             if not callable(terminate_fn):

@@ -22,19 +22,15 @@ from typing import Any
 
 from cara.broadcasting.Channel import Channel, channel_name
 from cara.broadcasting.ChannelRegistry import ChannelAuthCallback, ChannelRegistry
+from cara.broadcasting.contracts import ShouldBroadcast
+from cara.broadcasting.PresenceChannel import PresenceChannel
+from cara.broadcasting.PrivateChannel import PrivateChannel
 from cara.exceptions import BroadcastingConfigurationException
 from cara.facades import Log
-
-ChannelLike = str | Channel
 
 
 class Broadcasting:
     """High-level broadcasting API for the application."""
-
-    # Channel-name prefixes that require ``ChannelRegistry.authorize``
-    # to return truthy before a subscription is committed. Public
-    # channels (no recognised prefix) do not consult the registry.
-    _AUTH_PREFIXES = ("private-", "presence-")
 
     def __init__(self, application: Any, default_driver: str) -> None:
         self.application = application
@@ -95,7 +91,7 @@ class Broadcasting:
 
     async def authorize_subscription(
         self,
-        channel: str,
+        channel: Channel,
         user: Any,
     ) -> bool | dict[str, Any]:
         """Decide whether ``user`` may subscribe to ``channel``.
@@ -108,21 +104,34 @@ class Broadcasting:
         ``False`` on denial — callers translate the False to a 4007
         on the wire.
         """
-        for prefix in self._AUTH_PREFIXES:
-            if channel.startswith(prefix):
-                # Strip the prefix (e.g. "private-") once before
-                # consulting the registry. Patterns are written
-                # without the prefix so they match Laravel's
-                # convention of ``Broadcast::channel('user.{id}', ...)``
-                # for a ``private-user.{id}`` wire channel.
-                bare = channel[len(prefix) :]
-                return await self._channels.authorize(bare, user, require_callback=True)
+        if not isinstance(channel, Channel):
+            raise TypeError(f"channel must be Channel, got {type(channel).__name__}")
+        if isinstance(channel, PrivateChannel):
+            result = await self._channels.authorize(
+                channel.name, user, require_callback=True
+            )
+            if isinstance(channel, PresenceChannel) and result is True:
+                raise BroadcastingConfigurationException(
+                    "Presence-channel authorization must return an identity dict."
+                )
+            if not isinstance(channel, PresenceChannel) and isinstance(result, dict):
+                raise BroadcastingConfigurationException(
+                    "Identity data is valid only for a PresenceChannel."
+                )
+            return result
         # Public channel — allowed without callback. Apps that want
         # to require auth on a public channel can register a callback
         # for its name explicitly; we'll consult it.
-        match = self._channels.find(channel)
+        match = self._channels.find(channel.name)
         if match is not None:
-            return await self._channels.authorize(channel, user, require_callback=True)
+            result = await self._channels.authorize(
+                channel.name, user, require_callback=True
+            )
+            if isinstance(result, dict):
+                raise BroadcastingConfigurationException(
+                    "Identity data is valid only for a PresenceChannel."
+                )
+            return result
         return True
 
     # ------------------------------------------------------------------
@@ -131,7 +140,7 @@ class Broadcasting:
     # ------------------------------------------------------------------
     async def broadcast(
         self,
-        channels: ChannelLike | Sequence[ChannelLike],
+        channels: Channel | Sequence[Channel],
         event: str,
         data: dict[str, Any] | None = None,
         *,
@@ -149,7 +158,6 @@ class Broadcasting:
         """Dispatch a ``ShouldBroadcast`` event."""
         # Local import keeps the contracts module from pulling cara.facades
         # at module-load time.
-        from cara.broadcasting.contracts import ShouldBroadcast
 
         if not isinstance(event, ShouldBroadcast):
             raise BroadcastingConfigurationException(
@@ -159,18 +167,7 @@ class Broadcasting:
         # broadcast_when() AND not broadcast_unless() — both gates
         # must pass. Mirrors Laravel where both methods exist and
         # both must allow the broadcast.
-        try:
-            should_fire = bool(event.broadcast_when()) and not bool(
-                event.broadcast_unless()
-            )
-        except Exception as e:
-            Log.warning(
-                "broadcast_when/unless on %s raised: %s",
-                type(event).__name__,
-                e,
-                category="cara.broadcasting",
-            )
-            return
+        should_fire = bool(event.broadcast_when()) and not bool(event.broadcast_unless())
         if not should_fire:
             Log.debug(
                 "Broadcast skipped for %s (broadcast_when/unless gated it)",
@@ -182,16 +179,8 @@ class Broadcasting:
         names = self._normalize_channels(event.broadcast_on())
         event_name = event.broadcast_as()
         data = event.broadcast_with()
-        except_sid = None
-        try:
-            except_sid = event.except_socket_id()
-        except Exception:
-            except_sid = None
-        driver_name = None
-        try:
-            driver_name = event.broadcast_via()
-        except Exception:
-            driver_name = None
+        except_sid = event.except_socket_id()
+        driver_name = event.broadcast_via()
 
         Log.debug(
             "Broadcasting '%s' on %s (driver=%s, except_socket_id=%s)",
@@ -235,10 +224,10 @@ class Broadcasting:
     async def remove_connection(self, connection_id: str) -> None:
         await self.driver().remove_connection(connection_id)
 
-    async def subscribe(self, connection_id: str, channel: ChannelLike) -> bool:
+    async def subscribe(self, connection_id: str, channel: Channel) -> bool:
         return await self.driver().subscribe(connection_id, channel_name(channel))
 
-    async def unsubscribe(self, connection_id: str, channel: ChannelLike) -> bool:
+    async def unsubscribe(self, connection_id: str, channel: Channel) -> bool:
         return await self.driver().unsubscribe(connection_id, channel_name(channel))
 
     async def broadcast_to_user(
@@ -259,7 +248,7 @@ class Broadcasting:
     def get_connection_count(self) -> int:
         return self.driver().get_connection_count()
 
-    def get_channel_subscribers(self, channel: ChannelLike) -> list[str]:
+    def get_channel_subscribers(self, channel: Channel) -> list[str]:
         return self.driver().get_channel_subscribers(channel_name(channel))
 
     def get_stats(self) -> dict[str, Any]:
@@ -270,12 +259,13 @@ class Broadcasting:
     # ------------------------------------------------------------------
     @staticmethod
     def _normalize_channels(
-        channels: ChannelLike | Sequence[ChannelLike],
+        channels: Channel | Sequence[Channel],
     ) -> list[str]:
-        if isinstance(channels, (str, Channel)):
+        if isinstance(channels, Channel):
             return [channel_name(channels)]
         if isinstance(channels, (list, tuple)):
             return [channel_name(c) for c in channels]
         raise TypeError(
-            f"channels must be str, Channel, or sequence of either; got {type(channels).__name__}"
+            "channels must be Channel or a sequence of Channel objects; "
+            f"got {type(channels).__name__}"
         )

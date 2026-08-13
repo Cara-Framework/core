@@ -17,15 +17,17 @@ from __future__ import annotations
 
 import errno
 import time
+from importlib import import_module
 
 import pytest
 
-from cara.observability import Metrics
+Metrics = import_module("cara.observability.MetricsBase")
+RuntimeMetrics = import_module("cara.observability._RuntimeMetrics")
 
 
 @pytest.fixture(autouse=True)
 def _reset_server_state(monkeypatch):
-    monkeypatch.setattr(Metrics, "_http_server_started", False, raising=False)
+    monkeypatch.setattr(RuntimeMetrics, "_http_server_started", False)
     # Retry backoff is real seconds in production; nothing here waits for it.
     # ``Metrics`` imports ``time`` inside the function, so patching the module
     # attribute is what the retry loop actually reads.
@@ -36,12 +38,16 @@ def _always_in_use(*_args, **_kwargs):
     raise OSError(errno.EADDRINUSE, "Address already in use")
 
 
-def test_permanently_held_port_yields_no_server_instead_of_raising(monkeypatch):
-    monkeypatch.setattr(Metrics, "_prom_start_http_server", _always_in_use)
+def test_permanently_held_port_blocks_boot_after_bounded_retries(monkeypatch):
+    monkeypatch.setattr(RuntimeMetrics, "_prom_start_http_server", _always_in_use)
 
-    # Must NOT raise: the caller's real job is unaffected by a busy port.
-    assert Metrics.start_http_server(port=9400, role="queue-relay") is None
-    assert Metrics._http_server_started is False
+    with pytest.raises(OSError, match="Address already in use"):
+        Metrics.start_http_server(
+            port=9400,
+            service="test-services",
+            role="queue-relay",
+        )
+    assert RuntimeMetrics._http_server_started is False
 
 
 def test_transient_contention_still_wins_the_port(monkeypatch):
@@ -52,9 +58,16 @@ def test_transient_contention_still_wins_the_port(monkeypatch):
         if attempts["n"] < 3:
             raise OSError(errno.EADDRINUSE, "Address already in use")
 
-    monkeypatch.setattr(Metrics, "_prom_start_http_server", flaky)
+    monkeypatch.setattr(RuntimeMetrics, "_prom_start_http_server", flaky)
 
-    assert Metrics.start_http_server(port=9400, role="queue-worker") == 9400
+    assert (
+        Metrics.start_http_server(
+            port=9400,
+            service="test-services",
+            role="queue-worker",
+        )
+        == 9400
+    )
     assert attempts["n"] == 3
 
 
@@ -62,9 +75,13 @@ def test_non_contention_oserror_is_not_swallowed(monkeypatch):
     def refused(*_args, **_kwargs):
         raise OSError(errno.EACCES, "Permission denied")
 
-    monkeypatch.setattr(Metrics, "_prom_start_http_server", refused)
+    monkeypatch.setattr(RuntimeMetrics, "_prom_start_http_server", refused)
 
     # A misconfigured port is an operator error worth surfacing loudly —
     # only contention gets the soft landing.
     with pytest.raises(OSError):
-        Metrics.start_http_server(port=80, role="queue-relay")
+        Metrics.start_http_server(
+            port=80,
+            service="test-services",
+            role="queue-relay",
+        )

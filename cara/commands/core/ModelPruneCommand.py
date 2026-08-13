@@ -23,18 +23,39 @@ app stay as they are — a model can adopt ``MakesPrunable`` incrementally.
 
 from __future__ import annotations
 
-from cara.commands import CommandBase, missing_optional
+from cara.commands.CommandBase import CommandBase
+from cara.commands.OptionalDependencyError import missing_optional
 from cara.decorators import command
+from cara.eloquent.models import Model
+from cara.support import get_classes
 
 
 @command(
     name="model:prune",
     help="Prune expired rows from MakesPrunable models.",
-    options={
-        "--model=?": "Prune only this model (class name, e.g. AuditEvent)",
-        "--batch=1000": "Rows deleted per batch",
-        "--pretend": "Report how many rows WOULD be pruned without deleting",
-    },
+    options=[
+        {
+            "name": "--model",
+            "help": "Prune only this model (class name, e.g. AuditEvent)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--batch",
+            "help": "Rows deleted per batch",
+            "type": int,
+            "default": 1000,
+            "is_flag": False,
+        },
+        {
+            "name": "--pretend",
+            "help": "Report how many rows WOULD be pruned without deleting",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class ModelPruneCommand(CommandBase):
     """Prune expired rows from every (or one) MakesPrunable model."""
@@ -44,7 +65,7 @@ class ModelPruneCommand(CommandBase):
         # (psycopg2). Defer it so a DB-less surface can still import this
         # command module; fail LOUD here, not at module load.
         try:
-            from cara.eloquent.concerns import MakesPrunable
+            from cara.eloquent.concerns import MakesPrunable  # local: heavy optional dep
         except ImportError as exc:
             raise missing_optional("db", exc) from exc
 
@@ -115,7 +136,6 @@ class ModelPruneCommand(CommandBase):
         models (e.g. from ``commons.models``) are still considered even if
         the app's ``models`` package layout differs.
         """
-        from cara.support import get_classes
 
         classes: list[type] = []
         try:
@@ -128,8 +148,6 @@ class ModelPruneCommand(CommandBase):
         # ``models`` package re-exports; subclasses live wherever they're
         # imported from.
         try:
-            from cara.eloquent.models import Model
-
             classes.extend(
                 cls for cls in self._all_subclasses(Model) if self._is_prunable(cls)
             )

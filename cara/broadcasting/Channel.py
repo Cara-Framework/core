@@ -7,11 +7,9 @@ they fan out on. The string form ``"private-user.123"`` carries the
 auth requirement implicitly — the prefix tells the WebSocket layer
 "this needs an auth callback to allow subscription".
 
-Cara's broadcasting subsystem accepts plain strings *and* Channel
-objects. Strings are passed through unchanged for backwards
-compatibility with plain channel names like ``"deals"`` or
-``"products.live"``; Channel objects are flattened to their canonical
-``str(channel)`` form at dispatch time.
+Application broadcasts use Channel objects. Raw strings exist only at the
+WebSocket ingress, where :func:`channel_from_wire` validates and converts the
+wire name before it enters the broadcasting core.
 
 Conventions
 -----------
@@ -26,9 +24,10 @@ subscribe path.
 
 from __future__ import annotations
 
-from typing import Any
-
 from cara.exceptions import InvalidArgumentException
+
+_AUTH_PREFIXES = ("private-", "presence-")
+_MAX_CHANNEL_NAME_LENGTH = 200
 
 
 class Channel:
@@ -37,15 +36,22 @@ class Channel:
     prefix: str = ""
 
     def __init__(self, name: str) -> None:
-        if not isinstance(name, str) or not name:
+        if (
+            not isinstance(name, str)
+            or not name
+            or name != name.strip()
+            or any(char.isspace() or ord(char) < 32 for char in name)
+            or len(name) > _MAX_CHANNEL_NAME_LENGTH
+        ):
             raise InvalidArgumentException(
-                f"Channel name must be a non-empty string, got {name!r}"
+                "Channel name must be a non-empty, whitespace-free string no "
+                f"longer than {_MAX_CHANNEL_NAME_LENGTH} characters, got {name!r}"
             )
-        # Strip any prefix the caller already attached, so
-        # ``PrivateChannel("private-foo")`` and
-        # ``PrivateChannel("foo")`` produce the same result.
-        if self.prefix and name.startswith(f"{self.prefix}-"):
-            name = name[len(self.prefix) + 1 :]
+        if name.startswith(_AUTH_PREFIXES):
+            raise InvalidArgumentException(
+                "Channel constructors require a bare name; use the matching "
+                "PrivateChannel or PresenceChannel type instead of a wire prefix."
+            )
         self.name = name
 
     @property
@@ -59,53 +65,44 @@ class Channel:
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.name!r})"
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, Channel):
             return self.full_name == other.full_name
-        if isinstance(other, str):
-            return self.full_name == other
         return NotImplemented
 
     def __hash__(self) -> int:
         return hash(self.full_name)
 
 
-class PrivateChannel(Channel):
-    """Authenticated channel — only callers passing the registered
-    authorization callback for the matching pattern may subscribe.
-
-    Wire form: ``private-{name}``. The ``private-`` prefix is the
-    framework's signal that ``ChannelRegistry.authorize`` must run
-    before the subscription is accepted.
-    """
-
-    prefix = "private"
+def channel_name(value: Channel) -> str:
+    """Return the canonical wire name of a typed channel."""
+    if not isinstance(value, Channel):
+        raise TypeError(f"Expected Channel, got {type(value).__name__}")
+    return value.full_name
 
 
-class PresenceChannel(PrivateChannel):
-    """Like PrivateChannel but the authorization callback is expected
-    to return a *user data dict* (or ``True`` for legacy callers) so
-    other subscribers can see who else is on the channel.
-
-    Wire form: ``presence-{name}``.
-    """
-
-    prefix = "presence"
-
-
-def channel_name(value: Any) -> str:
-    """Coerce a Channel-or-string to its canonical string form.
-
-    Used at every API boundary that accepts both — the contract is
-    "give us anything channel-shaped and we'll normalize it".
-    """
-    if isinstance(value, Channel):
-        return value.full_name
-    if isinstance(value, str):
-        return value
-    raise TypeError(
-        f"Expected str or Channel instance for channel name, got {type(value).__name__}"
+def channel_from_wire(value: object) -> Channel:
+    """Validate one client-supplied wire name and recover its channel type."""
+    from .PresenceChannel import (
+        PresenceChannel,  # local: cycle with cara.broadcasting.PresenceChannel
+    )
+    from .PrivateChannel import (
+        PrivateChannel,  # local: cycle with cara.broadcasting.PrivateChannel
     )
 
+    if not isinstance(value, str):
+        raise InvalidArgumentException(
+            f"Wire channel name must be a string, got {type(value).__name__}"
+        )
+    if value.startswith("presence-"):
+        return PresenceChannel(value[len("presence-") :])
+    if value.startswith("private-"):
+        return PrivateChannel(value[len("private-") :])
+    return Channel(value)
 
-__all__ = ["Channel", "PrivateChannel", "PresenceChannel", "channel_name"]
+
+__all__ = [
+    "Channel",
+    "channel_from_wire",
+    "channel_name",
+]

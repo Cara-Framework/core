@@ -46,7 +46,7 @@ from typing import Any
 
 from cara.facades import Log
 from cara.http import Request, Response
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
 
 # Methods for which a body may be safely cache-validated. HEAD shares
 # GET semantics (same representation, empty body) so an ETag is still

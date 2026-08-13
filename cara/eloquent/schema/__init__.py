@@ -1,6 +1,61 @@
-from .Column import Column
-from .Field import Field
-from .Schema import Schema
-from .Table import Table
+"""Eloquent — layer barrel (generated, DOCTRINE §5.1). — schema subpackage."""
 
-__all__ = ["Column", "Field", "Schema", "Table"]
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "Blueprint": (".Blueprint", "Blueprint"),
+    "BlueprintExecutor": (".BlueprintExecutor", "BlueprintExecutor"),
+    "CONSTRAINT_BUILDERS": (".Schema", "CONSTRAINT_BUILDERS"),
+    "Column": (".Column", "Column"),
+    "ColumnFactory": (".ColumnFactory", "ColumnFactory"),
+    "Constraint": (".Constraint", "Constraint"),
+    "ConstraintManager": (".ConstraintManager", "ConstraintManager"),
+    "FIELD_TYPES_WITHOUT_NAMES": (".Schema", "FIELD_TYPES_WITHOUT_NAMES"),
+    "FIELD_TYPES_WITH_NAMES": (".Schema", "FIELD_TYPES_WITH_NAMES"),
+    "Field": (".Field", "Field"),
+    "FieldBuilder": (".FieldBuilder", "FieldBuilder"),
+    "FieldDefinition": (".FieldDefinition", "FieldDefinition"),
+    "FieldMeta": (".FieldMeta", "FieldMeta"),
+    "FieldProxy": (".FieldProxy", "FieldProxy"),
+    "ForeignKeyBuilder": (".ForeignKeyBuilder", "ForeignKeyBuilder"),
+    "ForeignKeyConstraint": (".ForeignKeyConstraint", "ForeignKeyConstraint"),
+    "Index": (".Index", "Index"),
+    "Platform": (".platforms", "Platform"),
+    "PostgresPlatform": (".platforms", "PostgresPlatform"),
+    "SQLitePlatform": (".platforms", "SQLitePlatform"),
+    "Schema": (".Schema", "Schema"),
+    "SchemaConnectionManager": (".SchemaConnectionManager", "SchemaConnectionManager"),
+    "SchemaQueryExecutor": (".SchemaQueryExecutor", "SchemaQueryExecutor"),
+    "Table": (".Table", "Table"),
+    "TableDiff": (".TableDiff", "TableDiff"),
+}
+
+__all__ = [
+    "Blueprint",
+    "BlueprintExecutor",
+    "CONSTRAINT_BUILDERS",
+    "Column",
+    "ColumnFactory",
+    "Constraint",
+    "ConstraintManager",
+    "FIELD_TYPES_WITHOUT_NAMES",
+    "FIELD_TYPES_WITH_NAMES",
+    "Field",
+    "FieldBuilder",
+    "FieldDefinition",
+    "FieldMeta",
+    "FieldProxy",
+    "ForeignKeyBuilder",
+    "ForeignKeyConstraint",
+    "Index",
+    "Platform",
+    "PostgresPlatform",
+    "SQLitePlatform",
+    "Schema",
+    "SchemaConnectionManager",
+    "SchemaQueryExecutor",
+    "Table",
+    "TableDiff",
+]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

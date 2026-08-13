@@ -22,12 +22,14 @@ Design
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from typing import Any
 
 from cara.authorization.AuthorizationResponse import AuthorizationResponse
-from cara.authorization.contracts import Gate as GateContract
+from cara.authorization.contracts import GateContract
 from cara.exceptions import AuthorizationFailedException
+from cara.facades import Log
 
 # Sentinel separating "no decision" (None) from an explicit deny when a
 # before/after callback or policy hook returns a value.
@@ -334,14 +336,11 @@ class Gate(GateContract):
     @staticmethod
     def _log(message: str) -> None:
         try:
-            from cara.facades import Log
-
             Log.error(message, category="cara.authorization", exc_info=True)
         except Exception:  # noqa: BLE001 — logging must never raise
             # The Log facade itself failed (unbooted container, broken
             # channel). The old fallback re-ran the identical facade call
             # — re-raising the same failure — so the message was lost AND
             # the "never raise" promise broke. Fall back to stderr.
-            import sys
 
             print(f"[cara.authorization] {message}", file=sys.stderr)

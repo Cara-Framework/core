@@ -75,7 +75,7 @@ def authenticated_user(request: Any) -> Any:
     if user is None or not hasattr(user, "id") or user.id is None:
         # Imported lazily: ``cara.helpers`` pulls configuration/environment,
         # which must not be dragged in merely by importing ``cara.support``.
-        from cara.helpers import abort
+        from cara.helpers import abort  # local: cycle with cara.helpers
 
         abort(401, "Authentication required")
     return user
@@ -105,7 +105,7 @@ def gate_allows(request: Any, ability: str) -> bool:
     """
     # Lazy: facade bindings are resolved at boot, after ``cara.support`` has
     # already been imported.
-    from cara.facades import Gate
+    from cara.facades import Gate  # local: cycle with cara.facades
 
     return Gate.for_user(resolve_user(request)).allows(ability)
 

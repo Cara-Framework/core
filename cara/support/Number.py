@@ -1,55 +1,49 @@
 """Decimal-safe number utilities — coercion and safe division.
 
-Generic math helpers for any application dealing with precise numeric
-values (money, measurements, percentages). Floats are routed through
-``str()`` before ``Decimal()`` to avoid binary-float drift.
-
-Two coercions live here on purpose, and picking the wrong one is a
-money bug:
-
-* :func:`to_decimal` is **total** — it always answers a ``Decimal``,
-  substituting ``0`` for anything it cannot parse. That is correct only
-  where zero is the genuine additive identity for the caller (a running
-  total seeded from optional parts), and it is what ``Money`` relies on
-  to stay non-optional.
-* :func:`to_decimal_or_none` is **partial** — unparseable input answers
-  ``None``. Use it anywhere the value is a *measurement*: unknown is
-  ``NULL``, never 0, because a fake zero is indistinguishable from a
-  measured zero once it lands in a column and it averages into every
-  report built on that column.
+Generic math helpers for applications dealing with precise numeric values.
+Floats are routed through ``str()`` before ``Decimal()`` to avoid importing
+binary-float drift. Invalid, boolean and non-finite values are never minted
+into a plausible zero.
 """
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal, DivisionByZero, InvalidOperation
 from typing import Any
 
+_DECIMAL_TEXT_RE = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+
+
+def parse_decimal_text(value: Any) -> Decimal | None:
+    """Parse an exact JSON decimal string; numbers/bools/exponents are refused."""
+    if not isinstance(value, str) or not _DECIMAL_TEXT_RE.fullmatch(value):
+        return None
+    try:
+        out = Decimal(value)
+    except InvalidOperation:
+        return None
+    return out if out.is_finite() else None
+
+
+def decimal_text(value: Decimal) -> str:
+    """Render a validated Decimal without exponent notation or precision loss."""
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValueError("a finite Decimal is required")
+    return format(value, "f")
+
 
 def to_decimal(value: Any) -> Decimal:
-    """Coerce ``value`` to ``Decimal``, returning ``Decimal('0')`` for
-    None / invalid input.
-
-    Accepts None, str, int, float, Decimal. Floats are routed through
-    ``str()`` first so we never store the binary-float drift that
-    ``Decimal(float)`` would introduce.
-
-    This function is deliberately total. ``Money.__post_init__`` calls
-    it unconditionally on a non-optional ``amount`` field, so handing
-    back ``None`` here would mint a ``Money(None)`` that blows up at
-    every downstream comparison instead of at construction. When you
-    need to tell "unknown" apart from "zero", reach for
-    :func:`to_decimal_or_none`.
-    """
-    if value is None:
-        return Decimal("0")
-    if isinstance(value, Decimal):
-        return value
+    """Coerce a finite numeric value to ``Decimal`` or raise ``ValueError``."""
+    if value is None or isinstance(value, bool):
+        raise ValueError("a finite numeric value is required")
     try:
-        if isinstance(value, float):
-            return Decimal(str(value))
-        return Decimal(value)
-    except InvalidOperation, ValueError, TypeError:
-        return Decimal("0")
+        out = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError("a finite numeric value is required") from exc
+    if not out.is_finite():
+        raise ValueError("a finite numeric value is required")
+    return out
 
 
 def to_decimal_or_none(value: Any) -> Decimal | None:
@@ -61,18 +55,15 @@ def to_decimal_or_none(value: Any) -> Decimal | None:
     actually deliver for a missing number — are unknown, not zero, and
     resolve to ``None`` rather than falling through ``Decimal("")``.
     """
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
-    if isinstance(value, Decimal):
-        return value
     if isinstance(value, str) and not value.strip():
         return None
     try:
-        if isinstance(value, float):
-            return Decimal(str(value))
-        return Decimal(value)
+        out = value if isinstance(value, Decimal) else Decimal(str(value))
     except InvalidOperation, ValueError, TypeError:
         return None
+    return out if out.is_finite() else None
 
 
 def safe_divide_decimal(num: Any, den: Any) -> Decimal | None:
@@ -90,9 +81,9 @@ def safe_divide_decimal(num: Any, den: Any) -> Decimal | None:
     Callers that genuinely want a numeric floor say so at the call site:
     ``safe_divide_decimal(a, b) or Decimal("0")``.
     """
-    n = to_decimal(num)
-    d = to_decimal(den)
-    if d == 0:
+    n = to_decimal_or_none(num)
+    d = to_decimal_or_none(den)
+    if n is None or d is None or d == 0:
         return None
     try:
         return n / d
@@ -100,4 +91,10 @@ def safe_divide_decimal(num: Any, den: Any) -> Decimal | None:
         return None
 
 
-__all__ = ["safe_divide_decimal", "to_decimal", "to_decimal_or_none"]
+__all__ = [
+    "decimal_text",
+    "parse_decimal_text",
+    "safe_divide_decimal",
+    "to_decimal",
+    "to_decimal_or_none",
+]

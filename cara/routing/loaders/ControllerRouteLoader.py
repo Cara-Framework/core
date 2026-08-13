@@ -7,7 +7,8 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from cara.routing import Route
+from cara.http.controllers import Controller
+from cara.routing.Route import Route
 from cara.support import get_classes
 
 
@@ -69,27 +70,7 @@ class ControllerRouteLoader:
 
     def _all_controller_classes(self) -> list[Any]:
         """Get all controller classes from configured controllers module."""
-        try:
-            # Get controllers module path from configuration
-            controllers_module_path = self.application.make("controllers.location")
-
-            # Use fluent helper to get controller classes - Clean & Simple!
-            from cara.http.controllers import Controller
-
-            # Direct module path usage with fluent helper
-            controller_classes = get_classes(
-                controllers_module_path, base_class=Controller
-            )
-
-            return controller_classes
-
-        except Exception:
-            # Fallback to default app.controllers path if configuration fails
-            # Framework tries standard path but gracefully handles if not available
-            try:
-                from cara.http.controllers import Controller
-
-                return get_classes("app.controllers", base_class=Controller)
-            except Exception:
-                # No controllers found - return empty list (framework agnostic)
-                return []
+        controllers_module_path = self.application.make("controllers.location")
+        if not isinstance(controllers_module_path, str) or not controllers_module_path:
+            raise RuntimeError("controllers.location must name an importable module")
+        return get_classes(controllers_module_path, base_class=Controller)

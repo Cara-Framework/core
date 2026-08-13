@@ -35,7 +35,6 @@ Configurable via ``config/compression.py`` → ``COMPRESSION`` dict:
 
 from __future__ import annotations
 
-import contextlib
 import gzip
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
@@ -43,7 +42,7 @@ from typing import Any
 from cara.configuration import config
 from cara.facades import Log
 from cara.http import Request, Response
-from cara.middleware import Middleware
+from cara.middleware.Middleware import Middleware
 
 # Default compressible MIME prefixes. Match conservatively: anything
 # already compressed (image/*, video/*, audio/*, application/zip,
@@ -79,35 +78,34 @@ class CompressResponses(Middleware):
 
     @staticmethod
     def _load_config() -> tuple[bool, int, int, tuple[str, ...]]:
-        enabled = True
-        min_size = _DEFAULT_MIN_SIZE
-        level = _DEFAULT_LEVEL
-        prefixes: tuple[str, ...] = _DEFAULT_COMPRESSIBLE_PREFIXES
-        try:
-            cfg_enabled = config("compression.compression.enabled", None)
-            if cfg_enabled is not None:
-                enabled = bool(cfg_enabled)
-            cfg_min = config("compression.compression.min_size", None)
-            if cfg_min is not None:
-                with contextlib.suppress(TypeError, ValueError):
-                    min_size = max(0, int(cfg_min))
-            cfg_level = config("compression.compression.level", None)
-            if cfg_level is not None:
-                try:
-                    lvl = int(cfg_level)
-                    if 1 <= lvl <= 9:
-                        level = lvl
-                except TypeError, ValueError:
-                    pass
-            cfg_types = config("compression.compression.content_types", None)
-            if isinstance(cfg_types, (list, tuple)) and cfg_types:
-                prefixes = tuple(
-                    str(p).strip().lower() for p in cfg_types if str(p).strip()
-                )
-        except Exception as e:
-            CompressResponses._log_debug(
-                f"CompressResponses: config load failed ({e.__class__.__name__}: {e})"
+        enabled = config("compression.compression.enabled", True)
+        min_size = config("compression.compression.min_size", _DEFAULT_MIN_SIZE)
+        level = config("compression.compression.level", _DEFAULT_LEVEL)
+        configured_types = config("compression.compression.content_types", None)
+
+        if not isinstance(enabled, bool):
+            raise TypeError("Response compression enabled must be boolean")
+        if type(min_size) is not int or min_size < 0:
+            raise ValueError(
+                "Response compression min_size must be a non-negative integer"
             )
+        if type(level) is not int or not 1 <= level <= 9:
+            raise ValueError("Response compression level must be an integer from 1 to 9")
+        if configured_types is None:
+            prefixes = _DEFAULT_COMPRESSIBLE_PREFIXES
+        else:
+            if not isinstance(configured_types, (list, tuple)) or not configured_types:
+                raise TypeError(
+                    "Response compression content_types must be a non-empty list"
+                )
+            if any(
+                not isinstance(value, str) or not value.strip()
+                for value in configured_types
+            ):
+                raise ValueError(
+                    "Response compression content_types must contain non-empty strings"
+                )
+            prefixes = tuple(value.strip().lower() for value in configured_types)
         return enabled, min_size, level, prefixes
 
     async def handle(
@@ -139,10 +137,14 @@ class CompressResponses(Middleware):
             if len(compressed) >= len(body):
                 return response
 
-            response.content = compressed
+            # Commit headers before replacing the body. If a custom response
+            # cannot accept the compression headers, the outer handler keeps
+            # the original bytes intact instead of returning compressed bytes
+            # without a correct cache key.
+            self._append_vary(response, "Accept-Encoding")
             response.header("Content-Encoding", "gzip")
             response.header("Content-Length", str(len(compressed)))
-            self._append_vary(response, "Accept-Encoding")
+            response.content = compressed
         except Exception as e:
             # Never break a response because compression failed — fall
             # through with the original bytes. Log at debug so a
@@ -233,20 +235,14 @@ class CompressResponses(Middleware):
 
     @staticmethod
     def _append_vary(response: Any, value: str) -> None:
-        try:
-            existing = ""
-            headers = getattr(response, "headers", None)
-            if headers is not None and hasattr(headers, "get"):
-                existing = headers.get("Vary") or ""
-            tokens = [t.strip() for t in existing.split(",") if t.strip()]
-            if not any(t.lower() == value.lower() for t in tokens):
-                tokens.append(value)
-            response.header("Vary", ", ".join(tokens))
-        except Exception:
-            # allow-silent-except: Vary is advisory for shared caches
-            # Vary is advisory for shared caches; failure to append it
-            # doesn't break the response itself.
-            pass
+        existing = ""
+        headers = getattr(response, "headers", None)
+        if headers is not None and hasattr(headers, "get"):
+            existing = headers.get("Vary") or ""
+        tokens = [token.strip() for token in existing.split(",") if token.strip()]
+        if not any(token.lower() == value.lower() for token in tokens):
+            tokens.append(value)
+        response.header("Vary", ", ".join(tokens))
 
     @staticmethod
     def _log_debug(msg: str) -> None:

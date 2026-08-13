@@ -31,7 +31,7 @@ from cara.eloquent.connections.ConnectionResolver import _get_registry
 
 
 def test_create_connection_instance_returns_the_pinned_transaction_connection():
-    dm = DatabaseManager()
+    dm = DatabaseManager("app", {"app": {"driver": "sqlite"}})
     # Stand-in for "the connection begin_transaction pinned for this context".
     pinned = object()
 
@@ -60,7 +60,7 @@ def test_no_active_transaction_does_not_borrow_another_connections_pin():
     ``'other'`` must never leak into a lookup for ``'app'``. Otherwise an
     unrelated open transaction on one connection would hijack queries meant for
     a different connection."""
-    dm = DatabaseManager()
+    dm = DatabaseManager("app", {"app": {"driver": "sqlite"}})
     other_pin = object()
 
     registry = _get_registry()

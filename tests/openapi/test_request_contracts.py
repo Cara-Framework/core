@@ -37,6 +37,7 @@ class StoreRequest(FormRequest):
             "items": "required|array|between:1,20",
             "items.*": "required|dict",
             "items.*.quantity": "required|integer|between:1,100",
+            "items.*.amount": "required|decimal_text:14,4",
             "legacy_page": "missing",
         }
 ''',
@@ -54,9 +55,96 @@ class StoreRequest(FormRequest):
     items = store["properties"]["items"]
     assert items["minItems"] == 1
     assert items["maxItems"] == 20
-    assert items["items"]["required"] == ["quantity"]
+    assert items["items"]["required"] == ["amount", "quantity"]
+    assert items["items"]["additionalProperties"] is False
+    amount = items["items"]["properties"]["amount"]
+    assert amount["type"] == "string"
+    assert amount["maxLength"] == 15
+    assert amount["x-cara-decimal-precision"] == 14
+    assert amount["x-cara-decimal-scale"] == 4
     assert items["items"]["properties"]["quantity"]["maximum"] == 100
     assert store["x-cara-forbidden-fields"] == ["legacy_page"]
+
+
+def test_imported_rule_spreads_and_nested_inheritance_stay_complete(tmp_path: Path):
+    requests = tmp_path / "requests"
+    requests.mkdir()
+    (requests / "DefinitionRules.py").write_text(
+        """
+AUTOMATION_DEFINITION_RULES = {
+    "conditions": "required|array",
+    "conditions.*": "required|dict",
+    "conditions.*.field": "required|string",
+    "conditions.*.value": "required|decimal_text:14,4",
+}
+""",
+        encoding="utf-8",
+    )
+    (requests / "Contracts.py").write_text(
+        """
+from app.requests.DefinitionRules import AUTOMATION_DEFINITION_RULES
+
+
+class DefinitionRequest(FormRequest):
+    def rules(self):
+        return {**AUTOMATION_DEFINITION_RULES, "name": "required|string"}
+
+
+class UpdateRequest(DefinitionRequest):
+    def rules(self):
+        return {"revision": "required|integer"}
+""",
+        encoding="utf-8",
+    )
+
+    schemas = FormRequestSchemaExtractor(requests).extract()
+
+    base = schemas["DefinitionRequest"]
+    assert "x-cara-rules-partial" not in base
+    assert (
+        base["properties"]["conditions"]["items"]["properties"]["value"]["type"]
+        == "string"
+    )
+    inherited = schemas["UpdateRequest"]
+    assert set(inherited["properties"]) == {"conditions", "name", "revision"}
+    assert inherited["properties"]["conditions"]["items"]["required"] == [
+        "field",
+        "value",
+    ]
+
+
+def test_named_and_wildcard_children_describe_an_open_typed_object(tmp_path: Path):
+    requests = _write_source(
+        tmp_path,
+        "requests",
+        """
+class SettingsRequest(FormRequest):
+    def rules(self):
+        return {
+            "settings": "required|dict",
+            "settings.*": "nullable",
+            "settings.reprice": "nullable|dict",
+            "settings.reprice.min_price": "required|decimal_text:14,4",
+        }
+
+
+class SettingsUpdateRequest(SettingsRequest):
+    def rules(self):
+        return {"revision": "required|integer"}
+""",
+    )
+
+    schemas = FormRequestSchemaExtractor(requests).extract()
+    settings = schemas["SettingsRequest"]["properties"]["settings"]
+
+    assert settings["type"] == "object"
+    assert settings["additionalProperties"]["nullable"] is True
+    assert settings["properties"]["reprice"]["additionalProperties"] is False
+    assert (
+        settings["properties"]["reprice"]["properties"]["min_price"]["type"] == "string"
+    )
+    inherited = schemas["SettingsUpdateRequest"]["properties"]["settings"]
+    assert inherited["additionalProperties"]["nullable"] is True
 
 
 def test_controller_contracts_capture_request_and_every_response_status(

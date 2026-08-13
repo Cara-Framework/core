@@ -11,7 +11,7 @@ Example
     expect(price.is_valid).to_be_true()
     expect(reason).to_equal("Price is null")
     expect(score).to_be_between(0, 100)
-    expect(items).to_have_count(3).and_to_contain("apple")
+    expect(items).to_have_length(3).and_to_contain("apple")
     expect(lambda: service.run()).to_throw(ValueError, match="negative")
 
 The API is intentionally large because tests should *read*. Each method
@@ -28,14 +28,11 @@ from collections.abc import Iterable
 from re import Pattern
 from typing import Any
 
+from .ExpectationFailed import ExpectationFailed
+
 # Sentinel marking "no value supplied" in optional kwargs without
 # colliding with legitimate ``None`` arguments.
 _MISSING: Any = object()
-
-
-class ExpectationFailed(AssertionError):
-    """Raised when an expectation fails. Subclasses ``AssertionError``
-    so pytest displays it the same way as ``assert`` failures."""
 
 
 def _format(value: Any, max_len: int = 200) -> str:
@@ -175,10 +172,6 @@ class Expectation:
             f"instance of {klass.__name__}, got {type(self._subject).__name__}",
         )
 
-    def to_be_a(self, klass: type[Any]) -> Expectation:
-        """Alias for :meth:`to_be_instance_of`."""
-        return self.to_be_instance_of(klass)
-
     # ── Containers ───────────────────────────────────────────────────
 
     def to_have_length(self, n: int) -> Expectation:
@@ -187,10 +180,6 @@ class Expectation:
             actual == n,
             f"length {n}, got length {actual}",
         )
-
-    def to_have_count(self, n: int) -> Expectation:
-        """Alias for :meth:`to_have_length`."""
-        return self.to_have_length(n)
 
     def to_be_empty(self) -> Expectation:
         return self._fail(
@@ -313,7 +302,6 @@ class Expectation:
     and_to_equal = to_equal
     and_to_contain = to_contain
     and_to_have_length = to_have_length
-    and_to_have_count = to_have_count
     and_to_have_key = to_have_key
     and_to_match = to_match
 

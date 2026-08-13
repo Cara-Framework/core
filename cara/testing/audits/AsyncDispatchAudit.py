@@ -29,29 +29,15 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
+
+from .DispatchFinding import DispatchFinding
 
 #: Framework calls that return a coroutine and are routinely written as a
 #: bare statement.
 DISPATCH_CALLS: frozenset[str] = frozenset(
     {"Event.dispatch", "Event.fire", "Bus.dispatch", "safe_dispatch"}
 )
-
-
-@dataclass(frozen=True, slots=True)
-class DispatchFinding:
-    """One discarded coroutine, reported against a product-relative path."""
-
-    path: str
-    line: int
-    call: str
-
-    def __str__(self) -> str:
-        return (
-            f"{self.path}:{self.line}: `{self.call}(...)` is a statement with no "
-            f"`await` — the coroutine is discarded and the work never runs"
-        )
 
 
 def _dotted_name(node: ast.expr) -> str | None:

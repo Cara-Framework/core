@@ -7,7 +7,7 @@ import time
 
 import pendulum
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.exceptions import InvalidArgumentException
 from cara.facades import Queue
@@ -16,11 +16,29 @@ from cara.facades import Queue
 @command(
     name="queue:stats",
     help="Display canonical delivery-ledger queue statistics",
-    options={
-        "--queue=?": "Canonical queue name to show stats for",
-        "--recent=24": "Show jobs from last N hours (default: 24)",
-        "--watch": "Watch mode - refresh every 5 seconds",
-    },
+    options=[
+        {
+            "name": "--queue",
+            "help": "Canonical queue name to show stats for",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--recent",
+            "help": "Show jobs from last N hours (default: 24)",
+            "type": int,
+            "default": 24,
+            "is_flag": False,
+        },
+        {
+            "name": "--watch",
+            "help": "Watch mode - refresh every 5 seconds",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class QueueStatsCommand(CommandBase):
     """Display due, stale and terminal-hook state for one canonical queue."""

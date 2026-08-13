@@ -52,10 +52,8 @@ _STDLIB_EXCEPTION_BASES = {
 #: ``JobThrottledException``, ``UnsafeOutboundUrl``,
 #: ``ProcessFailedException`` and ``StepFailed`` were rooted in place, each
 #: keeping its stdlib base as a SECOND base where callers catch it.
-#: ``DeliverySettlementError`` and ``CurrencyMismatch`` remain — they are
-#: owned by lanes running concurrently with this one.
+#: ``CurrencyMismatch`` remains — it is owned by the money lane.
 _ALLOWED_ORPHANS: dict[str, set[str]] = {
-    "commands/core/QueueWorkCommand.py": {"DeliverySettlementError"},
     "http/client/HttpFake.py": {"StrayHttpRequestError", "FakeExhaustedError"},
     "support/Money.py": {"CurrencyMismatch"},
     "testing/Expectation.py": {"ExpectationFailed"},
@@ -148,10 +146,8 @@ def test_the_queue_contracts_survive_joining_the_taxonomy() -> None:
     not disturb either — nor the constructor kwargs the raisers pass.
     """
     from cara.exceptions import CaraException, QueueException
-    from cara.queues.contracts.CancellableJob import (
-        JobCancelledException,
-        JobThrottledException,
-    )
+    from cara.queues.contracts.JobCancelledException import JobCancelledException
+    from cara.queues.contracts.JobThrottledException import JobThrottledException
 
     for klass in (JobCancelledException, JobThrottledException):
         assert issubclass(klass, QueueException)
@@ -178,13 +174,14 @@ def test_the_queue_contracts_survive_joining_the_taxonomy() -> None:
 
 def test_the_rooted_orphans_keep_the_stdlib_base_callers_catch() -> None:
     """Root them, do not strand their existing ``except`` clauses (§5)."""
-    from cara.commands._optional import OptionalDependencyError
+    from cara.commands.OptionalDependencyError import OptionalDependencyError
     from cara.exceptions import CaraException
-    from cara.openapi.Controllers import UnknownDeclaredResource
-    from cara.openapi.Errors import ConflictingErrorStatus, UntypedErrorResponse
+    from cara.openapi.ConflictingErrorStatus import ConflictingErrorStatus
+    from cara.openapi.UnknownDeclaredResource import UnknownDeclaredResource
+    from cara.openapi.UntypedErrorResponse import UntypedErrorResponse
     from cara.security import UnsafeOutboundUrl
-    from cara.support.Process import ProcessFailedException
-    from cara.workflows.Pipeline import StepFailed
+    from cara.support.ProcessFailedException import ProcessFailedException
+    from cara.workflows.StepFailed import StepFailed
 
     runtime_rooted = (
         OptionalDependencyError,
@@ -227,7 +224,8 @@ def test_a_failing_subprocess_raises_inside_the_taxonomy() -> None:
     import pytest as _pytest
 
     from cara.exceptions import CaraException
-    from cara.support.Process import Process, ProcessFailedException
+    from cara.support.Process import Process
+    from cara.support.ProcessFailedException import ProcessFailedException
 
     result = Process.command([sys.executable, "-c", "raise SystemExit(3)"]).run()
 

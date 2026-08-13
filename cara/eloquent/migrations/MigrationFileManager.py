@@ -28,7 +28,9 @@ class MigrationFileManager:
         """Load migration class from file"""
         # Local import to avoid a package-__init__ circular (this module is
         # imported by ``cara.eloquent.migrations.__init__`` itself).
-        from cara.eloquent.migrations.Migration import Migration
+        from cara.eloquent.migrations.Migration import (
+            Migration,  # local: cycle with cara.eloquent.migrations.Migration
+        )
 
         # ``exec_module`` does not register an ad-hoc module in
         # ``sys.modules`` for us.  Decorators such as ``@dataclass(slots=True)``

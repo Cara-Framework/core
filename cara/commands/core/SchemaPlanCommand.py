@@ -58,19 +58,22 @@ import json
 import tempfile
 from pathlib import Path
 
+import cara.schema.Scratch as Scratch
 from cara.commands.CommandBase import CommandBase
+from cara.configuration import config
 from cara.decorators import command
 from cara.exceptions import ScratchDatabaseException
+from cara.facades import DB
 from cara.schema import (
     ADDITIVE,
     DESTRUCTIVE,
     LOCKING,
-    Scratch,
     as_dict,
     introspect,
     plan,
     plan_id,
 )
+from cara.support import base_path
 
 
 @command(
@@ -82,14 +85,50 @@ from cara.schema import (
         "plan contains destructive operations without --allow_destructive, or "
         "when the planner refused to derive part of it."
     ),
-    options={
-        "--c|connection=default": "The connection to plan against",
-        "--schema=?": "The Postgres schema to inspect (defaults to the connection's)",
-        "--allow_destructive": "Permit destructive operations (drops) in the plan",
-        "--sql": "Print the executable SQL for each operation",
-        "--out=?": "Write the plan as a JSON artifact to this path (for review)",
-        "--rehearse": "Run the plan against a structure-clone scratch first",
-    },
+    options=[
+        {
+            "name": "-c|--connection",
+            "help": "The connection to plan against",
+            "type": str,
+            "default": "default",
+            "is_flag": False,
+        },
+        {
+            "name": "--schema",
+            "help": "The Postgres schema to inspect (defaults to the connection's)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--allow_destructive",
+            "help": "Permit destructive operations (drops) in the plan",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--sql",
+            "help": "Print the executable SQL for each operation",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--out",
+            "help": "Write the plan as a JSON artifact to this path (for review)",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--rehearse",
+            "help": "Run the plan against a structure-clone scratch first",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class SchemaPlanCommand(CommandBase):
     def handle(self):
@@ -216,8 +255,6 @@ class SchemaPlanCommand(CommandBase):
         leftover, and worse, a database named after production sitting on the
         production server.
         """
-        from cara.configuration import config  # local: heavy optional dep
-        from cara.support import base_path  # local: heavy optional dep
 
         try:
             params = Scratch.connection_params(config)
@@ -277,7 +314,6 @@ class SchemaPlanCommand(CommandBase):
 
     def _preflight(self, operation) -> str | None:
         """Answer the operation's data question against the live database."""
-        from cara.facades import DB  # local: heavy optional dep
 
         try:
             rows = DB.select(operation.preflight_sql)
@@ -294,8 +330,8 @@ class SchemaPlanCommand(CommandBase):
         changed.
         """
         try:
-            from cara.eloquent.migrations import (  # local: heavy optional dep
-                ModelDiscoverer,
+            from cara.eloquent.migrations import (
+                ModelDiscoverer,  # local: heavy optional dep
             )
             from cara.eloquent.schema import Schema  # local: heavy optional dep
         except ImportError as exc:

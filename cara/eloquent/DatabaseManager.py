@@ -1,17 +1,56 @@
 from __future__ import annotations
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 import logging
-import threading
+from collections.abc import Mapping
 from contextlib import contextmanager
+from copy import deepcopy
+from typing import Self
 
 from cara.exceptions import ConfigurationException, ConnectionNotRegisteredException
 
+from .connections import ConnectionResolver
+from .connections.ConnectionResolver import _get_registry
+
 _logger = logging.getLogger("cara.database")
+
+
+def _normalize_database_config(
+    default_connection,
+    connection_details,
+) -> tuple[str, dict[str, dict]]:
+    """Validate and snapshot the complete application database config."""
+    if hasattr(connection_details, "to_dict"):
+        connection_details = connection_details.to_dict()
+    if not isinstance(connection_details, Mapping):
+        raise ConfigurationException("database.drivers must be a mapping")
+
+    normalized_connections: dict[str, dict] = {}
+    for connection_name, details in connection_details.items():
+        if not isinstance(connection_name, str) or not connection_name.strip():
+            raise ConfigurationException(
+                "database.drivers keys must be non-empty connection names"
+            )
+        if not isinstance(details, Mapping):
+            raise ConfigurationException(
+                f"database.drivers.{connection_name} must be a mapping"
+            )
+        normalized_details = deepcopy(dict(details))
+        driver = normalized_details.get("driver")
+        if not isinstance(driver, str) or not driver.strip():
+            raise ConfigurationException(
+                f"database.drivers.{connection_name}.driver must be configured"
+            )
+        normalized_details["driver"] = driver.strip()
+        normalized_connections[connection_name] = normalized_details
+
+    if not isinstance(default_connection, str) or not default_connection.strip():
+        raise ConfigurationException("database.default must name a configured connection")
+    default_connection = default_connection.strip()
+    if default_connection not in normalized_connections:
+        raise ConfigurationException(
+            f"database.default '{default_connection}' is not present in database.drivers"
+        )
+    return default_connection, normalized_connections
 
 
 class DatabaseManager:
@@ -21,127 +60,23 @@ class DatabaseManager:
     Open/Closed: Extensible through ConnectionResolver
     """
 
-    _instance = None
-    # Guards ``get_instance`` against the classic double-checked-locking
-    # race: two threads both observe ``_instance is None``, both call
-    # ``cls()``, both auto-configure — one wins, the other's instance
-    # is silently discarded along with anything that captured a
-    # reference to it. With a lock, exactly one bootstrap runs.
-    _instance_lock = threading.Lock()
-
-    def __init__(self):
-        # Initialize database configuration directly
-        self._database_config = {"default": "app", "drivers": {}}
-        self._queue_config = {
-            "default": "database",
-            "drivers": {
-                "database": {
-                    "connection": "default",
-                    "table": "job",
-                    "failed_table": "failed_job",
-                }
-            },
-        }
-
-        # Initialize resolver with self to avoid circular dependency
+    def __init__(self, default_connection, connection_details):
+        """Build a fully configured, application-owned manager."""
+        default_connection, connections = _normalize_database_config(
+            default_connection,
+            connection_details,
+        )
         self._resolver = None
-        self._default_connection = "app"
-        self._connections = {}
-
-        # Initialize morph map for polymorphic relationships
+        self._default_connection = default_connection
+        self._connections = connections
         self._morph_map = {}
+        self._ensure_resolver()
 
     def _ensure_resolver(self):
         """Lazy initialization of resolver to avoid circular dependency"""
         if self._resolver is None:
-            from .connections import ConnectionResolver
-
             self._resolver = ConnectionResolver(database_manager=self)
         return self._resolver
-
-    def set_database_config(self, default_connection, connection_details) -> Self:
-        """Set database configuration"""
-        # Normalize connection_details to a plain dict. Sometimes config()
-        # returns a dotty_dict whose __hash__/__str__ recurses infinitely
-        # when used as a dict key or in `in` checks — flatten it here.
-        if hasattr(connection_details, "to_dict"):
-            connection_details = connection_details.to_dict()
-        elif not isinstance(connection_details, dict):
-            connection_details = dict(connection_details)
-        self._database_config = {
-            "default": default_connection,
-            "drivers": connection_details,
-        }
-        self._default_connection = default_connection
-        self._connections = connection_details
-
-        # Ensure resolver is initialized
-        self._ensure_resolver()
-        return self
-
-    def get_database_config(self):
-        """Get database configuration"""
-        return self._database_config
-
-    def set_queue_config(self, config) -> Self:
-        """Set queue configuration"""
-        self._queue_config = config
-        return self
-
-    def get_queue_config(self):
-        """Get queue configuration"""
-        return self._queue_config
-
-    @classmethod
-    def get_instance(cls):
-        """
-        Get the global DatabaseManager singleton instance.
-
-        Configuration strategy (hybrid approach):
-        1. Primary: EloquentProvider explicitly injects config (clear, testable)
-        2. Fallback: Auto-configure from config module if not yet configured
-
-        This hybrid approach provides both clarity and convenience:
-        - Provider injection = explicit, professional
-        - Auto-configure fallback = works everywhere, zero boilerplate
-        """
-        if cls._instance is None:
-            with cls._instance_lock:
-                if cls._instance is None:
-                    instance = cls()
-                    instance._auto_configure()
-                    cls._instance = instance
-        return cls._instance
-
-    def _auto_configure(self):
-        """
-        Auto-configure from config module as fallback.
-
-        Only runs if instance not yet configured (empty connections).
-        Allows DatabaseManager to work even if called before Provider runs.
-        """
-        # Skip if already configured by Provider
-        if self._connections:
-            return
-
-        try:
-            # Try to load config module
-            from cara.configuration import config
-
-            default_connection = config("database.default", "app")
-            connection_details = config("database.drivers", {})
-
-            if connection_details:
-                self.set_database_config(default_connection, connection_details)
-        except Exception as e:
-            # Config not available yet (early bootstrap).
-            # Provider will configure later — this is OK. Log at debug
-            # so it's visible if someone is troubleshooting boot order.
-            import logging
-
-            logging.getLogger("cara.database").debug(
-                "DatabaseManager._auto_configure skipped (early bootstrap): %s", e
-            )
 
     def _resolve_connection_name(self, name=None):
         """Resolves connection name - simple logic"""
@@ -218,7 +153,6 @@ class DatabaseManager:
         they can afterwards unwind exactly the levels they opened themselves
         — see :meth:`commit_transactions_above`.
         """
-        from .connections.ConnectionResolver import _get_registry
 
         connection_name = self._resolve_connection_name(connection)
         conn = _get_registry().get(connection_name)
@@ -264,7 +198,6 @@ class DatabaseManager:
         must never pop or close on its own — doing that unconditionally is
         precisely what let a boundary release a connection it did not open.
         """
-        from .connections.ConnectionResolver import _get_registry
 
         connection_name = self._resolve_connection_name(connection)
         registry = _get_registry()
@@ -290,7 +223,6 @@ class DatabaseManager:
         level (a boundary running after a driver-level failure), which would
         otherwise pin a dead handle for the rest of the context.
         """
-        from .connections.ConnectionResolver import _get_registry
 
         registry = _get_registry()
         connection_name = self._resolve_connection_name(connection)
@@ -360,7 +292,6 @@ class DatabaseManager:
         the pinned handle — we must NOT close that one (the
         transaction's commit/rollback path owns its lifecycle).
         """
-        from .connections.ConnectionResolver import _get_registry
 
         connection_name = self._resolve_connection_name(connection)
         resolver = self._ensure_resolver()
@@ -479,8 +410,6 @@ class DatabaseManager:
         # Transaction-aware short-circuit: reuse the active connection if
         # this context is inside ``with db.transaction()``.
         try:
-            from .connections.ConnectionResolver import _get_registry
-
             active = _get_registry().get(connection_name)
             if active is not None:
                 return active
@@ -550,8 +479,6 @@ class DatabaseManager:
     def validate_connection(self, connection_name):
         """Validate that connection exists and has required config"""
         if connection_name not in self._connections:
-            from cara.exceptions import ConnectionNotRegisteredException
-
             raise ConnectionNotRegisteredException(
                 f"Could not find the '{connection_name}' connection details"
             )
@@ -563,9 +490,3 @@ class DatabaseManager:
             )
 
         return True
-
-
-# Convenience function for accessing DatabaseManager without tight coupling
-def get_database_manager():
-    """Get DatabaseManager instance without dependency coupling"""
-    return DatabaseManager.get_instance()

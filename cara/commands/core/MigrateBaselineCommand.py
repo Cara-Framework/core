@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.commands import CommandBase, missing_optional
+from cara.commands.CommandBase import CommandBase
+from cara.commands.OptionalDependencyError import missing_optional
 from cara.decorators import command
 from cara.support import paths
 
@@ -10,12 +11,36 @@ from cara.support import paths
 @command(
     name="migrate:baseline",
     help="Adopt a verified live schema after intentionally squashing migrations.",
-    options={
-        "--c|connection=default": "The connection to baseline",
-        "--schema=?": "The database schema to introspect",
-        "--d|directory=?": "The migration directory",
-        "--force": "Acknowledge replacement of migration history",
-    },
+    options=[
+        {
+            "name": "-c|--connection",
+            "help": "The connection to baseline",
+            "type": str,
+            "default": "default",
+            "is_flag": False,
+        },
+        {
+            "name": "--schema",
+            "help": "The database schema to introspect",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "-d|--directory",
+            "help": "The migration directory",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--force",
+            "help": "Acknowledge replacement of migration history",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class MigrateBaselineCommand(CommandBase):
     """Reconcile history only after live schema and preserved work are proven safe."""
@@ -28,10 +53,15 @@ class MigrateBaselineCommand(CommandBase):
             return 2
 
         try:
-            from cara.commands.core.SchemaCheckCommand import SchemaCheckCommand
-            from cara.eloquent.migrations import Migration, ModelDiscoverer
+            from cara.commands.core.SchemaCheckCommand import (
+                SchemaCheckCommand,  # local: heavy optional dep
+            )
+            from cara.eloquent.migrations import (  # local: heavy optional dep
+                Migration,
+                ModelDiscoverer,
+            )
             from cara.eloquent.migrations.ModelMigrationComparator import (
-                migration_table_actions,
+                migration_table_actions,  # local: heavy optional dep
             )
         except ImportError as exc:
             raise missing_optional("db", exc) from exc

@@ -30,9 +30,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.configuration import config
 from cara.facades import Cache, Log
+from cara.queues import DEAD_LETTER_EXCHANGE
 from cara.support import Process, Sleep
 
 try:
@@ -50,14 +51,38 @@ class DevResetCommand(CommandBase):
     """Reset development state; the application owns the destructive half."""
 
     help = "Flush caches + purge queues + optionally truncate operational tables"
-    _cli_options = {
-        "--db": "Also TRUNCATE operational tables (destructive; default: off)",
-        "--keep-queues": "Skip AMQP purge (keeps in-flight jobs)",
-        "--keep-cache": "Skip cache flush (keeps idempotency keys)",
-        "--dlx": "Drop bound queues so the next publisher re-declares canonical args",
-        "--kill-workers": "Also stop running worker processes first",
-        "--yes": "Skip the confirmation prompt for --db",
-    }
+    _cli_options = [
+        {
+            "name": "--db",
+            "help": "Also TRUNCATE operational tables (destructive; default: off)",
+            "is_flag": True,
+        },
+        {
+            "name": "--keep-queues",
+            "help": "Skip AMQP purge (keeps in-flight jobs)",
+            "is_flag": True,
+        },
+        {
+            "name": "--keep-cache",
+            "help": "Skip cache flush (keeps idempotency keys)",
+            "is_flag": True,
+        },
+        {
+            "name": "--dlx",
+            "help": "Drop bound queues so the next publisher re-declares canonical args",
+            "is_flag": True,
+        },
+        {
+            "name": "--kill-workers",
+            "help": "Also stop running worker processes first",
+            "is_flag": True,
+        },
+        {
+            "name": "--yes",
+            "help": "Skip the confirmation prompt for --db",
+            "is_flag": True,
+        },
+    ]
 
     #: Process command-line fragments matched when ``--kill-workers`` is given.
     WORKER_PROCESS_PATTERNS: tuple[str, ...] = ("queue:work", "schedule:work")
@@ -122,7 +147,6 @@ class DevResetCommand(CommandBase):
 
     def canonical_dlx(self) -> str:
         """The dead-letter exchange name reported after a ``--dlx`` rebuild."""
-        from cara.queues.Topology import DEAD_LETTER_EXCHANGE
 
         return DEAD_LETTER_EXCHANGE
 

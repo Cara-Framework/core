@@ -117,10 +117,9 @@ class BaseNotification(ABC, SerializesModels):
         Returns:
             Self for method chaining
         """
-        notification_id = str(notification_id).strip()
-        if not notification_id:
+        if not isinstance(notification_id, str) or not notification_id.strip():
             raise InvalidArgumentException("Notification id must be a non-empty string.")
-        self._id = notification_id
+        self._id = notification_id.strip()
         return self
 
     def delay(self, seconds: int) -> BaseNotification:
@@ -150,12 +149,11 @@ class BaseNotification(ABC, SerializesModels):
         Returns:
             Self for method chaining
         """
-        queue = str(queue).strip()
-        if not queue:
+        if not isinstance(queue, str) or not queue.strip():
             raise InvalidArgumentException(
                 "Notification queue must be a non-empty string."
             )
-        self._queue = queue
+        self._queue = queue.strip()
         return self
 
     def with_data(self, data: dict[str, Any]) -> BaseNotification:

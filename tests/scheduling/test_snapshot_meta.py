@@ -16,7 +16,7 @@ import json
 import sys
 from types import ModuleType, SimpleNamespace
 
-import cara.commands.core.ScheduleWorkCommand as schedule_work_command
+import cara.commands.core._ScheduleRegistration as schedule_registration
 from cara.commands.core.ScheduleWorkCommand import ScheduleWorkCommand
 from cara.scheduling.drivers.APSchedulerDriver import APSchedulerDriver
 from cara.scheduling.ScheduleBuilder import ScheduleBuilder
@@ -98,7 +98,7 @@ def _dict_spec_options(monkeypatch, spec_extra: dict) -> dict:
 
     driver = _RecordingDriver()
     monkeypatch.setattr(
-        schedule_work_command,
+        schedule_registration,
         "Schedule",
         SimpleNamespace(call=lambda callback: ScheduleBuilder(driver, "", callback, {})),
     )

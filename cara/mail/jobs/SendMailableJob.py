@@ -6,7 +6,9 @@ This job is automatically created when mailables implement ShouldQueue.
 
 from __future__ import annotations
 
-from cara.exceptions.types.Base import CaraException
+from cara.context import ExecutionContext
+from cara.exceptions import CaraException
+from cara.facades import Mail
 from cara.queues.contracts import BaseJob
 
 
@@ -53,8 +55,6 @@ class SendMailableJob(BaseJob):
         stalling the worker's event loop.
         """
         # Get the mail service from container
-        from cara.context import ExecutionContext
-        from cara.facades import Mail
 
         # Send the mailable immediately (bypass queue check)
         result = await ExecutionContext.run_in_thread(

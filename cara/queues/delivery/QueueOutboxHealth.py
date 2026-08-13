@@ -62,7 +62,7 @@ import time
 from typing import Any
 
 from cara.configuration import config
-from cara.facades import Cache, Log
+from cara.facades import Cache, Log, Queue
 from cara.observability import AlertSink
 
 _ALERT_TITLE = "Queue publication outbox is stalled"
@@ -145,7 +145,6 @@ class QueueOutboxHealth:
     def _store(store: Any | None) -> Any:
         if store is not None:
             return store
-        from cara.facades import Queue  # local: cycle with cara.facades
 
         return Queue.driver("amqp").delivery_store
 

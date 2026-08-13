@@ -10,8 +10,8 @@ import inspect
 from typing import Any
 
 from cara.context import ExecutionContext
-from cara.events import Event as EventDispatcher
 from cara.events.contracts import Listener
+from cara.events.Event import Event as EventDispatcher
 from cara.exceptions import (
     CaraException,
     InvalidArgumentException,

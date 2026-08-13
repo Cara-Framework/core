@@ -1,7 +1,7 @@
 """Regression pins for ``cara.features`` — the framework feature-flag gate.
 
 Pins the pluggable resolver, read-through caching of hits and misses,
-fail-open resolution, explicit boolean over percentage, deterministic
+fail-closed resolution, explicit boolean over percentage, deterministic
 bucketing, and the test fake.
 """
 
@@ -49,20 +49,18 @@ class TestResolution:
         manager = _manager(_Store({"x": {"value": True}}))
         assert manager.active("x") is True
 
-    def test_absent_flag_falls_back_to_default(self, cache):
+    def test_absent_flag_is_disabled(self, cache):
         manager = _manager(_Store())
         assert manager.active("missing") is False
-        assert manager.active("missing", default=True) is True
 
-    def test_no_resolver_registered_is_fail_open(self, cache):
+    def test_no_resolver_registered_is_fail_closed(self, cache):
         manager = FeatureManager()
         assert manager.active("anything") is False
-        assert manager.active("anything", default=True) is True
 
-    def test_resolver_error_is_fail_open(self, cache):
+    def test_resolver_error_is_fail_closed(self, cache):
         manager = FeatureManager()
         manager.resolve_using(lambda key: 1 / 0)
-        assert manager.active("x", default=True) is True
+        assert manager.active("x") is False
 
     def test_reads_are_cached_including_misses(self, cache):
         store = _Store({"x": {"value": True}})
@@ -104,9 +102,9 @@ class TestPercentageRollout:
         # Every identifier inside 30% stays inside at 60%.
         assert all(bucket("ramp", ident) < 60 for ident in inside)
 
-    def test_no_identifier_degrades_to_global_boolean(self, cache):
+    def test_percentage_rollout_without_identifier_is_disabled(self, cache):
         manager = _manager(_Store({"x": {"value": True, "percentage": 1}}))
-        assert manager.active("x") is True
+        assert manager.active("x") is False
 
         manager2 = _manager(_Store({"y": {"value": True, "percentage": 0}}))
         assert manager2.active("y") is False
@@ -120,7 +118,7 @@ class TestFake:
         with manager.fake({"x": True, "ramp": 100}):
             assert manager.active("x") is True
             assert manager.active("ramp", identifier="u1") is True
-            assert manager.active("unlisted", default=True) is True
+            assert manager.active("unlisted") is False
             assert store.reads == 0  # fake bypasses cache + resolver
 
         assert manager.active("x") is False  # back to the real store
@@ -149,5 +147,21 @@ class TestConfigResolver:
         assert manager.active("plain") is True
         assert manager.active("rich", identifier="u1") is True
         assert manager.active("missing") is False
-        assert manager.active("missing", default=True) is True
         assert manager.active("ramp", identifier="u1") == (bucket("ramp", "u1") < 30)
+
+    @pytest.mark.parametrize(
+        "value",
+        [101, -1, {"value": 1}, {"value": True, "percentage": "30"}],
+    )
+    def test_invalid_config_state_is_disabled(self, cache, monkeypatch, value):
+        import cara.configuration
+
+        monkeypatch.setattr(
+            cara.configuration,
+            "config",
+            lambda key, default=None: value if key == "features.invalid" else default,
+        )
+        manager = FeatureManager()
+        manager.resolve_using(FeatureManager.from_config("features"))
+
+        assert manager.active("invalid") is False

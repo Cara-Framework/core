@@ -37,7 +37,7 @@ _TRUE_UTC = "2026-08-08 20:29:13"
 def madrid_app_timezone():
     """Run the body with a non-UTC APP_TIMEZONE, then put it back."""
     if not Configuration._instance:
-        Configuration()
+        Configuration.empty()
 
     configuration = Configuration._instance
     had = configuration.has("app.timezone")

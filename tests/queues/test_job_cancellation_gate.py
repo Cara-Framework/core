@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from cara.queues.contracts.CancellableJob import JobCancelledException
+from cara.queues.contracts.JobCancelledException import JobCancelledException
 from cara.queues.tracking.JobTracker import JobTracker
 from cara.queues.tracking.Trackable import Trackable
 

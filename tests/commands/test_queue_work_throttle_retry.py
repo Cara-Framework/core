@@ -32,7 +32,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cara.commands.core.QueueWorkCommand import JobProcessor
+from cara.commands.core.JobProcessor import JobProcessor
 from cara.queues.retry.Policy import (
     DEFAULT_MAX_THROTTLE_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_SECONDS,

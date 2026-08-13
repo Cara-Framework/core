@@ -55,10 +55,6 @@ class View:
         renderer = self.engine.get_renderer(factory=self)
         return renderer.render_mail_template(view, data)
 
-    def render_mail_template(self, view: str, data: dict[str, Any] = None) -> str:
-        """Alias for render_mail method."""
-        return self.render_mail(view, data)
-
     def share(self, key: str, value: Any) -> View:
         """Share data globally across all views."""
         self.shared_data[key] = value

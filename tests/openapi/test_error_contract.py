@@ -13,12 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from cara.openapi.Errors import (
-    FRAMEWORK_ERROR_ROOTS,
-    ConflictingErrorStatus,
-    ErrorContractExtractor,
-    UntypedErrorResponse,
-)
+from cara.openapi.ConflictingErrorStatus import ConflictingErrorStatus
+from cara.openapi.ErrorContractExtractor import ErrorContractExtractor
+from cara.openapi.Errors import FRAMEWORK_ERROR_ROOTS
+from cara.openapi.UntypedErrorResponse import UntypedErrorResponse
 
 
 def _module(directory: Path, name: str, body: str) -> Path:

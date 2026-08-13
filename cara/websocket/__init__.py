@@ -1,3 +1,13 @@
-from .Socket import Socket
+"""Websocket — layer barrel (generated, DOCTRINE §5.1)."""
 
-__all__ = ["Socket"]
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "Socket": (".Socket", "Socket"),
+}
+
+__all__ = [
+    "Socket",
+]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

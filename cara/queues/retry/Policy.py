@@ -1,15 +1,7 @@
 """Single source of truth for the framework's default retry policy.
 
-Both consumer paths derive their attempt budget + backoff schedule from
-here so they can never silently drift:
-
-* the production worker — ``QueueWorkCommand.JobProcessor``
-* the legacy driver loop — ``AMQPDriver.consume`` (deprecated)
-
-…as does the publisher-side ``AMQPDriver.retry``. Previously each kept a
-hand-copied ``DEFAULT_MAX_ATTEMPTS`` / ``DEFAULT_RETRY_BACKOFF_SECONDS``
-that the surrounding comments could only *ask* future maintainers to keep
-"in lockstep" — a silent-divergence bug waiting to happen.
+The production worker derives its attempt budget + backoff schedule here so
+job classes and the worker never restate the defaults.
 
 A job class still overrides per-job by declaring ``max_attempts`` and/or
 ``retry_backoff`` (a list of per-attempt delays in seconds) at the class

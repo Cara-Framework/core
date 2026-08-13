@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.facades import Log
+
 
 class SerializesModels:
     """
@@ -194,8 +196,6 @@ class SerializesModels:
             module = __import__(module_name, fromlist=[class_name])
             return getattr(module, class_name)
         except (ImportError, AttributeError, KeyError, TypeError) as e:
-            from cara.facades import Log
-
             Log.warning(
                 "[SerializesModels] _resolve_class failed for %s.%s: %s. Returning NoneType stand-in — job attributes may be missing.",
                 data.get("__class_module__", "?"),
@@ -244,8 +244,6 @@ class SerializesModels:
             return obj
 
         except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as e:
-            from cara.facades import Log
-
             Log.error(
                 "[SerializesModels] _deserialize_object failed: %s. Module=%s, Class=%s. Returning stub — downstream attribute access will likely fail.",
                 e,

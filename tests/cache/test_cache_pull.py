@@ -3,9 +3,12 @@ from __future__ import annotations
 import pickle
 from unittest.mock import MagicMock
 
+import pytest
+
 from cara.cache import Cache
 from cara.cache.codecs import JsonCacheCodec
 from cara.cache.drivers import FileCacheDriver, RedisCacheDriver
+from cara.exceptions import CacheConfigurationException
 from cara.testing.fakes import CacheFake
 
 
@@ -31,7 +34,7 @@ def test_file_driver_pull_removes_value(tmp_path) -> None:
     assert driver.pull("once") is None
 
 
-def test_file_driver_deletes_legacy_pickle_without_decoding(tmp_path) -> None:
+def test_file_driver_deletes_noncanonical_pickle_and_rejects_it(tmp_path) -> None:
     driver = FileCacheDriver(
         str(tmp_path),
         default_ttl=60,
@@ -41,7 +44,8 @@ def test_file_driver_deletes_legacy_pickle_without_decoding(tmp_path) -> None:
     with open(path, "wb") as legacy:
         legacy.write(pickle.dumps((None, {"secret": "legacy"})))
 
-    assert driver.get("legacy", "miss") == "miss"
+    with pytest.raises(CacheConfigurationException, match="Unreadable"):
+        driver.get("legacy", "miss")
     assert not tmp_path.joinpath("legacy.cache").exists()
 
 

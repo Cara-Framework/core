@@ -208,7 +208,7 @@ def root_span(
         links = []
     # Empty Context() = detach any ambient parent → this span roots a
     # brand-new trace; the Link (if any) keeps the discovery reachable.
-    from opentelemetry.context import Context as _Context
+    from opentelemetry.context import Context as _Context  # local: heavy optional dep
 
     with tracer.start_as_current_span(
         name,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.exceptions import InvalidArgumentException
+
 # Supported binary arithmetic operators, mapped to the SQL symbol the
 # grammar emits. Anything outside this set is rejected at construction so a
 # malformed expression fails loudly rather than producing broken SQL.
@@ -27,8 +29,6 @@ class Operation:
 
     def __init__(self, left: Any, operator: str, right: Any) -> None:
         if operator not in _ARITHMETIC_OPERATORS:
-            from cara.exceptions import InvalidArgumentException
-
             raise InvalidArgumentException(
                 f"Unsupported arithmetic operator {operator!r}. "
                 f"Expected one of {', '.join(_ARITHMETIC_OPERATORS)}."

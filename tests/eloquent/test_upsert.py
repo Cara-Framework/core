@@ -23,23 +23,16 @@ from cara.eloquent.connections import SQLiteConnection
 from cara.eloquent.query import QueryBuilder
 from cara.eloquent.query.grammars import SQLiteGrammar
 from cara.exceptions import QueryException
+from cara.testing.FacadeSwap import swap
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _register_sqlite_connection():
-    dm = DatabaseManager.get_instance()
-    _saved_config = dm._database_config
-    _saved_default = dm._default_connection
-    _saved_connections = dm._connections
-    dm.set_database_config(
+    dm = DatabaseManager(
         "test_upsert", {"test_upsert": {"driver": "sqlite", "database": ":memory:"}}
     )
-    try:
+    with swap("DB", dm):
         yield
-    finally:
-        dm._database_config = _saved_config
-        dm._default_connection = _saved_default
-        dm._connections = _saved_connections
 
 
 def _qb(table: str = "receipt") -> QueryBuilder:

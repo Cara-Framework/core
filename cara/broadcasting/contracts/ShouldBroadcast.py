@@ -6,35 +6,25 @@ Mirrors Laravel's ``Illuminate\\Contracts\\Broadcasting\\ShouldBroadcast``
 plus the optional ``broadcastUnless`` / ``except_socket_id`` /
 ``broadcastVia`` extensions used in real-world Laravel codebases.
 
-Channel return values may be:
-- a single string (``"deals"``)
-- a single Channel instance (``PrivateChannel("user.42")``)
-- a list / tuple containing any mix of the above
-
-The Broadcasting manager flattens to canonical wire-form strings
-before dispatch. Callers don't need to think about Channel vs string
-when implementing their event.
+Channel return values are a single typed ``Channel`` or a sequence of typed
+channels. The Broadcasting manager flattens them to wire names at dispatch.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any, Union
+from typing import Any
 
-# Forward-imported lazily to avoid a circular import — the Channel
-# module has no other deps but ShouldBroadcast lives in `contracts`
-# which loads first.
-ChannelLike = Union[str, "object"]
+from cara.broadcasting.Channel import Channel
 
 
 class ShouldBroadcast(ABC):
     """Interface for events that should be broadcast over WebSocket."""
 
     @abstractmethod
-    def broadcast_on(self) -> ChannelLike | Sequence[ChannelLike]:
-        """Channel(s) the event should broadcast on. May return a
-        string, a ``Channel`` instance, or a list/tuple of either."""
+    def broadcast_on(self) -> Channel | Sequence[Channel]:
+        """Typed channel or channels the event should broadcast on."""
 
     @abstractmethod
     def broadcast_as(self) -> str:

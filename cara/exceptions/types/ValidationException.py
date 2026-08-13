@@ -1,0 +1,153 @@
+"""ValidationException."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .CaraException import CaraException
+
+
+class ValidationException(CaraException):
+    """
+    Exception raised when validation fails.
+
+    Smart validation exception that analyzes and extracts validation content.
+    """
+
+    is_http_exception = True
+    status_code = 422
+
+    def __init__(
+        self,
+        validation_errors=None,
+        message: str | None = None,
+        errors: dict[str, Any] | None = None,
+        status_code: int | None = None,
+    ):
+        self.validation_errors = validation_errors
+        self._extracted_errors = {}
+        self._extracted_message = "Validation failed"
+
+        # Analyze and extract validation content
+        self._analyze_validation_content()
+
+        # Use provided values or extracted values
+        if message is None:
+            message = self._extracted_message
+        if errors is None:
+            errors = self._extracted_errors
+
+        super().__init__(message)
+        self.errors = errors
+
+        if status_code:
+            self.status_code = status_code
+
+    @classmethod
+    def generic(cls, message: str) -> ValidationException:
+        """Create a validation error on the generic ``_`` field.
+
+        Service-layer convenience constructor: raise a single-message 422
+        without hand-building the ``errors`` dict. Emits the canonical
+        ``{error, type: validation_error, errors: {_: [msg]}, meta}`` envelope.
+        """
+        return cls(message=message, errors={"_": [message]})
+
+    @classmethod
+    def field(cls, field_name: str, message: str) -> ValidationException:
+        """Create a validation error scoped to a single ``field_name``."""
+        return cls(message=message, errors={field_name: [message]})
+
+    def _analyze_validation_content(self) -> None:
+        """Analyze validation_errors and extract meaningful content."""
+        if self.validation_errors is None:
+            return
+
+        # Case 1: RouteParameterValidator dict structure
+        if isinstance(self.validation_errors, dict):
+            self._analyze_dict_structure()
+
+        # Case 2: ValidationErrors object with methods
+        elif hasattr(self.validation_errors, "all") and hasattr(
+            self.validation_errors, "first"
+        ):
+            self._analyze_validation_object()
+
+    def _analyze_dict_structure(self) -> None:
+        """Analyze dict-based validation errors (like RouteParameterValidator)."""
+        validation_dict = self.validation_errors
+
+        if "route_parameter_validation_failed" in validation_dict:
+            # RouteParameterValidator format
+            if "first_error" in validation_dict and validation_dict["first_error"]:
+                self._extracted_message = validation_dict["first_error"]
+            if "errors" in validation_dict and validation_dict["errors"]:
+                self._extracted_errors = validation_dict["errors"]
+        else:
+            # Regular dict of errors
+            self._extracted_errors = validation_dict
+            self._extract_first_error_from_dict(validation_dict)
+
+    def _analyze_validation_object(self) -> None:
+        """Analyze the canonical ``ValidationErrors`` protocol."""
+        all_errors = self.validation_errors.all()
+        if not isinstance(all_errors, dict):
+            raise TypeError("Validation errors all() must return a dictionary")
+        if all_errors:
+            self._extracted_errors = all_errors
+            self._extract_first_error_from_dict(all_errors)
+
+        first_error = self.validation_errors.first()
+        if first_error:
+            self._extracted_message = first_error
+
+    def _extract_first_error_from_dict(self, errors_dict: dict[str, Any]) -> None:
+        """Extract first error message from errors dictionary."""
+        for _field_name, field_errors in errors_dict.items():
+            if field_errors:
+                if isinstance(field_errors, list) and field_errors:
+                    self._extracted_message = field_errors[0]
+                elif isinstance(field_errors, str):
+                    self._extracted_message = field_errors
+                break
+
+    def get_all_errors(self) -> dict[str, list[str]]:
+        """Get all validation errors in normalized format."""
+        return self.errors
+
+    def get_first_error(self) -> str:
+        """Get the first validation error message."""
+        return str(self)
+
+    def get_errors_for_field(self, field: str) -> list[str]:
+        """Get all errors for a specific field."""
+        return self.errors.get(field, [])
+
+    def has_errors_for_field(self, field: str) -> bool:
+        """Check if there are errors for a specific field."""
+        return field in self.errors and bool(self.errors[field])
+
+    def get_error_count(self) -> int:
+        """Get total number of validation errors."""
+        return sum(len(errors) for errors in self.errors.values())
+
+    def get_failed_fields(self) -> list[str]:
+        """Get list of field names that failed validation."""
+        return [field for field, errors in self.errors.items() if errors]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert exception to dictionary for JSON response with all errors."""
+        response = {
+            "error": self.get_first_error(),
+            "type": "validation_error",
+        }
+
+        # Add all errors if available
+        if self.errors:
+            response["errors"] = self.get_all_errors()
+            response["meta"] = {
+                "total_errors": self.get_error_count(),
+                "failed_fields": self.get_failed_fields(),
+            }
+
+        return response

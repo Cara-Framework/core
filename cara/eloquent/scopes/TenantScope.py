@@ -58,7 +58,7 @@ class TenantScope(BaseScope):
         of skipping the filter was a data-leak vector.
         """
         try:
-            from cara.context import Tenancy
+            from cara.context import Tenancy  # local: cycle with cara.context
 
             state = Tenancy.state()
             if state is Tenancy.UNSET:
@@ -83,7 +83,7 @@ class TenantScope(BaseScope):
         subsequent scoped queries and constitute a data integrity failure).
         """
         try:
-            from cara.context import Tenancy
+            from cara.context import Tenancy  # local: cycle with cara.context
 
             state = Tenancy.state()
             creates = builder._creates
@@ -125,7 +125,7 @@ class TenantScope(BaseScope):
         resolution failure fails CLOSED.
         """
         try:
-            from cara.context import Tenancy
+            from cara.context import Tenancy  # local: cycle with cara.context
 
             state = Tenancy.state()
             if state is Tenancy.UNSET:
@@ -166,6 +166,6 @@ class TenantScope(BaseScope):
         ``run_in_thread`` hop and stays isolated per request/job
         (thread-local storage leaked across requests on reused
         executor-pool threads and was removed)."""
-        from cara.context import Tenancy
+        from cara.context import Tenancy  # local: cycle with cara.context
 
         return Tenancy.id()

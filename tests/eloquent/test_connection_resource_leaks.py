@@ -142,7 +142,10 @@ def test_create_connection_closes_cursor_when_healthcheck_execute_raises(
         user="x",
         port=5432,
         password="x",
-        full_details={"connection_pooling_enabled": True},
+        full_details={
+            "connection_pooling_enabled": True,
+            "connection_pooling_max_size": 100,
+        },
     )
 
     returned = pc.create_connection()

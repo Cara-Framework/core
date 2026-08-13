@@ -29,6 +29,7 @@ from cara.eloquent import DatabaseManager
 from cara.eloquent.query import QueryBuilder
 from cara.eloquent.query.grammars import SQLiteGrammar
 from cara.exceptions import QueryException
+from cara.testing.FacadeSwap import swap
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -39,25 +40,13 @@ def _register_sqlite_connection():
     even when we never execute SQL — we only assemble it via
     ``to_sql()`` / ``to_qmark()``. A throwaway connection is enough.
 
-    The DatabaseManager is a process-wide singleton, and
-    ``set_database_config`` REPLACES its whole connection registry +
-    default. Other suites share the same process — notably a fully
-    booted app whose ``app`` connection this would otherwise wipe for
-    the rest of the session. Snapshot the prior config and restore it on
-    teardown so this module's throwaway sqlite registry never leaks."""
-    dm = DatabaseManager.get_instance()
-    _saved_config = dm._database_config
-    _saved_default = dm._default_connection
-    _saved_connections = dm._connections
-    dm.set_database_config(
+    The fixture owns a fresh manager and exposes it only through the canonical
+    DB facade, so its throwaway registry cannot leak into another suite."""
+    dm = DatabaseManager(
         "test_qb", {"test_qb": {"driver": "sqlite", "database": ":memory:"}}
     )
-    try:
+    with swap("DB", dm):
         yield
-    finally:
-        dm._database_config = _saved_config
-        dm._default_connection = _saved_default
-        dm._connections = _saved_connections
 
 
 def _qb(table: str = "users") -> QueryBuilder:

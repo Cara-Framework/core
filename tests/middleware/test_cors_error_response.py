@@ -13,7 +13,8 @@ status is unreachable. The fix wraps the inner call in try/finally so
 headers are applied regardless of how the chain terminates.
 """
 
-from unittest.mock import MagicMock
+from importlib import import_module
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -45,12 +46,10 @@ def _build_middleware():
     its own ``config("cors.cors.<key>", <default>)`` block. That block was
     the second copy of the policy — the one the error path had already
     been migrated off — so the patch target moved with it. The seam is now
-    ``cara.configuration.config``, which means this fixture drives the REAL
-    ``Cors.load_cors_policy``: the key list and the defaults under test are
-    the shipped ones, not a restatement living in a test file.
+    ``cara.middleware.http.Cors.configuration.config`` — the dependency module
+    bound by its owner — so this fixture drives the REAL ``load_cors_policy``:
+    the key list and defaults under test are shipped code, not a restatement.
     """
-    import cara.configuration as configuration
-
     fake_cfg = {
         "paths": ["api/*"],
         "allowed_methods": ["GET", "POST"],
@@ -67,22 +66,15 @@ def _build_middleware():
         leaf = key.split(".")[-1]
         return fake_cfg.get(leaf, default)
 
-    original_config = configuration.config
-    configuration.config = fake_config
-
     app = MagicMock()
-    mw = HandleCors(app)
-
-    return mw, lambda: setattr(configuration, "config", original_config)
+    cors_policy = import_module("cara.middleware.http.Cors")
+    with patch.object(cors_policy.configuration, "config", fake_config):
+        return HandleCors(app)
 
 
 @pytest.fixture
 def cors_middleware():
-    mw, restore = _build_middleware()
-    try:
-        yield mw
-    finally:
-        restore()
+    yield _build_middleware()
 
 
 def _make_request(method="GET", origin="https://app.example.com", path="/api/test"):
@@ -215,8 +207,6 @@ async def test_header_application_failure_does_not_mask_original_exception(
 
 def _credentialed_middleware(allowed_origins, patterns=None):
     """A HandleCors with ``supports_credentials`` on and the given allowlist."""
-    import cara.configuration as configuration
-
     fake_cfg = {
         "paths": ["api/*"],
         "allowed_methods": ["GET", "POST"],
@@ -231,12 +221,9 @@ def _credentialed_middleware(allowed_origins, patterns=None):
     def fake_config(key, default=None):
         return fake_cfg.get(key.split(".")[-1], default)
 
-    original_config = configuration.config
-    configuration.config = fake_config
-    try:
+    cors_policy = import_module("cara.middleware.http.Cors")
+    with patch.object(cors_policy.configuration, "config", fake_config):
         return HandleCors(MagicMock())
-    finally:
-        configuration.config = original_config
 
 
 def test_credentials_header_accompanies_an_allowlisted_origin():

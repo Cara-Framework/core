@@ -21,7 +21,7 @@ only DOWNGRADE a verdict, never certify it. Absent here + present there is
 from __future__ import annotations
 
 from cara.docs import DocsManifest, check_path_claim, sibling_roots, verify_claims
-from cara.docs.ClaimSources import forget_path_index, owned_markdowns
+from cara.docs.ClaimSources import _owned_markdowns, forget_path_index
 
 from ._fixtures import make_checkout, manifest_for, write
 
@@ -116,7 +116,7 @@ def test_owned_markdown_covers_the_docs_tree_and_the_neighbours_shared_atlas(tmp
     write(alpha / "docs" / "internal" / "note.md", "# note\n")
     write(alpha / "docs" / "internal" / "reference" / "routes.md", "# generated\n")
 
-    owned = owned_markdowns(
+    owned = _owned_markdowns(
         alpha,
         alpha / "docs",
         alpha / "docs" / "internal" / "reference",

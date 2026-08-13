@@ -21,15 +21,15 @@ def _messages(root: Path, **overrides) -> list[str]:
     return [str(finding) for finding in RawSqlHome.scan(make_manifest(root, **overrides))]
 
 
-def test_facade_alias_manager_instance_and_driver_cursor_are_all_caught(
+def test_facade_alias_resolved_manager_and_driver_cursor_are_all_caught(
     tmp_path: Path,
 ) -> None:
     write(
         tmp_path / "app" / "services" / "Report.py",
-        "from cara.eloquent import DatabaseManager\n"
+        "from cara.foundation import resolve as get_service\n"
         "from cara.facades import DB as Database\n"
         "\n"
-        "manager = DatabaseManager.get_instance()\n"
+        'manager = get_service("DB")\n'
         "\n"
         "\n"
         "def run(connection, query):\n"
@@ -45,6 +45,23 @@ def test_facade_alias_manager_instance_and_driver_cursor_are_all_caught(
     assert any(".statement(...)" in message for message in messages)
     assert any(".cursor(...)" in message for message in messages)
     assert any("SQL literal" in message for message in messages)
+
+
+def test_constructor_injected_manager_attributes_are_caught(tmp_path: Path) -> None:
+    write(
+        tmp_path / "app" / "services" / "Report.py",
+        "from cara.eloquent import DatabaseManager\n"
+        "\n"
+        "\n"
+        "class Report:\n"
+        "    def __init__(self, manager: DatabaseManager):\n"
+        "        self.manager = manager\n"
+        "\n"
+        "    def run(self, query):\n"
+        "        return self.manager.select(query)\n",
+    )
+
+    assert any(".select(...)" in message for message in _messages(tmp_path))
 
 
 def test_composing_raw_sql_is_caught_even_without_a_database_receiver(

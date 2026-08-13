@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from cara.mail.contracts import Mail
+from cara.mail.contracts import MailContract
 
 
-class ArrayDriver(Mail):
+class ArrayDriver(MailContract):
     driver_name = "array"
 
     def __init__(self, config: dict[str, Any]):

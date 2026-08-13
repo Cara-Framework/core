@@ -7,6 +7,7 @@ This module provides a logging channel that sends log records to a Slack webhook
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 
 import requests
@@ -41,7 +42,6 @@ class SlackChannel:
         except Exception as exc:
             # Log delivery to Slack is best-effort — but don't swallow
             # completely since repeated failures indicate a config issue.
-            import sys
 
             print(f"[SlackChannel] delivery failed: {exc}", file=sys.stderr)
 

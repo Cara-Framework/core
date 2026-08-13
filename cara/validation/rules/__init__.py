@@ -1,72 +1,75 @@
-# Export only these modules in this package:
-# BaseRule MUST be imported first — all other rules inherit from it,
-# and importing them triggers `from cara.validation.rules import BaseRule`.
-# If BaseRule isn't in the namespace yet, Python resolves it as the module
-# (the .py file) instead of the class, causing "module() takes at most 2 arguments".
-from .BaseRule import BaseRule
-from .AcceptedRule import AcceptedRule
-from .AfterOrEqualRule import AfterOrEqualRule
-from .AfterRule import AfterRule
-from .AlphaDashRule import AlphaDashRule
-from .AlphaRule import AlphaRule
-from .AlphanumRule import AlphanumRule
-from .ArrayRule import ArrayRule
-from .BatchExistsRule import BatchExistsRule
-from .BeforeOrEqualRule import BeforeOrEqualRule
-from .BeforeRule import BeforeRule
-from .BetweenRule import BetweenRule
-from .BooleanRule import BooleanRule
-from .ConfirmedRule import ConfirmedRule
-from .DateFormatRule import DateFormatRule
-from .DateRule import DateRule
-from .DigitsBetweenRule import DigitsBetweenRule
-from .DigitsRule import DigitsRule
-from .DictRule import DictRule
-from .DifferentRule import DifferentRule
-from .DistinctRule import DistinctRule
-from .EmailRule import EmailRule
-from .EndsWithRule import EndsWithRule
-from .ExistsRule import ExistsRule
-from .FilledRule import FilledRule
-from .GtRule import GtRule
-from .GteRule import GteRule
-from .InCsvRule import InCsvRule
-from .InRule import InRule
-from .IntegerRule import IntegerRule
-from .IpRule import IpRule
-from .Ipv4Rule import Ipv4Rule
-from .Ipv6Rule import Ipv6Rule
-from .JsonRule import JsonRule
-from .LtRule import LtRule
-from .LteRule import LteRule
-from .MaxRule import MaxRule
-from .MaxLengthRule import MaxLengthRule
-from .MinRule import MinRule
-from .MinLengthRule import MinLengthRule
-from .MissingRule import MissingRule
-from .NotInRule import NotInRule
-from .NotRegexRule import NotRegexRule
-from .NumericRule import NumericRule
-from .NullableRule import NullableRule
-from .PhoneRule import PhoneRule
-from .PresentRule import PresentRule
-from .ProhibitedRule import ProhibitedRule
-from .PublicIdCsvRule import PublicIdCsvRule
-from .RegexRule import RegexRule
-from .RequiredIfRule import RequiredIfRule
-from .RequiredRule import RequiredRule
-from .RequiredUnlessRule import RequiredUnlessRule
-from .RequiredWithRule import RequiredWithRule
-from .RequiredWithoutRule import RequiredWithoutRule
-from .SameRule import SameRule
-from .SizeRule import SizeRule
-from .SlugRule import SlugRule
-from .StartsWithRule import StartsWithRule
-from .StringRule import StringRule
-from .TimezoneRule import TimezoneRule
-from .URLRule import URLRule
-from .UniqueRule import UniqueRule
-from .UuidRule import UuidRule
+"""Validation — layer barrel (generated, DOCTRINE §5.1). — rules subpackage."""
+
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AcceptedRule": (".AcceptedRule", "AcceptedRule"),
+    "AfterOrEqualRule": (".AfterOrEqualRule", "AfterOrEqualRule"),
+    "AfterRule": (".AfterRule", "AfterRule"),
+    "AlphaDashRule": (".AlphaDashRule", "AlphaDashRule"),
+    "AlphaRule": (".AlphaRule", "AlphaRule"),
+    "AlphanumRule": (".AlphanumRule", "AlphanumRule"),
+    "ArrayRule": (".ArrayRule", "ArrayRule"),
+    "BaseRule": (".BaseRule", "BaseRule"),
+    "BatchExistsRule": (".BatchExistsRule", "BatchExistsRule"),
+    "BeforeOrEqualRule": (".BeforeOrEqualRule", "BeforeOrEqualRule"),
+    "BeforeRule": (".BeforeRule", "BeforeRule"),
+    "BetweenRule": (".BetweenRule", "BetweenRule"),
+    "BooleanRule": (".BooleanRule", "BooleanRule"),
+    "ConfirmedRule": (".ConfirmedRule", "ConfirmedRule"),
+    "DateFormatRule": (".DateFormatRule", "DateFormatRule"),
+    "DateRule": (".DateRule", "DateRule"),
+    "DecimalTextRule": (".DecimalTextRule", "DecimalTextRule"),
+    "DictRule": (".DictRule", "DictRule"),
+    "DifferentRule": (".DifferentRule", "DifferentRule"),
+    "DigitsBetweenRule": (".DigitsBetweenRule", "DigitsBetweenRule"),
+    "DigitsRule": (".DigitsRule", "DigitsRule"),
+    "DistinctRule": (".DistinctRule", "DistinctRule"),
+    "EmailRule": (".EmailRule", "EmailRule"),
+    "EndsWithRule": (".EndsWithRule", "EndsWithRule"),
+    "ExistsRule": (".ExistsRule", "ExistsRule"),
+    "FilledRule": (".FilledRule", "FilledRule"),
+    "FilterTreeRule": (".FilterTreeRule", "FilterTreeRule"),
+    "GtRule": (".GtRule", "GtRule"),
+    "GteRule": (".GteRule", "GteRule"),
+    "InCsvRule": (".InCsvRule", "InCsvRule"),
+    "InRule": (".InRule", "InRule"),
+    "IntegerRule": (".IntegerRule", "IntegerRule"),
+    "IpRule": (".IpRule", "IpRule"),
+    "Ipv4Rule": (".Ipv4Rule", "Ipv4Rule"),
+    "Ipv6Rule": (".Ipv6Rule", "Ipv6Rule"),
+    "JsonRule": (".JsonRule", "JsonRule"),
+    "LtRule": (".LtRule", "LtRule"),
+    "LteRule": (".LteRule", "LteRule"),
+    "MaxLengthRule": (".MaxLengthRule", "MaxLengthRule"),
+    "MaxRule": (".MaxRule", "MaxRule"),
+    "MinLengthRule": (".MinLengthRule", "MinLengthRule"),
+    "MinRule": (".MinRule", "MinRule"),
+    "MissingRule": (".MissingRule", "MissingRule"),
+    "NotInRule": (".NotInRule", "NotInRule"),
+    "NotRegexRule": (".NotRegexRule", "NotRegexRule"),
+    "NullableRule": (".NullableRule", "NullableRule"),
+    "NumericRule": (".NumericRule", "NumericRule"),
+    "PhoneRule": (".PhoneRule", "PhoneRule"),
+    "PresentRule": (".PresentRule", "PresentRule"),
+    "ProhibitedRule": (".ProhibitedRule", "ProhibitedRule"),
+    "PublicIdCsvRule": (".PublicIdCsvRule", "PublicIdCsvRule"),
+    "RegexRule": (".RegexRule", "RegexRule"),
+    "RequiredIfRule": (".RequiredIfRule", "RequiredIfRule"),
+    "RequiredRule": (".RequiredRule", "RequiredRule"),
+    "RequiredUnlessRule": (".RequiredUnlessRule", "RequiredUnlessRule"),
+    "RequiredWithRule": (".RequiredWithRule", "RequiredWithRule"),
+    "RequiredWithoutRule": (".RequiredWithoutRule", "RequiredWithoutRule"),
+    "SameRule": (".SameRule", "SameRule"),
+    "SizeRule": (".SizeRule", "SizeRule"),
+    "SlugRule": (".SlugRule", "SlugRule"),
+    "StartsWithRule": (".StartsWithRule", "StartsWithRule"),
+    "StringRule": (".StringRule", "StringRule"),
+    "TimezoneRule": (".TimezoneRule", "TimezoneRule"),
+    "URLRule": (".URLRule", "URLRule"),
+    "UniqueRule": (".UniqueRule", "UniqueRule"),
+    "UuidRule": (".UuidRule", "UuidRule"),
+}
 
 __all__ = [
     "AcceptedRule",
@@ -85,6 +88,7 @@ __all__ = [
     "ConfirmedRule",
     "DateFormatRule",
     "DateRule",
+    "DecimalTextRule",
     "DictRule",
     "DifferentRule",
     "DigitsBetweenRule",
@@ -94,6 +98,7 @@ __all__ = [
     "EndsWithRule",
     "ExistsRule",
     "FilledRule",
+    "FilterTreeRule",
     "GtRule",
     "GteRule",
     "InCsvRule",
@@ -134,3 +139,5 @@ __all__ = [
     "UniqueRule",
     "UuidRule",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

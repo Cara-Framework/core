@@ -91,6 +91,21 @@ def _bound_names(tree: ast.Module) -> set[str]:
             )
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             bound.add(node.target.id)
+        if (
+            isinstance(node, (ast.Assign, ast.AnnAssign))
+            and isinstance(
+                node.targets[0] if isinstance(node, ast.Assign) else node.target,
+                ast.Name,
+            )
+            and (node.targets[0] if isinstance(node, ast.Assign) else node.target).id
+            == "_LAZY_EXPORTS"
+            and isinstance(node.value, ast.Dict)
+        ):
+            bound.update(
+                key.value
+                for key in node.value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            )
     return bound
 
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from cara.facades import Log
+
 _logger = logging.getLogger("cara.eloquent.observers")
 
 
@@ -17,8 +19,6 @@ class ObservesEvents:
                     pass
                 except Exception as exc:
                     try:
-                        from cara.facades import Log
-
                         Log.error(
                             "Observer %s.%s failed: %s: %s",
                             observer.__class__.__name__,

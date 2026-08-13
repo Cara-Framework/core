@@ -16,7 +16,8 @@ import pytest
 
 from cara.facades import Http
 from cara.http.client import HttpFake
-from cara.http.client.HttpFake import FakeExhaustedError, StrayHttpRequestError
+from cara.http.client.FakeExhaustedError import FakeExhaustedError
+from cara.http.client.StrayHttpRequestError import StrayHttpRequestError
 
 
 @pytest.fixture(autouse=True)

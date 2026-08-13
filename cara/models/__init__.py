@@ -22,10 +22,17 @@ must not either — the ledger's compare-and-set lease protocol cannot be
 expressed as model saves.
 """
 
-from cara.models.FailedJob import FailedJob
-from cara.models.QueueJobDelivery import QueueJobDelivery
-from cara.models.QueueJobDeliveryHookRetryAudit import QueueJobDeliveryHookRetryAudit
-from cara.models.SchemaOperation import SchemaOperation
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "FailedJob": (".FailedJob", "FailedJob"),
+    "QueueJobDelivery": (".QueueJobDelivery", "QueueJobDelivery"),
+    "QueueJobDeliveryHookRetryAudit": (
+        ".QueueJobDeliveryHookRetryAudit",
+        "QueueJobDeliveryHookRetryAudit",
+    ),
+    "SchemaOperation": (".SchemaOperation", "SchemaOperation"),
+}
 
 __all__ = [
     "FailedJob",
@@ -33,3 +40,5 @@ __all__ = [
     "QueueJobDeliveryHookRetryAudit",
     "SchemaOperation",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

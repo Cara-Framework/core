@@ -32,7 +32,7 @@ class ValidationProvider(DeferredProvider):
         # first config consumer after Kernel's imports got isort-sorted).
         # ``register()`` only runs at provider-resolve time, long after boot,
         # so importing here is free of the cycle.
-        from cara.configuration import config
+        from cara.configuration import config  # local: cycle with cara.configuration
 
         settings = config("validation", {})
 

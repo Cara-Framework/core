@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# lazy config import inside register() to avoid circular configuration <-> eloquent
+from cara.configuration import config
 from cara.eloquent.DatabaseManager import DatabaseManager
 from cara.foundation import Provider
 
@@ -21,24 +21,20 @@ class EloquentProvider(Provider):
         self.application = application
 
     def register(self):
-        """Configure and register DatabaseManager as singleton"""
-        from cara.configuration import (
-            config,  # lazy import: avoid circular import at boot
-        )
+        """Build and bind this application's configured database manager."""
 
         # Read database config explicitly (single responsibility)
-        default_connection = config("database.default", "app")
-        connection_details = config("database.drivers", {})
+        default_connection = config("database.default")
+        connection_details = config("database.drivers")
 
-        # Get singleton instance
-        database_manager = DatabaseManager.get_instance()
-
-        # Inject config explicitly (testable, clear)
-        if connection_details:
-            database_manager.set_database_config(default_connection, connection_details)
+        database_manager = DatabaseManager(
+            default_connection,
+            connection_details,
+        )
 
         # Bind configured instance to container
         self.application.bind("DB", database_manager)
+        self.application.bind(DatabaseManager, database_manager)
 
     def boot(self):
         """Boot provider (optional hook for post-registration setup)"""

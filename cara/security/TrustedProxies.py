@@ -55,9 +55,14 @@ is what Symfony and Laravel 9+ also require.
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 from collections.abc import Iterable
 from functools import lru_cache
+
+from cara.configuration import config
+from cara.exceptions import InvalidConfigurationSetupException
+from cara.facades import Log
 
 #: Auto-trusted regardless of configuration — see the module docstring.
 LOOPBACK_NETWORKS: tuple[str, ...] = ("127.0.0.0/8", "::1/128")
@@ -154,10 +159,11 @@ def _raw_config() -> object:
     takes effect.
     """
     try:
-        from cara.configuration import config
-
         return config(_CONFIG_KEY, "") or ""
-    except Exception:
+    except InvalidConfigurationSetupException:
+        # Exception rendering can run while provider boot itself is failing.
+        # The only safe pre-config policy is to trust no external peer; the
+        # normal parser still includes process-local loopback.
         return ""
 
 
@@ -179,17 +185,11 @@ def _networks_for(
 
 def _warn_invalid(token: str) -> None:
     """Surface a bad allow-list entry without taking the process down."""
-    try:
-        from cara.facades import Log
-
+    with contextlib.suppress(Exception):
         Log.warning(
             f"TrustedProxies: ignoring invalid entry {token!r} in {_CONFIG_KEY}",
             category="security.trusted_proxies",
         )
-    except Exception:
-        # allow-silent-except: warning about a bad entry may not itself
-        # break config load, and the Log facade is unbound this early
-        pass
 
 
 __all__ = [

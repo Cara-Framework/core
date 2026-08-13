@@ -24,17 +24,12 @@ def test_queue_metrics_use_job_class_label() -> None:
 
 
 def test_build_info_accepts_runtime_role_override() -> None:
-    try:
-        init_build_info(MetricsBase, role="scheduler")
-        samples = [
-            sample
-            for family in MetricsBase.build_info.collect()
-            for sample in family.samples
-        ]
-        assert len(samples) == 1
-        assert samples[0].labels["role"] == "scheduler"
-    finally:
-        init_build_info(MetricsBase)
+    init_build_info(MetricsBase, service="test", role="scheduler")
+    samples = [
+        sample for family in MetricsBase.build_info.collect() for sample in family.samples
+    ]
+    assert len(samples) == 1
+    assert samples[0].labels == {"service": "test", "role": "scheduler"}
 
 
 def test_scheduler_wrapper_emits_tick_and_per_task_last_run() -> None:
@@ -60,18 +55,11 @@ def test_scheduler_wrapper_emits_tick_and_per_task_last_run() -> None:
     )
 
 
-def test_render_restamps_build_info_after_config_boot(monkeypatch) -> None:
-    metrics_module = importlib.import_module("cara.observability.Metrics")
-    resolved = {"metrics.service": "test-api", "metrics.role": "web"}
-    original_config = metrics_module.config
-    monkeypatch.setattr(
-        metrics_module,
-        "config",
-        lambda key, default=None: resolved.get(key, default),
-    )
+def test_render_stamps_explicit_build_identity() -> None:
+    metrics_module = importlib.import_module("cara.observability.MetricsBase")
 
     try:
-        metrics_module.render()
+        metrics_module.render(service="test-api", role="web")
         samples = [
             sample
             for family in MetricsBase.build_info.collect()
@@ -80,5 +68,4 @@ def test_render_restamps_build_info_after_config_boot(monkeypatch) -> None:
         assert len(samples) == 1
         assert samples[0].labels == {"service": "test-api", "role": "web"}
     finally:
-        monkeypatch.setattr(metrics_module, "config", original_config)
-        init_build_info(MetricsBase)
+        init_build_info(MetricsBase, service="test", role="test")

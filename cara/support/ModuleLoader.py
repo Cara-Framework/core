@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import importlib
+import logging
 
 from cara.exceptions import LoaderNotFoundException
 from cara.support.Str import modularize
+
+_logger = logging.getLogger("cara.support.module_loader")
 
 
 def load(
@@ -33,18 +36,7 @@ def load(
         error_message = (
             f"'{module_path}' not found OR error when importing this module: {str(e)}"
         )
-        try:
-            from cara.facades import Log
-
-            Log.warning(error_message, category="cara.support.module_loader")
-        except Exception:
-            # allow-silent-except: logging is best-effort during early bootstrap and must not mask the import error
-            # Logging here is best-effort. During early bootstrap the ``logger``
-            # facade isn't bound yet (config loads BEFORE LoggerProvider), so the
-            # Facade raises AttributeError; any logging failure must NEVER mask
-            # the real import error or fatal the bootstrap. Swallow it and let
-            # ``raise_exception`` surface the true LoaderNotFoundException below.
-            pass
+        _logger.warning(error_message, exc_info=True)
 
         if raise_exception:
             raise LoaderNotFoundException(error_message) from e

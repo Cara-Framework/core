@@ -6,12 +6,13 @@ This module provides the base class for all CLI commands in the application.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from rich.console import Console as RichConsole
 from rich.progress import track
 from rich.table import Table
+
+from cara.configuration import config
 
 
 class CommandBase:
@@ -75,12 +76,7 @@ class CommandBase:
 
     def _is_production(self) -> bool:
         """Check if running in production environment."""
-        try:
-            from cara.configuration import config
-
-            env = str(config("app.env", "")).lower()
-        except Exception:
-            env = os.getenv("APP_ENV", "").lower()
+        env = str(config("app.env", "")).lower()
         return env in ("production", "prod")
 
     def confirm(

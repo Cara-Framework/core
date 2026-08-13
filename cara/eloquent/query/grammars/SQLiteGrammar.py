@@ -121,7 +121,7 @@ class SQLiteGrammar(BaseGrammar):
 
     def to_sql(self):
         """Clean up the SQL string and return it."""
-        from . import _MULTI_SPACE_RE
+        from . import _MULTI_SPACE_RE  # local: cycle with cara.eloquent.query.grammars
 
         if self.queries and (not self._columns and not self._creates):
             sql = ""

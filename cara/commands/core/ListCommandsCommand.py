@@ -6,10 +6,11 @@ This module provides a CLI command to list all registered commands with enhanced
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from typing import Any
 
-from cara.commands import CommandBase
+from cara.commands.CommandBase import CommandBase
 from cara.decorators import command, get_registered_commands
 from cara.exceptions import CaraException
 
@@ -17,15 +18,57 @@ from cara.exceptions import CaraException
 @command(
     name="commands:list",
     help="List all available CLI commands with enhanced filtering and display options.",
-    options={
-        "--detailed": "Show detailed information including class names and options",
-        "--categorized": "Group commands by category/namespace",
-        "--filter=?": "Filter commands by name pattern",
-        "--category=?": "Show only commands from specific category",
-        "--no-help": "Show only commands without help text",
-        "--stats": "Show command statistics",
-        "--json": "Output in JSON format",
-    },
+    options=[
+        {
+            "name": "--detailed",
+            "help": "Show detailed information including class names and options",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--categorized",
+            "help": "Group commands by category/namespace",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--filter",
+            "help": "Filter commands by name pattern",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--category",
+            "help": "Show only commands from specific category",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--no-help",
+            "help": "Show only commands without help text",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--stats",
+            "help": "Show command statistics",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--json",
+            "help": "Output in JSON format",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+    ],
 )
 class ListCommandsCommand(CommandBase):
     """List registered CLI commands with enhanced filtering and display options."""
@@ -194,7 +237,6 @@ class ListCommandsCommand(CommandBase):
 
     def _output_json(self, commands: list[dict[str, Any]]) -> None:
         """Output commands in JSON format."""
-        import json
 
         self.console.print_json(json.dumps(commands, indent=2))
 

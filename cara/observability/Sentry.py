@@ -1,135 +1,85 @@
-"""Sentry / GlitchTip wiring — generic, idempotent setup.
-
-One import, one call:
-
-    from cara.observability import setup_sentry
-    setup_sentry(service_name="my-service")   # idempotent
-
-Reads DSN, traces sample rate, and environment from cara config
-(``sentry.dsn``, ``sentry.traces_rate``, ``app.env``) with
-``os.environ`` fallback for early-bootstrap calls before
-``cara.configuration`` is fully loaded.
-
-``sentry_sdk`` is an OPTIONAL runtime dependency — when the package
-isn't installed (or the DSN is empty), ``setup_sentry`` is a no-op
-and the rest of the bootstrap continues unaffected.
-"""
+"""Explicit, idempotent Sentry/GlitchTip process wiring."""
 
 from __future__ import annotations
 
-import contextlib
+import math
 import os
 import socket
 import subprocess
-import sys
 import threading
+from numbers import Real
 from typing import Any
+
+from cara.facades import Log
 
 _setup_done = False
 _setup_lock = threading.Lock()
 
 
-def _env(key: str, default: Any = "") -> str:
-    """Read from cara ``config()`` if available, fall back to ``os.environ``.
-
-    During very early bootstrap (before ``ConfigurationProvider.boot()``
-    fires) ``config()`` can throw — fall back to the matching uppercase
-    env var so this helper is callable from anywhere in the bootstrap
-    chain.
-    """
-    try:
-        from cara.configuration import config
-
-        val = config(key)
-        if val is not None:
-            return str(val)
-    except Exception as e:
-        # stderr fallback — Log facade may not be booted yet either.
-        print(
-            f"[cara.observability._env] config({key!r}) failed: "
-            f"{e.__class__.__name__}: {e}",
-            file=sys.stderr,
-        )
-    env_key = key.upper().replace(".", "_")
-    return os.environ.get(env_key, str(default))
-
-
 def setup_sentry(
     *,
     service_name: str,
+    dsn: str,
+    environment: str,
+    traces_rate: float,
     release: str | None = None,
     git_repo_dir: str | None = None,
 ) -> None:
-    """Initialise Sentry / GlitchTip if a DSN is configured.
+    """Configure Sentry from composition-root values.
 
-    Idempotent — repeat calls after the first are no-ops, so it's
-    safe to invoke from multiple bootstrap entry points (HTTP server,
-    queue worker, CLI command). The first caller wins and sets the
-    ``service_name`` / ``release`` for the process lifetime.
-
-    Args:
-        service_name: Logical name reported as ``release`` prefix
-            (``f"{service_name}@{release}"``). Required.
-        release: Version tag. ``None`` falls back to the git short-SHA
-            of ``git_repo_dir`` (or the current working directory),
-            then ``"dev"`` if neither is available.
-        git_repo_dir: Directory to run ``git rev-parse --short HEAD``
-            in for release-tag resolution. Defaults to the current
-            working directory; pass the app's repo root for accuracy
-            when calling from a deeply-nested module.
+    An empty DSN explicitly disables Sentry. Once a DSN is configured,
+    dependency or SDK setup failures propagate and block boot; a configured
+    error pipeline must never disappear behind a successful startup.
     """
+    name = _required_text(service_name, "service_name")
+    target_environment = _required_text(environment, "environment")
+    if not isinstance(dsn, str):
+        raise TypeError("Sentry dsn must be a string.")
+    target_dsn = dsn.strip()
+    rate = _sample_rate(traces_rate)
+    if release is not None:
+        release = _required_text(release, "release")
+    if git_repo_dir is not None:
+        git_repo_dir = _required_text(git_repo_dir, "git_repo_dir")
+
     global _setup_done
     with _setup_lock:
         if _setup_done:
             return
-
-        rel = release or _git_short_sha(git_repo_dir) or "dev"
-        _try(_init_sentry, service_name, rel)
+        if target_dsn:
+            resolved_release = release or _git_short_sha(git_repo_dir) or "dev"
+            _init_sentry(
+                service_name=name,
+                dsn=target_dsn,
+                environment=target_environment,
+                traces_rate=rate,
+                release=resolved_release,
+            )
         _setup_done = True
 
 
-def _try(fn, *args, **kwargs) -> None:
-    """Run a setup step swallowing failures so one broken backend
-    cannot prevent the rest of the bootstrap from coming up."""
-    try:
-        fn(*args, **kwargs)
-    except Exception as e:
-        try:
-            from cara.facades import Log
-
-            Log.warning(
-                "[cara.observability] %s failed: %s: %s",
-                fn.__name__,
-                e.__class__.__name__,
-                e,
-                category="observability",
-            )
-        except Exception as log_err:
-            # Last-resort stderr — the Log facade itself blew up.
-            print(
-                f"[cara.observability._try] Log.warning failed after "
-                f"{fn.__name__} error ({e}): {log_err}",
-                file=sys.stderr,
-            )
-
-
-def _init_sentry(service_name: str, release: str) -> None:
-    dsn = _env("sentry.dsn").strip()
-    if not dsn:
-        return  # disabled — caller didn't configure a DSN
-
-    # ``sentry_sdk`` is an optional dep. Importing inside the helper
-    # so projects that don't install it are unaffected at import time.
-    import sentry_sdk
-    from sentry_sdk.integrations.logging import LoggingIntegration
-    from sentry_sdk.integrations.threading import ThreadingIntegration
+def _init_sentry(
+    *,
+    service_name: str,
+    dsn: str,
+    environment: str,
+    traces_rate: float,
+    release: str,
+) -> None:
+    import sentry_sdk  # local: heavy optional dep
+    from sentry_sdk.integrations.logging import (
+        LoggingIntegration,  # local: heavy optional dep
+    )
+    from sentry_sdk.integrations.threading import (
+        ThreadingIntegration,  # local: heavy optional dep
+    )
 
     sentry_sdk.init(
         dsn=dsn,
         release=f"{service_name}@{release}",
-        environment=_env("app.env", "dev"),
+        environment=environment,
         server_name=socket.gethostname(),
-        traces_sample_rate=float(_env("sentry.traces_rate", "0.1")),
+        traces_sample_rate=traces_rate,
         integrations=[
             LoggingIntegration(level=None, event_level=None),
             ThreadingIntegration(propagate_hub=True),
@@ -138,112 +88,93 @@ def _init_sentry(service_name: str, release: str) -> None:
         send_default_pii=False,
         max_breadcrumbs=50,
     )
-    try:
-        from cara.facades import Log
-
-        Log.info(
-            "Sentry/GlitchTip enabled (service=%s, release=%s)", service_name, release
-        )
-    except Exception as e:
-        print(
-            f"[cara.observability] Sentry enabled but Log.info failed: {e}",
-            file=sys.stderr,
-        )
 
 
 def set_request_user(user_id: Any, email: str | None = None) -> None:
-    """Attach the resolved user to the current Sentry scope.
-
-    Called from the auth middleware after ``request.set_user(...)``;
-    every subsequent error in this request inherits the identity so
-    Sentry can cluster by user without ops grepping the access log.
-    Email is masked to keep PII out of the event store; pass ``None``
-    when only the surrogate id is wanted.
-    """
+    """Attach a masked request identity when the optional SDK is installed."""
     try:
-        import sentry_sdk
-    except Exception:
-        # allow-silent-except: sentry_sdk is optional
+        import sentry_sdk  # local: heavy optional dep
+    except ImportError:
         return
-    payload: dict = {"id": str(user_id)}
-    if email:
-        # Mask: ``j****@example.com``. Keeps the first char + domain
-        # so on-call can spot which tenant a flood comes from without
-        # storing the raw address.
-        try:
-            local, _, domain = email.partition("@")
-            if local and domain:
-                head = local[0] if local else ""
-                payload["email"] = f"{head}***@{domain}"
-        except OSError, RuntimeError, AttributeError, ConnectionError:
-            pass
-    with contextlib.suppress(OSError, RuntimeError, AttributeError, ConnectionError):
+
+    payload: dict[str, str] = {"id": str(user_id)}
+    if email is not None:
+        if not isinstance(email, str):
+            raise TypeError("Sentry request email must be a string or None.")
+        local, separator, domain = email.partition("@")
+        if separator and local and domain:
+            payload["email"] = f"{local[0]}***@{domain}"
+    try:
         sentry_sdk.set_user(payload)
+    except (OSError, RuntimeError, AttributeError) as exc:
+        _report_scope_failure("set_user", exc)
 
 
 def set_request_tag(key: str, value: Any) -> None:
-    """Attach a tag (route, tenant, request_id, …) to the scope.
-
-    Tags are searchable in the Sentry UI. Skip silently when the SDK
-    isn't installed so this stays a zero-cost helper in dev.
-    """
+    """Attach one bounded tag when the optional SDK is installed."""
     if value is None:
         return
+    tag = _required_text(key, "tag key")
     try:
-        import sentry_sdk
-
-        sentry_sdk.set_tag(key, str(value)[:200])
-    except OSError, RuntimeError, AttributeError, ConnectionError:
-        pass
+        import sentry_sdk  # local: heavy optional dep
+    except ImportError:
+        return
+    try:
+        sentry_sdk.set_tag(tag, str(value)[:200])
+    except (OSError, RuntimeError, AttributeError) as exc:
+        _report_scope_failure("set_tag", exc)
 
 
 def clear_scope() -> None:
-    """Reset the per-request/job scope — call between queue ticks so
-    a prior job's user/tag context doesn't leak into the next one.
-    """
+    """Clear request/job Sentry state when the optional SDK is installed."""
     try:
-        import sentry_sdk
-
+        import sentry_sdk  # local: heavy optional dep
+    except ImportError:
+        return
+    try:
         scope = sentry_sdk.Scope.get_isolation_scope()
         scope.set_user(None)
         scope.clear_breadcrumbs()
-    except OSError, RuntimeError, AttributeError, ConnectionError:
-        pass
+    except (OSError, RuntimeError, AttributeError) as exc:
+        _report_scope_failure("clear_scope", exc)
+
+
+def _report_scope_failure(operation: str, error: Exception) -> None:
+    Log.warning(
+        "Sentry %s failed: %s",
+        operation,
+        error,
+        category="observability.sentry",
+    )
 
 
 def _git_short_sha(repo_dir: str | None = None) -> str | None:
-    """Resolve the current git short-SHA in ``repo_dir`` (or cwd).
-
-    Returns ``None`` when git is unavailable, the directory isn't a
-    repo, or the call times out — the caller falls through to a static
-    ``"dev"`` release tag.
-    """
+    """Resolve a release hint; missing git intentionally falls back to dev."""
     try:
-        cwd = repo_dir or os.getcwd()
-        out = subprocess.check_output(
+        output = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=cwd,
+            cwd=repo_dir or os.getcwd(),
             stderr=subprocess.DEVNULL,
             timeout=2,
         )
-        return out.decode().strip() or None
-    except Exception as e:
-        try:
-            from cara.facades import Log
-
-            Log.warning(
-                "[cara.observability._git_short_sha] resolve failed, falling back to 'dev' release tag: %s: %s",
-                e.__class__.__name__,
-                e,
-                category="observability",
-            )
-        except Exception as log_err:
-            print(
-                f"[cara.observability._git_short_sha] git rev-parse failed "
-                f"({e}) and Log.warning also failed: {log_err}",
-                file=sys.stderr,
-            )
+        return output.decode().strip() or None
+    except OSError, subprocess.SubprocessError, UnicodeError:
         return None
 
 
-__all__ = ["setup_sentry"]
+def _required_text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Sentry {field} must be a non-empty string.")
+    return value.strip()
+
+
+def _sample_rate(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError("Sentry traces_rate must be a real number.")
+    rate = float(value)
+    if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
+        raise ValueError("Sentry traces_rate must be between 0.0 and 1.0.")
+    return rate
+
+
+__all__ = ["clear_scope", "set_request_tag", "set_request_user", "setup_sentry"]

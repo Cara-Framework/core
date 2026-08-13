@@ -128,8 +128,8 @@ def test_the_http_barrel_resolves_the_class_from_the_taxonomy() -> None:
     """
     import cara.http as http_barrel
 
-    assert http_barrel._EXPORTS["InvalidCursor"] == (
-        "cara.exceptions.types.http",
+    assert http_barrel._LAZY_EXPORTS["InvalidCursor"] == (
+        "cara.exceptions.types.InvalidCursor",
         "InvalidCursor",
     )
 
@@ -159,6 +159,6 @@ def test_reaching_the_exception_does_not_drag_in_the_cursor_codec() -> None:
         cwd=str(pathlib.Path(__file__).resolve().parents[2]),
     )
 
-    assert completed.stdout.split() == ["False", "cara.exceptions.types.http"], (
+    assert completed.stdout.split() == ["False", "cara.exceptions.types.InvalidCursor"], (
         f"unexpected probe output: {completed.stdout!r} / {completed.stderr!r}"
     )

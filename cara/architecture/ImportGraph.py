@@ -26,6 +26,7 @@ Two queries drive the Import Law tooling:
 from __future__ import annotations
 
 import ast
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -173,7 +174,6 @@ class ImportGraph:
         ``start == goal``."""
         if start == goal:
             return [start]
-        from collections import deque
 
         prev: dict[str, str | None] = {start: None}
         queue = deque([start])

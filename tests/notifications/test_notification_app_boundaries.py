@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
+
+import pytest
 
 from cara.notifications import BaseNotification, Notifiable
 from cara.notifications.channels import DatabaseChannel
@@ -52,6 +55,24 @@ def test_database_channel_uses_generic_polymorphic_schema():
     assert "tenant_id" not in record
     assert "user_id" not in record
     assert "status" not in record
+
+
+def test_database_channel_preserves_exact_decimal_and_rejects_unknown_objects():
+    table = _Table()
+    channel = DatabaseChannel(_Database(table))
+
+    class _Exact(_DatabaseNotification):
+        def to_database(self, notifiable):
+            return {"amount": Decimal("19.90")}
+
+    class _Unknown(_DatabaseNotification):
+        def to_database(self, notifiable):
+            return {"value": object()}
+
+    assert channel.send(_Recipient(), _Exact()) is True
+    assert json.loads(table.created[0]["data"]) == {"amount": "19.90"}
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        channel.send(_Recipient(), _Unknown())
 
 
 def test_notifiable_reads_and_mutations_delegate_to_the_database_channel(monkeypatch):

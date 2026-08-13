@@ -20,42 +20,39 @@ import threading
 
 import pytest
 
-from cara.observability import Metrics
-from cara.observability.Metrics import (
+from cara.observability.MetricsBase import (
     REGISTRY,
     MetricsBase,
     metric_name,
     sample_db_pool_metrics,
 )
 
+RuntimeMetrics = importlib.import_module("cara.observability._RuntimeMetrics")
 _PG = importlib.import_module("cara.eloquent.connections.PostgresConnection")
 
 
 @pytest.fixture
 def restore_pool_state():
     """Snapshot + restore the Postgres pool module globals."""
-    saved = (_PG._pool_initialized, _PG._pool_semaphore, list(_PG.CONNECTION_POOL))
+    saved = (
+        _PG._pool_initialized,
+        _PG._pool_semaphore,
+        _PG._pool_max_size,
+        list(_PG.CONNECTION_POOL),
+    )
     try:
         yield
     finally:
         _PG._pool_initialized = saved[0]
         _PG._pool_semaphore = saved[1]
-        _PG.CONNECTION_POOL[:] = saved[2]
+        _PG._pool_max_size = saved[2]
+        _PG.CONNECTION_POOL[:] = saved[3]
 
 
 @pytest.fixture
-def fake_pool_config(monkeypatch):
-    """Make the metric read a configured pool ceiling of 20."""
-    real_config = Metrics.config
-
-    def _fake(key, default=None):
-        if key == "database.default":
-            return "pgsql"
-        if key == "database.drivers":
-            return {"pgsql": {"connection_pooling_max_size": 20}}
-        return real_config(key, default)
-
-    monkeypatch.setattr(Metrics, "config", _fake)
+def fake_pool_config():
+    """Make the live pool publish a ceiling of 20."""
+    _PG._pool_max_size = 20
 
 
 # ── Registration ─────────────────────────────────────────────────────
@@ -80,7 +77,7 @@ def test_pool_gauges_are_attributes_on_metrics_base():
 def test_read_stats_returns_none_when_pool_uninitialised(restore_pool_state):
     _PG._pool_initialized = False
     _PG._pool_semaphore = None
-    assert Metrics._read_db_pool_stats() is None
+    assert RuntimeMetrics._read_db_pool_stats() is None
 
 
 def test_sample_is_noop_and_does_not_raise_when_uninitialised(restore_pool_state):
@@ -96,7 +93,26 @@ def test_read_stats_returns_none_when_initialised_but_semaphore_missing(
     # Defensive: initialised flag set but semaphore somehow None.
     _PG._pool_initialized = True
     _PG._pool_semaphore = None
-    assert Metrics._read_db_pool_stats() is None
+    assert RuntimeMetrics._read_db_pool_stats() is None
+
+
+def test_read_stats_rejects_missing_pool_ceiling(restore_pool_state, monkeypatch):
+    _PG._pool_initialized = True
+    _PG._pool_semaphore = threading.Semaphore(1)
+    _PG._pool_max_size = None
+
+    with pytest.raises(RuntimeError, match="publish a positive"):
+        RuntimeMetrics._read_db_pool_stats()
+
+
+def test_read_stats_rejects_inconsistent_free_slot_count(
+    restore_pool_state, fake_pool_config
+):
+    _PG._pool_initialized = True
+    _PG._pool_semaphore = threading.Semaphore(21)
+
+    with pytest.raises(RuntimeError, match="exceeds"):
+        RuntimeMetrics._read_db_pool_stats()
 
 
 # ── Live pool state ──────────────────────────────────────────────────
@@ -110,7 +126,7 @@ def test_read_stats_derives_in_use_idle_max(restore_pool_state, fake_pool_config
     _PG.CONNECTION_POOL = [object(), object()]  # 2 idle/warm
     _PG._pool_initialized = True
 
-    stats = Metrics._read_db_pool_stats()
+    stats = RuntimeMetrics._read_db_pool_stats()
     assert stats == {"in_use": 12, "idle": 2, "max": 20}
 
 
@@ -134,6 +150,8 @@ def test_render_invokes_pool_sampler_without_raising(restore_pool_state):
     uninitialised pool it must still produce a payload."""
     _PG._pool_initialized = False
     _PG._pool_semaphore = None
-    payload, content_type = Metrics.render()
+    from cara.observability import render
+
+    payload, content_type = render(service="test", role="test")
     assert isinstance(payload, bytes)
     assert "text/plain" in content_type

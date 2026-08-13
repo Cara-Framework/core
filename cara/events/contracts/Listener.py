@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .Event import Event
+from .EventContract import EventContract
 
 
 class Listener(Protocol):
     """Protocol that each Listener must implement."""
 
-    def handle(self, event: Event) -> None:
+    def handle(self, event: EventContract) -> None:
         """Receive an Event instance and perform any logic."""

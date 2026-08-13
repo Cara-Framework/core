@@ -10,8 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from cara.exceptions.types.authentication import AuthenticationException
-from cara.exceptions.types.validation import ValidationException
+from cara.exceptions import AuthenticationException, ValidationException
 
 
 class MakesRequestHelpers:

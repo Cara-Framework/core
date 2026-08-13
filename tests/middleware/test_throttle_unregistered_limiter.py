@@ -58,7 +58,7 @@ class TestUnregisteredNamedLimiter:
     ) -> None:
         module = sys.modules["cara.middleware.http.ThrottleRequests"]
 
-        monkeypatch.setattr(module, "RateLimiter", _RateLimiterStub())
+        monkeypatch.setattr(module.facades, "RateLimiter", _RateLimiterStub())
 
         with pytest.raises(RateLimitConfigurationException, match="throttle:login"):
             _middleware(limit="login")._resolve_limit_config(request=object())
@@ -68,7 +68,7 @@ class TestUnregisteredNamedLimiter:
     ) -> None:
         module = sys.modules["cara.middleware.http.ThrottleRequests"]
 
-        monkeypatch.setattr(module, "RateLimiter", _RateLimiterStub())
+        monkeypatch.setattr(module.facades, "RateLimiter", _RateLimiterStub())
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
             _middleware(limit="typoed")._resolve_limit_config(request=object())
@@ -82,7 +82,7 @@ class TestUnregisteredNamedLimiter:
         fallback. There is no configuration that silently means 60/min."""
         module = sys.modules["cara.middleware.http.ThrottleRequests"]
 
-        monkeypatch.setattr(module, "RateLimiter", _RateLimiterStub())
+        monkeypatch.setattr(module.facades, "RateLimiter", _RateLimiterStub())
 
         with pytest.raises(RateLimitConfigurationException):
             _middleware(limit=None, window=5)._resolve_limit_config(request=object())
@@ -98,7 +98,9 @@ class TestRegisteredConfigurationsAreUnchanged:
 
         expected = Limit(max_attempts=5, decay_minutes=1)
         monkeypatch.setattr(
-            module, "RateLimiter", _RateLimiterStub({"login": lambda _r: expected})
+            module.facades,
+            "RateLimiter",
+            _RateLimiterStub({"login": lambda _r: expected}),
         )
 
         resolved = _middleware(limit="login")._resolve_limit_config(request=object())

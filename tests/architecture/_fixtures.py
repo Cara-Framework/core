@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cara.architecture.Manifest import Manifest, ManifestRoots
+from cara.architecture.Manifest import Manifest
+from cara.architecture.ManifestRoots import ManifestRoots
 
 
 def write(path: Path, content: str) -> Path:

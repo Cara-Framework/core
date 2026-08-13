@@ -10,7 +10,7 @@ Laravel-style dynamic interface for filesystem paths:
 
 from __future__ import annotations
 
-from .PathManager import PathManager
+from cara.environment import PathManager
 
 
 def paths(path: str = "", relative: str = "") -> str:

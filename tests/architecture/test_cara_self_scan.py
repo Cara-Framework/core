@@ -8,7 +8,7 @@ manifest, the include/exclude reasoning, and the regeneration recipe;
 
 from __future__ import annotations
 
-from cara.architecture._ratchet import ratchet
+from cara.architecture._ratchet import _ratchet
 from cara.architecture.scanners import REGISTRY
 from tests.architecture._cara_census import CENSUS
 from tests.architecture._cara_self_scan import (
@@ -19,18 +19,9 @@ from tests.architecture._cara_self_scan import (
     scan,
 )
 
-#: Total pinned findings. Spelled out so the debt's SIZE is part of the
-#: guard's output, as §11 requires ("its size is part of the guard's
-#: output") — a census that only lives as a dict is a number nobody reads.
-# 1523 -> 1527: evolve mode adds four framework commands
-# (schema:verify, schema:plan, schema:apply, schema:rollback) to
-# cara/commands/core/__init__.py, a barrel that deliberately re-exports
-# NOTHING so one command's optional dependency cannot disable the rest.
-# Every command in it therefore counts as a missing re-export: this is a
-# structural consequence of the barrel's design, not new debt of a new
-# kind, and the only way to avoid it would be to give the barrel the
-# eager imports it exists to prevent.
-CENSUS_TOTAL = 1527
+#: Total pinned findings. Zero is intentional: cara must obey the Guard Pack
+#: it publishes without carrying a framework-local allowlist.
+CENSUS_TOTAL = 0
 
 
 class TestEveryScannerIsDecidedOn:
@@ -68,19 +59,17 @@ class TestTheManifestDescribesCaraAndNotAProduct:
         layers = cara_manifest().layers
         assert {"eloquent", "queues", "middleware", "architecture"} <= set(layers)
 
-    def test_findings_are_reported_under_cara(self):
-        # A scan that produced findings pathed anywhere else would mean the
-        # deployable root is wrong and every census key is a lie.
-        findings = scan("inline_imports")
-        assert findings
-        assert all(f.path.startswith("cara/") for f in findings)
+    def test_the_deployable_root_is_cara(self):
+        roots = cara_manifest().roots
+        assert roots.app.parent == roots.deployable
+        assert roots.deployable.name == "cara"
 
 
 class TestCaraOwesExactlyItsPinnedDebt:
     """Each self-scanned rule is at, and only at, its pinned count."""
 
     def _ratchet(self, scanner_id: str):
-        return ratchet(
+        return _ratchet(
             key=f"cara self-scan {scanner_id}",
             current=counts(scan(scanner_id)),
             pinned=CENSUS[scanner_id],
@@ -133,14 +122,12 @@ class TestCaraOwesExactlyItsPinnedDebt:
 
 
 class TestTheDebtIsVisibleAndShrinkOnly:
-    """§11: an allowlist's size is part of the guard's output."""
+    """§11: cara carries no pinned debt against its own guards."""
 
     def test_the_total_is_pinned(self):
         total = sum(sum(paths.values()) for paths in CENSUS.values())
         assert total == CENSUS_TOTAL, (
-            f"cara's self-scan debt is now {total}, pinned at {CENSUS_TOTAL}. "
-            "Lower it here when you shrink the census; raising it is a "
-            "doctrine amendment (§14), not a fix."
+            f"cara's self-scan debt is now {total}; expected zero."
         )
 
     def test_every_pinned_count_is_positive(self):

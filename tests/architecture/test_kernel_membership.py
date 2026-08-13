@@ -135,6 +135,18 @@ def test_gate_persistence_orm_write_and_sql_cas_pass(tmp_path):
     assert KernelMembership.scan(manifest) == []
 
 
+def test_gate_persistence_lock_ladder_is_an_atomic_invariant(tmp_path):
+    manifest = make_manifest(tmp_path)
+    write(
+        tmp_path / "commons" / "gates" / "persistence" / "LockRepository.py",
+        "class LockRepository:\n"
+        "    def lock(self, row_id):\n"
+        "        return Item.where('id', row_id).lock_for_update().first()\n",
+    )
+
+    assert KernelMembership.scan(manifest) == []
+
+
 def test_single_consumer_shared_module_is_a_finding(tmp_path):
     consumer_a = tmp_path / "deployable_a" / "app"
     consumer_b = tmp_path / "deployable_b" / "app"

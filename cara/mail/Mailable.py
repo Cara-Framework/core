@@ -12,6 +12,7 @@ import os
 import re
 from typing import Any
 
+from cara.mail.JinjaRenderer import render_mail_view
 from cara.queues.contracts import SerializesModels
 
 _HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$")
@@ -243,8 +244,6 @@ class Mailable(SerializesModels):
             return self._html
         if not self._view:
             return None
-
-        from cara.mail.JinjaRenderer import render_mail_view
 
         return render_mail_view(self._application, self._view, self._view_data or {})
 

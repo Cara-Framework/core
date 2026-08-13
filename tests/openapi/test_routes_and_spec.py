@@ -188,6 +188,27 @@ class TestSpecAssembly:
         assert body["required"] == ["data", "meta"]
         assert body["properties"]["meta"] == {"$ref": "#/components/schemas/_CursorMeta"}
 
+    def test_an_action_specific_meta_resource_extends_the_generic_cursor_meta(self):
+        spec = _spec(
+            cursor_actions={"ThingController@index"},
+            meta_mapping={"ThingController@index": "ThingIndexMetaResource"},
+            envelope_components={
+                "_Meta": {"type": "object"},
+                "_CursorMeta": {"type": "object"},
+                "ThingIndexMetaResource": {"type": "object"},
+                "ApiErrorBody": {},
+            },
+        )
+        body = spec["paths"]["/api/things/"]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]
+        assert body["properties"]["meta"] == {
+            "allOf": [
+                {"$ref": "#/components/schemas/_CursorMeta"},
+                {"$ref": "#/components/schemas/ThingIndexMetaResource"},
+            ]
+        }
+
     def test_envelope_component_names_are_the_application_s_to_choose(self):
         spec = _spec(
             envelope_components={"Meta": {"type": "object"}, "Error": {}},

@@ -202,7 +202,7 @@ class Migration:
 
         We don't borrow our own connection here — every operation we
         invoke (``disable_foreign_key_constraints``, ``get_all_tables``,
-        ``drop_table_if_exists``) goes through ``self.schema``, which
+        ``drop_if_exists``) goes through ``self.schema``, which
         borrows and releases its own connection per statement. The
         previous implementation grabbed a slot it never used and never
         returned, draining the pool on multi-table resets.
@@ -213,7 +213,7 @@ class Migration:
         tables = self.schema.get_all_tables()
 
         for table_name in tables:
-            self.schema.drop_table_if_exists(table_name)
+            self.schema.drop_if_exists(table_name)
 
         if ignore_fk:
             self.schema.enable_foreign_key_constraints()

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import contextlib
 
-from cara.commands import CommandBase, missing_optional
+from cara.commands.CommandBase import CommandBase
+from cara.commands.OptionalDependencyError import missing_optional
 from cara.decorators import command
 from cara.support import paths
 
@@ -10,14 +11,50 @@ from cara.support import paths
 @command(
     name="migrate",
     help="Run the database migrations.",
-    options={
-        "--m|migration=all": "Migration's name to be migrated",
-        "--c|connection=default": "The connection you want to run migrations on",
-        "--f|force": "Force migrations without prompt in production",
-        "--show": "Show SQL output without executing migrations",
-        "--schema=?": "Sets the schema to be migrated",
-        "--d|directory=?": "The location of the migration directory",
-    },
+    options=[
+        {
+            "name": "-m|--migration",
+            "help": "Migration's name to be migrated",
+            "type": str,
+            "default": "all",
+            "is_flag": False,
+        },
+        {
+            "name": "-c|--connection",
+            "help": "The connection you want to run migrations on",
+            "type": str,
+            "default": "default",
+            "is_flag": False,
+        },
+        {
+            "name": "-f|--force",
+            "help": "Force migrations without prompt in production",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--show",
+            "help": "Show SQL output without executing migrations",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--schema",
+            "help": "Sets the schema to be migrated",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "-d|--directory",
+            "help": "The location of the migration directory",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+    ],
 )
 class MigrateCommand(CommandBase):
     def handle(self):
@@ -27,7 +64,7 @@ class MigrateCommand(CommandBase):
         # import this command module — and fail LOUD here, not at module load.
         global Migration
         try:
-            from cara.eloquent.migrations import Migration
+            from cara.eloquent.migrations import Migration  # local: heavy optional dep
         except ImportError as exc:
             raise missing_optional("db", exc) from exc
 
@@ -270,23 +307,17 @@ class MigrateCommand(CommandBase):
 
         return statements
 
-    @staticmethod
-    def _install_db_facade_guard(sink: list[str]):
+    def _install_db_facade_guard(self, sink: list[str]):
         """Patch the bound ``DB`` manager so raw SQL is recorded, not executed.
 
         Migrations that call ``DB.statement(...)`` / ``DB.select(...)`` resolve
-        to the singleton ``DatabaseManager``. During a dry preview we must NOT
-        touch the database, so we temporarily replace its mutating methods with
-        recorders that append the SQL to ``sink`` and return a benign value.
-        Returns a ``restore()`` callable that puts the originals back — always
-        call it in a ``finally``.
+        to the application container's ``DatabaseManager``. During a dry preview
+        we must NOT touch the database, so we temporarily replace its mutating
+        methods with recorders that append the SQL to ``sink`` and return a
+        benign value. Returns a ``restore()`` callable that puts the originals
+        back — always call it in a ``finally``.
         """
-        try:
-            from cara.eloquent.DatabaseManager import DatabaseManager
-
-            db = DatabaseManager.get_instance()
-        except Exception:  # noqa: BLE001 — no DB manager → nothing to guard
-            return lambda: None
+        db = self.application.make("DB")
 
         guarded = ("statement", "select", "select_one")
         originals = {name: getattr(db, name, None) for name in guarded}

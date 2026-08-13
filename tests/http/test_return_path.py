@@ -8,7 +8,7 @@ hypothetical.
 
 import pytest
 
-from cara.http import ReturnPath
+from cara.support import ReturnPath
 
 
 @pytest.mark.parametrize(

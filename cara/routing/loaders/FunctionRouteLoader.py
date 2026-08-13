@@ -4,9 +4,9 @@ Function Route Loader for loading routes from decorated standalone functions.
 
 from __future__ import annotations
 
-from cara.decorators.route import all_pending, clear
+from cara.decorators import all_pending, clear
 from cara.facades import Log
-from cara.routing import Route
+from cara.routing.Route import Route
 
 
 class FunctionRouteLoader:

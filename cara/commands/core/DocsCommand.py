@@ -1,11 +1,11 @@
 """DocsCommand: the one product fact a documentation command needs, bound late.
 
 Both documentation commands need exactly one thing from the product — its
-:class:`~cara.docs.Manifest.DocsManifest` — and this is the single place that
+:class:`~cara.docs.DocsManifest.DocsManifest` — and this is the single place that
 resolves it.
 
 WHY THE RESOLUTION IS LAZY. A product binds its manifest in a file that calls
-:meth:`~cara.docs.Manifest.DocsManifest.discover_root`, and that call REQUIRES a
+:meth:`~cara.docs.DocsManifest.DocsManifest.discover_root`, and that call REQUIRES a
 documentation tree: it raises when no ancestor holds ``docs/index.html``. That
 strictness is correct — a docs run against the wrong root is worse than no run
 — but it makes the manifest a runtime fact, not an import-time one.
@@ -32,7 +32,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
-from cara.docs.Manifest import DocsManifest
+from cara.docs import DocsManifest
 
 
 class DocsCommand(CommandBase):

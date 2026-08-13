@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from cara.configuration import config
+from cara.exceptions import InvalidConfigurationSetupException
 from cara.http.request import HeaderBag
-from cara.support.Http import HTTP_STATUS_CODES
+from cara.support import HTTP_STATUS_CODES
 
 
 class BaseResponse:
@@ -100,11 +102,13 @@ class BaseResponse:
 
         try:
             try:
-                from cara.configuration import config
-
-                debug = bool(config("app.debug", False))
-            except Exception:
+                debug_value = config("app.debug", False)
+            except InvalidConfigurationSetupException:
                 debug = False
+            else:
+                # Last-resort response generation must never disclose an
+                # internal exception because a malformed value is truthy.
+                debug = debug_value is True
 
             error_payload = {
                 "success": False,

@@ -31,7 +31,7 @@ _APP_KEY = "k" * 48
 
 @pytest.fixture
 def app_key(monkeypatch: pytest.MonkeyPatch):
-    Configuration()  # ensure the bare singleton exists
+    Configuration.empty()
     store = Configuration._instance._config
     monkeypatch.setitem(store, "app.key", _APP_KEY)
     return _APP_KEY
@@ -245,13 +245,13 @@ class TestMalformedTokens:
 class TestKeyStrength:
     @pytest.mark.parametrize("key", ["", "short", "x" * 31])
     def test_a_weak_app_key_refuses_to_sign(self, key, monkeypatch):
-        Configuration()
+        Configuration.empty()
         monkeypatch.setitem(Configuration._instance._config, "app.key", key)
         with pytest.raises(RuntimeError, match="at least 32 bytes"):
             SignedToken.issue({"c": "abc"}, purpose="demo", ttl=60)
 
     def test_a_weak_app_key_refuses_to_verify(self, monkeypatch):
-        Configuration()
+        Configuration.empty()
         monkeypatch.setitem(Configuration._instance._config, "app.key", "short")
         with pytest.raises(RuntimeError, match="at least 32 bytes"):
             SignedToken.verify(f"body.{'0' * 64}", purpose="demo", max_ttl=60)
@@ -259,7 +259,7 @@ class TestKeyStrength:
     def test_the_key_is_read_at_call_time_not_import_time(self, monkeypatch):
         """Configuration loads during boot; a key captured at import would
         pin whatever (probably nothing) was set at that moment."""
-        Configuration()
+        Configuration.empty()
         monkeypatch.setitem(Configuration._instance._config, "app.key", "a" * 48)
         token = SignedToken.issue({"c": "abc"}, purpose="demo", ttl=60)["token"]
         assert SignedToken.verify(token, purpose="demo", max_ttl=60) is not None

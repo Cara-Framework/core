@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from cara.commands import CommandBase, missing_optional
+from cara.commands.CommandBase import CommandBase
+from cara.commands.OptionalDependencyError import missing_optional
 from cara.decorators import command
 from cara.support import paths
 
@@ -8,15 +9,57 @@ from cara.support import paths
 @command(
     name="migrate:rollback",
     help="Rollback database migrations.",
-    options={
-        "--m|migration=all": "Migration name to rollback; 'all' means latest batch",
-        "--c|connection=": "The connection key from config to run migrations on",
-        "--f|force": "Force rollback without prompt in production",
-        "--s|show": "Shows the output of SQL for rollback operations",
-        "--schema=?": "Sets the schema to be used",
-        "--d|directory=?": "The location of the migration directory",
-        "--step=1": "Number of migration batches to rollback",
-    },
+    options=[
+        {
+            "name": "-m|--migration",
+            "help": "Migration name to rollback; 'all' means latest batch",
+            "type": str,
+            "default": "all",
+            "is_flag": False,
+        },
+        {
+            "name": "-c|--connection",
+            "help": "The connection key from config to run migrations on",
+            "type": str,
+            "default": "",
+            "is_flag": False,
+        },
+        {
+            "name": "-f|--force",
+            "help": "Force rollback without prompt in production",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "-s|--show",
+            "help": "Shows the output of SQL for rollback operations",
+            "type": bool,
+            "default": False,
+            "is_flag": True,
+        },
+        {
+            "name": "--schema",
+            "help": "Sets the schema to be used",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "-d|--directory",
+            "help": "The location of the migration directory",
+            "type": str,
+            "default": None,
+            "is_flag": False,
+        },
+        {
+            "name": "--step",
+            "help": "Number of migration batches to rollback",
+            "type": int,
+            "default": 1,
+            "is_flag": False,
+        },
+    ],
 )
 class MigrateRollbackCommand(CommandBase):
     def handle(self):
@@ -25,7 +68,9 @@ class MigrateRollbackCommand(CommandBase):
         """
         global Migration
         try:
-            from cara.eloquent.migrations.Migration import Migration
+            from cara.eloquent.migrations.Migration import (
+                Migration,  # local: heavy optional dep
+            )
         except ImportError as exc:
             raise missing_optional("db", exc) from exc
 

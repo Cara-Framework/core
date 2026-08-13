@@ -19,7 +19,7 @@ import pika
 import pytest
 
 from cara.exceptions import QueueException
-from cara.queues.Topology import (
+from cara.queues.QueueState import (
     DEAD_LETTER_BINDING,
     DEAD_LETTER_EXCHANGE,
     DEAD_LETTER_QUEUE,

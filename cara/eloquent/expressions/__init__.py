@@ -1,22 +1,28 @@
-from .Raw import Raw
-from .JoinClause import JoinClause
-from .QueryExpression import QueryExpression
-from .HavingExpression import HavingExpression
-from .FromTable import FromTable
-from .UpdateQueryExpression import UpdateQueryExpression
-from .BetweenExpression import BetweenExpression
-from .SubSelectExpression import SubSelectExpression
-from .SubGroupExpression import SubGroupExpression
-from .SelectExpression import SelectExpression
-from .OrderByExpression import OrderByExpression
-from .GroupByExpression import GroupByExpression
-from .AggregateExpression import AggregateExpression
-from .OnClause import OnClause
-from .OnValueClause import OnValueClause
-from .F import F
-from .Greatest import Greatest
-from .Least import Least
-from .Operation import Operation
+"""Eloquent — layer barrel (generated, DOCTRINE §5.1). — expressions subpackage."""
+
+from cara._LazyExports import _install_lazy_exports
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AggregateExpression": (".AggregateExpression", "AggregateExpression"),
+    "BetweenExpression": (".BetweenExpression", "BetweenExpression"),
+    "F": (".F", "F"),
+    "FromTable": (".FromTable", "FromTable"),
+    "Greatest": (".Greatest", "Greatest"),
+    "GroupByExpression": (".GroupByExpression", "GroupByExpression"),
+    "HavingExpression": (".HavingExpression", "HavingExpression"),
+    "JoinClause": (".JoinClause", "JoinClause"),
+    "Least": (".Least", "Least"),
+    "OnClause": (".OnClause", "OnClause"),
+    "OnValueClause": (".OnValueClause", "OnValueClause"),
+    "Operation": (".Operation", "Operation"),
+    "OrderByExpression": (".OrderByExpression", "OrderByExpression"),
+    "QueryExpression": (".QueryExpression", "QueryExpression"),
+    "Raw": (".Raw", "Raw"),
+    "SelectExpression": (".SelectExpression", "SelectExpression"),
+    "SubGroupExpression": (".SubGroupExpression", "SubGroupExpression"),
+    "SubSelectExpression": (".SubSelectExpression", "SubSelectExpression"),
+    "UpdateQueryExpression": (".UpdateQueryExpression", "UpdateQueryExpression"),
+}
 
 __all__ = [
     "AggregateExpression",
@@ -39,3 +45,5 @@ __all__ = [
     "SubSelectExpression",
     "UpdateQueryExpression",
 ]
+
+_install_lazy_exports(__name__, _LAZY_EXPORTS)

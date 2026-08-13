@@ -18,7 +18,8 @@ def _write_manifest(tmp_path, **fields) -> str:
     manifest_file = write(
         tmp_path / "app" / "architecture_manifest.py",
         "from pathlib import Path\n\n"
-        "from cara.architecture.Manifest import Manifest, ManifestRoots\n\n"
+        "from cara.architecture.Manifest import Manifest\n"
+        "from cara.architecture.ManifestRoots import ManifestRoots\n\n"
         "ROOT = Path(__file__).resolve().parents[1]\n\n"
         "MANIFEST = Manifest(\n"
         "    product='acme',\n"

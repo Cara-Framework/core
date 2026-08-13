@@ -6,18 +6,18 @@ import hashlib
 import hmac
 import inspect
 import json
-import math
 import re
-import time
-import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 from cara.exceptions import QueueException
-from cara.queues.contracts import ShouldQueue
+from cara.queues.Bus import Bus
+from cara.queues.contracts import ShouldQueue, UniqueJob
 from cara.queues.JobClassResolver import JobClassResolver
 from cara.queues.PayloadLimits import MAX_AMQP_JOB_PAYLOAD_BYTES
+
+from ._SignedJsonValues import _SignedJsonValues
 
 
 class SignedJsonJobSerializer:
@@ -116,7 +116,9 @@ class SignedJsonJobSerializer:
             job_descriptor={
                 "module": job_class.__module__,
                 "class": job_class.__name__,
-                "kwargs": cls._json_value(init_kwargs or {}, path="job.kwargs"),
+                "kwargs": _SIGNED_JSON_VALUES.json_value(
+                    init_kwargs or {}, path="job.kwargs"
+                ),
             },
             payload=payload,
         )
@@ -147,14 +149,14 @@ class SignedJsonJobSerializer:
     ) -> bytes:
         """Create a new immutable delivery from a verified dead-letter payload."""
         cls._validate_verified_payload(dict(verified_payload))
-        now = cls._epoch(issued_at, default_now=True)
+        now = _SIGNED_JSON_VALUES.epoch(issued_at, default_now=True)
         replay_payload = dict(verified_payload)
         replay_payload.update(
             {
                 "attempts": 0,
                 "throttle_attempts": 0,
                 "created": datetime.fromtimestamp(now, tz=UTC).isoformat(),
-                "db_job_id": cls._required_positive_int(
+                "db_job_id": _SIGNED_JSON_VALUES.required_positive_int(
                     new_db_job_id,
                     "db_job_id",
                 ),
@@ -162,8 +164,8 @@ class SignedJsonJobSerializer:
                     now,
                     tz=UTC,
                 ).isoformat(),
-                "job_id": cls._required_uuid(new_job_id, "job_id"),
-                "replay_of": cls._required_uuid(
+                "job_id": _SIGNED_JSON_VALUES.required_uuid(new_job_id, "job_id"),
+                "replay_of": _SIGNED_JSON_VALUES.required_uuid(
                     verified_payload.get("job_id"),
                     "replay_of",
                 ),
@@ -181,7 +183,6 @@ class SignedJsonJobSerializer:
 
     @staticmethod
     def _dispatch_params(job: Any) -> dict[str, Any]:
-        from cara.queues.Bus import Bus
 
         return Bus.get_dispatch_params(job)
 
@@ -282,7 +283,7 @@ class SignedJsonJobSerializer:
         allow_expired: bool = False,
     ) -> dict[str, Any]:
         envelope = cls._parse_envelope(body)
-        kid = cls._required_key_id(envelope["kid"])
+        kid = _SIGNED_JSON_VALUES.required_key_id(envelope["kid"])
         if kid not in signing_keys:
             raise QueueException(f"Unknown AMQP signing key id: {kid!r}.")
         signature = envelope["signature"]
@@ -290,8 +291,8 @@ class SignedJsonJobSerializer:
             raise QueueException("AMQP job signature has an invalid shape.")
         signed = {key: envelope[key] for key in cls._SIGNED_ENVELOPE_KEYS}
         expected = hmac.new(
-            cls._key_bytes(signing_keys[kid]),
-            cls._DOMAIN + cls._canonical_json(signed),
+            _SIGNED_JSON_VALUES.key_bytes(signing_keys[kid]),
+            cls._DOMAIN + _SIGNED_JSON_VALUES.canonical_json(signed),
             hashlib.sha256,
         ).hexdigest()
         if not hmac.compare_digest(signature, expected):
@@ -317,7 +318,7 @@ class SignedJsonJobSerializer:
         body: bytes | str | dict[str, Any],
     ) -> bytes:
         """Canonicalize an envelope for ledger hashing/JSONB round-trips."""
-        return cls._canonical_json(cls._parse_envelope(body))
+        return _SIGNED_JSON_VALUES.canonical_json(cls._parse_envelope(body))
 
     @classmethod
     def canonical_envelope_sha256(
@@ -335,14 +336,16 @@ class SignedJsonJobSerializer:
         clock_skew_seconds: int = DEFAULT_CLOCK_SKEW_SECONDS,
     ) -> bool:
         """Apply the same expiry boundary used by envelope verification."""
-        skew = cls._bounded_seconds(
+        skew = _SIGNED_JSON_VALUES.bounded_seconds(
             clock_skew_seconds,
             "clock_skew_seconds",
             minimum=0,
             maximum=300,
         )
-        current = cls._epoch(now, default_now=True)
-        expiry = cls._non_negative_int(envelope.get("expires_at"), "expires_at")
+        current = _SIGNED_JSON_VALUES.epoch(now, default_now=True)
+        expiry = _SIGNED_JSON_VALUES.non_negative_int(
+            envelope.get("expires_at"), "expires_at"
+        )
         return expiry <= current - skew
 
     @classmethod
@@ -354,14 +357,14 @@ class SignedJsonJobSerializer:
         clock_skew_seconds: int = DEFAULT_CLOCK_SKEW_SECONDS,
     ) -> str:
         """Classify a cryptographically valid envelope independently."""
-        skew = cls._bounded_seconds(
+        skew = _SIGNED_JSON_VALUES.bounded_seconds(
             clock_skew_seconds,
             "clock_skew_seconds",
             minimum=0,
             maximum=300,
         )
-        current = cls._epoch(now, default_now=True)
-        available = cls._non_negative_int(
+        current = _SIGNED_JSON_VALUES.epoch(now, default_now=True)
+        available = _SIGNED_JSON_VALUES.non_negative_int(
             envelope.get("not_before"),
             "not_before",
         )
@@ -385,44 +388,52 @@ class SignedJsonJobSerializer:
         return {
             "version": cls.VERSION,
             "job": job_descriptor,
-            "args": cls._json_value(payload.get("args", ()), path="args"),
+            "args": _SIGNED_JSON_VALUES.json_value(payload.get("args", ()), path="args"),
             "callback": "handle",
-            "created": cls._required_string(
+            "created": _SIGNED_JSON_VALUES.required_string(
                 str(payload.get("created") or ""),
                 "created",
             ),
-            "job_id": cls._required_uuid(payload.get("job_id"), "job_id"),
-            "db_job_id": cls._required_positive_int(
+            "job_id": _SIGNED_JSON_VALUES.required_uuid(payload.get("job_id"), "job_id"),
+            "db_job_id": _SIGNED_JSON_VALUES.required_positive_int(
                 payload.get("db_job_id"),
                 "db_job_id",
             ),
-            "timeout_seconds": cls._required_positive_int(
+            "timeout_seconds": _SIGNED_JSON_VALUES.required_positive_int(
                 payload.get("timeout_seconds"),
                 "timeout_seconds",
             ),
-            "attempts": cls._non_negative_int(payload.get("attempts", 0), "attempts"),
-            "throttle_attempts": cls._non_negative_int(
+            "attempts": _SIGNED_JSON_VALUES.non_negative_int(
+                payload.get("attempts", 0), "attempts"
+            ),
+            "throttle_attempts": _SIGNED_JSON_VALUES.non_negative_int(
                 payload.get("throttle_attempts", 0),
                 "throttle_attempts",
             ),
-            "_otel": cls._json_value(payload.get("_otel") or {}, path="_otel"),
-            "_tenant": cls._optional_positive_int(
+            "_otel": _SIGNED_JSON_VALUES.json_value(
+                payload.get("_otel") or {}, path="_otel"
+            ),
+            "_tenant": _SIGNED_JSON_VALUES.optional_positive_int(
                 payload.get("_tenant"),
                 "_tenant",
             ),
-            "_tenant_mode": cls._required_string(
+            "_tenant_mode": _SIGNED_JSON_VALUES.required_string(
                 payload.get("_tenant_mode"),
                 "_tenant_mode",
             ),
-            "queue": cls._bounded_string(payload.get("queue"), "queue", 100),
-            "priority": cls._priority(payload.get("priority")),
-            "dispatched_at": cls._required_string(
+            "queue": _SIGNED_JSON_VALUES.bounded_string(
+                payload.get("queue"), "queue", 100
+            ),
+            "priority": _SIGNED_JSON_VALUES.priority(payload.get("priority")),
+            "dispatched_at": _SIGNED_JSON_VALUES.required_string(
                 payload.get("dispatched_at"),
                 "dispatched_at",
             ),
-            "replay_of": cls._optional_uuid(payload.get("replay_of"), "replay_of"),
+            "replay_of": _SIGNED_JSON_VALUES.optional_uuid(
+                payload.get("replay_of"), "replay_of"
+            ),
             "unique_key": (
-                cls._bounded_string(
+                _SIGNED_JSON_VALUES.bounded_string(
                     payload.get("unique_key"),
                     "unique_key",
                     500,
@@ -445,18 +456,18 @@ class SignedJsonJobSerializer:
         ttl_seconds: int,
         max_age_seconds: int,
     ) -> bytes:
-        kid = cls._required_key_id(signing_key_id)
+        kid = _SIGNED_JSON_VALUES.required_key_id(signing_key_id)
         if kid not in signing_keys:
             raise QueueException("Active AMQP signing key id is absent from keyring.")
-        issued = cls._epoch(issued_at, default_now=True)
-        available = cls._epoch(not_before, default=issued)
-        ttl = cls._bounded_seconds(ttl_seconds, "ttl_seconds", minimum=300)
-        max_age = cls._bounded_seconds(
+        issued = _SIGNED_JSON_VALUES.epoch(issued_at, default_now=True)
+        available = _SIGNED_JSON_VALUES.epoch(not_before, default=issued)
+        ttl = _SIGNED_JSON_VALUES.bounded_seconds(ttl_seconds, "ttl_seconds", minimum=300)
+        max_age = _SIGNED_JSON_VALUES.bounded_seconds(
             max_age_seconds,
             "max_age_seconds",
             minimum=ttl,
         )
-        expiry = cls._epoch(expires_at, default=available + ttl)
+        expiry = _SIGNED_JSON_VALUES.epoch(expires_at, default=available + ttl)
         temporal = {
             "issued_at": issued,
             "not_before": available,
@@ -470,12 +481,12 @@ class SignedJsonJobSerializer:
             "payload": payload,
         }
         signature = hmac.new(
-            cls._key_bytes(signing_keys[kid]),
-            cls._DOMAIN + cls._canonical_json(signed),
+            _SIGNED_JSON_VALUES.key_bytes(signing_keys[kid]),
+            cls._DOMAIN + _SIGNED_JSON_VALUES.canonical_json(signed),
             hashlib.sha256,
         ).hexdigest()
-        body = cls._canonical_json({**signed, "signature": signature})
-        cls._require_size(len(body))
+        body = _SIGNED_JSON_VALUES.canonical_json({**signed, "signature": signature})
+        _SIGNED_JSON_VALUES.require_size(len(body), maximum=cls.MAX_PAYLOAD_BYTES)
         return body
 
     @classmethod
@@ -485,10 +496,16 @@ class SignedJsonJobSerializer:
     ) -> dict[str, Any]:
         if isinstance(body, dict):
             envelope = body
-            cls._require_size(len(cls._canonical_json(body)))
+            _SIGNED_JSON_VALUES.require_size(
+                len(_SIGNED_JSON_VALUES.canonical_json(body)),
+                maximum=cls.MAX_PAYLOAD_BYTES,
+            )
         else:
             if isinstance(body, bytes):
-                cls._require_size(len(body))
+                _SIGNED_JSON_VALUES.require_size(
+                    len(body),
+                    maximum=cls.MAX_PAYLOAD_BYTES,
+                )
                 try:
                     raw = body.decode("utf-8")
                 except UnicodeDecodeError as exc:
@@ -496,7 +513,10 @@ class SignedJsonJobSerializer:
                         "AMQP job payload is not valid UTF-8 JSON."
                     ) from exc
             elif isinstance(body, str):
-                cls._require_size(len(body.encode("utf-8")))
+                _SIGNED_JSON_VALUES.require_size(
+                    len(body.encode("utf-8")),
+                    maximum=cls.MAX_PAYLOAD_BYTES,
+                )
                 raw = body
             else:
                 raise QueueException("AMQP job payload must be bytes, text or JSON.")
@@ -528,14 +548,14 @@ class SignedJsonJobSerializer:
         allow_not_before: bool,
         allow_expired: bool,
     ) -> None:
-        skew = cls._bounded_seconds(
+        skew = _SIGNED_JSON_VALUES.bounded_seconds(
             clock_skew_seconds,
             "clock_skew_seconds",
             minimum=0,
             maximum=300,
         )
-        current = cls._epoch(now, default_now=True)
-        max_age = cls._bounded_seconds(
+        current = _SIGNED_JSON_VALUES.epoch(now, default_now=True)
+        max_age = _SIGNED_JSON_VALUES.bounded_seconds(
             max_age_seconds,
             "max_age_seconds",
             minimum=300,
@@ -561,9 +581,15 @@ class SignedJsonJobSerializer:
         *,
         max_age_seconds: int,
     ) -> None:
-        issued = cls._non_negative_int(envelope.get("issued_at"), "issued_at")
-        available = cls._non_negative_int(envelope.get("not_before"), "not_before")
-        expiry = cls._non_negative_int(envelope.get("expires_at"), "expires_at")
+        issued = _SIGNED_JSON_VALUES.non_negative_int(
+            envelope.get("issued_at"), "issued_at"
+        )
+        available = _SIGNED_JSON_VALUES.non_negative_int(
+            envelope.get("not_before"), "not_before"
+        )
+        expiry = _SIGNED_JSON_VALUES.non_negative_int(
+            envelope.get("expires_at"), "expires_at"
+        )
         if issued > available:
             raise QueueException("AMQP job not_before precedes issued_at.")
         if available >= expiry:
@@ -588,22 +614,26 @@ class SignedJsonJobSerializer:
             raise QueueException("AMQP job args must be an array.")
         if payload.get("callback") != "handle":
             raise QueueException("AMQP job callback must be handle.")
-        cls._bounded_string(payload.get("queue"), "queue", 100)
-        cls._priority(payload.get("priority"))
-        cls._required_string(payload.get("dispatched_at"), "dispatched_at")
-        cls._required_string(payload.get("created"), "created")
-        cls._non_negative_int(payload.get("attempts"), "attempts")
-        cls._non_negative_int(
+        _SIGNED_JSON_VALUES.bounded_string(payload.get("queue"), "queue", 100)
+        _SIGNED_JSON_VALUES.priority(payload.get("priority"))
+        _SIGNED_JSON_VALUES.required_string(payload.get("dispatched_at"), "dispatched_at")
+        _SIGNED_JSON_VALUES.required_string(payload.get("created"), "created")
+        _SIGNED_JSON_VALUES.non_negative_int(payload.get("attempts"), "attempts")
+        _SIGNED_JSON_VALUES.non_negative_int(
             payload.get("throttle_attempts"),
             "throttle_attempts",
         )
-        cls._required_positive_int(payload.get("db_job_id"), "db_job_id")
-        cls._required_positive_int(
+        _SIGNED_JSON_VALUES.required_positive_int(payload.get("db_job_id"), "db_job_id")
+        _SIGNED_JSON_VALUES.required_positive_int(
             payload.get("timeout_seconds"),
             "timeout_seconds",
         )
-        tenant_id = cls._optional_positive_int(payload.get("_tenant"), "_tenant")
-        tenant_mode = cls._required_string(payload.get("_tenant_mode"), "_tenant_mode")
+        tenant_id = _SIGNED_JSON_VALUES.optional_positive_int(
+            payload.get("_tenant"), "_tenant"
+        )
+        tenant_mode = _SIGNED_JSON_VALUES.required_string(
+            payload.get("_tenant_mode"), "_tenant_mode"
+        )
         if tenant_mode == "tenant":
             if tenant_id is None:
                 raise QueueException("Tenant AMQP jobs require a signed tenant id.")
@@ -612,22 +642,20 @@ class SignedJsonJobSerializer:
                 raise QueueException("Central AMQP jobs cannot carry a tenant id.")
         else:
             raise QueueException("AMQP job tenant mode must be tenant or central.")
-        cls._required_uuid(payload.get("job_id"), "job_id")
-        cls._optional_uuid(payload.get("replay_of"), "replay_of")
+        _SIGNED_JSON_VALUES.required_uuid(payload.get("job_id"), "job_id")
+        _SIGNED_JSON_VALUES.optional_uuid(payload.get("replay_of"), "replay_of")
         if payload.get("unique_key") is not None:
-            cls._bounded_string(
+            _SIGNED_JSON_VALUES.bounded_string(
                 payload.get("unique_key"),
                 "unique_key",
                 500,
             )
-        cls._json_value(job["kwargs"], path="job.kwargs")
-        cls._json_value(payload["args"], path="args")
-        cls._json_value(payload.get("_otel"), path="_otel")
+        _SIGNED_JSON_VALUES.json_value(job["kwargs"], path="job.kwargs")
+        _SIGNED_JSON_VALUES.json_value(payload["args"], path="args")
+        _SIGNED_JSON_VALUES.json_value(payload.get("_otel"), path="_otel")
 
     @staticmethod
     def _validate_job_tenancy(job_class: type, payload: Mapping[str, Any]) -> None:
-        from cara.queues.contracts import UniqueJob
-
         is_central_job = bool(getattr(job_class, "central_job", False))
         unique_key = payload.get("unique_key")
         if issubclass(job_class, UniqueJob):
@@ -649,204 +677,10 @@ class SignedJsonJobSerializer:
                 f"Ordinary job {job_class.__name__} requires signed tenant mode."
             )
 
-    @staticmethod
-    def _canonical_json(value: Any) -> bytes:
-        try:
-            return json.dumps(
-                value,
-                allow_nan=False,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-        except (TypeError, ValueError) as exc:
-            raise QueueException(
-                f"AMQP job payload is not canonical JSON: {exc}"
-            ) from exc
 
-    @classmethod
-    def _json_value(
-        cls,
-        value: Any,
-        *,
-        path: str,
-        depth: int = 0,
-    ) -> Any:
-        if depth > cls.MAX_JSON_DEPTH:
-            raise QueueException(f"{path} exceeds the maximum JSON depth.")
-        if value is None or isinstance(value, (bool, int, str)):
-            return value
-        if isinstance(value, float):
-            if not math.isfinite(value):
-                raise QueueException(f"{path} contains a non-finite float.")
-            return value
-        if isinstance(value, (list, tuple)):
-            return [
-                cls._json_value(
-                    item,
-                    path=f"{path}[{index}]",
-                    depth=depth + 1,
-                )
-                for index, item in enumerate(value)
-            ]
-        if isinstance(value, dict):
-            normalized = {}
-            for key, item in value.items():
-                if not isinstance(key, str):
-                    raise QueueException(f"{path} contains a non-string object key.")
-                if cls._FORBIDDEN_PAYLOAD_KEY_PATTERN.search(key):
-                    raise QueueException(
-                        f"{path} contains forbidden secret-bearing key {key!r}; "
-                        "queued jobs must carry durable IDs, not credentials."
-                    )
-                normalized[key] = cls._json_value(
-                    item,
-                    path=f"{path}.{key}",
-                    depth=depth + 1,
-                )
-            return normalized
-        raise QueueException(
-            f"{path} contains unsupported {type(value).__name__}; "
-            "queued job constructors must use JSON primitives."
-        )
-
-    @staticmethod
-    def _key_bytes(signing_key: str | bytes) -> bytes:
-        key = signing_key.encode("utf-8") if isinstance(signing_key, str) else signing_key
-        if not isinstance(key, bytes) or len(key) < 32:
-            raise QueueException("AMQP signing key must contain at least 32 bytes.")
-        return key
-
-    @classmethod
-    def _require_size(cls, size: int) -> None:
-        if size > cls.MAX_PAYLOAD_BYTES:
-            raise QueueException(
-                "AMQP job payload exceeds maximum wire size "
-                f"({size} > {cls.MAX_PAYLOAD_BYTES} bytes)."
-            )
-
-    @staticmethod
-    def _required_string(value: Any, field: str) -> str:
-        if not isinstance(value, str) or not value:
-            raise QueueException(f"AMQP job field {field!r} must be a non-empty string.")
-        return value
-
-    @classmethod
-    def _required_key_id(cls, value: Any) -> str:
-        key_id = cls._required_string(value, "kid")
-        if not cls._KEY_ID_PATTERN.fullmatch(key_id):
-            raise QueueException("AMQP signing key id has an invalid format.")
-        return key_id
-
-    @classmethod
-    def _required_uuid(cls, value: Any, field: str) -> str:
-        text = cls._required_string(value, field)
-        try:
-            normalized = str(uuid.UUID(text))
-        except (ValueError, AttributeError) as exc:
-            raise QueueException(
-                f"AMQP job field {field!r} must be a canonical UUID."
-            ) from exc
-        if text != normalized:
-            raise QueueException(f"AMQP job field {field!r} must be a canonical UUID.")
-        return text
-
-    @classmethod
-    def _optional_uuid(cls, value: Any, field: str) -> str | None:
-        if value is None:
-            return None
-        return cls._required_uuid(value, field)
-
-    @classmethod
-    def _bounded_string(cls, value: Any, field: str, maximum: int) -> str:
-        text = cls._required_string(value, field)
-        if len(text) > maximum:
-            raise QueueException(
-                f"AMQP job field {field!r} exceeds {maximum} characters."
-            )
-        return text
-
-    @classmethod
-    def _priority(cls, value: Any) -> str:
-        priority = cls._required_string(value, "priority")
-        if priority not in cls._PRIORITIES:
-            raise QueueException(
-                "AMQP job priority must be critical, high, default or low."
-            )
-        return priority
-
-    @staticmethod
-    def _optional_positive_int(value: Any, field: str) -> int | None:
-        if value is None:
-            return None
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise QueueException(
-                f"AMQP job field {field!r} must be a positive integer or null."
-            )
-        return value
-
-    @staticmethod
-    def _required_positive_int(value: Any, field: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise QueueException(f"AMQP job field {field!r} must be a positive integer.")
-        return value
-
-    @staticmethod
-    def _non_negative_int(value: Any, field: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise QueueException(
-                f"AMQP job field {field!r} must be a non-negative integer."
-            )
-        return value
-
-    @staticmethod
-    def _bounded_seconds(
-        value: Any,
-        field: str,
-        *,
-        minimum: int,
-        maximum: int | None = None,
-    ) -> int:
-        if isinstance(value, bool):
-            raise QueueException(f"{field} must be an integer.")
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError) as exc:
-            raise QueueException(f"{field} must be an integer.") from exc
-        if parsed < minimum or (maximum is not None and parsed > maximum):
-            bound = (
-                f"between {minimum} and {maximum}"
-                if maximum is not None
-                else f"at least {minimum}"
-            )
-            raise QueueException(f"{field} must be {bound}.")
-        return parsed
-
-    @staticmethod
-    def _epoch(
-        value: Any | None,
-        *,
-        default: int | None = None,
-        default_now: bool = False,
-    ) -> int:
-        if value is None:
-            if default_now:
-                return int(time.time())
-            if default is not None:
-                return default
-            raise QueueException("AMQP job timestamp is required.")
-        if isinstance(value, bool):
-            raise QueueException("AMQP job timestamp must be an epoch integer.")
-        if isinstance(value, (int, float)):
-            parsed = int(value)
-        elif isinstance(value, datetime):
-            if value.tzinfo is None:
-                raise QueueException("AMQP job timestamps must include a timezone.")
-            parsed = int(value.timestamp())
-        elif hasattr(value, "timestamp") and callable(value.timestamp):
-            parsed = int(value.timestamp())
-        else:
-            raise QueueException("AMQP job timestamp must be timezone-aware.")
-        if parsed < 0:
-            raise QueueException("AMQP job timestamp cannot be negative.")
-        return parsed
+_SIGNED_JSON_VALUES = _SignedJsonValues(
+    key_id_pattern=SignedJsonJobSerializer._KEY_ID_PATTERN,
+    forbidden_key_pattern=SignedJsonJobSerializer._FORBIDDEN_PAYLOAD_KEY_PATTERN,
+    priorities=SignedJsonJobSerializer._PRIORITIES,
+    max_json_depth=SignedJsonJobSerializer.MAX_JSON_DEPTH,
+)

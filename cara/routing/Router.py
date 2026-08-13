@@ -6,6 +6,8 @@ Implements Laravel-style route lookup, including OPTIONS preflight for HTTP and 
 
 from __future__ import annotations
 
+import re as _re
+import urllib.parse as _up
 from typing import Any
 
 from cara.exceptions import (
@@ -88,7 +90,6 @@ class Router:
         in the route URL using ``params``. Unknown placeholders are left
         in place so the caller sees the mismatch.
         """
-        import re as _re
 
         route = self.find_by_name(name)
         if route is None:
@@ -108,8 +109,6 @@ class Router:
         used = set(m.group(1) for m in _re.finditer(r"@(\w+)(?::\w+)?", route.url))
         extras = {k: v for k, v in params.items() if k not in used}
         if extras:
-            import urllib.parse as _up
-
             url = f"{url}?{_up.urlencode(extras, doseq=True)}"
         return url
 

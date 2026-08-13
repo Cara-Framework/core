@@ -12,21 +12,20 @@ event loop should always use the ``_async`` versions.
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Awaitable, Sequence
 from typing import Any
 
+import cara.facades as facades
 from cara.broadcasting.Channel import Channel
 from cara.broadcasting.contracts import ShouldBroadcast
-from cara.facades import Broadcast
-
-ChannelLike = str | Channel
 
 
 # ---------------------------------------------------------------------
 # Async — preferred API.
 # ---------------------------------------------------------------------
 async def broadcast_async(
-    channels: ChannelLike | Sequence[ChannelLike],
+    channels: Channel | Sequence[Channel],
     event: str = "message",
     data: dict[str, Any] | None = None,
     *,
@@ -38,14 +37,14 @@ async def broadcast_async(
     payload shape — the event class keeps the wire contract close to
     its data.
     """
-    await Broadcast.broadcast(
+    await facades.Broadcast.broadcast(
         channels, event, data or {}, except_socket_id=except_socket_id
     )
 
 
 async def broadcast_event_async(event: ShouldBroadcast) -> None:
     """Dispatch a ``ShouldBroadcast`` event."""
-    await Broadcast.broadcast_event(event)
+    await facades.Broadcast.broadcast_event(event)
 
 
 async def broadcast_to_user_async(
@@ -56,7 +55,7 @@ async def broadcast_to_user_async(
     except_socket_id: str | None = None,
 ) -> None:
     """Push an event to every (cross-process) connection of a user."""
-    await Broadcast.broadcast_to_user(
+    await facades.Broadcast.broadcast_to_user(
         user_id, event, data or {}, except_socket_id=except_socket_id
     )
 
@@ -86,9 +85,7 @@ def _handle_broadcast_task_exception(task: asyncio.Task) -> None:
         return
     except Exception as e:
         try:
-            from cara.facades import Log
-
-            Log.error(
+            facades.Log.error(
                 "Fire-and-forget broadcast failed with exception: %s: %s",
                 e.__class__.__name__,
                 e,
@@ -96,8 +93,6 @@ def _handle_broadcast_task_exception(task: asyncio.Task) -> None:
                 exc_info=True,
             )
         except Exception:
-            import sys
-
             print(
                 f"[cara.broadcasting] broadcast task raised {e.__class__.__name__}: {e}",
                 file=sys.stderr,
@@ -121,7 +116,7 @@ def _run_or_schedule(coro: Awaitable[None]) -> asyncio.Task | None:
 
 
 def broadcast(
-    channels: ChannelLike | Sequence[ChannelLike],
+    channels: Channel | Sequence[Channel],
     event: str = "message",
     data: dict[str, Any] | None = None,
     *,

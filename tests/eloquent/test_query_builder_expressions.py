@@ -11,9 +11,8 @@ matters (row locks):
 4. ``lock_for_update`` row-lock modifiers (SKIP LOCKED / NOWAIT / OF).
 
 The connection-registration fixture mirrors
-``test_query_builder_edge_cases`` so the process-wide DatabaseManager
-singleton is snapshotted and restored — the throwaway sqlite registry must
-never leak into a co-resident booted app.
+``test_query_builder_edge_cases``: a fresh manager is explicitly swapped into
+the DB facade, so the throwaway sqlite registry cannot leak across suites.
 """
 
 from __future__ import annotations
@@ -25,27 +24,20 @@ from cara.eloquent.expressions import F, Greatest, Least, Operation
 from cara.eloquent.query import QueryBuilder
 from cara.eloquent.query.grammars import PostgresGrammar, SQLiteGrammar
 from cara.exceptions import InvalidArgumentException
+from cara.testing.FacadeSwap import swap
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _register_connections():
-    dm = DatabaseManager.get_instance()
-    _saved_config = dm._database_config
-    _saved_default = dm._default_connection
-    _saved_connections = dm._connections
-    dm.set_database_config(
+    dm = DatabaseManager(
         "test_expr",
         {
             "test_expr": {"driver": "sqlite", "database": ":memory:"},
             "test_expr_pg": {"driver": "sqlite", "database": ":memory:"},
         },
     )
-    try:
+    with swap("DB", dm):
         yield
-    finally:
-        dm._database_config = _saved_config
-        dm._default_connection = _saved_default
-        dm._connections = _saved_connections
 
 
 def _qb(table: str = "listing") -> QueryBuilder:

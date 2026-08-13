@@ -16,10 +16,10 @@ from cara.exceptions import (
     StorageConfigurationException,
     StorageException,
 )
-from cara.storage.contracts import Storage
+from cara.storage.contracts import StorageContract
 
 
-class FileDriver(Storage):
+class FileDriver(StorageContract):
     """
     File-based Storage Driver for the Cara framework.
 

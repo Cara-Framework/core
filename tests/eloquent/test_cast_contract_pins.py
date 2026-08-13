@@ -33,18 +33,9 @@ file:
    between ``col IS NULL`` and ``col = '[]'::jsonb`` quietly leaked
    into facet aggregation / sitemap filters.
 
-   The asymmetric companion ``ArrayCast.get(None)`` still returns
-   ``[]`` — read-side fallback is reasonable because callers
-   typically iterate the result and an empty list is the
-   no-elements shape they expect. The write-side fallback was the
-   actual hazard.
-
-   ``ArrayCast.set(non_list)`` (a dict, a number, a string) ALSO
-   silently dropped the caller's data and stored ``"[]"``. The fix
-   logs a warning so the dropped write surfaces in observability
-   instead of disappearing — the behaviour stays graceful (no
-   raise) for backwards compatibility, but ops can now see the
-   data-loss event.
+   Read-side NULL also remains ``None``; a missing list is not an
+   observed empty list. Non-list writes raise instead of silently
+   discarding the caller's value into ``"[]"``.
 """
 
 from __future__ import annotations
@@ -53,14 +44,13 @@ from decimal import Decimal
 
 import pytest
 
-from cara.eloquent.casts.Collections import ArrayCast, CollectionCast
-from cara.eloquent.casts.primitives import (
-    BoolCast,
-    DecimalCast,
-    FloatCast,
-    IntCast,
-    JsonCast,
-)
+from cara.eloquent.casts.ArrayCast import ArrayCast
+from cara.eloquent.casts.BoolCast import BoolCast
+from cara.eloquent.casts.CollectionCast import CollectionCast
+from cara.eloquent.casts.DecimalCast import DecimalCast
+from cara.eloquent.casts.FloatCast import FloatCast
+from cara.eloquent.casts.IntCast import IntCast
+from cara.eloquent.casts.JsonCast import JsonCast
 
 # ── BoolCast: comprehensive truthy / falsy / null pinning ────────
 
@@ -125,13 +115,16 @@ class TestBoolCast:
             (False, False),
             (1, True),
             (0, False),
-            (1.0, True),
-            (0.0, False),
         ],
     )
     def test_native_types(self, value, expected):
         assert BoolCast().set(value) is expected
         assert BoolCast().get(value) is expected
+
+    @pytest.mark.parametrize("value", [1.0, 0.0, 2, "truthy", [], {}])
+    def test_unknown_shapes_stay_unknown(self, value):
+        assert BoolCast().set(value) is None
+        assert BoolCast().get(value) is None
 
 
 # ── IntCast: None-preservation (FK columns) ──────────────────────
@@ -158,6 +151,10 @@ class TestIntCast:
         assert IntCast().set("garbage") is None
         assert IntCast().get("garbage") is None
 
+    @pytest.mark.parametrize("value", [True, False, 1.2, "1.2", "NaN", "Infinity"])
+    def test_non_integral_or_non_finite_input_is_unknown(self, value):
+        assert IntCast().set(value) is None
+
 
 # ── FloatCast: None-preservation + invalid handling ──────────────
 
@@ -172,6 +169,10 @@ class TestFloatCast:
 
     def test_string_numbers_coerced(self):
         assert FloatCast().set("3.14") == 3.14
+
+    @pytest.mark.parametrize("value", [True, False, "NaN", "Infinity", float("inf")])
+    def test_non_finite_and_boolean_input_is_unknown(self, value):
+        assert FloatCast().set(value) is None
 
 
 # ── DecimalCast: precision quantisation ──────────────────────────
@@ -210,6 +211,10 @@ class TestDecimalCast:
 
     def test_invalid_returns_none(self):
         assert DecimalCast(2).set("not a number") is None
+
+    @pytest.mark.parametrize("value", [True, False, 1.2, float("nan"), "NaN", "Infinity"])
+    def test_lossy_or_non_finite_input_is_unknown(self, value):
+        assert DecimalCast(2).set(value) is None
 
 
 # ── JsonCast: NULL vs "" vs valid JSON ──────────────────────────
@@ -283,12 +288,7 @@ class TestJsonCast:
 
 
 class TestArrayCastNullPreservation:
-    """Pre-fix ``ArrayCast.set(None)`` returned ``"[]"`` (the literal
-    two-char JSON array string), so a nullable array column that the
-    caller intended to write as SQL NULL stored a non-NULL ``"[]"``
-    instead. The fix preserves ``None`` as ``None`` on the write leg
-    while keeping the read-leg ``get(None) → []`` for the
-    iterate-without-guards convenience callers already rely on."""
+    """Unknown stays NULL and malformed writes are rejected."""
 
     def test_set_none_returns_none_not_empty_array(self):
         """Pre-fix this returned ``"[]"`` — NULL drift for nullable
@@ -296,12 +296,8 @@ class TestArrayCastNullPreservation:
         through this path."""
         assert ArrayCast().set(None) is None
 
-    def test_get_none_still_returns_empty_list(self):
-        """The read-side ``[]`` fallback is intentional — callers
-        iterate without guards. Asymmetric with ``set`` because the
-        write hazard (NULL→"[]" drift) only existed on the write
-        leg."""
-        assert ArrayCast().get(None) == []
+    def test_get_none_preserves_unknown(self):
+        assert ArrayCast().get(None) is None
 
     def test_set_empty_list_persists_as_empty_array(self):
         """An EXPLICIT empty list is distinct from ``None``: the
@@ -313,82 +309,24 @@ class TestArrayCastNullPreservation:
     def test_set_populated_list_serialises_to_json(self):
         assert ArrayCast().set([1, 2, 3]) == "[1, 2, 3]"
 
-    def test_set_non_list_logs_and_falls_back(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """A dict / number / string passed where a list was expected
-        is a caller bug. The cast historically swallowed the value
-        and stored ``"[]"`` silently — the user's data was lost
-        without any signal. The fix keeps the graceful fallback (no
-        raise — historical contract) but logs a warning so the
-        dropped write is observable in ops dashboards.
-
-        Verified by replacing the ``cara.facades.Log`` module attribute
-        the cast does ``from cara.facades import Log`` against, then
-        confirming the cast called ``Log.warning`` with a message that
-        names ``ArrayCast`` and the offending input type. The cast
-        still returns ``"[]"`` so existing callers that rely on a
-        string return don't break."""
-        from types import SimpleNamespace
-
-        import cara.facades as facades_module
-
-        warnings: list[tuple[str, dict]] = []
-
-        def _capture(msg, *args, **kwargs):
-            # cara's Log.warning uses lazy %-style logging (template + deferred
-            # args), so the dropped type lives in the ARGS, not the raw
-            # template. Render ``msg % args`` here to assert on the line the
-            # logger actually EMITS — the same string ops greps in production.
-            rendered = str(msg)
-            if args:
-                try:
-                    rendered = rendered % args
-                except TypeError, ValueError:
-                    rendered = f"{rendered} {args!r}"
-            warnings.append((rendered, kwargs))
-
-        fake_log = SimpleNamespace(warning=_capture)
-        monkeypatch.setattr(facades_module, "Log", fake_log)
-
-        result = ArrayCast().set({"not": "a list"})
-        assert result == "[]"
-
-        joined = " ".join(msg for msg, _ in warnings).lower()
-        assert "arraycast" in joined, (
-            f"expected ArrayCast warning to fire, got: {warnings!r}"
-        )
-        # The dropped input type must show up in the message so ops
-        # can grep for ``ArrayCast: dropped dict input`` and trace
-        # back to the offending call site.
-        assert "dict" in joined
+    def test_set_non_list_is_rejected(self):
+        with pytest.raises(TypeError, match="ArrayCast requires a list"):
+            ArrayCast().set({"not": "a list"})
 
 
 # ── CollectionCast: the same fix, in the same file, one cast later ──────
 
 
 class TestCollectionCastNullPreservation:
-    """``CollectionCast`` is registered side by side with ``ArrayCast``
-    (``casts/__init__.py`` "array"/"collection", ``Model.py`` likewise) and
-    encodes the same write rule — but the NULL fix above was applied to only
-    one of the two. ``CollectionCast.set(None)`` kept returning the literal
-    ``"[]"``, so a model declaring ``__casts__ = {"tags": "collection"}`` and
-    assigning ``None`` persisted a non-NULL value: ``WHERE tags IS NULL``
-    returned zero rows while ``tags = '[]'::jsonb`` matched them all. The
-    dropped non-list write had no log at all, so it was invisible too.
-
-    Both casts now share one write-side coercion helper, which is the only
-    thing that stops the rule drifting apart a third time."""
+    """CollectionCast shares ArrayCast's strict NULL/write contract."""
 
     def test_set_none_returns_none_not_empty_array(self):
         """Pre-fix this returned ``"[]"`` — the NULL drift its sibling
         cast's docstring says was already fixed."""
         assert CollectionCast().set(None) is None
 
-    def test_get_none_still_returns_empty_collection(self):
-        """Read-side fallback stays, exactly as for ``ArrayCast``."""
-        assert list(CollectionCast().get(None)) == []
+    def test_get_none_preserves_unknown(self):
+        assert CollectionCast().get(None) is None
 
     def test_set_empty_list_persists_as_empty_array(self):
         assert CollectionCast().set([]) == "[]"
@@ -409,33 +347,6 @@ class TestCollectionCastNullPreservation:
 
         assert CollectionCast().set(Collection([1, 2])) == "[1, 2]"
 
-    def test_set_non_list_logs_and_falls_back(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """Pre-fix the value vanished into ``"[]"`` with NO signal — the
-        terminal ``return "[]"`` had no log, unlike its sibling."""
-        from types import SimpleNamespace
-
-        import cara.facades as facades_module
-
-        warnings: list[str] = []
-
-        def _capture(msg, *args, **kwargs):
-            rendered = str(msg)
-            if args:
-                try:
-                    rendered = rendered % args
-                except TypeError, ValueError:
-                    rendered = f"{rendered} {args!r}"
-            warnings.append(rendered)
-
-        monkeypatch.setattr(facades_module, "Log", SimpleNamespace(warning=_capture))
-
-        assert CollectionCast().set({"not": "a list"}) == "[]"
-
-        joined = " ".join(warnings).lower()
-        assert "collectioncast" in joined, (
-            f"expected CollectionCast warning to fire, got: {warnings!r}"
-        )
-        assert "dict" in joined
+    def test_set_non_list_is_rejected(self):
+        with pytest.raises(TypeError, match="CollectionCast requires a list"):
+            CollectionCast().set({"not": "a list"})

@@ -13,74 +13,7 @@ from collections.abc import Callable
 from cara.exceptions import RateLimitConfigurationException
 from cara.facades import Cache
 from cara.rates.contracts import RateLimit
-
-
-class Limit:
-    """
-    Represents a rate limit configuration.
-
-    Provides builder pattern methods to configure rate limits with custom keys and responses.
-    Inspired by Laravel's Limit class for flexible rate limiting definitions.
-    """
-
-    def __init__(self, max_attempts: int = 60, decay_minutes: int = 1):
-        """
-        Initialize a rate limit.
-
-        Args:
-            max_attempts: Maximum number of requests allowed in the decay window
-            decay_minutes: Time window in minutes
-        """
-        self.max_attempts = max_attempts
-        self.decay_minutes = decay_minutes
-        self._key = None
-        self._response = None
-
-    @classmethod
-    def per_minute(cls, max_attempts: int) -> Limit:
-        """Create a rate limit for a 1-minute window."""
-        return cls(max_attempts=max_attempts, decay_minutes=1)
-
-    @classmethod
-    def per_hour(cls, max_attempts: int) -> Limit:
-        """Create a rate limit for a 1-hour window."""
-        return cls(max_attempts=max_attempts, decay_minutes=60)
-
-    @classmethod
-    def per_day(cls, max_attempts: int) -> Limit:
-        """Create a rate limit for a 24-hour window."""
-        return cls(max_attempts=max_attempts, decay_minutes=1440)
-
-    @classmethod
-    def none(cls) -> Limit:
-        """Create an unlimited rate limit (no rate limiting)."""
-        return cls(max_attempts=0, decay_minutes=0)
-
-    def by(self, key: str) -> Limit:
-        """
-        Set the rate limit key (e.g., user ID, IP address, endpoint).
-
-        Args:
-            key: Unique identifier for this rate limit
-
-        Returns:
-            self for method chaining
-        """
-        self._key = key
-        return self
-
-    def response(self, callback: Callable) -> Limit:
-        """
-        Set a custom response handler for when rate limit is exceeded.
-
-        Args:
-            callback: Function to call when rate limited
-
-        Returns:
-            self for method chaining
-        """
-        self._response = callback
-        return self
+from cara.rates.RateLimitAuthority import attempt_rate_limit
 
 
 class RateLimiter(RateLimit):
@@ -102,10 +35,29 @@ class RateLimiter(RateLimit):
                 - window_seconds: int, length of window in seconds
                 - cache_prefix: str, prefix for all counter keys
         """
+        if not isinstance(options, dict):
+            raise RateLimitConfigurationException(
+                "Rate limiter options must be a dictionary."
+            )
+        limit = options.get("limit")
+        window = options.get("window_seconds")
+        prefix = options.get("cache_prefix")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise RateLimitConfigurationException(
+                "rate.drivers.fixed.limit must be a positive integer."
+            )
+        if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+            raise RateLimitConfigurationException(
+                "rate.drivers.fixed.window_seconds must be a positive integer."
+            )
+        if not isinstance(prefix, str) or not prefix.strip():
+            raise RateLimitConfigurationException(
+                "rate.drivers.fixed.cache_prefix must be a non-empty string."
+            )
         self.application = application
-        self.limit = options.get("limit", 60)
-        self.window = options.get("window_seconds", 60)
-        self.prefix = options.get("cache_prefix", "rate_")
+        self.limit = limit
+        self.window = window
+        self.prefix = prefix.strip()
         self._limiters = {}  # Named limiter definitions (name -> callback)
 
     def attempt(self, key: str) -> tuple[bool, int, int]:
@@ -147,16 +99,9 @@ class RateLimiter(RateLimit):
         """
         cache_key = f"{self.prefix}{key}"
 
-        # Atomic increment + Redis-down fallback handled by the shared
-        # helper. Both this method and the parallel ``ThrottleRequests``
-        # middleware path delegate so the fallback policy (memory /
-        # open / closed), the once-per-transition warning, and the
-        # recovery sweep live in one place. See
-        # ``cara.rates.MemoryRateStore.attempt_with_fallback`` for the
-        # policy contract.
-        from cara.rates.MemoryRateStore import attempt_with_fallback
-
-        allowed, remaining, reset_in, _backend = attempt_with_fallback(
+        # Both this method and transport middleware use one fail-closed
+        # authority, so accounting and outage policy cannot drift.
+        allowed, remaining, reset_in = attempt_rate_limit(
             cache_key=cache_key,
             window_seconds=self.window,
             max_attempts=self.limit,
