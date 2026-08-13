@@ -13,13 +13,15 @@ line naming which:
 
 An untagged function-local import is a Finding, as is an unrecognised
 reason or an ``envelope body`` tag outside the manifest's declared envelope
-directories. ``manifest.inline_import_exemptions`` is a documented, dated
-escape hatch for pre-rule imports that cannot yet carry a truthful tag —
-shrink-only by convention, exactly like the product guards' ``_EXEMPT``.
+directories. Pre-rule imports that cannot yet carry a truthful tag are pinned
+by exact ``path::imported-name -> hit count`` entries in
+``seam_allowlists["inline_imports"]``. New identities, growth, shrinkage
+without a ratchet update, and stale entries all fail.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 
 from cara.architecture._ast_utils import (
@@ -34,6 +36,7 @@ from cara.architecture.Manifest import Manifest
 TAG = "# local:"
 CYCLE_PREFIX = "cycle with"
 LEGAL_PREFIXES = ("envelope body", "heavy optional dep", CYCLE_PREFIX)
+SEAM_KEY = "inline_imports"
 
 
 def _first_imported_name(node) -> str:
@@ -63,15 +66,21 @@ class InlineImports:
         scan_bases = list(manifest.roots.scan_dirs("inline_imports")) + list(
             manifest.roots.kernel.values()
         )
+        seen: set[Path] = set()
+        exercised_exemptions: set[tuple[str, str]] = set()
+        untagged: dict[str, list[tuple[int, str]]] = defaultdict(list)
         for base in scan_bases:
             for path in python_files(base):
+                resolved = path.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
                 tree = parse(path)
                 if tree is None:
                     continue
                 source = path.read_text(encoding="utf-8")
                 lines = source.splitlines()
                 rel = relpath(path, manifest.roots.deployable)
-                resolved = path.resolve()
                 in_envelopes = any(d.resolve() in resolved.parents for d in envelope_dirs)
                 for node in function_local_imports(tree):
                     start = max(node.lineno - 1, 0)
@@ -85,15 +94,10 @@ class InlineImports:
                     where_key = (rel, _first_imported_name(node))
                     if tagged_line is None:
                         if where_key in manifest.inline_import_exemptions:
+                            exercised_exemptions.add(where_key)
                             continue
-                        findings.append(
-                            Finding(
-                                rel,
-                                node.lineno,
-                                f"function-local import without a '# local: <reason>' "
-                                f"tag: {line.strip()}",
-                            )
-                        )
+                        identity = f"{rel}::{where_key[1]}"
+                        untagged[identity].append((node.lineno, line.strip()))
                         continue
                     reason = tagged_line.split(TAG, 1)[1].strip()
                     if not reason.startswith(LEGAL_PREFIXES):
@@ -121,4 +125,55 @@ class InlineImports:
                                 "'envelope body' tag outside a declared envelope directory",
                             )
                         )
+        for rel, imported_name in sorted(
+            manifest.inline_import_exemptions - exercised_exemptions
+        ):
+            findings.append(
+                Finding(
+                    rel,
+                    0,
+                    f"stale inline-import exemption for {imported_name!r} — delete it",
+                )
+            )
+        allowlist = manifest.seam_allowlists.get(SEAM_KEY, {})
+        for identity, hits in sorted(untagged.items()):
+            rel = identity.split("::", 1)[0]
+            count = len(hits)
+            pinned = allowlist.get(identity)
+            detail = "; ".join(f"line {line}: {source}" for line, source in hits)
+            if pinned is None:
+                findings.append(
+                    Finding(
+                        rel,
+                        hits[0][0],
+                        f"{count} function-local import(s) without a "
+                        f"'# local: <reason>' tag for {identity}: {detail}",
+                    )
+                )
+            elif count > pinned:
+                findings.append(
+                    Finding(
+                        rel,
+                        hits[0][0],
+                        f"inline-import debt grew for {identity}: {pinned} -> {count}",
+                    )
+                )
+            elif count < pinned:
+                findings.append(
+                    Finding(
+                        rel,
+                        hits[0][0],
+                        f"stale inline-import pin for {identity}: {pinned}, now {count}",
+                    )
+                )
+        for identity, pinned in sorted(allowlist.items()):
+            if identity not in untagged:
+                findings.append(
+                    Finding(
+                        identity.split("::", 1)[0],
+                        0,
+                        f"stale inline-import pin for {identity}: {pinned}, "
+                        "violation resolved",
+                    )
+                )
         return findings
