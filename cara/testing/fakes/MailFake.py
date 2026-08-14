@@ -1,13 +1,38 @@
 """In-memory fake for the ``Mail`` facade.
 
-Captures every ``send`` / ``raw`` / ``to`` chain so tests can assert
-who got what without touching SMTP.
+Captures every send so tests can assert who got what without touching SMTP.
+
+The fluent chain is the REAL ``MailMessage``; this fake does not
+re-implement it. A double that re-implements a surface drifts from it, and
+drift in the PERMISSIVE direction is the dangerous one — the double accepts
+a call the production object rejects, so writing a test for the broken code
+is what keeps it green.
+
+That is not hypothetical. This fake used to expose ``raw(body, to, …)``,
+which ``cara.mail.Mail`` has never had. Three cheapa operator-alert jobs
+(scrape health, credit budget, canary drift) called ``Mail.raw(...)``; every
+real send raised ``AttributeError`` into the surrounding ``except`` and
+became a one-line warning, so those "wake a human, the scraper is broken"
+emails had never once been delivered. The same fake was simultaneously too
+NARROW — its chain object had no ``subject`` / ``text`` — so correct code
+would have failed under test too.
+
+Delegating to ``MailMessage`` makes both directions structurally impossible:
+the chain IS the production chain, and ``send`` mirrors ``Mail._send_now``'s
+``set_application`` → ``build`` order so a ``Mailable`` subclass populates
+its fields exactly as it would in production.
+
+Driver plumbing (``add_driver`` / ``driver`` / ``set_default_driver``) is
+deliberately absent: a fake has no drivers, and being NARROWER than the real
+object fails loudly at the call site instead of hiding a defect.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from typing import Any
+
+from cara.mail import Mailable, MailMessage, MailPendingSend
 
 from .SentMail import SentMail
 
@@ -20,45 +45,12 @@ def _as_list(x: None | str | Iterable[str]) -> list[str]:
     return list(x)
 
 
-class _PendingMail:
-    """The fluent ``Mail.to(...).send(...)`` chain target."""
-
-    def __init__(self, fake: MailFake, to: list[str]) -> None:
-        self._fake = fake
-        self._to = to
-        self._cc: list[str] = []
-        self._bcc: list[str] = []
-
-    def cc(self, addrs: str | Iterable[str]) -> _PendingMail:
-        self._cc.extend(_as_list(addrs))
-        return self
-
-    def bcc(self, addrs: str | Iterable[str]) -> _PendingMail:
-        self._bcc.extend(_as_list(addrs))
-        return self
-
-    def send(self, mailable: Any = None, **kwargs: Any) -> bool:
-        # Real ``Mail.send`` returns ``bool`` — production code does
-        # ``if Mail.send(...): ...`` to branch on delivery result. The
-        # fake returning ``None`` flipped those branches to falsy in
-        # tests, hiding regressions in delivery-failure handling.
-        self._fake._record(
-            SentMail(
-                to=self._to,
-                cc=self._cc,
-                bcc=self._bcc,
-                subject=kwargs.get("subject"),
-                body=kwargs.get("body"),
-                template=kwargs.get("template"),
-                context=kwargs.get("context", {}),
-                mailable=mailable,
-            )
-        )
-        return True
-
-
 class MailFake:
     """A drop-in fake for the ``Mail`` facade."""
+
+    #: ``MailMessage.queue()`` and ``Mail._send_now`` read the manager's
+    #: application to render views. There is no container in a fake.
+    application: Any = None
 
     def __init__(self) -> None:
         self.sent: list[SentMail] = []
@@ -66,37 +58,50 @@ class MailFake:
     def _record(self, mail: SentMail) -> None:
         self.sent.append(mail)
 
-    # Production-side surface
-    def to(self, addrs: str | Iterable[str]) -> _PendingMail:
-        return _PendingMail(self, _as_list(addrs))
+    # ── Production-side surface ──────────────────────────────────────
 
-    def raw(self, body: str, to: str | Iterable[str], **kwargs: Any) -> bool:
-        self._record(
-            SentMail(
-                to=_as_list(to),
-                subject=kwargs.get("subject"),
-                body=body,
-            )
-        )
+    def to(self, addrs: str | Iterable[str]) -> MailMessage:
+        """Begin the real fluent chain, bound to this fake as its manager."""
+        return MailMessage(self).to(addrs)
+
+    def mailable(self, mailable: Mailable) -> MailPendingSend:
+        """Mirror ``Mail.mailable`` — the chain target that only sends."""
+        return MailPendingSend(self, mailable)
+
+    def send(self, mailable: Mailable, driver_name: str | None = None) -> bool:
+        """Record the mailable instead of handing it to a driver.
+
+        Returns ``bool`` like the real ``Mail.send`` so production callers
+        that branch on ``if Mail.send(...)`` take the same path in tests.
+        """
+        self._record(self._capture(mailable))
         return True
 
-    def send(self, mailable: Any, **kwargs: Any) -> bool:
-        # Match ``Mail.send`` real return type so production callers
-        # that branch on ``if Mail.send(...)`` exercise the same path
-        # in tests as in prod.
-        self._record(
-            SentMail(
-                to=_as_list(kwargs.get("to")),
-                cc=_as_list(kwargs.get("cc")),
-                bcc=_as_list(kwargs.get("bcc")),
-                subject=kwargs.get("subject"),
-                body=kwargs.get("body"),
-                template=kwargs.get("template"),
-                context=kwargs.get("context", {}),
-                mailable=mailable,
-            )
+    # ── Capture ──────────────────────────────────────────────────────
+
+    def _capture(self, mailable: Any) -> SentMail:
+        """Read a built mailable into a ``SentMail`` row.
+
+        Mirrors ``Mail._send_now``: set the application, then ``build()``,
+        so a ``Mailable`` subclass that fills its fields in ``build`` is
+        captured with them — the same values a driver would receive.
+        Fields are read off the instance rather than via ``to_dict()``
+        because that renders the HTML view, which needs a real application.
+        """
+        if isinstance(mailable, Mailable):
+            mailable.set_application(self.application)
+            mailable.build()
+
+        return SentMail(
+            to=_as_list(getattr(mailable, "_to", None)),
+            cc=_as_list(getattr(mailable, "_cc", None)),
+            bcc=_as_list(getattr(mailable, "_bcc", None)),
+            subject=getattr(mailable, "_subject", None),
+            body=getattr(mailable, "_text", None) or getattr(mailable, "_html", None),
+            template=getattr(mailable, "_view", None),
+            context=getattr(mailable, "_view_data", None) or {},
+            mailable=mailable,
         )
-        return True
 
     # ── Assertions ───────────────────────────────────────────────────
 
