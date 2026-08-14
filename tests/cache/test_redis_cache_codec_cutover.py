@@ -168,28 +168,29 @@ def test_counter_requires_expiry_and_exact_integer_amount() -> None:
 
 def test_corrupt_counter_is_never_reset() -> None:
     driver = _driver()
-    driver._client.incrby.side_effect = RuntimeError("WRONGTYPE")
+    driver._client.eval.side_effect = RuntimeError("WRONGTYPE")
 
     with pytest.raises(RuntimeError, match="WRONGTYPE"):
         driver.increment("rate", 1, ttl=60)
 
-    driver._client.pipeline.assert_not_called()
+    driver._client.set.assert_not_called()
 
 
 def test_counter_namespace_never_overlaps_authenticated_values() -> None:
     driver = _driver()
-    driver._client.incrby.return_value = 1
+    driver._client.eval.return_value = 1
 
     assert driver.increment("rate:user:7", 1, ttl=60) == 1
 
-    driver._client.incrby.assert_called_once_with(
+    driver._client.eval.assert_called_once_with(
+        driver._INCREMENT_WITH_EXPIRY_LUA,
+        1,
         "test_cache:j1:c:rate:user:7",
         1,
-    )
-    driver._client.expire.assert_called_once_with(
-        "test_cache:j1:c:rate:user:7",
         60,
     )
+    driver._client.incrby.assert_not_called()
+    driver._client.expire.assert_not_called()
 
 
 def test_forget_and_has_cover_both_type_namespaces() -> None:

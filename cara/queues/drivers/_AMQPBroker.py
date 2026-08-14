@@ -16,6 +16,15 @@ from cara.facades import Log
 from cara.queues.QueueState import DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE
 from cara.queues.serializers.SignedJsonJobSerializer import SignedJsonJobSerializer
 
+_AMQP_CONNECTION_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    ConnectionError,
+    RuntimeError,
+    AttributeError,
+)
+if pika is not None:
+    _AMQP_CONNECTION_ERRORS += (pika.exceptions.AMQPError,)
+
 
 def _amqp_broker_get_dead_letter_messages(
     self, queue_name: str = DEAD_LETTER_QUEUE, limit: int = 100
@@ -282,17 +291,45 @@ def _amqp_broker_acquire_thread_connection(self, url: str, opts: dict[str, Any])
     """
     if self.connection is not None and self.channel is not None:
         # Already bound on this thread (typical case for hot
-        # publishers reusing the same pika channel).
+        # publishers reusing the same pika channel). BlockingConnection does
+        # not run an I/O loop in the background: process pending frames before
+        # trusting ``is_open`` so a broker heartbeat close cannot survive as a
+        # zombie handle until the first real publish.
         try:
+            self.connection.process_data_events(time_limit=0)
             if self.connection.is_open and self.channel.is_open:
                 return
-        except OSError, ConnectionError, RuntimeError, AttributeError:
+        except _AMQP_CONNECTION_ERRORS:
             pass
         # Stale handle — drop it and fall through.
         self._discard_thread_connection()
 
     # No healthy owner-local handle — open a fresh connection.
     self.connection, self.channel = self._open_new_connection(opts)
+
+
+def _amqp_broker_maintain_publisher_connection(self) -> None:
+    """Service heartbeat/control frames on an idle publisher connection.
+
+    Pika's ``BlockingConnection`` is synchronous; merely retaining an open
+    object does not service RabbitMQ heartbeats.  Long-idle relays therefore
+    reused a broker-closed socket and lost their first publish.  Relay loops
+    call this method on every poll.  A dead handle is discarded here so the
+    next publish starts on a clean connection.
+    """
+    if self.connection is None:
+        return
+
+    try:
+        self.connection.process_data_events(time_limit=0)
+        if (
+            not self.connection.is_open
+            or self.channel is None
+            or not self.channel.is_open
+        ):
+            self._discard_thread_connection()
+    except _AMQP_CONNECTION_ERRORS:
+        self._discard_thread_connection()
 
 
 def _amqp_broker_return_thread_connection(self, url: str) -> None:

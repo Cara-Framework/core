@@ -423,6 +423,18 @@ class RedisCacheDriver(CacheContract):
         "else return 0 end"
     )
 
+    # INCRBY and the expiry repair must be one Redis operation.  The previous
+    # ``INCRBY; TTL; EXPIRE`` sequence exposed a real interval where a newly
+    # created rate-limit key had no authoritative expiry.  Concurrent readers
+    # could therefore fail closed with a 503, while a process crash in that
+    # interval left a permanent counter.  Redis executes Lua atomically.
+    _INCREMENT_WITH_EXPIRY_LUA = (
+        "local value = redis.call('incrby', KEYS[1], ARGV[1]); "
+        "local expiry = redis.call('ttl', KEYS[1]); "
+        "if expiry < 0 then redis.call('expire', KEYS[1], ARGV[2]); end; "
+        "return value"
+    )
+
     def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
         """Atomically increment via Redis INCRBY.
 
@@ -443,18 +455,15 @@ class RedisCacheDriver(CacheContract):
                 "Cache counters require a positive expiration"
             )
         try:
-            new_val = self._client.incrby(redis_key, amount)
-            # Set TTL on first creation OR refresh TTL if the key
-            # previously lost its expiry (e.g. after WRONGTYPE
-            # recovery). Checking TTL(-1) avoids resetting the timer
-            # on every increment for keys that already have a TTL.
-            if (
-                ttl
-                and ttl > 0
-                and (new_val == amount or self._client.ttl(redis_key) == -1)
-            ):
-                self._client.expire(redis_key, ttl)
-            return new_val
+            return int(
+                self._client.eval(
+                    self._INCREMENT_WITH_EXPIRY_LUA,
+                    1,
+                    redis_key,
+                    amount,
+                    ttl,
+                )
+            )
         except Exception as exc:
             Log.error(
                 "[RedisCacheDriver] counter increment failed for '%s': %s",

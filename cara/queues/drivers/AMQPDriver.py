@@ -374,6 +374,7 @@ class AMQPDriver(HasColoredOutput, _QueueContract):
     _connection_parameters = _AMQPBroker._amqp_broker_connection_parameters
     _discard_thread_connection = _AMQPBroker._amqp_broker_discard_thread_connection
     _message_priority = _AMQPBroker._amqp_broker_message_priority
+    maintain_publisher_connection = _AMQPBroker._amqp_broker_maintain_publisher_connection
     _open_new_connection = _AMQPBroker._amqp_broker_open_new_connection
     _priority_name = _AMQPBroker._amqp_broker_priority_name
     _return_thread_connection = _AMQPBroker._amqp_broker_return_thread_connection

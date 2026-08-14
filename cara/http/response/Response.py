@@ -133,6 +133,20 @@ class Response(BaseResponse):
 
     def _finalize_response(self) -> None:
         """Finalize response before sending (Laravel-style)."""
+        # RFC 9110 forbids content on informational responses, 204 and 304;
+        # 205 likewise requires a zero-length response.  A factory call such
+        # as ``response.json({}, status=204)`` used to retain the JSON bytes
+        # and Content-Length.  Uvicorn correctly suppresses that illegal body,
+        # then reports that the ASGI application never completed the response.
+        # Enforce the wire contract at the final response boundary so every
+        # factory and controller path is safe, not only ``no_content()``.
+        if 100 <= self._status < 200 or self._status in {204, 205, 304}:
+            self.content = b""
+            self.headers.remove("Content-Type")
+            self.headers.remove("Content-Length")
+            self.headers.remove("Transfer-Encoding")
+            return
+
         content_length = len(self.to_bytes())
 
         # Use smart detection if content-type not explicitly set

@@ -18,6 +18,7 @@ import pytest
 
 from cara.exceptions.handlers.DefaultExceptionHandler import DefaultExceptionHandler
 from cara.http.response.BaseResponse import BaseResponse
+from cara.http.response.Response import Response
 
 
 class _Send:
@@ -125,3 +126,25 @@ def test_exception_handler_sends_normally_on_a_fresh_connection():
     assert len(send.starts()) == 1
     assert send.starts()[0]["status"] == 503
     assert send.bodies()[-1].get("more_body", False) is not True
+
+
+@pytest.mark.parametrize("status", [101, 204, 205, 304])
+def test_bodyless_statuses_always_complete_without_entity_headers(status: int):
+    response = Response(application=None).json(
+        {"must": "not reach the wire"},
+        status=status,
+        headers={"Transfer-Encoding": "chunked", "X-Test": "preserved"},
+    )
+    send = _Send()
+
+    asyncio.run(response({"type": "http"}, None, send))
+
+    assert send.starts()[0]["status"] == status
+    headers = dict(send.starts()[0]["headers"])
+    assert b"content-type" not in headers
+    assert b"content-length" not in headers
+    assert b"transfer-encoding" not in headers
+    assert headers[b"x-test"] == b"preserved"
+    assert send.bodies() == [
+        {"type": "http.response.body", "body": b"", "more_body": False}
+    ]

@@ -1,6 +1,7 @@
 import importlib
 import os
 import subprocess
+import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ from cara.commands.core.QueueRelayCommand import QueueRelayCommand
 from cara.commands.core.QueueStatsCommand import QueueStatsCommand
 from cara.exceptions import QueueException
 from cara.queues.delivery import QueueJobDeliveryStore
+from cara.queues.drivers.AMQPDriver import AMQPDriver
 from cara.queues.tracking import JobTracker
 
 
@@ -48,6 +50,44 @@ def test_relay_readiness_tracks_runtime_failure_not_quarantined_work_item():
     assert command._iteration_has_failures(
         {"published": 0, "retried": 0, "quarantined": 1}
     )
+
+
+def test_idle_publisher_services_heartbeats_before_reuse():
+    driver = AMQPDriver.__new__(AMQPDriver)
+    driver._tls = threading.local()
+    connection = SimpleNamespace(is_open=True, process_data_events=lambda **_: None)
+    channel = SimpleNamespace(is_open=True)
+    driver.connection = connection
+    driver.channel = channel
+
+    calls = []
+    connection.process_data_events = lambda *, time_limit: calls.append(time_limit)
+
+    driver._acquire_thread_connection("amqp://unused", {})
+
+    assert calls == [0]
+    assert driver.connection is connection
+    assert driver.channel is channel
+
+
+def test_idle_publisher_discards_a_heartbeat_failed_connection():
+    driver = AMQPDriver.__new__(AMQPDriver)
+    driver._tls = threading.local()
+    connection = SimpleNamespace(
+        is_open=True,
+        close=lambda: None,
+        process_data_events=lambda **_: (_ for _ in ()).throw(
+            ConnectionResetError("broker closed idle socket")
+        ),
+    )
+    channel = SimpleNamespace(is_open=True, close=lambda: None)
+    driver.connection = connection
+    driver.channel = channel
+
+    driver.maintain_publisher_connection()
+
+    assert driver.connection is None
+    assert driver.channel is None
 
 
 def test_hook_readiness_separates_service_health_from_failed_work_items():

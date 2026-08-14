@@ -67,6 +67,11 @@ class _RelayLoop(CommandBase):
         driver = Queue.driver("amqp")
         while not stop.is_set():
             try:
+                maintain_connection = getattr(
+                    driver, "maintain_publisher_connection", None
+                )
+                if callable(maintain_connection):
+                    maintain_connection()
                 result = callback(driver)
                 healthy = self._iteration_is_healthy(driver, result)
                 metric.set(1 if healthy else 0)
