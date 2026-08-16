@@ -53,6 +53,20 @@ def test_schema_build_executes_column_index_and_timestamp_modifiers() -> None:
     assert timestamp.to_dict()["params"]["use_current"] is True
 
 
+def test_schema_build_executes_evolve_backfill_declaration() -> None:
+    (definition,) = Schema.build(
+        lambda field: (field.string("value_key", 32).backfill_from("md5(source_value)"),)
+    )
+
+    assert definition.to_dict()["params"]["backfill_from"] == "md5(source_value)"
+
+
+@pytest.mark.parametrize("expression", ["", "   ", None])
+def test_schema_build_rejects_empty_evolve_backfill(expression) -> None:
+    with pytest.raises(ValueError, match="backfill_from"):
+        FieldBuilder().string("value_key", 32).backfill_from(expression)
+
+
 def test_schema_build_rejects_duplicate_explicit_and_expanded_columns() -> None:
     with pytest.raises(ValueError, match="duplicate column.*tenant_id"):
         Schema.build(

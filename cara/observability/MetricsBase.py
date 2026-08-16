@@ -598,9 +598,7 @@ def bool_label(flag: object) -> str:
     return "on" if bool(flag) else "off"
 
 
-def render(
-    *, service: str | None = None, role: str | None = None
-) -> tuple[bytes, str]:
+def render(*, service: str | None = None, role: str | None = None) -> tuple[bytes, str]:
     return _render(MetricsBase, REGISTRY, _NS, service=service, role=role)
 
 

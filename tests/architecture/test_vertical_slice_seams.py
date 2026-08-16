@@ -91,9 +91,9 @@ def test_export_manifests_are_exempt_container_positions(tmp_path):
     manifest = make_manifest(tmp_path, plugin_tokens=TOKENS)
     write(
         tmp_path / "app" / "jobs" / "__init__.py",
-        '_LAZY_EXPORTS = {\n'
+        "_LAZY_EXPORTS = {\n"
         '    "PullEbayJob": (".PullEbayJob", "PullEbayJob"),\n'
-        '}\n'
+        "}\n"
         "__all__ = [\n"
         '    "PullEbayJob",\n'
         "]\n",
@@ -103,8 +103,7 @@ def test_export_manifests_are_exempt_container_positions(tmp_path):
     # The same token in an ORDINARY container in the same file still hits.
     write(
         tmp_path / "app" / "jobs" / "__init__.py",
-        '__all__ = ["PullEbayJob"]\n'
-        "LANES = ['ebay']\n",
+        "__all__ = [\"PullEbayJob\"]\nLANES = ['ebay']\n",
     )
     findings = VerticalSliceSeams.scan(manifest)
     assert findings and "container-literal" in findings[0].message

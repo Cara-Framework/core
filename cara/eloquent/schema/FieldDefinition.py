@@ -14,6 +14,7 @@ class FieldDefinition:
         self.params = kwargs
         self._nullable = False
         self._default = None
+        self._backfill_from = None
         self._unique = False
         self._index = False
         self._use_current = False
@@ -27,6 +28,17 @@ class FieldDefinition:
 
     def default(self, value) -> Self:
         self._default = value
+        return self
+
+    def backfill_from(self, expression: str) -> Self:
+        """Declare the evolve-mode SQL expression for existing rows.
+
+        Fresh migrations ignore it because a newly created table has no rows
+        to fill. ``schema:plan`` uses it between ADD COLUMN and SET NOT NULL.
+        """
+        if not isinstance(expression, str) or not expression.strip():
+            raise ValueError("backfill_from expression must be a non-empty string")
+        self._backfill_from = expression
         return self
 
     def unique(self) -> Self:
@@ -87,6 +99,8 @@ class FieldDefinition:
             params["nullable"] = True
         if self._default is not None:
             params["default"] = self._default
+        if self._backfill_from is not None:
+            params["backfill_from"] = self._backfill_from
         if self._unique:
             params["unique"] = True
         if self._index:

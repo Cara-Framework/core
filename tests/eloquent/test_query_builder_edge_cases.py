@@ -86,6 +86,19 @@ def test_where_in_with_values_unchanged():
     assert " IN ('1','2','3')" in sql, sql
 
 
+def test_where_none_uses_sql_null_semantics():
+    sql = _qb().where("deleted_at", None).to_sql()
+    assert '"deleted_at" IS NULL' in sql, sql
+    assert "= NULL" not in sql, sql
+
+
+def test_where_dict_none_uses_sql_null_semantics():
+    sql = _qb().where({"tenant_id": 7, "channel_id": None}).to_sql()
+    assert "\"tenant_id\" = '7'" in sql, sql
+    assert '"channel_id" IS NULL' in sql, sql
+    assert "= NULL" not in sql, sql
+
+
 def test_where_in_large_list_keeps_all_bindings():
     """A 1500-element IN list must not be truncated or paginated by
     the builder. Drivers handle binding limits."""

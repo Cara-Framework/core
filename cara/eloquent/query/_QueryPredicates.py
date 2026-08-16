@@ -279,7 +279,8 @@ def _qb_where(self, column, *args) -> Self:
         )
     elif isinstance(column, dict):
         for key, value in column.items():
-            self._wheres += ((QueryExpression(key, "=", value, "value")),)
+            expression_type = "NULL" if value is None else "value"
+            self._wheres += ((QueryExpression(key, "=", value, expression_type)),)
     elif isinstance(value, QueryBuilder):
         self._wheres += (
             (
@@ -291,7 +292,8 @@ def _qb_where(self, column, *args) -> Self:
             ),
         )
     else:
-        self._wheres += ((QueryExpression(column, operator, value, "value")),)
+        expression_type = "NULL" if value is None else "value"
+        self._wheres += ((QueryExpression(column, operator, value, expression_type)),)
     return self
 
 

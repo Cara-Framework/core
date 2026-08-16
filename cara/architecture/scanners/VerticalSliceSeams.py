@@ -184,9 +184,7 @@ def _string_literal_hits(tree: ast.Module, token_re: re.Pattern[str]) -> list[st
                     and not any(ch.isspace() for ch in text)
                     and token_re.search(text)
                 ):
-                    hits.append(
-                        f"container-literal {text!r} (line {element.lineno})"
-                    )
+                    hits.append(f"container-literal {text!r} (line {element.lineno})")
     return hits
 
 
