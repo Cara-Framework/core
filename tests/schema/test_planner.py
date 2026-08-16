@@ -171,6 +171,42 @@ def test_non_concurrent_model_index_is_locking_concurrent_is_additive():
     assert index_op.transactional is False
 
 
+def test_raw_partial_unique_index_gets_a_duplicate_preflight():
+    entry = {
+        "name": "product_tenant_sku_unique",
+        "up": (
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+            "product_tenant_sku_unique ON product (tenant_id, sku) "
+            "WHERE sku IS NOT NULL"
+        ),
+        "down": "DROP INDEX CONCURRENTLY IF EXISTS product_tenant_sku_unique",
+    }
+    model = _model(
+        {
+            "tenant_id": _field("big_integer", nullable=False),
+            "sku": _field("string", length=64, nullable=True),
+        },
+        indexes=[entry],
+    )
+
+    operations, _, _ = plan(
+        [model],
+        _live(
+            {
+                "tenant_id": _col("bigint", False),
+                "sku": _col(),
+            }
+        ),
+    )
+
+    index_op = next(op for op in operations if op.kind == "create_index")
+    assert index_op.preflight_sql == (
+        'SELECT 1 FROM "product" WHERE sku IS NOT NULL '
+        "GROUP BY tenant_id, sku HAVING COUNT(*) > 1 LIMIT 1"
+    )
+    assert "product_tenant_sku_unique" in index_op.preflight_failure
+
+
 def test_an_index_the_database_already_has_is_not_planned():
     entry = {
         "name": "product_sku_idx",

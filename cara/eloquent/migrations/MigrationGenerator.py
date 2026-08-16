@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -585,13 +586,23 @@ class MigrationGenerator:
         """
         up_lines = []
         for entry in indexes:
-            sql = entry["up"].strip()
+            # The model's DDL is also consumed by ``schema:apply`` against
+            # already-live tables, where CONCURRENTLY avoids blocking writes.
+            # A generated CREATE migration has just created an empty table and
+            # runs transactionally, so CONCURRENTLY is unnecessary and illegal
+            # inside that transaction. Keep the live declaration safe while
+            # rendering the fresh-install form here.
+            sql = re.sub(
+                r"\bCONCURRENTLY\s+", "", entry["up"].strip(), flags=re.IGNORECASE
+            )
             up_lines.append(
                 f'\n        DB.statement("""\n            {sql}\n        """)'
             )
         down_lines = []
         for entry in reversed(indexes):
-            sql = entry["down"].strip()
+            sql = re.sub(
+                r"\bCONCURRENTLY\s+", "", entry["down"].strip(), flags=re.IGNORECASE
+            )
             down_lines.append(
                 f'        DB.statement("""\n            {sql}\n        """)'
             )

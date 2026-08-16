@@ -56,6 +56,35 @@ _ADDS_COLUMN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Simple column-list UNIQUE indexes can be checked before apply, including a
+# partial predicate. Expression indexes deliberately do not match: guessing at
+# nested SQL would turn a safety check into false confidence.
+_SIMPLE_UNIQUE_INDEX_RE = re.compile(
+    r"^\s*CREATE\s+UNIQUE\s+INDEX\s+(?:CONCURRENTLY\s+)?"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?\"?\w+\"?\s+ON\s+\"?\w+\"?\s*"
+    r"\((?P<columns>[^()]+)\)"
+    r"(?:\s+WHERE\s+(?P<predicate>.+?))?\s*;?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _unique_index_preflight(
+    up_sql: str, table: str, index_name: str
+) -> tuple[str | None, str | None]:
+    match = _SIMPLE_UNIQUE_INDEX_RE.match(up_sql)
+    if match is None:
+        return None, None
+    columns = " ".join(match.group("columns").split())
+    predicate = match.group("predicate")
+    where = ""
+    if predicate:
+        where = f" WHERE {' '.join(predicate.rstrip(';').split())}"
+    return (
+        f'SELECT 1 FROM "{table}"{where} GROUP BY {columns} HAVING COUNT(*) > 1 LIMIT 1',
+        f"{table} already holds duplicate keys for {index_name} — resolve them "
+        "before building the UNIQUE index",
+    )
+
 
 def created_objects(up_sql: str) -> set[str] | None:
     """The objects this statement creates, or None when it cannot be read.
@@ -224,6 +253,7 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
         if created <= present:
             continue
         concurrent = "CONCURRENTLY" in up.upper()
+        preflight_sql, preflight_failure = _unique_index_preflight(up, table, name)
         operations.append(
             Operation(
                 kind="create_index",
@@ -234,6 +264,8 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
                 safety=ADDITIVE if concurrent else LOCKING,
                 reason="named DDL declared by the model, absent from the database",
                 transactional=not concurrent,
+                preflight_sql=preflight_sql,
+                preflight_failure=preflight_failure,
                 notes=()
                 if concurrent
                 else ("builds with a write lock; declare it CONCURRENTLY to avoid that",),

@@ -139,3 +139,40 @@ def test_hook_retry_audit_references_the_ledger():
 
     assert "REFERENCES queue_job_delivery(job_id)" in source
     assert "ON DELETE CASCADE" in source
+
+
+def test_create_migration_strips_concurrently_from_live_index_ddl():
+    """Live index declarations must not break transactional fresh installs."""
+    source = '''"""CreateWidgetTable Migration."""
+
+from cara.eloquent.migrations import Migration
+
+
+class CreateWidgetTable(Migration):
+    def up(self):
+        with self.schema.create("widget") as table:
+            table.big_increments("id")
+
+    def down(self):
+        self.schema.drop("widget")
+'''
+
+    rendered = MigrationGenerator()._inject_indexes_into_migration(
+        source,
+        [
+            {
+                "name": "widget_name_unique",
+                "up": (
+                    "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+                    "widget_name_unique ON widget (name)"
+                ),
+                "down": "DROP INDEX CONCURRENTLY IF EXISTS widget_name_unique",
+            }
+        ],
+        "widget",
+    )
+
+    assert "CONCURRENTLY" not in rendered
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS widget_name_unique" in rendered
+    assert "DROP INDEX IF EXISTS widget_name_unique" in rendered
+    ast.parse(rendered)
