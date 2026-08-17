@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, Self
 
+from cara.eloquent.Integrity import is_unique_violation
 from cara.exceptions import (
     Http404Exception,
     InvalidArgumentException,
@@ -49,8 +50,12 @@ def _qb_first(self, fields: list[str] | None = None, query: bool = False) -> Any
 
 
 def _qb_first_or_create(self, wheres, creates: dict | None = None):
-    """
-    Get the first record matching the attributes or create it.
+    """Get the first record matching the attributes or create it.
+
+    The speculative INSERT owns a transaction boundary so a concurrent
+    unique-key loser can roll back before re-querying the winner. This also
+    covers relationship builders, which use this QueryBuilder-level variant
+    instead of ``Model.first_or_create``.
 
     Returns:
         Model
@@ -71,9 +76,18 @@ def _qb_first_or_create(self, wheres, creates: dict | None = None):
 
     total.update(self._creates_related)
 
-    if not record:
-        return self.create(total, id_key=self.get_primary_key())
-    return record
+    if record:
+        return record
+    try:
+        with self._db_manager.transaction(self.connection):
+            return self.create(total, id_key=self.get_primary_key())
+    except Exception as exc:
+        if not is_unique_violation(exc):
+            raise
+        again = self.where(wheres).first()
+        if again is not None:
+            return again
+        raise
 
 
 def _qb_sole(self, query=False):

@@ -28,8 +28,12 @@ both call ``create()``. Outcomes:
     the race surfaces an unhandled 500 even though the row IS
     there now — just inserted by the winner.
 
-Both methods now ask ``cara.eloquent.Integrity.is_unique_violation`` —
-the framework's single classifier — instead of a private copy.
+Both methods now put the speculative INSERT in its own transaction boundary
+(a savepoint under an existing transaction), then ask
+``cara.eloquent.Integrity.is_unique_violation`` — the framework's single
+classifier — instead of a private copy. Rolling back that boundary before the
+re-query is mandatory on PostgreSQL: a failed statement otherwise poisons the
+whole surrounding transaction.
 
 Re-pinned 2026-08-08
 --------------------
@@ -81,6 +85,11 @@ from cara.eloquent.Integrity import is_unique_violation, sqlstate_of
 from cara.exceptions import QueryException
 
 _model_mod = importlib.import_module("cara.eloquent.models.Model")
+_model_data_mod = importlib.import_module("cara.eloquent.models._ModelData")
+_model_presentation_mod = importlib.import_module(
+    "cara.eloquent.models._ModelPresentation"
+)
+_query_results_mod = importlib.import_module("cara.eloquent.query._QueryResults")
 Model = _model_mod.Model
 
 
@@ -198,6 +207,7 @@ class _RecordingModelFOC:
     create_side_effect: Exception | None = None
     create_payload: dict | None = None
     primary_key: str = "id"
+    timeline: list[Any] = []
 
     @classmethod
     def get_primary_key(cls) -> str:
@@ -214,12 +224,14 @@ class _RecordingModelFOC:
         return self
 
     def first(self) -> Any:
+        type(self).timeline.append("select")
         type(self).select_calls.append(dict(self._pending_wheres or {}))
         if not type(self).select_sequence:
             return None
         return type(self).select_sequence.pop(0)
 
     def create(self, payload: dict, id_key: str | None = None) -> Any:
+        type(self).timeline.append("create")
         type(self).create_payload = dict(payload)
         if type(self).create_side_effect is not None:
             raise type(self).create_side_effect
@@ -240,14 +252,35 @@ class _FakeRow:
         return self
 
 
+@pytest.fixture(autouse=True)
+def race_savepoint(monkeypatch) -> list[Any]:
+    """DB-free transaction probe shared by both real model helpers."""
+    timeline: list[Any] = []
+
+    class _Scope:
+        def __enter__(self):
+            timeline.append("tx_enter")
+            return self
+
+        def __exit__(self, exc_type, _exc, _tb):
+            timeline.append(("tx_exit", exc_type.__name__ if exc_type else None))
+            return False
+
+    db = type("_DB", (), {"transaction": staticmethod(lambda *_a, **_k: _Scope())})
+    monkeypatch.setattr(_model_data_mod, "DB", db)
+    monkeypatch.setattr(_model_presentation_mod, "DB", db)
+    return timeline
+
+
 @pytest.fixture
-def model_class() -> type[_RecordingModelFOC]:
+def model_class(race_savepoint) -> type[_RecordingModelFOC]:
     """Reset the per-class recording state between tests so each test
     starts from a clean slate."""
     _RecordingModelFOC.select_sequence = []
     _RecordingModelFOC.select_calls = []
     _RecordingModelFOC.create_side_effect = None
     _RecordingModelFOC.create_payload = None
+    _RecordingModelFOC.timeline = race_savepoint
     return _RecordingModelFOC
 
 
@@ -303,6 +336,13 @@ class TestFirstOrCreateRace:
         assert len(model_class.select_calls) == 2, (
             "expected pre-create SELECT + post-violation re-query"
         )
+        assert model_class.timeline == [
+            "select",
+            "tx_enter",
+            "create",
+            ("tx_exit", "QueryException"),
+            "select",
+        ]
 
     def test_non_unique_integrity_error_propagates(
         self,
@@ -393,6 +433,13 @@ class TestUpdateOrCreateRace:
         # promise: even though create lost, the loser's payload
         # converges via the update branch.
         assert model_class.create_payload == {"title": "Loser merged", "slug": "foo"}
+        assert model_class.timeline[:5] == [
+            "select",
+            "tx_enter",
+            "create",
+            ("tx_exit", "QueryException"),
+            "select",
+        ]
 
     def test_race_then_winner_vanishes_reraises(
         self,
@@ -416,3 +463,29 @@ class TestUpdateOrCreateRace:
             )
 
         assert sqlstate_of(excinfo.value) == "23505"
+
+
+def test_query_builder_first_or_create_rolls_back_before_requery(
+    model_class,
+) -> None:
+    """Relationship builders use the QueryBuilder-level implementation."""
+    winner = _FakeRow(id=99, slug="foo")
+    model_class.select_sequence = [None, winner]
+    model_class.create_side_effect = _make_unique_violation()
+    builder = model_class()
+    builder._creates_related = {}
+    builder._db_manager = _model_data_mod.DB
+    builder.connection = "default"
+
+    result = _query_results_mod._qb_first_or_create(
+        builder, {"slug": "foo"}, {"title": "Foo"}
+    )
+
+    assert result is winner
+    assert model_class.timeline == [
+        "select",
+        "tx_enter",
+        "create",
+        ("tx_exit", "QueryException"),
+        "select",
+    ]

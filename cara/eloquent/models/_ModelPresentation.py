@@ -12,6 +12,7 @@ from typing import Any, Self
 
 from cara.eloquent.Integrity import is_unique_violation
 from cara.exceptions import LazyLoadingViolation, ModelNotFoundException
+from cara.facades import DB
 from cara.support import Collection, json_dumps
 
 from ..casts import cast_registry as enhanced_registry
@@ -500,7 +501,13 @@ def _model_first_or_create(cls, wheres, creates: dict | None = None) -> Any:
     if record:
         return record
     try:
-        return self.create(total, id_key=cls.get_primary_key())
+        # The INSERT must own a transaction boundary. Under a caller's open
+        # transaction this is a savepoint; standalone it is a short outer
+        # transaction. PostgreSQL aborts the current transaction scope after
+        # 23505, so the recovery SELECT below is usable only after this scope
+        # has rolled back.
+        with DB.transaction(getattr(cls, "__connection__", None)):
+            return self.create(total, id_key=cls.get_primary_key())
     except Exception as exc:
         if not is_unique_violation(exc):
             raise

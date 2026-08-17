@@ -11,6 +11,7 @@ from typing import Any
 import pendulum
 
 from cara.eloquent.Integrity import is_unique_violation
+from cara.facades import DB
 from cara.support import Collection
 
 from ..casts import cast_registry as enhanced_registry
@@ -63,7 +64,11 @@ def _model_update_or_create(cls, wheres, updates) -> Any:
     total.update(wheres)
     if not record:
         try:
-            return self.create(total, id_key=cls.get_primary_key()).fresh()
+            # A unique-race loser must roll back its failed INSERT before the
+            # existence check and UPDATE can reuse the surrounding PostgreSQL
+            # session. Nested callers get a savepoint from this boundary.
+            with DB.transaction(getattr(cls, "__connection__", None)):
+                return self.create(total, id_key=cls.get_primary_key()).fresh()
         except Exception as exc:
             if not is_unique_violation(exc):
                 raise
