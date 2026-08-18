@@ -93,6 +93,13 @@ def _migration_generate_blueprint_create_migration(self, model_info: dict) -> st
         composite_lines.append(
             f"            table.index({self._composite_args(declaration)})"
         )
+    for declaration in model_info.get("checks", []):
+        expression = repr(declaration["expression"])
+        name = declaration.get("name")
+        name_arg = f", name={name!r}" if name else ""
+        composite_lines.append(
+            f"            table.check({expression}{name_arg})"
+        )
 
     # Combine: regular fields → foreign keys → composite constraints
     all_lines = fields_code + foreign_keys + composite_lines

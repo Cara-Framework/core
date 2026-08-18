@@ -156,3 +156,18 @@ class FieldBuilder:
     ) -> FieldDefinition:
         """Declare a standalone single- or multi-column index."""
         return self._constraint("index", columns, name)
+
+    def check(self, expression: str, name: str | None = None) -> FieldDefinition:
+        """Declare a standalone table CHECK constraint.
+
+        This mirrors :meth:`Blueprint.check` for model-first ``Schema.build``
+        definitions. The migration discoverer renders the same declaration
+        into the generated create-table migration.
+        """
+        if not isinstance(expression, str) or not expression.strip():
+            raise ValueError("check expression must be a non-empty string")
+        if name is not None and (not isinstance(name, str) or not name.strip()):
+            raise ValueError("check name must be a non-empty string")
+        definition = FieldDefinition("check", None, expression=expression)
+        definition.params["name"] = name
+        return definition

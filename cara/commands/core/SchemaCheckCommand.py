@@ -429,7 +429,16 @@ class SchemaCheckCommand(CommandBase):
         CHECK in a form the regex doesn't catch (the Blueprint convention is
         that the entry ``name`` IS the constraint name).
         """
+        table = model.get("table") or ""
         found: set[str] = set()
+        for check in model.get("checks", []) or []:
+            name = check.get("name")
+            if name:
+                found.add(name)
+                continue
+            expression = check.get("expression") or ""
+            slug = re.sub(r"[^a-zA-Z0-9]+", "_", expression).strip("_").lower()
+            found.add(f"{table}_{slug or 'check'}_check"[:63])
         for index in model.get("indexes", []) or []:
             up_sql = index.get("up") or ""
             matched = False

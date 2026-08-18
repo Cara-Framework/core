@@ -321,6 +321,7 @@ class ModelDiscoverer:
 
     _column_name_literal = _ModelFieldDiscovery._model_discovery_column_name_literal
     _extract_composite_call = _ModelFieldDiscovery._model_discovery_extract_composite_call
+    _extract_check_call = _ModelFieldDiscovery._model_discovery_extract_check_call
     _extract_field_definition = (
         _ModelFieldDiscovery._model_discovery_extract_field_definition
     )

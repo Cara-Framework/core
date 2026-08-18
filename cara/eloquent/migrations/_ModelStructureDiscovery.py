@@ -66,6 +66,12 @@ def _model_discovery_extract_model_structure(
         # specification``).
         "composite_uniques": [],
         "composite_indexes": [],
+        # First-class table CHECK constraints declared as
+        # ``field.check("expression", name="...")``. Blueprint already
+        # supports this verb; discovery must carry it into generated create
+        # migrations instead of forcing models through raw ``__indexes__``
+        # ALTER TABLE SQL.
+        "checks": [],
         # Multi-column foreign keys declared as
         # ``field.foreign(["a", "b"]).references(["x", "y"]).on("t")``.
         # The local columns are a list (so there is no single ``fields``

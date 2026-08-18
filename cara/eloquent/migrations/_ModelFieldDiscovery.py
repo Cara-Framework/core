@@ -68,6 +68,11 @@ def _model_discovery_parse_lambda_fields(self, lambda_node: ast.Lambda, model_in
                 if ci is not None:
                     self._record_composite(model_info["composite_indexes"], ci[0], ci[1])
                     continue
+                check = self._extract_check_call(field_call)
+                if check is not None:
+                    if check not in model_info["checks"]:
+                        model_info["checks"].append(check)
+                    continue
                 # Check if this is a separate foreign key definition
                 if self._is_separate_foreign_key_call(field_call):
                     foreign_key_def = self._extract_separate_foreign_key_definition(
@@ -556,6 +561,35 @@ def _model_discovery_extract_composite_call(self, call_node: ast.Call, method_na
     if col is not None:
         return [col], name
     return [], None
+
+
+def _model_discovery_extract_check_call(self, call_node: ast.Call):
+    """Extract a top-level ``field.check(expression, name=...)`` declaration.
+
+    CHECK expressions and names are schema identity, so computed values are
+    refused instead of being silently omitted from a generated migration.
+    """
+    if not (
+        isinstance(call_node, ast.Call)
+        and isinstance(call_node.func, ast.Attribute)
+        and call_node.func.attr == "check"
+        and isinstance(call_node.func.value, ast.Name)
+        and call_node.func.value.id == "field"
+    ):
+        return None
+    if not call_node.args:
+        raise RuntimeError("field.check() requires a literal SQL expression")
+    expression = self._literal_argument(call_node.args[0])
+    if not isinstance(expression, str) or not expression.strip():
+        raise RuntimeError("field.check() expression must be a non-empty literal string")
+    name = None
+    for keyword in call_node.keywords:
+        if keyword.arg != "name":
+            continue
+        name = self._literal_argument(keyword.value)
+        if not isinstance(name, str) or not name.strip():
+            raise RuntimeError("field.check() name must be a non-empty literal string")
+    return {"expression": expression, "name": name}
 
 
 def _model_discovery_column_name_literal(self, node: ast.AST) -> str | None:

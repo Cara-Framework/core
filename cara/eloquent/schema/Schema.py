@@ -402,9 +402,10 @@ class Schema:
 # means adding a builder method is the only step there is.
 
 #: Constraint declarations, not column types. ``field.unique([...])`` /
-#: ``field.index([...])`` are collected by the parser's separate composite
-#: path, so they must not be mistaken for a field type.
-CONSTRAINT_BUILDERS = frozenset({"unique", "index"})
+#: ``field.index([...])`` / ``field.check(...)`` are collected by the
+#: parser's standalone-constraint paths, so they must not be mistaken for
+#: field types.
+CONSTRAINT_BUILDERS = frozenset({"unique", "index", "check"})
 
 #: Builders whose first positional argument is not a column name.
 _UNNAMED_FIELD_BUILDERS = frozenset({"timestamps", "soft_deletes", "foreign"})

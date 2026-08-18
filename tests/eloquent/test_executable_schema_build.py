@@ -123,3 +123,25 @@ def test_schema_build_rejects_invalid_constraint_declarations(
 ) -> None:
     with pytest.raises(ValueError, match=method):
         getattr(FieldBuilder(), method)(columns, name=name)
+
+
+def test_schema_build_executes_named_check_declaration() -> None:
+    (definition,) = Schema.build(
+        lambda field: (
+            field.check("amount >= 0", name="invoice_amount_check"),
+        )
+    )
+
+    assert definition.to_dict() == {
+        "type": "check",
+        "params": {
+            "expression": "amount >= 0",
+            "name": "invoice_amount_check",
+        },
+    }
+
+
+@pytest.mark.parametrize("expression", ["", "   ", None])
+def test_schema_build_rejects_empty_check_expression(expression) -> None:
+    with pytest.raises(ValueError, match="check expression"):
+        FieldBuilder().check(expression)

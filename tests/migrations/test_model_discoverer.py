@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from cara.eloquent.migrations.MigrationGenerator import MigrationGenerator
 from cara.eloquent.migrations.ModelDiscoverer import ModelDiscoverer
 
 
@@ -98,6 +99,57 @@ def test_chained_index_coexists_with_composite_index(discoverer, tmp_path):
     assert ["queue", "status"] in declared
     # default("default") still captured alongside the chained index.
     assert info["fields"]["queue"]["params"].get("default") == "default"
+
+
+def test_first_class_check_is_discovered_and_rendered(discoverer, tmp_path):
+    src = """
+        from cara.eloquent.schema import Schema
+
+        class Price(Model):
+            __table__ = "price"
+
+            @property
+            def fields(self):
+                return Schema.build(
+                    lambda field: (
+                        field.big_increments("id"),
+                        field.decimal("amount", 12, 2),
+                        field.check(
+                            "amount <> 'NaN'::numeric AND amount >= 0",
+                            name="price_amount_check",
+                        ),
+                    )
+                )
+    """
+    info = discoverer._parse_model_file(_write_model(tmp_path, "Price.py", src))
+
+    assert info["checks"] == [
+        {
+            "expression": "amount <> 'NaN'::numeric AND amount >= 0",
+            "name": "price_amount_check",
+        }
+    ]
+    rendered = MigrationGenerator().generate_create_migration(info)
+    assert "table.check(" in rendered
+    assert "price_amount_check" in rendered
+    assert "amount <>" in rendered
+
+
+def test_non_literal_check_is_refused(discoverer, tmp_path):
+    src = """
+        from cara.eloquent.schema import Schema
+
+        class Price(Model):
+            __table__ = "price"
+
+            @property
+            def fields(self):
+                expression = "amount >= 0"
+                return Schema.build(lambda field: (field.check(expression),))
+    """
+
+    with pytest.raises(RuntimeError, match="literal string"):
+        discoverer._parse_model_file(_write_model(tmp_path, "Price.py", src))
 
 
 def test_self_constant_default_resolves_to_literal(discoverer, tmp_path):
