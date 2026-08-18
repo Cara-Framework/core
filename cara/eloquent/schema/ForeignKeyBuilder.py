@@ -50,10 +50,10 @@ class ForeignKeyBuilder:
             self._last_foreign.on(table)
         return self
 
-    def on_delete(self, action) -> Self:
+    def on_delete(self, action, columns=None) -> Self:
         """Set on delete action"""
         if self._last_foreign:
-            self._last_foreign.on_delete(action)
+            self._last_foreign.on_delete(action, columns=columns)
         return self
 
     def on_update(self, action) -> Self:

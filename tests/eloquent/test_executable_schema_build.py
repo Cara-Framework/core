@@ -41,6 +41,29 @@ def test_schema_build_executes_composite_unique_and_index_declarations() -> None
     ]
 
 
+def test_schema_build_preserves_named_composite_foreign_key() -> None:
+    (definition,) = Schema.build(
+        lambda field: (
+            field.foreign(
+                ["product_id", "tenant_id"],
+                name="child_product_tenant_fk",
+            )
+            .references(["id", "tenant_id"])
+            .on("product")
+            .on_delete("cascade"),
+        )
+    )
+
+    assert definition.to_dict()["foreign_key"] == {
+        "field": ["product_id", "tenant_id"],
+        "name": "child_product_tenant_fk",
+        "references": ["id", "tenant_id"],
+        "on": "product",
+        "on_delete": "cascade",
+        "on_update": None,
+    }
+
+
 def test_schema_build_executes_column_index_and_timestamp_modifiers() -> None:
     indexed, timestamp = Schema.build(
         lambda field: (

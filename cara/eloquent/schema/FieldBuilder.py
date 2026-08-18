@@ -127,12 +127,13 @@ class FieldBuilder:
         """Create soft delete field (deleted_at)."""
         return FieldDefinition("soft_deletes", None)
 
-    def foreign(self, field_name):
+    def foreign(self, field_name, name=None):
         """Create a standalone foreign key definition."""
         fk_definition = FieldDefinition("foreign_key", None)
         fk_definition._is_foreign = True
         fk_definition._foreign_key_config = {
             "field": field_name,
+            "name": name,
             "references": None,
             "on": None,
             "on_delete": None,

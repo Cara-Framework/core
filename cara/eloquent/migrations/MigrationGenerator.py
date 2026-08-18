@@ -432,7 +432,10 @@ class MigrationGenerator:
         references = foreign_key_info.get("references")
         on_table = foreign_key_info.get("on")
         on_delete = foreign_key_info.get("on_delete")
+        on_delete_columns = foreign_key_info.get("on_delete_columns")
         on_update = foreign_key_info.get("on_update")
+        name = foreign_key_info.get("name")
+        name_arg = f', name="{name}"' if name else ""
 
         if columns is not None:
             # Composite FK — both sides are column lists of matching length.
@@ -446,21 +449,27 @@ class MigrationGenerator:
             cols_str = ", ".join(f'"{c}"' for c in columns)
             refs_str = ", ".join(f'"{c}"' for c in references)
             fk_line = (
-                f'table.foreign([{cols_str}]).references([{refs_str}]).on("{on_table}")'
+                f'table.foreign([{cols_str}]{name_arg})'
+                f'.references([{refs_str}]).on("{on_table}")'
             )
         else:
-            # Scalar FK — unchanged.
             field = foreign_key_info.get("field")
             if not field or not references or not on_table:
                 return ""
-            # Build foreign key constraint: table.foreign("field").references("column").on("table")
             fk_line = (
-                f'table.foreign("{field}").references("{references}").on("{on_table}")'
+                f'table.foreign("{field}"{name_arg})'
+                f'.references("{references}").on("{on_table}")'
             )
 
         # Add ON DELETE clause if specified
         if on_delete:
-            fk_line += f'.on_delete("{on_delete}")'
+            delete_columns_arg = ""
+            if on_delete_columns:
+                rendered_columns = ", ".join(
+                    f'"{column}"' for column in on_delete_columns
+                )
+                delete_columns_arg = f", columns=[{rendered_columns}]"
+            fk_line += f'.on_delete("{on_delete}"{delete_columns_arg})'
 
         # Add ON UPDATE clause if specified
         if on_update:

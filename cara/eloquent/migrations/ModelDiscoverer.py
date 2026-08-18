@@ -19,6 +19,7 @@ from . import (
     _ModelDependencyDiscovery,
     _ModelFieldDiscovery,
     _ModelStructureDiscovery,
+    _SeparateForeignKeyDiscovery,
 )
 
 _logger = logging.getLogger("cara.migrations.discoverer")
@@ -333,7 +334,7 @@ class ModelDiscoverer:
         _ModelFieldDiscovery._model_discovery_extract_referenced_table
     )
     _extract_separate_foreign_key_definition = (
-        _ModelFieldDiscovery._model_discovery_extract_separate_foreign_key_definition
+        _SeparateForeignKeyDiscovery._extract_separate_foreign_key_definition
     )
     _foreign_key_arg = staticmethod(_ModelFieldDiscovery._model_discovery_foreign_key_arg)
     _is_foreign_key_field = _ModelFieldDiscovery._model_discovery_is_foreign_key_field

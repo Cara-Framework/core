@@ -397,12 +397,12 @@ class Blueprint:
             self.foreign_key_builder.on(table)
         return self
 
-    def on_delete(self, action) -> Self:
+    def on_delete(self, action, columns=None) -> Self:
         """Set on delete action - delegates to ForeignKeyBuilder"""
         if hasattr(self, "_last_foreign") and self._last_foreign:
-            self._last_foreign.on_delete(action)
+            self._last_foreign.on_delete(action, columns=columns)
         else:
-            self.foreign_key_builder.on_delete(action)
+            self.foreign_key_builder.on_delete(action, columns=columns)
         return self
 
     def on_update(self, action) -> Self:

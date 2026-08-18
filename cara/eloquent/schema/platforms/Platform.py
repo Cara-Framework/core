@@ -12,6 +12,8 @@ _SQL_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
 
 
 class Platform:
+    supports_foreign_key_action_columns = False
+
     foreign_key_actions = {
         "cascade": "CASCADE",
         "set null": "SET NULL",
@@ -104,12 +106,39 @@ class Platform:
             return ", ".join(self.wrap_column(c) for c in columns)
         return self.wrap_column(columns)
 
+    def foreign_key_action_sql(self, action, columns=None):
+        """Render one referential action, including PostgreSQL's optional
+        column list for composite ``SET NULL`` / ``SET DEFAULT`` actions.
+        """
+
+        mapped = self.foreign_key_actions.get(action.lower())
+        if mapped is None:
+            raise InvalidArgumentException(f"Unsupported foreign key action: {action}")
+        if columns is None:
+            return mapped
+        if not self.supports_foreign_key_action_columns:
+            raise InvalidArgumentException(
+                "This database does not support column-scoped foreign key actions"
+            )
+        if mapped not in {"SET NULL", "SET DEFAULT"}:
+            raise InvalidArgumentException(
+                "Foreign key action columns require SET NULL or SET DEFAULT"
+            )
+        if not isinstance(columns, list) or not columns:
+            raise InvalidArgumentException(
+                "Foreign key action columns must be a non-empty list"
+            )
+        return f"{mapped} ({self.wrap_columns(columns)})"
+
     def foreign_key_constraintize(self, table, foreign_keys):
         sql = []
         for _name, foreign_key in foreign_keys.items():
             cascade = ""
             if foreign_key.delete_action:
-                cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key.delete_action.lower())}"
+                cascade += " ON DELETE " + self.foreign_key_action_sql(
+                    foreign_key.delete_action,
+                    foreign_key.delete_columns,
+                )
             if foreign_key.update_action:
                 cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key.update_action.lower())}"
             sql.append(

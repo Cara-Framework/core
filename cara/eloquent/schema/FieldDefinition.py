@@ -80,10 +80,12 @@ class FieldDefinition:
             self._foreign_key_config["on"] = table
         return self
 
-    def on_delete(self, action) -> Self:
+    def on_delete(self, action, columns=None) -> Self:
         """Set the ON DELETE action for foreign key."""
         if self._is_foreign:
             self._foreign_key_config["on_delete"] = action
+            if columns is not None:
+                self._foreign_key_config["on_delete_columns"] = columns
         return self
 
     def on_update(self, action) -> Self:

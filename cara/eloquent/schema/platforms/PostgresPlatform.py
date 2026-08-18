@@ -6,6 +6,8 @@ from .Platform import Platform
 
 
 class PostgresPlatform(Platform):
+    supports_foreign_key_action_columns = True
+
     types_without_lengths = [
         "integer",
         "big_integer",
@@ -370,7 +372,10 @@ class PostgresPlatform(Platform):
             ) in table.get_added_foreign_keys().items():
                 cascade = ""
                 if foreign_key_constraint.delete_action:
-                    cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key_constraint.delete_action.lower())}"
+                    cascade += " ON DELETE " + self.foreign_key_action_sql(
+                        foreign_key_constraint.delete_action,
+                        foreign_key_constraint.delete_columns,
+                    )
                 if foreign_key_constraint.update_action:
                     cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key_constraint.update_action.lower())}"
                 sql.append(

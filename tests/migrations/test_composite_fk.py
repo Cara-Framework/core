@@ -3,11 +3,12 @@ model-first migration generator.
 
 A composite FK is declared on a model as::
 
-    field.foreign(["a", "b"]).references(["x", "y"]).on("t").on_delete("CASCADE")
+    field.foreign(["a", "b"], name="child_parent_tenant_fk") \
+        .references(["x", "y"]).on("t").on_delete("CASCADE")
 
 i.e. the local-column and referenced-column arguments are LISTS instead of
-single strings. No production model uses this yet — these tests exercise the
-capability synthetically across all three layers:
+single strings. These tests exercise the capability synthetically across all
+three layers:
 
   * ModelDiscoverer  — parses the list-form into ``composite_foreign_keys``
     and registers the referenced table as a dependency,
@@ -63,7 +64,10 @@ _COMPOSITE_MODEL_SRC = """
                     field.big_increments("id"),
                     field.unsigned_big_integer("order_id"),
                     field.string("tenant_id", 50),
-                    field.foreign(["order_id", "tenant_id"])
+                    field.foreign(
+                        ["order_id", "tenant_id"],
+                        name="order_line_order_tenant_fk",
+                    )
                     .references(["id", "tenant_id"])
                     .on("orders")
                     .on_delete("CASCADE"),
@@ -87,6 +91,7 @@ def test_discoverer_parses_composite_fk_into_its_own_collection(discoverer, tmp_
     assert info["composite_foreign_keys"] == [
         {
             "columns": ["order_id", "tenant_id"],
+            "name": "order_line_order_tenant_fk",
             "references": ["id", "tenant_id"],
             "on": "orders",
             "on_delete": "CASCADE",
@@ -175,6 +180,7 @@ def test_discoverer_skips_malformed_composite_fk(discoverer, tmp_path):
 def test_generator_emits_composite_fk_line(generator):
     fk_info = {
         "columns": ["order_id", "tenant_id"],
+        "name": "order_line_order_tenant_fk",
         "references": ["id", "tenant_id"],
         "on": "orders",
         "on_delete": "CASCADE",
@@ -182,7 +188,7 @@ def test_generator_emits_composite_fk_line(generator):
     }
     line = generator._generate_foreign_key_line(fk_info)
     assert line == (
-        'table.foreign(["order_id", "tenant_id"])'
+        'table.foreign(["order_id", "tenant_id"], name="order_line_order_tenant_fk")'
         '.references(["id", "tenant_id"]).on("orders").on_delete("CASCADE")'
     )
 
@@ -202,15 +208,66 @@ def test_generator_scalar_fk_line_unchanged(generator):
     )
 
 
+def test_generator_emits_named_scalar_fk_line(generator):
+    fk_info = {
+        "field": "tenant_id",
+        "name": "order_line_tenant_fk",
+        "references": "id",
+        "on": "tenant",
+        "on_delete": "CASCADE",
+        "on_update": None,
+    }
+    line = generator._generate_foreign_key_line(fk_info)
+    assert line == (
+        'table.foreign("tenant_id", name="order_line_tenant_fk")'
+        '.references("id").on("tenant").on_delete("CASCADE")'
+    )
+
+
 def test_create_migration_contains_composite_fk_line(discoverer, generator, tmp_path):
     model_path = _write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
     info = discoverer._parse_model_file(model_path)
     migration = generator._generate_blueprint_create_migration(info)
 
     assert (
-        'table.foreign(["order_id", "tenant_id"])'
+        'table.foreign(["order_id", "tenant_id"], name="order_line_order_tenant_fk")'
         '.references(["id", "tenant_id"]).on("orders").on_delete("CASCADE")'
     ) in migration
+
+
+def test_column_scoped_set_null_survives_discovery_generation_and_sql(
+    discoverer, generator, tmp_path
+):
+    source = _COMPOSITE_MODEL_SRC.replace(
+        '.on_delete("CASCADE")',
+        '.on_delete("set null", columns=["order_id"])',
+    )
+    model_path = _write_model(tmp_path, "OrderLine.py", source)
+    info = discoverer._parse_model_file(model_path)
+    (foreign_key,) = info["composite_foreign_keys"]
+    assert foreign_key["on_delete_columns"] == ["order_id"]
+    assert generator._generate_foreign_key_line(foreign_key) == (
+        'table.foreign(["order_id", "tenant_id"], '
+        'name="order_line_order_tenant_fk")'
+        '.references(["id", "tenant_id"]).on("orders")'
+        '.on_delete("set null", columns=["order_id"])'
+    )
+
+    blueprint = Blueprint(None, table="order_line")
+    blueprint.foreign(
+        ["order_id", "tenant_id"], name="order_line_order_tenant_fk"
+    ).references(["id", "tenant_id"]).on("orders").on_delete(
+        "set null", columns=["order_id"]
+    )
+    sql = PostgresPlatform().foreign_key_constraintize(
+        "order_line", blueprint.table.added_foreign_keys
+    )
+    assert sql == [
+        "CONSTRAINT order_line_order_tenant_fk "
+        'FOREIGN KEY ("order_id", "tenant_id") '
+        'REFERENCES "orders"("id", "tenant_id") '
+        'ON DELETE SET NULL ("order_id")'
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -231,16 +288,16 @@ def test_emitted_composite_line_renders_composite_sql(discoverer, generator, tmp
     # Re-run the emitted Blueprint chain against a fresh table named
     # "order_line" (table is the 2nd ctor arg; the 1st is the grammar).
     blueprint = Blueprint(None, table="order_line")
-    blueprint.foreign(["order_id", "tenant_id"]).references(["id", "tenant_id"]).on(
-        "orders"
-    ).on_delete("CASCADE")
+    blueprint.foreign(
+        ["order_id", "tenant_id"], name="order_line_order_tenant_fk"
+    ).references(["id", "tenant_id"]).on("orders").on_delete("CASCADE")
 
     platform = PostgresPlatform()
     sql = platform.foreign_key_constraintize(
         "order_line", blueprint.table.added_foreign_keys
     )
     assert sql == [
-        "CONSTRAINT order_line_order_id_tenant_id_foreign "
+        "CONSTRAINT order_line_order_tenant_fk "
         'FOREIGN KEY ("order_id", "tenant_id") '
         'REFERENCES "orders"("id", "tenant_id") ON DELETE CASCADE'
     ]

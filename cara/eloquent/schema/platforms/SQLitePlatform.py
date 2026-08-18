@@ -380,7 +380,10 @@ class SQLitePlatform(Platform):
         for _name, foreign_key in foreign_keys.items():
             cascade = ""
             if foreign_key.delete_action:
-                cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key.delete_action.lower())}"
+                cascade += " ON DELETE " + self.foreign_key_action_sql(
+                    foreign_key.delete_action,
+                    foreign_key.delete_columns,
+                )
             if foreign_key.update_action:
                 cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key.update_action.lower())}"
             sql.append(

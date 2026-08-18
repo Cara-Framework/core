@@ -49,7 +49,6 @@ def _model_discovery_extract_field_definition(self, call_node: ast.Call) -> dict
 
     return None
 
-
 def _model_discovery_parse_lambda_fields(self, lambda_node: ast.Lambda, model_info: dict):
     """Parse lambda field: (...) body to extract field definitions."""
     if isinstance(lambda_node.body, ast.Tuple):
@@ -81,9 +80,19 @@ def _model_discovery_parse_lambda_fields(self, lambda_node: ast.Lambda, model_in
                         # composite_uniques / composite_indexes.
                         entry = {
                             "columns": foreign_key_def["field"],
+                            "name": foreign_key_def.get("name"),
                             "references": foreign_key_def["references"],
                             "on": foreign_key_def["on"],
                             "on_delete": foreign_key_def.get("on_delete"),
+                            **(
+                                {
+                                    "on_delete_columns": foreign_key_def[
+                                        "on_delete_columns"
+                                    ]
+                                }
+                                if foreign_key_def.get("on_delete_columns")
+                                else {}
+                            ),
                             "on_update": foreign_key_def.get("on_update"),
                         }
                         if entry not in model_info["composite_foreign_keys"]:
@@ -252,6 +261,15 @@ def _model_discovery_extract_field_definition_new_syntax(
                 elif method_name == "on_delete":
                     if current.args and isinstance(current.args[0], ast.Constant):
                         foreign_key_info["on_delete"] = current.args[0].value
+                    if len(current.args) > 1:
+                        foreign_key_info["on_delete_columns"] = self._foreign_key_arg(
+                            current.args[1]
+                        )
+                    for keyword in current.keywords:
+                        if keyword.arg == "columns":
+                            foreign_key_info["on_delete_columns"] = (
+                                self._foreign_key_arg(keyword.value)
+                            )
                 elif method_name == "on_update":
                     if current.args and isinstance(current.args[0], ast.Constant):
                         foreign_key_info["on_update"] = current.args[0].value
@@ -276,6 +294,15 @@ def _model_discovery_extract_field_definition_new_syntax(
                     "references": foreign_key_info.get("references"),
                     "on": foreign_key_info.get("on"),
                     "on_delete": foreign_key_info.get("on_delete"),
+                    **(
+                        {
+                            "on_delete_columns": foreign_key_info[
+                                "on_delete_columns"
+                            ]
+                        }
+                        if foreign_key_info.get("on_delete_columns")
+                        else {}
+                    ),
                     "on_update": foreign_key_info.get("on_update"),
                 }
                 result["foreign_key"] = foreign_key_config
@@ -588,89 +615,4 @@ def _model_discovery_foreign_key_arg(arg: ast.expr):
             if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
         ]
         return cols if cols else None
-    return None
-
-
-def _model_discovery_extract_separate_foreign_key_definition(
-    self, call_node: ast.Call
-) -> dict | None:
-    """Extract a separate foreign key definition.
-
-    Scalar:    ``field.foreign("col").references("id").on("table")``
-    Composite: ``field.foreign(["a", "b"]).references(["x", "y"]).on("t")``
-
-    For the composite form ``field``/``references`` come back as lists. The
-    ``"composite"`` flag tells the caller which collection to file the
-    result into. Defaulting ``references`` to ``"id"`` only applies to the
-    scalar form — a composite FK must spell its referenced columns out
-    (their count has to match the local columns), so it is left as ``None``
-    when omitted and the entry is skipped.
-    """
-    field_name = None
-    references = None
-    on_table = None
-    on_delete = None
-    on_update = None
-
-    # Use the same traversal logic as _extract_field_definition_new_syntax
-    current = call_node
-    while current:
-        if isinstance(current, ast.Call):
-            if isinstance(current.func, ast.Attribute):
-                method_name = current.func.attr
-
-                if method_name == "foreign" and current.args:
-                    field_name = self._foreign_key_arg(current.args[0])
-                elif method_name == "references" and current.args:
-                    references = self._foreign_key_arg(current.args[0])
-                elif method_name == "on" and current.args:
-                    if isinstance(current.args[0], ast.Constant):
-                        on_table = current.args[0].value
-                elif method_name in ("on_delete", "onDelete") and current.args:
-                    if isinstance(current.args[0], ast.Constant):
-                        on_delete = current.args[0].value
-                elif (
-                    method_name in ("on_update", "onUpdate")
-                    and current.args
-                    and isinstance(current.args[0], ast.Constant)
-                ):
-                    on_update = current.args[0].value
-
-                # Move to next in chain
-                current = current.func.value
-            else:
-                break
-        else:
-            break
-
-    is_composite = isinstance(field_name, list)
-
-    if is_composite:
-        # Composite FK: referenced columns are mandatory and must be a list
-        # matching the local-column count; bail out on a malformed decl
-        # rather than emitting a broken constraint.
-        if (
-            not on_table
-            or not isinstance(references, list)
-            or len(references) != len(field_name)
-        ):
-            return None
-        return {
-            "composite": True,
-            "field": field_name,
-            "references": references,
-            "on": on_table,
-            "on_delete": on_delete,
-            "on_update": on_update,
-        }
-
-    if field_name and on_table:
-        return {
-            "composite": False,
-            "field": field_name,
-            "references": references or "id",
-            "on": on_table,
-            "on_delete": on_delete,
-            "on_update": on_update,
-        }
     return None

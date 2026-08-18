@@ -18,6 +18,7 @@ class ForeignKeyConstraint:
         self.foreign_table = foreign_table
         self.foreign_column = foreign_column
         self.delete_action = None
+        self.delete_columns = None
         self.update_action = None
         self.constraint_name = name
 
@@ -29,8 +30,9 @@ class ForeignKeyConstraint:
         self.foreign_table = foreign_table
         return self
 
-    def on_delete(self, action) -> Self:
+    def on_delete(self, action, columns=None) -> Self:
         self.delete_action = action
+        self.delete_columns = columns
         return self
 
     def on_update(self, action) -> Self:
