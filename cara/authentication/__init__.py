@@ -7,6 +7,10 @@ Provides authentication guards, managers, and policy primitives.
 from cara._LazyExports import _install_lazy_exports
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "AUTH_REFRESH_REPLAY_WINDOW": (
+        ".SessionPolicy",
+        "AUTH_REFRESH_REPLAY_WINDOW",
+    ),
     "AUTH_SECURITY_MAX_WINDOW": (".SessionPolicy", "AUTH_SECURITY_MAX_WINDOW"),
     "Authenticatable": (".contracts", "Authenticatable"),
     "Authentication": (".Authentication", "Authentication"),
@@ -30,6 +34,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 }
 
 __all__ = [
+    "AUTH_REFRESH_REPLAY_WINDOW",
     "AUTH_SECURITY_MAX_WINDOW",
     "Authenticatable",
     "Authentication",
