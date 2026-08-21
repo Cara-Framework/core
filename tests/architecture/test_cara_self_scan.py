@@ -59,10 +59,24 @@ class TestTheManifestDescribesCaraAndNotAProduct:
         layers = cara_manifest().layers
         assert {"eloquent", "queues", "middleware", "architecture"} <= set(layers)
 
-    def test_the_deployable_root_is_cara(self):
+    def test_the_deployable_root_holds_caras_own_source(self):
+        """The manifest points at cara's tree — identified by what is IN it.
+
+        This used to assert ``roots.deployable.name == "cara"``, which is the
+        name of the checkout DIRECTORY, not a fact about the code. Locally the
+        clone lands at ``commons/cara`` and it passed; in CI the repository is
+        ``Cara-Framework/core`` so the checkout is ``core`` and it failed — a
+        verdict that depended on where someone happened to clone. The claim
+        worth making is that ``roots.app`` really is cara's own package, and
+        the packages it must contain are the ones that say so.
+        """
         roots = cara_manifest().roots
         assert roots.app.parent == roots.deployable
-        assert roots.deployable.name == "cara"
+        assert roots.app.name == "cara"
+        for package in ("eloquent", "queues", "middleware", "architecture"):
+            assert (roots.app / package).is_dir(), (
+                f"{package} is missing from {roots.app} — this is not cara's tree"
+            )
 
 
 class TestCaraOwesExactlyItsPinnedDebt:
