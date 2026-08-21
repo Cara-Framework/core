@@ -277,12 +277,16 @@ def _seam_filter(
             # through generated ``app.*`` barrels, so a models barrel imports
             # the very slug constants the vocabulary seam exists to allow —
             # the two rules would otherwise contradict each other, with no way
-            # to satisfy both. Only UPPER_SNAKE names pass: a brand-carrying
-            # CLASS or module import (``packages.amazon.AmazonMarketplace``)
-            # is still a leak.
+            # to satisfy both. One declaration arriving mechanically at its
+            # second legal spelling, not a second appearance of the brand.
+            # Only the CONSTANT's own name is exempt: if the token is in the
+            # MODULE path (``from app.models.EbayThing import X``) the import
+            # is a brand-carrying module reference and stays flagged, as does
+            # any non-UPPER_SNAKE name (``packages.amazon.AmazonMarketplace``).
             if hit.startswith("import "):
-                imported = hit.split(" ", 2)[1].rsplit(".", 1)[-1]
-                if _UPPER_SNAKE.match(imported):
+                dotted = hit.split(" ", 2)[1]
+                module, _, symbol = dotted.rpartition(".")
+                if _UPPER_SNAKE.match(symbol) and not token_re.search(module):
                     continue
             remaining.append(hit)
         return remaining

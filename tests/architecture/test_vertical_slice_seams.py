@@ -461,3 +461,23 @@ def test_data_vocabulary_prefix_still_flags_a_branded_class_import(tmp_path):
     )
     findings = VerticalSliceSeams.scan(manifest)
     assert findings and "EbayMarketplace" in findings[0].message
+
+
+def test_data_vocabulary_prefix_still_flags_a_branded_module_path(tmp_path):
+    """The CONSTANT may travel to its runtime name; a branded MODULE may not.
+
+    ``from app.models.EbayThing import SOME_CONST`` re-exports an UPPER_SNAKE
+    symbol, but the brand is in the module path — that is a reference to a
+    brand-carrying module, not the vocabulary arriving at its second spelling.
+    """
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=TOKENS,
+        seam_locations=SeamLocations(data_vocabulary_prefixes=("app/models/",)),
+    )
+    write(
+        tmp_path / "app" / "models" / "__init__.py",
+        "from app.models.EbayThing import SOME_CONST\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert findings and "EbayThing" in findings[0].message
