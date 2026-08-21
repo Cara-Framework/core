@@ -420,6 +420,56 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
                     ),
                 )
             )
+    elif model_category == db_category == "numeric":
+        # A model that widened a decimal (more scale for a proration factor,
+        # more precision for money) must reach the deployed column, or every
+        # write is silently rounded — and where a CHECK re-derives a value
+        # from the stored column, the row is rejected outright. Widening only,
+        # mirroring the integer rule: narrowing loses digits and stays the
+        # operator's decision.
+        params = declared.get("params") or {}
+        declared_precision = params.get("precision")
+        declared_scale = params.get("scale")
+        live_precision = live.get("numeric_precision")
+        live_scale = live.get("numeric_scale")
+        widens = (
+            declared_precision is not None
+            and declared_scale is not None
+            and live_precision is not None
+            and live_scale is not None
+            and (
+                int(declared_precision) > int(live_precision)
+                or int(declared_scale) > int(live_scale)
+            )
+            and int(declared_precision) - int(declared_scale)
+            >= int(live_precision) - int(live_scale)
+        )
+        if widens:
+            type_sql = postgres_type(declared["type"], params)
+            operations.append(
+                Operation(
+                    kind="widen_column",
+                    table=table,
+                    key=f"{table}.{name}:type",
+                    forward_sql=(
+                        f'ALTER TABLE "{table}" ALTER COLUMN "{name}" TYPE {type_sql}'
+                    ),
+                    reverse_sql=(
+                        f'ALTER TABLE "{table}" ALTER COLUMN "{name}" TYPE '
+                        f"NUMERIC({live_precision},{live_scale})"
+                    ),
+                    safety=LOCKING,
+                    reason=(
+                        f"model widened numeric({live_precision},{live_scale}) → "
+                        f"{type_sql} — the live column silently rounds every write"
+                    ),
+                    restores_data=False,
+                    notes=(
+                        "rewrites the table; the reverse re-rounds every value "
+                        "and cannot restore the digits it drops",
+                    ),
+                )
+            )
     elif model_category and db_category and model_category != db_category:
         raise SchemaPlanRefused(
             f"type change {live['data_type']} → {declared['type']} is a rewrite "

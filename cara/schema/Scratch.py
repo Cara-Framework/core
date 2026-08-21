@@ -38,6 +38,7 @@ import shutil
 import subprocess
 import sys
 
+from cara.configuration import config
 from cara.exceptions import ScratchDatabaseException
 
 #: Scratch names are interpolated into DDL as identifiers; keep them boring
@@ -131,6 +132,33 @@ def run_craft(arguments: list[str], scratch: str, cwd: str) -> int:
     return subprocess.call([sys.executable, "craft", *arguments], cwd=cwd, env=env)
 
 
+def _resolve_client_binary(name: str, config_key: str) -> str | None:
+    """The PostgreSQL client binary to shell out to.
+
+    An explicit override wins over PATH, because the host that most needs a
+    rehearsal is the one whose client tools live outside PATH or whose PATH
+    resolves to a client older than the server. The products declare
+    ``PSQL_BIN`` / ``PG_DUMP_BIN`` for exactly this and nothing read them, so
+    an operator following their own config watched the setting change
+    nothing. An override that does not resolve to an executable is a typo,
+    not a fallback: silently reverting to PATH would run a DIFFERENT binary
+    than the operator named.
+    """
+    try:
+        override = config(config_key, None)
+    except Exception:  # noqa: BLE001 — a rehearsal must not need a booted config
+        override = None
+    if override:
+        resolved = shutil.which(str(override))
+        if resolved is None:
+            raise ScratchDatabaseException(
+                f"{config_key} points at '{override}', which is not an "
+                f"executable. Fix the path or unset it to use PATH's {name}."
+            )
+        return resolved
+    return shutil.which(name)
+
+
 def clone_structure(params: dict, source: str, scratch: str) -> None:
     """Copy ``source``'s SHAPE into ``scratch`` — no rows, ever.
 
@@ -148,13 +176,14 @@ def clone_structure(params: dict, source: str, scratch: str) -> None:
     production data to answer it would be a far larger promise — and a copy of
     production in a scratch database nobody is watching.
     """
-    pg_dump = shutil.which("pg_dump")
-    psql = shutil.which("psql")
+    pg_dump = _resolve_client_binary("pg_dump", "database.pg_dump_bin")
+    psql = _resolve_client_binary("psql", "database.psql_bin")
     if not pg_dump or not psql:
         raise ScratchDatabaseException(
             "A structure clone needs the 'pg_dump' and 'psql' binaries on "
             "PATH; they are how Postgres describes its own schema. Install the "
-            "PostgreSQL client tools, or run the plan without --rehearse."
+            "PostgreSQL client tools, set PG_DUMP_BIN / PSQL_BIN to their "
+            "absolute paths, or run the plan without --rehearse."
         )
 
     env = {**os.environ}

@@ -16,7 +16,7 @@ class _LiveSchemaInspection:
         target = self._sql_literal(self._target_schema(live_schema, schema_name))
         sql = (
             "SELECT table_name, column_name, data_type, is_nullable, "
-            "character_maximum_length "
+            "character_maximum_length, numeric_precision, numeric_scale "
             "FROM information_schema.columns "
             f"WHERE table_schema = '{target}' "
             "ORDER BY table_name, ordinal_position"
@@ -29,6 +29,13 @@ class _LiveSchemaInspection:
                 "data_type": (row["data_type"] or "").lower(),
                 "is_nullable": (row["is_nullable"] or "").upper() == "YES",
                 "max_length": row.get("character_maximum_length"),
+                # Numeric WIDTH is the same class of silent data loss as a
+                # too-narrow varchar, and it was invisible here: a live
+                # numeric(6,4) under a model declaring numeric(20,18) coerces
+                # every write and, where a CHECK re-derives a value from the
+                # stored column, rejects the row outright.
+                "numeric_precision": row.get("numeric_precision"),
+                "numeric_scale": row.get("numeric_scale"),
             }
         return tables
 

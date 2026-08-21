@@ -109,7 +109,7 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
     for row in (
         run(
             "SELECT table_name, column_name, data_type, is_nullable, "
-            "character_maximum_length "
+            "character_maximum_length, numeric_precision, numeric_scale "
             "FROM information_schema.columns "
             f"WHERE table_schema = '{sql_literal(target)}' "
             "ORDER BY table_name, ordinal_position"
@@ -121,6 +121,11 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
             "is_nullable": (row["is_nullable"] or "").upper() == "YES",
             # None for unbounded types (text, jsonb, …).
             "max_length": row.get("character_maximum_length"),
+            # Numeric width lives in its own information_schema columns. Not
+            # reading them let a live numeric(6,4) sit under a model declaring
+            # numeric(20,18) with both gates calling it clean.
+            "numeric_precision": row.get("numeric_precision"),
+            "numeric_scale": row.get("numeric_scale"),
         }
 
     checks: dict[str, set[str]] = {}
