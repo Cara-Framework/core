@@ -36,6 +36,7 @@ data, and a structure-only rehearsal — no rows — would answer it wrong.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 
 #: Applies to a table without touching existing rows or blocking readers and
@@ -177,6 +178,37 @@ def plan_id(operations: list[Operation]) -> str:
     return digest.hexdigest()[:16]
 
 
+_CREATES_TRIGGER = re.compile(
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\b", re.IGNORECASE
+)
+_CREATES_FUNCTION = re.compile(
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b", re.IGNORECASE
+)
+_CREATES_EXTENSION = re.compile(r"\bCREATE\s+EXTENSION\b", re.IGNORECASE)
+
+
+def _ddl_precedence(operation: Operation) -> int:
+    """Dependency rank for named-DDL creates inside one safety class.
+
+    A trigger EXECUTEs a function, and the function may be declared by a
+    DIFFERENT model (one referee function, several guarded tables), so
+    alphabetical table order can put ``CREATE TRIGGER`` ahead of the
+    ``CREATE FUNCTION`` it needs and fail mid-apply. Extensions come first
+    (anything may use them), then functions, then everything else, with
+    triggers last. An entry whose SQL creates both a function and a trigger
+    ranks as a trigger: it carries its own function and only needs the
+    stand-alone functions to exist before it.
+    """
+    sql = operation.forward_sql
+    if _CREATES_TRIGGER.search(sql):
+        return 3
+    if _CREATES_FUNCTION.search(sql):
+        return 1
+    if _CREATES_EXTENSION.search(sql):
+        return 0
+    return 2
+
+
 def sort_operations(operations: list[Operation]) -> list[Operation]:
     """Ledger first, then safest first, then stable by table and key.
 
@@ -192,6 +224,10 @@ def sort_operations(operations: list[Operation]) -> list[Operation]:
     run and then fail to record, which is the worst possible failure for this
     command: a schema that moved with no entry saying so. Sorted first, the
     ledger's own creation becomes its first row.
+
+    Within one safety class, :func:`_ddl_precedence` orders named-DDL creates
+    by dependency (extension → function → other → trigger) before the stable
+    table/key tiebreak.
     """
     return sorted(
         operations,
@@ -199,6 +235,7 @@ def sort_operations(operations: list[Operation]) -> list[Operation]:
             op.table != LEDGER_TABLE,
             SAFETY_ORDER.get(op.safety, 9),
             op.kind != "create_table",
+            _ddl_precedence(op),
             op.table,
             op.key,
         ),

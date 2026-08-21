@@ -32,7 +32,9 @@ from __future__ import annotations
 from cara.exceptions import SchemaPlanRefused
 from cara.schema.LiveSchema import LiveSchema, declared_columns
 from cara.schema.Objects import (
+    missing_checks,
     missing_indexes,
+    orphaned_checks,
     orphaned_indexes,
     orphaned_tables,
 )
@@ -51,6 +53,10 @@ from cara.schema.Vocabulary import (
     MODEL_TYPE_CATEGORY,
     postgres_type,
 )
+
+#: Text-family model types with no length bound — widening a bounded live
+#: column to one of these is always safe for the data.
+_UNBOUNDED_TEXT_TYPES = frozenset({"text", "tiny_text", "long_text"})
 
 
 def plan(
@@ -179,6 +185,8 @@ def plan(
         except SchemaPlanRefused as refusal:
             refusals.append(str(refusal))
         operations.extend(orphaned_indexes(model, table, live))
+        operations.extend(missing_checks(model, table, live))
+        operations.extend(orphaned_checks(model, table, live))
 
     notices.extend(orphaned_tables({m["table"] for m in planned}, live))
 
@@ -367,6 +375,49 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
                     reason=f"model widened {live['data_type']} → {declared['type']}",
                     restores_data=False,
                     notes=("rewrites the table; the reverse fails on out-of-range rows",),
+                )
+            )
+    elif model_category == db_category == "text":
+        # The bounded→bounded widening (varchar(n) → varchar(m>n)) is derived
+        # by the ``:length`` block below. This branch covers the case that
+        # block cannot: the model dropping the bound entirely (``text`` over
+        # a live varchar(n)) — the shape a ``__renamed_from__`` rename leaves
+        # behind when the split column widened its type. Narrowing stays the
+        # operator's decision, mirroring the integer rule: ``schema:check``
+        # reports it, and deriving a lossy statement would be worse than
+        # deriving nothing.
+        widens = (
+            declared["type"] in _UNBOUNDED_TEXT_TYPES
+            and live.get("max_length") is not None
+        )
+        if widens:
+            type_sql = postgres_type(declared["type"], declared.get("params"))
+            operations.append(
+                Operation(
+                    kind="widen_column",
+                    table=table,
+                    key=f"{table}.{name}:type",
+                    forward_sql=(
+                        f'ALTER TABLE "{table}" ALTER COLUMN "{name}" TYPE {type_sql}'
+                    ),
+                    # Narrowing back can fail on values that now exceed the
+                    # old bound, so the reverse is offered but not promised.
+                    reverse_sql=(
+                        f'ALTER TABLE "{table}" ALTER COLUMN "{name}" TYPE '
+                        f"{_live_type_sql(live)}"
+                    ),
+                    safety=LOCKING,
+                    reason=(
+                        f"model widened {_live_type_sql(live)} → "
+                        f"{type_sql} — the live bound rejects writes the "
+                        "model allows"
+                    ),
+                    restores_data=False,
+                    notes=(
+                        "varchar widening is metadata-only in Postgres — a "
+                        "brief ACCESS EXCLUSIVE lock, no rewrite; the reverse "
+                        "fails on rows longer than the old bound",
+                    ),
                 )
             )
     elif model_category and db_category and model_category != db_category:

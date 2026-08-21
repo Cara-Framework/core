@@ -176,6 +176,154 @@ def _declared_blueprint_indexes(
     return list(declared.values())
 
 
+def _adopt_unique_index(
+    table: str, name: str, columns: list[str], *, index_prebuilt: bool = False
+) -> Operation:
+    """Attach the declared UNIQUE constraint to its (existing or just-built)
+    backing index. ``ADD CONSTRAINT ... UNIQUE USING INDEX`` takes a brief
+    ACCESS EXCLUSIVE lock and no table scan — the index already proves
+    uniqueness."""
+    return Operation(
+        kind="add_unique_constraint",
+        table=table,
+        key=f"{table}:{name}:constraint",
+        forward_sql=(
+            f'ALTER TABLE "{table}" ADD CONSTRAINT {name} '
+            f"UNIQUE USING INDEX {name}"
+        ),
+        reverse_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {name}',
+        safety=LOCKING,
+        reason=(
+            "a bare unique index carries the declared unique constraint's "
+            "name; adopting it restores the constraint form a from-zero "
+            "migrate creates"
+            if index_prebuilt
+            else (
+                f"model declares a unique constraint on {', '.join(columns)}; "
+                "the CONCURRENTLY-built index becomes the constraint"
+            )
+        ),
+        notes=(
+            "brief ACCESS EXCLUSIVE lock, no scan; dropping the constraint "
+            "later also drops the index it absorbed",
+        ),
+    )
+
+
+def _slugify_check(text: str) -> str:
+    """Mirror of ``ConstraintManager._slugify`` — the auto-derived CHECK name
+    must match what the generator writes into a from-zero migration, or the
+    same declaration would carry two names depending on which tool ran."""
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", str(text)).strip("_").lower()
+    return slug or "check"
+
+
+def _declared_checks(model: dict, table: str) -> list[tuple[str, str]]:
+    """``(name, expression)`` for every field-level ``field.check`` the model
+    declares, named exactly as the Blueprint would name it."""
+    declared: list[tuple[str, str]] = []
+    for check in model.get("checks", []) or []:
+        expression = str(check.get("expression") or "").strip()
+        if not expression:
+            continue
+        name = check.get("name") or f"{table}_{_slugify_check(expression)}_check"
+        declared.append((name, expression))
+    return declared
+
+
+def missing_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]:
+    """CHECK constraints the model declares and the database does not have.
+
+    ``schema:check`` has always reported these; the planner silently omitted
+    them, so a deployed database could never converge on a model that grew a
+    CHECK. Each lands as the safe two-step recipe: ``ADD CONSTRAINT ... NOT
+    VALID`` (metadata only, no scan) then ``VALIDATE CONSTRAINT`` (scans
+    without blocking writes), with a preflight proving the rows already
+    satisfy it before either runs.
+    """
+    live_checks = live.checks.get(table, set())
+    operations: list[Operation] = []
+    for name, expression in _declared_checks(model, table):
+        if name in live_checks:
+            continue
+        operations.append(
+            Operation(
+                kind="add_check",
+                table=table,
+                key=f"{table}:{name}",
+                forward_sql=(
+                    f'ALTER TABLE "{table}" ADD CONSTRAINT {name} '
+                    f"CHECK ({expression}) NOT VALID"
+                ),
+                reverse_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {name}',
+                safety=LOCKING,
+                reason="model declares a CHECK constraint absent from the database",
+                notes=(
+                    "attached NOT VALID: existing rows are not scanned here — "
+                    "the paired VALIDATE does that without blocking writes",
+                ),
+            )
+        )
+        operations.append(
+            Operation(
+                kind="validate_check",
+                table=table,
+                key=f"{table}:{name}:validate",
+                forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
+                reverse_sql=None,
+                safety=LOCKING,
+                reason="prove the existing rows satisfy the attached CHECK",
+                preflight_sql=(
+                    f'SELECT 1 FROM "{table}" WHERE NOT ({expression}) LIMIT 1'
+                ),
+                preflight_failure=(
+                    f"{table} holds rows violating {name} — repair the data "
+                    "before validating the constraint"
+                ),
+                notes=(
+                    "no reverse recorded: validation has nothing to undo — the "
+                    "paired ADD CONSTRAINT's reverse removes the constraint",
+                ),
+            )
+        )
+    return operations
+
+
+def orphaned_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]:
+    """CHECK constraints on a model-owned table that no declaration owns.
+
+    The mirror of :func:`missing_checks`, with the same over-claiming rule as
+    :func:`orphaned_indexes`: an ``__indexes__`` entry whose SQL cannot be
+    read contributes its label, so the safe failure is an orphan surviving
+    one more deploy rather than a declared object being dropped.
+    """
+    declared = {name for name, _ in _declared_checks(model, table)}
+    for index in model.get("indexes", []) or []:
+        up = index.get("up")
+        if up:
+            declared |= created_objects(up) or {index.get("name") or ""}
+
+    operations: list[Operation] = []
+    for name in sorted(live.checks.get(table, set()) - declared):
+        operations.append(
+            Operation(
+                kind="drop_check",
+                table=table,
+                key=f"{table}:{name}",
+                forward_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {name}',
+                reverse_sql=None,
+                safety=DESTRUCTIVE,
+                reason="CHECK constraint in the database that no model declares",
+                restores_data=False,
+                notes=(
+                    "no reverse is recorded: capture its definition from "
+                    "pg_constraint before dropping if you may want it back",
+                ),
+            )
+        )
+    return operations
+
+
 def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation]:
     """Index-shaped objects the model declares and the database does not have.
 
@@ -188,12 +336,32 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
     and nothing would say so.
     """
     present = live.objects_on(table)
+    live_indexes = live.indexes.get(table, set())
+    live_constraints = live.constraints.get(table, set())
     operations: list[Operation] = []
 
     for name, columns, unique in _declared_blueprint_indexes(model, table):
-        if name in present:
-            continue
         column_list = ", ".join(f'"{column}"' for column in columns)
+        if not unique:
+            if name in present:
+                continue
+        else:
+            # A blueprint UNIQUE is a CONSTRAINT from zero (``table.unique``
+            # emits ADD CONSTRAINT, and the backing index is Postgres's own).
+            # Evolve must land the same shape, or ``schema:check`` — which
+            # exempts constraint-backed indexes precisely because no model
+            # names them — reads the bare index as an orphan forever. Three
+            # live states: the constraint exists (done), only a bare index
+            # exists (adopt it), neither exists (build CONCURRENTLY, then
+            # adopt).
+            if name in live_constraints:
+                continue
+            if name in live_indexes:
+                operations.append(
+                    _adopt_unique_index(table, name, columns, index_prebuilt=True)
+                )
+                continue
+            operations.append(_adopt_unique_index(table, name, columns))
         operations.append(
             Operation(
                 kind="create_index",
@@ -357,7 +525,9 @@ def orphaned_tables(model_tables: set[str], live: LiveSchema) -> list[str]:
 
 __all__ = [
     "created_objects",
+    "missing_checks",
     "missing_indexes",
+    "orphaned_checks",
     "orphaned_indexes",
     "orphaned_tables",
 ]
