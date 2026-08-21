@@ -14,7 +14,10 @@ class PathManager:
     Filesystem Path Manager for the Cara framework.
 
     Handles all filesystem path operations for the project structure.
-    If `set_base_path(...)` is never called, `base_path()` returns cwd.
+    If `set_base_path(...)` is never called, `base_path()` anchors to the
+    nearest ancestor of cwd that owns `bootstrap.py` — the deployable — and
+    refuses outright when cwd is the workspace root that HOLDS deployables.
+    See :meth:`_anchor_from_cwd`.
 
     Individual paths can be overridden via `set_path_override(key, path)`.
     When set, the corresponding `*_path()` method returns the override
@@ -25,6 +28,9 @@ class PathManager:
 
     _base_path: str = None
     _overrides: dict = {}
+    # cwd -> resolved anchor. Resolution walks the filesystem, and base_path()
+    # is called on nearly every path derivation.
+    _anchors: dict = {}
 
     @staticmethod
     def set_base_path(path: str) -> None:
@@ -56,12 +62,81 @@ class PathManager:
         return PathManager._overrides.get(key)
 
     @staticmethod
+    def _holds_deployables(directory: str) -> bool:
+        """True when *directory* CONTAINS deployables instead of being one."""
+        try:
+            children = os.scandir(directory)
+        except OSError:
+            return False
+        with children:
+            return any(
+                entry.is_dir()
+                and os.path.isfile(os.path.join(entry.path, "bootstrap.py"))
+                for entry in children
+            )
+
+    @staticmethod
+    def _anchor_from_cwd() -> str:
+        """Anchor an unconfigured process to its DEPLOYABLE, never to bare cwd.
+
+        This used to return ``os.getcwd()`` outright, which makes every derived
+        path — ``database/migrations``, ``storage/logs``, ``config`` — a
+        function of where the operator happened to be standing. A run from the
+        WORKSPACE ROOT therefore created ``database/`` and ``storage/`` there:
+        outside every deployable, outside every ``.gitignore`` (the workspace
+        root is not a git repository, so nothing ignores them) and outside the
+        retention the deployables' own ``storage/`` gets. It really happened —
+        a stray migration-generation lock and a month of API stack traces.
+        DOCTRINE §1 enumerates the workspace-root children exhaustively and
+        neither directory is among them.
+
+        A deployable is the nearest ancestor owning ``bootstrap.py`` — the
+        entry point that calls :meth:`set_base_path` when it is the one
+        running. Standing in the workspace root is not ambiguity but misuse: it
+        HOLDS deployables rather than being one, so it fails loudly instead of
+        being written into. Everywhere else keeps cwd, so a fixture tree or an
+        installed package behaves exactly as before.
+        """
+        try:
+            cwd = os.getcwd()
+        except OSError:  # the working directory was removed under us
+            return os.sep
+        cached = PathManager._anchors.get(cwd)
+        if cached is not None:
+            return cached
+
+        anchor = None
+        candidate = cwd
+        while anchor is None:
+            if os.path.isfile(os.path.join(candidate, "bootstrap.py")):
+                anchor = candidate
+                break
+            parent = os.path.dirname(candidate)
+            if parent == candidate:
+                break
+            candidate = parent
+
+        if anchor is None:
+            if PathManager._holds_deployables(cwd):
+                raise RuntimeError(
+                    f"{cwd} is a workspace root, not a deployable: it holds the "
+                    "deployables rather than being one, and anchoring here "
+                    "writes database/ and storage/ outside every repository. "
+                    "Run the command from api/ or services/, or call "
+                    "PathManager.set_base_path() with the deployable root."
+                )
+            anchor = cwd
+
+        PathManager._anchors[cwd] = anchor
+        return anchor
+
+    @staticmethod
     def base_path(relative: str = "") -> str:
         """
         Return the project root path.
         If `relative` is provided, append it under the root.
         """
-        base = PathManager._base_path or os.getcwd()
+        base = PathManager._base_path or PathManager._anchor_from_cwd()
         return os.path.join(base, relative) if relative else base
 
     # App structure paths

@@ -13,6 +13,7 @@ import builtins
 import html
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from cara import observability
@@ -399,10 +400,10 @@ def report(exception: BaseException) -> None:
     structured logs) without aborting the request / job. Falls back
     to ``stderr`` if the Log facade itself fails.
     """
-    try:
+    # Reporting must never raise: a broken exporter cannot be allowed to
+    # replace the exception it was asked to report.
+    with suppress(Exception):
         observability.capture_exception(exception)
-    except Exception:  # noqa: BLE001 — reporting must never raise
-        pass
     try:
         Log.error(
             "%s: %s",

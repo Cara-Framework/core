@@ -164,6 +164,43 @@ EVENT_ORDER = {
 }
 
 
+def _event_marker(candidate: object) -> str | None:
+    """
+    Read the model-event marker off a raw class-body value, boot-free.
+
+    ``_register_model_event`` writes the marker into the decorated
+    function's OWN ``__dict__``, so it is read back the same way. This must
+    never go through ``getattr``/``hasattr``: a model class body also holds
+    RELATIONSHIP DESCRIPTORS, and ``BaseRelationship.__getattr__`` resolves
+    the relationship by INSTANTIATING the related model —
+    ``Model.__init__`` -> ``boot()`` -> ``get_connection_details()`` -> the
+    ``DB`` facade. Probing with ``hasattr`` therefore made merely SCANNING a
+    model for hooks boot the application and hit the database, and raise
+    outright in a bootless context.
+
+    ``vars()`` reads ``__dict__`` through the type, so it can never reach
+    ``__getattr__``. Values with no instance dict of their own (``property``,
+    slot-only objects, plain strings) simply carry no marker — the same
+    answer the old probe gave, since ``classmethod``/``staticmethod`` do not
+    forward arbitrary attributes either.
+
+    Args:
+        candidate (object): A raw value taken from a class ``__dict__``
+
+    Returns:
+        str | None: The event name when the value is a listener, else None
+    """
+    try:
+        namespace = vars(candidate)
+    except TypeError:
+        return None
+
+    if not namespace.get("_is_model_event"):
+        return None
+
+    return namespace["_event_name"]
+
+
 def _get_model_events(model_class) -> dict:
     """
     Discover and return all event listeners for a model class.
@@ -181,8 +218,8 @@ def _get_model_events(model_class) -> dict:
         for method_name in dir(cls):
             if method_name in cls.__dict__:
                 method = cls.__dict__[method_name]
-                if hasattr(method, "_is_model_event") and method._is_model_event:
-                    event_name = method._event_name
+                event_name = _event_marker(method)
+                if event_name is not None:
                     if event_name not in events:
                         events[event_name] = []
                     events[event_name].append(method)
