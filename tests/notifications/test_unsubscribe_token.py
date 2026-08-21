@@ -19,7 +19,7 @@ from cara.notifications.UnsubscribeToken import matches, mint
 
 _PUBLIC_ID = "usr_9f2c1a"
 _EMAIL = "reader@example.com"
-_SECRET = "s3cret-unsubscribe-key"
+_SECRET = "s3cret-unsubscribe-key"  # gitleaks:allow — test fixture, not a credential
 
 # Computed independently of the implementation, from the documented format:
 # hexdigest of HMAC-SHA256 over "<public_id>:<email>" keyed by the raw secret.
