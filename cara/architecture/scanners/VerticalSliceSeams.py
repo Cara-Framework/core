@@ -273,6 +273,17 @@ def _seam_filter(
             # default) stay flagged even here.
             if hit.startswith(("container-literal ", "dict-key-literal ")):
                 continue
+            # ...and it RE-EXPORTS them. §2 requires the kernel to be reached
+            # through generated ``app.*`` barrels, so a models barrel imports
+            # the very slug constants the vocabulary seam exists to allow —
+            # the two rules would otherwise contradict each other, with no way
+            # to satisfy both. Only UPPER_SNAKE names pass: a brand-carrying
+            # CLASS or module import (``packages.amazon.AmazonMarketplace``)
+            # is still a leak.
+            if hit.startswith("import "):
+                imported = hit.split(" ", 2)[1].rsplit(".", 1)[-1]
+                if _UPPER_SNAKE.match(imported):
+                    continue
             remaining.append(hit)
         return remaining
     return hits

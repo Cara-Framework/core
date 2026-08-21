@@ -426,3 +426,38 @@ def test_token_matching_keeps_camel_case_and_fused_host_leaks(tmp_path):
         assert token_re.search(leak), f"missed leak in {leak!r}"
 
     assert not token_re.search("amazonian")
+
+
+def test_data_vocabulary_prefix_forgives_reexported_slug_constants(tmp_path):
+    """A generated kernel barrel re-exports the vocabulary it is allowed to hold.
+
+    §2 requires app code to reach the kernel through ``app.*`` barrels, and
+    Seam #1 allows the slug constant on the owning model. The barrel therefore
+    imports exactly those constants — without this, the namespace rule and the
+    data-vocabulary seam contradict each other and no layout satisfies both.
+    """
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=TOKENS,
+        seam_locations=SeamLocations(data_vocabulary_prefixes=("app/models/",)),
+    )
+    write(
+        tmp_path / "app" / "models" / "__init__.py",
+        "from commons.models import EBAY_US, AMAZON_US\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
+
+
+def test_data_vocabulary_prefix_still_flags_a_branded_class_import(tmp_path):
+    """Only UPPER_SNAKE vocabulary passes — a brand class import is still a leak."""
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=TOKENS,
+        seam_locations=SeamLocations(data_vocabulary_prefixes=("app/models/",)),
+    )
+    write(
+        tmp_path / "app" / "models" / "__init__.py",
+        "from packages.ebay.EbayMarketplace import EbayMarketplace\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert findings and "EbayMarketplace" in findings[0].message
