@@ -5,8 +5,8 @@ excluded; every other Python source file is governed by three rules:
 
 * files above the hard line limit are refactoring debt;
 * a file declares at most one public top-level class, named for the file;
-* public methods on controller/job edge classes and their adapter mixins
-  stay within the edge-method limit;
+* every method on a controller/job edge class and its adapter mixins —
+  private ones included — stays within the edge-method limit;
 * adapter mixins carry public PascalCase names, matching their file, and
   stay off package barrels (privacy is barrel non-export, never an
   underscore prefix), while business services use composition rather than
@@ -202,9 +202,14 @@ class SourceShape:
                         edge_classes.append(class_node)
                 for class_node in edge_classes:
                     for node in class_node.body:
-                        if not isinstance(
-                            node, (ast.FunctionDef, ast.AsyncFunctionDef)
-                        ) or node.name.startswith("_"):
+                        # PRIVATE methods count. The budget exists to keep the
+                        # edge thin (§5: "Controller/job methods <= ~40 lines"),
+                        # and skipping ``_``-prefixed names made it trivially
+                        # evadable: a 149-line controller action passed by
+                        # delegating its whole body to a ``_handle_*`` twin in
+                        # the same class. Both products were doing it at scale
+                        # when this skip was removed.
+                        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                             continue
                         lines = (node.end_lineno or node.lineno) - node.lineno + 1
                         if lines > edge_limit:

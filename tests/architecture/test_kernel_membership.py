@@ -260,3 +260,71 @@ def test_single_consumer_check_noops_with_fewer_than_two_consumer_roots(tmp_path
     manifest = make_manifest(tmp_path)
     write(tmp_path / "commons" / "shared" / "Fx.py", "def convert():\n    return 1\n")
     assert KernelMembership.scan(manifest) == []
+
+
+def test_lazy_generated_theme_barrel_proves_both_consumers(tmp_path):
+    """A ``_LAZY_EXPORTS`` barrel re-exports names just like an eager one.
+
+    ``BarrelGenerator`` emits generated barrels as a ``_LAZY_EXPORTS`` dict
+    literal, so a consumer writes ``from app.shared.catalog import convert``
+    and never names the defining module. Reading only eager
+    ``from .Fx import convert`` statements makes that consumer invisible and
+    reports a genuinely two-process module as single-consumer eviction debt.
+    """
+    from dataclasses import replace
+
+    consumer_a = tmp_path / "deployable_a" / "app"
+    consumer_b = tmp_path / "deployable_b" / "app"
+    write(consumer_a / "services" / "Uses.py", "from app.shared.catalog import convert\n")
+    write(consumer_b / "services" / "Uses.py", "from app.shared.catalog import convert\n")
+
+    manifest = make_manifest(tmp_path)
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            consumer_roots={"a": (consumer_a,), "b": (consumer_b,)},
+        ),
+    )
+    shared = tmp_path / "commons" / "shared"
+    write(shared / "catalog" / "Fx.py", "def convert():\n    return 1\n")
+    write(
+        shared / "catalog" / "__init__.py",
+        '_LAZY_EXPORTS: dict[str, tuple[str, str]] = {\n'
+        '    "convert": (".Fx", "convert"),\n'
+        "}\n"
+        '__all__ = ["convert"]\n',
+    )
+
+    assert not [f for f in KernelMembership.scan(manifest) if "Fx" in f.message]
+
+
+def test_lazy_generated_theme_barrel_still_reports_one_consumer(tmp_path):
+    """The lazy form must not become a blanket amnesty: one consumer still fails."""
+    from dataclasses import replace
+
+    consumer_a = tmp_path / "deployable_a" / "app"
+    consumer_b = tmp_path / "deployable_b" / "app"
+    write(consumer_a / "services" / "Uses.py", "from app.shared.catalog import convert\n")
+    write(consumer_b / "services" / "Other.py", "X = 1\n")
+
+    manifest = make_manifest(tmp_path)
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            consumer_roots={"a": (consumer_a,), "b": (consumer_b,)},
+        ),
+    )
+    shared = tmp_path / "commons" / "shared"
+    write(shared / "catalog" / "Fx.py", "def convert():\n    return 1\n")
+    write(
+        shared / "catalog" / "__init__.py",
+        '_LAZY_EXPORTS: dict[str, tuple[str, str]] = {\n'
+        '    "convert": (".Fx", "convert"),\n'
+        "}\n"
+        '__all__ = ["convert"]\n',
+    )
+
+    findings = KernelMembership.scan(manifest)
+    assert any("'Fx' is consumed by exactly one" in f.message for f in findings)

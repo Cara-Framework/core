@@ -325,6 +325,45 @@ class KernelMembership:
         return findings
 
 
+def _lazy_export_symbols(tree: ast.Module, stems: set[str]) -> dict[str, str]:
+    """``_LAZY_EXPORTS`` entries in one barrel -> defining module stem.
+
+    ``BarrelGenerator`` emits a generated barrel as a ``_LAZY_EXPORTS`` dict
+    literal (``"format_title": (".Text", "format_title")``) rather than eager
+    ``from .Text import format_title`` statements. Both forms re-export the
+    same names, so consumer counting MUST read both: a scanner that only
+    understands the eager form sees a lazily-generated barrel as exporting
+    nothing, and every ``from app.shared.<theme> import X`` consumer of it
+    becomes invisible — which under-counts consumers and reports a
+    two-process module as single-consumer eviction debt.
+    """
+    mapping: dict[str, str] = {}
+    for node in tree.body:
+        target = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target.id
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target = node.targets[0].id
+        if target != "_LAZY_EXPORTS" or not isinstance(node.value, ast.Dict):
+            continue
+        for key, value in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            if not (isinstance(value, ast.Tuple) and value.elts):
+                continue
+            module = value.elts[0]
+            if not (isinstance(module, ast.Constant) and isinstance(module.value, str)):
+                continue
+            candidate = module.value.lstrip(".").split(".")[-1]
+            if candidate in stems:
+                mapping[key.value] = candidate
+    return mapping
+
+
 def _shared_barrel_symbols(
     shared_dir: Path, stems: set[str]
 ) -> dict[tuple[str, str], str]:
@@ -336,6 +375,8 @@ def _shared_barrel_symbols(
             continue
         suffix = init.parent.relative_to(shared_dir).as_posix().replace("/", ".")
         suffix = "" if suffix == "." else suffix
+        for exported, candidate in _lazy_export_symbols(tree, stems).items():
+            mapping[(suffix, exported)] = candidate
         for node in tree.body:
             if not isinstance(node, ast.ImportFrom) or node.level == 0:
                 continue

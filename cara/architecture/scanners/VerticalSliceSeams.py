@@ -59,9 +59,53 @@ _SEAM_KEY = "vertical_slice_seams"
 _UPPER_SNAKE = re.compile(r"^[A-Z0-9_]+$")
 
 
+#: A plug-in token must occupy a whole SEGMENT, not merely appear as a run of
+#: characters. Without this, ``lowes`` matches inside ``lowest_price_30d`` and
+#: ``on`` matches inside every ``json``/``connection``/``version`` in the tree —
+#: which is why a product with 199 retailer packages could only ever declare a
+#: handful of tokens, leaving the other 190-odd unscanned (DOCTRINE §4, and
+#: changelog 1.4: "concrete plug-in string scanning is mandatory whenever
+#: plug-in tokens are declared"). A segment ends at a non-alphanumeric
+#: character, at end-of-string, or at a camelCase hump — so ``AmazonListing``
+#: and ``shopify_product_id`` still hit, while ``lowest`` and ``json`` do not.
+#: NOTE the case handling: the boundaries are case-SENSITIVE (a camelCase hump
+#: is only a hump if the letter really is upper case), so ``re.IGNORECASE`` is
+#: scoped to the token alternation with an inline ``(?i:...)`` group instead of
+#: being set on the whole pattern. Applied globally it makes ``[A-Z]`` match
+#: lower case too, every letter reads as a hump, and the end boundary accepts
+#: anything — ``lowes`` matches ``lowest`` again.
+_SEGMENT_START = r"(?:^|(?<=[^0-9A-Za-z])|(?<=[a-z0-9])(?=[A-Z]))"
+_SEGMENT_END = r"(?:$|(?=[^0-9A-Za-z])|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Za-z])(?=[0-9]))"
+
+#: A token this long may also start MID-segment. The end boundary alone is not
+#: enough for short tokens (``on`` would hit ``json``, ``version``,
+#: ``comparison``), but demanding a start boundary loses the leak that matters
+#: most in practice: a vendor name fused into a host or handle —
+#: ``myshopify.com``. Six characters is where a plug-in slug stops colliding
+#: with English; below it the token must own its whole segment.
+_EMBEDDED_MIN_LENGTH = 6
+
+
 def _token_re(manifest: Manifest) -> re.Pattern[str]:
-    tokens = sorted(manifest.plugin_tokens, key=len, reverse=True)
-    return re.compile("(" + "|".join(re.escape(t) for t in tokens) + ")", re.IGNORECASE)
+    """Match plug-in tokens at segment boundaries, never as blind substrings.
+
+    The end boundary is always required, so ``lowes`` no longer reports itself
+    inside ``lowest_price_30d`` — a false positive that made declaring a real
+    token set impossible and left most of a 199-package tree unscanned.
+    """
+    anchored: list[str] = []
+    embedded: list[str] = []
+    for token in sorted(manifest.plugin_tokens, key=len, reverse=True):
+        bucket = embedded if len(token) >= _EMBEDDED_MIN_LENGTH else anchored
+        bucket.append(re.escape(token))
+    branches: list[str] = []
+    if anchored:
+        branches.append(f"{_SEGMENT_START}(?i:{'|'.join(anchored)}){_SEGMENT_END}")
+    if embedded:
+        branches.append(f"(?i:{'|'.join(embedded)}){_SEGMENT_END}")
+    if not branches:
+        return re.compile(r"(?!)")
+    return re.compile("|".join(f"(?:{branch})" for branch in branches))
 
 
 def _identifier_hits(rel: str, tree: ast.Module, token_re: re.Pattern[str]) -> list[str]:

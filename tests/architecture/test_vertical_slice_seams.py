@@ -389,3 +389,40 @@ def test_no_plugin_tokens_declared_noops(tmp_path):
         tmp_path / "app" / "services" / "EbayThing.py", "class EbayConnector:\n    pass\n"
     )
     assert VerticalSliceSeams.scan(manifest) == []
+
+
+def test_token_matching_is_segment_bounded_not_substring(tmp_path):
+    """``lowes`` must not report itself inside ``lowest_price_30d``.
+
+    Blind substring matching is why a product with 199 retailer packages could
+    declare only a handful of tokens: turning the rest on drowned the guard in
+    English words. The boundary rule is what makes a real token set usable.
+    """
+    from cara.architecture.scanners.VerticalSliceSeams import _token_re
+
+    manifest = make_manifest(tmp_path, plugin_tokens=frozenset({"lowes", "on", "bose"}))
+    token_re = _token_re(manifest)
+
+    for benign in ("lowest_price_30d", "lowest", "slowest", "json", "version",
+                   "connection", "comparison", "verbose", "season"):
+        assert not token_re.search(benign), f"false positive on {benign!r}"
+
+    for leak in ("lowes", "lowes.com", "on_delete", "BOSE_SPEAKER"):
+        assert token_re.search(leak), f"missed leak in {leak!r}"
+
+
+def test_token_matching_keeps_camel_case_and_fused_host_leaks(tmp_path):
+    """Boundaries must not cost the leaks the substring form did catch."""
+    from cara.architecture.scanners.VerticalSliceSeams import _token_re
+
+    manifest = make_manifest(
+        tmp_path, plugin_tokens=frozenset({"amazon", "ebay", "shopify"})
+    )
+    token_re = _token_re(manifest)
+
+    for leak in ("AmazonListingExtractor", "PullEbayJob", "MARKETPLACE_EBAY",
+                 "amazon_id", "cdn.shopify.com", "shopify_product_id",
+                 "myshopify.com", "Amazon2"):
+        assert token_re.search(leak), f"missed leak in {leak!r}"
+
+    assert not token_re.search("amazonian")
