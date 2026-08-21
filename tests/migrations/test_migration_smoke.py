@@ -1,98 +1,130 @@
-"""Smoke test for the production migration set under
-``commons/database/migrations``.
+"""The migration-shape audit, exercised against fixtures that always exist.
 
-These tests do NOT run the DDL — they only verify that every
-migration file:
+WHY THIS FILE WAS REWRITTEN
+---------------------------
+It used to walk ``Path(__file__).parents[3] / "database" / "migrations"`` and
+skip when that directory was absent, "so the tests skip cleanly rather than
+fail" in build contexts without the consumer's migrations.
 
-* parses cleanly (no SyntaxError, no top-level ImportError),
-* defines exactly one ``Migration`` subclass, and
-* exposes callable ``up()`` and ``down()`` methods.
+From ``commons/cara/tests/migrations/``, ``parents[3]`` is ``commons`` — so the
+path was ``commons/database/migrations``, which exists in no product: the
+migrations live in each DEPLOYABLE (``api/database/migrations``, 149 files in
+synkronus). The list was therefore always empty, the module-level ``skipif``
+always true, and the reason text — "smoke test only runs in the full monorepo
+checkout" — was false precisely in the full monorepo checkout. Both tests were
+permanently skipped in both products, which reads as coverage and is not.
 
-This is the cheapest way to detect the regressions that would
-otherwise only surface mid-sweep against a real database. A broken
-migration sitting on disk silently passes type-check and unit tests
-but explodes the moment ``run_pending_migrations`` reaches it.
+No path relative to this file reaches a real migration set, and hard-coding
+``../../api/database/migrations`` would couple the framework to one product's
+layout. So the RULE moved into ``MigrationShapeAudit`` where the framework can
+own it, the products point it at their own directory from their own suites
+(api/tests/test_migration_convention.py, services/tests/...), and what remains
+here is the framework's job: proving the audit itself detects each defect.
 
-If commons/database/migrations is absent (some build contexts ship
-the cara package without the consumer's migration directory), the
-tests skip cleanly rather than fail.
+The audit is static for the same reason ``audit_migrations`` is — importing a
+migration can open a database connection at module scope.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
 
-# Resolve commons/database/migrations relative to this test file.
-# tests/ → cara/ → commons/ → cara/.. → commons/database/migrations
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "database" / "migrations"
+from cara.testing.audits import MigrationShapeAudit
+
+GOOD = '''
+from cara.migrations import Migration
 
 
-def _migration_files() -> list[Path]:
-    if not _MIGRATIONS_DIR.is_dir():
-        return []
-    return sorted(p for p in _MIGRATIONS_DIR.glob("*.py") if p.name != "__init__.py")
+class CreateWidgetTable(Migration):
+    def up(self):
+        pass
+
+    def down(self):
+        pass
+'''
 
 
-_FILES = _migration_files()
+def _write(directory: Path, name: str, body: str) -> Path:
+    path = directory / name
+    path.write_text(body)
+    return path
 
-pytestmark = pytest.mark.skipif(
-    not _FILES,
-    reason=(
-        "No commons/database/migrations directory present in this build "
-        "context; smoke test only runs in the full monorepo checkout."
-    ),
+
+def test_a_well_formed_migration_raises_nothing(tmp_path: Path) -> None:
+    _write(tmp_path, "2026_01_01_000000_create_widget_table.py", GOOD)
+    assert MigrationShapeAudit(tmp_path).findings() == []
+
+
+def test_init_is_not_a_migration(tmp_path: Path) -> None:
+    _write(tmp_path, "__init__.py", "")
+    assert MigrationShapeAudit(tmp_path).files() == []
+
+
+def test_a_missing_directory_yields_no_files(tmp_path: Path) -> None:
+    """Callers assert non-emptiness themselves — the audit does not guess."""
+    assert MigrationShapeAudit(tmp_path / "nope").files() == []
+
+
+@pytest.mark.parametrize(
+    ("name", "body", "expected"),
+    [
+        ("unparseable", "class Broken(Migration:\n    pass\n", "does not parse"),
+        ("no_subclass", "class NotAMigration:\n    pass\n", "declares no Migration subclass"),
+        (
+            "two_subclasses",
+            "class A(Migration):\n    def up(self): pass\n    def down(self): pass\n"
+            "class B(Migration):\n    def up(self): pass\n    def down(self): pass\n",
+            "declares 2 Migration subclasses",
+        ),
+        (
+            "missing_down",
+            "class A(Migration):\n    def up(self): pass\n",
+            "is missing down()",
+        ),
+        (
+            "missing_up",
+            "class A(Migration):\n    def down(self): pass\n",
+            "is missing up()",
+        ),
+    ],
 )
+def test_each_defect_is_reported(tmp_path: Path, name: str, body: str, expected: str) -> None:
+    _write(tmp_path, f"2026_01_01_000000_{name}.py", body)
+    findings = MigrationShapeAudit(tmp_path).findings()
+    assert findings, f"{name} must be reported"
+    assert expected in str(findings[0])
+    assert findings[0].path.endswith(f"{name}.py")
 
 
-def _load_module(path: Path):
-    # Each migration module name must be unique-per-test to avoid
-    # cross-test cache hits (importlib treats same name as same module
-    # and returns the cached one).
-    mod_name = f"_migration_smoke_{path.stem}"
-    spec = importlib.util.spec_from_file_location(mod_name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[mod_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        sys.modules.pop(mod_name, None)
-        raise
-    return module
+def test_a_dotted_base_still_counts_as_a_migration(tmp_path: Path) -> None:
+    """``class X(migrations.Migration)`` is the same declaration."""
+    _write(
+        tmp_path,
+        "2026_01_01_000000_dotted.py",
+        "class A(migrations.Migration):\n    def up(self): pass\n    def down(self): pass\n",
+    )
+    assert MigrationShapeAudit(tmp_path).findings() == []
 
 
-@pytest.mark.parametrize("path", _FILES, ids=lambda p: p.name)
-def test_migration_file_imports_cleanly(path):
-    """A migration that won't import is a migration that won't run.
-    Catches syntax errors, missing imports, broken decorators."""
-    _load_module(path)
+def test_async_methods_satisfy_the_runner_contract(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "2026_01_01_000000_async.py",
+        "class A(Migration):\n    async def up(self): pass\n    async def down(self): pass\n",
+    )
+    assert MigrationShapeAudit(tmp_path).findings() == []
 
 
-@pytest.mark.parametrize("path", _FILES, ids=lambda p: p.name)
-def test_migration_file_defines_migration_subclass_with_up_and_down(path):
-    """Every migration must expose exactly one Migration subclass with
-    callable ``up`` and ``down``. A missing ``down`` quietly breaks
-    rollback months later when someone runs ``cara migrate:rollback``."""
-    from cara.eloquent.migrations import Migration
-
-    module = _load_module(path)
-    migration_classes = [
-        obj
-        for obj in vars(module).values()
-        if isinstance(obj, type) and issubclass(obj, Migration) and obj is not Migration
+def test_files_are_returned_in_applied_order(tmp_path: Path) -> None:
+    """Timestamps sort lexically; a finding list out of order misleads."""
+    for stamp in ("2026_03_01_000000_c", "2026_01_01_000000_a", "2026_02_01_000000_b"):
+        _write(tmp_path, f"{stamp}.py", GOOD)
+    assert [path.name[:4] for path in MigrationShapeAudit(tmp_path).files()] == [
+        "2026",
+        "2026",
+        "2026",
     ]
-    assert migration_classes, f"{path.name} defines no Migration subclass"
-    assert len(migration_classes) == 1, (
-        f"{path.name} defines {len(migration_classes)} Migration subclasses; "
-        "the executor's discovery assumes exactly one per file"
-    )
-    cls = migration_classes[0]
-    assert callable(getattr(cls, "up", None)), (
-        f"{path.name}::{cls.__name__}.up is missing or not callable"
-    )
-    assert callable(getattr(cls, "down", None)), (
-        f"{path.name}::{cls.__name__}.down is missing or not callable"
-    )
+    names = [path.stem[-1] for path in MigrationShapeAudit(tmp_path).files()]
+    assert names == ["a", "b", "c"]
