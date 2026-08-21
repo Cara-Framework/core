@@ -318,6 +318,38 @@ def test_data_vocabulary_seam_exempts_upper_snake_slug_constants(tmp_path):
     assert VerticalSliceSeams.scan(manifest) == []
 
 
+def test_data_vocabulary_seam_exempts_the_barrel_re_export_of_a_slug(tmp_path):
+    """A kernel barrel inside the seam re-exports the vocabulary constants
+    under the mandated ``app.*`` runtime name (§2). That is ONE declaration
+    reaching its second legal spelling mechanically, not a second appearance
+    of the brand — the generated barrel has no other shape it could take."""
+    manifest = make_manifest(
+        tmp_path,
+        plugin_tokens=TOKENS,
+        seam_locations=SeamLocations(
+            data_vocabulary_prefixes=("commons/models/", "app/models/")
+        ),
+    )
+    write(
+        tmp_path / "commons" / "models" / "Channel.py",
+        "MARKETPLACE_EBAY = 'ebay'\n",
+    )
+    write(
+        tmp_path / "app" / "models" / "__init__.py",
+        "from commons.models import MARKETPLACE_EBAY\n",
+    )
+    assert VerticalSliceSeams.scan(manifest) == []
+
+    # The exemption is the CONSTANT's name, never the module path: importing
+    # a brand-carrying module is still core code reaching for a plug-in.
+    write(
+        tmp_path / "app" / "models" / "__init__.py",
+        "from commons.models.EbayChannel import MARKETPLACE_EBAY\n",
+    )
+    findings = VerticalSliceSeams.scan(manifest)
+    assert findings and "import" in findings[0].message
+
+
 def test_data_vocabulary_seam_exempts_declaration_positions_only(tmp_path):
     """Within the vocabulary seam, container/dict-key literals ARE the
     vocabulary (column keys, jsonb specs). Branching positions — a compare,
@@ -426,58 +458,3 @@ def test_token_matching_keeps_camel_case_and_fused_host_leaks(tmp_path):
         assert token_re.search(leak), f"missed leak in {leak!r}"
 
     assert not token_re.search("amazonian")
-
-
-def test_data_vocabulary_prefix_forgives_reexported_slug_constants(tmp_path):
-    """A generated kernel barrel re-exports the vocabulary it is allowed to hold.
-
-    §2 requires app code to reach the kernel through ``app.*`` barrels, and
-    Seam #1 allows the slug constant on the owning model. The barrel therefore
-    imports exactly those constants — without this, the namespace rule and the
-    data-vocabulary seam contradict each other and no layout satisfies both.
-    """
-    manifest = make_manifest(
-        tmp_path,
-        plugin_tokens=TOKENS,
-        seam_locations=SeamLocations(data_vocabulary_prefixes=("app/models/",)),
-    )
-    write(
-        tmp_path / "app" / "models" / "__init__.py",
-        "from commons.models import EBAY_US, AMAZON_US\n",
-    )
-    assert VerticalSliceSeams.scan(manifest) == []
-
-
-def test_data_vocabulary_prefix_still_flags_a_branded_class_import(tmp_path):
-    """Only UPPER_SNAKE vocabulary passes — a brand class import is still a leak."""
-    manifest = make_manifest(
-        tmp_path,
-        plugin_tokens=TOKENS,
-        seam_locations=SeamLocations(data_vocabulary_prefixes=("app/models/",)),
-    )
-    write(
-        tmp_path / "app" / "models" / "__init__.py",
-        "from packages.ebay.EbayMarketplace import EbayMarketplace\n",
-    )
-    findings = VerticalSliceSeams.scan(manifest)
-    assert findings and "EbayMarketplace" in findings[0].message
-
-
-def test_data_vocabulary_prefix_still_flags_a_branded_module_path(tmp_path):
-    """The CONSTANT may travel to its runtime name; a branded MODULE may not.
-
-    ``from app.models.EbayThing import SOME_CONST`` re-exports an UPPER_SNAKE
-    symbol, but the brand is in the module path — that is a reference to a
-    brand-carrying module, not the vocabulary arriving at its second spelling.
-    """
-    manifest = make_manifest(
-        tmp_path,
-        plugin_tokens=TOKENS,
-        seam_locations=SeamLocations(data_vocabulary_prefixes=("app/models/",)),
-    )
-    write(
-        tmp_path / "app" / "models" / "__init__.py",
-        "from app.models.EbayThing import SOME_CONST\n",
-    )
-    findings = VerticalSliceSeams.scan(manifest)
-    assert findings and "EbayThing" in findings[0].message

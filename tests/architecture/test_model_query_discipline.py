@@ -144,3 +144,58 @@ def test_a_pinned_file_reports_only_through_the_shrink_only_ratchet(
             tmp_path, seam_allowlists={key: {"app/services/Harness.py": 1}}
         )
     )
+
+
+def test_a_model_file_querying_through_cls_is_a_finding(tmp_path: Path) -> None:
+    write(
+        tmp_path / "app" / "models" / "Widget.py",
+        "class Widget:\n"
+        "    @classmethod\n"
+        "    def upsert_observed(cls, owner, values):\n"
+        "        row = cls.where('owner_id', owner.id).first()\n"
+        "        return row.update(values) if row else cls.create(values)\n",
+    )
+
+    # ``cls`` is not an imported name, so a receiver rule that only accepted
+    # imported names left every model-resident use-case unscanned.
+    assert any("cls.where(...)" in message for message in _messages(tmp_path))
+    assert any("cls.create(...)" in message for message in _messages(tmp_path))
+
+
+def test_a_model_file_querying_through_self_dunder_class_is_a_finding(
+    tmp_path: Path,
+) -> None:
+    write(
+        tmp_path / "app" / "models" / "Widget.py",
+        "class Widget:\n"
+        "    def rotate(self):\n"
+        "        self.__class__.where('id', self.id).update({'epoch': 1})\n",
+    )
+
+    assert any("self.__class__.update(...)" in message for message in _messages(tmp_path))
+
+
+def test_a_loaded_rows_own_update_stays_the_models_intrinsic_transition(
+    tmp_path: Path,
+) -> None:
+    write(
+        tmp_path / "app" / "models" / "Widget.py",
+        "class Widget:\n"
+        "    def touch(self, values):\n"
+        "        self.update(values)\n"
+        "        self.save()\n",
+    )
+
+    assert _messages(tmp_path) == []
+
+
+def test_cls_outside_a_model_home_is_not_a_model_receiver(tmp_path: Path) -> None:
+    write(
+        tmp_path / "app" / "services" / "Report.py",
+        "class Report:\n"
+        "    @classmethod\n"
+        "    def build(cls):\n"
+        "        return cls.where('a', 1).get()\n",
+    )
+
+    assert _messages(tmp_path) == []

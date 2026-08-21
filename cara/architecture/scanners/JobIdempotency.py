@@ -5,7 +5,11 @@
 manifest's job base class (``manifest.job_root_class``, default
 ``BaseJob``) under the manifest's job roots (``manifest.job_roots`` —
 ``app/jobs/**`` and, if the manifest declares a ``packages`` root, every
-``packages/*/jobs/**``) and requires ONE of:
+``packages/*/jobs/**``), PLUS every tree in ``manifest.external_job_roots``
+under the base class that tree declares — cross-process envelope jobs live in
+the kernel and ride the framework's bare ``Queueable`` contract, so a scan
+scoped to ``app/jobs/**``-riding-``BaseJob`` reported a clean pass over code
+it had never judged. Each job class requires ONE of:
 
 * a class-level ``manifest.idempotency_field_name`` assignment on the
   class itself or an ancestor within the scanned trees (inherited
@@ -55,10 +59,29 @@ def _job_files(manifest: Manifest) -> list[Path]:
     return sorted(set(files))
 
 
-def _collect(manifest: Manifest) -> dict[str, list[_ClassInfo]]:
+def _scan_groups(manifest: Manifest) -> list[tuple[list[Path], str]]:
+    """Every ``(files, base class)`` group this manifest puts under the rule.
+
+    A group carries its OWN root class: the deployable's job tree rides
+    ``BaseJob``, while an external tree (kernel envelopes) rides whatever
+    contract it declares. Mixing the two into one root-class question would
+    either miss the envelopes or drag every ``Queueable`` in the app tree
+    under a base class it does not actually inherit.
+    """
+    groups: list[tuple[list[Path], str]] = [
+        (_job_files(manifest), manifest.job_root_class)
+    ]
+    for directory, root_class in manifest.external_job_roots:
+        files = python_files(directory)
+        if files:
+            groups.append((files, root_class))
+    return groups
+
+
+def _collect(manifest: Manifest, files: list[Path]) -> dict[str, list[_ClassInfo]]:
     classes: dict[str, list[_ClassInfo]] = {}
     field_name = manifest.idempotency_field_name
-    for path in _job_files(manifest):
+    for path in files:
         tree = parse(path)
         if tree is None:
             continue
@@ -131,32 +154,33 @@ class JobIdempotency:
 
     @staticmethod
     def scan(manifest: Manifest) -> list[Finding]:
-        classes = _collect(manifest)
-        root_class = manifest.job_root_class
         exemptions = manifest.job_idempotency_exemptions
         findings: list[Finding] = []
         satisfied: set[str] = set()
         known: set[str] = set()
-        for name, infos in classes.items():
-            if name == root_class or not _rides_base(name, root_class, classes):
-                continue
-            for info in infos:
-                key = f"{info.rel}::{name}"
-                known.add(key)
-                ok = info.declares or info.tagged or _chain_declares(name, classes)
-                if ok:
-                    satisfied.add(key)
+        for files, root_class in _scan_groups(manifest):
+            classes = _collect(manifest, files)
+            for name, infos in classes.items():
+                if name == root_class or not _rides_base(name, root_class, classes):
                     continue
-                if key in exemptions:
-                    continue
-                findings.append(
-                    Finding(
-                        info.rel,
-                        0,
-                        f"{name}: declare class-level `{manifest.idempotency_field_name}` "
-                        f"(or the documented opt-out `# idempotency: none — <reason>`)",
+                for info in infos:
+                    key = f"{info.rel}::{name}"
+                    known.add(key)
+                    ok = info.declares or info.tagged or _chain_declares(name, classes)
+                    if ok:
+                        satisfied.add(key)
+                        continue
+                    if key in exemptions:
+                        continue
+                    findings.append(
+                        Finding(
+                            info.rel,
+                            0,
+                            f"{name}: declare class-level "
+                            f"`{manifest.idempotency_field_name}` (or the documented "
+                            f"opt-out `# idempotency: none — <reason>`)",
+                        )
                     )
-                )
         for key in sorted(exemptions):
             if key in satisfied:
                 findings.append(

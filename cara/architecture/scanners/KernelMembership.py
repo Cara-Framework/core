@@ -19,10 +19,11 @@ Four checks over the dev-only kernel (``manifest.roots.kernel``):
   data-access seam.
 * **Single-consumer eviction.** A module living in the kernel's ``shared``
   package (§2: "shared" membership requires >=2 PROVABLE consumer processes)
-  that reaches only ONE group in ``manifest.roots.consumer_roots`` is
-  evicted-in-waiting. Reachability follows shared-to-shared imports, so a
-  private helper of a two-process shared facade is not mislabeled as
-  single-consumer debt. ``manifest.single_consumer_allowlist`` pins the
+  that reaches FEWER THAN TWO groups in ``manifest.roots.consumer_roots`` is
+  evicted-in-waiting — one consumer, or none at all (a dead re-export
+  projection nothing imports fails the same rule). Reachability follows
+  shared-to-shared imports, so a private helper of a two-process shared
+  facade is not mislabeled as single-consumer debt. ``manifest.single_consumer_allowlist`` pins the
   current known set (shrink-only). This check no-ops when fewer than two
   consumer trees are present (a sibling deployable not checked out) — a
   whole-repo fact that per-service CI cannot evaluate alone.
@@ -299,7 +300,14 @@ class KernelMembership:
                 continue
             stem = path.stem
             consuming = sum(stem in used for used in consumed_by_group.values())
-            if consuming == 1 and stem not in kernel_consumers:
+            # ``< 2``, not ``== 1``: §2 states the rule as ">=2 provable
+            # consumers", and a module that falls all the way to ZERO fails it
+            # harder than one that falls to one. The ``== 1`` spelling was a
+            # blind spot in the shape of the rule it enforced — cheapa's
+            # ``shared/catalog/Brands.py`` was a dead re-export projection with
+            # no consuming tree at all and this scanner passed it in silence,
+            # which is exactly the vacuously-green outcome §9 forbids.
+            if consuming < 2 and stem not in kernel_consumers:
                 single_consumer_stems.add(stem)
                 if stem in manifest.single_consumer_allowlist:
                     continue
@@ -308,7 +316,7 @@ class KernelMembership:
                     Finding(
                         rel,
                         0,
-                        f"'{stem}' is consumed by exactly one process tree — kernel "
+                        f"'{stem}' is consumed by {consuming} process tree(s) — kernel "
                         f"'shared' membership requires >=2 provable consumers "
                         f"(evacuate it, or pin it in single_consumer_allowlist)",
                     )
@@ -319,7 +327,7 @@ class KernelMembership:
                     "app/architecture_manifest.py",
                     0,
                     f"'{stem}' is a stale single_consumer_allowlist pin — the module "
-                    f"is absent or no longer consumed by exactly one process tree",
+                    f"is absent or now consumed by two or more process trees",
                 )
             )
         return findings
@@ -350,7 +358,9 @@ def _lazy_export_symbols(tree: ast.Module, stems: set[str]) -> dict[str, str]:
             target = node.targets[0].id
         if target != "_LAZY_EXPORTS" or not isinstance(node.value, ast.Dict):
             continue
-        for key, value in zip(node.value.keys, node.value.values):
+        # An ast.Dict's keys and values are the same literal's halves;
+        # strict=True asserts that rather than assuming it.
+        for key, value in zip(node.value.keys, node.value.values, strict=True):
             if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
                 continue
             if not (isinstance(value, ast.Tuple) and value.elts):

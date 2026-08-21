@@ -122,6 +122,16 @@ class Manifest:
     collaborator_call_exemptions: frozenset[str] = frozenset()
     job_root_class: str = "BaseJob"
     job_roots: tuple[str, ...] = ("jobs",)
+    # Queued-job trees that live OUTSIDE ``roots.app / job_roots``, each paired
+    # with the base class that marks a queued job THERE. Cross-process envelope
+    # jobs are the case this exists for: they must resolve to the same class
+    # symbol on the publishing and the consuming side, so they live in the
+    # kernel (``commons/contracts/envelopes``) and ride the framework's bare
+    # ``Queueable``/``ShouldQueue`` contracts rather than a deployable
+    # ``BaseJob``. That put them outside every path JobIdempotency walked AND
+    # outside the base class it keyed on — real queued jobs the §8 rule could
+    # not see, which is a guard blind spot, not an absence of jobs.
+    external_job_roots: tuple[tuple[Path, str], ...] = ()
     idempotency_field_name: str = "idempotency_params"
     side_effect_facade_roots: frozenset[str] = frozenset()
     # Imported names to police within those facade modules. Empty means every

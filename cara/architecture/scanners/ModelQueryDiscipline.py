@@ -12,6 +12,16 @@ builder call does. The whole CHAIN counts: ``Model.without_scope().first()``
 is the same reach as ``Model.first()``, and a scanner that only looked at the
 head of the chain would miss it.
 
+Inside a MODEL's own file the class is never an imported name — the chain is
+spelled ``cls.where(...)`` or ``self.__class__.where(...).update(...)``. That
+is the identical class-level reach, so both are read as model receivers when
+the scanned file itself sits under a model home (``model_import_roots``
+rendered as path fragments). Requiring an imported name everywhere made every
+model-resident repository use-case invisible: a find-or-create with its own
+``DB.transaction()`` could live on a model and the census stayed empty. A bare
+``self`` is NOT a receiver — ``self.update(...)`` on a loaded row is an
+intrinsic state transition, which is exactly what §5 leaves to the model.
+
 Two carve-outs, each narrow and each earned:
 
 * a single-argument primary-key lookup (``Model.find(pk)``) — the documented
@@ -100,16 +110,29 @@ def _imported_model_names(tree: ast.Module, roots: tuple[str, ...]) -> set[str]:
     return names
 
 
-def _chain_root(expression: ast.AST, models: set[str]) -> str | None:
-    """The imported model a builder chain started from, if it started at one."""
+def _chain_root(
+    expression: ast.AST,
+    models: set[str],
+    *,
+    model_home: bool = False,
+) -> str | None:
+    """The model a builder chain started from, if it started at one."""
     current = expression
+    through_dunder_class = False
     while isinstance(current, ast.Call) and isinstance(current.func, ast.Attribute):
         current = current.func.value
     while isinstance(current, ast.Attribute):
+        through_dunder_class = through_dunder_class or current.attr == "__class__"
         current = current.value
-    if isinstance(current, ast.Name) and current.id in models:
+    if not isinstance(current, ast.Name):
+        return None
+    if current.id in models:
         return current.id
-    return None
+    if not model_home:
+        return None
+    if current.id == "cls":
+        return "cls"
+    return "self.__class__" if current.id == "self" and through_dunder_class else None
 
 
 def _is_transaction(node: ast.AST) -> bool:
@@ -162,14 +185,20 @@ class ModelQueryDiscipline:
         pinned = manifest.seam_allowlists.get(_ALLOWLIST_KEY, {})
         findings: list[Finding] = []
         counts: dict[str, int] = {}
+        # ``app.models`` / ``commons.models`` as path fragments: a file that
+        # lives there defines models, so ``cls`` is one.
+        model_homes = tuple(
+            root.replace(".", "/") for root in manifest.model_import_roots
+        )
         for _path, rel, tree in iter_modules(
             manifest.roots.scan_dirs("model_query_discipline"),
             manifest.roots.deployable,
         ):
             if _path_has_fragment(rel, manifest.raw_sql_homes):
                 continue
+            model_home = _path_has_fragment(rel, model_homes)
             models = _imported_model_names(tree, manifest.model_import_roots)
-            if not models:
+            if not models and not model_home:
                 continue
             parents = {
                 child: parent
@@ -184,7 +213,7 @@ class ModelQueryDiscipline:
                     or node.func.attr not in ORM_METHODS
                 ):
                     continue
-                model = _chain_root(node.func.value, models)
+                model = _chain_root(node.func.value, models, model_home=model_home)
                 if model is None or _is_primary_key_lookup(node):
                     continue
                 if _locking_transaction_owns(node, parents):

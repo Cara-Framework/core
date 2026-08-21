@@ -164,7 +164,33 @@ def test_single_consumer_shared_module_is_a_finding(tmp_path):
     )
     write(tmp_path / "commons" / "shared" / "Fx.py", "def convert():\n    return 1\n")
     findings = KernelMembership.scan(manifest)
-    assert any("'Fx' is consumed by exactly one" in f.message for f in findings)
+    assert any("'Fx' is consumed by 1 process tree(s)" in f.message for f in findings)
+
+
+def test_zero_consumer_shared_module_is_a_finding(tmp_path):
+    """A module that falls to ZERO consumers fails §2 harder than one that
+    falls to one, and the ``== 1`` predicate this replaced passed it in
+    silence — cheapa's ``shared/catalog/Brands.py`` was a dead re-export
+    projection no tree imported and the scanner never said a word."""
+    from dataclasses import replace
+
+    consumer_a = tmp_path / "deployable_a" / "app"
+    consumer_b = tmp_path / "deployable_b" / "app"
+    write(consumer_a / "services" / "Other.py", "X = 1\n")
+    write(consumer_b / "services" / "Other.py", "X = 1\n")
+    manifest = make_manifest(tmp_path)
+    manifest = replace(
+        manifest,
+        roots=replace(
+            manifest.roots,
+            consumer_roots={"a": (consumer_a,), "b": (consumer_b,)},
+        ),
+    )
+    write(tmp_path / "commons" / "shared" / "Fx.py", "def convert():\n    return 1\n")
+
+    findings = KernelMembership.scan(manifest)
+
+    assert any("'Fx' is consumed by 0 process tree(s)" in f.message for f in findings)
 
 
 def test_single_consumer_allowlist_suppresses_the_finding(tmp_path):
@@ -230,7 +256,7 @@ def test_transitive_shared_imports_prove_consumers(tmp_path):
 
     findings = KernelMembership.scan(manifest)
 
-    assert not any("'Core' is consumed by exactly one" in f.message for f in findings)
+    assert not any("'Core' is consumed by" in f.message for f in findings)
 
 
 def test_kernel_internal_consumer_makes_shared_module_cross_process(tmp_path):
@@ -327,4 +353,4 @@ def test_lazy_generated_theme_barrel_still_reports_one_consumer(tmp_path):
     )
 
     findings = KernelMembership.scan(manifest)
-    assert any("'Fx' is consumed by exactly one" in f.message for f in findings)
+    assert any("'Fx' is consumed by 1 process tree(s)" in f.message for f in findings)
