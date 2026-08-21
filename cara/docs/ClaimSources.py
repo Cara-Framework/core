@@ -209,7 +209,22 @@ def _owned_markdowns(
         atlas = sibling / "CLAUDE.md"
         if atlas.exists() and product in _read(atlas):
             shared.append(atlas)
-    return doc_files + root_files + tree_files + shared
+    # ONE physical file, ONE verdict. These three lists overlap by design: the
+    # atlas is a tracked file inside a child repository exposed at the root by
+    # symlink, and ``docs/README.md`` is both a docs page and a subtree page.
+    # Reporting the same file twice under two labels doubles every finding it
+    # makes and invites the reader to fix one copy. The ROOT spelling wins,
+    # because that is the position the atlas occupies and the label
+    # ``atlas_bans`` already reports.
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    for file in root_files + doc_files + tree_files + shared:
+        resolved = file.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        ordered.append(file)
+    return ordered
 
 
 __all__ = [

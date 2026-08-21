@@ -20,6 +20,8 @@ only DOWNGRADE a verdict, never certify it. Absent here + present there is
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from cara.docs import DocsManifest, check_path_claim, sibling_roots, verify_claims
 from cara.docs.ClaimSources import _owned_markdowns, forget_path_index
 
@@ -129,6 +131,36 @@ def test_owned_markdown_covers_the_docs_tree_and_the_neighbours_shared_atlas(tmp
     # Generated pages are extracted from code and cannot lie, so they are never
     # judged as claims.
     assert alpha / "docs" / "internal" / "reference" / "routes.md" not in owned
+
+
+def test_a_file_reachable_by_two_routes_is_judged_once(tmp_path):
+    """The atlas is a tracked docs file exposed at the root by symlink.
+
+    Three enumerations overlap — the docs tree, the root, and every subtree —
+    so the same physical page arrives up to twice. Before deduplication every
+    finding it made was reported twice under two different labels, which reads
+    as two separate problems and invites a reader to fix one copy.
+    """
+    forget_path_index()
+    alpha = make_checkout(tmp_path, "alpha")
+    (alpha / "CLAUDE.md").unlink()
+    write(alpha / "docs" / "CLAUDE.md", "`x:y` is FORBIDDEN.\n")
+    (alpha / "CLAUDE.md").symlink_to(Path("docs") / "CLAUDE.md")
+    write(alpha / "docs" / "README.md", "# about these docs\n")
+
+    owned = _owned_markdowns(
+        alpha,
+        alpha / "docs",
+        alpha / "docs" / "internal" / "reference",
+        "alpha",
+    )
+
+    resolved = [path.resolve() for path in owned]
+    assert len(resolved) == len(set(resolved))
+    # The root spelling is the one kept: that is where the atlas lives and the
+    # label `atlas_bans` already reports.
+    assert alpha / "CLAUDE.md" in owned
+    assert alpha / "docs" / "CLAUDE.md" not in owned
 
 
 def test_the_product_name_in_a_verdict_comes_from_the_manifest(tmp_path):

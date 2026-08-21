@@ -1,11 +1,22 @@
 """Reference pages extracted straight from code: routes, queues, models, jobs…
 
-Every page here is derived by an AST/regex walk over the checkout — never hand
-written, so it cannot go stale. Its failure mode is the opposite one:
-producing NOTHING and reporting "unchanged" forever, which is exactly what the
-routes page did from the day routes were sharded until the shard walk in
-:func:`gen_routes` was added. When a generator here stops finding its subject,
-say so in the page (:func:`gen_queues` does) rather than emit an empty table.
+Every page here is derived by an AST/regex walk over the checkout — plus, for
+kernel CONTRACT modules only, a boot-free load by file location
+(:mod:`cara.docs.Queues`) — never hand written, so it cannot go stale. Its
+failure mode is the opposite one: producing NOTHING and reporting "unchanged"
+forever, which is exactly what the routes page did from the day routes were
+sharded until the shard walk in :func:`gen_routes` was added.
+
+When a generator here stops finding its subject it RAISES. Saying so in the
+page was the earlier rule and it failed: a page whose whole body was "could
+not parse — check the file by hand" shipped in two products for a month,
+green, about a file that parses perfectly. A prose apology is
+indistinguishable from working software; a crash is not. A product that
+genuinely lacks the subject is a different case — the generator probes for it
+and no-ops.
+
+The queue page lives in :mod:`cara.docs.Queues`; it is re-exported through
+``GENERATORS`` here so the reference set stays one list.
 
 The directory layout the walkers probe — deployables beside a dev-only kernel,
 routes under the HTTP deployable, plug-in packages under the worker — is
@@ -20,6 +31,7 @@ import re
 from pathlib import Path
 
 from cara.docs.DocsManifest import DocsManifest
+from cara.docs.Queues import gen_queues
 from cara.docs.Support import Say, header, md_escape, read, write_if_changed
 
 # ---------------------------------------------------------------- routes
@@ -187,90 +199,6 @@ def gen_routes(manifest: DocsManifest, now: str, say: Say) -> None:
         body += "\n"
     body += f"_Total: {total} routes._\n"
     write_if_changed(manifest.reference / "routes.md", body, "reference/routes.md", say)
-
-
-# ---------------------------------------------------------------- queues
-
-
-def gen_queues(manifest: DocsManifest, now: str, say: Say) -> None:
-    """Write the queue-topology reference page."""
-    root = manifest.root
-    topology = root / "commons" / "contracts" / "QueueTopology.py"
-    body = header(
-        manifest,
-        "Queue topology",
-        ["commons/contracts/QueueTopology.py", "services/config/queue.py"],
-        now,
-    )
-    src = read(topology)
-    bindings: list = []
-    try:
-        tree = ast.parse(src) if src else None
-    except SyntaxError:
-        tree = None
-    if tree:
-        for node in ast.walk(tree):
-            targets = []
-            if isinstance(node, ast.Assign):
-                targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                targets = [node.target.id]
-            if "TOPIC_EXCHANGE_BINDINGS" in targets:
-                val = node.value if isinstance(node, ast.Assign) else node.value
-                for el in getattr(val, "elts", []):
-                    try:
-                        bindings.append(ast.literal_eval(el))
-                    except ValueError, SyntaxError:
-                        bindings.append(("<dynamic>", "<dynamic>"))
-    if bindings:
-        body += "| Queue | Routing key pattern |\n|---|---|\n"
-        for queue, key in bindings:
-            body += f"| `{queue}` | `{key}` |\n"
-        body += (
-            f"\n_Total: {len(bindings)} bindings. The exchange name comes from "
-            "the `RABBIT_EXCHANGE` env var._\n\n"
-        )
-    else:
-        body += "_Could not parse QueueTopology.py — check the file by hand._\n\n"
-    # Pools live in TWO config modules, and BOTH must be named here. The worker
-    # deployable drains the pipeline families; the HTTP deployable drains the
-    # queues whose job classes resolve only against its own ``app.jobs``
-    # package. Documenting one alone would imply those queues have no consumer
-    # — the green-by-omission failure this reference exists to prevent.
-    for label in ("services", "api"):
-        pools_src = read(root / label / "config" / "queue.py")
-        relative = f"{label}/config/queue.py"
-        match = re.search(r"WORKER_POOLS[^=]*=\s*(\{.*?\n\})", pools_src, re.DOTALL)
-        if not match:
-            body += f"_No WORKER_POOLS block found in {relative}._\n\n"
-            continue
-        try:
-            pools = ast.literal_eval(match.group(1))
-        except ValueError, SyntaxError:
-            # Expected when a product derives concurrency from env().
-            body += (
-                f"_WORKER_POOLS in {relative} is not a literal (env()-derived "
-                "values) — read the file._\n\n"
-            )
-            continue
-        # "timeout" is the BROKER RECONNECT BACKOFF, not a job budget and not
-        # an idle poll: consumers hold a long-lived basic_consume, so there is
-        # no empty-queue sleep to document. The framework clamps it to [1, 10]
-        # and only applies it after a disconnect.
-        body += (
-            f"## Worker pools ({relative})\n\n"
-            "| Pool | Queues | Reconnect backoff |\n|---|---|---|\n"
-        )
-        for name, cfg in pools.items():
-            queues = (
-                ", ".join(f"`{q}`" for q in cfg.get("queues", []))
-                if isinstance(cfg, dict)
-                else ""
-            )
-            timeout = cfg.get("timeout", "?") if isinstance(cfg, dict) else "?"
-            body += f"| {name} | {queues} | {timeout}s |\n"
-        body += "\n"
-    write_if_changed(manifest.reference / "queues.md", body, "reference/queues.md", say)
 
 
 # ---------------------------------------------------------------- models / jobs / commands
@@ -600,7 +528,6 @@ __all__ = [
     "gen_jobs",
     "gen_models",
     "gen_permissions",
-    "gen_queues",
     "gen_routes",
     "generate_reference",
     "parse_routes",

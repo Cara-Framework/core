@@ -1,7 +1,8 @@
 """cara.docs — the documentation engine products configure rather than copy.
 
-Three passes over a checkout, all pure filesystem (AST, regex and git; no DB,
-no broker, no app boot):
+Three passes over a checkout, all pure filesystem (AST, regex and git, plus a
+boot-free load of a kernel contract module by file location; no DB, no broker,
+no app boot):
 
 1. REFERENCE GENERATION — the route/queue/model/job/command/permission/env and
    package inventories, extracted straight from code. These pages are never
@@ -43,6 +44,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "TILDE_RE": (".Claims", "TILDE_RE"),
     "VERBS": (".Inventory", "VERBS"),
     "atlas_bans": (".Claims", "atlas_bans"),
+    "binding_tables": (".Queues", "binding_tables"),
     "check_forbidden": (".Claims", "check_forbidden"),
     "check_path_claim": (".ClaimSources", "check_path_claim"),
     "claims_report": (".Claims", "claims_report"),
@@ -62,13 +64,14 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "gen_models": (".Inventory", "gen_models"),
     "gen_nav": (".Freshness", "gen_nav"),
     "gen_permissions": (".Inventory", "gen_permissions"),
-    "gen_queues": (".Inventory", "gen_queues"),
+    "gen_queues": (".Queues", "gen_queues"),
     "gen_routes": (".Inventory", "gen_routes"),
     "generate_reference": (".Inventory", "generate_reference"),
     "git_root": (".Support", "git_root"),
     "header": (".Support", "header"),
     "invocation_re": (".Claims", "invocation_re"),
     "latest_committed_change": (".Support", "latest_committed_change"),
+    "load_contract": (".Queues", "load_contract"),
     "md_escape": (".Support", "md_escape"),
     "newest_change": (".Support", "newest_change"),
     "owned_markdowns": (".Claims", "owned_markdowns"),
@@ -80,6 +83,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "strip_fences": (".ClaimSources", "strip_fences"),
     "verified_ts": (".Support", "verified_ts"),
     "verify_claims": (".Claims", "verify_claims"),
+    "worker_pool_rows": (".Queues", "worker_pool_rows"),
     "write_if_changed": (".Support", "write_if_changed"),
 }
 
@@ -102,6 +106,7 @@ __all__ = [
     "TILDE_RE",
     "VERBS",
     "atlas_bans",
+    "binding_tables",
     "check_forbidden",
     "check_path_claim",
     "claims_report",
@@ -128,6 +133,7 @@ __all__ = [
     "header",
     "invocation_re",
     "latest_committed_change",
+    "load_contract",
     "md_escape",
     "newest_change",
     "owned_markdowns",
@@ -139,6 +145,7 @@ __all__ = [
     "strip_fences",
     "verified_ts",
     "verify_claims",
+    "worker_pool_rows",
     "write_if_changed",
 ]
 
