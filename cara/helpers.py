@@ -15,6 +15,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+from cara import observability
 from cara.configuration import config
 from cara.encryption import Hash
 from cara.environment import env
@@ -398,6 +399,10 @@ def report(exception: BaseException) -> None:
     structured logs) without aborting the request / job. Falls back
     to ``stderr`` if the Log facade itself fails.
     """
+    try:
+        observability.capture_exception(exception)
+    except Exception:  # noqa: BLE001 — reporting must never raise
+        pass
     try:
         Log.error(
             "%s: %s",

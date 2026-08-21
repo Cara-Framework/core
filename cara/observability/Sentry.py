@@ -110,6 +110,27 @@ def set_request_user(user_id: Any, email: str | None = None) -> None:
         _report_scope_failure("set_user", exc)
 
 
+def capture_exception(error: BaseException) -> None:
+    """Send one caught exception to Sentry when the optional SDK is installed.
+
+    The framework's terminal catch points (the 500 branch of the HTTP
+    exception handler, the worker's job failure/timeout handlers,
+    ``helpers.report``) consume exceptions instead of re-raising, so no
+    integration hook ever sees them — without this explicit path a fully
+    initialized Sentry receives nothing but interpreter-crashing boot
+    failures, which is the "wired but blind" state this module's docstring
+    promises to prevent.
+    """
+    try:
+        import sentry_sdk  # local: heavy optional dep
+    except ImportError:
+        return
+    try:
+        sentry_sdk.capture_exception(error)
+    except (OSError, RuntimeError, AttributeError) as exc:
+        _report_scope_failure("capture_exception", exc)
+
+
 def set_request_tag(key: str, value: Any) -> None:
     """Attach one bounded tag when the optional SDK is installed."""
     if value is None:

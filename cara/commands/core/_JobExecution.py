@@ -11,6 +11,7 @@ from typing import Any
 
 import pendulum
 
+from cara import observability
 from cara.configuration import config
 from cara.exceptions import QueueException
 from cara.facades import Log, Queue
@@ -512,6 +513,9 @@ def _process_message(
 
     except TimeoutError as timeout_error:
         Log.error("Job timeout: %s", timeout_error, exc_info=True)
+        # Terminal catch: the outcome is returned, never re-raised, so the
+        # explicit capture is Sentry's only path to a job timeout.
+        observability.capture_exception(timeout_error)
 
         JobProcessor._route_failed_message(
             channel=channel,
@@ -531,6 +535,9 @@ def _process_message(
 
     except Exception as job_error:
         Log.error("Job failed: %s", job_error, exc_info=True)
+        # Terminal catch: the worker consumes the failure ("failed
+        # gracefully"), so the explicit capture is Sentry's only path.
+        observability.capture_exception(job_error)
 
         JobProcessor._route_failed_message(
             channel=channel,

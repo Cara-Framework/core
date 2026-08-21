@@ -30,7 +30,20 @@ class DeployTopologyManifest:
     #: Opt-in. True only where roles share a network namespace, so two
     #: exporters on one port would mean the loser dies or runs blind.
     distinct_metrics_ports: bool = False
-    metrics_port_keys: tuple[str, ...] = ("METRICS_PORT", "SCHEDULER_METRICS_PORT")
+    #: Every env key that can drive an exporter binding. Role-specific keys
+    #: (``RELAY_METRICS_PORT``/``HOOKS_METRICS_PORT``/``SCHEDULER_METRICS_PORT``)
+    #: exist because dev runs all roles in one network namespace; a service
+    #: that sets more than one of these must set them to ONE value —
+    #: :meth:`DeployTopologyAudit.split_metrics_ports` enforces that, because
+    #: probes and Prometheus follow ``METRICS_PORT`` while the process binds
+    #: its role key, and the two agreeing only by default-value coincidence
+    #: is exactly the drift that pages an operator against a healthy relay.
+    metrics_port_keys: tuple[str, ...] = (
+        "METRICS_PORT",
+        "SCHEDULER_METRICS_PORT",
+        "RELAY_METRICS_PORT",
+        "HOOKS_METRICS_PORT",
+    )
     #: Compose services that are not application processes (databases, proxies)
     #: and are exempt from role extraction noise. Purely cosmetic: a service
     #: with neither idiom contributes no role either way.

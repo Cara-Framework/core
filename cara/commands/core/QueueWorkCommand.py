@@ -136,21 +136,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
         self.start_time = None
         self.jobs_processed = 0
         self.jobs_failed = 0
-        # Memory ceiling for the worker process — configurable via
-        # WORKER_MEMORY_LIMIT_MB env. The default doubles when
-        # ``--concurrency`` is in use (each consumer thread carries its
-        # own ORM pool + HTTP clients + parser state) so multi-threaded
-        # workers don't hit the limit after a handful of scrapes.
-        try:
-            limit_mb = int(config("queue.worker_memory_limit_mb", 512))
-        except Exception:
-            limit_mb = 512
-        # Bumped minimum so multi-thread heavy workloads (browser pools +
-        # extractor pipelines + HTTP clients per thread) breathe without
-        # bouncing. Override with the env if 2 GB is too aggressive for
-        # the deploy box.
-        limit_mb = max(limit_mb, 2048)
-        self.memory_limit_bytes = limit_mb * 1024 * 1024
+        self.memory_limit_bytes = self._resolve_memory_limit_mb() * 1024 * 1024
         self._signal_handlers_installed = False
         self._atexit_registered = False
         self._shutdown_signal: int | None = None
@@ -200,6 +186,22 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
             atexit.register(self._shutdown_worker_resources)
             self._atexit_registered = True
 
+    @staticmethod
+    def _resolve_memory_limit_mb() -> int:
+        """Graceful-recycle threshold in MiB — WORKER_MEMORY_LIMIT_MB env,
+        2 GiB when unset.
+
+        The configured value is a DEFAULT, never a floor: recycle only works
+        when this threshold sits BELOW the container's cgroup cap, and the
+        old ``max(limit_mb, 2048)`` floor made every lower setting dead —
+        with a 2 GiB container cap the kernel OOM-killed the worker (un-acked
+        job, lease wait) before the recycle check could ever fire.
+        """
+        try:
+            return int(config("queue.worker_memory_limit_mb", 2048))
+        except Exception:
+            return 2048
+
     def handle(
         self,
         driver: str | None = None,
@@ -225,6 +227,14 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
                 concurrency = str(pool_cfg.get("concurrency", 1))
             if not timeout:
                 timeout = str(pool_cfg.get("timeout", 5))
+            # A pool may declare its own graceful-recycle threshold.
+            # Precedence: an EXPLICIT deploy-time env always wins (that is
+            # the operator's knob), then the pool declaration, then the
+            # config default — so neither knob can silently dead-end the
+            # other again.
+            pool_memory_mb = pool_cfg.get("max_memory_mb")
+            if pool_memory_mb and os.environ.get("WORKER_MEMORY_LIMIT_MB") is None:
+                self.memory_limit_bytes = int(pool_memory_mb) * 1024 * 1024
 
         self.console.print()  # Empty line for spacing
         self.console.print("[bold #e5c07b]╭─ Queue Worker ─╮[/bold #e5c07b]")

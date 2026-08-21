@@ -327,6 +327,35 @@ class DeployTopologyAudit:
                 return port
         return None
 
+    def split_metrics_ports(self) -> list[str]:
+        """One service, several metrics-port keys, more than one value.
+
+        The healthchecks and Prometheus follow ``METRICS_PORT`` while the
+        relay/hooks/scheduler processes bind their role-specific key, so two
+        disagreeing values mean every probe watches a port nothing serves —
+        the container flaps unhealthy against a working process, or the
+        scrape goes dark while the guard stays green.
+        """
+        problems: list[str] = []
+        for name, service in (self._compose().get("services") or {}).items():
+            if not isinstance(service, dict):
+                continue
+            environment = _environment(service)
+            ports = {
+                key: environment.get(key, "").strip()
+                for key in self._manifest.metrics_port_keys
+                if environment.get(key, "").strip()
+                and environment.get(key, "").strip() != NO_EXPORTER
+            }
+            if len(set(ports.values())) > 1:
+                detail = ", ".join(f"{key}={value}" for key, value in sorted(ports.items()))
+                problems.append(
+                    f"{name} sets disagreeing metrics ports ({detail}) — probes "
+                    f"and Prometheus follow one key while the process binds "
+                    f"another; set them to one value"
+                )
+        return problems
+
     # --- everything at once ----------------------------------------------
 
     def problems(self) -> list[str]:
@@ -335,6 +364,7 @@ class DeployTopologyAudit:
             *self.missing_roles(),
             *self.role_declaration_conflicts(),
             *self.metrics_port_collisions(),
+            *self.split_metrics_ports(),
             *self.outbox_alert_problems(),
             *self.readiness_alert_problems(),
             *self.unscraped_roles(),

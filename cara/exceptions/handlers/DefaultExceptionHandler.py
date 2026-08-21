@@ -254,6 +254,11 @@ class DefaultExceptionHandler:
                         "exception_type": exc_type,
                     },
                 )
+                # This handler CONSUMES the exception (the response is built
+                # here, nothing re-raises), so no Sentry integration hook
+                # ever sees a 500 — the explicit capture is the only path.
+                observability = importlib.import_module("cara.observability")
+                observability.capture_exception(exception)
         except ImportError:
             pass
 
