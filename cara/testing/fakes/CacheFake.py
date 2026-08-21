@@ -123,6 +123,40 @@ class CacheFake:
         self.put(key, value, ttl)
         return value
 
+    def remember_with_negative(
+        self,
+        key: str,
+        hit_ttl: int,
+        miss_ttl: int,
+        callback: Callable[[], Any],
+        driver_name: str | None = None,
+        *,
+        sentinel: Any = "",
+        strict: bool = True,
+    ) -> Any | None:
+        """``remember`` that also caches the MISS, as the real facade does.
+
+        A fake missing a method the facade has is not a smaller fake — it is a
+        test that cannot run. Any suite reaching for this one fell back to the
+        live Redis, which meant it needed a server on 127.0.0.1 and silently
+        no-opped under ``pytest --disable-socket``.
+
+        Mirrors ``Cache.remember_with_negative``: a stored sentinel reads back
+        as ``None``, a ``None`` result stores the sentinel under ``miss_ttl``,
+        and anything else stores under ``hit_ttl``.
+        """
+        del driver_name, strict
+        missing = object()
+        cached = self._store.get(key, missing)
+        if cached is not missing:
+            return None if cached == sentinel else cached
+        result = callback()
+        if result is not None:
+            self.put(key, result, hit_ttl)
+        else:
+            self.put(key, sentinel, miss_ttl)
+        return result
+
     def increment(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
         """Atomically increment ``key`` by ``amount``.
 
