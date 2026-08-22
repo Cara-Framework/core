@@ -231,6 +231,159 @@ def _declared_checks(model: dict, table: str) -> list[tuple[str, str]]:
     return declared
 
 
+def declared_foreign_keys(model: dict, table: str) -> list[dict]:
+    """Every FOREIGN KEY a model declares, named the way Postgres will store it.
+
+    Two declaration sites, one naming rule (``cara/eloquent/schema/Table.py``):
+    a single-column ``field.foreign("x")`` and a composite
+    ``field.foreign(["a", "b"], name=...)``. An unnamed key defaults to
+    ``<table>_<columns joined by _>_foreign``, which is what the Blueprint
+    emits, so a declared name and a live ``conname`` are directly comparable.
+
+    Each entry is ``{name, columns, references, on, on_delete, on_update}``.
+    Raw-SQL ``__indexes__`` entries that add a foreign key are NOT included:
+    those are diffed as named objects, by whole-constraint-set membership.
+    """
+
+    def named(columns: list[str], given) -> str:
+        return str(given) if given else f"{table}_{'_'.join(columns)}_foreign"
+
+    def listed(value, fallback: str | None = None) -> list[str]:
+        if value is None:
+            return [fallback] if fallback else []
+        if isinstance(value, (list, tuple)):
+            return [str(item) for item in value]
+        return [str(value)]
+
+    keys: list[dict] = []
+    for column, definition in (model.get("fields") or {}).items():
+        key = (definition or {}).get("foreign_key")
+        if not key or not key.get("on"):
+            continue
+        columns = listed(key.get("field"), column)
+        keys.append(
+            {
+                "name": named(columns, key.get("name")),
+                "columns": columns,
+                "references": listed(key.get("references"), "id"),
+                "on": str(key["on"]),
+                "on_delete": key.get("on_delete"),
+                "on_update": key.get("on_update"),
+            }
+        )
+    for key in model.get("composite_foreign_keys") or []:
+        columns = listed(key.get("columns"))
+        if not columns or not key.get("on"):
+            continue
+        keys.append(
+            {
+                "name": named(columns, key.get("name")),
+                "columns": columns,
+                "references": listed(key.get("references"), "id"),
+                "on": str(key["on"]),
+                "on_delete": key.get("on_delete"),
+                "on_update": key.get("on_update"),
+            }
+        )
+    return keys
+
+
+def _foreign_key_sql(table: str, key: dict) -> str:
+    columns = ", ".join(f'"{column}"' for column in key["columns"])
+    references = ", ".join(f'"{column}"' for column in key["references"])
+    clause = (
+        f'ALTER TABLE "{table}" ADD CONSTRAINT {key["name"]} '
+        f'FOREIGN KEY ({columns}) REFERENCES "{key["on"]}" ({references})'
+    )
+    if key.get("on_delete"):
+        clause += f" ON DELETE {str(key['on_delete']).upper()}"
+    if key.get("on_update"):
+        clause += f" ON UPDATE {str(key['on_update']).upper()}"
+    return f"{clause} NOT VALID"
+
+
+def _foreign_key_preflight(table: str, key: dict) -> str:
+    """Child rows that would break the key, under MATCH SIMPLE semantics.
+
+    A row with ANY null in the key columns is exempt from the constraint, so
+    the probe only considers rows where every column is present — otherwise it
+    would report violations Postgres will never raise.
+    """
+    present = " AND ".join(f'c."{column}" IS NOT NULL' for column in key["columns"])
+    joined = " AND ".join(
+        f'p."{reference}" = c."{column}"'
+        for column, reference in zip(key["columns"], key["references"], strict=False)
+    )
+    return (
+        f'SELECT 1 FROM "{table}" c WHERE {present} AND NOT EXISTS '
+        f'(SELECT 1 FROM "{key["on"]}" p WHERE {joined}) LIMIT 1'
+    )
+
+
+def missing_foreign_keys(model: dict, table: str, live: LiveSchema) -> list[Operation]:
+    """FOREIGN KEYs the model declares and the database does not have.
+
+    The planner omitted these entirely, and so did ``schema:check`` — which is
+    how a synkronus development database came to be missing 90 of the 104
+    composite ``(child_id, tenant_id) -> parent(id, tenant_id)`` keys while
+    every gate called it in sync. Those keys are where tenant isolation stops
+    being a query habit and becomes a storage guarantee, and their absence is
+    invisible until a database that HAS them (a fresh CI one, built from the
+    same migrations) starts refusing rows the development database accepts.
+
+    Same safe two-step as :func:`missing_checks`: ``ADD CONSTRAINT ... NOT
+    VALID`` takes no scan, the paired ``VALIDATE`` scans without blocking
+    writes, and a preflight proves the existing rows already satisfy the key
+    before either runs.
+    """
+    live_keys = (live.constraints or {}).get(table, set())
+    operations: list[Operation] = []
+    for key in declared_foreign_keys(model, table):
+        name = key["name"]
+        if name in live_keys:
+            continue
+        if key["on"] not in live.tables:
+            # Nothing to point at yet. The table this key references is itself
+            # created by this plan, and its own key follows on the next one.
+            continue
+        operations.append(
+            Operation(
+                kind="add_foreign_key",
+                table=table,
+                key=f"{table}:{name}",
+                forward_sql=_foreign_key_sql(table, key),
+                reverse_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {name}',
+                safety=LOCKING,
+                reason="model declares a FOREIGN KEY absent from the database",
+                notes=(
+                    "attached NOT VALID: existing rows are not scanned here — "
+                    "the paired VALIDATE does that without blocking writes",
+                ),
+            )
+        )
+        operations.append(
+            Operation(
+                kind="validate_foreign_key",
+                table=table,
+                key=f"{table}:{name}:validate",
+                forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
+                reverse_sql=None,
+                safety=LOCKING,
+                reason="prove the existing rows satisfy the attached FOREIGN KEY",
+                preflight_sql=_foreign_key_preflight(table, key),
+                preflight_failure=(
+                    f"{table} holds rows with no {key['on']} parent for {name} — "
+                    "repair the data before validating the constraint"
+                ),
+                notes=(
+                    "no reverse recorded: validation has nothing to undo — the "
+                    "paired ADD CONSTRAINT's reverse removes the constraint",
+                ),
+            )
+        )
+    return operations
+
+
 def missing_checks(model: dict, table: str, live: LiveSchema) -> list[Operation]:
     """CHECK constraints the model declares and the database does not have.
 

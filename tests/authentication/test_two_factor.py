@@ -215,3 +215,42 @@ class TestBackupCodes:
         for code in generate_backup_codes(5):
             assert normalize_backup_code(code).isalnum()
             assert len(normalize_backup_code(code)) == 10
+
+
+class TestCodeGeneration:
+    """``current_code`` is the generating half of the same arithmetic.
+
+    Only verification was public, so a development enrollment command and an
+    end-to-end login that has to clear the 2FA wall both had to reach into
+    ``_hotp`` and re-derive the time step by hand. Two derivations of one
+    formula is one too many, and the private one is the one that drifts.
+    """
+
+    def test_a_generated_code_verifies_against_its_own_secret(self):
+        secret = TwoFactor.generate_secret()
+
+        assert TwoFactor.verify_totp(secret, TwoFactor.current_code(secret))
+
+    def test_generation_and_verification_read_the_same_clock(self):
+        secret = TwoFactor.generate_secret()
+        at = 1_700_000_000.0
+
+        code = TwoFactor.current_code(secret, at=at)
+
+        assert TwoFactor.matched_totp_counter(secret, code, at=at) == int(
+            at // TwoFactor.STEP_SECONDS
+        )
+
+    def test_a_code_from_a_distant_step_is_outside_the_window(self):
+        secret = TwoFactor.generate_secret()
+        at = 1_700_000_000.0
+
+        stale = TwoFactor.current_code(secret, at=at - 10 * TwoFactor.STEP_SECONDS)
+
+        assert not TwoFactor.verify_totp(secret, stale, at=at)
+
+    def test_the_code_is_the_declared_number_of_digits(self):
+        code = TwoFactor.current_code(TwoFactor.generate_secret())
+
+        assert len(code) == TwoFactor.DIGITS
+        assert code.isdigit()

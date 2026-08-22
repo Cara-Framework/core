@@ -33,6 +33,7 @@ from cara.exceptions import SchemaPlanRefused
 from cara.schema.LiveSchema import LiveSchema, declared_columns
 from cara.schema.Objects import (
     missing_checks,
+    missing_foreign_keys,
     missing_indexes,
     orphaned_checks,
     orphaned_indexes,
@@ -187,6 +188,10 @@ def plan(
         operations.extend(orphaned_indexes(model, table, live))
         operations.extend(missing_checks(model, table, live))
         operations.extend(orphaned_checks(model, table, live))
+        # Foreign keys, missing direction only: an EXTRA live key is not the
+        # model's business, and dropping one on a guess is how referential
+        # integrity disappears quietly.
+        operations.extend(missing_foreign_keys(model, table, live))
 
     notices.extend(orphaned_tables({m["table"] for m in planned}, live))
 

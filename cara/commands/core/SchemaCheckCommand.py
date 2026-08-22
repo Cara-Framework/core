@@ -24,6 +24,11 @@ request.
     an index over e.g. ``COALESCE(last_seen_at, created_at)`` cannot build,
   * CHECK constraints declared in a model's ``__indexes__`` but MISSING from
     live ``pg_constraint`` (a dropped CHECK otherwise passes silently),
+  * FOREIGN KEYs a model declares — ``field.foreign(...)``, single or composite
+    — but MISSING from live ``pg_constraint``. A composite
+    ``(child_id, tenant_id)`` key is where tenant isolation stops being a query
+    habit and becomes a storage guarantee; without this comparison a database
+    can be missing almost every one of them and still be reported "in sync",
   * INDEX drift in BOTH directions — every index a model declares (``__indexes__``
     raw SQL and ``field.index([...])``) diffed by name against live
     ``pg_indexes``. Missing catches a dropped ON-CONFLICT upsert target; EXTRA
@@ -44,6 +49,7 @@ from __future__ import annotations
 import re
 
 from cara.decorators import command
+from cara.schema import declared_foreign_keys
 
 from ..CommandBase import CommandBase
 from ..OptionalDependencyError import missing_optional
@@ -174,6 +180,9 @@ class SchemaCheckCommand(CommandBase):
             # pg_indexes, NOT information_schema.columns — introspect them
             # separately so we can diff declared ``__indexes__`` against them.
             live_checks = self._introspect_live_checks(live_schema, schema_name)
+            live_foreign_keys = self._introspect_live_foreign_keys(
+                live_schema, schema_name
+            )
             live_indexes = self._introspect_live_indexes(live_schema, schema_name)
             constraint_indexes = self._introspect_constraint_indexes(
                 live_schema, schema_name
@@ -211,6 +220,11 @@ class SchemaCheckCommand(CommandBase):
             # is MISSING it. A dropped ON-CONFLICT target or a dropped CHECK
             # otherwise passes silently — caught here.
             drift.extend(self._diff_checks(model, live_checks.get(table, set())))
+            # Foreign keys are declared the same way and were never compared:
+            # see ``_diff_foreign_keys``.
+            drift.extend(
+                self._diff_foreign_keys(model, live_foreign_keys.get(table, set()))
+            )
             # Full index diff (both directions, constraint-owned excluded): an
             # index living only in a hand-written migration is invisible to the
             # column diff and silently disappears on regenerate-from-models.
@@ -242,6 +256,11 @@ class SchemaCheckCommand(CommandBase):
 
     def _introspect_live_checks(self, live_schema, schema_name) -> dict[str, set[str]]:
         return _LIVE_SCHEMA_INSPECTION.checks(live_schema, schema_name)
+
+    def _introspect_live_foreign_keys(
+        self, live_schema, schema_name
+    ) -> dict[str, set[str]]:
+        return _LIVE_SCHEMA_INSPECTION.foreign_keys(live_schema, schema_name)
 
     def _introspect_live_indexes(self, live_schema, schema_name) -> dict[str, set[str]]:
         return _LIVE_SCHEMA_INSPECTION.indexes(live_schema, schema_name)
@@ -396,6 +415,40 @@ class SchemaCheckCommand(CommandBase):
                 f"sweep will not recreate it"
             )
         return issues
+
+    @staticmethod
+    def _declared_foreign_keys(model: dict) -> set[str]:
+        """FOREIGN KEY constraint names a model declares.
+
+        Extraction lives in ``cara.schema.Objects`` and is shared with the
+        planner on purpose: a checker and a repairer that each derive the same
+        names their own way is two chances to disagree about what is missing.
+        """
+        return {
+            key["name"]
+            for key in declared_foreign_keys(model, model.get("table") or "")
+        }
+
+    def _diff_foreign_keys(self, model: dict, live_keys: set[str]) -> list[str]:
+        """Report declared FOREIGN KEYs MISSING from the DB.
+
+        This was the gate's blind spot, and the most expensive kind: a
+        composite ``(child_id, tenant_id) -> parent(id, tenant_id)`` key is how
+        tenant isolation is enforced in STORAGE rather than in query habit, and
+        90 of synkronus's 104 such keys were absent from a database
+        ``schema:check`` called "in sync". Nothing noticed until a fresh CI
+        database — built from the same migrations — started refusing rows the
+        development database happily accepted, so the two disagreed about
+        which tests could pass.
+
+        Declared-but-absent only, for the same reason as ``_diff_checks``: the
+        model owns the invariants it asserts, and an extra live key is not
+        the model's business.
+        """
+        return [
+            f"FOREIGN KEY '{name}' declared in model but MISSING in database"
+            for name in sorted(self._declared_foreign_keys(model) - live_keys)
+        ]
 
     def _diff_checks(self, model: dict, live_checks: set[str]) -> list[str]:
         """Report declared CHECK constraints MISSING from the DB.

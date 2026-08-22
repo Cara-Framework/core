@@ -69,6 +69,22 @@ class TwoFactor:
         return str(truncated % (10**cls.DIGITS)).zfill(cls.DIGITS)
 
     @classmethod
+    def current_code(cls, secret: str, *, at: float | None = None) -> str:
+        """The TOTP ``secret`` produces right now — the generating half.
+
+        Only verification was public, so anything needing to PRODUCE a code
+        (a development enrollment command, an end-to-end login that must get
+        past the 2FA wall) had to reach into ``_hotp`` and re-derive the time
+        step by hand. Two derivations of one formula is one too many; this is
+        the same arithmetic ``matched_totp_counter`` checks against.
+
+        ``at`` (unix seconds) is injectable for tests; otherwise the wall
+        clock, exactly as verification reads it.
+        """
+        counter = int((at if at is not None else time.time()) // cls.STEP_SECONDS)
+        return cls._hotp(secret, counter)
+
+    @classmethod
     def matched_totp_counter(
         cls, secret: str, code: str, *, window: int = 1, at: float | None = None
     ) -> int | None:

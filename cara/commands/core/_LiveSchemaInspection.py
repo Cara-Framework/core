@@ -56,6 +56,31 @@ class _LiveSchemaInspection:
             checks.setdefault(row["table_name"], set()).add(row["constraint_name"])
         return checks
 
+    def foreign_keys(self, live_schema, schema_name) -> dict[str, set[str]]:
+        """Every FOREIGN KEY name per table (``contype='f'``).
+
+        Kept apart from ``checks`` because the two answer different questions
+        and Postgres names them from different places: a CHECK is named by the
+        model, a foreign key is named by the model OR defaulted by the
+        Blueprint. Both are constraints a model DECLARES and a database can
+        silently lack.
+        """
+        target = self._sql_literal(self._target_schema(live_schema, schema_name))
+        sql = (
+            "SELECT c.relname AS table_name, con.conname AS constraint_name "
+            "FROM pg_constraint con "
+            "JOIN pg_class c ON c.oid = con.conrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname = '{target}' "
+            "AND con.contype = 'f' "
+            "ORDER BY c.relname, con.conname"
+        )
+        rows = live_schema.query_executor.get_query_result(sql) or []
+        keys: dict[str, set[str]] = {}
+        for row in rows:
+            keys.setdefault(row["table_name"], set()).add(row["constraint_name"])
+        return keys
+
     def indexes(self, live_schema, schema_name) -> dict[str, set[str]]:
         target = self._sql_literal(self._target_schema(live_schema, schema_name))
         sql = (
