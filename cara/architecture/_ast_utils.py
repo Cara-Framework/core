@@ -112,17 +112,61 @@ def read_source(path: Path) -> str | None:
         return None
 
 
+#: Parsed trees, keyed by ``(path, the file's exact source text)``.
+#:
+#: A Guard Pack run parses the SAME file once per scanner whose roots contain
+#: it. In cheapa services that is 29,899 parses of 3,195 distinct files — 89%
+#: of them redundant, ~7.5s of a 20s run, and the reason
+#: ``test_architecture_manifest_is_clean`` began tripping a 30s CI budget.
+#:
+#: The key is the source TEXT, not an mtime/size signature, so a stale hit is
+#: impossible by construction: identical bytes always compile to an identical
+#: tree, and a file rewritten mid-run (what the tmp_path scanner tests do)
+#: re-parses because its text differs — no dependence on filesystem timestamp
+#: granularity. Sharing one tree between scanners is safe because no scanner
+#: mutates one: ``cara/architecture/`` contains no NodeTransformer and no
+#: assignment to an AST node attribute.
+_PARSE_CACHE: dict[tuple[str, str], ast.Module | None] = {}
+
+#: Materialized ``ast.walk`` order per tree, keyed by ``id(tree)``. The tuple
+#: keeps the TREE itself alive alongside its node list: an ``id()`` key is
+#: only stable while its object is, and a collected tree could otherwise hand
+#: its address to an unrelated one.
+_NODES_CACHE: dict[int, tuple[ast.Module, list[ast.AST]]] = {}
+
+
+def clear_parse_cache() -> None:
+    """Drop every memoized tree AND its materialized node list.
+
+    Together they roughly double the scan's peak RSS (189 MB -> 419 MB for
+    cheapa services' 14 MB of Python). ``craft arch:check`` simply exits; a
+    process that scans once and then does unrelated work — a pytest session
+    with 11k tests after the guard test — reclaims that memory here.
+    """
+    _PARSE_CACHE.clear()
+    _NODES_CACHE.clear()
+
+
 def parse(path: Path) -> ast.Module | None:
     """Parse a file; ``None`` on a syntax error (a scanner's own concern —
     py_compile / the test suite catches genuine syntax breakage) or on a file
-    that cannot be read at all (see ``read_source``)."""
+    that cannot be read at all (see ``read_source``).
+
+    Memoized on the file's exact text (see ``_PARSE_CACHE``) — the tree the
+    next scanner would build from the same bytes is the one already built.
+    """
     source = read_source(path)
     if source is None:
         return None
+    key = (str(path), source)
+    if key in _PARSE_CACHE:
+        return _PARSE_CACHE[key]
     try:
-        return ast.parse(source, filename=str(path))
+        tree: ast.Module | None = ast.parse(source, filename=str(path))
     except SyntaxError:
-        return None
+        tree = None
+    _PARSE_CACHE[key] = tree
+    return tree
 
 
 def is_type_checking_if(node: ast.stmt) -> bool:
@@ -195,10 +239,33 @@ def function_local_imports(tree: ast.Module) -> list[ast.stmt]:
     return found
 
 
+def all_nodes(tree: ast.Module) -> list[ast.AST]:
+    """Every node of ``tree`` in ``ast.walk`` order, walked at most once.
+
+    ``ast.walk`` is a Python-level BFS: a deque round-trip plus
+    ``iter_child_nodes``/``iter_fields``/``getattr`` per node. Scanners ask
+    the same tree for its nodes over and over — ``RawSqlHome`` alone walked
+    each file SEVEN times (bound names, compiler ids, call sites, docstring
+    ids, schema metadata, literals), and across the pack cheapa services
+    yielded 18.7M nodes from a 1.2M-node census, 15x.
+
+    Walking once and re-reading the list is exactly equivalent: the list is
+    in the same BFS order, holds the same node objects, and no scanner
+    mutates a tree. Paired with the ``parse`` cache the list is shared
+    ACROSS scanners too, because they are handed the same tree object.
+    """
+    cached = _NODES_CACHE.get(id(tree))
+    if cached is not None:
+        return cached[1]
+    nodes = list(ast.walk(tree))
+    _NODES_CACHE[id(tree)] = (tree, nodes)
+    return nodes
+
+
 def docstring_node_ids(tree: ast.Module) -> set[int]:
     """``id()`` of every module/class/function docstring Constant node."""
     ids: set[int] = set()
-    for node in ast.walk(tree):
+    for node in all_nodes(tree):
         if (
             not isinstance(
                 node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)

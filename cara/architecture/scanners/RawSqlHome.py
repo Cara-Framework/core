@@ -46,6 +46,7 @@ import re
 
 from cara.architecture._ast_utils import (
     _path_has_fragment,
+    all_nodes,
     docstring_node_ids,
     iter_modules,
 )
@@ -96,10 +97,11 @@ def _bound_database_names(tree: ast.Module) -> set[str]:
     and explicit manager instances obtained from constructor injection,
     ``resolve("DB")`` or an application/container ``make("DB")`` call.
     """
+    nodes = all_nodes(tree)
     facades: set[str] = set()
     managers: set[str] = set()
     resolvers: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.ImportFrom) or not node.module:
             continue
         if node.module == "cara.facades":
@@ -120,7 +122,7 @@ def _bound_database_names(tree: ast.Module) -> set[str]:
 
     instances: set[str] = {
         argument.arg
-        for node in ast.walk(tree)
+        for node in nodes
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
         if isinstance(argument.annotation, ast.Name)
@@ -128,7 +130,7 @@ def _bound_database_names(tree: ast.Module) -> set[str]:
     }
     assignments = [
         node
-        for node in ast.walk(tree)
+        for node in nodes
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
     ]
     changed = True
@@ -191,7 +193,7 @@ def _contains_sql_literal(node: ast.Call) -> bool:
 def _schema_metadata_node_ids(tree: ast.Module) -> set[int]:
     """Nodes inside an ``__indexes__`` / ``__views__`` declaration."""
     ids: set[int] = set()
-    for node in ast.walk(tree):
+    for node in all_nodes(tree):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -227,7 +229,8 @@ def raw_sql_findings(tree: ast.Module, rel: str) -> list[Finding]:
         for child in ast.walk(compiler)
     }
     findings: list[Finding] = []
-    for node in ast.walk(tree):
+    nodes = all_nodes(tree)
+    for node in nodes:
         if id(node) in compiler_ids:
             continue
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
@@ -250,7 +253,7 @@ def raw_sql_findings(tree: ast.Module, rel: str) -> list[Finding]:
             )
 
     excluded = docstring_node_ids(tree) | _schema_metadata_node_ids(tree) | compiler_ids
-    for node in ast.walk(tree):
+    for node in nodes:
         if id(node) in excluded:
             continue
         text = _literal_text(node)
