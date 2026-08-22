@@ -109,6 +109,87 @@ def test_a_claim_absent_everywhere_still_fails(tmp_path):
     ]
 
 
+def test_a_citation_of_an_ABSENT_neighbour_is_unverifiable_not_broken(tmp_path):
+    """CI checks out ONE product. The neighbour's tree is simply not there.
+
+    Locally the shape finds it and the verdict reads "resolves in <product>";
+    remotely the same sentence used to flip to BROKEN — a verdict about the
+    environment rather than about the sentence. A product that DECLARES its
+    neighbours keeps the honest answer in both places.
+    """
+    forget_path_index()
+    alpha = make_checkout(tmp_path, "alpha")  # no neighbour beside it
+    write(
+        alpha / "docs" / "internal" / "note.md",
+        "The bridge lives in `api/app/support/auth/Access.py` in beta.example.\n",
+    )
+    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+
+    broken, unverifiable = verify_claims(manifest, lambda _line: None)
+
+    assert [row[3] for row in broken] == []
+    assert (
+        "api/app/support/auth/Access.py",
+        "names beta.example, not checked out here",
+    ) in [(row[3], row[4]) for row in unverifiable]
+
+
+def test_an_undeclared_neighbour_does_not_excuse_a_bad_path(tmp_path):
+    """The escape hatch is the DECLARED list, not "mentions any name"."""
+    forget_path_index()
+    alpha = make_checkout(tmp_path, "alpha")
+    write(
+        alpha / "docs" / "internal" / "note.md",
+        "The bridge lives in `api/app/support/auth/Access.py` in gamma.example.\n",
+    )
+    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+
+    broken, _unverifiable = verify_claims(manifest, lambda _line: None)
+
+    assert ("api/app/support/auth/Access.py", "path does not exist") in [
+        (row[3], row[4]) for row in broken
+    ]
+
+
+def test_a_present_neighbour_still_answers_for_itself(tmp_path):
+    """Declaring a sibling must not blind the verifier when it IS checked out:
+    a path that resolves next door still says so, by name."""
+    forget_path_index()
+    alpha = make_checkout(tmp_path, "alpha")
+    beta = make_checkout(tmp_path, "beta")
+    write(beta / "api" / "tests" / "test_registry.py")
+    write(
+        alpha / "docs" / "internal" / "note.md",
+        "The registry is guarded by `tests/test_registry.py` in beta.example.\n",
+    )
+    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+
+    broken, unverifiable = verify_claims(manifest, lambda _line: None)
+
+    assert [row[3] for row in broken] == []
+    assert ("tests/test_registry.py", "resolves in beta.example, not alpha") in [
+        (row[3], row[4]) for row in unverifiable
+    ]
+
+
+def test_a_workspace_pointer_into_an_absent_neighbour_is_unverifiable(tmp_path):
+    forget_path_index()
+    alpha = make_checkout(tmp_path, "alpha")
+    write(
+        alpha / "docs" / "internal" / "note.md",
+        "See `~/Desktop/beta.example/code/docs/internal/backlog.md` for the rest.\n",
+    )
+    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+
+    broken, unverifiable = verify_claims(manifest, lambda _line: None)
+
+    assert [row[3] for row in broken] == []
+    assert any(
+        row[4] == "points into beta.example, not checked out here"
+        for row in unverifiable
+    )
+
+
 def test_owned_markdown_covers_the_docs_tree_and_the_neighbours_shared_atlas(tmp_path):
     forget_path_index()
     alpha = make_checkout(tmp_path, "alpha")

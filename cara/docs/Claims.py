@@ -214,6 +214,22 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
             for s in siblings
             if s.parent.name in text or s.parent.name.split(".")[0] in text
         ]
+        # A neighbour that is NOT checked out cannot answer the question
+        # either way. Locally the shape above finds it and the claim reads
+        # "resolves in <product>, not <this one>"; CI checks out ONE product,
+        # so the same sentence flipped to BROKEN — a verdict about the
+        # environment, not about the sentence. When the document names a
+        # declared sibling and no sibling tree is present, say what is
+        # actually true: unverifiable here.
+        absent_sibling = next(
+            (
+                name
+                for name in manifest.sibling_products
+                if not siblings
+                and (name in text or name.split(".")[0] in text)
+            ),
+            None,
+        )
         for number, line in enumerate(strip_fences(text), 1):
             if IGNORE_LINE in line or not line.strip():
                 continue
@@ -242,6 +258,16 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                                     f"resolves in {elsewhere}, not {manifest.product}",
                                 )
                             )
+                        elif absent_sibling:
+                            unverifiable.append(
+                                (
+                                    label,
+                                    number,
+                                    "path",
+                                    token,
+                                    f"names {absent_sibling}, not checked out here",
+                                )
+                            )
                         else:
                             broken.append((label, number, "path", token, reason))
                     elif kind == "unverifiable":
@@ -256,9 +282,31 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                         (label, number, "pointer", pointer + "…", "glob pointer")
                     )
                 elif not Path(pointer).expanduser().exists():
-                    broken.append(
-                        (label, number, "pointer", pointer, "does not exist on disk")
+                    # A workspace pointer into a neighbour product is the same
+                    # situation as the path branch above: absent here is not
+                    # the same fact as wrong.
+                    into_sibling = next(
+                        (
+                            name
+                            for name in manifest.sibling_products
+                            if name in pointer
+                        ),
+                        None,
                     )
+                    if into_sibling and not siblings:
+                        unverifiable.append(
+                            (
+                                label,
+                                number,
+                                "pointer",
+                                pointer,
+                                f"points into {into_sibling}, not checked out here",
+                            )
+                        )
+                    else:
+                        broken.append(
+                            (label, number, "pointer", pointer, "does not exist on disk")
+                        )
             for command in CRAFT_RE.findall(line):
                 if ":" not in command:
                     # Bare word after "craft": prose extracts as a command
@@ -281,6 +329,8 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                     inventories.setdefault(sibling, command_names(sibling))
                     if command in inventories[sibling]:
                         elsewhere = sibling.parent.name
+                if elsewhere is None and absent_sibling:
+                    elsewhere = f"{absent_sibling} (not checked out here)"
                 if elsewhere:
                     unverifiable.append(
                         (
