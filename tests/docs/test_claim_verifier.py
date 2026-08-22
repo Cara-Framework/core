@@ -172,22 +172,44 @@ def test_a_present_neighbour_still_answers_for_itself(tmp_path):
     ]
 
 
-def test_a_workspace_pointer_into_an_absent_neighbour_is_unverifiable(tmp_path):
+def test_a_workspace_pointer_is_unverifiable_not_broken(tmp_path):
+    """``~/Desktop/<product>/…`` describes a LAYOUT, not a file in a checkout.
+
+    The operator's backups directory sits beside the code, not inside it, so
+    only a machine that holds the workspace can judge the pointer — and CI
+    clones one repository into a path of its own choosing.
+    """
     forget_path_index()
     alpha = make_checkout(tmp_path, "alpha")
     write(
         alpha / "docs" / "internal" / "note.md",
-        "See `~/Desktop/beta.example/code/docs/internal/backlog.md` for the rest.\n",
+        "Backups live under `~/Desktop/alpha.example/backups`, and the rest is "
+        "in `~/Desktop/beta.example/code/docs/internal/backlog.md`.\n",
     )
     manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
 
     broken, unverifiable = verify_claims(manifest, lambda _line: None)
 
     assert [row[3] for row in broken] == []
-    assert any(
-        row[4] == "points into beta.example, not checked out here"
-        for row in unverifiable
+    reasons = [row[4] for row in unverifiable if row[2] == "pointer"]
+    assert len(reasons) == 2
+    assert all("only the machine that holds it can verify" in r for r in reasons)
+
+
+def test_a_home_pointer_naming_no_workspace_still_fails(tmp_path):
+    forget_path_index()
+    alpha = make_checkout(tmp_path, "alpha")
+    write(
+        alpha / "docs" / "internal" / "note.md",
+        "Run the script at `~/tools/definitely-not-here.sh` first.\n",
     )
+    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+
+    broken, _unverifiable = verify_claims(manifest, lambda _line: None)
+
+    assert ("~/tools/definitely-not-here.sh", "does not exist on disk") in [
+        (row[3], row[4]) for row in broken
+    ]
 
 
 def test_owned_markdown_covers_the_docs_tree_and_the_neighbours_shared_atlas(tmp_path):

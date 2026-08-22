@@ -282,25 +282,35 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                         (label, number, "pointer", pointer + "…", "glob pointer")
                     )
                 elif not Path(pointer).expanduser().exists():
-                    # A workspace pointer into a neighbour product is the same
-                    # situation as the path branch above: absent here is not
-                    # the same fact as wrong.
-                    into_sibling = next(
+                    # A ``~/`` pointer that names a product WORKSPACE
+                    # directory — this product's own, or a declared
+                    # neighbour's — describes a layout, not a file in any
+                    # checkout: the operator's backups directory, the sibling
+                    # product's backlog. Only a machine that HAS the workspace
+                    # can judge it, and CI checks out one repository into a
+                    # path of its own choosing. Reporting those as broken
+                    # graded the environment, not the sentence. Anything else
+                    # (a real typo in a home path) still fails.
+                    workspace = next(
                         (
                             name
-                            for name in manifest.sibling_products
-                            if name in pointer
+                            for name in (
+                                manifest.root.parent.name,
+                                *manifest.sibling_products,
+                            )
+                            if name and name in pointer
                         ),
                         None,
                     )
-                    if into_sibling and not siblings:
+                    if workspace:
                         unverifiable.append(
                             (
                                 label,
                                 number,
                                 "pointer",
                                 pointer,
-                                f"points into {into_sibling}, not checked out here",
+                                f"workspace path under {workspace}; only the "
+                                "machine that holds it can verify",
                             )
                         )
                     else:
