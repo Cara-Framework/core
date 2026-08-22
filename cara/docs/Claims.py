@@ -25,6 +25,7 @@ from cara.docs.ClaimSources import (
     declared_ports,
     sibling_roots,
     strip_fences,
+    workspace_names,
 )
 from cara.docs.DocsManifest import DocsManifest
 from cara.docs.Inventory import command_rows
@@ -177,6 +178,10 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
     broken: list[Finding] = []
     unverifiable: list[Finding] = []
     siblings = sibling_roots(root)
+    # Workspace topology, read from the atlas prose rather than declared in
+    # code: every product directory the atlas points at, plus this one.
+    workspaces = workspace_names(root) | {root.parent.name}
+    neighbours = workspaces - {root.parent.name}
     inventories = {root: command_names(root)}
     ports_here = declared_ports(root, manifest.port_source_dirs)
     bans = atlas_bans(root)
@@ -218,13 +223,13 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
         # either way. Locally the shape above finds it and the claim reads
         # "resolves in <product>, not <this one>"; CI checks out ONE product,
         # so the same sentence flipped to BROKEN — a verdict about the
-        # environment, not about the sentence. When the document names a
-        # declared sibling and no sibling tree is present, say what is
-        # actually true: unverifiable here.
-        absent_sibling = next(
+        # environment, not about the sentence. The names come from the atlas's
+        # own topology prose (``workspace_names``), so no product's code has to
+        # carry another product's name.
+        absent_neighbour = next(
             (
                 name
-                for name in manifest.sibling_products
+                for name in sorted(neighbours)
                 if not siblings
                 and (name in text or name.split(".")[0] in text)
             ),
@@ -258,14 +263,14 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                                     f"resolves in {elsewhere}, not {manifest.product}",
                                 )
                             )
-                        elif absent_sibling:
+                        elif absent_neighbour:
                             unverifiable.append(
                                 (
                                     label,
                                     number,
                                     "path",
                                     token,
-                                    f"names {absent_sibling}, not checked out here",
+                                    f"names {absent_neighbour}, not checked out here",
                                 )
                             )
                         else:
@@ -294,10 +299,7 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                     workspace = next(
                         (
                             name
-                            for name in (
-                                manifest.root.parent.name,
-                                *manifest.sibling_products,
-                            )
+                            for name in sorted(workspaces)
                             if name and name in pointer
                         ),
                         None,
@@ -339,8 +341,8 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                     inventories.setdefault(sibling, command_names(sibling))
                     if command in inventories[sibling]:
                         elsewhere = sibling.parent.name
-                if elsewhere is None and absent_sibling:
-                    elsewhere = f"{absent_sibling} (not checked out here)"
+                if elsewhere is None and absent_neighbour:
+                    elsewhere = f"{absent_neighbour} (not checked out here)"
                 if elsewhere:
                     unverifiable.append(
                         (

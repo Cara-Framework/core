@@ -118,12 +118,18 @@ def test_a_citation_of_an_ABSENT_neighbour_is_unverifiable_not_broken(tmp_path):
     neighbours keeps the honest answer in both places.
     """
     forget_path_index()
-    alpha = make_checkout(tmp_path, "alpha")  # no neighbour beside it
+    # No neighbour beside it — only the atlas prose that names one.
+    alpha = make_checkout(
+        tmp_path, "alpha", atlas=(
+            "`some:banned-command` is FORBIDDEN.\n"
+            "Beta lives at `~/Desktop/beta.example/code`.\n"
+        )
+    )
     write(
         alpha / "docs" / "internal" / "note.md",
         "The bridge lives in `api/app/support/auth/Access.py` in beta.example.\n",
     )
-    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+    manifest = manifest_for(alpha, "alpha")
 
     broken, unverifiable = verify_claims(manifest, lambda _line: None)
 
@@ -135,14 +141,19 @@ def test_a_citation_of_an_ABSENT_neighbour_is_unverifiable_not_broken(tmp_path):
 
 
 def test_an_undeclared_neighbour_does_not_excuse_a_bad_path(tmp_path):
-    """The escape hatch is the DECLARED list, not "mentions any name"."""
+    """The escape hatch is the atlas's own topology, not "mentions any name"."""
     forget_path_index()
-    alpha = make_checkout(tmp_path, "alpha")
+    alpha = make_checkout(
+        tmp_path, "alpha", atlas=(
+            "`some:banned-command` is FORBIDDEN.\n"
+            "Beta lives at `~/Desktop/beta.example/code`.\n"
+        )
+    )
     write(
         alpha / "docs" / "internal" / "note.md",
         "The bridge lives in `api/app/support/auth/Access.py` in gamma.example.\n",
     )
-    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+    manifest = manifest_for(alpha, "alpha")
 
     broken, _unverifiable = verify_claims(manifest, lambda _line: None)
 
@@ -162,7 +173,7 @@ def test_a_present_neighbour_still_answers_for_itself(tmp_path):
         alpha / "docs" / "internal" / "note.md",
         "The registry is guarded by `tests/test_registry.py` in beta.example.\n",
     )
-    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+    manifest = manifest_for(alpha, "alpha")
 
     broken, unverifiable = verify_claims(manifest, lambda _line: None)
 
@@ -180,30 +191,46 @@ def test_a_workspace_pointer_is_unverifiable_not_broken(tmp_path):
     clones one repository into a path of its own choosing.
     """
     forget_path_index()
-    alpha = make_checkout(tmp_path, "alpha")
+    alpha = make_checkout(
+        tmp_path, "alpha", atlas=(
+            "`some:banned-command` is FORBIDDEN.\n"
+            "Beta lives at `~/Desktop/beta.example/code`.\n"
+        )
+    )
     write(
         alpha / "docs" / "internal" / "note.md",
         "Backups live under `~/Desktop/alpha.example/backups`, and the rest is "
         "in `~/Desktop/beta.example/code/docs/internal/backlog.md`.\n",
     )
-    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+    manifest = manifest_for(alpha, "alpha")
 
     broken, unverifiable = verify_claims(manifest, lambda _line: None)
 
     assert [row[3] for row in broken] == []
-    reasons = [row[4] for row in unverifiable if row[2] == "pointer"]
-    assert len(reasons) == 2
-    assert all("only the machine that holds it can verify" in r for r in reasons)
+    pointers = {row[3]: row[4] for row in unverifiable if row[2] == "pointer"}
+    # Both the doc's own pointers — this product's workspace and the
+    # neighbour's — and no verdict that grades the machine instead.
+    assert "~/Desktop/alpha.example/backups" in pointers
+    assert "~/Desktop/beta.example/code/docs/internal/backlog.md" in pointers
+    assert all(
+        "only the machine that holds it can verify" in reason
+        for reason in pointers.values()
+    )
 
 
 def test_a_home_pointer_naming_no_workspace_still_fails(tmp_path):
     forget_path_index()
-    alpha = make_checkout(tmp_path, "alpha")
+    alpha = make_checkout(
+        tmp_path, "alpha", atlas=(
+            "`some:banned-command` is FORBIDDEN.\n"
+            "Beta lives at `~/Desktop/beta.example/code`.\n"
+        )
+    )
     write(
         alpha / "docs" / "internal" / "note.md",
         "Run the script at `~/tools/definitely-not-here.sh` first.\n",
     )
-    manifest = manifest_for(alpha, "alpha", sibling_products=("beta.example",))
+    manifest = manifest_for(alpha, "alpha")
 
     broken, _unverifiable = verify_claims(manifest, lambda _line: None)
 

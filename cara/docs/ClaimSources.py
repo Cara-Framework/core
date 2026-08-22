@@ -96,6 +96,28 @@ def sibling_roots(root: Path) -> list[Path]:
     return out
 
 
+def workspace_names(root: Path) -> set[str]:
+    """Workspace directory names this product's own atlas points at.
+
+    Derived, never declared. The atlas states the topology in prose —
+    ``~/Desktop/<product>/<checkout>`` — so the names are already written
+    down where a human maintains them, and no product's code has to carry
+    another product's name (the vertical-slice seam the architecture guard
+    enforces, and the same reason :func:`sibling_roots` works by shape).
+
+    Returns every workspace the atlas names, including this product's own.
+    """
+    atlas = root / "CLAUDE.md"
+    if not atlas.is_file():
+        return set()
+    with suppress(OSError):
+        pattern = re.compile(
+            r"~/[^\s`\"']*?/([^/\s`\"']+)/" + re.escape(root.name) + r"\b"
+        )
+        return set(pattern.findall(atlas.read_text(encoding="utf-8")))
+    return set()
+
+
 def strip_fences(text: str) -> list[str]:
     """Blank fenced-code lines while preserving source line numbers."""
     out: list[str] = []
@@ -236,4 +258,5 @@ __all__ = [
     "path_index",
     "sibling_roots",
     "strip_fences",
+    "workspace_names",
 ]

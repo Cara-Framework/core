@@ -54,16 +54,6 @@ class DocsManifest:
       its vocabulary compiled into the framework, silently inherited by every
       other product until the day one of them happens to define a class by the
       same name. ``None`` omits the column entirely.
-    * ``sibling_products`` — the other products whose checkouts this one's
-      documentation legitimately cites (by workspace directory name, e.g.
-      ``synkronus.io``). When a neighbour is checked out beside this one, its
-      tree is found by shape and used to DOWNGRADE an unresolved path to
-      "resolves next door". CI checks out ONE product, so that shape is
-      absent — and without this list every such citation flipped from
-      informational to BROKEN the moment the gate ran remotely, which is a
-      verdict about the environment rather than about the sentence. Declared,
-      not sniffed: a name is the only thing a single-product checkout can know
-      about its neighbour.
     * ``generator_command`` — the CLI name the product registers this engine
       under. Every generated page opens by naming the command that rebuilds
       it, so a product that renames the command must say so here or the pages
@@ -75,7 +65,6 @@ class DocsManifest:
     viewer_port: int
     viewer_host: str = "127.0.0.1"
     port_source_dirs: tuple[str, ...] = ("api", "services")
-    sibling_products: tuple[str, ...] = ()
     packages_page_title: str = "Packages"
     model_scope: ModelScope | None = None
     generator_command: str = "maintenance:docs"
