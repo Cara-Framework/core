@@ -81,7 +81,7 @@ setup(
             "pip-audit==2.10.1",
             "pytest==9.1.1",
             "pytest-asyncio==1.4.0",
-            "ruff==0.15.21",
+            "ruff==0.16.4",
         ],
         # Everything: a full backend service (services/api) wants db + queue.
         "all": [
