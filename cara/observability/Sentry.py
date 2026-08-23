@@ -37,6 +37,16 @@ def setup_sentry(
         raise TypeError("Sentry dsn must be a string.")
     target_dsn = dsn.strip()
     rate = _sample_rate(traces_rate)
+    # A BLANK release is an absent one, not an invalid one. Rejecting "" here
+    # made an unset SENTRY_RELEASE fatal even with Sentry switched off: the
+    # composition root reads the env into a string, hands over "", and the
+    # process died before line 49 could notice there was no DSN at all — so an
+    # image with no error pipeline configured could not run its own CLI. The
+    # fallback three lines down already answers the absent case (git sha, then
+    # "dev"); this now routes both spellings of "absent" into it.
+    release = release.strip() if isinstance(release, str) else release
+    if release is not None and not release:
+        release = None
     if release is not None:
         release = _required_text(release, "release")
     if git_repo_dir is not None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from cara.observability import Sentry
+
 import importlib
 
 import pytest
@@ -87,3 +89,43 @@ def test_enabled_tracing_requires_an_explicit_endpoint() -> None:
             environment="test",
             sample_ratio=0.1,
         )
+
+
+def test_a_blank_release_is_absent_not_invalid(monkeypatch):
+    """An unset ``SENTRY_RELEASE`` must not be able to stop a boot.
+
+    A composition root reads the environment into a STRING, so "absent"
+    arrives as ``""`` rather than ``None``. Rejecting it raised before the
+    empty-DSN check could disable Sentry at all — an image with no error
+    pipeline configured could not run its own CLI, which is how this was
+    found. Both spellings of absent now fall through to the release
+    fallback.
+    """
+    calls: list[dict] = []
+    monkeypatch.setattr(Sentry, "_init_sentry", lambda **kw: calls.append(kw))
+    Sentry._setup_done = False
+
+    Sentry.setup_sentry(
+        service_name="api",
+        dsn="",
+        environment="production",
+        traces_rate=0.0,
+        release="   ",
+    )
+    assert calls == [], "an empty DSN must still disable Sentry"
+
+
+def test_a_blank_release_falls_back_when_sentry_is_on(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(Sentry, "_init_sentry", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(Sentry, "_git_short_sha", lambda *_a, **_k: None)
+    Sentry._setup_done = False
+
+    Sentry.setup_sentry(
+        service_name="api",
+        dsn="https://key@example.invalid/1",
+        environment="production",
+        traces_rate=0.0,
+        release="",
+    )
+    assert calls and calls[0]["release"] == "dev"
