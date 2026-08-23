@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from cara.observability import Sentry
-
 import importlib
 
 import pytest
+
+from cara.observability import Sentry
 
 sentry = importlib.import_module("cara.observability.Sentry")
 tracing = importlib.import_module("cara.observability.Tracing")
