@@ -107,14 +107,20 @@ class TenantScope(BaseScope):
 
             return builder
 
-        except Exception:
+        except RuntimeError:
+            # The deliberate refusals above (UNSET tenancy, a missing central
+            # tenant_id, a cross-tenant write) already say exactly what went
+            # wrong. Swallowing them into the generic message below reported a
+            # cross-tenant write attempt as a resolution failure.
+            raise
+        except Exception as exc:
             _logger.error(
                 "Tenant ID injection failed — aborting insert to prevent orphan row",
                 exc_info=True,
             )
             raise RuntimeError(
                 "Cannot insert without tenant_id: tenant resolution failed"
-            )
+            ) from exc
 
     def _inject_tenant_id_bulk(self, builder):
         """Bulk-insert variant of :meth:`_inject_tenant_id`.
@@ -150,14 +156,18 @@ class TenantScope(BaseScope):
 
             return builder
 
-        except Exception:
+        except RuntimeError:
+            # Same as the single-row path: the deliberate refusals above carry
+            # the precise reason and must reach the caller unchanged.
+            raise
+        except Exception as exc:
             _logger.error(
                 "Tenant ID injection failed — aborting bulk insert to prevent orphan rows",
                 exc_info=True,
             )
             raise RuntimeError(
                 "Cannot bulk-insert without tenant_id: tenant resolution failed"
-            )
+            ) from exc
 
     def _get_current_tenant_id(self):
         """The current tenant from :class:`cara.context.Tenancy` — the

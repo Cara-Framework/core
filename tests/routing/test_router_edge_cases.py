@@ -317,22 +317,6 @@ class TestOptionsPreflight:
         assert captured["Allow"] == "GET, OPTIONS"
 
 
-async def _maybe_await(value):
-    """Await ``value`` if it's a coroutine; otherwise return it.
-
-    ``Router._create_preflight_route``'s controller is a plain
-    callable returning ``response`` (not async). ``Route.controller``
-    is wrapped by ``RouteResolver`` whose ``handle`` returns the
-    handler's return value — sometimes a coroutine, sometimes not.
-    Keep the test compatible with both shapes.
-    """
-    import inspect
-
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
 # ── 5. Non-standard HTTP verbs reach the lookup table ───────────────
 
 

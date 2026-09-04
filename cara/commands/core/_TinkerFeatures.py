@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
 
+from cara.environment import PathManager
 from cara.facades import Cache, Config
 from cara.routing import Route
 
@@ -285,182 +287,26 @@ def _add_tinker_features(self, shell):
         return result
 
     def craft_command(command: str):
-        """Run craft command from tinker."""
+        """Run a craft command from tinker.
+
+        ``sys.executable`` is the interpreter this shell already runs under —
+        the project's managed venv. Spelling it ``python`` resolved off PATH,
+        which is the Homebrew interpreter without the project dependencies.
+        ``PathManager.base_path()`` is the deployable root ``craft`` lives in;
+        the process cwd is not guaranteed to be it.
+        """
 
         result = subprocess.run(
-            ["python", "craft"] + command.split(),
+            [sys.executable, "craft", *command.split()],
             capture_output=True,
             text=True,
-            cwd=".",
+            cwd=PathManager.base_path(),
         )
         if result.stdout:
             print(result.stdout)
         if result.stderr:
             console.print(result.stderr, style="red")
         return f"Command exit code: {result.returncode}"
-
-    def test_mail():
-        """Test mail configuration and send test email."""
-        try:
-            # Test mail configuration
-            console.print("📧 Testing mail configuration...")
-
-            # You can send a test email like this:
-            # Mail.to('test@example.com').subject('Test Mail').send('Hello from Cara!')
-
-            # For now, just check if mail driver is configured
-            mail_driver = Config.get("mail.default", "Unknown")
-            mail_from = Config.get("mail.from_address", "Unknown")
-
-            table = Table(title="📧 Mail Configuration")
-            table.add_column("Setting", style="cyan")
-            table.add_column("Value", style="green")
-
-            table.add_row("Driver", mail_driver)
-            table.add_row("From Address", mail_from)
-            table.add_row("Status", "✅ Ready to send")
-
-            console.print(table)
-
-            return {
-                "driver": mail_driver,
-                "from_address": mail_from,
-                "status": "ready",
-            }
-        except Exception as e:
-            return f"❌ Mail error: {str(e)}"
-
-    def test_queue():
-        """Test queue functionality."""
-        try:
-            # Test queue configuration
-            console.print("⚡ Testing queue configuration...")
-
-            queue_driver = Config.get("queue.default", "Unknown")
-
-            table = Table(title="⚡ Queue Configuration")
-            table.add_column("Setting", style="cyan")
-            table.add_column("Value", style="green")
-
-            table.add_row("Driver", queue_driver)
-            table.add_row("Status", "✅ Ready to queue jobs")
-
-            console.print(table)
-
-            # Example of how to queue a job:
-            console.print("\n💡 [bold cyan]Example Usage:[/bold cyan]")
-            console.print(
-                "   Queue.push('app.jobs.SendEmailJob', {'email': 'user@example.com'})"
-            )
-            console.print(
-                "   Queue.later(60, 'app.jobs.ProcessDataJob', {'data': 'some_data'})"
-            )
-
-            return {"driver": queue_driver, "status": "ready"}
-        except Exception as e:
-            return f"❌ Queue error: {str(e)}"
-
-    def test_notification():
-        """Test notification system."""
-        try:
-            # Test notification configuration
-            console.print("🔔 Testing notification configuration...")
-
-            notification_driver = str(Config.get("notification.default", "database"))
-
-            table = Table(title="🔔 Notification Configuration")
-            table.add_column("Setting", style="cyan")
-            table.add_column("Value", style="green")
-
-            table.add_row("Driver", notification_driver)
-            table.add_row("Status", "✅ Ready to send notifications")
-
-            console.print(table)
-
-            # Example of how to send notifications:
-            console.print("\n💡 [bold cyan]Example Usage:[/bold cyan]")
-            console.print("   user = User.first()")
-            console.print("   user.notify(WelcomeNotification())")
-            console.print("   Notification.send([user], NewMessageNotification(message))")
-
-            return {"driver": notification_driver, "status": "ready"}
-        except Exception as e:
-            return f"❌ Notification error: {str(e)}"
-
-    def send_test_mail(
-        to_email: str = "test@example.com", subject: str = "Test from Cara Tinker"
-    ):
-        """Send a test email."""
-        try:
-            console.print(f"📧 Sending test email to {to_email}...")
-
-            # Example mail sending (you'll need to implement actual mail class)
-            # Mail.to(to_email).subject(subject).send('This is a test email from Cara Tinker!')
-
-            console.print("✅ Test email would be sent!")
-            console.print("\n💡 [bold cyan]To actually send:[/bold cyan]")
-            console.print(
-                f"   Mail.to('{to_email}').subject('{subject}').send('Your message here')"
-            )
-
-            return f"Test email prepared for {to_email}"
-        except Exception as e:
-            return f"❌ Mail send error: {str(e)}"
-
-    def queue_test_job(job_name: str = "TestJob", delay: int = 0):
-        """Queue a test job."""
-        try:
-            console.print(f"⚡ Queuing test job: {job_name}...")
-
-            if delay > 0:
-                console.print(f"   Delayed by {delay} seconds")
-                # Queue.later(delay, job_name, {'test': True})
-            else:
-                # Queue.push(job_name, {'test': True})
-                pass
-
-            console.print("✅ Test job would be queued!")
-            console.print("\n💡 [bold cyan]To actually queue:[/bold cyan]")
-            if delay > 0:
-                console.print(
-                    f"   Queue.later({delay}, '{job_name}', {{'data': 'value'}})"
-                )
-            else:
-                console.print(f"   Queue.push('{job_name}', {{'data': 'value'}})")
-
-            return f"Test job {job_name} prepared"
-        except Exception as e:
-            return f"❌ Queue job error: {str(e)}"
-
-    def send_test_notification(
-        user_id: int = 1, notification_type: str = "TestNotification"
-    ):
-        """Send a test notification."""
-        try:
-            console.print(f"🔔 Sending test notification to user {user_id}...")
-
-            # Get user
-            user = shell.namespace.get("User")
-            if user:
-                target_user = user.find(user_id)
-                if target_user:
-                    console.print(
-                        f"   Target: {target_user.__attributes__.get('name', 'Unknown')} ({target_user.__attributes__.get('email', 'No email')})"
-                    )
-                else:
-                    console.print(f"   User {user_id} not found")
-                    return f"User {user_id} not found"
-
-            console.print("✅ Test notification would be sent!")
-            console.print("\n💡 [bold cyan]To actually send:[/bold cyan]")
-            console.print(f"   user = User.find({user_id})")
-            console.print(f"   user.notify({notification_type}())")
-            console.print("   # or")
-            console.print(f"   Notification.send([user], {notification_type}())")
-
-            return f"Test notification prepared for user {user_id}"
-        except Exception as e:
-            return f"❌ Notification send error: {str(e)}"
 
     def show_queue_jobs(limit: int = 10):
         """Show queued jobs."""
@@ -523,13 +369,6 @@ def _add_tinker_features(self, shell):
         "logs": logs,
         "benchmark": benchmark,
         "craft": craft_command,
-        # Notification helpers
-        "test_mail": test_mail,
-        "test_queue": test_queue,
-        "test_notification": test_notification,
-        "send_test_mail": send_test_mail,
-        "queue_test_job": queue_test_job,
-        "send_test_notification": send_test_notification,
         "show_queue_jobs": show_queue_jobs,
     }
 

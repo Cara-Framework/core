@@ -20,10 +20,8 @@ from .Expectation import expect as _expect
 from .FacadeSwap import register, reset, uninstall_patch
 from .fakes import (
     CacheFake,
-    EventFake,
     LogFake,
     MailFake,
-    NotificationFake,
     QueueFake,
 )
 from .mocks import Mock, Spy
@@ -82,22 +80,10 @@ class TestCase(unittest.TestCase):
         self._fakes["queue"] = fake
         return fake
 
-    def fake_event(self) -> EventFake:
-        fake = EventFake()
-        register("event", fake)
-        self._fakes["event"] = fake
-        return fake
-
     def fake_cache(self) -> CacheFake:
         fake = CacheFake()
         register("cache", fake)
         self._fakes["cache"] = fake
-        return fake
-
-    def fake_notification(self) -> NotificationFake:
-        fake = NotificationFake()
-        register("notification", fake)
-        self._fakes["notification"] = fake
         return fake
 
     # Lookup helpers — useful when ``auto_fakes = ("log",)``.

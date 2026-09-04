@@ -456,6 +456,37 @@ def _qb_where_json_doesnt_contain(self, column: str, value):
     return self.where_raw(f"NOT ({column} @> %s::jsonb)", [json.dumps(value)])
 
 
+#: Comparison operators ``where_json_path`` recognises. Anything else in the
+#: operator position means the caller used the two-argument form and passed a
+#: VALUE there.
+_JSON_PATH_OPERATORS = (
+    "=",
+    "!=",
+    "<>",
+    ">",
+    ">=",
+    "<",
+    "<=",
+    "LIKE",
+    "ILIKE",
+    "NOT LIKE",
+    "NOT ILIKE",
+)
+
+
+def _json_path_predicate(self, column: str, path, operator: str, value):
+    """The shared ``<json path> <operator> %s`` fragment and its binding.
+
+    Owned once so the AND and OR entry points below cannot drift apart:
+    both the two-argument form and the operator whitelist live here.
+    """
+    if value is None and operator not in _JSON_PATH_OPERATORS:
+        value = operator
+        operator = "="
+    sql_col = self._json_path_sql(column, path)
+    return f"{sql_col} {operator} %s", [value]
+
+
 def _qb_where_json_path(self, column: str, path, operator: str = "=", value=None):
     """
     Filter by a nested JSON path extract.
@@ -471,45 +502,12 @@ def _qb_where_json_path(self, column: str, path, operator: str = "=", value=None
         q.where_json_path("metadata", "external_order_id", "=", "ord_123")
         # -> metadata->>'external_order_id' = %s
     """
-    # Two-arg form: where_json_path(column, path, value) with operator defaulted to "="
-    if value is None and operator not in (
-        "=",
-        "!=",
-        "<>",
-        ">",
-        ">=",
-        "<",
-        "<=",
-        "LIKE",
-        "ILIKE",
-        "NOT LIKE",
-        "NOT ILIKE",
-    ):
-        value = operator
-        operator = "="
-    sql_col = self._json_path_sql(column, path)
-    return self.where_raw(f"{sql_col} {operator} %s", [value])
+    return self.where_raw(*_json_path_predicate(self, column, path, operator, value))
 
 
 def _qb_or_where_json_path(self, column: str, path, operator: str = "=", value=None):
     """OR-joined variant of where_json_path."""
-    if value is None and operator not in (
-        "=",
-        "!=",
-        "<>",
-        ">",
-        ">=",
-        "<",
-        "<=",
-        "LIKE",
-        "ILIKE",
-        "NOT LIKE",
-        "NOT ILIKE",
-    ):
-        value = operator
-        operator = "="
-    sql_col = self._json_path_sql(column, path)
-    return self.or_where_raw(f"{sql_col} {operator} %s", [value])
+    return self.or_where_raw(*_json_path_predicate(self, column, path, operator, value))
 
 
 def _qb_where_json_length(self, column: str, operator_or_value, value=None):

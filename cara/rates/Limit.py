@@ -47,11 +47,6 @@ class Limit:
         return cls(max_attempts=max_attempts, decay_minutes=60)
 
     @classmethod
-    def per_day(cls, max_attempts: int) -> Limit:
-        """Create a rate limit for a 24-hour window."""
-        return cls(max_attempts=max_attempts, decay_minutes=1440)
-
-    @classmethod
     def none(cls) -> Limit:
         """Create an unlimited rate limit (no rate limiting)."""
         return cls(max_attempts=0, decay_minutes=0)

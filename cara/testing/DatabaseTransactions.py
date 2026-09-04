@@ -44,7 +44,7 @@ class DatabaseTransactions:
         finally:
             try:
                 DB.rollback(connection)
-            except Exception:  # noqa: BLE001 — log misuse, never mask the test result
+            except Exception:  # log misuse, never mask the test result
                 # No active transaction at teardown means the test body
                 # committed past the fixture's outer BEGIN, so writes may have
                 # PERSISTED (isolation lost for this test). Surface it loudly

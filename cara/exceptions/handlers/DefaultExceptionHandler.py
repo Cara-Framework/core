@@ -291,10 +291,6 @@ class DefaultExceptionHandler:
     def _security_headers_for_scope(self, scope: dict[str, Any]) -> list:
         return _EXCEPTION_RESPONSE_HEADERS.security(scope)
 
-    @staticmethod
-    def _is_https_for_scope(scope: Any) -> bool:
-        return _EXCEPTION_RESPONSE_HEADERS.is_https(scope)
-
     def _request_id_header_for(self, request: Any, scope: dict[str, Any]) -> list:
         return _EXCEPTION_RESPONSE_HEADERS.request_id(request, scope)
 

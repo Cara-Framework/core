@@ -66,7 +66,7 @@ class ArchBarrelsCommand(CommandBase):
             return 1
         try:
             loaded = Manifest.load(manifest_path)
-        except Exception as exc:  # noqa: BLE001 - surfaced to the operator, not swallowed
+        except Exception as exc:  # surfaced to the operator, not swallowed
             self.error(f"failed to load manifest {manifest_path}: {exc}")
             return 1
 

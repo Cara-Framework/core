@@ -54,7 +54,14 @@ from cara.commands.CommandBase import CommandBase
 from cara.commands.core.SchemaPlanCommand import SchemaPlanCommand
 from cara.decorators import command
 from cara.facades import DB
-from cara.schema import DESTRUCTIVE, LEDGER_TABLE, migration_to_run, plan_id
+from cara.schema import (
+    DESTRUCTIVE,
+    LEDGER_TABLE,
+    STATUS_APPLIED,
+    STATUS_FAILED,
+    migration_to_run,
+    plan_id,
+)
 from cara.support import paths
 
 #: Short on purpose — see the module docstring.
@@ -211,7 +218,7 @@ class SchemaApplyCommand(CommandBase):
             try:
                 self._execute(operation, lock_timeout)
             except Exception as exc:
-                self._record(identifier, operation, status="failed", error=str(exc))
+                self._record(identifier, operation, status=STATUS_FAILED, error=str(exc))
                 self.error(
                     f"FAILED on {operation.key}: {exc}\n"
                     f"   statement: {operation.forward_sql}\n"
@@ -219,7 +226,7 @@ class SchemaApplyCommand(CommandBase):
                     f"recorded; re-run to continue from here once the cause is fixed."
                 )
                 return 1
-            self._record(identifier, operation, status="applied")
+            self._record(identifier, operation, status=STATUS_APPLIED)
             done += 1
 
         self.success(f"Applied {done} operation(s). Plan {identifier} recorded.")
@@ -259,7 +266,7 @@ class SchemaApplyCommand(CommandBase):
         rows = (
             DB.select(
                 f"SELECT operation_key FROM {LEDGER_TABLE} "
-                f"WHERE plan_id = %s AND status = 'applied'",
+                f"WHERE plan_id = %s AND status = '{STATUS_APPLIED}'",
                 [plan_id],
             )
             or []

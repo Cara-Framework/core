@@ -19,12 +19,11 @@ from typing import get_type_hints as _get_type_hints
 import typer
 from rich import print as rprint
 
-from cara.decorators import _run_after, _run_before, _run_on_error
 from cara.observability import MetricsBase
 
 
 class CommandRunner:
-    """Handles Typer command registration and execution, including hooks and full-traceback on errors."""
+    """Handles Typer command registration and execution, with full-traceback on errors."""
 
     def __init__(
         self,
@@ -317,15 +316,13 @@ class CommandRunner:
     ):
         """
         Create the Typer callback that:
-        - Runs before hooks
         - Instantiates the command class
         - Sets parsed options
         - Calls handle() (DI via application.call())
-        - Runs after hooks or on_error hooks, printing full traceback if exceptions occur
+        - Prints a full traceback if an exception escapes
         """
 
         def callback(**cli_kwargs):
-            _run_before(name)
             try:
                 inst = cmd_cls(self.application)
             except Exception as e:
@@ -356,11 +353,9 @@ class CommandRunner:
                 result = self.application.call(inst.handle, **filtered_cli)
                 if inspect.isawaitable(result):
                     result = asyncio.run(result)
-                _run_after(name)
             except Exception as e:
                 _cmd_outcome = "failure"
                 traceback.print_exc()
-                _run_on_error(name, e)
                 rprint(f"[red]Error in {name}: {e}[/red]")
                 if metrics is not None:
                     try:

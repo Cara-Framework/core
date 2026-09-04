@@ -212,7 +212,7 @@ def check_required_config_present() -> CheckResult:
     for label, resolver in _required_config_specs():
         try:
             value = resolver()
-        except Exception:  # noqa: BLE001 — a resolver should never abort the gate
+        except Exception:  # a resolver should never abort the gate
             value = None
         if _is_blank(value):
             missing.append(label)
@@ -303,7 +303,7 @@ class PreflightCommand(CommandBase):
             check = self.checks[name]
             try:
                 result = check()
-            except Exception as exc:  # noqa: BLE001 — a broken check must not abort the gate
+            except Exception as exc:  # a broken check must not abort the gate
                 # A check that throws is itself a readiness problem — treat it as
                 # a failure rather than letting it crash the whole preflight.
                 result = fail(f"check raised an unexpected error: {exc}")

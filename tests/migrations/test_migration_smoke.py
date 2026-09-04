@@ -8,17 +8,19 @@ fail" in build contexts without the consumer's migrations.
 
 From ``commons/cara/tests/migrations/``, ``parents[3]`` is ``commons`` — so the
 path was ``commons/database/migrations``, which exists in no product: the
-migrations live in each DEPLOYABLE (``api/database/migrations``, 149 files in
-synkronus). The list was therefore always empty, the module-level ``skipif``
-always true, and the reason text — "smoke test only runs in the full monorepo
-checkout" — was false precisely in the full monorepo checkout. Both tests were
-permanently skipped in both products, which reads as coverage and is not.
+migrations live in the DEPLOYABLE that owns them (``api/database/migrations``;
+in synkronus that is the only one — ``services/database/migrations`` holds no
+migration files). The list was therefore always empty, the module-level
+``skipif`` always true, and the reason text — "smoke test only runs in the full
+monorepo checkout" — was false precisely in the full monorepo checkout. Both
+tests were permanently skipped in both products, which reads as coverage and is
+not.
 
 No path relative to this file reaches a real migration set, and hard-coding
 ``../../api/database/migrations`` would couple the framework to one product's
 layout. So the RULE moved into ``MigrationShapeAudit`` where the framework can
-own it, the products point it at their own directory from their own suites
-(api/tests/test_migration_convention.py, services/tests/...), and what remains
+own it, each product points it at its own migration directory from its own
+suite (synkronus: api/tests/test_migration_convention.py), and what remains
 here is the framework's job: proving the audit itself detects each defect.
 
 The audit is static for the same reason ``audit_migrations`` is — importing a
@@ -121,10 +123,5 @@ def test_files_are_returned_in_applied_order(tmp_path: Path) -> None:
     """Timestamps sort lexically; a finding list out of order misleads."""
     for stamp in ("2026_03_01_000000_c", "2026_01_01_000000_a", "2026_02_01_000000_b"):
         _write(tmp_path, f"{stamp}.py", GOOD)
-    assert [path.name[:4] for path in MigrationShapeAudit(tmp_path).files()] == [
-        "2026",
-        "2026",
-        "2026",
-    ]
     names = [path.stem[-1] for path in MigrationShapeAudit(tmp_path).files()]
     assert names == ["a", "b", "c"]

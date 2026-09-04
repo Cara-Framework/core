@@ -40,7 +40,6 @@ from ..casts.UUIDCast import UUIDCast
 # Import concerns for clean architecture
 from ..concerns.HasAttributes import HasAttributes
 from ..concerns.HasRelationships import HasRelationships
-from ..concerns.HasTimestamps import HasTimestamps
 from ..observers import ObservesEvents
 from ..query import QueryBuilder
 from ..scopes import MakesTimestamps
@@ -55,7 +54,6 @@ class Model(
     HasRelationships,
     MakesTimestamps,
     ObservesEvents,
-    HasTimestamps,
     metaclass=ModelMeta,
 ):
     """Laravel-style ORM Model class.
@@ -98,8 +96,6 @@ class Model(
     # Attribute casting and dates
     __casts__: dict[str, str | type] = {}
     __dates__: list[str] = []
-    __cast_map__: dict[str, type] = {}
-    __internal_cast_map__: dict[str, type] = {}
 
     # Timestamps
     __timestamps__: bool = True
@@ -265,7 +261,7 @@ class Model(
         )
     )
 
-    __cast_map__ = {}
+    __cast_map__: dict[str, type] = {}
 
     __internal_cast_map__: dict[str, type] = {
         "bool": BoolCast,
@@ -292,8 +288,11 @@ class Model(
         Args:
             **kwargs: Initial attribute values to set on the model
         """
-        # Call parent constructors (including HasRelationships)
-        super().__init__(**kwargs)
+        # No concern in the MRO defines ``__init__`` any more: the two that
+        # did (``HasAttributes``, ``HasRelationships``) only initialised
+        # stores this constructor immediately re-initialises, or caches
+        # nothing read. Calling ``super().__init__(**kwargs)`` now lands on
+        # ``object.__init__``, which rejects keyword arguments.
 
         # Initialize attribute storage
         self.__attributes__: dict[str, Any] = {}

@@ -7,7 +7,6 @@ failure handling. Includes automatic serialization support and job cancellation.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from .PendingDispatch import PendingDispatch
@@ -91,25 +90,6 @@ class Queueable(SerializesModels):
     def dispatch_after(cls, delay, *args, **kwargs):
         """Explicitly dispatch a delayed job."""
         return cls.dispatch(*args, **kwargs).delay(delay).dispatch()
-
-    @classmethod
-    async def dispatch_now(cls, *args, **kwargs):
-        """Immediate job execution (bypasses queue)."""
-        instance = cls(*args, **kwargs)
-        if not hasattr(instance, "handle") or not callable(instance.handle):
-            return None
-
-        app = getattr(instance, "_app", None) or getattr(cls, "_app", None)
-        if app is not None and hasattr(app, "call"):
-            result = app.call(instance.handle)
-        elif asyncio.iscoroutinefunction(instance.handle):
-            result = await instance.handle()
-        else:
-            result = instance.handle()
-
-        if asyncio.iscoroutine(result):
-            result = await result
-        return result
 
     def _safe_serialize(self) -> dict:
         """Safely serialize job data for database storage."""

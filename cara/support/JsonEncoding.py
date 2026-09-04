@@ -18,7 +18,6 @@ boundary                                     wire value
 ===========================================  ==============================
 ``ResponseFactory.json``                     ``"19.99"``   (JSON string)
 ``Response.stream_json_lines``               ``"19.99"``
-``StreamingResponse.stream_json_lines``      ``"19.99"``
 ``StreamingResponse._format_sse_event``      ``"19.99"``
 ``Socket.send_json``                         ``19.99``     (IEEE-754 double)
 ``RedisBroadcaster`` publish                 ``19.99``     (IEEE-754 double)

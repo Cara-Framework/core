@@ -27,11 +27,6 @@ through it.
 
 from __future__ import annotations
 
-import textwrap
-from pathlib import Path
-
-import pytest
-
 from cara.eloquent.migrations.MigrationGenerator import MigrationGenerator
 from cara.eloquent.migrations.ModelDiscoverer import ModelDiscoverer
 from cara.eloquent.schema.Schema import (
@@ -42,17 +37,7 @@ from cara.eloquent.schema.Schema import (
     Schema,
 )
 
-
-def _write_model(tmp_path: Path, filename: str, source: str) -> Path:
-    path = tmp_path / filename
-    path.write_text(textwrap.dedent(source), encoding="utf-8")
-    return path
-
-
-@pytest.fixture
-def discoverer() -> ModelDiscoverer:
-    return ModelDiscoverer()
-
+from ._fixtures import write_model
 
 # --------------------------------------------------------------------------
 # The derivation itself
@@ -121,7 +106,7 @@ _MODEL_SOURCE = """
 
 def test_char_and_binary_columns_reach_the_discovered_model(discoverer, tmp_path):
     """Pre-fix ``info["fields"]`` held only ``id`` — both columns vanished."""
-    model_path = _write_model(tmp_path, "Payment.py", _MODEL_SOURCE)
+    model_path = write_model(tmp_path, "Payment.py", _MODEL_SOURCE)
     info = discoverer._parse_model_file(model_path)
 
     assert info["fields"]["currency_code"]["type"] == "char"
@@ -135,7 +120,7 @@ def test_char_keeps_its_declared_length(discoverer, tmp_path):
     ``table.char("currency_code", 255)`` for a declared width of 3 — a
     silently widened column, which is a different flavour of the same lie.
     """
-    model_path = _write_model(tmp_path, "Payment.py", _MODEL_SOURCE)
+    model_path = write_model(tmp_path, "Payment.py", _MODEL_SOURCE)
     info = discoverer._parse_model_file(model_path)
 
     assert info["fields"]["currency_code"]["params"]["length"] == 3
@@ -143,7 +128,7 @@ def test_char_keeps_its_declared_length(discoverer, tmp_path):
 
 def test_generated_migration_carries_both_columns(discoverer, tmp_path):
     """End to end: the column has to survive into the emitted migration."""
-    model_path = _write_model(tmp_path, "Payment.py", _MODEL_SOURCE)
+    model_path = write_model(tmp_path, "Payment.py", _MODEL_SOURCE)
     info = discoverer._parse_model_file(model_path)
 
     content = MigrationGenerator().generate_create_migration(info)
@@ -184,7 +169,7 @@ def test_unrecognised_field_call_is_announced(discoverer, tmp_path, caplog):
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Widget.py", src)
+    model_path = write_model(tmp_path, "Widget.py", src)
 
     with caplog.at_level("WARNING"):
         info = discoverer._parse_model_file(model_path)

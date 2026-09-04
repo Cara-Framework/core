@@ -15,18 +15,12 @@ fence, which must stay unflushed because it is a monotonic counter.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import cara.facades
 from cara.commands.core.MigrateResetCommand import MigrateResetCommand
 from cara.queues.idempotency.MakesIdempotentBase import MakesIdempotentBase
 
-
-def _make_command() -> MigrateResetCommand:
-    cmd = MigrateResetCommand(application=None)
-    cmd.set_parsed_options({})
-    cmd.console = MagicMock()
-    return cmd
+from ._fixtures import make_command
 
 
 def _flush_and_capture(monkeypatch) -> list[str]:
@@ -39,7 +33,7 @@ def _flush_and_capture(monkeypatch) -> list[str]:
             forget_by_prefix=lambda prefix: prefixes.append(prefix) or 1,
         ),
     )
-    _make_command()._flush_job_idempotency_cache()
+    make_command(MigrateResetCommand)._flush_job_idempotency_cache()
     return prefixes
 
 

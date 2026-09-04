@@ -190,7 +190,7 @@ class Atomic:
             try:
                 with instance:
                     return func(*args, **kwargs)
-            except BaseException as exc:  # noqa: BLE001 — re-raised below
+            except BaseException as exc:  # re-raised below
                 last_exc = exc
                 retriable = (
                     _is_retriable_error(exc)
@@ -270,7 +270,7 @@ async def _run_async_atomic(func, connection_name, attempts, args, kwargs):
         try:
             with instance:
                 return await func(*args, **kwargs)
-        except BaseException as exc:  # noqa: BLE001 — re-raised below
+        except BaseException as exc:  # re-raised below
             last_exc = exc
             retriable = (
                 _is_retriable_error(exc)

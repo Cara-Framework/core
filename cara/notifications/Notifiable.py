@@ -32,16 +32,6 @@ class Notifiable(NotifiableContract):
 
         return NotificationFacade.send(self, notification)
 
-    def notify_now(self, notification) -> bool:
-        """
-        Send the given notification immediately.
-
-        Args:
-            notification: Notification instance to send
-        """
-
-        return NotificationFacade.send_now(self, notification)
-
     def route_notification_for(self, channel: str) -> Any | None:
         """
         Get the notification routing information for the given channel.

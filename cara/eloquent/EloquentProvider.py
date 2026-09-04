@@ -38,4 +38,3 @@ class EloquentProvider(Provider):
 
     def boot(self):
         """Boot provider (optional hook for post-registration setup)"""
-        pass

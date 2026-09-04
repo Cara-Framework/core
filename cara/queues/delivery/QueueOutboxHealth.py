@@ -336,7 +336,7 @@ class QueueOutboxHealth:
                 str(int(time.time())),
                 cls.stall_renotify_seconds() * 4,
             )
-        except Exception as exc:  # noqa: BLE001 — never mute an outage
+        except Exception as exc:  # never mute an outage
             Log.warning(
                 "Outbox stall alert throttle unavailable; announcing unthrottled: %s",
                 exc,
@@ -369,7 +369,7 @@ class QueueOutboxHealth:
     ) -> str:
         try:
             was_active = bool(Cache.get(active_key))
-        except Exception:  # noqa: BLE001 — a cache miss must not page
+        except Exception:  # a cache miss must not page
             return "quiet"
         if not was_active:
             return "quiet"
@@ -377,7 +377,7 @@ class QueueOutboxHealth:
         try:
             Cache.forget(active_key)
             Cache.forget(notify_key)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # Fail-open by design: the recovery notice below is the point
             # of this branch, and losing a best-effort cache eviction must
             # not suppress it. Both keys carry TTLs, so a failed forget

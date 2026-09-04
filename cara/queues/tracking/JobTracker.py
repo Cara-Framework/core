@@ -8,7 +8,6 @@ and performance analytics. Similar to Laravel's job tracking but enhanced.
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 import pendulum
 
@@ -86,7 +85,6 @@ class JobTracker:
         job_id: int | None = None,
         entity_id: str | None = None,
         queue: str = "default",
-        metadata: dict | None = None,
     ) -> str:
         """
         Track job start - updates existing job record with tracking info.
@@ -97,7 +95,6 @@ class JobTracker:
             job_id: Job.id to update
             entity_id: Optional domain entity identifier for conflict detection
             queue: Queue name
-            metadata: Additional metadata
 
         Returns:
             str: The job_uid for tracking
@@ -116,10 +113,8 @@ class JobTracker:
                     if entity_id:
                         job_record.entity_id = entity_id
 
-                    # Merge metadata with pipeline_id
-
+                    # Stamp the pipeline this job belongs to.
                     enriched_metadata = job_record.metadata or {}
-                    enriched_metadata.update(metadata or {})
                     pipeline_id = ExecutionContext.get_job_id()
                     if pipeline_id:
                         enriched_metadata["pipeline_id"] = pipeline_id
@@ -280,85 +275,6 @@ class JobTracker:
             raise JobCancelledException(
                 f"Job {job_uid} cancelled during {operation} for entity {entity_id}"
             )
-
-    def get_job_analytics(
-        self, entity_id: str | None = None, job_name: str | None = None, hours: int = 24
-    ) -> dict[str, Any]:
-        """
-        Get job performance analytics.
-
-        Args:
-            entity_id: Optional entity filter
-            job_name: Optional job name filter
-            hours: Time window in hours
-
-        Returns:
-            Dict with analytics data
-        """
-        if not self.job_model:
-            return {"total_jobs": 0, "message": "No Job model configured"}
-
-        try:
-            query = self.job_model.query()
-
-            if entity_id:
-                query = query.where("entity_id", entity_id)
-            if job_name:
-                query = query.where("name", job_name)
-
-            # Time window
-            since = pendulum.now("UTC").subtract(hours=hours)
-            jobs = query.where("created_at", ">=", since).get()
-
-            total_jobs = len(jobs)
-            if total_jobs == 0:
-                return {"total_jobs": 0}
-
-            # Status counts
-            status_counts = {}
-            for job in jobs:
-                status = getattr(job, "status", "unknown")
-                status_counts[status] = status_counts.get(status, 0) + 1
-
-            # Average processing time over the ONE lifecycle contract
-            # (started_at → completed_at) that ``_transition`` owns.
-            succeeded = self._success_statuses()
-            successful_jobs = [
-                j
-                for j in jobs
-                if getattr(j, "status", None) in succeeded
-                and getattr(j, "completed_at", None)
-                and getattr(j, "started_at", None)
-            ]
-
-            avg_processing_time = 0
-            if successful_jobs:
-                total_time = sum(
-                    [
-                        (j.completed_at - j.started_at).total_seconds()
-                        for j in successful_jobs
-                    ]
-                )
-                avg_processing_time = total_time / len(successful_jobs)
-
-            success_count = sum(
-                count for status, count in status_counts.items() if status in succeeded
-            )
-
-            return {
-                "total_jobs": total_jobs,
-                "status_counts": status_counts,
-                "success_count": success_count,
-                "success_rate": (success_count / total_jobs * 100)
-                if total_jobs > 0
-                else 0,
-                "avg_processing_time_seconds": avg_processing_time,
-                "period_hours": hours,
-            }
-
-        except Exception as e:
-            Log.error("Failed to get job analytics: %s", str(e))
-            return {"error": str(e)}
 
     def _cancel_conflicting_jobs(
         self, job_name: str, entity_id: str, current_job_uid: str

@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 import re
 
 from cara.eloquent.expressions import F, Greatest, Least, Operation
@@ -59,17 +54,15 @@ class BaseGrammar:
 
     add_binding = _BaseGrammarValues._grammar_add_binding
 
-    column_exists = _BaseGrammarValues._grammar_column_exists
-
-    table_exists = _BaseGrammarValues._grammar_table_exists
-
     wrap_table = _BaseGrammarValues._grammar_wrap_table
 
-    process_exists = _BaseGrammarValues._grammar_process_exists
-
     def to_sql(self):
-        """Clean up and return the compiled SQL string."""
-        return _MULTI_SPACE_RE.sub(" ", self._sql.strip())
+        """Clean up and return the compiled SQL string.
+
+        Dialect-neutral: both grammars carried a byte-identical override of
+        this, so the shape lives here.
+        """
+        return _MULTI_SPACE_RE.sub(" ", self._sql.strip().replace(",)", ")"))
 
     def to_qmark(self):
         """Clean up and return the compiled SQL string (qmark variant)."""
@@ -102,12 +95,6 @@ class BaseGrammar:
     compile_expression = _BaseGrammarValues._grammar_compile_expression
 
     _compile_expression_operand = _BaseGrammarValues._compile_expression_operand
-
-    drop_table = _BaseGrammarValues._grammar_drop_table
-
-    drop_table_if_exists = _BaseGrammarValues._grammar_drop_table_if_exists
-
-    rename_table = _BaseGrammarValues._grammar_rename_table
 
     def truncate_table(self, table, foreign_keys=False):
         """

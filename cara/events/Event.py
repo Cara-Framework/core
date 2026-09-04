@@ -32,6 +32,7 @@ from cara.queues.contracts import PendingDispatch, ShouldQueue
 
 from ._DispatchScope import _dispatch_stack
 from .EventSubscriber import EventSubscriber
+from .PayloadGate import event_payload_gaps
 
 
 class Event:
@@ -289,36 +290,47 @@ class Event:
             event_name = event.__class__.__name__.lower()
 
         # Per-event payload validation. Events opt in by declaring
-        # ``REQUIRED_FIELDS`` (or implementing
-        # :meth:`validate_payload`); a non-empty result means the
-        # event is malformed (caller forgot a positional, passed
-        # ``None`` for a typed field, etc.). We log + skip dispatch
-        # rather than raise — the upstream job has already done its
-        # work and may have queued the event for observability only,
-        # so a fire-time raise would back-propagate a failure that
-        # wasn't really there. The warning surfaces the bad payload
-        # exactly once.
-        validator = getattr(event, "validate_payload", None)
-        if callable(validator):
-            try:
-                missing = validator()
-            except Exception as _vexc:
-                missing = None
-                Log.warning(
-                    "Event %s validate_payload() raised %s: %s; dispatching anyway",
-                    event_name,
-                    _vexc.__class__.__name__,
-                    _vexc,
-                    category="cara.events",
-                )
-            if missing:
-                Log.warning(
-                    "Event %s failed validate_payload(); missing/invalid fields: %s. Skipping dispatch.",
-                    event_name,
-                    missing,
-                    category="cara.events",
-                )
-                return
+        # ``REQUIRED_FIELDS`` or by implementing
+        # :meth:`validate_payload`; ``event_payload_gaps`` reads BOTH,
+        # so a plain ``REQUIRED_FIELDS`` event needs no method. A
+        # non-empty result means the event is malformed (caller forgot
+        # a positional, passed ``None`` for a typed field, etc.). We
+        # log + skip dispatch rather than raise — the upstream job has
+        # already done its work and may have queued the event for
+        # observability only, so a fire-time raise would
+        # back-propagate a failure that wasn't really there. The
+        # warning surfaces the bad payload exactly once.
+        #
+        # The rejection line NAMES both opt-in hooks. A skipped
+        # dispatch is invisible by construction — nothing downstream
+        # runs and nothing raises — so this warning is the only
+        # evidence the gate fired, and log-side consumers (alert
+        # rules, the reliability suite's assertion that a malformed
+        # event cannot slip past the dispatch boundary silently)
+        # match on the hook name to tell it apart from every other
+        # dispatch warning. Generic prose here reads fine to a human
+        # and is invisible to them.
+        try:
+            missing = event_payload_gaps(event)
+        except Exception as _vexc:
+            missing = None
+            Log.warning(
+                "Event %s validate_payload() raised %s: %s; dispatching anyway",
+                event_name,
+                _vexc.__class__.__name__,
+                _vexc,
+                category="cara.events",
+            )
+        if missing:
+            Log.warning(
+                "Event %s failed payload validation "
+                "(REQUIRED_FIELDS/validate_payload); "
+                "missing/invalid fields: %s. Skipping dispatch.",
+                event_name,
+                missing,
+                category="cara.events",
+            )
+            return
 
         # Cycle guard. If this same event name is already in flight on
         # the current task, a listener somewhere re-dispatched it —

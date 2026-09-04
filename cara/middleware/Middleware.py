@@ -53,12 +53,3 @@ class Middleware(ABC):
         return MiddlewareParameterParser.parse_and_create(
             cls, application, parameters or []
         )
-
-    @classmethod
-    def with_parameters(cls, *parameters: Any) -> Callable[[Any], Middleware]:
-        """Laravel-style factory for manual parameter setting."""
-
-        def factory(application: Any) -> Middleware:
-            return cls.create_with_parameters(application, [str(p) for p in parameters])
-
-        return factory

@@ -253,11 +253,6 @@ class PostgresPlatform(Platform):
                         column_constraint=column_constraint,
                         nullable="NULL" if column.is_null else "NOT NULL",
                         default=default,
-                        after=(
-                            (" AFTER " + self.wrap_column(column._after))
-                            if column._after
-                            else ""
-                        ),
                     )
                     .strip()
                 )
@@ -467,9 +462,6 @@ class PostgresPlatform(Platform):
         return sql
 
     def alter_format(self):
-        return "ALTER TABLE {table} {columns}"
-
-    def alter_format_add_foreign_key(self):
         return "ALTER TABLE {table} {columns}"
 
     def add_column_string(self):

@@ -8,14 +8,14 @@ triggers the leaky path and asserts the resource has been released.
 from __future__ import annotations
 
 import importlib
-import sys
 import threading
-import types
 from unittest.mock import MagicMock
 
 import pytest
 
 from cara.eloquent.connections import SQLiteConnection
+
+from ._fixtures import install_fake_psycopg2
 
 # Resolve the *module* (not the class re-exported by the package __init__).
 PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")
@@ -91,19 +91,6 @@ def test_select_many_releases_connection_after_full_consumption():
 # ── PostgresConnection.create_connection: cursor leak on healthcheck ──
 
 
-def _install_fake_psycopg2(monkeypatch, connect_factory):
-    """Insert a minimal fake ``psycopg2`` module so ``create_connection``
-    can ``import psycopg2`` without the real driver installed.
-
-    Returns the fake module so individual tests can inspect / extend it.
-    """
-    fake = types.ModuleType("psycopg2")
-    fake.connect = connect_factory
-    fake.OperationalError = type("OperationalError", (Exception,), {})
-    monkeypatch.setitem(sys.modules, "psycopg2", fake)
-    return fake
-
-
 def test_create_connection_closes_cursor_when_healthcheck_execute_raises(
     monkeypatch,
 ):
@@ -129,7 +116,7 @@ def test_create_connection_closes_cursor_when_healthcheck_execute_raises(
 
     # Replacement connection for after the stale one is discarded.
     fresh_conn = MagicMock(name="fresh_conn")
-    _install_fake_psycopg2(monkeypatch, connect_factory=lambda **kw: fresh_conn)
+    install_fake_psycopg2(monkeypatch, connect_factory=lambda **kw: fresh_conn)
 
     # Reset the module-level pool / semaphore so this test is hermetic.
     monkeypatch.setattr(PGModule, "CONNECTION_POOL", [stale_conn])

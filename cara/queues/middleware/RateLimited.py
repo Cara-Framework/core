@@ -1,4 +1,4 @@
-"""Rate limiting + overlap protection middleware for queue jobs.
+"""Rate limiting middleware for queue jobs.
 
 Handle methods are async-aware: if ``next_fn(job)`` returns a coroutine it is
 awaited inside the middleware, so ``try/except/finally`` blocks observe the
@@ -7,10 +7,7 @@ real execution outcome (and not just the coroutine object).
 Usage:
     class MyJob(ShouldQueue, Queueable):
         def middleware(self):
-            return [
-                RateLimited(max_attempts=10, decay_seconds=60),
-                WithoutOverlapping(key="my-job-key", expire_after=300),
-            ]
+            return [RateLimited(max_attempts=10, decay_seconds=60)]
 """
 
 from __future__ import annotations
@@ -29,16 +26,11 @@ _rate_buckets: dict = {}
 _rate_lock = threading.Lock()
 _rate_sweep_counter: int = 0
 
-_overlap_locks: dict = {}
-_overlap_lock = threading.Lock()
-_overlap_sweep_counter: int = 0
-
 # Sweep stale keys every N operations. Without this, the in-process
-# dicts only ever grow — a long-running worker that sees a stream of
+# dict only ever grows — a long-running worker that sees a stream of
 # unique rate keys (per-keyword, per-URL, per-tenant) accumulates an
 # empty bucket per key forever. Found during scenario 4 load test.
 _RATE_SWEEP_EVERY = 500
-_OVERLAP_SWEEP_EVERY = 500
 
 
 def _sweep_rate_buckets_locked(now: float) -> None:
@@ -54,20 +46,6 @@ def _sweep_rate_buckets_locked(now: float) -> None:
     dead = [k for k, ts in _rate_buckets.items() if not ts or ts[-1] < cutoff]
     for k in dead:
         _rate_buckets.pop(k, None)
-
-
-def _sweep_overlap_locks_locked(now: float) -> None:
-    """Drop locks whose ``expire_after`` window has long-since passed.
-
-    Per-key ``expire_after`` is not stored; we use a 24h ceiling for
-    the sweep — well past any reasonable lock TTL. Live locks held by
-    in-flight jobs use ``time.time()`` timestamps within the last few
-    minutes and won't be touched.
-    """
-    cutoff = now - 86400  # 24h
-    dead = [k for k, ts in _overlap_locks.items() if ts < cutoff]
-    for k in dead:
-        _overlap_locks.pop(k, None)
 
 
 async def _call_next(next_fn: Callable, job) -> Any:

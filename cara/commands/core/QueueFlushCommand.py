@@ -56,7 +56,7 @@ class QueueFlushCommand(CommandBase):
             driver = self.application.make("queue").driver("amqp")
             targets = self.purge_targets(driver)
             connection, channel = driver.open_topology_connection()
-        except Exception as exc:  # noqa: BLE001 — reported to the operator below
+        except Exception as exc:  # reported to the operator below
             Log.error(
                 "queue:flush could not reach the broker: %s",
                 exc,
@@ -72,7 +72,7 @@ class QueueFlushCommand(CommandBase):
                 try:
                     channel.queue_purge(queue=name)
                     purged += 1
-                except Exception as exc:  # noqa: BLE001 — a 404 is expected
+                except Exception as exc:  # a 404 is expected
                     # A missing queue closes the channel — reopen and skip.
                     Log.debug(
                         "queue:flush could not purge %s: %s",

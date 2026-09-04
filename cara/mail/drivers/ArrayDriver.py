@@ -1,7 +1,10 @@
 """
 Array driver for Cara Framework mail system.
 
-This driver stores emails in memory for testing purposes.
+This driver discards emails; it exists so a dev/test ``MAIL_DRIVER=array``
+resolves to a real transport object instead of failing. Nothing reads what
+it "sends" — test assertions belong on ``MailFake`` (``assert_sent``), and
+``MailProvider`` refuses this driver outright in production.
 """
 
 from __future__ import annotations
@@ -19,28 +22,7 @@ class ArrayDriver(MailContract):
         Initialize array driver.
         """
         self.config = config
-        self.sent_mails: list[dict[str, Any]] = []
 
     def send(self, mailable_data: dict[str, Any]) -> bool:
-        """
-        Store email in array for testing.
-        """
-        # Use from address from mailable or driver config default
-        email_data = mailable_data.copy()
-        from_address = email_data.get("from")
-        if not from_address:
-            from_address = self.config.get("from_address")
-        email_data["from"] = from_address
-
-        self.sent_mails.append(email_data)
+        """Discard the email and report success."""
         return True
-
-    def get_sent_mails(self) -> list[dict[str, Any]]:
-        """
-        Get sent mails for testing.
-        """
-        return self.sent_mails
-
-    def clear(self) -> None:
-        """Clear sent mails."""
-        self.sent_mails = []

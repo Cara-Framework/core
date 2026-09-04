@@ -9,18 +9,9 @@ from cara.cache.codecs import JsonCacheCodec
 from cara.cache.drivers import RedisCacheDriver
 from cara.exceptions import CacheConfigurationException
 
+from ._fixtures import pickle_probe
+
 _KEY = b"redis-cache-driver-test-key-32-bytes"
-_PICKLE_EXECUTED = False
-
-
-def _execute_pickle_gadget() -> None:
-    global _PICKLE_EXECUTED
-    _PICKLE_EXECUTED = True
-
-
-class _PickleGadget:
-    def __reduce__(self):
-        return (_execute_pickle_gadget, ())
 
 
 def _driver() -> RedisCacheDriver:
@@ -78,17 +69,16 @@ def test_constructor_rejects_ambiguous_large_value_threshold(threshold) -> None:
 
 
 def test_noncanonical_pickle_is_deleted_and_rejected_without_execution() -> None:
-    global _PICKLE_EXECUTED
-    _PICKLE_EXECUTED = False
     driver = _driver()
-    driver._client.get.return_value = pickle.dumps(_PickleGadget())
 
-    with pytest.raises(CacheConfigurationException, match="Corrupt cache value"):
-        driver.get("auth", "missing", strict=True)
+    with pickle_probe() as gadget:
+        driver._client.get.return_value = pickle.dumps(gadget())
 
-    driver._client.get.assert_called_once_with("test_cache:j1:v:auth")
-    driver._client.delete.assert_called_once_with("test_cache:j1:v:auth")
-    assert _PICKLE_EXECUTED is False
+        with pytest.raises(CacheConfigurationException, match="Corrupt cache value"):
+            driver.get("auth", "missing", strict=True)
+
+        driver._client.get.assert_called_once_with("test_cache:j1:v:auth")
+        driver._client.delete.assert_called_once_with("test_cache:j1:v:auth")
 
 
 def test_disposable_corruption_is_deleted_and_read_as_a_miss() -> None:

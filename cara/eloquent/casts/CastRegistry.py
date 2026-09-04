@@ -67,7 +67,3 @@ class CastRegistry:
         format_str = parts[0] if parts else None
         timezone = parts[1] if len(parts) > 1 else "UTC"
         return cast_class(format_str, timezone)
-
-    def list_casts(self) -> dict[str, type[BaseCast]]:
-        """Get all registered casts."""
-        return self._casts.copy()

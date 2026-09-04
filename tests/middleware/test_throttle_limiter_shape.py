@@ -30,9 +30,10 @@ import sys
 import pytest
 
 from cara.exceptions import RateLimitConfigurationException
-from cara.middleware.http.ThrottleRequests import ThrottleRequests
 from cara.rates import Limit
 from cara.rates.RateLimiter import RateLimiter
+
+from ._fixtures import throttle_middleware
 
 _throttle_module = sys.modules["cara.middleware.http.ThrottleRequests"]
 
@@ -50,15 +51,6 @@ def _real_rate_limiter(**limiters) -> RateLimiter:
     for name, callback in limiters.items():
         limiter.for_(name, callback)
     return limiter
-
-
-def _middleware(limit=None, window=None) -> ThrottleRequests:
-    """Build the middleware without the provider boot the base
-    ``Middleware.__init__`` triggers."""
-    middleware = ThrottleRequests.__new__(ThrottleRequests)
-    middleware.custom_limit = limit
-    middleware.custom_window_minutes = window
-    return middleware
 
 
 @pytest.mark.parametrize(
@@ -100,7 +92,7 @@ class TestTheListFormWasNeverImplemented:
         limits = [Limit.per_minute(5), Limit.per_hour(100)]
 
         with pytest.raises(AttributeError, match="max_attempts"):
-            _middleware()._attempt_limit("k", limits)
+            throttle_middleware()._attempt_limit("k", limits)
 
     def test_resolving_a_list_returning_limiter_refuses(
         self, monkeypatch: pytest.MonkeyPatch
@@ -116,7 +108,7 @@ class TestTheListFormWasNeverImplemented:
         )
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
-            _middleware(limit="login")._resolve_limit_config(request=object())
+            throttle_middleware(limit="login")._resolve_limit_config(request=object())
 
         assert "throttle:login" in str(excinfo.value)
         assert "list" in str(excinfo.value)
@@ -133,7 +125,7 @@ class TestTheListFormWasNeverImplemented:
         )
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
-            _middleware(limit="api")._resolve_limit_config(request=object())
+            throttle_middleware(limit="api")._resolve_limit_config(request=object())
 
         assert "config/rate.py" in str(excinfo.value)
 
@@ -151,7 +143,7 @@ class TestTheListFormWasNeverImplemented:
         )
 
         with pytest.raises(RateLimitConfigurationException):
-            _middleware(limit="admin")._resolve_limit_config(request=object())
+            throttle_middleware(limit="admin")._resolve_limit_config(request=object())
 
 
 class TestTheSupportedShapeIsUntouched:
@@ -165,7 +157,9 @@ class TestTheSupportedShapeIsUntouched:
             _real_rate_limiter(login=lambda _r: expected),
         )
 
-        resolved = _middleware(limit="login")._resolve_limit_config(request=object())
+        resolved = throttle_middleware(limit="login")._resolve_limit_config(
+            request=object()
+        )
 
         assert resolved is expected
 
@@ -181,7 +175,9 @@ class TestTheSupportedShapeIsUntouched:
             _real_rate_limiter(internal=lambda _r: Limit.none()),
         )
 
-        resolved = _middleware(limit="internal")._resolve_limit_config(request=object())
+        resolved = throttle_middleware(limit="internal")._resolve_limit_config(
+            request=object()
+        )
 
         assert resolved.max_attempts == 0
 
@@ -193,7 +189,9 @@ class TestTheSupportedShapeIsUntouched:
         monkeypatch.setattr(_throttle_module.facades, "RateLimiter", _real_rate_limiter())
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
-            _middleware(limit="never_registered")._resolve_limit_config(request=object())
+            throttle_middleware(limit="never_registered")._resolve_limit_config(
+                request=object()
+            )
 
         assert "unregistered rate" in str(excinfo.value)
 
@@ -226,4 +224,4 @@ class TestTheDocumentedContractIsTheEnforcedOne:
         )
 
         with pytest.raises(RateLimitConfigurationException):
-            _middleware(limit="api")._resolve_limit_config(request=object())
+            throttle_middleware(limit="api")._resolve_limit_config(request=object())

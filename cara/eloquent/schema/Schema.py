@@ -16,22 +16,6 @@ from .Table import Table
 from .TableDiff import TableDiff
 
 
-def _release_connection(connection) -> None:
-    """Return an owned connection, never the active transaction handle."""
-    if connection is None:
-        return
-    transaction_level = getattr(connection, "transaction_level", 0)
-    if isinstance(transaction_level, (int, float)) and transaction_level > 0:
-        return
-    try:
-        close = getattr(connection, "close_connection", None)
-        if callable(close):
-            close()
-    except OSError, RuntimeError, AttributeError:
-        # Cleanup must never mask the real result.
-        pass
-
-
 @contextlib.contextmanager
 def _borrow_connection(connection_manager, schema=None):
     """Borrow a pool connection and guarantee its release on exit.
@@ -44,7 +28,7 @@ def _borrow_connection(connection_manager, schema=None):
     try:
         yield conn
     finally:
-        _release_connection(conn)
+        connection_manager.release(conn)
 
 
 class Schema:
@@ -186,17 +170,17 @@ class Schema:
 
     # === Query Methods - Delegation to Query Executor ===
 
-    def has_column(self, table, column, query_only=False):
+    def has_column(self, table, column):
         """Check if table has column - delegates to query executor"""
         sql = self.connection_manager.platform.compile_column_exists(table, column)
         return self.query_executor.execute_query(sql)
 
-    def drop(self, table, query_only=False):
+    def drop(self, table):
         """Drop a table through the query executor."""
         sql = self.connection_manager.platform.compile_drop_table(table)
         return self.query_executor.execute_query(sql)
 
-    def drop_if_exists(self, table, exists=False, query_only=False):
+    def drop_if_exists(self, table):
         """Drop a table when it exists through the query executor."""
         sql = self.connection_manager.platform.compile_drop_table_if_exists(table)
         return self.query_executor.execute_query(sql)
@@ -213,7 +197,7 @@ class Schema:
         )
         return self.query_executor.execute_query(sql)
 
-    def has_table(self, table, query_only=False):
+    def has_table(self, table):
         """Check if table exists - delegates to query executor"""
         connection_info = self.connection_manager.get_connection_info()
         sql = self.connection_manager.platform.compile_table_exists(

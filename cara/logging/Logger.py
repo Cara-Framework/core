@@ -40,11 +40,6 @@ class Logger(LoggerContract):
     _initialized: bool = False
     _config: dict = {}
 
-    @classmethod
-    def force_reinitialize(cls) -> None:
-        """Force re-initialization of the logger (for development)."""
-        cls._initialized = False
-
     def __init__(self, name: str = "app", config: dict | None = None) -> None:
         self._name = name
         if config:

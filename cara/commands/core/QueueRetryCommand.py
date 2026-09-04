@@ -92,7 +92,7 @@ class QueueRetryCommand(CommandBase):
 
         try:
             driver = self.application.make("queue").driver("amqp")
-        except Exception as exc:  # noqa: BLE001 — reported to the operator below
+        except Exception as exc:  # reported to the operator below
             Log.error(
                 "queue:retry could not obtain the AMQP driver: %s",
                 exc,

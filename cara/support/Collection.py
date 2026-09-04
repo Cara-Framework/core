@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from itertools import groupby
 
-from cara.support.Macroable import Macroable
-
 from . import (
     _CollectionFiltering,
     _CollectionInspection,
@@ -21,7 +19,7 @@ from . import (
 )
 
 
-class Collection(Macroable):
+class Collection:
     """
     Collection class for fluent data manipulation.
 
@@ -102,10 +100,8 @@ class Collection(Macroable):
             value: The key to pluck (supports dot notation and wildcards).
             key: The key to use as the collection key (also supports dot notation).
             keep_nulls: When ``False`` (and no ``key`` is given), ``None`` values
-                are dropped from the resulting list. The polymorphic relations
-                (Morph* ``get_related``) rely on this to avoid feeding ``None``
-                ids into a ``where_in`` — without it those eager-loads raised
-                ``TypeError: pluck() got an unexpected keyword argument``.
+                are dropped from the resulting list, so a nullable foreign key
+                cannot feed ``None`` ids into an eager-load ``where_in``.
                 Defaults to ``True`` so every existing caller is unaffected.
 
         Returns:

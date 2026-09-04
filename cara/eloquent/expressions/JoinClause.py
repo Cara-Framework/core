@@ -8,10 +8,7 @@ from __future__ import annotations
 
 from typing import Self
 
-from cara.exceptions import InvalidArgumentException
-
 from .OnClause import OnClause
-from .OnValueClause import OnValueClause
 
 
 class JoinClause:
@@ -49,124 +46,6 @@ class JoinClause:
     def on(self, column1, equality, column2) -> Self:
         self.on_clauses.append(OnClause(column1, equality, column2))
         return self
-
-    def or_on(self, column1, equality, column2) -> Self:
-        self.on_clauses.append(OnClause(column1, equality, column2, "or"))
-        return self
-
-    def on_value(self, column, *args) -> Self:
-        equality, value = self._extract_operator_value(*args)
-        self.on_clauses += ((OnValueClause(column, equality, value, "value")),)
-        return self
-
-    def or_on_value(self, column, *args) -> Self:
-        equality, value = self._extract_operator_value(*args)
-        self.on_clauses += (
-            (
-                OnValueClause(
-                    column,
-                    equality,
-                    value,
-                    "value",
-                    operator="or",
-                )
-            ),
-        )
-        return self
-
-    def on_null(self, column) -> Self:
-        """
-        Specifies an ON expression where the column IS NULL.
-
-        Arguments:
-            column {string} -- The name of the column.
-
-        Returns:
-            self
-        """
-        self.on_clauses += ((OnValueClause(column, "=", None, "NULL")),)
-        return self
-
-    def on_not_null(self, column: str) -> Self:
-        """
-        Specifies an ON expression where the column IS NOT NULL.
-
-        Arguments:
-            column {string} -- The name of the column.
-
-        Returns:
-            self
-        """
-        self.on_clauses += ((OnValueClause(column, "=", True, "NOT NULL")),)
-        return self
-
-    def or_on_null(self, column) -> Self:
-        """
-        Specifies an ON expression where the column IS NULL.
-
-        Arguments:
-            column {string} -- The name of the column.
-
-        Returns:
-            self
-        """
-        self.on_clauses += ((OnValueClause(column, "=", None, "NULL", operator="or")),)
-        return self
-
-    def or_on_not_null(self, column: str) -> Self:
-        """
-        Specifies an ON expression where the column IS NOT NULL.
-
-        Arguments:
-            column {string} -- The name of the column.
-
-        Returns:
-            self
-        """
-        self.on_clauses += (
-            (
-                OnValueClause(
-                    column,
-                    "=",
-                    True,
-                    "NOT NULL",
-                    operator="or",
-                )
-            ),
-        )
-        return self
-
-    def _extract_operator_value(self, *args):
-        operators = [
-            "=",
-            ">",
-            ">=",
-            "<",
-            "<=",
-            "!=",
-            "<>",
-            "like",
-            "not like",
-        ]
-
-        operator = operators[0]
-
-        value = None
-
-        if (len(args)) >= 2:
-            operator = args[0]
-            value = args[1]
-        elif len(args) == 1:
-            value = args[0]
-
-        if operator not in operators:
-            raise InvalidArgumentException(
-                "Invalid comparison operator. The operator can be {}".format(
-                    ", ".join(operators)
-                )
-            )
-
-        return operator, value
 
     def get_on_clauses(self):
         return self.on_clauses

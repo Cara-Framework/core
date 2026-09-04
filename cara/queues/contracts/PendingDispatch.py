@@ -21,7 +21,6 @@ class PendingDispatch:
         self.job = job_instance
         self._queue_name = getattr(job_instance, "queue", None)
         self._delay = None
-        self._connection = None
         self._routing_key = None
         self._job_id = None
         self._unique_key = None
@@ -42,11 +41,6 @@ class PendingDispatch:
     def delay(self, seconds: int) -> PendingDispatch:
         """Set delay in seconds."""
         self._delay = seconds
-        return self
-
-    def on_connection(self, connection: str) -> PendingDispatch:
-        """Set connection."""
-        self._connection = connection
         return self
 
     def with_routing_key(self, routing_key: str) -> PendingDispatch:
@@ -98,7 +92,7 @@ class PendingDispatch:
             return self._dispatch_result
 
         if self._after_commit or isinstance(self.job, ShouldDispatchAfterCommit):
-            driver = Queue.driver(self._connection)
+            driver = Queue.driver()
             if getattr(driver, "durable_transactional_outbox", False):
                 # The AMQP driver must register its delivery ledger row INSIDE
                 # the domain transaction. It defers only broker publication.

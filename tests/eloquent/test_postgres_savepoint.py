@@ -296,7 +296,7 @@ def test_concurrent_threads_each_run_nested_tx_without_crosstalk():
             pc.commit()  # release sp_1
             pc.commit()  # commit outer
             results.append((pc.transaction_level, pc._connection.commit.call_count))
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             errors.append(e)
 
     threads = [threading.Thread(target=worker) for _ in range(8)]

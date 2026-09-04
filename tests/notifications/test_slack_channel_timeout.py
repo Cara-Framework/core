@@ -47,7 +47,7 @@ class _FakeNotification:
 
 
 def test_send_passes_timeout_to_urlopen(channel: SlackChannel):
-    """urlopen MUST receive a timeout > 0 to prevent indefinite hangs."""
+    """urlopen MUST receive the keyword timeout that prevents indefinite hangs."""
     fake_response = MagicMock()
     fake_response.status = 200
     fake_response.__enter__ = MagicMock(return_value=fake_response)
@@ -58,20 +58,13 @@ def test_send_passes_timeout_to_urlopen(channel: SlackChannel):
 
     assert result is True
     mock_urlopen.assert_called_once()
-    call_kwargs = mock_urlopen.call_args
-    # timeout can be positional arg #2 or keyword
-    if call_kwargs.kwargs and "timeout" in call_kwargs.kwargs:
-        timeout_val = call_kwargs.kwargs["timeout"]
-    else:
-        # positional: urlopen(req, timeout)
-        assert len(call_kwargs.args) >= 2, (
-            "urlopen called without timeout argument — worker will hang "
-            "indefinitely when Slack is unresponsive"
-        )
-        timeout_val = call_kwargs.args[1]
+    timeout_val = mock_urlopen.call_args.kwargs["timeout"]
 
-    assert isinstance(timeout_val, (int, float))
-    assert timeout_val > 0, "timeout must be positive"
+    # Pinned to the value production passes, not merely "> 0": a silent
+    # widening is exactly how a worker ends up hanging on an unresponsive
+    # Slack, and a range check would wave it through.
+    assert timeout_val == 5
+    assert isinstance(timeout_val, int | float)
     assert timeout_val <= 30, "timeout should be reasonable (<=30s)"
 
 

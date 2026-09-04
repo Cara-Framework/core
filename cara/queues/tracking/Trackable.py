@@ -38,43 +38,25 @@ class Trackable:
         - Automatic job lifecycle tracking
         - Conflict resolution (prevent duplicate jobs)
         - Smart retry with exponential backoff
-        - Performance analytics
-        - Laravel-style method chaining
     """
+
+    #: Tracking gate read by ``Bus._run_sync_with_tracking``; a job (or a
+    #: test double) opts out by declaring it ``False`` on the class.
+    _tracking_enabled: bool = True
 
     def __init__(self, *args, **kwargs):
         """Initialize tracking properties."""
         super().__init__(*args, **kwargs)
         self._job_uid: str | None = None
-        self._tracking_metadata: dict[str, Any] = {}
-        self._tracking_enabled: bool = True
         self._job_tracker: Any | None = None
 
         # Ensure priority attribute exists for queue system
         if not hasattr(self, "priority"):
             self.priority = "default"
 
-    def with_tracking(self, enabled: bool = True) -> Trackable:
-        """Enable/disable job tracking (Laravel-style fluent method)."""
-        self._tracking_enabled = enabled
-        return self
-
-    def with_metadata(self, metadata: dict[str, Any]) -> Trackable:
-        """Set metadata for job tracking (Laravel-style fluent method)."""
-        self._tracking_metadata.update(metadata)
-        return self
-
-    def set_tracking_metadata(self, key: str, value: Any) -> None:
-        """Set individual metadata key for job tracking."""
-        self._tracking_metadata[key] = value
-
     def get_job_id(self) -> str | None:
         """Get the current job tracking ID."""
         return self._job_uid
-
-    def is_tracking_enabled(self) -> bool:
-        """Check if tracking is enabled for this job."""
-        return self._tracking_enabled
 
     def _start_tracking(self) -> str | None:
         """Start job tracking and return job_id."""
@@ -102,7 +84,6 @@ class Trackable:
                     job_id=db_job_id,  # Pass database job ID for FK
                     entity_id=entity_id,
                     queue=queue,
-                    metadata=self._tracking_metadata,
                 )
             return self._job_uid
 
@@ -157,20 +138,6 @@ class Trackable:
         except Exception as e:
             Log.warning("Failed to mark job as failed: %s", str(e))
         return None
-
-    def _should_continue(self) -> bool:
-        """Check if job should continue processing."""
-        if not self._tracking_enabled or not self._job_uid:
-            return True
-
-        try:
-            job_tracker = self._get_job_tracker()
-            if job_tracker:
-                entity_id = self._get_entity_id()
-                return job_tracker.should_job_continue(self._job_uid, entity_id)
-        except Exception as e:
-            Log.warning("Failed to check job continuation: %s", str(e))
-        return True
 
     def _validate_or_cancel(self, operation: str = "operation") -> None:
         """Validate job should continue or raise JobCancelledException."""

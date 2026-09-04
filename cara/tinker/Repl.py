@@ -20,8 +20,6 @@ class Repl:
     def __init__(self, namespace: dict[str, Any]):
         """Initialize REPL with given namespace and Rich console."""
         self.namespace = namespace
-        self.history = []
-        self.last_result = None
         self.console = Console()
 
     def execute(self, code: str) -> Any:
@@ -29,17 +27,12 @@ class Repl:
         if not code.strip():
             return None
 
-        # Add to history
-        self.history.append(code)
-
         try:
             # Try to parse as expression first
             try:
                 # Parse as expression
                 parsed = ast.parse(code, mode="eval")
-                result = eval(compile(parsed, "<tinker>", "eval"), self.namespace)
-                self.last_result = result
-                return result
+                return eval(compile(parsed, "<tinker>", "eval"), self.namespace)
             except SyntaxError:
                 # If it's not an expression, try as statement
                 parsed = ast.parse(code, mode="exec")
@@ -83,18 +76,6 @@ class Repl:
         self.console.print(result, style="bold green")
         return ""  # Rich already printed it
 
-    def get_history(self) -> list:
-        """Get command history."""
-        return self.history.copy()
-
-    def clear_history(self):
-        """Clear command history."""
-        self.history.clear()
-
-    def get_last_result(self) -> Any:
-        """Get last execution result."""
-        return self.last_result
-
     def add_to_namespace(self, name: str, value: Any):
         """Add variable to namespace."""
         self.namespace[name] = value
@@ -102,60 +83,3 @@ class Repl:
     def get_namespace(self) -> dict[str, Any]:
         """Get current namespace."""
         return self.namespace.copy()
-
-    def run_interactive(self):
-        """Run interactive REPL session with Rich."""
-        self.console.print(
-            Panel.fit(
-                "[bold blue]Cara Tinker REPL[/bold blue]\n"
-                "[green]Type 'exit()' or 'quit()' to exit[/green]",
-                border_style="blue",
-            )
-        )
-
-        while True:
-            try:
-                # Get input with Rich prompt
-                code = input(">>> ")
-
-                # Check for exit commands
-                if code.strip() in ["exit()", "quit()", "exit", "quit"]:
-                    break
-
-                # Execute code
-                result = self.execute(code)
-
-                # Display result if not None (Rich handles the formatting)
-                if result is not None:
-                    self.format_result(result)
-
-            except KeyboardInterrupt:
-                self.console.print("\n[yellow]KeyboardInterrupt[/yellow]")
-                continue
-            except EOFError:
-                self.console.print("\n[green]Exiting...[/green]")
-                break
-
-    def evaluate_expression(self, expression: str) -> Any:
-        """Evaluate a single expression."""
-        try:
-            parsed = ast.parse(expression, mode="eval")
-            return eval(compile(parsed, "<tinker>", "eval"), self.namespace)
-        except Exception as e:
-            self.print_error(e, expression)
-            return None
-
-    def execute_statement(self, statement: str) -> bool:
-        """Execute a statement."""
-        try:
-            parsed = ast.parse(statement, mode="exec")
-            exec(compile(parsed, "<tinker>", "exec"), self.namespace)
-            return True
-        except Exception as e:
-            self.print_error(e, statement)
-            return False
-
-    def show_code_with_syntax(self, code: str, title: str = "Code"):
-        """Show code with syntax highlighting."""
-        syntax = Syntax(code, "python", theme="monokai", line_numbers=True)
-        self.console.print(Panel(syntax, title=title, border_style="cyan"))

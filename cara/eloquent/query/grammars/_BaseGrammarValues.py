@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 from cara.eloquent.expressions import (
     F,
     Greatest,
@@ -35,55 +30,11 @@ def _grammar_add_binding(self, *bindings):
     self._bindings += bindings
 
 
-def _grammar_column_exists(self, column) -> Self:
-    """
-    Check if a column exists.
-
-    Arguments:
-        column {string} -- The name of the column to check for existence.
-
-    Returns:
-        self
-    """
-    self._column = column
-    self._sql = self.process_exists()
-    return self
-
-
-def _grammar_table_exists(self) -> Self:
-    """
-    Checks if a table exists.
-
-    Returns:
-        self
-    """
-    self._sql = self.table_exists_string().format(
-        table=self.process_table(self.table),
-        database=self.database,
-        clean_table=self.table,
-    )
-    return self
-
-
 def _grammar_wrap_table(self, table_name):
     return self.table_string().format(table=table_name)
 
 
-def _grammar_process_exists(self):
-    """
-    Specifies the column exists expression.
-
-    Returns:
-        self
-    """
-    return self.column_exists_string().format(
-        table=self.process_table(self.table),
-        clean_table=self.table,
-        value=self._compile_value(self._column),
-    )
-
-
-def _grammar_process_columns(self, separator="", action="select", qmark=False):
+def _grammar_process_columns(self, separator="", qmark=False):
     """
     Specifies the columns in a selection expression.
 
@@ -282,54 +233,6 @@ def _compile_expression_operand(self, operand) -> str:
         return rendered
 
     return self._compile_value(operand).strip()
-
-
-def _grammar_drop_table(self, table) -> Self:
-    """
-    Specifies a drop table expression.
-
-    Arguments:
-        table {string} -- The table to drop.
-
-    Returns:
-        self
-    """
-    self._sql = self.drop_table_string().format(table=self.process_column(table))
-    return self
-
-
-def _grammar_drop_table_if_exists(self, table) -> Self:
-    """
-    Specifies a drop table if exists expression.
-
-    Arguments:
-        table {string} -- The name of the table to drop.
-
-    Returns:
-        self
-    """
-    self._sql = self.drop_table_if_exists_string().format(
-        table=self.process_column(table)
-    )
-    return self
-
-
-def _grammar_rename_table(self, current_table_name, new_table_name) -> Self:
-    """
-    Specifies a rename table expression.
-
-    Arguments:
-        current_table_name {string} -- The name of the table currently.
-        new_table_name {string} -- The name you want to use now for the table.
-
-    Returns:
-        self
-    """
-    self._sql = self.rename_table_string().format(
-        current_table_name=self.process_column(current_table_name),
-        new_table_name=self.process_column(new_table_name),
-    )
-    return self
 
 
 def _grammar_where_regexp_string(self):

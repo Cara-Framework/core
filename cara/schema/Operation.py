@@ -60,6 +60,15 @@ SAFETY_ORDER = {ADDITIVE: 0, LOCKING: 1, DESTRUCTIVE: 2}
 #: a test asserting it equals ``SchemaOperation.__table__``.
 LEDGER_TABLE = "schema_operation"
 
+#: The ledger's status vocabulary, next to the table it belongs to. A row is
+#: written ``STATUS_APPLIED`` when its statement succeeded and ``STATUS_FAILED``
+#: when it did not; ``schema:rollback`` moves a reversed row to
+#: ``STATUS_REVERSED``. ``SchemaOperation`` reads these rather than restating
+#: them, and so do the two commands, which talk to the ledger in raw SQL.
+STATUS_APPLIED = "applied"
+STATUS_FAILED = "failed"
+STATUS_REVERSED = "reversed"
+
 #: ``forward_sql`` prefix meaning "this is not SQL — run the named generated
 #: migration". A new table is created by executing its own generated creator,
 #: never by a CREATE TABLE re-rendered from the model: one renderer, one truth.
@@ -253,6 +262,9 @@ __all__ = [
     "LOCKING",
     "Operation",
     "SAFETY_ORDER",
+    "STATUS_APPLIED",
+    "STATUS_FAILED",
+    "STATUS_REVERSED",
     "migration_to_run",
     "sort_operations",
 ]

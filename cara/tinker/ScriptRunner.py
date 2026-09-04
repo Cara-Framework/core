@@ -31,7 +31,7 @@ class ScriptRunner:
     def run_script(
         self,
         script_content: str,
-        context: dict[str, Any] = None,
+        context: dict[str, Any] | None = None,
         show_progress: bool = True,
     ):
         """Run script content with Rich progress tracking."""
@@ -69,7 +69,10 @@ class ScriptRunner:
         return results
 
     def run_file(
-        self, file_path: str, context: dict[str, Any] = None, show_progress: bool = True
+        self,
+        file_path: str,
+        context: dict[str, Any] | None = None,
+        show_progress: bool = True,
     ):
         """Run script from file with Rich formatting."""
         path = Path(file_path)
@@ -158,60 +161,3 @@ class ScriptRunner:
             )
 
         self.console.print(table)
-
-    def run_interactive_script(self, script_content: str):
-        """Run script with interactive confirmation for each line."""
-        lines = [
-            line.strip()
-            for line in script_content.splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
-        results = []
-
-        self.console.print(
-            Panel(
-                "[bold blue]Interactive Script Execution[/bold blue]\n"
-                "[green]You will be prompted before each command execution[/green]",
-                border_style="blue",
-            )
-        )
-
-        for line_num, line in enumerate(lines, 1):
-            # Show the command with syntax highlighting
-            syntax = Syntax(line, "python", theme="monokai", line_numbers=False)
-            self.console.print(
-                Panel(syntax, title=f"Line {line_num}/{len(lines)}", border_style="cyan")
-            )
-
-            # Ask for confirmation
-            response = input("Execute this command? [Y/n/q]: ").strip().lower()
-
-            if response == "q":
-                self.console.print("[yellow]Script execution cancelled by user[/yellow]")
-                break
-            elif response in ["n", "no"]:
-                self.console.print("[dim]Skipped[/dim]")
-                results.append(
-                    {
-                        "line": line_num,
-                        "command": line,
-                        "result": None,
-                        "success": True,
-                        "error": None,
-                        "skipped": True,
-                    }
-                )
-                continue
-
-            # Execute the command
-            result = self._execute_line(line, line_num)
-            results.append(result)
-
-            # Show result
-            if result["success"] and result["result"] is not None:
-                self.repl.format_result(result["result"])
-            elif not result["success"]:
-                self.console.print(f"❌ [red]Error:[/red] {result['error']}")
-
-        self._show_results_summary(results)
-        return results

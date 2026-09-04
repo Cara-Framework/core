@@ -274,7 +274,7 @@ class AIClient:
                             f"backing off {wait_s:.1f}s",
                         )
                         time.sleep(wait_s)
-                except Exception as e:  # noqa: BLE001 — record and retry/fallback
+                except Exception as e:  # record and retry/fallback
                     last_error = e
                     _log("error", f"AI fail [{self.provider.value}/{attempt_model}]: {e}")
                     self._on_attempt_error(attempt_model, e, None, retry)
@@ -320,7 +320,7 @@ class AIClient:
             # A missing model is a deployment defect, not a flaky response —
             # ``fallback`` must not turn it into a permanently silent no-op.
             raise
-        except Exception as e:  # noqa: BLE001 — fall back when the caller allows
+        except Exception as e:  # fall back when the caller allows
             if fallback is not None:
                 _log("warning", f"AI.json fallback: {e}")
                 return fallback

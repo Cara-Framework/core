@@ -29,4 +29,7 @@ logs/
 
 # Persistent advisory-lock files; the inode must survive between processes.
 database/migrations/.*.lock
-storage/
+# Anchored: the runtime storage dir is the REPO ROOT one. Unanchored,
+# this also swallowed ``cara/storage/`` (framework source) and
+# ``tests/storage/`` — a new file in either was silently untracked.
+/storage/

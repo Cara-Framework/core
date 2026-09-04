@@ -22,10 +22,7 @@ import pytest
 
 from cara.broadcasting.ConnectionManager import ConnectionManager
 from cara.broadcasting.drivers.RedisBroadcaster import RedisBroadcaster
-from cara.websocket.Socket import Socket
-
-# NUMERIC(17,6) ceiling — ``float(MONEY)`` is ``100000000000.0``.
-MONEY = Decimal("99999999999.999999")
+from tests._money_wire import EXACT, MONEY, connected_socket
 
 _CONFIG = {"websocket": {"heartbeat_interval": 0, "max_connections": 10}}
 
@@ -51,20 +48,6 @@ def _node() -> tuple[RedisBroadcaster, _RecordingRedis]:
     return node, broker
 
 
-def _connected_socket(sent: list[dict]) -> Socket:
-    async def _send(message: dict) -> None:
-        sent.append(message)
-
-    async def _receive() -> dict:
-        return {"type": "websocket.receive"}
-
-    socket = Socket(
-        application=None, scope={"type": "websocket"}, receive=_receive, send=_send
-    )
-    socket._ws_connected = True
-    return socket
-
-
 @pytest.mark.asyncio
 async def test_published_payload_carries_exact_decimal_digits() -> None:
     node, broker = _node()
@@ -74,7 +57,7 @@ async def test_published_payload_carries_exact_decimal_digits() -> None:
     channel, payload = broker.published[-1]
     assert channel == "cara_broadcast:orders"
     data = json.loads(payload)["data"]
-    assert data["total"] == "99999999999.999999"
+    assert data["total"] == EXACT
     assert Decimal(data["total"]) == MONEY
     assert data["total"] != float(MONEY)
 
@@ -89,7 +72,7 @@ async def test_a_subscriber_on_another_node_sees_the_same_money() -> None:
     sent: list[dict] = []
     # Register through the base manager: the driver's own subscribe()
     # would start a listener task against a Redis that isn't there.
-    await ConnectionManager.add_connection(subscriber, "conn-1", _connected_socket(sent))
+    await ConnectionManager.add_connection(subscriber, "conn-1", connected_socket(sent))
     await ConnectionManager.subscribe(subscriber, "conn-1", "orders")
 
     try:
@@ -102,7 +85,7 @@ async def test_a_subscriber_on_another_node_sees_the_same_money() -> None:
         assert sent, "the remote node delivered nothing to its local client"
         delivered = json.loads(sent[-1]["text"])
         assert delivered["event"] == "price.changed"
-        assert delivered["data"]["total"] == "99999999999.999999"
+        assert delivered["data"]["total"] == EXACT
         assert Decimal(delivered["data"]["total"]) == MONEY
     finally:
         await subscriber.cleanup()
@@ -118,11 +101,11 @@ async def test_local_and_remote_subscribers_receive_identical_frames() -> None:
     local_frames: list[dict] = []
     remote_frames: list[dict] = []
     await ConnectionManager.add_connection(
-        publisher, "local-1", _connected_socket(local_frames)
+        publisher, "local-1", connected_socket(local_frames)
     )
     await ConnectionManager.subscribe(publisher, "local-1", "orders")
     await ConnectionManager.add_connection(
-        subscriber, "remote-1", _connected_socket(remote_frames)
+        subscriber, "remote-1", connected_socket(remote_frames)
     )
     await ConnectionManager.subscribe(subscriber, "remote-1", "orders")
 

@@ -211,14 +211,6 @@ class HeaderManager:
             }
         )
 
-    def cors_credentials(self, allow: bool = True) -> None:
-        """Set CORS credentials header (Laravel-style)."""
-        self.set("Access-Control-Allow-Credentials", "true" if allow else "false")
-
-    def cors_max_age(self, seconds: int = 86400) -> None:
-        """Set CORS max age header (Laravel-style)."""
-        self.set("Access-Control-Max-Age", str(seconds))
-
     # =============================================================================
     # SECURITY HEADERS (Laravel-style)
     # =============================================================================

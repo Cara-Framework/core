@@ -3,6 +3,7 @@ Dynamic Module Helper for the Cara framework.
 
 Laravel config() style dynamic interface:
     modules('controllers')                    # app.controllers
+    modules('routes')                        # routes
     modules('routes.api')                    # routes.api
     modules('app.anything')                  # app.anything
     modules('mymodule.submodule')            # mymodule.submodule
@@ -21,6 +22,7 @@ def modules(path: str = "", base: str | None = None) -> str:
     Examples:
         modules('controllers')              # app.controllers
         modules('models')                   # app.models
+        modules('routes')                  # routes
         modules('routes.api')              # routes.api
         modules('config.database')         # config.database
         modules('anything.here')           # anything.here (passthrough)
@@ -59,31 +61,6 @@ def _resolve_dynamic_module_path(path: str) -> str:
 def _get_smart_module_path(component: str) -> str:
     """Intelligently determine module prefix based on component name."""
 
-    # App-level components (most common)
-    app_patterns = [
-        "controllers",
-        "middlewares",
-        "models",
-        "commands",
-        "providers",
-        "mailables",
-        "jobs",
-        "listeners",
-        "events",
-        "handlers",
-        "policies",
-        "services",
-        "repositories",
-        "facades",
-        "traits",
-        "helpers",
-        "resources",
-        "transformers",
-        "observers",
-        "scouts",
-        "rules",
-    ]
-
     # Routes components
     if component.startswith("routes") or component in ["api", "web", "channels"]:
         if component == "api":
@@ -92,6 +69,8 @@ def _get_smart_module_path(component: str) -> str:
             return ModuleManager.routes_module("web")
         elif component == "channels":
             return ModuleManager.routes_module("channels")
+        elif component == "routes":
+            return ModuleManager.routes_module()
         else:
             return ModuleManager.routes_module(component.replace("routes_", ""))
 
@@ -116,10 +95,6 @@ def _get_smart_module_path(component: str) -> str:
         elif component == "config":
             return ModuleManager.config_module()
         return ModuleManager.config_module(component)
-
-    # App components (default for most things)
-    if component in app_patterns:
-        return ModuleManager.app_module(component)
 
     # Default: treat as app submodule for anything new
     return ModuleManager.app_module(component)

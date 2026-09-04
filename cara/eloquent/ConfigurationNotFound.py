@@ -9,5 +9,3 @@ from cara.exceptions import CaraException
 
 class ConfigurationNotFound(CaraException):
     """Exception raised when a configuration is not found."""
-
-    pass

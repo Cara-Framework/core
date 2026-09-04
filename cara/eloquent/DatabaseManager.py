@@ -4,7 +4,6 @@ import logging
 from collections.abc import Mapping
 from contextlib import contextmanager
 from copy import deepcopy
-from typing import Self
 
 from cara.exceptions import ConfigurationException, ConnectionNotRegisteredException
 
@@ -69,7 +68,6 @@ class DatabaseManager:
         self._resolver = None
         self._default_connection = default_connection
         self._connections = connections
-        self._morph_map = {}
         self._ensure_resolver()
 
     def _ensure_resolver(self):
@@ -259,17 +257,6 @@ class DatabaseManager:
         self._unwind_transactions(0, connection, commit=True)
         self._release_pinned_connection(connection)
 
-    def rollback_open_transactions(self, connection=None) -> None:
-        """Roll back every open level on the context-pinned connection.
-
-        This is the failure-side counterpart of
-        :meth:`commit_open_transactions`. Framework execution boundaries use
-        it before propagating a failed or cancelled unit of work so a caught
-        exception cannot leak a live transaction into the next sync job.
-        """
-        self._unwind_transactions(0, connection, commit=False)
-        self._release_pinned_connection(connection)
-
     @contextmanager
     def transaction(self, connection=None):
         """Context manager for transaction handling"""
@@ -454,27 +441,6 @@ class DatabaseManager:
         if connection_key == "default" or connection_key is None:
             return self._default_connection
         return connection_key
-
-    def morph_map(self, morph_map_dict) -> Self:
-        """Register morph type mappings for polymorphic relationships.
-
-        Args:
-            morph_map_dict: Dict mapping type names to model class paths
-                           e.g. {"post": "app.models.Post.Post", "user": "app.models.User.User"}
-
-        Returns:
-            self for method chaining
-        """
-        self._morph_map = morph_map_dict
-        return self
-
-    def get_morph_map(self):
-        """Get the morph map for polymorphic relationships.
-
-        Returns:
-            Dict mapping type names to model class paths
-        """
-        return self._morph_map
 
     def validate_connection(self, connection_name):
         """Validate that connection exists and has required config"""

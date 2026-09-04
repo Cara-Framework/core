@@ -21,7 +21,6 @@ class UploadedFile:
 
     Provides clean API for file uploads:
     - store('directory') - Auto filename
-    - store_as('directory', 'filename') - Custom filename
     """
 
     name: str
@@ -72,16 +71,6 @@ class UploadedFile:
 
         # Store file
         return self._store_file(directory, unique_filename)
-
-    def store_as(self, directory: str, filename: str) -> str:
-        """
-        Store file with custom filename.
-
-        Laravel: $file->storeAs('receipts', 'custom.jpg')
-
-        Returns: 'receipts/custom.jpg'
-        """
-        return self._store_file(directory, filename)
 
     def _store_file(self, directory: str, filename: str) -> str:
         """Internal file storage method.

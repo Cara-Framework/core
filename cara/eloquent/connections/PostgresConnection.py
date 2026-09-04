@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import logging
-
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 import contextlib
+import logging
 import re
 import threading
 import time
+from typing import Self
 
 from cara.exceptions import (
     DatabaseUnavailableException,
@@ -347,9 +342,6 @@ class PostgresConnection(BaseConnection):
                     continue
                 raise
         raise last_err
-
-    def get_database_name(self):
-        return self.database
 
     @classmethod
     def get_default_query_grammar(cls):

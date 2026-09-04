@@ -146,7 +146,7 @@ def _resolve_client_binary(name: str, config_key: str) -> str | None:
     """
     try:
         override = config(config_key, None)
-    except Exception:  # noqa: BLE001 — a rehearsal must not need a booted config
+    except Exception:  # a rehearsal must not need a booted config
         override = None
     if override:
         resolved = shutil.which(str(override))

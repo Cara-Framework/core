@@ -19,11 +19,6 @@ class FieldDiff:
     old_name: str | None = None  # renamed: the previous column name
     changed_attrs: list[str] = field(default_factory=list)  # altered: which attrs
 
-    @property
-    def is_destructive(self) -> bool:
-        """A removed column drops data; the generator marks/guards these."""
-        return self.kind == "removed"
-
     def __str__(self) -> str:  # human-readable line for the command's diff print
         if self.kind == "added":
             return f"+ add column {self.name} ({self.column.type})"

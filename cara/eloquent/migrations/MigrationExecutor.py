@@ -160,26 +160,6 @@ class MigrationExecutor:
             # we *could* have run safely wrapped.
             return True
 
-    def get_migration_status(self):
-        """Get status of all migrations"""
-        self.tracker.ensure_migrations_table()
-
-        migration_files = self.file_manager.get_migration_files()
-        migration_files.sort()
-        self._validate_applied_checksums(migration_files)
-
-        ran_migrations = self.tracker.get_ran_migrations()
-
-        status = []
-        for file_path in migration_files:
-            migration_name = self.file_manager.get_migration_name_from_file(file_path)
-            is_ran = migration_name in ran_migrations
-            status.append(
-                {"name": migration_name, "status": "Ran" if is_ran else "Pending"}
-            )
-
-        return status
-
     def _validate_applied_checksums(self, migration_files) -> None:
         """Refuse altered, deleted, or unverifiable applied migrations."""
         records = self.tracker.get_ran_migration_records()

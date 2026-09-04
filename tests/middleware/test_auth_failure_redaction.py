@@ -387,7 +387,7 @@ def _drive_to_the_wire(error: Exception) -> _SendRecorder:
         async def _run() -> None:
             try:
                 await middleware.handle(object(), _next)
-            except Exception as escaped:  # noqa: BLE001 - the ASGI server's job
+            except Exception as escaped:  # the ASGI server's job
                 await handler.handle(escaped, None, scope, None, recorder)
             else:  # pragma: no cover - would mean the leak is back
                 raise AssertionError(

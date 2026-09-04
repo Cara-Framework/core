@@ -45,16 +45,6 @@ class HeaderBag:
         """
         self.add(Header(name, value))
 
-    def add_if_not_exists(self, header: Header) -> None:
-        """
-        Add a header only if it doesn't exist.
-
-        Args:
-            header: Header object to add
-        """
-        name_lower = header.name.lower()
-        self.bag.setdefault(name_lower, header)
-
     def get_raw(self, name: str) -> Header | None:
         """
         Get a raw header object by name.
@@ -196,36 +186,6 @@ class HeaderBag:
         Example: content-type -> Content-Type
         """
         return titleize(name).replace(" ", "-")
-
-    @staticmethod
-    def to_server_format(name: str) -> str:
-        """
-        Convert header name to server format.
-
-        Example: X-Rate-Limited -> HTTP_X_RATE_LIMITED
-        """
-        if name.lower() == "content-type":
-            return "CONTENT_TYPE"
-        elif name.lower() == "content-length":
-            return "CONTENT_LENGTH"
-        else:
-            return f"HTTP_{name.replace('-', '_').upper()}"
-
-    @staticmethod
-    def from_server_format(name: str) -> str:
-        """
-        Convert server header name to standard format.
-
-        Example: HTTP_X_RATE_LIMITED -> X-Rate-Limited
-        """
-        if name == "CONTENT_TYPE":
-            return "Content-Type"
-        elif name == "CONTENT_LENGTH":
-            return "Content-Length"
-        elif name.startswith("HTTP_"):
-            return titleize(name[5:].replace("_", " ")).replace(" ", "-")
-        else:
-            return titleize(name.replace("_", " ")).replace(" ", "-")
 
     def load(self, headers: dict[str, str]) -> None:
         """

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .MissingValue import MissingValue
@@ -104,31 +103,6 @@ class JsonResource:
         if default is None:
             return None
         return default() if callable(default) else default
-
-    @staticmethod
-    def when_loaded(
-        resource: Any, relation: str, value_fn: Callable | None = None
-    ) -> Any:
-        """Include a relation only when it has been eager-loaded.
-
-        Args:
-            resource: The model instance to check.
-            relation: Relation name to check for.
-            value_fn: Optional callable that receives the loaded relation
-                      and returns the value to include.  If omitted the
-                      raw relation value is returned.
-
-        Returns:
-            The transformed relation value or ``MissingValue`` to omit.
-        """
-        related = getattr(resource, relation, MissingValue())
-        if isinstance(related, MissingValue):
-            return related
-        if related is None:
-            return None
-        if value_fn is not None:
-            return value_fn(related)
-        return related
 
     # ── Type coercion helpers ────────────────────────────────────────────
     #

@@ -21,7 +21,6 @@ class BaseRelationship:
         Arguments:
             name {object} -- The model class.
         """
-        pass
 
     def __call__(self, fn=None, *args, **kwargs):
         """
@@ -56,36 +55,50 @@ class BaseRelationship:
         raise AttributeError("Cannot get builder: related model not found")
 
     def __get__(self, instance, owner):
-        """
-        This method is called when the decorated method is accessed.
+        """Property access: return the eager-loaded value, or lazy-load and cache.
 
-        Arguments:
-            instance {object|None} -- The instance we called.
-                If we didn't call the attribute and only accessed it then this will be None.
+        Laravel behavior: accessing ``model.relation`` returns a Model, a
+        Collection or ``None`` — never a QueryBuilder. The result is cached in
+        ``_relations`` so subsequent access does not re-query.
 
-            owner {object} -- The current model that the property was accessed on.
-
-        Returns:
-            object -- Either returns a builder or a hydrated model.
+        The cache lookup, the strict lazy-load guard and the write-back are the
+        same for every relationship kind; only the query differs, and each
+        subclass supplies that through :meth:`_resolve`.
         """
         if instance is None:
             return self
 
-        attribute = self.fn.__name__
-        relationship = self.fn(instance)()
-        self.set_keys(instance, attribute)
-        self._related_builder = relationship.builder
+        func = getattr(self, "_func", None) or getattr(self, "fn", None)
+        attr_name = func.__name__ if func and hasattr(func, "__name__") else None
 
-        if not instance.is_loaded():
-            return self
+        # Return cached relation if already loaded (eager or previous lazy load)
+        if attr_name:
+            relations = getattr(instance, "_relations", None)
+            if relations is not None and attr_name in relations:
+                return relations[attr_name]
 
-        if hasattr(instance, "_relations") and attribute in instance._relations:
-            return instance._relations[attribute]
+        # Strict lazy-load guard (opt-in, off by default): raise if this
+        # un-eager-loaded relation is accessed on a collection-hydrated model.
+        guard = getattr(instance, "_guard_against_lazy_load", None)
+        if attr_name and callable(guard):
+            guard(attr_name)
 
-        if attribute in instance._relationships:
-            return instance._relationships[attribute]
+        result = self._resolve(instance)
 
-        return self.apply_query(self._related_builder, instance)
+        # Cache in _relations so subsequent access doesn't re-query
+        if attr_name:
+            if not hasattr(instance, "_relations") or instance._relations is None:
+                instance.__dict__.setdefault("_relations", {})
+            instance._relations[attr_name] = result
+
+        return result
+
+    def _resolve(self, instance):
+        """Run this relationship's lazy-load query for ``instance``."""
+        klass = self.__class__.__name__
+        raise NotImplementedError(
+            f"{klass} relationship does not implement the '_resolve' method"
+        )
 
     def __getattr__(self, attribute):
         # Use _func if set by decorator, otherwise fn. Read via __dict__:
@@ -99,28 +112,34 @@ class BaseRelationship:
             f"'{type(self).__name__}' object has no attribute '{attribute}'"
         )
 
-    def apply_query(self, foreign, owner):
+    def query_has(self, current_query_builder, method="where_exists"):
+        """Exists-correlated subquery: `WHERE EXISTS (SELECT ... FROM related
+        WHERE related.foreign_key = parent.local_key)`. Used by ``has`` /
+        ``doesnt_have`` for boolean relation filtering.
         """
-        Return a dictionary to hydrate the model with.
-
-        Arguments:
-            foreign {oject} -- The relationship object
-            owner {object} -- The current model oject.
-
-        Returns:
-            dict -- A dictionary of data which will be hydrated.
-        """
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'apply_query' method"
+        related_builder = self.get_builder()
+        getattr(current_query_builder, method)(
+            related_builder.where_column(
+                f"{related_builder.get_table_name()}.{self.foreign_key}",
+                f"{current_query_builder.get_table_name()}.{self.local_key}",
+            )
         )
+        return related_builder
 
     def query_where_exists(self, builder, callback, method="where_exists"):
-        """Adds a criteria clause to the query filter for existing related records."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'query_where_exists' method"
+        """Same shape as ``query_has`` but invokes the caller's callback so
+        they can add extra constraints. Used by ``where_has`` family.
+        """
+        query = self.get_builder()
+        getattr(builder, method)(
+            callback(
+                query.where_column(
+                    f"{query.get_table_name()}.{self.foreign_key}",
+                    f"{builder.get_table_name()}.{self.local_key}",
+                )
+            )
         )
+        return query
 
     def joins(self, builder, clause=None):
         """Helper method for adding join clauses to a relationship."""
@@ -134,47 +153,111 @@ class BaseRelationship:
             clause=clause,
         )
 
-    def get_with_count_query(self, builder, callback, relation_name=None):
+    # ===== Aggregate Subquery Support (withCount, withSum, withAvg, withMin, withMax) =====
+    #
+    # Laravel-style correlated subqueries: SELECT (SELECT COUNT(*) FROM <related>
+    # WHERE <related>.<foreign_key> = <parent>.<local_key>) AS <alias>, ...
+    # ``callback`` (if given) receives the inner subquery for extra constraints.
+    #
+    # The key layout differs per relationship kind but the correlation is
+    # written the same way: HasOne/HasMany store the parent's key in
+    # ``local_key`` and the child's pointer in ``foreign_key``; BelongsTo
+    # stores the FK in ``local_key`` and the related row identifies itself
+    # via ``foreign_key`` (usually ``id``). Either way the predicate is
+    # ``<related>.<foreign_key> = <parent>.<local_key>``.
+
+    def _aggregate_subquery(self, builder, alias, agg_fn, callback):
+        related_table = self.get_builder().get_table_name()
+        if not builder._columns:
+            builder = builder.select("*")
+
+        # Laravel parity: build the correlated subquery from the RELATED
+        # model's own query (so its global scopes apply, not the parent's).
+        def _make_sub(_unused_new):
+            sub = self.get_builder()
+            return (
+                agg_fn(sub)
+                .where_column(
+                    f"{related_table}.{self.foreign_key}",
+                    f"{builder.get_table_name()}.{self.local_key}",
+                )
+                .when(callback, lambda qq: callback(qq))
+            )
+
+        return builder.add_select(alias, _make_sub)
+
+    def _alias_base(self, relation_name):
+        """Laravel uses the relation name for alias (e.g. ``images_count``).
+        Fall back to the related table name when no relation name is given."""
+        return relation_name or self.get_builder().get_table_name()
+
+    def get_with_count_query(self, builder, callback=None, relation_name=None):
         """Adds a clause to the query to get the record count of the relationship."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'get_with_count_query' method"
+        base = self._alias_base(relation_name)
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_count",
+            lambda q: q.count("*", dry=True),
+            callback,
         )
 
-    def get_with_sum_query(self, builder, column, callback, relation_name=None):
+    def get_with_sum_query(self, builder, column, callback=None, relation_name=None):
         """Adds a clause to the query to get the sum of a column in the relationship."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'get_with_sum_query' method"
+        base = self._alias_base(relation_name)
+        related_table = self.get_builder().get_table_name()
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_{column}_sum",
+            lambda q: q.sum(f"{related_table}.{column}", dry=True),
+            callback,
         )
 
-    def get_with_avg_query(self, builder, column, callback, relation_name=None):
+    def get_with_avg_query(self, builder, column, callback=None, relation_name=None):
         """Adds a clause to the query to get the average of a column in the relationship."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'get_with_avg_query' method"
+        base = self._alias_base(relation_name)
+        related_table = self.get_builder().get_table_name()
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_{column}_avg",
+            lambda q: q.avg(f"{related_table}.{column}", dry=True),
+            callback,
         )
 
-    def get_with_min_query(self, builder, column, callback, relation_name=None):
+    def get_with_min_query(self, builder, column, callback=None, relation_name=None):
         """Adds a clause to the query to get the minimum of a column in the relationship."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'get_with_min_query' method"
+        base = self._alias_base(relation_name)
+        related_table = self.get_builder().get_table_name()
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_{column}_min",
+            lambda q: q.min(f"{related_table}.{column}", dry=True),
+            callback,
         )
 
-    def get_with_max_query(self, builder, column, callback, relation_name=None):
+    def get_with_max_query(self, builder, column, callback=None, relation_name=None):
         """Adds a clause to the query to get the maximum of a column in the relationship."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'get_with_max_query' method"
+        base = self._alias_base(relation_name)
+        related_table = self.get_builder().get_table_name()
+        return self._aggregate_subquery(
+            builder,
+            f"{base}_{column}_max",
+            lambda q: q.max(f"{related_table}.{column}", dry=True),
+            callback,
         )
 
     def attach(self, current_model, related_record):
-        """Link a related model to the current model."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'attach' method"
-        )
+        """Link a related model to the current model.
+
+        The child-owns-the-key layout (HasOne / HasMany): stamp the parent's
+        ``local_key`` value onto the related record's ``foreign_key``.
+        ``BelongsTo`` overrides this — there the PARENT holds the key.
+        """
+        local_key_value = getattr(current_model, self.local_key)
+        if not related_record.is_created():
+            related_record.fill({self.foreign_key: local_key_value})
+            return related_record.create(related_record.all_attributes(), cast=True)
+
+        return related_record.update({self.foreign_key: local_key_value})
 
     def get_related(self, query, relation, eagers=None, callback=None):
         klass = self.__class__.__name__
@@ -196,28 +279,14 @@ class BaseRelationship:
         )
 
     def attach_related(self, current_model, related_record):
-        """Unlink a related model from the current model."""
+        """Link a related model to the current model."""
         klass = self.__class__.__name__
         raise NotImplementedError(
             f"{klass} relationship does not implement the 'attach_related' method"
         )
 
-    def detach_related(self, current_model, related_record):
-        """Unlink a related model from the current model."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'detach_related' method"
-        )
-
-    def query_has(self, current_query_builder, method="where_exists"):
-        """Adds a clause to the query to chek if a rwlarion exists."""
-        klass = self.__class__.__name__
-        raise NotImplementedError(
-            f"{klass} relationship does not implement the 'query_has' method"
-        )
-
     def map_related(self, related_result):
         klass = self.__class__.__name__
         raise NotImplementedError(
-            f"{klass} relationship does not implement the 'related_result' method"
+            f"{klass} relationship does not implement the 'map_related' method"
         )

@@ -6,8 +6,8 @@ from __future__ import annotations
 class MissingValue:
     """Represents an attribute that should be excluded from the resource output.
 
-    Used by JsonResource.when() and JsonResource.when_loaded() to signal
-    that a field should not appear in the serialized output.
+    Used by JsonResource.when() to signal that a field should not appear
+    in the serialized output.
     """
 
     _instance = None

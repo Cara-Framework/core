@@ -100,11 +100,6 @@ class Date:
         cls._pendulum_freeze(_test_now)
 
     @classmethod
-    def has_test_now(cls) -> bool:
-        """True if :meth:`now` is currently frozen."""
-        return _test_now is not None
-
-    @classmethod
     def travel(
         cls,
         *,

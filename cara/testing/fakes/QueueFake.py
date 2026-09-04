@@ -81,9 +81,5 @@ class QueueFake:
             label = of_type.__name__ if of_type else "any job"
             raise AssertionError(f"Expected at least one push of {label}, got 0")
 
-    def assert_nothing_pushed(self) -> None:
-        if self.jobs:
-            raise AssertionError(f"Expected no jobs queued, got {len(self.jobs)}")
-
     def clear(self) -> None:
         self.jobs.clear()

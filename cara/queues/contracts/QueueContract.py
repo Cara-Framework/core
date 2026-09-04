@@ -23,16 +23,6 @@ class QueueContract(Protocol):
     def push(self, *jobs: Any, options: dict[str, Any]) -> str | list[str]:
         """Push one or more job objects onto the queue with given options. Returns job ID(s)."""
 
-    def chain(self, jobs: list[Any], options: dict[str, Any]) -> None:
-        """Enqueue a sequence of jobs so that each runs only after its predecessor succeeds."""
-
-    def batch(self, *jobs: Any, options: dict[str, Any]) -> None:
-        """
-        Enqueue multiple jobs as a batch.
-
-        They can be processed in parallel but tracked together.
-        """
-
     def schedule(self, job: Any, when: Any, options: dict[str, Any]) -> None:
         """
         Schedule a single job to run at a specific time or after a delay.

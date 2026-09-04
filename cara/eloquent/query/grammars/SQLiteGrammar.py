@@ -69,9 +69,6 @@ class SQLiteGrammar(BaseGrammar):
     def subquery_string(self):
         return "({query})"
 
-    def default_string(self):
-        return " DEFAULT {default} "
-
     def raw_query_string(self):
         return "{keyword} {query}"
 
@@ -111,35 +108,6 @@ class SQLiteGrammar(BaseGrammar):
     def decrement_string(self):
         return "{column} = {column} - '{value}'{separator}"
 
-    def column_exists_string(self):
-        return "SELECT column_name FROM information_schema.columns WHERE table_name='{clean_table}' and column_name={value}"
-
-    def table_exists_string(self):
-        return (
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='{clean_table}'"
-        )
-
-    def to_sql(self):
-        """Clean up the SQL string and return it."""
-        from . import _MULTI_SPACE_RE  # local: cycle with cara.eloquent.query.grammars
-
-        if self.queries and (not self._columns and not self._creates):
-            sql = ""
-            for query in self.queries:
-                query += "; "
-                sql += _MULTI_SPACE_RE.sub(" ", query)
-            return sql.rstrip(" ")
-
-        sql = _MULTI_SPACE_RE.sub(
-            " ",
-            self._sql.strip().replace(",)", ")"),
-        )
-        for query in self.queries:
-            sql += "; "
-            sql += _MULTI_SPACE_RE.sub(" ", query.strip())
-
-        return sql
-
     def table_string(self):
         return '"{table}"'
 
@@ -174,9 +142,6 @@ class SQLiteGrammar(BaseGrammar):
 
     def or_where_string(self):
         return "OR"
-
-    def where_in_string(self):
-        return "WHERE IN ({values})"
 
     def where_string(self):
         return " {keyword} {column} {equality} {value}"

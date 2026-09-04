@@ -131,28 +131,3 @@ class RouteParameterValidator:
             "errors": error_dict,
             "first_error": first_error or "Validation failed",
         }
-
-    @classmethod
-    def clear_all_rules(cls) -> None:
-        """Clear all validation and compile rules."""
-        cls._validation_rules.clear()
-        cls._compile_rules.clear()
-        cls._compile_patterns.clear()
-
-    @classmethod
-    def get_debug_info(cls, parameter: str | None = None) -> dict[str, Any]:
-        """Get debug information about rules and mappings."""
-        if parameter:
-            return {
-                "parameter": parameter,
-                "validation_rules": cls._validation_rules.get(parameter),
-                "compile_rule": cls._compile_rules.get(parameter),
-                "compile_pattern": cls._compile_patterns.get(parameter),
-                "combined_rules": cls.get_all_rules_for_parameter(parameter),
-            }
-
-        return {
-            "all_validation_rules": cls._validation_rules.copy(),
-            "all_compile_rules": cls._compile_rules.copy(),
-            "all_compile_patterns": cls._compile_patterns.copy(),
-        }

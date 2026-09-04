@@ -9,7 +9,6 @@ from cara._LazyExports import _install_lazy_exports
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "HasAttributes": (".HasAttributes", "HasAttributes"),
     "HasRelationships": (".HasRelationships", "HasRelationships"),
-    "HasTimestamps": (".HasTimestamps", "HasTimestamps"),
     "MakesPrunable": (".MakesPrunable", "MakesPrunable"),
     "MakesPublicId": (".MakesPublicId", "MakesPublicId"),
 }
@@ -17,7 +16,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 __all__ = [
     "HasAttributes",
     "HasRelationships",
-    "HasTimestamps",
     "MakesPrunable",
     "MakesPublicId",
 ]

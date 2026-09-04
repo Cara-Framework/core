@@ -1,5 +1,5 @@
 """
-Deferred provider that loads middleware configuration from MiddlewareRegistry.
+Deferred provider that loads middleware configuration from ``config/middleware.py``.
 Binds the configured MiddlewareCapsule under the key 'middleware_http' and 'middleware_ws'.
 """
 
@@ -109,7 +109,7 @@ class MiddlewareProvider(DeferredProvider):
         Validate all middleware classes in configuration.
 
         Args:
-            config_dict: Configuration dictionary from MiddlewareRegistry
+            config_dict: Configuration dictionary from ``config/middleware.py``
         """
         all_middleware = []
 
@@ -136,7 +136,7 @@ class MiddlewareProvider(DeferredProvider):
         bind_name: str,
     ) -> None:
         """
-        Build middleware capsule from MiddlewareRegistry configuration.
+        Build middleware capsule from ``config/middleware.py`` configuration.
 
         Args:
             application: The application instance

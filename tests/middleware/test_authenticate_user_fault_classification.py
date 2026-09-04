@@ -146,7 +146,7 @@ def _drive(error: Exception) -> tuple[str, int | None, bytes]:
         async def _run() -> tuple[str, int | None, bytes]:
             try:
                 response = await middleware.handle(MagicMock(), _next)
-            except Exception as escaped:  # noqa: BLE001 - the ASGI server's job
+            except Exception as escaped:  # the ASGI server's job
                 recorder = _SendRecorder()
                 await handler.handle(escaped, None, scope, None, recorder)
                 return ("envelope", recorder.status(), recorder.raw_body())

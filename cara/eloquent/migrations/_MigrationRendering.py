@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
-from cara.eloquent.schema import Schema
-
 
 def _migration_generate_blueprint_create_migration(self, model_info: dict) -> str:
     """Generate blueprint-style CREATE TABLE migration."""
@@ -97,9 +93,7 @@ def _migration_generate_blueprint_create_migration(self, model_info: dict) -> st
         expression = repr(declaration["expression"])
         name = declaration.get("name")
         name_arg = f", name={name!r}" if name else ""
-        composite_lines.append(
-            f"            table.check({expression}{name_arg})"
-        )
+        composite_lines.append(f"            table.check({expression}{name_arg})")
 
     # Combine: regular fields → foreign keys → composite constraints
     all_lines = fields_code + foreign_keys + composite_lines
@@ -130,111 +124,3 @@ def _migration_generate_blueprint_create_migration(self, model_info: dict) -> st
         result = self._inject_views_into_migration(result, views, table_name)
 
     return result
-
-
-def _migration_prettify_sql(self, sql: str) -> str:
-    """Clean up SQL formatting."""
-    # Remove extra whitespace
-    sql = re.sub(r"\s+", " ", sql)
-    # Clean up around commas and parentheses
-    sql = re.sub(r"\s*,\s*", ", ", sql)
-    sql = re.sub(r"\s*\(\s*", "(", sql)
-    sql = re.sub(r"\s*\)\s*", ")", sql)
-    # Clean up quotes
-    sql = re.sub(r"'\s*,\s*'", "', '", sql)
-    # Add spaces around comparison operators only (not DEFAULT =)
-    sql = re.sub(r"(?<!\w)([<>!=]{1,2})(?!\w)", r" \1 ", sql)
-    sql = re.sub(r"\s+", " ", sql)  # Remove duplicate spaces
-    return sql.strip()
-
-
-def _migration_prettify_create_table_sql(self, sql: str) -> str:
-    """Format CREATE TABLE SQL nicely."""
-    if not sql.strip():
-        return sql
-
-    # Replace common patterns for better formatting
-    sql = sql.replace("CREATE TABLE ", "CREATE TABLE\n    ")
-    sql = sql.replace(" (", "\n(\n    ")
-    sql = sql.replace(", ", ",\n    ")
-    sql = sql.replace(");", "\n);")
-
-    # Clean up spacing
-    lines = []
-    for line in sql.split("\n"):
-        line = line.strip()
-        if line:
-            lines.append(line)
-
-    # Indent field definitions
-    formatted_lines = []
-    for line in lines:
-        if line.startswith("CREATE TABLE"):
-            formatted_lines.append(line)
-        elif line == "(":
-            formatted_lines.append("(")
-        elif line.endswith(");"):
-            formatted_lines.append(");")
-        else:
-            formatted_lines.append(f"    {line}")
-
-    return "\n".join(formatted_lines)
-
-
-def _migration_prettify_alter_table_sql(self, sql: str) -> str:
-    """Format ALTER TABLE SQL nicely."""
-    if not sql.strip():
-        return sql
-
-    # Basic formatting for ALTER statements
-    sql = sql.replace("ALTER TABLE ", "ALTER TABLE\n    ")
-    sql = sql.replace(" ADD COLUMN ", "\n    ADD COLUMN ")
-    sql = sql.replace(" DROP COLUMN ", "\n    DROP COLUMN ")
-    sql = sql.replace(" MODIFY COLUMN ", "\n    MODIFY COLUMN ")
-    sql = sql.replace(";", ";\n")
-
-    # Clean up extra newlines
-    lines = [line.strip() for line in sql.split("\n") if line.strip()]
-    return "\n".join(lines)
-
-
-def _migration_generate_sql_create_migration(self, model_info: dict) -> str:
-    """Generate SQL-style CREATE TABLE migration using Blueprint's to_sql()."""
-
-    table_name = model_info["table"]
-    class_name = f"Create{model_info['name']}Table"
-
-    # Create a schema in dry-run mode to get SQL without executing
-    schema = Schema(dry=True)
-
-    # Use dry-run mode to get SQL without executing
-    with schema.create(table_name) as table:
-        # Add all fields from the model
-        for field_name, field_info in model_info["fields"].items():
-            self._add_field_to_blueprint(table, field_name, field_info)
-
-        # Get the SQL from Blueprint without executing
-        raw_sql = table.to_sql()
-        # Join SQL statements if it's a list
-        if isinstance(raw_sql, list):
-            create_sql = "\n            ".join(
-                [self._prettify_sql(sql) for sql in raw_sql]
-            )
-        else:
-            create_sql = self._prettify_sql(raw_sql)
-
-    # Generate migration template with formatted SQL
-    return f'''from cara.eloquent.migrations import Migration
-
-
-class {class_name}(Migration):
-def up(self):
-    self.schema.new_connection().query(
-        """
-        {create_sql}
-        """
-    )
-
-def down(self):
-    self.schema.new_connection().query("DROP TABLE IF EXISTS {table_name};")
-'''

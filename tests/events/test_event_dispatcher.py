@@ -629,7 +629,7 @@ async def test_concurrent_subscribe_during_dispatch_does_not_raise(dispatcher):
         for i in range(iterations):
             try:
                 dispatcher.subscribe(f"churn{i}.*", SimpleListener([]))
-            except BaseException as e:  # noqa: BLE001
+            except BaseException as e:
                 errors.append(e)
                 return
 
@@ -843,7 +843,7 @@ def test_threaded_concurrent_dispatch_independent_event_loops():
         try:
             barrier.wait()
             _a.run(runner())
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             errors.append(e)
 
     threads = [threading.Thread(target=worker, args=(t,)) for t in range(threads_n)]
@@ -883,7 +883,7 @@ def test_thread_subscribes_while_thread_dispatches_high_volume():
             barrier.wait()
             for i in range(iterations):
                 dispatcher.subscribe(f"churn{i}.*", SimpleListener([]))
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             errors.append(e)
 
     def dispatcher_thread():
@@ -900,7 +900,7 @@ def test_thread_subscribes_while_thread_dispatches_high_volume():
         try:
             barrier.wait()
             _a.run(runner())
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             errors.append(e)
 
     t1 = threading.Thread(target=churner, daemon=True)

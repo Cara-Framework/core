@@ -16,25 +16,11 @@ broke silently:
 
 from __future__ import annotations
 
-import textwrap
-from pathlib import Path
-
 import pytest
 
 from cara.eloquent.migrations.MigrationGenerator import MigrationGenerator
-from cara.eloquent.migrations.ModelDiscoverer import ModelDiscoverer
 
-
-def _write_model(tmp_path: Path, filename: str, source: str) -> Path:
-    path = tmp_path / filename
-    path.write_text(textwrap.dedent(source), encoding="utf-8")
-    return path
-
-
-@pytest.fixture
-def discoverer() -> ModelDiscoverer:
-    return ModelDiscoverer()
-
+from ._fixtures import write_model
 
 # --------------------------------------------------------------------------
 # Fix 1: chained single-column .index() must not be silently dropped
@@ -58,7 +44,7 @@ def test_chained_single_column_index_is_captured(discoverer, tmp_path):
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Widget.py", src)
+    model_path = write_model(tmp_path, "Widget.py", src)
     info = discoverer._parse_model_file(model_path)
 
     assert info is not None
@@ -90,7 +76,7 @@ def test_chained_index_coexists_with_composite_index(discoverer, tmp_path):
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Combo.py", src)
+    model_path = write_model(tmp_path, "Combo.py", src)
     info = discoverer._parse_model_file(model_path)
 
     declared = [d["columns"] for d in info["composite_indexes"]]
@@ -121,7 +107,7 @@ def test_first_class_check_is_discovered_and_rendered(discoverer, tmp_path):
                     )
                 )
     """
-    info = discoverer._parse_model_file(_write_model(tmp_path, "Price.py", src))
+    info = discoverer._parse_model_file(write_model(tmp_path, "Price.py", src))
 
     assert info["checks"] == [
         {
@@ -149,7 +135,7 @@ def test_non_literal_check_is_refused(discoverer, tmp_path):
     """
 
     with pytest.raises(RuntimeError, match="literal string"):
-        discoverer._parse_model_file(_write_model(tmp_path, "Price.py", src))
+        discoverer._parse_model_file(write_model(tmp_path, "Price.py", src))
 
 
 def test_self_constant_default_resolves_to_literal(discoverer, tmp_path):
@@ -175,7 +161,7 @@ def test_self_constant_default_resolves_to_literal(discoverer, tmp_path):
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Ticket.py", src)
+    model_path = write_model(tmp_path, "Ticket.py", src)
     info = discoverer._parse_model_file(model_path)
 
     status = info["fields"]["status"]["params"]
@@ -201,20 +187,20 @@ def test_model_class_constant_default_resolves_to_literal(discoverer, tmp_path):
                     )
                 )
     """
-    info = discoverer._parse_model_file(_write_model(tmp_path, "Ticket.py", src))
+    info = discoverer._parse_model_file(write_model(tmp_path, "Ticket.py", src))
 
     assert info["fields"]["status"]["params"] == {"length": 20, "default": "pending"}
 
 
 def test_discovery_excludes_models_pinned_inside_migration_history(discoverer, tmp_path):
-    _write_model(
+    write_model(
         tmp_path,
         "Canonical.py",
         'class Canonical(Model):\n    __table__ = "record"\n',
     )
     migrations = tmp_path / "database" / "migrations"
     migrations.mkdir(parents=True)
-    _write_model(
+    write_model(
         migrations,
         "0001_transition.py",
         'class HistoricalRow(Model):\n    __table__ = "record"\n',
@@ -244,10 +230,6 @@ def test_discovery_rejects_duplicate_canonical_tables(discoverer, monkeypatch):
 # --------------------------------------------------------------------------
 # Fix 2: deterministic discovery + topological sort
 # --------------------------------------------------------------------------
-
-
-def _model(table, fields, deps):
-    return {"table": table, "fields": fields, "name": table.title()}
 
 
 def test_topological_sort_is_deterministic_and_fk_respecting(discoverer):
@@ -412,7 +394,7 @@ def test_uuid_and_double_field_types_are_captured(discoverer, tmp_path):
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Sample.py", src)
+    model_path = write_model(tmp_path, "Sample.py", src)
     info = discoverer._parse_model_file(model_path)
     assert info["fields"]["external_uuid"]["type"] == "uuid"
     assert info["fields"]["ratio"]["type"] == "double"
@@ -459,7 +441,7 @@ def test_indexes_entry_with_module_constant_fstring_resolves(discoverer, tmp_pat
                     )
                 )
     """
-    info = discoverer._parse_model_file(_write_model(tmp_path, "Sub.py", src))
+    info = discoverer._parse_model_file(write_model(tmp_path, "Sub.py", src))
 
     assert [index["name"] for index in info["indexes"]] == ["sub_live_idx"]
     assert info["indexes"][0]["up"].endswith("WHERE status IN ('active', 'trialing')")
@@ -497,7 +479,7 @@ def test_indexes_entry_with_unresolvable_sql_raises(discoverer, tmp_path):
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Sub.py", src)
+    model_path = write_model(tmp_path, "Sub.py", src)
 
     with pytest.raises(RuntimeError, match="sub_computed_idx"):
         discoverer._parse_model_file(model_path)
@@ -540,7 +522,7 @@ def test_column_named_by_class_constant_is_discovered(discoverer, tmp_path):
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Fulfillment.py", src)
+    model_path = write_model(tmp_path, "Fulfillment.py", src)
     info = discoverer._parse_model_file(model_path)
 
     assert info is not None
@@ -575,7 +557,7 @@ def test_composite_index_mixes_literal_and_class_constant_columns(discoverer, tm
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Mixed.py", src)
+    model_path = write_model(tmp_path, "Mixed.py", src)
     info = discoverer._parse_model_file(model_path)
 
     assert "tenant_id" in info["fields"]

@@ -15,7 +15,6 @@ class BaseCast(ABC):
 
     def __init__(self, *args, **kwargs):
         """Initialize cast with parameters."""
-        pass
 
     @abstractmethod
     def get(self, value: Any) -> Any:
@@ -28,7 +27,6 @@ class BaseCast(ABC):
         Returns:
             Transformed value for application use
         """
-        pass
 
     @abstractmethod
     def set(self, value: Any) -> Any:
@@ -41,4 +39,3 @@ class BaseCast(ABC):
         Returns:
             Value ready for database storage
         """
-        pass

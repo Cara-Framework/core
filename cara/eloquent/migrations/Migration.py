@@ -4,7 +4,6 @@ from cara.exceptions import ConnectionNotRegisteredException
 from cara.facades import DB, Log
 from cara.support import paths
 
-from ..models.MigrationModel import MigrationModel
 from ..schema import Schema
 from .MigrationExecutor import MigrationExecutor
 from .MigrationFileManager import MigrationFileManager
@@ -58,9 +57,6 @@ class Migration:
         self.tracker = MigrationTracker(DB)
         self.executor = MigrationExecutor(DB, self.file_manager, self.tracker)
 
-        # Initialize migration model for tracking
-        self.migration_model = MigrationModel()
-
     def create_table_if_not_exists(self):
         """Create migrations table if it doesn't exist - delegates to tracker"""
         self.tracker.ensure_migrations_table()
@@ -93,10 +89,6 @@ class Migration:
     def get_last_batch_number(self):
         """Get last batch number - delegates to tracker"""
         return self.tracker.get_last_batch_number()
-
-    def delete_migration(self, migration_name):
-        """Delete migration record - delegates to tracker"""
-        return self.tracker.remove_migration(migration_name)
 
     def locate(self, file_name):
         """Locate migration class - delegates to file manager"""
@@ -222,17 +214,3 @@ class Migration:
         """Fresh migration (drop all + migrate)"""
         self.drop_all_tables(ignore_fk)
         self.migrate(migration)
-
-    def delete_migrations(self, migrations=None):
-        """Delete migration records - delegates to tracker"""
-        if migrations:
-            for migration in migrations:
-                self.tracker.remove_migration(migration)
-
-    def delete_last_batch(self):
-        """Delete last batch - delegates to tracker"""
-        last_batch = self.tracker.get_last_batch_number()
-        if last_batch > 0:
-            migrations = self.tracker.get_migrations_by_batch(last_batch)
-            for migration in migrations:
-                self.tracker.remove_migration(migration)

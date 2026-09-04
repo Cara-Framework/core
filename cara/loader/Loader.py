@@ -142,29 +142,6 @@ class Loader:
             )
         return classes
 
-    def get_object(
-        self,
-        path_or_module,
-        object_name,
-        raise_exception=False,
-    ):
-        """
-        Get a single object (class/function/variable) from a module.
-
-        Args:
-            path_or_module: Dotted path or module object
-            object_name: Name of the object to retrieve
-            raise_exception: Whether to raise if not found
-
-        Returns:
-            The object if found, otherwise None
-        """
-        return load(
-            path_or_module,
-            object_name,
-            raise_exception=raise_exception,
-        )
-
     def get_objects(
         self,
         path_or_module,

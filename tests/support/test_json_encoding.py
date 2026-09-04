@@ -25,32 +25,16 @@ from cara.broadcasting.drivers.RedisBroadcaster import RedisBroadcaster
 from cara.cache.codecs.JsonCacheCodec import JsonCacheCodec
 from cara.exceptions import QueueException
 from cara.http import Response
-from cara.http.response import StreamingResponse
 from cara.queues.contracts import Queueable, ShouldQueue
 from cara.queues.serializers import SignedJsonJobSerializer
 from cara.support import decimal_to_wire
-from cara.websocket.Socket import Socket
-
-# NUMERIC(17,6) ceiling — the value ``QueryBuilder.aggregate_result``
-# already carries an incident for. ``float(MONEY)`` is ``100000000000.0``.
-MONEY = Decimal("99999999999.999999")
-EXACT = "99999999999.999999"
-
-
-async def _drain(response: Response) -> str:
-    events: list[dict] = []
-
-    async def send(event: dict) -> None:
-        events.append(event)
-
-    await response({}, None, send)
-    return b"".join(event.get("body", b"") for event in events[1:]).decode("utf-8")
+from tests._money_wire import EXACT, MONEY, connected_socket, drain
 
 
 async def _http_json() -> object:
     response = Response(MagicMock())
     response.json({"total": MONEY})
-    return json.loads(await _drain(response))["total"]
+    return json.loads(await drain(response))["total"]
 
 
 async def _jsonl_chunk() -> object:
@@ -59,21 +43,7 @@ async def _jsonl_chunk() -> object:
 
     response = Response(MagicMock())
     response.stream_json_lines(rows())
-    body = await _drain(response)
-    return json.loads(body.splitlines()[0])["total"]
-
-
-async def _streaming_jsonl_chunk() -> object:
-    async def rows():
-        yield {"total": MONEY}
-
-    events: list[dict] = []
-
-    async def send(event: dict) -> None:
-        events.append(event)
-
-    await StreamingResponse(Response(MagicMock())).stream_json_lines(rows(), send)
-    body = b"".join(event.get("body", b"") for event in events[1:]).decode("utf-8")
+    body = await drain(response)
     return json.loads(body.splitlines()[0])["total"]
 
 
@@ -83,7 +53,7 @@ async def _sse_frame() -> object:
 
     response = Response(MagicMock())
     response.stream_sse(events_generator())
-    frame = await _drain(response)
+    frame = await drain(response)
     data = "".join(
         line[len("data: ") :] for line in frame.splitlines() if line.startswith("data: ")
     )
@@ -92,18 +62,7 @@ async def _sse_frame() -> object:
 
 async def _websocket_frame() -> object:
     sent: list[dict] = []
-
-    async def _send(message: dict) -> None:
-        sent.append(message)
-
-    async def _receive() -> dict:
-        return {"type": "websocket.receive"}
-
-    socket = Socket(
-        application=None, scope={"type": "websocket"}, receive=_receive, send=_send
-    )
-    socket._ws_connected = True
-    await socket.send_json({"total": MONEY})
+    await connected_socket(sent).send_json({"total": MONEY})
     return json.loads(sent[-1]["text"])["total"]
 
 
@@ -129,7 +88,6 @@ async def test_every_outbound_boundary_lands_on_one_wire_representation() -> Non
     measured = {
         "http json body": await _http_json(),
         "jsonl chunk (Response)": await _jsonl_chunk(),
-        "jsonl chunk (StreamingResponse)": await _streaming_jsonl_chunk(),
         "sse frame": await _sse_frame(),
         "websocket frame": await _websocket_frame(),
         "broadcast publish": await _broadcast_publish(),

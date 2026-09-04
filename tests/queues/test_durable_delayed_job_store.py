@@ -197,6 +197,37 @@ def test_schedule_registers_future_v2_delivery_and_settles_source_atomically():
     assert decoded["throttle_attempts"] == 7
 
 
+def test_schedule_of_a_central_job_persists_the_central_tenant_stamp():
+    """A central job carries ``central``/``None``, and only inside central scope.
+
+    The delayed store is where a retry's tenancy is FROZEN onto the wire, so a
+    central job scheduled outside central scope must be refused rather than
+    silently stamped with whatever tenant happened to be current.
+    """
+    db = _DB()
+    store, ledger = _store(db)
+    available = pendulum.now("UTC").add(seconds=30)
+
+    with Tenancy.central():
+        job_id = store.schedule(
+            CentralDelayedJob(17),
+            available,
+            {"deduplication_key": "retry:central-1:1"},
+        )
+
+    payload = ledger.registered[0]["payload"]
+    assert payload["job_id"] == job_id
+    assert payload["_tenant_mode"] == "central"
+    assert payload["_tenant"] is None
+
+    with pytest.raises(QueueException, match="central scope required"):
+        store.schedule(
+            CentralDelayedJob(18),
+            available,
+            {"deduplication_key": "retry:central-2:1"},
+        )
+
+
 def test_schedule_rejects_oversized_body_before_transaction(monkeypatch):
     db = _DB()
     store, ledger = _store(db)

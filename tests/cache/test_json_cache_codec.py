@@ -14,18 +14,9 @@ import pytest
 from cara.cache.codecs import JsonCacheCodec
 from cara.exceptions import CacheConfigurationException
 
+from ._fixtures import pickle_probe
+
 _KEY = b"cache-codec-test-key-material-32-bytes"
-_PICKLE_EXECUTED = False
-
-
-def _execute_pickle_gadget() -> None:
-    global _PICKLE_EXECUTED
-    _PICKLE_EXECUTED = True
-
-
-class _PickleGadget:
-    def __reduce__(self):
-        return (_execute_pickle_gadget, ())
 
 
 class _UnsupportedValue:
@@ -81,17 +72,15 @@ def test_tampered_payload_is_rejected() -> None:
 
 
 def test_unsigned_integer_and_legacy_pickle_are_never_decoded() -> None:
-    global _PICKLE_EXECUTED
-    _PICKLE_EXECUTED = False
     codec = JsonCacheCodec(_KEY)
-    malicious_pickle = pickle.dumps(_PickleGadget())
 
-    with pytest.raises(CacheConfigurationException, match="codec prefix"):
-        codec.decode(b"1")
-    with pytest.raises(CacheConfigurationException, match="codec prefix"):
-        codec.decode(malicious_pickle)
+    with pickle_probe() as gadget:
+        malicious_pickle = pickle.dumps(gadget())
 
-    assert _PICKLE_EXECUTED is False
+        with pytest.raises(CacheConfigurationException, match="codec prefix"):
+            codec.decode(b"1")
+        with pytest.raises(CacheConfigurationException, match="codec prefix"):
+            codec.decode(malicious_pickle)
 
 
 def test_custom_objects_and_non_finite_numbers_are_rejected() -> None:

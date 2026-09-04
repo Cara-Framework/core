@@ -205,9 +205,6 @@ class TinkerCommand(CommandBase):
         self.info("  💾 Cache: clear_cache(), test_cache()")
         self.info("  🔧 Config: show_config('app.name')")
         self.info("  📋 Development: logs(20), benchmark(func), craft('migrate:status')")
-        self.info("  📧 Mail: test_mail(), send_test_mail(...)")
-        self.info("  ⚡ Queue: test_queue(), queue_test_job(...)")
-        self.info("  🔔 Notification: test_notification(), send_test_notification(...)")
         self.info("  ⚡ Jobs: show_queue_jobs(10)")
         self.info("")
 
@@ -261,9 +258,6 @@ class TinkerCommand(CommandBase):
         self.info("   • Application info: app_info(), db_info()")
         self.info("   • Performance testing: benchmark(lambda: YourModel.all())")
         self.info("   • Run commands: craft('routes:list')")
-        self.info("   • Mail testing: test_mail(), send_test_mail('user@example.com')")
-        self.info("   • Queue testing: test_queue(), queue_test_job('MyJob')")
-        self.info("   • Notifications: test_notification(), send_test_notification(1)")
 
     def _resolve_user_model(self):
         """

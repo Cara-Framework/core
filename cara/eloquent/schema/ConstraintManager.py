@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import re
-
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
+from typing import Self
 
 
 class ConstraintManager:

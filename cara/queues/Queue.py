@@ -52,28 +52,6 @@ class Queue:
         driver = self.driver(driver_name)
         return driver.push(*jobs, options=options)
 
-    def chain(
-        self,
-        jobs: list,
-        driver_name: str | None = None,
-        **options: Any,
-    ) -> None:
-        raise QueueException(
-            "Queue chains are unsupported until durable JSON chain "
-            "descriptors are implemented."
-        )
-
-    def batch(
-        self,
-        *jobs: Any,
-        driver_name: str | None = None,
-        **options: Any,
-    ) -> None:
-        raise QueueException(
-            "Queue batches are unsupported until durable JSON batch "
-            "descriptors are implemented."
-        )
-
     def schedule(
         self,
         job: Any,
@@ -140,7 +118,7 @@ class Queue:
         # bypassing every retry/idempotency guarantee the queue is
         # there to provide. We now let driver-configuration errors
         # surface to the caller; explicit sync execution is available
-        # via ``dispatch_now`` / ``ExecutionContext.sync()``.
+        # via ``Bus.dispatch`` inside ``ExecutionContext.sync()``.
         if isinstance(job, type):
             if hasattr(app, "make") and not args and not kwargs:
                 instance = app.make(job)
@@ -187,32 +165,3 @@ class Queue:
             raise QueueException(
                 f"dispatch_after requires a ShouldQueue job, got: {job!r}"
             )
-
-    def dispatch_now(
-        self,
-        job: Any,
-        *args: Any,
-        **kwargs: Any,
-    ):
-        """Immediate job execution (bypasses queue)."""
-        if isinstance(job, type):
-            if hasattr(self.application, "make") and not args and not kwargs:
-                instance = self.application.make(job)
-            else:
-                instance = job(*args, **kwargs)
-        else:
-            instance = job
-
-        if hasattr(instance, "handle") and callable(instance.handle):
-            if hasattr(self.application, "call"):
-                return self.application.call(instance.handle)
-            result = instance.handle()
-            if asyncio.iscoroutine(result):
-                result.close()
-                raise TypeError(
-                    f"Job {instance.__class__.__name__}.handle() is async "
-                    f"but was dispatched via dispatch_now without an application container."
-                )
-            return result
-        else:
-            raise QueueException(f"Cannot execute job: {job!r} has no handle() method")

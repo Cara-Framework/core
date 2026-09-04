@@ -12,6 +12,7 @@ from typing import Any
 from cara.context import ExecutionContext
 from cara.events.contracts import Listener
 from cara.events.Event import Event as EventDispatcher
+from cara.events.PayloadGate import event_payload_gaps
 from cara.exceptions import (
     CaraException,
     InvalidArgumentException,
@@ -55,10 +56,10 @@ def _instantiate_event(event_cls: type[Any], data: dict[str, Any]) -> Any:
     (private bookkeeping like ``_dispatch_id`` shouldn't reach the
     ``__init__``) and call ``event_cls(**public)``.
 
-    Post-construction, if the event ships a ``validate_payload``
-    method (the same hook the in-process dispatcher gates on at
-    Event.py:318), call it and refuse to hand a malformed event to
-    the listener. Pre-fix the queue path skipped this gate entirely
+    Post-construction, run ``event_payload_gaps`` — the same gate the
+    in-process dispatcher applies, reading ``REQUIRED_FIELDS`` or a
+    ``validate_payload`` override — and refuse to hand a malformed
+    event to the listener. Pre-fix the queue path skipped this gate entirely
     — a payload that the dispatcher would have rejected at fire-time
     silently round-tripped through serialization and reached the
     listener with missing required fields. That's worse than the
@@ -80,29 +81,28 @@ def _instantiate_event(event_cls: type[Any], data: dict[str, Any]) -> Any:
                 f"Could not reconstruct event {event_cls.__name__} from serialized data: {e}"
             ) from e
 
-    validator = getattr(event, "validate_payload", None)
-    if callable(validator):
-        try:
-            missing = validator()
-        except Exception as exc:
-            # Validator raised — surface with the originating event
-            # class name so the worker log points straight at the bug.
-            # Use InvalidArgumentException (a ValueError subclass, same type
-            # the ``missing``-fields branch below raises) so the queue
-            # runner's standard ValueError-based retry+DLQ path owns the
-            # recovery uniformly — not a bare CaraException that the runner
-            # treats as an unexpected crash.
-            raise InvalidArgumentException(
-                f"validate_payload() on rehydrated {event_cls.__name__} "
-                f"raised {exc.__class__.__name__}: {exc}",
-            ) from exc
-        if missing:
-            raise InvalidArgumentException(
-                f"Queued {event_cls.__name__} failed validate_payload(); "
-                f"missing/invalid fields: {missing!r}. Refusing to invoke "
-                f"listener with a malformed payload — same gate the sync "
-                f"dispatcher applies at fire time.",
-            )
+    try:
+        missing = event_payload_gaps(event)
+    except Exception as exc:
+        # Validator raised — surface with the originating event
+        # class name so the worker log points straight at the bug.
+        # Use InvalidArgumentException (a ValueError subclass, same type
+        # the ``missing``-fields branch below raises) so the queue
+        # runner's standard ValueError-based retry+DLQ path owns the
+        # recovery uniformly — not a bare CaraException that the runner
+        # treats as an unexpected crash.
+        raise InvalidArgumentException(
+            f"validate_payload() on rehydrated {event_cls.__name__} "
+            f"raised {exc.__class__.__name__}: {exc}",
+        ) from exc
+    if missing:
+        raise InvalidArgumentException(
+            f"Queued {event_cls.__name__} failed payload validation "
+            f"(REQUIRED_FIELDS/validate_payload); "
+            f"missing/invalid fields: {missing!r}. Refusing to invoke "
+            f"listener with a malformed payload — same gate the sync "
+            f"dispatcher applies at fire time.",
+        )
     return event
 
 

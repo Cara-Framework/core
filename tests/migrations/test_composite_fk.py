@@ -22,26 +22,13 @@ byte-identical (a ``str`` argument is unchanged end-to-end).
 
 from __future__ import annotations
 
-import textwrap
-from pathlib import Path
-
 import pytest
 
 from cara.eloquent.migrations.MigrationGenerator import MigrationGenerator
-from cara.eloquent.migrations.ModelDiscoverer import ModelDiscoverer
 from cara.eloquent.schema.Blueprint import Blueprint
 from cara.eloquent.schema.platforms.PostgresPlatform import PostgresPlatform
 
-
-def _write_model(tmp_path: Path, filename: str, source: str) -> Path:
-    path = tmp_path / filename
-    path.write_text(textwrap.dedent(source), encoding="utf-8")
-    return path
-
-
-@pytest.fixture
-def discoverer() -> ModelDiscoverer:
-    return ModelDiscoverer()
+from ._fixtures import write_model
 
 
 @pytest.fixture
@@ -82,7 +69,7 @@ _COMPOSITE_MODEL_SRC = """
 
 
 def test_discoverer_parses_composite_fk_into_its_own_collection(discoverer, tmp_path):
-    model_path = _write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
+    model_path = write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
     info = discoverer._parse_model_file(model_path)
 
     assert info is not None
@@ -105,9 +92,9 @@ def test_discoverer_parses_composite_fk_into_its_own_collection(discoverer, tmp_
 def test_discoverer_registers_composite_fk_as_dependency(discoverer, tmp_path):
     """The referenced table must be an ordering dependency so the CREATE TABLE
     that adds the composite constraint runs after its target exists."""
-    order_line_path = _write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
+    order_line_path = write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
     # A minimal ``orders`` parent so the dependency resolves to a real table.
-    orders_path = _write_model(
+    orders_path = write_model(
         tmp_path,
         "Orders.py",
         """
@@ -167,7 +154,7 @@ def test_discoverer_skips_malformed_composite_fk(discoverer, tmp_path):
                     )
                 )
     """
-    model_path = _write_model(tmp_path, "Bad.py", src)
+    model_path = write_model(tmp_path, "Bad.py", src)
     info = discoverer._parse_model_file(model_path)
     assert info["composite_foreign_keys"] == []
 
@@ -225,7 +212,7 @@ def test_generator_emits_named_scalar_fk_line(generator):
 
 
 def test_create_migration_contains_composite_fk_line(discoverer, generator, tmp_path):
-    model_path = _write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
+    model_path = write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
     info = discoverer._parse_model_file(model_path)
     migration = generator._generate_blueprint_create_migration(info)
 
@@ -242,7 +229,7 @@ def test_column_scoped_set_null_survives_discovery_generation_and_sql(
         '.on_delete("CASCADE")',
         '.on_delete("set null", columns=["order_id"])',
     )
-    model_path = _write_model(tmp_path, "OrderLine.py", source)
+    model_path = write_model(tmp_path, "OrderLine.py", source)
     info = discoverer._parse_model_file(model_path)
     (foreign_key,) = info["composite_foreign_keys"]
     assert foreign_key["on_delete_columns"] == ["order_id"]
@@ -281,7 +268,7 @@ def test_emitted_composite_line_renders_composite_sql(discoverer, generator, tmp
     Closes the loop: the line the generator writes is valid Cara schema syntax
     that produces a real multi-column FOREIGN KEY constraint.
     """
-    model_path = _write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
+    model_path = write_model(tmp_path, "OrderLine.py", _COMPOSITE_MODEL_SRC)
     info = discoverer._parse_model_file(model_path)
     assert info["composite_foreign_keys"], "composite FK was not discovered"
 

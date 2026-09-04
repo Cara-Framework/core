@@ -1,7 +1,7 @@
 """
 Validation Provider for the Cara framework.
 
-This module provides the service provider that configures and registers the validation subsystem,
+This module provides the service provider that registers the validation subsystem,
 including all validation rules.
 """
 
@@ -15,7 +15,7 @@ class ValidationProvider(DeferredProvider):
     """
     Deferred provider for the Validation subsystem.
 
-    Reads configuration and registers the validation service.
+    Registers the validation service.
     """
 
     @classmethod
@@ -23,32 +23,8 @@ class ValidationProvider(DeferredProvider):
         return ["validation"]
 
     def register(self) -> None:
-        """Register validation services with configuration."""
-        # Lazy import — NOT module-level. ``cara.configuration`` pulls in
-        # ``facades → http → validation`` during its own package init, so a
-        # top-level ``from cara.configuration import config`` here closes a
-        # boot-time cycle whenever something imports ``cara.configuration``
-        # before it finishes initialising (e.g. ``cara.ai.Client`` being the
-        # first config consumer after Kernel's imports got isort-sorted).
-        # ``register()`` only runs at provider-resolve time, long after boot,
-        # so importing here is free of the cycle.
-        from cara.configuration import config  # local: cycle with cara.configuration
-
-        settings = config("validation", {})
-
-        # Register validation service
-        self._add_validation_service(settings)
-
-    def _add_validation_service(self, settings: dict) -> None:
-        """Register validation service with configuration."""
-        # Create validation instance with optional configuration
-        validation = Validation(
-            # Add any validation configuration here if needed
-            # e.g., custom_rules=settings.get("custom_rules", {}),
-            # default_messages=settings.get("messages", {}),
-        )
-
-        self.application.bind("validation", validation)
+        """Register the validation service."""
+        self.application.bind("validation", Validation())
 
     def boot(self) -> None:
         """No actions required at boot time."""

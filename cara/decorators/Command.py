@@ -13,11 +13,6 @@ from typing import Any
 # Registry of decorated command classes
 _command_registry: list[type[Any]] = []
 
-# Hook lists
-_before_hooks: list[Callable[[str], None]] = []
-_after_hooks: list[Callable[[str], None]] = []
-_on_error_hooks: list[Callable[[str, Exception], None]] = []
-
 
 def command(
     name: str,
@@ -75,33 +70,3 @@ def _wrap_handle(cls: type[Any]) -> None:
 
 def get_registered_commands() -> list[type[Any]]:
     return _command_registry
-
-
-def before_command(fn: Callable[[str], None]) -> Callable[[str], None]:
-    _before_hooks.append(fn)
-    return fn
-
-
-def after_command(fn: Callable[[str], None]) -> Callable[[str], None]:
-    _after_hooks.append(fn)
-    return fn
-
-
-def on_error(fn: Callable[[str, Exception], None]) -> Callable[[str, Exception], None]:
-    _on_error_hooks.append(fn)
-    return fn
-
-
-def _run_before(name: str) -> None:
-    for fn in _before_hooks:
-        fn(name)
-
-
-def _run_after(name: str) -> None:
-    for fn in _after_hooks:
-        fn(name)
-
-
-def _run_on_error(name: str, err: Exception) -> None:
-    for fn in _on_error_hooks:
-        fn(name, err)

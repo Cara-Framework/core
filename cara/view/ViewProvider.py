@@ -23,7 +23,5 @@ class ViewProvider(DeferredProvider):
     def register(self):
         """Register view services with configuration."""
         view_paths = config("view.paths") or [paths("views")]
-        cache_path = config("view.cache_path") or paths("storage", "framework")
 
-        engine = ViewEngine(view_paths=view_paths, cache_path=cache_path)
-        self.application.bind("view", View(engine))
+        self.application.bind("view", View(ViewEngine(view_paths=view_paths)))

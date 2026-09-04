@@ -7,5 +7,3 @@ from .FieldMeta import FieldMeta
 
 class Field(metaclass=FieldMeta):
     """Field factory that automatically proxies all Blueprint column methods."""
-
-    pass

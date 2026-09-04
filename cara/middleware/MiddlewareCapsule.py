@@ -23,7 +23,6 @@ class MiddlewareCapsule:
         self._global_middleware: list[MiddlewareType] = []
         self._route_middleware: dict[str, list[MiddlewareType]] = {}
         self._middleware_aliases: dict[str, MiddlewareType] = {}
-        self._terminable_middleware: set[MiddlewareType] = set()
         # Laravel-style middleware priority ordering. Middleware classes in
         # this list will be sorted into the order specified regardless of
         # how they were registered. Unknown middleware keep registration
@@ -69,32 +68,6 @@ class MiddlewareCapsule:
         """Add middleware alias for easier reference in routes."""
         self._middleware_aliases[name] = middleware
         return self
-
-    def register_terminable(self, middleware: MiddlewareType) -> MiddlewareCapsule:
-        """Register middleware as terminable (runs after response is sent)."""
-        self._terminable_middleware.add(middleware)
-        return self
-
-    def is_terminable(self, middleware: MiddlewareType) -> bool:
-        """Check if middleware is registered as terminable.
-
-        Routes that use parameterized middleware (e.g. ``throttle:60,1``,
-        ``auth:jwt``) get a *fresh* ``ParameterizedMiddleware`` proxy class
-        per resolution — see ``_create_parameterized_middleware``. The
-        proxy class is never identity-equal to the base class registered
-        in ``_terminable_middleware``, so a direct ``in`` check failed and
-        ``terminate()`` never ran for parameterized middleware. Unwrap
-        through ``__base_middleware__`` so the lookup matches the
-        registration.
-        """
-        if middleware in self._terminable_middleware:
-            return True
-        base = getattr(middleware, "__base_middleware__", None)
-        return bool(base is not None and base in self._terminable_middleware)
-
-    def get_terminable_middleware(self) -> set[MiddlewareType]:
-        """Get all registered terminable middleware."""
-        return self._terminable_middleware
 
     def resolve_alias(self, name: str) -> MiddlewareType | None:
         """Resolve middleware alias to actual middleware class."""
@@ -200,8 +173,6 @@ class MiddlewareCapsule:
         else:
             with contextlib.suppress(ValueError):
                 self._global_middleware.remove(mw)
-            if mw in self._terminable_middleware:
-                self._terminable_middleware.remove(mw)
         return self
 
     def get_global_middleware(self) -> list[MiddlewareType]:
@@ -217,10 +188,6 @@ class MiddlewareCapsule:
         """
         self._priority = list(priority)
         return self
-
-    def get_priority(self) -> list[MiddlewareType]:
-        """Return the configured priority list."""
-        return list(self._priority)
 
     def sort_by_priority(self, middleware: list[MiddlewareType]) -> list[MiddlewareType]:
         """Sort a middleware stack according to the configured priority.
@@ -262,7 +229,7 @@ class MiddlewareCapsule:
         return self._middleware_aliases.copy()
 
     def load_from_registry(self, registry_config: dict) -> MiddlewareCapsule:
-        """Load middleware configuration from MiddlewareRegistry build output."""
+        """Load middleware configuration from the ``config/middleware.py`` dict."""
         # Load global middleware
         for middleware in registry_config.get("global", []):
             self.add_global(middleware)

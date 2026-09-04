@@ -45,14 +45,6 @@ class BaseJob(BaseQueueable):
         # Set job tags for monitoring
         self.tags = kwargs.get("tags", [])
 
-    def with_payload(self, payload: dict[str, Any]) -> BaseJob:
-        """Set or update job payload."""
-        if isinstance(payload, dict):
-            self.payload.update(payload)
-        else:
-            self.payload = payload
-        return self
-
     def with_tag(self, tag: str) -> BaseJob:
         """Add a tag to this job."""
         if tag not in self.tags:
@@ -84,28 +76,6 @@ class BaseJob(BaseQueueable):
                 f"Unknown priority level {level!r}. Valid: {valid}"
             )
         self.job_priority = level
-        return self
-
-    def critical_priority(self) -> BaseJob:
-        """Mark this job as critical priority (preempts everything else)."""
-        return self.priority("critical")
-
-    def high_priority(self) -> BaseJob:
-        """Mark this job as high priority."""
-        return self.priority("high")
-
-    def low_priority(self) -> BaseJob:
-        """Mark this job as low priority."""
-        return self.priority("low")
-
-    def timeout_minutes(self, minutes: int) -> BaseJob:
-        """Set job timeout in minutes."""
-        self.timeout = minutes * 60
-        return self
-
-    def timeout_hours(self, hours: int) -> BaseJob:
-        """Set job timeout in hours."""
-        self.timeout = hours * 3600
         return self
 
     def display_name(self) -> str:
@@ -164,18 +134,6 @@ class BaseJob(BaseQueueable):
             )
 
         return progress_data
-
-    def get_payload_value(self, key: str, default=None):
-        """Get value from payload safely."""
-        if isinstance(self.payload, dict):
-            return self.payload.get(key, default)
-        return default
-
-    def set_payload_value(self, key: str, value: Any):
-        """Set value in payload safely."""
-        if not isinstance(self.payload, dict):
-            self.payload = {}
-        self.payload[key] = value
 
     async def failed(
         self,

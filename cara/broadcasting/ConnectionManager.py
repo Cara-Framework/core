@@ -515,20 +515,11 @@ class ConnectionManager:
     def get_channel_subscribers(self, channel: str) -> list[str]:
         return list(self.channel_subscribers.get(channel, set()))
 
-    def get_connection_channels(self, connection_id: str) -> list[str]:
-        return list(self.connection_channels.get(connection_id, set()))
-
-    def get_user_connection_ids(self, user_id: str) -> list[str]:
-        return list(self.user_connections.get(user_id, set()))
-
     def get_connection_count(self) -> int:
         return len(self.connections)
 
     def get_channel_count(self) -> int:
         return len(self.channel_subscribers)
-
-    def get_socket_id(self, connection_id: str) -> str | None:
-        return self.socket_ids.get(connection_id)
 
     def get_stats(self) -> dict[str, Any]:
         return {

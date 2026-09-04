@@ -246,7 +246,6 @@ def _qb_set_scope(self, name, callable) -> Self:
     Returns:
         self
     """
-    # setattr(self, name, callable)
     self._scopes.update({name: callable})
 
     return self

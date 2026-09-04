@@ -122,40 +122,10 @@ class PostgresGrammar(BaseGrammar):
     def decrement_string(self):
         return "{column} = {column} - '{value}'{separator}"
 
-    def create_column_string(self):
-        return "{column} {data_type}{length}{nullable}, "
-
-    def column_exists_string(self):
-        return "SELECT column_name FROM information_schema.columns WHERE table_name='{clean_table}' and column_name={value}"
-
-    def table_exists_string(self):
-        return "SELECT * from information_schema.tables where table_name='{clean_table}'"
-
     def create_column_length(self, column_type):
         if column_type in self.types_without_lengths:
             return ""
         return "({length})"
-
-    def to_sql(self):
-        """Clean up the SQL string and return it."""
-        from . import _MULTI_SPACE_RE  # local: cycle with cara.eloquent.query.grammars
-
-        if self.queries and (not self._columns and not self._creates):
-            sql = ""
-            for query in self.queries:
-                query += "; "
-                sql += _MULTI_SPACE_RE.sub(" ", query)
-            return sql.rstrip(" ")
-
-        sql = _MULTI_SPACE_RE.sub(
-            " ",
-            self._sql.strip().replace(",)", ")"),
-        )
-        for query in self.queries:
-            sql += "; "
-            sql += _MULTI_SPACE_RE.sub(" ", query.strip())
-
-        return sql
 
     def table_string(self):
         return '"{table}"'
@@ -189,9 +159,6 @@ class PostgresGrammar(BaseGrammar):
 
     def or_where_string(self):
         return "OR"
-
-    def where_in_string(self):
-        return "WHERE IN ({values})"
 
     def where_date_string(self):
         return "{keyword} DATE({column}) {equality} {value}"

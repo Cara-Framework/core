@@ -329,7 +329,7 @@ class QueueWorkCommand(MakesAutoReload, CommandBase):
 
         try:
             return PublicationBacklogProbe.announce(emit=_emit)
-        except Exception:  # noqa: BLE001 — belt and braces; see docstring
+        except Exception:  # belt and braces; see docstring
             return None
 
     def _trigger_auto_reload(self) -> None:

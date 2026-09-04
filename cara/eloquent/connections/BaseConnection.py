@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from cara.facades import Log
-
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 from timeit import default_timer as timer
+from typing import Self
+
+from cara.facades import Log
 
 
 class BaseConnection:
@@ -136,23 +132,6 @@ class BaseConnection:
         if self.has_global_connection():
             return self
         return None
-
-    def set_as_global(self, is_global=True) -> Self:
-        """Mark this connection as global - avoids circular dependency"""
-        self._is_global = is_global
-        return self
-
-    def enable_query_log(self):
-        """Enable query logging for this connection instance."""
-        if not self.full_details:
-            self.full_details = {}
-        self.full_details["log_queries"] = True
-
-    def disable_query_log(self):
-        """Disable query logging for this connection instance."""
-        if not self.full_details:
-            self.full_details = {}
-        self.full_details["log_queries"] = False
 
     def format_cursor_results(self, cursor_result):
         return cursor_result

@@ -2,7 +2,8 @@
 Tinker Provider for the Cara framework.
 
 This module provides the deferred service provider that configures and registers the tinker
-subsystem, including shell, REPL, and command functionality.
+subsystem: the shell, the REPL and the script runner. The command itself is
+``cara.commands.core.TinkerCommand``, discovered as ``craft tinker``.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from rich.table import Table
 from cara.configuration import config
 from cara.foundation import DeferredProvider
 
-from .Command import Command
 from .Repl import Repl
 from .ScriptRunner import ScriptRunner
 from .Shell import Shell
@@ -26,7 +26,7 @@ class TinkerProvider(DeferredProvider):
     """
     Deferred provider for the tinker subsystem.
 
-    Registers the Tinker shell, REPL, and command services.
+    Registers the Tinker shell, REPL and script-runner services.
     """
 
     @classmethod
@@ -35,7 +35,6 @@ class TinkerProvider(DeferredProvider):
             "tinker",
             "tinker.shell",
             "tinker.repl",
-            "tinker.command",
             "tinker.script_runner",
         ]
 
@@ -51,11 +50,6 @@ class TinkerProvider(DeferredProvider):
         repl = Repl(shell.namespace)
         self.application.bind("tinker.repl", repl)
         self.application.bind(Repl, repl)
-
-        # Register Command
-        command = Command()
-        self.application.bind("tinker.command", command)
-        self.application.bind(Command, command)
 
         # Register ScriptRunner
         script_runner = ScriptRunner(shell)

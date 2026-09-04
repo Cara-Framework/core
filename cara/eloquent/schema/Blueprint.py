@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from .Table import Table
-
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
+from typing import Self
 
 from .ColumnFactory import ColumnFactory
 from .ConstraintManager import ConstraintManager
 from .ForeignKeyBuilder import ForeignKeyBuilder
+from .Table import Table
 
 
 class Blueprint:
@@ -265,10 +261,6 @@ class Blueprint:
             self._last_column.default(value, raw)
         return self
 
-    def default_raw(self, value):
-        """Set raw default value for last column"""
-        return self.default(value, raw=True)
-
     def nullable(self) -> Self:
         """Make last column(s) nullable"""
         columns = (
@@ -290,12 +282,6 @@ class Blueprint:
         """Add comment to last column"""
         if self._last_column:
             self._last_column.comment(comment)
-        return self
-
-    def after(self, old_column) -> Self:
-        """Position column after another column"""
-        if self._last_column:
-            self._last_column.after(old_column)
         return self
 
     # === Constraints - Delegation to ConstraintManager ===

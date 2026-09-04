@@ -560,29 +560,6 @@ class Response(BaseResponse):
             headers=sse_headers,
         )
 
-    def stream_download(
-        self,
-        file_generator: AsyncGenerator[bytes],
-        filename: str,
-        content_type: str = "application/octet-stream",
-        content_length: int | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> Response:
-        """Stream file download."""
-        download_headers = {
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        }
-        if content_length is not None:
-            download_headers["Content-Length"] = str(content_length)
-        if headers:
-            download_headers.update(headers)
-
-        return self.stream(
-            file_generator,
-            content_type=content_type,
-            headers=download_headers,
-        )
-
     def stream_csv(
         self,
         data_generator: AsyncGenerator[list[Any]],
@@ -603,16 +580,12 @@ class Response(BaseResponse):
         )
 
     # =============================================================================
-    # COMPATIBILITY AND UTILITY METHODS
+    # ASGI AND UTILITY METHODS
     # =============================================================================
 
     def get_headers(self) -> list[tuple]:
         """Get headers for ASGI compatibility."""
         return self.headers.to_asgi()
-
-    def get_status_code(self) -> int:
-        """Get current status code."""
-        return self._status
 
     def __repr__(self) -> str:
         """String representation of Response."""

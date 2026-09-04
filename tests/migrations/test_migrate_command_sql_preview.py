@@ -29,17 +29,14 @@ from cara.commands.core.MigrateCommand import MigrateCommand
 from cara.container import Container
 from cara.eloquent import DatabaseManager
 from cara.eloquent.schema.SchemaQueryExecutor import SchemaQueryExecutor
+from tests.commands._fixtures import make_command
 
 
 def _make_command() -> MigrateCommand:
-    """Build a MigrateCommand without going through Typer wiring."""
+    """A MigrateCommand over a real container — it resolves ``DB`` itself."""
     application = Container()
     application.bind("DB", DatabaseManager("app", {"app": {"driver": "sqlite"}}))
-    cmd = MigrateCommand(application=application)
-    cmd.set_parsed_options({})
-    # Silence Rich console output during the test run.
-    cmd.console = MagicMock()
-    return cmd
+    return make_command(MigrateCommand, application=application)
 
 
 def test_install_sql_recorder_captures_every_statement_in_order():

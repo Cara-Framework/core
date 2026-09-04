@@ -8,10 +8,10 @@ operate in-memory. Mirrors the existing command-test pattern
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 from cara.commands.core.ModelPruneCommand import ModelPruneCommand
 from cara.eloquent.concerns import MakesPrunable
+
+from ._fixtures import make_command
 
 
 class _FakePrunable(MakesPrunable):
@@ -54,12 +54,9 @@ def _not_prunable_class() -> type:
 
 
 def _make_command(options=None, models=None) -> ModelPruneCommand:
-    cmd = ModelPruneCommand(application=None)
-    cmd.set_parsed_options(options or {})
-    cmd.console = MagicMock()
-    # Inject discovery result + ensure the MakesPrunable handle is set
-    # (handle() sets it lazily; tests that bypass handle() set it here).
-    cmd._MakesPrunable = MakesPrunable
+    # ``_MakesPrunable`` is the handle ``handle()`` binds lazily; tests that
+    # bypass ``handle()`` need it set. ``_load_models`` stands in for discovery.
+    cmd = make_command(ModelPruneCommand, options, _MakesPrunable=MakesPrunable)
     if models is not None:
         cmd._load_models = lambda: models  # type: ignore[assignment]
     return cmd

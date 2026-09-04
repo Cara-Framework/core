@@ -29,6 +29,9 @@ from __future__ import annotations
 
 from cara.eloquent.models import Model
 from cara.eloquent.schema import Schema
+from cara.schema import STATUS_APPLIED as _APPLIED
+from cara.schema import STATUS_FAILED as _FAILED
+from cara.schema import STATUS_REVERSED as _REVERSED
 
 
 class SchemaOperation(Model):
@@ -37,9 +40,12 @@ class SchemaOperation(Model):
     __table__ = "schema_operation"
     __primary_key__ = "id"
 
-    STATUS_APPLIED = "applied"
-    STATUS_FAILED = "failed"
-    STATUS_REVERSED = "reversed"
+    # The vocabulary is owned by ``cara.schema.Operation`` beside
+    # ``LEDGER_TABLE``; the two schema commands write the ledger in raw SQL
+    # and read it from there too.
+    STATUS_APPLIED = _APPLIED
+    STATUS_FAILED = _FAILED
+    STATUS_REVERSED = _REVERSED
 
     __fillable__ = [
         "plan_id",

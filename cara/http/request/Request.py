@@ -245,19 +245,3 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
     def request_id(self, value: str) -> None:
         """Allow middleware to set the ID (e.g. from ``X-Request-ID``)."""
         self._request_id = str(value) if value is not None else str(uuid.uuid4())
-
-    def wants_json(self) -> bool:
-        """
-        Determine if the request wants a JSON response.
-
-        Checks the Accept header for application/json content type.
-        Also checks for XMLHttpRequest header for AJAX requests.
-        """
-        accept_header = self.header("Accept", "")
-
-        # Check for explicit JSON accept header
-        if "application/json" in accept_header:
-            return True
-
-        # Check for AJAX requests (common pattern)
-        return self.header("X-Requested-With", "").lower() == "xmlhttprequest"

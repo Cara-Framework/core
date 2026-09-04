@@ -130,7 +130,7 @@ class PublicationBacklogProbe:
         """
         try:
             snapshot = cls.sample()
-        except Exception as exc:  # noqa: BLE001 — advisory must never be fatal
+        except Exception as exc:  # advisory must never be fatal
             Log.debug(
                 "Queue publication backlog probe could not sample the "
                 "delivery ledger; skipping the startup advisory: %s",

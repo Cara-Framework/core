@@ -25,7 +25,7 @@ class SchemaQueryExecutor:
         try:
             return bool(connection.query(sql, bindings))
         finally:
-            self._release(connection)
+            self.connection_manager.release(connection)
 
     def get_query_result(self, sql, bindings=()):
         """Get query result (not boolean)."""
@@ -37,20 +37,4 @@ class SchemaQueryExecutor:
         try:
             return connection.query(sql, bindings)
         finally:
-            self._release(connection)
-
-    @staticmethod
-    def _release(connection) -> None:
-        """Return an owned connection, never the active transaction handle."""
-        if connection is None:
-            return
-        transaction_level = getattr(connection, "transaction_level", 0)
-        if isinstance(transaction_level, (int, float)) and transaction_level > 0:
-            return
-        try:
-            close = getattr(connection, "close_connection", None)
-            if callable(close):
-                close()
-        except OSError, RuntimeError, AttributeError:
-            # A failed release should never mask the real query result.
-            pass
+            self.connection_manager.release(connection)

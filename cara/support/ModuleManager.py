@@ -29,21 +29,6 @@ class ModuleManager:
         """Set the base module path for app components (default: 'app')."""
         ModuleManager._app_module_base = module_path
 
-    @staticmethod
-    def set_models_module_base(module_path: str) -> None:
-        """Set the product's canonical runtime models barrel."""
-        ModuleManager._models_module_base = module_path
-
-    @staticmethod
-    def set_routes_module_base(module_path: str) -> None:
-        """Set the base module path for routes (default: 'routes')."""
-        ModuleManager._routes_module_base = module_path
-
-    @staticmethod
-    def set_config_module_base(module_path: str) -> None:
-        """Set the base module path for config (default: 'config')."""
-        ModuleManager._config_module_base = module_path
-
     # App module paths
     @staticmethod
     def app_module(submodule: str = "") -> str:
@@ -52,59 +37,9 @@ class ModuleManager:
         return f"{base}.{submodule}" if submodule else base
 
     @staticmethod
-    def controllers_module() -> str:
-        """Return controllers module path (e.g., 'app.controllers')."""
-        return ModuleManager.app_module("controllers")
-
-    @staticmethod
-    def middlewares_module() -> str:
-        """Return middlewares module path (e.g., 'app.middlewares')."""
-        return ModuleManager.app_module("middlewares")
-
-    @staticmethod
     def models_module() -> str:
         """Return the models barrel (default: ``app.models``)."""
         return ModuleManager._models_module_base
-
-    @staticmethod
-    def commands_module() -> str:
-        """Return commands module path (e.g., 'app.commands')."""
-        return ModuleManager.app_module("commands")
-
-    @staticmethod
-    def providers_module() -> str:
-        """Return providers module path (e.g., 'app.providers')."""
-        return ModuleManager.app_module("providers")
-
-    @staticmethod
-    def mailables_module() -> str:
-        """Return mail/mailables module path (e.g., 'app.mail')."""
-        return ModuleManager.app_module("mail")
-
-    @staticmethod
-    def jobs_module() -> str:
-        """Return jobs module path (e.g., 'app.jobs')."""
-        return ModuleManager.app_module("jobs")
-
-    @staticmethod
-    def listeners_module() -> str:
-        """Return listeners module path (e.g., 'app.listeners')."""
-        return ModuleManager.app_module("listeners")
-
-    @staticmethod
-    def events_module() -> str:
-        """Return events module path (e.g., 'app.events')."""
-        return ModuleManager.app_module("events")
-
-    @staticmethod
-    def handlers_module() -> str:
-        """Return handlers module path (e.g., 'app.handlers')."""
-        return ModuleManager.app_module("handlers")
-
-    @staticmethod
-    def policies_module() -> str:
-        """Return policies module path (e.g., 'app.policies')."""
-        return ModuleManager.app_module("policies")
 
     # Routes module paths
     @staticmethod
@@ -113,16 +48,6 @@ class ModuleManager:
         base = ModuleManager._routes_module_base
         return f"{base}.{submodule}" if submodule else base
 
-    @staticmethod
-    def routes_api_module() -> str:
-        """Return API routes module path (e.g., 'routes.api')."""
-        return ModuleManager.routes_module("api")
-
-    @staticmethod
-    def routes_web_module() -> str:
-        """Return web routes module path (e.g., 'routes.web')."""
-        return ModuleManager.routes_module("web")
-
     # Config module paths
     @staticmethod
     def config_module(submodule: str = "") -> str:
@@ -130,41 +55,12 @@ class ModuleManager:
         base = ModuleManager._config_module_base
         return f"{base}.{submodule}" if submodule else base
 
-    @staticmethod
-    def config_app_module() -> str:
-        """Return app config module path (e.g., 'config.app')."""
-        return ModuleManager.config_module("app")
-
-    @staticmethod
-    def config_database_module() -> str:
-        """Return database config module path (e.g., 'config.database')."""
-        return ModuleManager.config_module("database")
-
-    @staticmethod
-    def config_cache_module() -> str:
-        """Return cache config module path (e.g., 'config.cache')."""
-        return ModuleManager.config_module("cache")
-
-    @staticmethod
-    def config_mail_module() -> str:
-        """Return mail config module path (e.g., 'config.mail')."""
-        return ModuleManager.config_module("mail")
-
     # Utility methods
     @staticmethod
     def import_module(module_path: str):
         """Dynamically import a module by its path."""
 
         return importlib.import_module(module_path)
-
-    @staticmethod
-    def module_exists(module_path: str) -> bool:
-        """Check if a module exists and can be imported."""
-        try:
-            ModuleManager.import_module(module_path)
-            return True
-        except ImportError:
-            return False
 
     @staticmethod
     def get_module_classes(module_path: str, base_class=None):
@@ -181,17 +77,3 @@ class ModuleManager:
                 classes.append(cls)
 
         return classes
-
-    @staticmethod
-    def get_module_functions(module_path: str):
-        """Get all functions from a module."""
-
-        module = ModuleManager.import_module(module_path)
-        functions = []
-
-        for _name, func in inspect.getmembers(module, inspect.isfunction):
-            # Only include functions defined in this module
-            if func.__module__ == module.__name__:
-                functions.append(func)
-
-        return functions

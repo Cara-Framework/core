@@ -10,7 +10,7 @@ wrong connection and surfaced as ``ValueError: No active transaction
 found for connection: 'app'``.
 
 The registry is now keyed per execution-context via ``ContextVar``, which
-matches how the rest of the codebase (``ExecutionContext``, ``JobContext``,
+matches how the rest of the codebase (``ExecutionContext``,
 ``TenantScope``) already handles thread-local state. A ``ContextVar`` is
 both thread-safe and async-task-safe: each thread and each ``asyncio``
 task gets its own view of the dict automatically, without leaking state
@@ -25,7 +25,6 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
-from typing import Self
 
 from cara.exceptions import (
     ConfigurationException,
@@ -147,11 +146,6 @@ class ConnectionResolver:
         self.connection_factory = ConnectionFactory()
         self.database_manager = database_manager
         self._register_default_connections()
-
-    def set_database_manager(self, database_manager) -> Self:
-        """Set database manager dependency"""
-        self.database_manager = database_manager
-        return self
 
     def _register_default_connections(self):
         """Register default connection types - Open/Closed principle"""

@@ -7,7 +7,6 @@ from faker import Faker
 
 class Factory:
     _factories = {}
-    _after_creates = {}
     _faker = None
 
     @property
@@ -30,19 +29,14 @@ class Factory:
         if self.number == 1 and not isinstance(dictionary, list):
             called = self._factories[self.model][name](self.faker)
             called.update(dictionary)
-            model = self.model.hydrate(called)
-            self.run_after_creates(model)
-            return model
+            return self.model.hydrate(called)
         elif isinstance(dictionary, list):
             results = []
             for _index in range(0, len(dictionary)):
                 called = self._factories[self.model][name](self.faker)
                 called.update(dictionary)
                 results.append(called)
-            models = self.model.hydrate(results)
-            for model in models:
-                self.run_after_creates(model)
-            return models
+            return self.model.hydrate(results)
 
         else:
             results = []
@@ -50,10 +44,7 @@ class Factory:
                 called = self._factories[self.model][name](self.faker)
                 called.update(dictionary)
                 results.append(called)
-            models = self.model.hydrate(results)
-            for model in models:
-                self.run_after_creates(model)
-            return models
+            return self.model.hydrate(results)
 
     def create(self, dictionary=None, name="default"):
         if dictionary is None:
@@ -62,9 +53,7 @@ class Factory:
         if self.number == 1 and not isinstance(dictionary, list):
             called = self._factories[self.model][name](self.faker)
             called.update(dictionary)
-            model = self.model.create(called)
-            self.run_after_creates(model)
-            return model
+            return self.model.create(called)
         elif isinstance(dictionary, list):
             results = []
             for _index in range(0, len(dictionary)):
@@ -72,18 +61,14 @@ class Factory:
                 called.update(dictionary)
                 results.append(called)
 
-            models = self.model.create(results)
-            for model in models:
-                self.run_after_creates(model)
-            return models
+            return self.model.create(results)
         else:
             full_collection = []
             for _index in range(0, self.number):
                 called = self._factories[self.model][name](self.faker)
                 called.update(dictionary)
                 full_collection.append(called)
-                model = self.model.create(called)
-                self.run_after_creates(model)
+                self.model.create(called)
 
             return self.model.hydrate(full_collection)
 
@@ -93,17 +78,3 @@ class Factory:
             cls._factories[model] = {name: call}
         else:
             cls._factories[model][name] = call
-
-    @classmethod
-    def after_creating(cls, model, call, name="default"):
-        if model not in cls._after_creates:
-            cls._after_creates[model] = {name: call}
-        else:
-            cls._after_creates[model][name] = call
-
-    def run_after_creates(self, model):
-        if self.model not in self._after_creates:
-            return model
-
-        for _name, callback in self._after_creates[self.model].items():
-            callback(model, self.faker)

@@ -74,7 +74,7 @@ class QueueMonitorCommand(CommandBase):
 
             self.line("")
             return 0
-        except Exception as exc:  # noqa: BLE001 — reported below, never a raw traceback
+        except Exception as exc:  # reported below, never a raw traceback
             Log.error(
                 "queue:monitor failed: %s",
                 exc,
@@ -194,7 +194,7 @@ class QueueMonitorCommand(CommandBase):
             connection, channel = driver.open_topology_connection()
             result = channel.queue_declare(queue=DEAD_LETTER_QUEUE, passive=True)
             return int(result.method.message_count)
-        except Exception as exc:  # noqa: BLE001 — best-effort broker probe
+        except Exception as exc:  # best-effort broker probe
             Log.warning(
                 "queue:monitor could not reach the broker for dead-letter depth: %s",
                 exc,

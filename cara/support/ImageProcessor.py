@@ -142,28 +142,3 @@ class ImageProcessor:
             )
 
         return self
-
-    def scaled_down_original(
-        self, max_width: int = 800, max_height: int = 1200
-    ) -> ImageProcessor:
-        """
-        Create a scaled-down version of the original image.
-
-        This maintains the original aspect ratio but reduces the size
-        for better performance on mobile devices.
-        """
-        current_width, current_height = self.image.size
-
-        # Calculate scaling factor to fit within max dimensions
-        scale_x = max_width / current_width
-        scale_y = max_height / current_height
-        scale = min(scale_x, scale_y, 1.0)  # Don't upscale
-
-        if scale < 1.0:
-            new_width = int(current_width * scale)
-            new_height = int(current_height * scale)
-            self.image = self.image.resize(
-                (new_width, new_height), PILImage.Resampling.LANCZOS
-            )
-
-        return self

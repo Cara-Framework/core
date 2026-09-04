@@ -154,7 +154,7 @@ class SchemaCheckCommand(CommandBase):
         # gate that checked nothing is more dangerous than a failed pipeline.
         try:
             live_schema = Schema(connection=None, schema=schema_name).on(connection)
-        except Exception as exc:  # noqa: BLE001 — any connection-resolution failure
+        except Exception as exc:  # any connection-resolution failure
             message = f"No usable database connection ('{connection}'): {exc}."
             if self.option("allow_unavailable"):
                 self.warning(f"{message} Skipping by explicit request.")
@@ -187,7 +187,7 @@ class SchemaCheckCommand(CommandBase):
             constraint_indexes = self._introspect_constraint_indexes(
                 live_schema, schema_name
             )
-        except Exception as exc:  # noqa: BLE001 — DB unreachable / introspection failed
+        except Exception as exc:  # DB unreachable / introspection failed
             message = f"Could not introspect the live database: {exc}."
             if self.option("allow_unavailable"):
                 self.warning(f"{message} Skipping by explicit request.")

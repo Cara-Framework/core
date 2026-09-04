@@ -194,7 +194,7 @@ class DevResetCommand(CommandBase):
         try:
             Cache.flush()
             self.line("  • Cache.flush() OK")
-        except Exception as exc:  # noqa: BLE001 — falls back to raw redis below
+        except Exception as exc:  # falls back to raw redis below
             Log.warning(
                 "[dev:reset] Cache.flush failed: %s; trying raw redis",
                 exc,
@@ -216,7 +216,7 @@ class DevResetCommand(CommandBase):
             )
             client.flushdb()
             self.line("  • redis FLUSHDB OK")
-        except Exception as exc:  # noqa: BLE001 — reported to the operator
+        except Exception as exc:  # reported to the operator
             self.warning(f"  • redis flush failed: {exc}")
 
     def _purge_queues(self) -> None:
@@ -236,7 +236,7 @@ class DevResetCommand(CommandBase):
                 try:
                     channel.queue_purge(queue=name)
                     purged += 1
-                except Exception as exc:  # noqa: BLE001 — a missing queue is fine
+                except Exception as exc:  # a missing queue is fine
                     Log.debug("Could not purge queue %s: %s", name, exc, category="reset")
                     channel = connection.channel()  # a 404 closed the channel
             self.line(f"  • queues purged: {purged}/{len(queue_names)}")
@@ -259,7 +259,7 @@ class DevResetCommand(CommandBase):
                 try:
                     channel.queue_delete(queue=name, if_unused=False, if_empty=False)
                     rebuilt += 1
-                except Exception as exc:  # noqa: BLE001 — a missing queue is fine
+                except Exception as exc:  # a missing queue is fine
                     Log.debug(
                         "Could not delete queue %s: %s", name, exc, category="reset"
                     )
@@ -279,7 +279,7 @@ class DevResetCommand(CommandBase):
             for pattern in self.WORKER_PROCESS_PATTERNS:
                 Process.command(["pkill", "-KILL", "-f", pattern]).timeout(600).run()
             self.line(f"  • {' / '.join(self.WORKER_PROCESS_PATTERNS)} processes stopped")
-        except Exception as exc:  # noqa: BLE001 — reported to the operator
+        except Exception as exc:  # reported to the operator
             self.warning(f"  • pkill failed: {exc}")
 
     # ── broker plumbing ───────────────────────────────────────────────
@@ -289,7 +289,7 @@ class DevResetCommand(CommandBase):
             return None
         try:
             return pika.BlockingConnection(self._pika_params())
-        except Exception as exc:  # noqa: BLE001 — reported to the operator
+        except Exception as exc:  # reported to the operator
             self.warning(f"  • AMQP connect failed: {exc}")
             return None
 
@@ -297,7 +297,7 @@ class DevResetCommand(CommandBase):
     def _close_broker(connection: Any) -> None:
         try:
             connection.close()
-        except Exception as exc:  # noqa: BLE001 — teardown must not mask the run
+        except Exception as exc:  # teardown must not mask the run
             Log.warning("AMQP connection close failed: %s", exc, category="reset")
 
     def _pika_params(self) -> Any:

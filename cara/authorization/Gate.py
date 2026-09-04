@@ -176,7 +176,7 @@ class Gate(GateContract):
         for callback in self._before_callbacks:
             try:
                 decision = callback(user, ability, *args)
-            except Exception as exc:  # noqa: BLE001 — fail closed
+            except Exception as exc:  # fail closed
                 # A before-hook may be DENY-FIRST (see the API-token ability
                 # cap in GuardProvider). Skipping a crashed guard would hand
                 # the decision to the next hook — the root bypass — and WIDEN
@@ -219,7 +219,7 @@ class Gate(GateContract):
         for callback in self._after_callbacks:
             try:
                 override = callback(user, ability, response.allowed(), *args)
-            except Exception as exc:  # noqa: BLE001 — override hook: keep the
+            except Exception as exc:  # override hook: keep the
                 # prior verdict. Do NOT register a deny-only after-hook — a
                 # crash would drop the denial; deny belongs in `before`.
                 self._log(f"after-callback failed for ability='{ability}': {exc}")
@@ -236,7 +236,7 @@ class Gate(GateContract):
                 class_path, _, method = callback.partition("@")
                 return self._call_policy(class_path, method or ability, user, *args)
             return self._normalize(callback(user, *args))
-        except Exception as exc:  # noqa: BLE001 — fail closed
+        except Exception as exc:  # fail closed
             self._log(f"ability '{ability}' evaluation failed: {exc}")
             return AuthorizationResponse(False, "Authorization check failed.")
 
@@ -245,7 +245,7 @@ class Gate(GateContract):
     ) -> AuthorizationResponse:
         try:
             policy = self._instantiate_policy(policy_ref)
-        except Exception as exc:  # noqa: BLE001 — fail closed
+        except Exception as exc:  # fail closed
             self._log(f"policy {policy_ref!r} could not be instantiated: {exc}")
             return AuthorizationResponse(False, "Authorization check failed.")
 
@@ -264,7 +264,7 @@ class Gate(GateContract):
 
         try:
             result = handler(user, *args)
-        except Exception as exc:  # noqa: BLE001 — fail closed
+        except Exception as exc:  # fail closed
             self._log(f"policy '{method}' on {type(policy).__name__} raised: {exc}")
             return AuthorizationResponse(False, "Authorization check failed.")
 
@@ -283,7 +283,7 @@ class Gate(GateContract):
     def _safe_hook(self, hook: Callable, policy: Any, kind: str, *hook_args: Any) -> Any:
         try:
             return hook(*hook_args)
-        except Exception as exc:  # noqa: BLE001 — a bad hook must not crash a check
+        except Exception as exc:  # a bad hook must not crash a check
             self._log(f"policy {kind}-hook on {type(policy).__name__} raised: {exc}")
             return None
 
@@ -329,7 +329,7 @@ class Gate(GateContract):
         if self._user_resolver:
             try:
                 return self._user_resolver()
-            except Exception as exc:  # noqa: BLE001 — never let resolution crash a check
+            except Exception as exc:  # never let resolution crash a check
                 self._log(f"user resolver failed: {exc}")
         return None
 
@@ -337,7 +337,7 @@ class Gate(GateContract):
     def _log(message: str) -> None:
         try:
             Log.error(message, category="cara.authorization", exc_info=True)
-        except Exception:  # noqa: BLE001 — logging must never raise
+        except Exception:  # logging must never raise
             # The Log facade itself failed (unbooted container, broken
             # channel). The old fallback re-ran the identical facade call
             # — re-raising the same failure — so the message was lost AND

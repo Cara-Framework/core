@@ -15,7 +15,6 @@ import inspect
 import threading
 import types
 import typing as _typing
-from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any, Union
 
@@ -62,13 +61,6 @@ class Container:
         # fix; the path runs once per service, so contention is nil.
         self._deferred_lock = threading.RLock()
 
-        # (6) Hooks: callback lists for bind / make / resolve events
-        self._hooks: dict[str, dict[Any, list[Callable]]] = {
-            "bind": {},
-            "make": {},
-            "resolve": {},
-        }
-
         # (6) Temporary swap bindings for testing or mocking
         self.swaps: dict[Any, Any] = {}
 
@@ -111,7 +103,6 @@ class Container:
             )
 
         if self.override or name not in self.objects:
-            self.fire_hook("bind", name, class_obj)
             self.objects[name] = class_obj
 
         return self
@@ -227,32 +218,6 @@ class Container:
         except TypeError, ValueError:
             return False
 
-    def fire_hook(self, action: str, key: Any, obj: Any) -> None:
-        """Fire hooks for bind/make/resolve actions."""
-        # If bound object is a class, invoke class-based hooks
-        if inspect.isclass(obj) and obj in self._hooks[action]:
-            for fn in self._hooks[action][obj]:
-                fn(obj, self)
-
-        # If bound object is an instance, check hooks on its class
-        if hasattr(obj, "__class__") and obj.__class__ in self._hooks[action]:
-            for fn in self._hooks[action][obj.__class__]:
-                fn(obj, self)
-
-    def on_bind(self, key: Any, fn: Callable) -> Container:
-        return self._bind_hook("bind", key, fn)
-
-    def on_make(self, key: Any, fn: Callable) -> Container:
-        return self._bind_hook("make", key, fn)
-
-    def on_resolve(self, key: Any, fn: Callable) -> Container:
-        return self._bind_hook("resolve", key, fn)
-
-    def _bind_hook(self, hook: str, key: Any, fn: Callable) -> Container:
-        """Add a callback to the specified hook (bind/make/resolve) for the given key."""
-        self._hooks[hook].setdefault(key, []).append(fn)
-        return self
-
     # ----------------------------
     # Internal Binding Lookup Method
     # ----------------------------
@@ -268,9 +233,7 @@ class Container:
         """
         # Strategy 1: Direct lookup
         if obj in self.objects:
-            provider_obj = self.objects[obj]
-            self.fire_hook("resolve", obj, provider_obj)
-            return provider_obj
+            return self.objects[obj]
 
         # Strategy 2: Try full module path
         if (
@@ -280,9 +243,7 @@ class Container:
         ):
             full_path = f"{obj.__module__}.{obj.__name__}"
             if full_path in self.objects:
-                provider_obj = self.objects[full_path]
-                self.fire_hook("resolve", obj, provider_obj)
-                return provider_obj
+                return self.objects[full_path]
 
         # Strategy 3: Try simple class name
         if (
@@ -290,16 +251,13 @@ class Container:
             and hasattr(obj, "__name__")
             and obj.__name__ in self.objects
         ):
-            provider_obj = self.objects[obj.__name__]
-            self.fire_hook("resolve", obj, provider_obj)
-            return provider_obj
+            return self.objects[obj.__name__]
 
         # Strategy 4: Match by type/instance/subclass (original logic)
         for provider_obj in self.objects.values():
             # (1) Class–instance match
             try:
                 if inspect.isclass(obj) and isinstance(provider_obj, obj):
-                    self.fire_hook("resolve", obj, provider_obj)
                     return provider_obj
             except TypeError:
                 pass
@@ -310,7 +268,6 @@ class Container:
                     provider_obj,
                     provider_obj.__class__,
                 ):
-                    self.fire_hook("resolve", obj, provider_obj)
                     return provider_obj
             except TypeError:
                 pass
@@ -325,7 +282,6 @@ class Container:
                     issubclass(provider_obj.__class__, obj)
                     and not inspect.isabstract(provider_obj.__class__)
                 ):
-                    self.fire_hook("resolve", obj, provider_obj)
                     return provider_obj
             except TypeError:
                 pass

@@ -10,6 +10,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+from cara.eloquent.schema.SchemaConnectionManager import SchemaConnectionManager
 from cara.exceptions import MigrationException
 from cara.support import ProcessFileLock
 
@@ -17,21 +18,6 @@ _logger = logging.getLogger("cara.migrations")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SQLITE_LOCKS: dict[str, threading.Lock] = {}
 _SQLITE_LOCKS_GUARD = threading.Lock()
-
-
-def _release(connection) -> None:
-    """Return an owned connection, never an executor transaction handle."""
-    if connection is None:
-        return
-    transaction_level = getattr(connection, "transaction_level", 0)
-    if isinstance(transaction_level, (int, float)) and transaction_level > 0:
-        return
-    try:
-        close = getattr(connection, "close_connection", None)
-        if callable(close):
-            close()
-    except Exception:
-        _logger.debug("migration connection close failed", exc_info=True)
 
 
 def _row_value(row, key: str, index: int = 0):
@@ -101,7 +87,7 @@ class MigrationTracker:
                 f"Could not initialize migrations table '{self.table_name}': {exc}"
             ) from exc
         finally:
-            _release(connection)
+            SchemaConnectionManager.release(connection)
 
     def _create_migrations_table(self, connection) -> None:
         driver = self._get_driver_type()
@@ -213,7 +199,7 @@ class MigrationTracker:
                     _logger.debug(
                         "migration lock transaction cleanup failed", exc_info=True
                     )
-            _release(connection)
+            SchemaConnectionManager.release(connection)
 
     def _migration_lock_key(self) -> str:
         info = self.db_manager.get_connection_info() or {}
@@ -262,7 +248,7 @@ class MigrationTracker:
                 for row in rows
             ]
         finally:
-            _release(connection)
+            SchemaConnectionManager.release(connection)
 
     def get_last_batch_number(self) -> int:
         connection = self._get_connection()
@@ -276,7 +262,7 @@ class MigrationTracker:
             value = _row_value(rows[0], "max_batch", 0)
             return int(value or 0)
         finally:
-            _release(connection)
+            SchemaConnectionManager.release(connection)
 
     def get_migrations_by_batch(self, batch: int) -> list[str]:
         connection = self._get_connection()
@@ -292,7 +278,7 @@ class MigrationTracker:
             )
             return [_row_value(row, "migration", 0) for row in rows]
         finally:
-            _release(connection)
+            SchemaConnectionManager.release(connection)
 
     # ── Write APIs ───────────────────────────────────────────────────
     def record_migration(self, migration_name: str, batch: int, checksum: str) -> None:
@@ -307,19 +293,7 @@ class MigrationTracker:
                 (migration_name, batch, checksum),
             )
         finally:
-            _release(connection)
-
-    def set_migration_checksum(self, migration_name: str, checksum: str) -> None:
-        connection = self._get_connection()
-        try:
-            placeholder = self._get_placeholder()
-            connection.query(
-                f"UPDATE {self.table_name} SET checksum = {placeholder} "
-                f"WHERE migration = {placeholder} AND checksum IS NULL",
-                (checksum, migration_name),
-            )
-        finally:
-            _release(connection)
+            SchemaConnectionManager.release(connection)
 
     def replace_migration_history(
         self, records: list[tuple[str, str]], *, batch: int = 1
@@ -359,7 +333,7 @@ class MigrationTracker:
                 rollback()
             raise
         finally:
-            _release(connection)
+            SchemaConnectionManager.release(connection)
 
     def remove_migration(self, migration_name: str) -> None:
         connection = self._get_connection()
@@ -370,4 +344,4 @@ class MigrationTracker:
                 (migration_name,),
             )
         finally:
-            _release(connection)
+            SchemaConnectionManager.release(connection)

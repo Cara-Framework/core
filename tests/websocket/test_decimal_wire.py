@@ -19,35 +19,18 @@ from decimal import Decimal
 import pytest
 
 from cara.exceptions.types.WebSocketException import WebSocketException
-from cara.websocket.Socket import Socket
-
-# NUMERIC(17,6) ceiling — ``float(MONEY)`` is ``100000000000.0``.
-MONEY = Decimal("99999999999.999999")
-
-
-def _connected_socket(sent: list[dict]) -> Socket:
-    async def _send(message: dict) -> None:
-        sent.append(message)
-
-    async def _receive() -> dict:
-        return {"type": "websocket.receive"}
-
-    socket = Socket(
-        application=None, scope={"type": "websocket"}, receive=_receive, send=_send
-    )
-    socket._ws_connected = True  # skip the handshake; this is about the payload
-    return socket
+from tests._money_wire import EXACT, MONEY, connected_socket
 
 
 @pytest.mark.asyncio
 async def test_websocket_frame_carries_exact_decimal_digits() -> None:
     sent: list[dict] = []
-    socket = _connected_socket(sent)
+    socket = connected_socket(sent)
 
     await socket.send_json({"total": MONEY, "unit": Decimal("19.90")})
 
     payload = json.loads(sent[-1]["text"])
-    assert payload["total"] == "99999999999.999999"
+    assert payload["total"] == EXACT
     assert Decimal(payload["total"]) == MONEY
     assert payload["total"] != float(MONEY)
     # Scale is part of a price: "19.90" must not shrink to "19.9".
@@ -65,7 +48,7 @@ async def test_websocket_datetime_stays_iso8601() -> None:
     from datetime import datetime
 
     sent: list[dict] = []
-    socket = _connected_socket(sent)
+    socket = connected_socket(sent)
 
     await socket.send_json({"at": datetime(2026, 8, 9, 12, 0, tzinfo=UTC)})
 
@@ -80,7 +63,7 @@ async def test_unserializable_payload_closes_with_a_protocol_error() -> None:
         pass
 
     sent: list[dict] = []
-    socket = _connected_socket(sent)
+    socket = connected_socket(sent)
 
     with pytest.raises(WebSocketException) as raised:
         await socket.send_json({"order": _Order()})

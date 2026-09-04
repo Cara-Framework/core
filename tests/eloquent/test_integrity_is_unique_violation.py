@@ -259,10 +259,10 @@ def test_column_scope_is_a_token_not_a_substring_on_sqlite():
 
 def test_multi_column_postgres_detail_is_parsed_into_tokens():
     duplicate = _pg_duplicate(
-        constraint="supplier_tenant_name_unique", columns="tenant_id, name"
+        constraint="stock_policy_product_unique", columns="tenant_id, product_id"
     )
     assert is_unique_violation(duplicate, column="tenant_id") is True
-    assert is_unique_violation(duplicate, column="name") is True
+    assert is_unique_violation(duplicate, column="product_id") is True
     assert is_unique_violation(duplicate, column="id") is False
 
 
@@ -273,10 +273,10 @@ def test_constraint_scope_on_sqlite_warns_instead_of_answering_falsely(caplog):
     equal — so every constraint-scoped guard silently returned False under the
     test connection and re-raised on a legitimate race, with a green suite.
     """
-    duplicate = _sqlite_duplicate("suppliers.tenant_id, suppliers.name")
+    duplicate = _sqlite_duplicate("stock_policy.tenant_id, stock_policy.product_id")
     with caplog.at_level("WARNING"):
         assert (
-            is_unique_violation(duplicate, constraint="supplier_tenant_name_unique")
+            is_unique_violation(duplicate, constraint="stock_policy_product_unique")
             is False
         )
     assert "cannot be evaluated on SQLite" in caplog.text
@@ -284,7 +284,7 @@ def test_constraint_scope_on_sqlite_warns_instead_of_answering_falsely(caplog):
     # …and when the caller also scopes by column, that answerable half decides.
     assert (
         is_unique_violation(
-            duplicate, constraint="supplier_tenant_name_unique", column="name"
+            duplicate, constraint="stock_policy_product_unique", column="product_id"
         )
         is True
     )

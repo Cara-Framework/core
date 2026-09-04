@@ -146,12 +146,6 @@ class Validation(ValidationContract):
             )
         cls._custom_rules[name.lower()] = rule_class
 
-    @classmethod
-    def extend_many(cls, mapping: dict[str, type[Rule]]) -> None:
-        """Register multiple custom rules at once."""
-        for name, rule_class in mapping.items():
-            cls.extend(name, rule_class)
-
     def after(self, callback) -> Validation:
         """Register an after-validation callback (Laravel parity).
 

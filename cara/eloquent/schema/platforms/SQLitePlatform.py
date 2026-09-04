@@ -375,29 +375,6 @@ class SQLitePlatform(Platform):
             if c.constraint_type == "unique" and c.where
         ]
 
-    def foreign_key_constraintize(self, table, foreign_keys):
-        sql = []
-        for _name, foreign_key in foreign_keys.items():
-            cascade = ""
-            if foreign_key.delete_action:
-                cascade += " ON DELETE " + self.foreign_key_action_sql(
-                    foreign_key.delete_action,
-                    foreign_key.delete_columns,
-                )
-            if foreign_key.update_action:
-                cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key.update_action.lower())}"
-            sql.append(
-                self.get_foreign_key_constraint_string().format(
-                    column=self.wrap_columns(foreign_key.column),
-                    constraint_name=foreign_key.constraint_name,
-                    table=self.wrap_table(table),
-                    foreign_table=self.wrap_table(foreign_key.foreign_table),
-                    foreign_column=self.wrap_columns(foreign_key.foreign_column),
-                    cascade=cascade,
-                )
-            )
-        return sql
-
     def columnize_names(self, columns):
         names = []
         for _name, column in columns.items():
@@ -466,9 +443,13 @@ class SQLitePlatform(Platform):
         return f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"
 
     def compile_column_exists(self, table, column):
+        """SQLite has no ``information_schema``; ``PRAGMA table_info`` is the
+        catalogue. The previous body was Postgres SQL pasted verbatim and
+        could not run on this platform at all.
+        """
         table = self._validate_identifier(table, "table name")
         column = self._validate_identifier(column, "column name")
-        return f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' and column_name='{column}'"
+        return f"SELECT name FROM pragma_table_info('{table}') WHERE name='{column}'"
 
     def compile_get_all_tables(self, database, schema=None):
         return "SELECT name FROM sqlite_master WHERE type='table'"

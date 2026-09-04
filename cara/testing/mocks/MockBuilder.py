@@ -144,9 +144,6 @@ class _MockBase:
     def call_count(self, name: str) -> int:
         return len(self._calls.get(name, []))
 
-    def was_called(self, name: str) -> bool:
-        return self.call_count(name) > 0
-
     def assert_called(self, name: str, times: int | None = None) -> None:
         n = self.call_count(name)
         if times is None and n == 0:

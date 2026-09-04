@@ -130,7 +130,7 @@ def install_cache_metrics_observer(
     def _observer(operation: str, outcome: str, key: str, size_bytes: int | None) -> None:
         try:
             emit(scope_for_cache_key(key), operation, outcome)
-        except Exception as exc:  # noqa: BLE001 — telemetry must never break the cache
+        except Exception as exc:  # telemetry must never break the cache
             if logger is not None:
                 logger.warning("cache metric emission failed: %s", exc, exc_info=True)
 

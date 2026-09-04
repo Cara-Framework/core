@@ -8,23 +8,14 @@ paths are mock-driven.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 from cara.commands.core.SchemaCheckCommand import SchemaCheckCommand
-
-
-def _make_command(options=None) -> SchemaCheckCommand:
-    cmd = SchemaCheckCommand(application=None)
-    cmd.set_parsed_options(options or {})
-    cmd.console = MagicMock()
-    return cmd
-
+from tests.commands._fixtures import make_command
 
 # --- _declared_columns: model fields -> concrete columns ----------------------
 
 
 def test_declared_columns_expands_timestamps_and_soft_deletes():
-    cmd = _make_command()
+    cmd = make_command(SchemaCheckCommand)
     model = {
         "name": "Widget",
         "table": "widget",
@@ -54,7 +45,7 @@ def test_declared_columns_harvests_raw_sql_added_columns():
     """GENERATED columns declared via the ``__indexes__`` raw-SQL escape hatch
     (e.g. a tsvector ``search_vector``) ARE declared by the model — they must
     not be flagged as 'present in DB but not in model'."""
-    cmd = _make_command()
+    cmd = make_command(SchemaCheckCommand)
     model = {
         "name": "Product",
         "table": "product",
@@ -96,7 +87,7 @@ def test_declared_columns_harvests_raw_sql_added_columns():
 
 
 def test_diff_table_reports_missing_and_extra_columns():
-    cmd = _make_command()
+    cmd = make_command(SchemaCheckCommand)
     declared = {
         "id": {"type": "big_increments", "nullable": False},
         "name": {"type": "string", "nullable": False},
@@ -118,7 +109,7 @@ def test_diff_table_reports_missing_and_extra_columns():
 
 
 def test_diff_column_flags_nullability_mismatch():
-    cmd = _make_command()
+    cmd = make_command(SchemaCheckCommand)
     issues = cmd._diff_column(
         "listing",
         "email",
@@ -129,7 +120,7 @@ def test_diff_column_flags_nullability_mismatch():
 
 
 def test_diff_column_flags_clear_type_mismatch():
-    cmd = _make_command()
+    cmd = make_command(SchemaCheckCommand)
     # model says boolean, DB has an integer column -> clearly different category.
     issues = cmd._diff_column(
         "listing",
@@ -141,7 +132,7 @@ def test_diff_column_flags_clear_type_mismatch():
 
 
 def test_diff_column_does_not_flag_aliased_types():
-    cmd = _make_command()
+    cmd = make_command(SchemaCheckCommand)
     # string <-> character varying are the SAME category; no false positive.
     issues = cmd._diff_column(
         "listing",
@@ -153,7 +144,7 @@ def test_diff_column_does_not_flag_aliased_types():
 
 
 def test_diff_column_skips_unknown_types_to_avoid_false_positives():
-    cmd = _make_command()
+    cmd = make_command(SchemaCheckCommand)
     # An un-catalogued DB type must NOT produce a spurious mismatch.
     issues = cmd._diff_column(
         "listing",
@@ -168,7 +159,7 @@ def test_diff_column_skips_unknown_types_to_avoid_false_positives():
 
 
 def test_diff_table_clean_when_in_sync():
-    cmd = _make_command()
+    cmd = make_command(SchemaCheckCommand)
     declared = {
         "id": {"type": "big_increments", "nullable": False},
         "name": {"type": "string", "nullable": False},

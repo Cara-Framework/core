@@ -9,7 +9,6 @@ values. Mirrors the existing command-test pattern (``application=None``,
 from __future__ import annotations
 
 import sys
-from unittest.mock import MagicMock
 
 # NOTE: ``cara.commands.core.__init__`` re-exports the ``PreflightCommand``
 # CLASS, which shadows the same-named SUBMODULE on the package — so
@@ -26,6 +25,8 @@ from cara.commands.core.PreflightCommand import (
     ok,
     warn,
 )
+
+from ._fixtures import make_command
 
 preflight_mod = sys.modules["cara.commands.core.PreflightCommand"]
 
@@ -64,13 +65,6 @@ def _prodlike_ready() -> dict:
         "queue.drivers": {"amqp": {"host": "rabbit.internal"}},
         "meilisearch.url": "http://meili.internal:7700",
     }
-
-
-def _make_command(options=None) -> PreflightCommand:
-    cmd = PreflightCommand(application=None)
-    cmd.set_parsed_options(options or {})
-    cmd.console = MagicMock()
-    return cmd
 
 
 def _printed(cmd) -> str:
@@ -220,7 +214,7 @@ def test_debug_truthy_string_is_detected(monkeypatch):
 
 def test_handle_all_pass_returns_none(monkeypatch):
     _install_config(monkeypatch, _prodlike_ready())
-    cmd = _make_command()
+    cmd = make_command(PreflightCommand)
     assert cmd.handle() is None  # no int return → exit 0
     assert "passed" in _printed(cmd).lower()
 
@@ -230,7 +224,7 @@ def test_handle_fails_loudly_with_nonzero_exit(monkeypatch):
     cfg["app.debug"] = True
     cfg["app.key"] = ""
     _install_config(monkeypatch, cfg)
-    cmd = _make_command()
+    cmd = make_command(PreflightCommand)
     assert cmd.handle() == 1  # non-zero exit on failure
     printed = _printed(cmd).lower()
     assert "fail" in printed
@@ -240,7 +234,7 @@ def test_warn_only_downgrades_failures_to_warnings(monkeypatch):
     cfg = _prodlike_ready()
     cfg["app.debug"] = True  # would normally fail
     _install_config(monkeypatch, cfg)
-    cmd = _make_command(options={"warn_only": True})
+    cmd = make_command(PreflightCommand, options={"warn_only": True})
     # Downgraded → no non-zero exit.
     assert cmd.handle() is None
     assert "warn" in _printed(cmd).lower()
@@ -251,13 +245,13 @@ def test_only_runs_subset(monkeypatch):
     cfg = _prodlike_ready()
     cfg["app.key"] = ""
     _install_config(monkeypatch, cfg)
-    cmd = _make_command(options={"only": "debug_off_in_prod"})
+    cmd = make_command(PreflightCommand, options={"only": "debug_off_in_prod"})
     assert cmd.handle() is None
 
 
 def test_only_unknown_name_fails(monkeypatch):
     _install_config(monkeypatch, _prodlike_ready())
-    cmd = _make_command(options={"only": "no_such_check"})
+    cmd = make_command(PreflightCommand, options={"only": "no_such_check"})
     assert cmd.handle() == 1
     assert "unknown" in _printed(cmd).lower()
 
@@ -267,7 +261,7 @@ def test_only_unknown_name_fails(monkeypatch):
 
 def test_register_check_is_run(monkeypatch):
     _install_config(monkeypatch, _prodlike_ready())
-    cmd = _make_command()
+    cmd = make_command(PreflightCommand)
     cmd.register_check("custom_gate", lambda: fail("nope"))
     assert cmd.handle() == 1
     assert "custom_gate" in _printed(cmd)
@@ -275,15 +269,15 @@ def test_register_check_is_run(monkeypatch):
 
 def test_registering_does_not_mutate_default_registry(monkeypatch):
     _install_config(monkeypatch, _prodlike_ready())
-    cmd = _make_command()
+    cmd = make_command(PreflightCommand)
     cmd.register_check("custom_gate", lambda: ok("fine"))
-    other = _make_command()
+    other = make_command(PreflightCommand)
     assert "custom_gate" not in other.checks
 
 
 def test_check_that_raises_is_treated_as_failure(monkeypatch):
     _install_config(monkeypatch, _prodlike_ready())
-    cmd = _make_command()
+    cmd = make_command(PreflightCommand)
 
     def _boom() -> CheckResult:
         raise RuntimeError("kaboom")

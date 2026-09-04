@@ -25,23 +25,17 @@ def _make_container_with_service():
 
 
 def test_call_resolves_dependency_via_bound_class_fallback():
-    """Define the handler inside the test function so that its
-    annotation is a *string* (PEP 563 / __future__ annotations) and
-    the local-scope class is NOT in ``__globals__``. This forces the
-    fallback path through container bindings, which used to crash
-    with AttributeError on ``self._bindings``.
+    """The ordinary path: a string annotation (PEP 563) naming a class
+    that IS reachable from ``handler.__globals__``.
+
+    ``_Service`` is module-level, so ``container.call`` resolves it by
+    evaluating the annotation — the container-bindings fallback is NOT
+    exercised here. ``test_call_fallback_path_does_not_raise_attribute_error``
+    below is the one that forces that branch, with a name reachable from
+    neither ``__globals__`` nor ``typing``.
     """
-
-    class _LocalAlias:
-        """Locally-scoped wrapper to defeat __globals__ lookup."""
-
-    # Define handler with a string annotation referring to a class
-    # name. Since handler is defined here, ``_Service`` IS in
-    # __globals__ — but to force the fallback path, we use a name
-    # that does NOT resolve via __globals__ or typing.
     container = _make_container_with_service()
 
-    # Use eval-resistant annotation form: bind by exact class object.
     captured = {}
 
     def handler(svc: _Service):

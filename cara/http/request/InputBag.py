@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any
 
 from cara.http.request.utils.QueryStringParser import QueryStringParser
 from cara.support import data_get
-
-T = TypeVar("T", bound="InputBag")
 
 
 class InputBag:
@@ -22,21 +20,6 @@ class InputBag:
         """Initialize an empty input bag."""
         self._data: dict[str, Any] = {}
         self._parser = QueryStringParser()
-
-    @classmethod
-    def from_query_string(cls: type[T], query: str) -> T:
-        """
-        Create InputBag from query string.
-
-        Args:
-            query: Raw query string
-
-        Returns:
-            New InputBag instance with parsed query data
-        """
-        bag = cls()
-        bag.load_query_string(query)
-        return bag
 
     def load_query_string(self, query_string: str) -> None:
         """

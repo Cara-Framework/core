@@ -21,7 +21,8 @@ import sys
 import pytest
 
 from cara.exceptions import RateLimitConfigurationException
-from cara.middleware.http.ThrottleRequests import ThrottleRequests
+
+from ._fixtures import throttle_middleware
 
 
 class _RateLimiterStub:
@@ -43,15 +44,6 @@ class _RateLimiterStub:
         return callback(request) if callback else None
 
 
-def _middleware(limit=None, window=None) -> ThrottleRequests:
-    """Build the middleware without the provider boot the base
-    ``Middleware.__init__`` triggers."""
-    middleware = ThrottleRequests.__new__(ThrottleRequests)
-    middleware.custom_limit = limit
-    middleware.custom_window_minutes = window
-    return middleware
-
-
 class TestUnregisteredNamedLimiter:
     def test_refuses_instead_of_falling_back_to_the_global_limit(
         self, monkeypatch: pytest.MonkeyPatch
@@ -61,7 +53,7 @@ class TestUnregisteredNamedLimiter:
         monkeypatch.setattr(module.facades, "RateLimiter", _RateLimiterStub())
 
         with pytest.raises(RateLimitConfigurationException, match="throttle:login"):
-            _middleware(limit="login")._resolve_limit_config(request=object())
+            throttle_middleware(limit="login")._resolve_limit_config(request=object())
 
     def test_the_refusal_names_where_to_register_it(
         self, monkeypatch: pytest.MonkeyPatch
@@ -71,7 +63,7 @@ class TestUnregisteredNamedLimiter:
         monkeypatch.setattr(module.facades, "RateLimiter", _RateLimiterStub())
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
-            _middleware(limit="typoed")._resolve_limit_config(request=object())
+            throttle_middleware(limit="typoed")._resolve_limit_config(request=object())
 
         assert "config/rate.py" in str(excinfo.value)
 
@@ -85,7 +77,9 @@ class TestUnregisteredNamedLimiter:
         monkeypatch.setattr(module.facades, "RateLimiter", _RateLimiterStub())
 
         with pytest.raises(RateLimitConfigurationException):
-            _middleware(limit=None, window=5)._resolve_limit_config(request=object())
+            throttle_middleware(limit=None, window=5)._resolve_limit_config(
+                request=object()
+            )
 
 
 class TestRegisteredConfigurationsAreUnchanged:
@@ -103,12 +97,14 @@ class TestRegisteredConfigurationsAreUnchanged:
             _RateLimiterStub({"login": lambda _r: expected}),
         )
 
-        resolved = _middleware(limit="login")._resolve_limit_config(request=object())
+        resolved = throttle_middleware(limit="login")._resolve_limit_config(
+            request=object()
+        )
 
         assert resolved is expected
 
     def test_the_numeric_form_still_builds_its_own_limit(self) -> None:
-        resolved = _middleware(limit=600, window=1)._resolve_limit_config(
+        resolved = throttle_middleware(limit=600, window=1)._resolve_limit_config(
             request=object()
         )
 

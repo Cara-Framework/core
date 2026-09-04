@@ -81,9 +81,5 @@ class EventFake:
                 f"Expected no {of_type.__name__} events, got {len(matches)}"
             )
 
-    def assert_nothing_dispatched(self) -> None:
-        if self.events:
-            raise AssertionError(f"Expected no events, got {len(self.events)}")
-
     def clear(self) -> None:
         self.events.clear()

@@ -119,14 +119,6 @@ class ValidationException(CaraException):
         """Get the first validation error message."""
         return str(self)
 
-    def get_errors_for_field(self, field: str) -> list[str]:
-        """Get all errors for a specific field."""
-        return self.errors.get(field, [])
-
-    def has_errors_for_field(self, field: str) -> bool:
-        """Check if there are errors for a specific field."""
-        return field in self.errors and bool(self.errors[field])
-
     def get_error_count(self) -> int:
         """Get total number of validation errors."""
         return sum(len(errors) for errors in self.errors.values())

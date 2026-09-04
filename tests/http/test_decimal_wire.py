@@ -23,24 +23,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from cara.http import Response
-from cara.http.response import StreamingResponse
+from tests._money_wire import MONEY, drain
 
-# NUMERIC(17,6) ceiling: the smallest realistic money value whose double
-# is visibly wrong. ``float(MONEY) == 100000000000.0``.
-MONEY = Decimal("99999999999.999999")
 # Trailing zeros are part of a price's scale — "19.90" is not "19.9".
 SCALED = Decimal("19.90")
-
-
-async def _drain(response: Response) -> str:
-    """Run a configured response through ASGI and return the body text."""
-    events: list[dict] = []
-
-    async def send(event: dict) -> None:
-        events.append(event)
-
-    await response({}, None, send)
-    return b"".join(event.get("body", b"") for event in events[1:]).decode("utf-8")
 
 
 def _assert_exact(raw: object, expected: Decimal) -> None:
@@ -57,7 +43,7 @@ async def test_json_response_body_carries_exact_decimal_digits() -> None:
     response = Response(MagicMock())
     response.json({"total": MONEY, "unit": SCALED})
 
-    body = await _drain(response)
+    body = await drain(response)
     payload = json.loads(body)
 
     _assert_exact(payload["total"], MONEY)
@@ -75,31 +61,12 @@ async def test_jsonl_stream_chunks_carry_exact_decimal_digits() -> None:
     response = Response(MagicMock())
     response.stream_json_lines(rows())
 
-    body = await _drain(response)
+    body = await drain(response)
     lines = [json.loads(line) for line in body.splitlines() if line]
 
     assert len(lines) == 2
     _assert_exact(lines[0]["total"], MONEY)
     _assert_exact(lines[1]["total"], SCALED)
-
-
-@pytest.mark.asyncio
-async def test_streaming_response_jsonl_carries_exact_decimal_digits() -> None:
-    """``StreamingResponse`` owns a second JSONL encoder; it must agree."""
-
-    async def rows():
-        yield {"total": MONEY}
-
-    events: list[dict] = []
-
-    async def send(event: dict) -> None:
-        events.append(event)
-
-    streaming = StreamingResponse(Response(MagicMock()))
-    await streaming.stream_json_lines(rows(), send)
-
-    body = b"".join(event.get("body", b"") for event in events[1:]).decode("utf-8")
-    _assert_exact(json.loads(body)["total"], MONEY)
 
 
 @pytest.mark.asyncio
@@ -110,7 +77,7 @@ async def test_sse_frame_data_carries_exact_decimal_digits() -> None:
     response = Response(MagicMock())
     response.stream_sse(events_generator())
 
-    frame = await _drain(response)
+    frame = await drain(response)
     data_lines = [
         line[len("data: ") :] for line in frame.splitlines() if line.startswith("data: ")
     ]
@@ -167,7 +134,7 @@ async def test_streaming_nan_truncates_the_body_instead_of_emitting_it() -> None
     response = Response(MagicMock())
     response.stream_json_lines(rows())
 
-    body = await _drain(response)
+    body = await drain(response)
     assert "Infinity" not in body
     lines = [json.loads(line) for line in body.splitlines() if line]
     assert len(lines) == 1

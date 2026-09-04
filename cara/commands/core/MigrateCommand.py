@@ -196,22 +196,6 @@ class MigrateCommand(CommandBase):
         if len(migrations) > 5:
             self.info(f"   ... and {len(migrations) - 5} more")
 
-    def _show_migration_preview(self, migration_files: list):
-        """Show simplified migration preview."""
-        self.info("SQL that would be executed:")
-        self.info("=" * 60)
-
-        for i, file_path in enumerate(migration_files, 1):
-            migration_name = file_path.split("/")[-1].replace(".py", "")
-            self.info(f"\n{i}. Migration: {migration_name}")
-            self.info("-" * 40)
-            self.info(
-                f"-- Would execute: {migration_name} (CREATE/ALTER TABLE operations)"
-            )
-
-        self.info("\n" + "=" * 60)
-        self.info("No actual changes were made to the database.")
-
     def _show_sql_preview(self, migration_manager: Migration, pending: list):
         """Print the SQL each pending migration WOULD run, without touching the DB.
 
@@ -302,7 +286,7 @@ class MigrateCommand(CommandBase):
                 migration_instance.up()
             finally:
                 restore_db()
-        except Exception as exc:  # noqa: BLE001 — preview must not abort the loop
+        except Exception as exc:  # preview must not abort the loop
             self.warning(f"   Could not compile SQL for this migration: {exc}")
 
         return statements

@@ -32,6 +32,7 @@ from __future__ import annotations
 from cara.commands.CommandBase import CommandBase
 from cara.decorators import command
 from cara.facades import DB
+from cara.schema import LEDGER_TABLE, STATUS_APPLIED, STATUS_REVERSED
 
 _APPLY_LOCK_TIMEOUT_MS = 5000
 
@@ -136,8 +137,8 @@ class SchemaRollbackCommand(CommandBase):
     def _latest_plan(self) -> str | None:
         rows = (
             DB.select(
-                "SELECT plan_id FROM schema_operation WHERE status = 'applied' "
-                "ORDER BY id DESC LIMIT 1"
+                f"SELECT plan_id FROM {LEDGER_TABLE} "
+                f"WHERE status = '{STATUS_APPLIED}' ORDER BY id DESC LIMIT 1"
             )
             or []
         )
@@ -152,8 +153,8 @@ class SchemaRollbackCommand(CommandBase):
         return (
             DB.select(
                 "SELECT operation_key, reverse_sql, restores_data "
-                "FROM schema_operation "
-                "WHERE plan_id = %s AND status = 'applied' "
+                f"FROM {LEDGER_TABLE} "
+                f"WHERE plan_id = %s AND status = '{STATUS_APPLIED}' "
                 "ORDER BY id DESC",
                 [plan_id],
             )
@@ -167,7 +168,8 @@ class SchemaRollbackCommand(CommandBase):
 
     def _mark_reversed(self, plan_id: str, operation_key: str) -> None:
         DB.statement(
-            "UPDATE schema_operation SET status = 'reversed', reversed_at = NOW(), "
-            "updated_at = NOW() WHERE plan_id = %s AND operation_key = %s",
+            f"UPDATE {LEDGER_TABLE} SET status = '{STATUS_REVERSED}', "
+            "reversed_at = NOW(), updated_at = NOW() "
+            "WHERE plan_id = %s AND operation_key = %s",
             [plan_id, operation_key],
         )

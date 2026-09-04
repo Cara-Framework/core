@@ -125,7 +125,6 @@ def _container_make(self, name: Any, *arguments: Any) -> Any:
                         found = concrete
                     else:
                         raise TypeError(f"No concrete implementation found for '{name}'")
-                self.fire_hook("make", name, found)
 
                 # If found is a class, resolve it (instantiate with DI)
                 if inspect.isclass(found):
@@ -160,7 +159,6 @@ def _container_make(self, name: Any, *arguments: Any) -> Any:
 
             if name in self.objects:
                 bound = self.objects[name]
-                self.fire_hook("make", name, bound)
 
                 # a) If the bound value is a class, resolve its constructor
                 if inspect.isclass(bound) and inspect.isabstract(bound):

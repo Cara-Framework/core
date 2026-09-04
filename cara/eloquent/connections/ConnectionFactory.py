@@ -14,7 +14,6 @@ class ConnectionFactory:
 
     def __init__(self):
         """Initialize connection factory"""
-        pass
 
     @classmethod
     def register(cls, key, connection):

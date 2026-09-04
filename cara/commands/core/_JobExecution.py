@@ -64,6 +64,27 @@ def _job_label(instance: Any, msg: dict | None) -> str:
     return "unknown"
 
 
+def _stamp_dispatch_context(instance: Any, msg: dict) -> None:
+    """Copy the dispatcher-side envelope context onto the job instance.
+
+    ``_otel_carrier`` re-parents the job's span (Obs-4 propagation) and
+    ``_tenant_id`` / ``_tenant_mode`` carry the dispatcher's tenant scope,
+    armed around the job body by ``run_through_middleware_async``.
+
+    ``_current_attempt`` is the DELIVERY counter for the run that is about
+    to start. The envelope's ``attempts`` key is the attempts-ALREADY-MADE
+    counter (``AMQPDriver.push`` stamps it 0; every retry republish bumps
+    it), so this delivery is ``attempts + 1``. Jobs read it for retry-depth
+    metrics; a sync dispatch never passes through here and correctly falls
+    back to 1.
+    """
+    instance._otel_carrier = msg.get("_otel")
+    instance._tenant_id = msg.get("_tenant")
+    instance._tenant_mode = msg.get("_tenant_mode")
+    instance._dispatched_at = msg.get("dispatched_at")
+    instance._current_attempt = JobProcessor._envelope_counter(msg, "attempts") + 1
+
+
 def _process_message(
     channel,
     method_frame,
@@ -257,14 +278,7 @@ def _process_message(
             msg.get("init_kwargs", {}),
         )
         if instance is not None:
-            # Carry the dispatcher's trace context onto the job so
-            # BaseJob.handle re-parents its span (Obs-4 propagation).
-            instance._otel_carrier = msg.get("_otel")
-            # Dispatcher's tenant scope — armed around the job body
-            # by run_through_middleware_async.
-            instance._tenant_id = msg.get("_tenant")
-            instance._tenant_mode = msg.get("_tenant_mode")
-            instance._dispatched_at = msg.get("dispatched_at")
+            _stamp_dispatch_context(instance, msg)
         callback = msg.get("callback", "handle")
         init_args = msg.get("args", ())
         db_job_id = msg.get("db_job_id")

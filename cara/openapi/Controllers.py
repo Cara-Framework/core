@@ -38,7 +38,6 @@ _RESPONSE_METHODS = frozenset(
         "redirect",
         "stream",
         "stream_csv",
-        "stream_download",
         "stream_json_lines",
         "stream_sse",
         "to_response",

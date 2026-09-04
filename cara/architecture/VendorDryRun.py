@@ -94,7 +94,7 @@ def _stage_tree(src: Path, dst: Path, patterns: list[str], prefix: str = "") -> 
 
 
 def _run(python: str, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - fixed argv, no shell
+    return subprocess.run(  # fixed argv, no shell
         [python, *args], cwd=cwd, capture_output=True, text=True, check=False
     )
 

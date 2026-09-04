@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
+from typing import Self
 
 from .Column import Column
 from .Constraint import Constraint
@@ -64,7 +61,12 @@ class Table:
         return self.dropped_columns
 
     def drop_index(self, index) -> Self:
-        """Queue an index for drop on an ALTER."""
+        """Queue an index for drop on an ALTER.
+
+        ``drop_indexes`` has no reader — the platforms compile DROP INDEX from
+        ``TableDiff.removed_indexes``, which nothing writes. See the comment in
+        ``TableDiff.__init__``: this path emits no SQL today.
+        """
         self.drop_indexes[index] = index
         return self
 

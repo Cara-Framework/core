@@ -68,7 +68,7 @@ class _RecordingDispatch(PendingDispatch):
 
     pushed: list
 
-    def _push(self):  # noqa: D102 — test stub
+    def _push(self):  # test stub
         self.pushed.append(self.job)
         return "job-id-1"
 

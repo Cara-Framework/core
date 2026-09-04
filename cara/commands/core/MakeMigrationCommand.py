@@ -299,7 +299,7 @@ class MakeMigrationCommand(CommandBase):
         # Reset migration counter for fresh numbering.
         # NOTE: the regenerated filenames are NNNN_01_01_NNNNNN_<name>.py. The
         # ``01_01`` middle segment is vestigial Laravel date cruft, but every
-        # consumer (MigrationExecutor.run_pending_migrations / get_migration_status,
+        # consumer (MigrationExecutor.run_pending_migrations,
         # Migration.get_unran_migrations, the comparator's glob) orders purely by
         # LEXICOGRAPHIC sort on the whole filename string and never splits those
         # segments out — so they're load-bearing only as constant padding that
@@ -337,12 +337,11 @@ class MakeMigrationCommand(CommandBase):
 
     def _prepare_overwrite(self, ordered_models):
         """Render and syntax-check the complete replacement set in memory."""
-        style = self.option("style", "blueprint")
         prepared = []
         for index, model_info in enumerate(ordered_models):
             if not model_info.get("has_fields_method", False):
                 continue
-            content = self.generator.generate_create_migration(model_info, style)
+            content = self.generator.generate_create_migration(model_info)
             if not content:
                 continue
             compile(content, f"<migration:{model_info['table']}>", "exec")

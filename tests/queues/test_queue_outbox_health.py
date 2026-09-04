@@ -21,35 +21,11 @@ from __future__ import annotations
 import pytest
 
 from cara.queues.delivery import QueueJobDeliveryStore, QueueOutboxHealth
-from cara.queues.delivery import QueueOutboxHealth as _module_home
+from cara.testing.fakes import CacheFake
 
 module = __import__(
     "cara.queues.delivery.QueueOutboxHealth", fromlist=["QueueOutboxHealth"]
 )
-
-
-class _FakeCache:
-    """Minimal Cache double with real ``add`` set-if-absent semantics."""
-
-    def __init__(self) -> None:
-        self.store: dict[str, str] = {}
-        self.ttls: dict[str, int | None] = {}
-
-    def add(self, key, value, ttl=None) -> bool:
-        if key in self.store:
-            return False
-        self.store[key] = value
-        self.ttls[key] = ttl
-        return True
-
-    def put(self, key, value, ttl=None) -> None:
-        self.store[key] = value
-
-    def get(self, key, default=None):
-        return self.store.get(key, default)
-
-    def forget(self, key) -> bool:
-        return self.store.pop(key, None) is not None
 
 
 class _RecordingSink:
@@ -63,7 +39,7 @@ class _RecordingSink:
 
 @pytest.fixture
 def wired(monkeypatch):
-    cache = _FakeCache()
+    cache = CacheFake()
     sink = _RecordingSink()
     logs: list[tuple[str, tuple]] = []
 
@@ -252,7 +228,7 @@ def test_an_ongoing_stall_speaks_again_after_the_window(wired) -> None:
     cache, sink, _logs = wired
     QueueOutboxHealth.announce(_snapshot(), True)
     # The notify key expiring is what lets a CONTINUING stall re-page.
-    cache.store.pop(QueueOutboxHealth.NOTIFY_CACHE_KEY)
+    cache.forget(QueueOutboxHealth.NOTIFY_CACHE_KEY)
     assert QueueOutboxHealth.announce(_snapshot(), True) == "fired"
     assert len(sink.calls) == 2
 
@@ -353,7 +329,7 @@ def test_observe_returns_both_outcomes(monkeypatch) -> None:
         def outbox_health_metrics(self):
             return _snapshot(hook_due=40.0, hook_age=7200.0)
 
-    monkeypatch.setattr(module, "Cache", _FakeCache())
+    monkeypatch.setattr(module, "Cache", CacheFake())
     monkeypatch.setattr(module, "AlertSink", _RecordingSink())
     monkeypatch.setattr(module.Log, "error", lambda *a, **kw: None)
 
@@ -378,7 +354,7 @@ def test_publish_metrics_is_an_overridable_no_op_seam(monkeypatch) -> None:
         def outbox_health_metrics(self):
             return _snapshot(due=7.0)
 
-    monkeypatch.setattr(module, "Cache", _FakeCache())
+    monkeypatch.setattr(module, "Cache", CacheFake())
     monkeypatch.setattr(module, "AlertSink", _RecordingSink())
     monkeypatch.setattr(module.Log, "error", lambda *a, **kw: None)
 
@@ -389,5 +365,4 @@ def test_publish_metrics_is_an_overridable_no_op_seam(monkeypatch) -> None:
 
 def test_the_watchdog_lives_beside_the_ledger_it_observes() -> None:
     """It must stay importable from the delivery package, not an app tree."""
-    assert _module_home is QueueOutboxHealth
     assert QueueOutboxHealth.__module__.startswith("cara.queues.delivery")

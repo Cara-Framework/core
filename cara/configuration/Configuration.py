@@ -21,21 +21,6 @@ class Configuration:
     _instance = None
     _lock = threading.Lock()
 
-    # Foundation configuration keys that cannot be overwritten
-    reserved_keys = [
-        "app",
-        "auth",
-        "broadcast",
-        "cache",
-        "database",
-        "filesystem",
-        "mail",
-        "notification",
-        "providers",
-        "queue",
-        "session",
-    ]
-
     def __init__(self, application):
         if application is None:
             raise InvalidConfigurationSetupException(
@@ -79,28 +64,6 @@ class Configuration:
             raise InvalidConfigurationLocationException(
                 f"Config directory {config_root} does not contain required configuration files."
             )
-
-    def merge_with(self, path, external_config):
-        """
-        Merge external config into existing config under `path`.
-
-        Similar to Laravel's merge.
-        """
-        if path in self.reserved_keys:
-            raise InvalidConfigurationSetupException(
-                f"{path} is a reserved configuration key name. Please use another key."
-            )
-        if isinstance(external_config, str):
-            params = self._loader.get_parameters(external_config)
-        else:
-            params = external_config
-
-        base_config = {name.lower(): value for name, value in params.items()}
-        merged_config = {
-            **base_config,
-            **self.get(path, {}),
-        }
-        self.set(path, merged_config)
 
     def set(self, path, value):
         self._config[path] = value

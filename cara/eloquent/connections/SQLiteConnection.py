@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import sqlite3
-
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 import contextlib
 import re
+import sqlite3
+from typing import Self
 
 from cara.exceptions import QueryException
 
@@ -90,9 +85,6 @@ class SQLiteConnection(BaseConnection):
     @classmethod
     def get_default_post_processor(cls):
         return SQLitePostProcessor
-
-    def get_database_name(self):
-        return self.database
 
     def reconnect(self):
         """No-op — SQLite connections are file-backed and always available."""

@@ -138,17 +138,6 @@ class EnhancedCastRegistry(CastRegistry):
 
         return value
 
-    def validate_cast_definition(self, cast_definition: str) -> bool:
-        """Validate if a cast definition is valid."""
-        cast_type = (
-            cast_definition.split(":")[0] if ":" in cast_definition else cast_definition
-        )
-        return cast_type in self._casts
-
-    def get_available_casts(self) -> list:
-        """Get list of all available cast types."""
-        return list(self._casts.keys())
-
 
 # Create enhanced global registry
 cast_registry = EnhancedCastRegistry()

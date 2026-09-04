@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -11,14 +12,30 @@ from collections.abc import Callable
 from cara.facades import Cache, Log
 from cara.queues.contracts.JobThrottledException import JobThrottledException
 
-from .RateLimited import (
-    _OVERLAP_SWEEP_EVERY,
-    _call_next,
-    _overlap_lock,
-    _overlap_locks,
-    _overlap_sweep_counter,
-    _sweep_overlap_locks_locked,
-)
+from .RateLimited import _call_next
+
+_overlap_locks: dict = {}
+_overlap_lock = threading.Lock()
+_overlap_sweep_counter: int = 0
+
+# Sweep stale keys every N operations. Without this, the in-process
+# dict only ever grows — a long-running worker that sees a stream of
+# unique lock keys accumulates an entry per key forever.
+_OVERLAP_SWEEP_EVERY = 500
+
+
+def _sweep_overlap_locks_locked(now: float) -> None:
+    """Drop locks whose ``expire_after`` window has long-since passed.
+
+    Per-key ``expire_after`` is not stored; we use a 24h ceiling for
+    the sweep — well past any reasonable lock TTL. Live locks held by
+    in-flight jobs use ``time.time()`` timestamps within the last few
+    minutes and won't be touched.
+    """
+    cutoff = now - 86400  # 24h
+    dead = [k for k, ts in _overlap_locks.items() if ts < cutoff]
+    for k in dead:
+        _overlap_locks.pop(k, None)
 
 
 class WithoutOverlapping:
@@ -81,7 +98,6 @@ class WithoutOverlapping:
                     OSError, ConnectionError, TimeoutError, RuntimeError
                 ):
                     cache.forget_if(redis_key, owner)
-            return None  # unreachable, satisfies type-checkers
 
         # Cache facade isn't available — fall back to the process-local dict.
         with _overlap_lock:
@@ -96,8 +112,8 @@ class WithoutOverlapping:
                 )
             _overlap_locks[lock_key] = now
 
-            # Periodic sweep — same shape as the rate-bucket sweep
-            # above. Without it, the fallback path leaks one entry
+            # Periodic sweep — same shape as ``RateLimited``'s
+            # rate-bucket sweep. Without it, the fallback path leaks one entry
             # per unique lock_key over the worker's lifetime. The
             # try/finally pop() below catches successful completions,
             # but the "skipped" branch above raises out of the

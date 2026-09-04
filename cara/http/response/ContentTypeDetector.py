@@ -259,39 +259,3 @@ class ContentTypeDetector:
 
         # Check for XML declaration followed by SVG
         return bool(content_lower.startswith("<?xml") and "<svg" in content_lower)
-
-    @staticmethod
-    def get_charset_from_content_type(content_type: str) -> str:
-        """
-        Extract charset from content-type header.
-
-        Args:
-            content_type: Content-type header value
-
-        Returns:
-            str: Charset or 'utf-8' as default
-        """
-        if "charset=" in content_type.lower():
-            try:
-                charset_part = content_type.lower().split("charset=")[1]
-                charset = charset_part.split(";")[0].strip()
-                return charset
-            except IndexError, AttributeError:
-                pass
-        return "utf-8"
-
-    @staticmethod
-    def add_charset_if_missing(content_type: str, charset: str = "utf-8") -> str:
-        """
-        Add charset to content-type if not present.
-
-        Args:
-            content_type: Content-type string
-            charset: Charset to add (default: utf-8)
-
-        Returns:
-            str: Content-type with charset
-        """
-        if "charset=" not in content_type.lower():
-            return f"{content_type}; charset={charset}"
-        return content_type

@@ -104,9 +104,7 @@ class ConditionalGet(Middleware):
     @staticmethod
     def _is_2xx(response: Any) -> bool:
         try:
-            code = getattr(response, "status_code", None)
-            if code is None and hasattr(response, "get_status_code"):
-                code = response.get_status_code()
+            code = response.get_status_code()
             return isinstance(code, int) and 200 <= code < 300
         except AttributeError, TypeError:
             return False

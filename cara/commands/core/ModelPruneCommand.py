@@ -140,7 +140,7 @@ class ModelPruneCommand(CommandBase):
         classes: list[type] = []
         try:
             classes.extend(get_classes("models", self._MakesPrunable))
-        except Exception as exc:  # noqa: BLE001 — discovery must not hard-crash the command
+        except Exception as exc:  # discovery must not hard-crash the command
             self.debug(f"models module discovery skipped: {exc}")
 
         # Defence in depth: include any MakesPrunable Model subclass already
@@ -151,7 +151,7 @@ class ModelPruneCommand(CommandBase):
             classes.extend(
                 cls for cls in self._all_subclasses(Model) if self._is_prunable(cls)
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.debug(f"subclass discovery skipped: {exc}")
 
         # De-dupe while preserving classes (a class may be reachable both ways).
@@ -204,6 +204,6 @@ class ModelPruneCommand(CommandBase):
                 # Count the prunable set without deleting.
                 return int(instance.prunable().count())
             return int(instance.prune(batch_size=batch_size))
-        except Exception as exc:  # noqa: BLE001 — one bad model must not abort the rest
+        except Exception as exc:  # one bad model must not abort the rest
             self.error(f"× {model_cls.__name__}: prune failed: {exc}")
             return None

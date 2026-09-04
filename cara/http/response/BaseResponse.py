@@ -193,7 +193,7 @@ class BaseResponse:
                     }
                 )
                 self._sent = True
-            except Exception:  # noqa: BLE001 - the connection is already dead
+            except Exception:  # the connection is already dead
                 pass
 
     # =============================================================================
@@ -211,7 +211,7 @@ class BaseResponse:
 
     @property
     def status_code(self) -> int:
-        """Get current status code (property for compatibility)."""
+        """Current status code, read through the PEP-idiomatic attribute name."""
         return self._status
 
     def data(self) -> bytes:

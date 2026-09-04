@@ -24,6 +24,7 @@ import ast
 from collections.abc import Sequence
 from pathlib import Path
 
+from ._scan import _iter_sources
 from .CacheKeyFinding import CacheKeyFinding
 
 #: Parameters that carry no dimension of their own.
@@ -96,20 +97,9 @@ class CacheKeyAudit:
     def scan_tree(
         self, root: Path, directories: Sequence[str] | None = None
     ) -> list[CacheKeyFinding]:
-        roots = [root] if directories is None else [root / name for name in directories]
         findings: list[CacheKeyFinding] = []
-        for target in roots:
-            if not target.is_dir():
-                continue
-            for path in sorted(target.rglob("*.py")):
-                if "__pycache__" in path.parts:
-                    continue
-                findings.extend(
-                    self.scan_source(
-                        path.read_text(encoding="utf-8"),
-                        path.relative_to(root).as_posix(),
-                    )
-                )
+        for source, relative in _iter_sources(root, directories):
+            findings.extend(self.scan_source(source, relative))
         return findings
 
     @staticmethod

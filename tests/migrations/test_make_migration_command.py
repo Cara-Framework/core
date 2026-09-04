@@ -17,13 +17,7 @@ import pytest
 
 from cara.commands.core.MakeMigrationCommand import MakeMigrationCommand
 from cara.environment import PathManager
-
-
-def _make_command(options=None) -> MakeMigrationCommand:
-    cmd = MakeMigrationCommand(application=None)
-    cmd.set_parsed_options(options or {})
-    cmd.console = MagicMock()
-    return cmd
+from tests.commands._fixtures import make_command
 
 
 @pytest.fixture()
@@ -136,7 +130,7 @@ def _write(d, name, content):
 
 
 def test_generated_create_not_flagged(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     p = _write(
         migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE
     )
@@ -144,7 +138,7 @@ def test_generated_create_not_flagged(migrations_dir):
 
 
 def test_generated_update_annotations_not_flagged(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     p = _write(
         migrations_dir,
         "0002_01_01_000000_add_note_to_widget_table.py",
@@ -154,7 +148,7 @@ def test_generated_update_annotations_not_flagged(migrations_dir):
 
 
 def test_generated_db_statement_not_flagged(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     p = _write(
         migrations_dir,
         "0003_01_01_000000_create_widget_table.py",
@@ -164,7 +158,7 @@ def test_generated_db_statement_not_flagged(migrations_dir):
 
 
 def test_human_comment_flagged(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     edited = _GENERATED_CREATE.replace(
         "            table.timestamps()",
         "            table.timestamps()\n            # NOTE: keep this column for the legacy importer",
@@ -174,7 +168,7 @@ def test_human_comment_flagged(migrations_dir):
 
 
 def test_inline_human_comment_flagged(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     edited = _GENERATED_CREATE.replace(
         '            table.string("name", 255)',
         '            table.string("name", 255)  # keep for the legacy importer',
@@ -184,7 +178,7 @@ def test_inline_human_comment_flagged(migrations_dir):
 
 
 def test_custom_down_logic_flagged(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     edited = _GENERATED_CREATE.replace(
         '        self.schema.drop("widget")',
         '        for t in ("widget", "widget_audit"):\n            self.schema.drop(t)',
@@ -194,7 +188,7 @@ def test_custom_down_logic_flagged(migrations_dir):
 
 
 def test_unreadable_file_treated_as_hand_edited(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     missing = migrations_dir / "does_not_exist.py"
     # erring on the side of caution: can't read → assume worth protecting
     assert cmd._looks_hand_edited(missing) is True
@@ -207,7 +201,7 @@ def test_partition_dooms_every_file_including_unrelated_tables(migrations_dir):
     # The old rule ("does this file touch a model table?") let hand-written
     # add_*/backfill_* migrations survive forever, so the directory stopped
     # being a function of the models. EVERY .py is now doomed.
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
     _write(
         migrations_dir, "0002_01_01_000000_add_note_to_widget_table.py", _GENERATED_CREATE
@@ -229,7 +223,7 @@ def test_partition_dooms_marked_files_like_any_other(migrations_dir):
     anything: framework tables are cara.models, named DDL lives in a model's
     __indexes__, and data rewrites are not migrations — so a marked file is
     just a stray with a vintage badge."""
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     _write(migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE)
     _write(migrations_dir, "9982_01_01_000000_create_price_views.py", _MARKED_FILE)
 
@@ -241,7 +235,7 @@ def test_partition_dooms_marked_files_like_any_other(migrations_dir):
 
 
 def test_partition_ignores_package_init(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     _write(migrations_dir, "__init__.py", "")
     assert cmd._partition_migrations() == []
 
@@ -250,12 +244,12 @@ def test_partition_ignores_package_init(migrations_dir):
 
 
 def test_confirm_clobber_no_targets_proceeds(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     assert cmd._confirm_clobber(cmd._partition_migrations()) is True
 
 
 def test_confirm_clobber_clean_files_proceeds_without_prompt(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     cmd.confirm = MagicMock(
         side_effect=AssertionError("should not prompt for clean files")
     )
@@ -264,7 +258,7 @@ def test_confirm_clobber_clean_files_proceeds_without_prompt(migrations_dir):
 
 
 def test_confirm_clobber_hand_edited_prompts_and_respects_no(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     cmd.confirm = MagicMock(return_value=False)
     edited = _GENERATED_CREATE.replace(
         "            table.timestamps()",
@@ -276,7 +270,7 @@ def test_confirm_clobber_hand_edited_prompts_and_respects_no(migrations_dir):
 
 
 def test_confirm_clobber_hand_edited_prompts_and_respects_yes(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     cmd.confirm = MagicMock(return_value=True)
     edited = _GENERATED_CREATE.replace(
         "            table.timestamps()",
@@ -288,7 +282,7 @@ def test_confirm_clobber_hand_edited_prompts_and_respects_yes(migrations_dir):
 
 
 def test_force_skips_prompt_even_when_hand_edited(migrations_dir):
-    cmd = _make_command({"force": True})
+    cmd = make_command(MakeMigrationCommand, {"force": True})
     cmd.confirm = MagicMock(side_effect=AssertionError("--force must not prompt"))
     edited = _GENERATED_CREATE.replace(
         "            table.timestamps()",
@@ -299,7 +293,7 @@ def test_force_skips_prompt_even_when_hand_edited(migrations_dir):
 
 
 def test_dry_run_skips_prompt_even_when_hand_edited(migrations_dir):
-    cmd = _make_command({"dry_run": True})
+    cmd = make_command(MakeMigrationCommand, {"dry_run": True})
     cmd.confirm = MagicMock(side_effect=AssertionError("--dry_run must not prompt"))
     edited = _GENERATED_CREATE.replace(
         "            table.timestamps()",
@@ -313,7 +307,7 @@ def test_dry_run_skips_prompt_even_when_hand_edited(migrations_dir):
 
 
 def test_marked_file_is_deleted_by_the_atomic_replace(migrations_dir):
-    cmd = _make_command({"force": True})
+    cmd = make_command(MakeMigrationCommand, {"force": True})
     doomed_generated = _write(
         migrations_dir, "0001_01_01_000000_create_widget_table.py", _GENERATED_CREATE
     )
@@ -341,7 +335,7 @@ def test_marked_file_is_deleted_by_the_atomic_replace(migrations_dir):
 
 
 def test_overwrite_prepares_before_replacing_files(migrations_dir):
-    cmd = _make_command({"overwrite": True, "force": True})
+    cmd = make_command(MakeMigrationCommand, {"overwrite": True, "force": True})
     model = {
         "name": "Widget",
         "table": "widget",
@@ -363,7 +357,7 @@ def test_overwrite_prepares_before_replacing_files(migrations_dir):
 
 
 def test_overwrite_bad_generated_syntax_changes_nothing(migrations_dir):
-    cmd = _make_command({"overwrite": True, "force": True})
+    cmd = make_command(MakeMigrationCommand, {"overwrite": True, "force": True})
     model = {
         "name": "Widget",
         "table": "widget",
@@ -381,7 +375,7 @@ def test_overwrite_bad_generated_syntax_changes_nothing(migrations_dir):
 
 
 def test_sql_style_is_rejected_before_discovery():
-    cmd = _make_command({"style": "sql"})
+    cmd = make_command(MakeMigrationCommand, {"style": "sql"})
     cmd.discoverer.discover_models = MagicMock()
 
     assert cmd.handle() == 2
@@ -389,7 +383,7 @@ def test_sql_style_is_rejected_before_discovery():
 
 
 def test_finalize_counter_accounts_for_preserved_high_sequence(migrations_dir):
-    cmd = _make_command()
+    cmd = make_command(MakeMigrationCommand)
     cmd.generator.migrations_dir = migrations_dir
     cmd.generator.counter_file = migrations_dir / ".migration_counter"
     _write(

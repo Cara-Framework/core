@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Self
 
 from cara.exceptions import ConnectionNotRegisteredException
+
+_logger = logging.getLogger("cara.schema")
 
 
 class SchemaConnectionManager:
@@ -44,3 +47,26 @@ class SchemaConnectionManager:
     def get_connection_info(self):
         """Get connection information"""
         return self._db_manager.get_connection_info(self.connection)
+
+    @staticmethod
+    def release(connection) -> None:
+        """Return a connection this manager minted, never an active transaction.
+
+        The rule lives here because this class is what hands the connection
+        out. ``Schema``, ``SchemaQueryExecutor`` and ``MigrationTracker`` all
+        borrow DDL connections and each used to carry its own copy of the
+        teardown; this is the single home for all three.
+        """
+        if connection is None:
+            return
+        transaction_level = getattr(connection, "transaction_level", 0)
+        if isinstance(transaction_level, (int, float)) and transaction_level > 0:
+            return
+        try:
+            close = getattr(connection, "close_connection", None)
+            if callable(close):
+                close()
+        except Exception:
+            # Cleanup must never mask the real result, whatever driver-specific
+            # exception the close raises — but it must not vanish either.
+            _logger.debug("schema connection close failed", exc_info=True)

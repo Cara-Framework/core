@@ -113,7 +113,7 @@ class QueuePurgeCommand(CommandBase):
             identifier = job.get("public_id") or job.get("id")
             try:
                 deleted_tracker += store.delete_job(job["id"])
-            except Exception as exc:  # noqa: BLE001 — reported below, sweep continues
+            except Exception as exc:  # reported below, sweep continues
                 Log.warning(
                     "queue:purge failed to delete tracker job %s: %s",
                     identifier,
@@ -157,7 +157,7 @@ class QueuePurgeCommand(CommandBase):
             connection, channel = driver.open_topology_connection()
             result = channel.queue_purge(queue=DEAD_LETTER_QUEUE)
             return int(result.method.message_count)
-        except Exception as exc:  # noqa: BLE001 — reported to the operator below
+        except Exception as exc:  # reported to the operator below
             Log.error(
                 "queue:purge broker purge of %s failed: %s",
                 DEAD_LETTER_QUEUE,

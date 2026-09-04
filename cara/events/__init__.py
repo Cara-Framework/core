@@ -9,6 +9,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "EventSubscriber": (".EventSubscriber", "EventSubscriber"),
     "HandleListenerJob": (".jobs", "HandleListenerJob"),
     "Listener": (".contracts", "Listener"),
+    "event_payload_gaps": (".PayloadGate", "event_payload_gaps"),
 }
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "EventSubscriber",
     "HandleListenerJob",
     "Listener",
+    "event_payload_gaps",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

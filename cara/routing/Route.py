@@ -380,20 +380,3 @@ class Route:
     @classmethod
     def routes(cls, *routes: Route) -> list[Route]:
         return list(flatten(routes))
-
-    def is_ws(self) -> bool:
-        """Return True if this route is a WebSocket route."""
-        return "ws" in self.request_method
-
-    def is_http(self) -> bool:
-        """Return True if this route is an HTTP route (get, post, etc)."""
-        http_methods = {
-            "get",
-            "post",
-            "put",
-            "patch",
-            "delete",
-            "head",
-            "options",
-        }
-        return any(m in http_methods for m in self.request_method)

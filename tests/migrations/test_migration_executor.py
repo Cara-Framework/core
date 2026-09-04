@@ -36,20 +36,6 @@ from cara.eloquent.migrations import MigrationExecutor
 from cara.exceptions import ORMException
 
 
-class _NoOpMigration:
-    """Minimal Migration stand-in. Records up/down calls."""
-
-    transactional = True  # default
-    up_calls: list[str] = []
-    down_calls: list[str] = []
-
-    def up(self):
-        self.up_calls.append("up")
-
-    def down(self):
-        self.down_calls.append("down")
-
-
 def _setup(transactional=True, up_raises=False, down_raises=False):
     """Build the moving parts MigrationExecutor needs.
 
@@ -378,4 +364,8 @@ def test_null_checksum_requires_explicit_verified_baseline():
     with pytest.raises(ORMException, match="migrate:baseline --force"):
         executor.run_pending_migrations()
 
-    tracker.set_migration_checksum.assert_not_called()
+    # The invariant is that a NULL checksum is REFUSED, never silently healed:
+    # the run aborts before any migration executes. (The previous assertion
+    # named a writer method that no longer exists, and a spec-less Mock made it
+    # pass either way.)
+    executor.file_manager.load_migration_class.assert_not_called()

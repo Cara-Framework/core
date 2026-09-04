@@ -20,18 +20,20 @@ class FloatCast(BaseCast):
 
     def get(self, value):
         """Get as float, preserving ``None`` for SQL NULL / unparseable."""
-        if value is None or _is_blank(value):
-            return None
-        if isinstance(value, bool):
-            return None
-        try:
-            parsed = float(value)
-        except ValueError, TypeError:
-            return None
-        return parsed if math.isfinite(parsed) else None
+        return self._coerce(value)
 
     def set(self, value):
         """Set as float, preserving ``None`` for SQL NULL / unparseable."""
+        return self._coerce(value)
+
+    @staticmethod
+    def _coerce(value):
+        """The whole rule, in one place.
+
+        ``get`` and ``set`` stay as separate public methods so a future
+        deliberate asymmetry (rounding on write, say) has a seam to land in —
+        but until then they may not be two copies that can drift apart.
+        """
         if value is None or _is_blank(value):
             return None
         if isinstance(value, bool):

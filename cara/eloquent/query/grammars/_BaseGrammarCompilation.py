@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
 from cara.eloquent.expressions import (
     JoinClause,
-    OnClause,
 )
 
 
@@ -47,15 +41,12 @@ def _grammar_initialize(
     self.lock = lock
     self._lock_modifier = {"skip_locked": False, "nowait": False, "of": []}
     self._connection_details = connection_details or {}
-    self._column = None
 
     self._bindings = []
 
     self._sql = ""
 
-    self._sql_qmark = ""
     self._action = "select"
-    self.queries = []
 
 
 def _grammar_compile(self, action, qmark=False):
@@ -161,7 +152,7 @@ def _compile_insert(self, qmark=False):
     self._sql = self.insert_format().format(
         key_equals=self._compile_key_value_equals(qmark=qmark),
         table=self.process_table(self.table),
-        columns=self.process_columns(separator=", ", action="insert", qmark=qmark),
+        columns=self.process_columns(separator=", ", qmark=qmark),
         values=self.process_values(separator=", ", qmark=qmark),
     )
 
@@ -278,28 +269,9 @@ def _grammar_process_joins(self, qmark=False):
             for clause_idx, clause in enumerate(join.get_on_clauses()):
                 keyword = clause.operator.upper() if clause_idx else "ON"
 
-                if isinstance(clause, OnClause):
-                    on_string += f"{keyword} {self._table_column_string(clause.column1)} {clause.equality} {self._table_column_string(clause.column2)} "
-                else:
-                    if clause.value_type == "NULL":
-                        sql_string = f"{self.where_null_string()} "
-                        on_string += sql_string.format(
-                            keyword=keyword,
-                            column=self.process_column(clause.column),
-                        )
-                    elif clause.value_type == "NOT NULL":
-                        sql_string = f"{self.where_not_null_string()} "
-                        on_string += sql_string.format(
-                            keyword=keyword,
-                            column=self.process_column(clause.column),
-                        )
-                    else:
-                        if qmark:
-                            value = "'?'"
-                            self.add_binding(clause.value)
-                        else:
-                            value = self._compile_value(clause.value)
-                        on_string += f"{keyword} {self._table_column_string(clause.column)} {clause.equality} {value} "
+                # ``JoinClause.on`` is the only producer of ON conditions, so
+                # every clause here is an ``OnClause``.
+                on_string += f"{keyword} {self._table_column_string(clause.column1)} {clause.equality} {self._table_column_string(clause.column2)} "
 
             sql += self.join_string().format(
                 foreign_table=self.process_table(join.table),

@@ -31,20 +31,20 @@ class IntCast(BaseCast):
 
     def get(self, value):
         """Get as integer, preserving ``None`` for SQL NULL / unparseable."""
-        if value is None or _is_blank(value):
-            return None
-        if isinstance(value, bool):
-            return None
-        try:
-            parsed = Decimal(str(value))
-        except ValueError, TypeError, InvalidOperation:
-            return None
-        return (
-            int(parsed) if parsed.is_finite() and parsed == parsed.to_integral() else None
-        )
+        return self._coerce(value)
 
     def set(self, value):
         """Set as integer, preserving ``None`` for SQL NULL / unparseable."""
+        return self._coerce(value)
+
+    @staticmethod
+    def _coerce(value):
+        """The whole rule, in one place.
+
+        ``get`` and ``set`` stay as separate public methods so a future
+        deliberate asymmetry has a seam to land in — but until then they may
+        not be two copies that can drift apart.
+        """
         if value is None or _is_blank(value):
             return None
         if isinstance(value, bool):

@@ -109,7 +109,7 @@ def safe_call[T](
     """
     try:
         return fn(*args, **kwargs)
-    except Exception as error:  # noqa: BLE001 — intentional broad catch
+    except Exception as error:  # intentional broad catch
         if reraise and isinstance(error, reraise):
             raise
         if log_message is not None:

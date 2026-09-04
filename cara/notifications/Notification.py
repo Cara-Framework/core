@@ -272,12 +272,3 @@ class Notification:
                 )
             return decision
         return True
-
-    def available_channels(self) -> list[str]:
-        """
-        Get list of available channels.
-
-        Returns:
-            List of available channel names
-        """
-        return list(self._channels.keys())

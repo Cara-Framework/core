@@ -41,17 +41,11 @@ async def test_empty_body_is_nothing_sent_not_wrong_shape() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "raw",
-    [b"[1, 2, 3]", b'"text"', b"7", b"true", b"null"],
-    ids=["array", "string", "number", "boolean", "null"],
+    [b"[1, 2, 3]", b'"text"', b"7", b"true"],
+    ids=["array", "string", "number", "boolean"],
 )
 async def test_non_object_bodies_are_rejected(raw: bytes) -> None:
     request = _request_for_body(raw)
-
-    if raw == b"null":
-        # JSON ``null`` decodes to ``None``: the caller sent "nothing", which
-        # is the empty-body case, not a wrongly shaped payload.
-        assert await request.json_object() == {}
-        return
 
     with pytest.raises(ValidationException) as caught:
         await request.json_object()
@@ -59,6 +53,15 @@ async def test_non_object_bodies_are_rejected(raw: bytes) -> None:
     error = caught.value
     assert error.status_code == 422
     assert error.errors == {"body": ["Request body must be a JSON object."]}
+
+
+@pytest.mark.asyncio
+async def test_a_json_null_body_is_the_empty_object_case() -> None:
+    """JSON ``null`` decodes to ``None``: the caller sent "nothing", which
+    is the empty-body case, not a wrongly shaped payload."""
+    request = _request_for_body(b"null")
+
+    assert await request.json_object() == {}
 
 
 @pytest.mark.asyncio

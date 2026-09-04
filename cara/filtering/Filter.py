@@ -324,7 +324,6 @@ class Filter(ABC):
         *,
         min_val: float | None = None,
         max_val: float | None = None,
-        label: str = "filter",
     ) -> float | None:
         """Parse a numeric filter value, returning None when inactive.
 
@@ -346,7 +345,6 @@ class Filter(ABC):
                     payload.get("min_rating"),
                     min_val=0.01,
                     max_val=5,
-                    label="rating",
                 )
         """
         if raw is None or raw == "":

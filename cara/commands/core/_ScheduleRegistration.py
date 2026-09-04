@@ -131,7 +131,7 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
                     )
                     if db_job_id is not None:
                         tracker.update_job_status(db_job_id, "processing")
-            except Exception:  # noqa: BLE001 — tracking never breaks the run
+            except Exception:  # tracking never breaks the run
                 tracker = None
                 db_job_id = None
 

@@ -45,7 +45,7 @@ class _QueuedListener(ShouldQueue):
     def __init__(self, log: list[str]) -> None:
         self.log = log
 
-    def handle(self, event) -> None:  # noqa: ANN001
+    def handle(self, event) -> None:
         self.log.append("ran-inline")
 
 

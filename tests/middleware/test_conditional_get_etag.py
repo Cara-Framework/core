@@ -67,7 +67,7 @@ async def test_get_2xx_emits_weak_etag():
     resp = _make_response(200, {"id": 1})
     out = await _run(mw, _make_request("GET"), resp)
 
-    assert out.status_code == 200
+    assert out.get_status_code() == 200
     etag = out.header("ETag")
     assert etag is not None
     # Weak validator form: W/"<hex>".
@@ -107,7 +107,7 @@ async def test_matching_if_none_match_returns_304_empty_body_same_etag():
     resp = _make_response(200, {"id": 7})
     out = await _run(mw, _make_request("GET", if_none_match=etag), resp)
 
-    assert out.status_code == 304
+    assert out.get_status_code() == 304
     assert out.content == b""
     assert out.header("ETag") == etag
 
@@ -125,7 +125,7 @@ async def test_matching_works_when_client_sends_strong_form():
     out = await _run(
         mw, _make_request("GET", if_none_match=strong), _make_response(200, {"a": 1})
     )
-    assert out.status_code == 304
+    assert out.get_status_code() == 304
     assert out.content == b""
 
 
@@ -135,7 +135,7 @@ async def test_star_if_none_match_matches_any_representation():
     out = await _run(
         mw, _make_request("GET", if_none_match="*"), _make_response(200, {"a": 1})
     )
-    assert out.status_code == 304
+    assert out.get_status_code() == 304
     assert out.content == b""
     assert out.header("ETag") is not None
 
@@ -152,7 +152,7 @@ async def test_matching_etag_in_comma_separated_list():
         _make_request("GET", if_none_match=header_val),
         _make_response(200, {"a": 1}),
     )
-    assert out.status_code == 304
+    assert out.get_status_code() == 304
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_304_drops_content_length_and_type():
     resp.header("Content-Length", "9")
     out = await _run(mw, _make_request("GET", if_none_match=etag), resp)
 
-    assert out.status_code == 304
+    assert out.get_status_code() == 304
     # Representation headers describing a body must be gone.
     assert out.headers.get("Content-Length") is None
     assert out.headers.get("Content-Type") is None
@@ -180,7 +180,7 @@ async def test_non_matching_if_none_match_returns_full_200():
     mw = _middleware()
     resp = _make_response(200, {"id": 99})
     out = await _run(mw, _make_request("GET", if_none_match='W/"deadbeef"'), resp)
-    assert out.status_code == 200
+    assert out.get_status_code() == 200
     assert out.content == b'{"id": 99}'
     assert out.header("ETag") is not None
 
@@ -194,7 +194,7 @@ async def test_post_is_untouched_no_etag_no_304():
     # Even with a matching-looking If-None-Match, POST must pass through.
     resp = _make_response(200, {"id": 1})
     out = await _run(mw, _make_request("POST", if_none_match="*"), resp)
-    assert out.status_code == 200
+    assert out.get_status_code() == 200
     assert out.content == b'{"id": 1}'
     assert out.header("ETag") is None
 
@@ -204,7 +204,7 @@ async def test_non_2xx_is_untouched():
     mw = _middleware()
     resp = _make_response(404, {"error": "nope"})
     out = await _run(mw, _make_request("GET", if_none_match="*"), resp)
-    assert out.status_code == 404
+    assert out.get_status_code() == 404
     assert out.header("ETag") is None
 
 
@@ -218,7 +218,7 @@ async def test_head_request_gets_etag_and_can_304():
     out = await _run(
         mw, _make_request("HEAD", if_none_match=etag), _make_response(200, {"a": 1})
     )
-    assert out.status_code == 304
+    assert out.get_status_code() == 304
 
 
 # ── Does not fight cache-control ──────────────────────────────────────
@@ -243,7 +243,7 @@ async def test_cache_control_preserved_on_304():
     resp.cache_control("public, max-age=60, stale-while-revalidate=30")
     out = await _run(mw, _make_request("GET", if_none_match=etag), resp)
 
-    assert out.status_code == 304
+    assert out.get_status_code() == 304
     assert out.headers.get("Cache-Control") == (
         "public, max-age=60, stale-while-revalidate=30"
     )

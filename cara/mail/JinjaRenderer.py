@@ -1,17 +1,16 @@
 """Jinja2-backed renderer for mail templates.
 
-The notification / mail templates under ``resources/views/mail`` are
-authored in standard Jinja2 — filters (``| default``, ``| format``,
-``| int``, ``| float``, ``| length``), ``is defined`` tests, and
-``{% for %}`` loops with slicing. The legacy cara view compiler evaluates
-``{{ ... }}`` as raw Python and implements none of these, so those
-templates raise at render time (``unsupported operand type(s) for |``,
-``name 'length' is not defined`` …) — i.e. the emails never render.
+Jinja2 is the only template engine cara ships, and the notification /
+mail templates under ``resources/views/mail`` are the only templates it
+renders. They are authored in standard Jinja2 — filters (``| default``,
+``| format``, ``| int``, ``| float``, ``| length``), ``is defined``
+tests, and ``{% for %}`` loops with slicing.
 
-Mail is a textbook Jinja2 use case, so we render mail views with the real
-Jinja2 engine instead of reinventing filters inside the cara compiler.
-The cara compiler stays the engine for *web* views (which rely on cara's
-own ``@``-directives); only the mail layer routes through here.
+Historically cara carried its own ``@``-directive view compiler which
+evaluated ``{{ ... }}`` as raw Python and implemented none of those, so
+mail templates raised at render time (``unsupported operand type(s) for
+|``, ``name 'length' is not defined`` …) and the emails never rendered.
+That compiler is gone; this module is the whole rendering path.
 """
 
 from __future__ import annotations

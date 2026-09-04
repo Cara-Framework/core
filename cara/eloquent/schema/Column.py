@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
+from typing import Self
 
 
 class Column:
@@ -27,7 +24,6 @@ class Column:
         self.length = length
         self.values = values or []
         self.is_null = nullable
-        self._after = None
         self.old_column = ""
         self.default_value = default
         self._signed = signed
@@ -65,16 +61,6 @@ class Column:
         self._signed = "unsigned"
         return self
 
-    def not_nullable(self) -> Self:
-        """
-        Sets this column to be not nullable.
-
-        Returns:
-            self
-        """
-        self.is_null = False
-        return self
-
     def set_as_primary(self):
         self.primary = True
 
@@ -90,35 +76,6 @@ class Column:
         """
         self.old_column = column
         return self
-
-    def after(self, after) -> Self:
-        """
-        Sets the column that this new column should be created after.
-
-        This is useful for setting the location of the new column in the table schema.
-
-        Arguments:
-            after {string} -- The column that this new column should be created after
-
-        Returns:
-            self
-        """
-        self._after = after
-        return self
-
-    def get_after_column(self):
-        """
-        Sets the column that this new column should be created after.
-
-        This is useful for setting the location of the new column in the table schema.
-
-        Arguments:
-            after {string} -- The column that this new column should be created after
-
-        Returns:
-            self
-        """
-        return self._after
 
     def default(self, value, raw=False) -> Self:
         """

@@ -1,50 +1,12 @@
 from __future__ import annotations
 
-import inspect
-import json
 import logging
 from collections.abc import Callable
-from copy import deepcopy
-from datetime import datetime
 from typing import Any
 
-try:
-    from typing import Self
-except ImportError:  # Python <3.11
-    from typing import Self  # noqa: F401
-
-from cara.eloquent.expressions import (
-    AggregateExpression,
-    BetweenExpression,
-    F,
-    FromTable,
-    Greatest,
-    GroupByExpression,
-    HavingExpression,
-    JoinClause,
-    Least,
-    Operation,
-    OrderByExpression,
-    QueryExpression,
-    SelectExpression,
-    SubGroupExpression,
-    SubSelectExpression,
-    UpdateQueryExpression,
-)
-from cara.exceptions import (
-    Http404Exception,
-    InvalidArgumentException,
-    ModelNotFoundException,
-    MultipleRecordsFoundException,
-    QueryException,
-)
 from cara.facades import DB
-from cara.support import Collection
 
 from ..observers import ObservesEvents
-from ..pagination import LengthAwarePaginator, SimplePaginator
-from ..schema import Schema
-from ..scopes import BaseScope
 from . import (
     _QueryAggregation,
     _QueryConstraints,
@@ -56,10 +18,7 @@ from . import (
     _QueryResults,
     _QuerySelection,
 )
-from ._QuerySafety import ORDER_BY_COLUMN_RE as _ORDER_BY_COLUMN_RE
-from ._QuerySafety import _is_column_expression
 from .EagerRelations import EagerRelations
-from .TransactionContext import TransactionContext
 
 _logger = logging.getLogger("cara.eloquent.query")
 

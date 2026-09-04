@@ -157,10 +157,14 @@ class MigrationGenerator:
                 highest = max(highest, int(prefix))
         return highest
 
-    def generate_create_migration(
-        self, model_info: dict, style: str = "blueprint"
-    ) -> str:
-        """Generate CREATE TABLE migration content."""
+    def generate_create_migration(self, model_info: dict) -> str:
+        """Generate CREATE TABLE migration content.
+
+        Blueprint is the only rendering: a raw-SQL style used to live here
+        too, but the blueprint IS the SSOT (``MakeMigrationCommand`` refuses
+        ``--style`` anything else), so the SQL renderer had no reachable
+        caller.
+        """
         # Check if model has fields method
         if not model_info.get("has_fields_method", False):
             raise InvalidArgumentException(
@@ -183,10 +187,7 @@ class MigrationGenerator:
         if model_info.get("has_raw_sql", False):
             return self._generate_raw_sql_migration(model_info)
 
-        if style == "sql":
-            return self._generate_sql_create_migration(model_info)
-        else:
-            return self._generate_blueprint_create_migration(model_info)
+        return self._generate_blueprint_create_migration(model_info)
 
     def create_migration_file(self, name: str, content: str, dependency_order: int = 0):
         """Create migration file with Laravel 11+ ordering system (no timestamps).
@@ -220,109 +221,6 @@ class MigrationGenerator:
         _atomic_write(filepath, content)
 
         return filepath
-
-    def _add_field_to_blueprint(self, table, field_name: str, field_info: dict):
-        """Add a field to Blueprint table using field info."""
-        field_type = field_info.get("type", "string")
-        params = field_info.get("params", {})
-
-        # Create the field based on type — capture the returned column
-        # object so chained modifiers (.nullable(), .default(), .unique())
-        # apply to the correct column instead of the table.
-        column = None
-
-        if field_type == "string":
-            length = params.get("length", 255)
-            column = table.string(field_name, length)
-        elif field_type == "integer":
-            column = table.integer(field_name)
-        elif field_type == "unsigned_integer":
-            column = table.unsigned_integer(field_name)
-        elif field_type == "unsigned_big_integer":
-            column = table.unsigned_big_integer(field_name)
-        elif field_type == "text":
-            column = table.text(field_name)
-        elif field_type == "boolean":
-            column = table.boolean(field_name)
-        elif field_type == "decimal":
-            precision = params.get("precision", 10)
-            scale = params.get("scale", 2)
-            column = table.decimal(field_name, precision, scale)
-        elif field_type == "datetime":
-            column = table.datetime(field_name)
-        elif field_type == "timestamp":
-            column = table.timestamp(field_name)
-        elif field_type == "date":
-            column = table.date(field_name)
-        elif field_type == "time":
-            column = table.time(field_name)
-        elif field_type == "enum":
-            options = params.get("options", [])
-            column = table.enum(field_name, options)
-        elif field_type == "json":
-            column = table.json(field_name)
-        elif field_type == "jsonb":
-            column = table.jsonb(field_name)
-        elif field_type == "float":
-            column = table.float(field_name)
-        elif field_type == "binary":
-            column = table.binary(field_name)
-        elif field_type == "uuid":
-            column = table.uuid(field_name)
-        elif field_type == "double":
-            column = table.double(field_name)
-        elif field_type == "char":
-            length = params.get("length", 255)
-            column = table.char(field_name, length)
-        elif field_type == "tiny_integer":
-            column = table.tiny_integer(field_name)
-        elif field_type == "small_integer":
-            column = table.small_integer(field_name)
-        elif field_type == "medium_integer":
-            column = table.medium_integer(field_name)
-        elif field_type == "big_integer":
-            column = table.big_integer(field_name)
-        elif field_type == "increments":
-            column = table.increments(field_name)
-        elif field_type == "big_increments":
-            column = table.big_increments(field_name)
-        elif field_type == "timestamps":
-            table.timestamps()
-            return  # timestamps() doesn't return a column to modify
-        elif field_type == "soft_deletes":
-            table.soft_deletes()
-            return  # soft_deletes() doesn't return a column to modify
-        else:
-            # Default to string for unknown types
-            column = table.string(field_name)
-
-        if column is None:
-            return
-
-        # Apply modifiers to the column object, not the table
-        if params.get("nullable", False):
-            column.nullable()
-
-        if "default" in params:
-            column.default(params["default"])
-
-        if params.get("use_current", False):
-            column.use_current()
-
-        if params.get("unique", False):
-            column.unique()
-
-        # Handle foreign keys
-        foreign_key_info = field_info.get("foreign_key")
-        if foreign_key_info:
-            references = foreign_key_info.get("references")
-            on_table = foreign_key_info.get("on")
-            on_delete = foreign_key_info.get("on_delete", "CASCADE")
-
-            if references and on_table:
-                table.foreign(field_name).references(references).on(on_table).on_delete(
-                    on_delete
-                )
 
     def _generate_field_line(self, field_name: str, field_info: dict) -> str:
         """Generate blueprint field line from field info."""
@@ -449,7 +347,7 @@ class MigrationGenerator:
             cols_str = ", ".join(f'"{c}"' for c in columns)
             refs_str = ", ".join(f'"{c}"' for c in references)
             fk_line = (
-                f'table.foreign([{cols_str}]{name_arg})'
+                f"table.foreign([{cols_str}]{name_arg})"
                 f'.references([{refs_str}]).on("{on_table}")'
             )
         else:
@@ -521,12 +419,6 @@ class MigrationGenerator:
 
     _generate_blueprint_create_migration = (
         _MigrationRendering._migration_generate_blueprint_create_migration
-    )
-    _prettify_sql = _MigrationRendering._migration_prettify_sql
-    _prettify_create_table_sql = _MigrationRendering._migration_prettify_create_table_sql
-    _prettify_alter_table_sql = _MigrationRendering._migration_prettify_alter_table_sql
-    _generate_sql_create_migration = (
-        _MigrationRendering._migration_generate_sql_create_migration
     )
 
     def _generate_import_path(self, model_file: str, model_name: str) -> str:

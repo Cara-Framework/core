@@ -463,24 +463,6 @@ class ResponseFactory:
 
         return self.json(payload, status, headers)
 
-    # =============================================================================
-    # SMART DETECTION FALLBACK
-    # =============================================================================
-
-    def auto_detect_content_type(self) -> BaseResponse:
-        """
-        Use smart content-type detection as fallback.
-
-        Only used when explicit methods are not called.
-
-        Returns:
-            BaseResponse: Response with detected content-type
-        """
-        if not self.headers.is_content_type_explicit():
-            detected_type = ContentTypeDetector.detect(self.response.content)
-            self.headers.content_type(detected_type)
-        return self.response
-
     def finalize(self) -> BaseResponse:
         """
         Finalize response before sending.

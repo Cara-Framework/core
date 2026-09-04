@@ -20,7 +20,6 @@ filter). A single missing or extra value fails the field.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
 from typing import Any
 
 from cara.validation.MessageFormatter import MessageFormatter
@@ -139,12 +138,3 @@ class BatchExistsRule(BaseRule):
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attribute = MessageFormatter.format_attribute_name(field)
         return f"One or more selected {attribute.lower()} are invalid."
-
-    @staticmethod
-    def _coerce_list(value: Any) -> Iterable[Any]:
-        """Convenience for downstream consumers that want the deduped list."""
-        if value is None:
-            return []
-        if isinstance(value, (list, tuple, set)):
-            return list(dict.fromkeys(value))
-        return [value]

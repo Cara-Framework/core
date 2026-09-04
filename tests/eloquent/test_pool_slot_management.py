@@ -43,26 +43,16 @@ These tests pin three lifecycle invariants:
 from __future__ import annotations
 
 import importlib
-import sys
 import threading
-import types
 from unittest.mock import MagicMock
 
 import pytest
 
+from ._fixtures import install_fake_psycopg2
+
 PGModule = importlib.import_module("cara.eloquent.connections.PostgresConnection")
 PostgresConnection = PGModule.PostgresConnection
 DatabaseUnavailableException = PGModule.DatabaseUnavailableException
-
-
-def _install_fake_psycopg2(monkeypatch, connect_factory):
-    """Insert a minimal fake psycopg2 module so ``create_connection``
-    can run without the real driver attached to a live Postgres."""
-    fake = types.ModuleType("psycopg2")
-    fake.connect = connect_factory
-    fake.OperationalError = type("OperationalError", (Exception,), {})
-    monkeypatch.setitem(sys.modules, "psycopg2", fake)
-    return fake
 
 
 def _fresh_pool(
@@ -198,7 +188,7 @@ class TestConnectFailureReleasesSlot:
         sem = _fresh_pool(monkeypatch, size=3)
         before = sem._value
 
-        fake = _install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
+        fake = install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
 
         def _refused(**_kw):
             raise fake.OperationalError("connection refused")
@@ -220,7 +210,7 @@ class TestConnectFailureReleasesSlot:
         sem = _fresh_pool(monkeypatch, size=3, warm=[stale])
         before = sem._value
 
-        fake = _install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
+        fake = install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
         stale.cursor.return_value.execute.side_effect = fake.OperationalError(
             "idle connection dropped"
         )
@@ -245,7 +235,7 @@ class TestConnectFailureReleasesSlot:
         sem = _fresh_pool(monkeypatch, size=2)
         sem.acquire()
 
-        fake = _install_fake_psycopg2(monkeypatch, _mock_pg_connection)
+        fake = install_fake_psycopg2(monkeypatch, _mock_pg_connection)
         conn = _mock_pg_connection()
         conn.info.transaction_status = 1
         conn.rollback.side_effect = fake.OperationalError("connection reset")
@@ -293,7 +283,7 @@ class TestSlotLeakOnMidLifeReconnect:
             connects.append(conn)
             return conn
 
-        _install_fake_psycopg2(monkeypatch, connect_factory=_factory)
+        install_fake_psycopg2(monkeypatch, connect_factory=_factory)
 
         pc = _make_pc()
         pc.make_connection()
@@ -348,7 +338,7 @@ class TestMakeConnectionSetupFailureReleasesSlot:
         sem = _fresh_pool(monkeypatch, size=3)
         before = sem._value
 
-        _install_fake_psycopg2(monkeypatch, _mock_pg_connection)
+        install_fake_psycopg2(monkeypatch, _mock_pg_connection)
 
         # ``foreign_keys=True`` forces ``enable_disable_foreign_keys`` to issue
         # ``self._connection.cursor().execute(...)`` — a DBAPI connection has no
@@ -367,7 +357,7 @@ class TestMakeConnectionSetupFailureReleasesSlot:
             )
             return conn
 
-        _install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)
+        install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)
 
         with pytest.raises(RuntimeError, match="socket closed"):
             pc.make_connection()
@@ -407,7 +397,7 @@ class TestMakeConnectionSetupFailureReleasesSlot:
             )
             return conn
 
-        _install_fake_psycopg2(monkeypatch, _exploding_mock_pg_connection)
+        install_fake_psycopg2(monkeypatch, _exploding_mock_pg_connection)
         pc = _make_pc()
 
         with pytest.raises(RuntimeError, match="TCP RST"):
@@ -422,7 +412,7 @@ class TestMakeConnectionSetupFailureReleasesSlot:
         sem = _fresh_pool(monkeypatch, size=3)
         before = sem._value
 
-        fake = _install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
+        fake = install_fake_psycopg2(monkeypatch, connect_factory=lambda **_kw: None)
 
         def _connection_with_failed_setup(**_kw):
             conn = _mock_pg_connection()
@@ -452,7 +442,7 @@ class TestMakeConnectionSetupFailureReleasesSlot:
             conn.cursor.return_value.execute.side_effect = RuntimeError("repeat failure")
             return conn
 
-        _install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)
+        install_fake_psycopg2(monkeypatch, _broken_mock_pg_connection)
 
         for _ in range(10):
             pc = _make_pc(full_details={"foreign_keys": True})
@@ -477,7 +467,7 @@ class TestRepeatReconnectsDoNotAccumulate:
         def _factory(**_kw):
             return _mock_pg_connection()
 
-        _install_fake_psycopg2(monkeypatch, connect_factory=_factory)
+        install_fake_psycopg2(monkeypatch, connect_factory=_factory)
 
         pc = _make_pc()
         for _ in range(10):
