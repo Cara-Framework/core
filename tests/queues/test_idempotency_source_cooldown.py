@@ -19,7 +19,12 @@ from cara.queues.idempotency import MakesIdempotentBase
 # ``import cara.queues.idempotency.MakesIdempotentBase as module`` binds the
 # CLASS: the package barrel re-exported that name over the submodule. Reach
 # the module object through sys.modules so monkeypatching hits its globals.
-module = sys.modules["cara.queues.idempotency.MakesIdempotentBase"]
+# The cooldown pair moved to its own mixin (2026-09-11) — `Cache`, `Log` and
+# `config` are resolved in THAT module's namespace now, so that is where a
+# rebind has to land. `MakesIdempotentBase` still holds the orchestrator the
+# claim is called from, which is why both names are bound here.
+module = sys.modules["cara.queues.idempotency.ClaimsSourceCooldown"]
+orchestrator = sys.modules["cara.queues.idempotency.MakesIdempotentBase"]
 
 
 @pytest.fixture(autouse=True)

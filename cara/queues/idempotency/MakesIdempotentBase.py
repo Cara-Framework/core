@@ -37,12 +37,12 @@ from typing import Any
 
 import pendulum
 
-from cara.configuration import config
 from cara.exceptions import IdempotencyOverlapException
 from cara.facades import Cache, Log
+from cara.queues.idempotency.ClaimsSourceCooldown import ClaimsSourceCooldown
 
 
-class MakesIdempotentBase:
+class MakesIdempotentBase(ClaimsSourceCooldown):
     """Laravel-style trait for flow-level idempotency (opt-in per job).
 
     Subclasses define their own ``handle()`` and run the body through
@@ -110,9 +110,6 @@ class MakesIdempotentBase:
     #: channel-grain lease; the two callbacks never run concurrently.
     retry_on_idempotency_overlap = False
 
-    #: Cache-key namespace for the per-source poll cooldown.
-    COOLDOWN_KEY_PREFIX = "collection_cooldown:"
-
     #: Cache-key namespace for the result cache (:meth:`_result_key`).
     RESULT_KEY_PREFIX = "job_result:"
 
@@ -144,29 +141,12 @@ class MakesIdempotentBase:
     #: harmless; a reused one is not.
     RESET_FLUSHABLE_KEY_PREFIXES = (RESULT_KEY_PREFIX, LOCK_KEY_PREFIX)
 
-    #: Per-source cooldown windows in minutes, e.g. ``{"reports": 5}``. A
-    #: source absent from the map falls back to
-    #: ``config("jobs.source_cooldown_minutes")`` and then to
-    #: :attr:`default_source_cooldown_minutes`.
-    source_cooldown_minutes: dict[str, int] = {}
-
-    #: Cooldown for sources the map does not name.
-    default_source_cooldown_minutes = 15
-
-    #: Job attributes whose truthy values, in this order, make one poll
-    #: distinct from another. They join the cooldown key after the source.
-    cooldown_grain_attrs: tuple[str, ...] = ()
-
-    #: When True, a job that resolves NO grain is never throttled. Set this
-    #: wherever a source-only key would be a fleet-wide claim (multi-entity
-    #: deployments); leave it False where the source alone IS the identity.
-    cooldown_requires_grains = False
-
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._idempotency_key: str | None = None
         self._idempotency_lock_value: dict[str, Any] | None = None
         self._idempotency_fence: int | None = None
+        self._idempotency_cooldown_claim: tuple[str, str] | None = None
 
     # ── Public orchestrator ─────────────────────────────────────────
 
@@ -193,6 +173,7 @@ class MakesIdempotentBase:
                 redelivery and another callback owns the same lease.
         """
         self._idempotency_key = self.generate_idempotency_key()
+        self._idempotency_cooldown_claim = None
         Log.debug(
             "Job idempotency key: %s", self._idempotency_key, category="idempotency"
         )
@@ -236,25 +217,36 @@ class MakesIdempotentBase:
             self._emit_idempotency_metric("lifecycle_skip")
             return None
 
-        # Recovery/manual re-runs may bypass stale completed-result evidence,
-        # but never an active owner. Lock stealing allows two external-side-effect
-        # jobs to run concurrently and lets the older worker delete the
-        # newer worker's lock on exit.
-        if self.is_job_locked():
-            Log.debug(
-                "Job already running; waiting: %s",
-                self.get_job_identifier(),
-                category="idempotency",
-            )
-            self._emit_idempotency_metric("locked")
-            if getattr(self, "retry_on_idempotency_overlap", False):
-                raise IdempotencyOverlapException(
-                    f"Idempotency lease is active for {self.get_job_identifier()}"
+        # From here on the lifecycle hook may hold this poll's cooldown window
+        # (``_claim_source_cooldown``). A claim is only KEPT by a run that
+        # spends it: if the callback raises, or the lease throttle hands the
+        # envelope back to the queue, the retry that follows would otherwise
+        # meet the still-live window, return None from the gate and be
+        # settled as a success — the whole retry budget a no-op, the source
+        # unpolled for a full window after one transient failure.
+        try:
+            # Recovery/manual re-runs may bypass stale completed-result
+            # evidence, but never an active owner. Lock stealing allows two
+            # external-side-effect jobs to run concurrently and lets the older
+            # worker delete the newer worker's lock on exit.
+            if self.is_job_locked():
+                Log.debug(
+                    "Job already running; waiting: %s",
+                    self.get_job_identifier(),
+                    category="idempotency",
                 )
-            return await self.wait_for_completion()
+                self._emit_idempotency_metric("locked")
+                if getattr(self, "retry_on_idempotency_overlap", False):
+                    raise IdempotencyOverlapException(
+                        f"Idempotency lease is active for {self.get_job_identifier()}"
+                    )
+                return await self.wait_for_completion()
 
-        self._emit_idempotency_metric("fresh")
-        return await self._execute_with_lock(callback)
+            self._emit_idempotency_metric("fresh")
+            return await self._execute_with_lock(callback)
+        except BaseException:
+            self._release_source_cooldown()
+            raise
 
     # ── Key generation + parameter normalization ───────────────────
 
@@ -470,80 +462,6 @@ class MakesIdempotentBase:
         start claiming cooldown keys because it inherited this mixin.
         """
         return True
-
-    def _claim_source_cooldown(self) -> bool:
-        """Atomically claim this poll's cooldown window; ``True`` if it won.
-
-        Poll-style jobs (feed sweeps, inventory refreshes, discovery runs)
-        are dispatched by schedulers that can fire the same poll twice
-        inside one window — two ticks racing, a redelivery, an operator
-        re-run. Claiming a per-``(source, grains)`` key with SETNX + TTL
-        lets exactly the first caller through; the key expires with the
-        cooldown so the next window re-claims it. A ``get`` → ``put``
-        check-then-act here does NOT work: both racing callers read
-        "expired", both pass, and the upstream is polled twice.
-
-        Three escape hatches, in order:
-
-        * no ``source`` attribute — not a poll, never throttled;
-        * a truthy ``force`` attribute — an operator asked for this run;
-        * :attr:`cooldown_requires_grains` with no grain resolved — a
-          source-only key is a GLOBAL claim across every entity, so fail
-          open rather than let one job hold the whole fleet's key. The
-          job's own durable gate (claim token, TTL, lifecycle row) is the
-          real authority.
-        """
-        source = getattr(self, "source", None)
-        if not hasattr(self, "source"):
-            return True
-
-        if getattr(self, "force", None):
-            Log.debug(
-                "Force flag enabled - bypassing cooldown for %s",
-                source,
-                category="idempotency",
-            )
-            return True
-
-        cooldown_minutes = self.source_cooldown_minutes.get(
-            source,
-            int(
-                config(
-                    "jobs.source_cooldown_minutes",
-                    self.default_source_cooldown_minutes,
-                )
-            ),
-        )
-
-        # Grains come from the same identity tuple the idempotency key is
-        # built from, so the cooldown key and the idempotency key can never
-        # disagree about what makes two dispatches "the same poll".
-        grains = [
-            str(getattr(self, attr))
-            for attr in self.cooldown_grain_attrs
-            if getattr(self, attr, None)
-        ]
-        if self.cooldown_requires_grains and not grains:
-            return True
-
-        time_key = self.COOLDOWN_KEY_PREFIX + ":".join([str(source), *grains])
-
-        if Cache.add(time_key, pendulum.now("UTC").isoformat(), cooldown_minutes * 60):
-            Log.debug(
-                "Cooldown claim taken for %s (cooldown: %sm)",
-                source,
-                cooldown_minutes,
-                category="idempotency",
-            )
-            return True
-
-        Log.debug(
-            "Cooldown active for %s (cooldown: %sm)",
-            source,
-            cooldown_minutes,
-            category="idempotency",
-        )
-        return False
 
     # ── Metric emission hooks (override in subclass) ───────────────
 
