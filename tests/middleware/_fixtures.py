@@ -9,10 +9,9 @@ from __future__ import annotations
 from cara.middleware.http.ThrottleRequests import ThrottleRequests
 
 
-def throttle_middleware(limit=None, window=None) -> ThrottleRequests:
+def throttle_middleware(limiter=None) -> ThrottleRequests:
     """Build the middleware without the provider boot the base
     ``Middleware.__init__`` triggers."""
     middleware = ThrottleRequests.__new__(ThrottleRequests)
-    middleware.custom_limit = limit
-    middleware.custom_window_minutes = window
+    middleware.limiter_name = limiter
     return middleware

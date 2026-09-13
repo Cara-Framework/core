@@ -25,9 +25,9 @@ The implementation mirrors ``ThrottleRequests`` for parity:
     starve each other.
   * Per-bucket limits come from ``rate.<name>`` config keys
     (e.g. ``rate.ws_connect``) so ops can tune without a code change.
-  * Cache failure defaults to fail-CLOSED (reject the handshake).
-    The only availability mode is a bounded per-process in-memory counter;
-    there is no uncounted fail-open mode.
+  * The handshake spends from the same GCRA authority HTTP does. A cache
+    failure closes the handshake: there is no availability mode that lets
+    a connection through uncounted.
   * Limit-exceeded rejects with WebSocket close code 4008, which
     the framework already documents in
     :class:`cara.exceptions.types.websocket.WebSocketException` as
@@ -49,7 +49,7 @@ from cara.exceptions import ServiceUnavailableException, WebSocketException
 from cara.facades import Log
 from cara.http.request.Request import _is_trusted_proxy
 from cara.middleware.Middleware import Middleware
-from cara.rates import attempt_rate_limit
+from cara.rates import Limit, attempt_rate_limit
 from cara.support import mask_ip
 from cara.websocket import Socket
 
@@ -59,34 +59,26 @@ _DEFAULT_WINDOW_SECONDS = 60
 
 
 class Throttle(Middleware):
-    """Per-IP, per-channel rolling-window rate limit on WebSocket
-    handshakes. Mirrors the contract of the HTTP ``ThrottleRequests``
-    middleware so the same ops dashboards / alerts can cover both
-    transports."""
+    """Per-IP, per-channel rate limit on WebSocket handshakes. Mirrors the
+    contract of the HTTP ``ThrottleRequests`` middleware so the same ops
+    dashboards / alerts can cover both transports."""
 
     def __init__(self, application, name: str = "ws_connect"):
         super().__init__(application)
         self.name = name
 
     async def handle(self, socket: Socket, next_fn: Callable):
-        limit, window = self._limits()
+        count, window = self._limits()
         ip = self._client_ip(socket)
         path = self._path(socket)
-        key = f"throttle:ws:{self.name}:{ip}:{path}"
-
-        # Shared counting + Redis-down denial via the same helper the HTTP
-        # throttle uses so both transports fail closed uniformly.
+        limit = Limit(count, window).by(f"ws:{self.name}:{ip}:{path}")
 
         try:
-            allowed, _remaining, _reset_in = attempt_rate_limit(
-                cache_key=key,
-                window_seconds=window,
-                max_attempts=limit,
-            )
+            decision = attempt_rate_limit(limit)
         except ServiceUnavailableException as e:
             Log.warning(
                 "WebSocket throttle cache failure for key %s; failing closed. %s",
-                key,
+                limit.key,
                 e,
                 category="cara.websocket",
             )
@@ -99,13 +91,13 @@ class Throttle(Middleware):
                 _RATE_LIMIT_CLOSE_CODE,
             ) from e
 
-        if not allowed:
+        if not decision.allowed:
             Log.warning(
                 "WebSocket throttle exceeded: ip=%s path=%s name=%s limit=%s",
                 mask_ip(ip),
                 path,
                 self.name,
-                limit,
+                count,
                 category="cara.websocket",
             )
             with contextlib.suppress(
@@ -113,7 +105,7 @@ class Throttle(Middleware):
             ):
                 await socket.close(code=_RATE_LIMIT_CLOSE_CODE)
             raise WebSocketException(
-                f"WebSocket connect rate exceeded (>{limit} per {window}s)",
+                f"WebSocket connect rate exceeded (>{count} per {window}s)",
                 _RATE_LIMIT_CLOSE_CODE,
             )
 

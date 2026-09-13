@@ -120,6 +120,30 @@ class CacheContract:
         """Return the key's remaining expiry, or ``None`` when absent."""
         raise NotImplementedError
 
+    def throttle(
+        self,
+        key: str,
+        *,
+        emission_interval_ms: int,
+        burst: int,
+        cost: int = 1,
+    ) -> tuple[bool, int, int, int]:
+        """Spend ``cost`` cells from the GCRA bucket at ``key``, atomically.
+
+        Returns ``(allowed, remaining, retry_after_ms, reset_after_ms)``: whether
+        the spend happened, how many more cells the bucket holds, how long until
+        a refused spend would fit, and how long until the bucket is full. The
+        stored state is the bucket's theoretical arrival time — the moment it
+        would be full again at its steady pace — and it expires at that moment,
+        so an idle key costs nothing.
+
+        A refused spend writes nothing. Every driver MUST make the
+        read-decide-write one atomic step against ONE clock for all callers:
+        Redis evaluates it server-side on the server's clock, the file cache
+        serializes it under the process file lock.
+        """
+        raise NotImplementedError
+
     def forget_if(self, key: str, expected_value: Any) -> bool:
         """
         Atomically delete ``key`` only if its current value equals

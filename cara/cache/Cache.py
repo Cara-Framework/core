@@ -373,6 +373,23 @@ class Cache:
         """
         return self.driver(driver_name).increment(key, amount, ttl)
 
+    def throttle(
+        self,
+        key: str,
+        *,
+        emission_interval_ms: int,
+        burst: int,
+        cost: int = 1,
+        driver_name: str | None = None,
+    ) -> tuple[bool, int, int, int]:
+        """Spend ``cost`` from the GCRA bucket at ``key`` — see ``CacheContract.throttle``."""
+        return self.driver(driver_name).throttle(
+            key,
+            emission_interval_ms=emission_interval_ms,
+            burst=burst,
+            cost=cost,
+        )
+
     def decrement(
         self,
         key: str,

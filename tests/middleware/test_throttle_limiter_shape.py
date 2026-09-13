@@ -1,26 +1,18 @@
-"""A limiter callback returns ONE ``Limit`` — the docs promised otherwise.
+"""A limiter callback returns ONE keyed ``Limit``, and a Limit is a real policy.
 
-``RateLimiter.for_`` and ``RateLimiter.resolve_limiter`` both documented
-"a Limit object **or list of Limit objects**". Nothing implements the list.
-``ThrottleRequests._get_limit_config`` hands the callback's value straight
-back and ``_attempt_limit`` immediately reads ``limit_config.max_attempts``,
-so an operator who took the documented second option got
-``AttributeError: 'list' object has no attribute 'max_attempts'`` — a 500 on
-every request to every route carrying that ``throttle:<name>``, with nothing
-in the error naming the misconfigured limiter.
-
-§10: the promise is deleted rather than implemented. Composing several
-windows would also need a key per limit, a most-restrictive rule for the
-``X-RateLimit-*`` headers, and a rule for which limit's ``response``
-callback wins — none of which exist, and inventing them behind a docstring
-line is how the lie got there.
+``RateLimiter.for_`` once documented "a Limit object **or list of Limit
+objects**". Nothing implemented the list: the middleware dereferenced the
+budget on whatever came back, so an operator who took the documented option
+got an ``AttributeError`` 500 on every request to every route carrying that
+``throttle:<name>``, with nothing naming the misconfigured limiter. The promise
+was deleted rather than implemented — a route that needs two budgets names two
+limiters, each its own middleware.
 
 Deleting a docstring line cannot be tested, so the enforcement is tested
-instead: ``resolve_limiter`` refuses a shape the throttle cannot read, fails
-closed, and names the limiter. These tests drive the REAL
-``RateLimiter.resolve_limiter`` — the sibling
-``test_throttle_unregistered_limiter`` module stubs that method out, which
-would have hidden this entirely.
+instead: ``resolve_limiter`` refuses every shape the throttle cannot spend —
+including a Limit with no key, which has no bucket — fails closed, and names
+the limiter. These tests drive the REAL ``RateLimiter.resolve_limiter``; the
+sibling ``test_throttle_unregistered_limiter`` module stubs that method out.
 """
 
 from __future__ import annotations
@@ -39,42 +31,32 @@ _throttle_module = sys.modules["cara.middleware.http.ThrottleRequests"]
 
 
 def _real_rate_limiter(**limiters) -> RateLimiter:
-    """A genuine ``RateLimiter`` with genuine ``for_`` registrations.
-
-    Explicit fixed-driver options keep the test on the same validated
-    contract production uses; nothing here reaches ``attempt``.
-    """
-    limiter = RateLimiter(
-        application=None,
-        options={"limit": 60, "window_seconds": 60, "cache_prefix": "rate_"},
-    )
+    """A genuine ``RateLimiter`` with genuine ``for_`` registrations."""
+    limiter = RateLimiter(application=None)
     for name, callback in limiters.items():
         limiter.for_(name, callback)
     return limiter
 
 
 @pytest.mark.parametrize(
-    "options",
-    [
-        {},
-        {"limit": 0, "window_seconds": 60, "cache_prefix": "rate_"},
-        {"limit": 60, "window_seconds": 0, "cache_prefix": "rate_"},
-        {"limit": 60, "window_seconds": 60, "cache_prefix": ""},
-    ],
-)
-def test_fixed_driver_rejects_incomplete_or_nonpositive_options(options) -> None:
-    with pytest.raises(RateLimitConfigurationException):
-        RateLimiter(application=None, options=options)
-
-
-@pytest.mark.parametrize(
     ("factory", "exception_type"),
     [
         (lambda: Limit.per_minute(0), ValueError),
-        (lambda: Limit(-1, 1), ValueError),
-        (lambda: Limit(True, 1), TypeError),
+        (lambda: Limit(-1, 60), ValueError),
+        (lambda: Limit(True, 60), TypeError),
+        (lambda: Limit(5, 60, burst=0), ValueError),
+        (lambda: Limit(5, 60, burst=2.5), TypeError),
+        (lambda: Limit(0, 0, burst=3), ValueError),
         (lambda: Limit.none().by(""), ValueError),
-        (lambda: Limit.none().response(None), TypeError),
+    ],
+    ids=[
+        "zero-limit-with-a-period",
+        "negative",
+        "bool",
+        "zero-burst",
+        "float-burst",
+        "unlimited-with-burst",
+        "empty-key",
     ],
 )
 def test_limit_builder_rejects_ambiguous_or_invalid_shapes(
@@ -84,31 +66,32 @@ def test_limit_builder_rejects_ambiguous_or_invalid_shapes(
         factory()
 
 
-class TestTheListFormWasNeverImplemented:
-    def test_a_list_of_limits_cannot_be_enforced(self) -> None:
-        """The consequence the docstring promised away, stated as code:
-        ``_attempt_limit`` dereferences ``max_attempts`` on whatever the
-        limiter returned."""
-        limits = [Limit.per_minute(5), Limit.per_hour(100)]
+def test_burst_defaults_to_the_limit_and_the_pace_rounds_up() -> None:
+    seven_a_minute = Limit.per_minute(7)
 
-        with pytest.raises(AttributeError, match="max_attempts"):
-            throttle_middleware()._attempt_limit("k", limits)
+    assert seven_a_minute.burst == 7
+    # 60000 / 7 = 8571.43 ms; rounding down would mint budget.
+    assert seven_a_minute.emission_interval_ms == 8572
+    assert Limit.per_second(4, burst=10).emission_interval_ms == 250
 
+
+class TestOnlyOneKeyedLimitResolves:
     def test_resolving_a_list_returning_limiter_refuses(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Fails closed at the resolve step, before the middleware can turn
-        it into an unattributable AttributeError deeper in the stack."""
         monkeypatch.setattr(
             _throttle_module.facades,
             "RateLimiter",
             _real_rate_limiter(
-                login=lambda _r: [Limit.per_minute(5), Limit.per_hour(100)]
+                login=lambda _r: [
+                    Limit.per_minute(5).by("ip:198.51.100.1"),
+                    Limit.per_hour(100).by("ip:198.51.100.1"),
+                ]
             ),
         )
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
-            throttle_middleware(limit="login")._resolve_limit_config(request=object())
+            throttle_middleware(limiter="login")._resolve_limit(request=object())
 
         assert "throttle:login" in str(excinfo.value)
         assert "list" in str(excinfo.value)
@@ -116,8 +99,6 @@ class TestTheListFormWasNeverImplemented:
     def test_the_refusal_names_where_the_limiter_is_configured(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An operator reading a 500 log line has to be able to find the
-        registration — the AttributeError named nothing."""
         monkeypatch.setattr(
             _throttle_module.facades,
             "RateLimiter",
@@ -125,89 +106,47 @@ class TestTheListFormWasNeverImplemented:
         )
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
-            throttle_middleware(limit="api")._resolve_limit_config(request=object())
+            throttle_middleware(limiter="api")._resolve_limit(request=object())
 
         assert "config/rate.py" in str(excinfo.value)
 
     def test_a_none_returning_callback_is_refused_too(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A callback whose branch fell through returns ``None``, which the
-        pre-fix path reported as "unregistered limiter" — the wrong
-        diagnosis, and it would be a silent bypass if that refusal were ever
-        relaxed."""
+        """A callback whose branch fell through returns ``None`` — a different
+        fault from an unregistered name, and a silent bypass if it were ever
+        read as "no limit"."""
         monkeypatch.setattr(
             _throttle_module.facades,
             "RateLimiter",
             _real_rate_limiter(admin=lambda _r: None),
         )
 
-        with pytest.raises(RateLimitConfigurationException):
-            throttle_middleware(limit="admin")._resolve_limit_config(request=object())
+        with pytest.raises(RateLimitConfigurationException) as excinfo:
+            throttle_middleware(limiter="admin")._resolve_limit(request=object())
 
+        assert "NoneType" in str(excinfo.value)
 
-class TestTheSupportedShapeIsUntouched:
-    def test_a_single_limit_resolves_through_the_real_limiter(
+    def test_a_limit_without_a_key_has_no_bucket_to_spend(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        expected = Limit.per_minute(5).by("ip:127.0.0.1")
         monkeypatch.setattr(
             _throttle_module.facades,
             "RateLimiter",
-            _real_rate_limiter(login=lambda _r: expected),
+            _real_rate_limiter(api=lambda _r: Limit.per_minute(60)),
         )
-
-        resolved = throttle_middleware(limit="login")._resolve_limit_config(
-            request=object()
-        )
-
-        assert resolved is expected
-
-    def test_an_unlimited_limit_is_a_valid_shape(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``Limit.none()`` is ``max_attempts=0``, which ``_attempt_limit``
-        reads as UNLIMITED. The shape check must not mistake a falsy budget
-        for a missing attribute."""
-        monkeypatch.setattr(
-            _throttle_module.facades,
-            "RateLimiter",
-            _real_rate_limiter(internal=lambda _r: Limit.none()),
-        )
-
-        resolved = throttle_middleware(limit="internal")._resolve_limit_config(
-            request=object()
-        )
-
-        assert resolved.max_attempts == 0
-
-    def test_an_unregistered_name_still_reports_itself_as_unregistered(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The new shape refusal must not swallow the pre-existing
-        unregistered-limiter refusal — different fault, different message."""
-        monkeypatch.setattr(_throttle_module.facades, "RateLimiter", _real_rate_limiter())
 
         with pytest.raises(RateLimitConfigurationException) as excinfo:
-            throttle_middleware(limit="never_registered")._resolve_limit_config(
-                request=object()
-            )
+            throttle_middleware(limiter="api")._resolve_limit(request=object())
 
-        assert "unregistered rate" in str(excinfo.value)
-
-
-class TestTheDocumentedContractIsTheEnforcedOne:
-    """§10 the only way it can actually be held: not by grepping the
-    docstring for a deleted sentence — the docstring quotes the old promise
-    while explaining why it is gone — but by pinning that the one shape the
-    docs now describe is the one shape the code accepts."""
+        assert ".by(" in str(excinfo.value)
 
     @pytest.mark.parametrize(
         "returned",
         [
-            [Limit.per_minute(5)],
-            (Limit.per_minute(5),),
-            {"api": Limit.per_minute(5)},
+            [Limit.per_minute(5).by("ip:198.51.100.1")],
+            (Limit.per_minute(5).by("ip:198.51.100.1"),),
+            {"api": Limit.per_minute(5).by("ip:198.51.100.1")},
             60,
             "60/min",
             None,
@@ -224,4 +163,49 @@ class TestTheDocumentedContractIsTheEnforcedOne:
         )
 
         with pytest.raises(RateLimitConfigurationException):
-            throttle_middleware(limit="api")._resolve_limit_config(request=object())
+            throttle_middleware(limiter="api")._resolve_limit(request=object())
+
+
+class TestTheSupportedShapeIsUntouched:
+    def test_a_single_keyed_limit_resolves_through_the_real_limiter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        expected = Limit.per_minute(5).by("ip:198.51.100.1")
+        monkeypatch.setattr(
+            _throttle_module.facades,
+            "RateLimiter",
+            _real_rate_limiter(login=lambda _r: expected),
+        )
+
+        resolved = throttle_middleware(limiter="login")._resolve_limit(request=object())
+
+        assert resolved is expected
+
+    def test_an_unlimited_limit_needs_no_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            _throttle_module.facades,
+            "RateLimiter",
+            _real_rate_limiter(internal=lambda _r: Limit.none()),
+        )
+
+        resolved = throttle_middleware(limiter="internal")._resolve_limit(
+            request=object()
+        )
+
+        assert resolved.unlimited is True
+
+    def test_an_unregistered_name_still_reports_itself_as_unregistered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The shape refusal must not swallow the unregistered-limiter refusal —
+        different fault, different message."""
+        monkeypatch.setattr(_throttle_module.facades, "RateLimiter", _real_rate_limiter())
+
+        with pytest.raises(RateLimitConfigurationException) as excinfo:
+            throttle_middleware(limiter="never_registered")._resolve_limit(
+                request=object()
+            )
+
+        assert "unregistered rate" in str(excinfo.value)

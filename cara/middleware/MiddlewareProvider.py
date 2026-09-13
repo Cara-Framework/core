@@ -41,7 +41,6 @@ class MiddlewareProvider(DeferredProvider):
         return [
             AttachRequestID,
             CheckMaintenanceMode,
-            ThrottleRequests,
             TrimStrings,
         ]
 

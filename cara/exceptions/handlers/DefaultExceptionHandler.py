@@ -36,7 +36,13 @@ class DefaultExceptionHandler:
         status_code = self.get_status_code(exception)
         response_data = self.format_response(exception, status_code)
         await self.send_response(
-            response_data, status_code, scope, receive, send, request
+            response_data,
+            status_code,
+            scope,
+            receive,
+            send,
+            request,
+            headers=_EXCEPTION_RESPONSE_HEADERS.declared(exception),
         )
 
     def get_status_code(self, exception: Exception) -> int:
@@ -310,8 +316,15 @@ class DefaultExceptionHandler:
         receive: Any,
         send: Any,
         request: Any = None,
+        *,
+        headers: list | None = None,
     ) -> None:
-        """Send the response."""
+        """Send the response.
+
+        ``headers`` are the ones the exception declared for its own response —
+        a 429's ``RateLimit`` pair — already validated by
+        ``_ExceptionResponseHeaders.declared``.
+        """
         if scope.get("response_started") and not scope.get("response_sent"):
             # A response START is already on the wire (the body send then
             # failed): the status cannot change and any new
@@ -358,7 +371,7 @@ class DefaultExceptionHandler:
         # truth (works for both ``to_dict``-defining exceptions and the
         # ``getattr(exception, "retry_after", ...)`` fallback path).
         retry = self._retry_after_header_for(data)
-        extras = cors + sec + rid + retry + allow
+        extras = cors + sec + rid + retry + allow + (headers or [])
         try:
             if self.application:
                 response = self.application.make("response")

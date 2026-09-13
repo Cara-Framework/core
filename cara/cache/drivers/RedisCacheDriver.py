@@ -474,6 +474,76 @@ class RedisCacheDriver(CacheContract):
             )
             raise
 
+    # GCRA in one script. The stored value is the bucket's theoretical arrival
+    # time (ms); TIME inside the script gives every worker the same "now" — a
+    # caller-supplied clock would let skew between hosts mint or burn budget.
+    # A refusal returns before the SET, so it never moves the bucket.
+    _THROTTLE_LUA = (
+        "local interval = tonumber(ARGV[1]); "
+        "local burst = tonumber(ARGV[2]); "
+        "local cost = tonumber(ARGV[3]); "
+        "local clock = redis.call('time'); "
+        "local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000); "
+        "local tolerance = interval * burst; "
+        "local tat = tonumber(redis.call('get', KEYS[1])); "
+        "if not tat or tat < now then tat = now end; "
+        "local next_tat = tat + interval * cost; "
+        "local allow_at = next_tat - tolerance; "
+        "if now < allow_at then "
+        "local remaining = math.floor((tolerance - (tat - now)) / interval); "
+        "if remaining < 0 then remaining = 0 end; "
+        "return {0, remaining, allow_at - now, tat - now} "
+        "end; "
+        "local full_after = next_tat - now; "
+        "redis.call('set', KEYS[1], next_tat, 'PX', full_after); "
+        "local remaining = math.floor((tolerance - full_after) / interval); "
+        "if remaining < 0 then remaining = 0 end; "
+        "return {1, remaining, 0, full_after}"
+    )
+
+    def throttle(
+        self,
+        key: str,
+        *,
+        emission_interval_ms: int,
+        burst: int,
+        cost: int = 1,
+    ) -> tuple[bool, int, int, int]:
+        """GCRA cell evaluated server-side — see ``CacheContract.throttle``.
+
+        Lives in the counter namespace: the state is a raw integer, and keeping
+        it beside the INCRBY counters keeps authenticated values out of reach.
+        """
+        for name, value in (
+            ("emission_interval_ms", emission_interval_ms),
+            ("burst", burst),
+            ("cost", cost),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise CacheConfigurationException(
+                    f"Cache throttle {name} must be a positive integer"
+                )
+        redis_key = self._counter_key(key)
+        try:
+            allowed, remaining, retry_after_ms, reset_after_ms = self._client.eval(
+                self._THROTTLE_LUA,
+                1,
+                redis_key,
+                emission_interval_ms,
+                burst,
+                cost,
+            )
+        except Exception as exc:
+            Log.error(
+                "[RedisCacheDriver] throttle failed for '%s': %s",
+                key,
+                exc,
+                category="cache",
+                exc_info=True,
+            )
+            raise
+        return bool(allowed), int(remaining), int(retry_after_ms), int(reset_after_ms)
+
     def forget_if(self, key: str, expected_value: Any) -> bool:
         redis_key = self._value_key(key)
         owner_token = self._codec.encode(expected_value)

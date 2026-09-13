@@ -1,145 +1,117 @@
-"""
-Middleware that enforces a fixed-window rate limit on each request.
-
-Laravel-style parametric usage: throttle:60,1 (60 requests per 1 minute)
-If the client exceeds the limit, returns a 429 Response with appropriate headers so the client
-knows when to retry. Otherwise, adds rate-limit info in response headers.
-"""
+"""Rate-limit a route through one named limiter: ``throttle:<name>``."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import cara.facades as facades
-from cara.exceptions import RateLimitConfigurationException
+from cara.exceptions import RateLimitConfigurationException, TooManyRequestsException
 from cara.http import Request, Response
 from cara.middleware.Middleware import Middleware
-from cara.rates import Limit, attempt_rate_limit
+from cara.observability import counter, metric_name
+from cara.rates import Limit, RateLimitDecision
+
+_logger = logging.getLogger("cara.middleware.throttle")
 
 
 class ThrottleRequests(Middleware):
-    """Rate limiting middleware with automatic parameter parsing."""
+    """Spend one request from a named limiter's bucket, or refuse with 429.
 
-    def __init__(self, application, limit=None, window=None):
-        """ROOT-CAUSE / scenario 6 (concurrent load probe).
-        ----------------------------------------------------
-        ``limit`` and ``window`` are intentionally **untyped**.
-        ``MiddlewareParameterParser`` inspects ``__init__`` annotations
-        and uses them to coerce raw route-middleware strings — so
-        annotating ``limit: Optional[int]`` made the parser run
-        ``int("api")`` for ``throttle:api``, raise ``ValueError``,
-        and silently fall back to ``limit=None``. The route then
-        behaved as if it had no throttle at all, and the parameterless
-        ``ThrottleRequests`` global did the actual rate-limit work
-        with the global fallback ``Limit(RateLimiter.limit, ...)``
-        instead of the named limiter the route asked for. With the
-        annotations removed the parser keeps the raw string and the
-        constructor's existing string/int branching does the right
-        thing — named limiters resolve via
-        ``RateLimiter.resolve_limiter(name, request)``.
-        """
+    A route names its limiter — ``throttle:api`` — and ``config/rate.py``
+    LIMITERS maps that name to a callback returning the ``Limit`` for the
+    request in front of it: its pace, its burst and its key. The name is the
+    only form. ``throttle:60,1`` built an unreviewed budget at the call site,
+    outside the one file every other ceiling lives in, and no route used it.
+
+    The parameter is deliberately unannotated: ``MiddlewareParameterParser``
+    coerces raw route strings through ``__init__`` annotations, and an ``int``
+    annotation once turned ``throttle:api`` into a silent no-op.
+
+    An allowed response carries the IETF ``RateLimit-Policy`` and ``RateLimit``
+    headers (draft-ietf-httpapi-ratelimit-headers); a refusal raises
+    ``TooManyRequestsException`` with the same pair plus ``Retry-After``, so it
+    leaves through the one error path — envelope, CORS and all. The
+    ``X-RateLimit-*`` trio it replaced was nobody's standard.
+
+    Nothing registers this middleware globally. It used to sit in the
+    framework's default stack as a parameterless instance that had to
+    recognise itself and do nothing, so a throttled route was not charged
+    twice; a middleware that exists to skip itself is not a feature.
+    """
+
+    def __init__(self, application, limiter=None):
         super().__init__(application)
-
-        if limit is not None and not isinstance(limit, str):
-            self.custom_limit = limit
-        elif limit is not None:
-            try:
-                self.custom_limit = int(limit)
-            except ValueError, TypeError:
-                self.custom_limit = limit
-        else:
-            self.custom_limit = None
-
-        if window is not None:
-            try:
-                self.custom_window_minutes = int(window)
-            except ValueError, TypeError:
-                self.custom_window_minutes = window
-        else:
-            self.custom_window_minutes = None
+        self.limiter_name = limiter
 
     async def handle(
         self, request: Request, next_fn: Callable[..., Awaitable[Any]]
     ) -> Response:
-        """Handle rate limiting logic."""
-        # Bypass for trusted IPs (monitoring, health checks, local dev).
         if self._is_trusted_ip(request):
             return await next_fn(request)
 
-        # ROOT-CAUSE / scenario 6 (concurrent load probe).
-        # ``ThrottleRequests`` is registered TWICE in the framework:
-        #   1. As a default global middleware in
-        #      ``MiddlewareProvider.default_http_middleware`` (no params).
-        #   2. As the route-level alias ``throttle:<name>`` (with params).
-        #
-        # Previously, the parameterless global instance fell through to
-        # ``Limit(max_attempts=RateLimiter.limit, ...)`` and incremented
-        # the same ``throttle_<method>:<endpoint>:<ip>`` key the
-        # route-level instance later incremented again — every request
-        # to a throttled route burned TWO units of budget instead of
-        # one. ``X-RateLimit-Remaining`` decremented at 2x the request
-        # rate, halving the effective per-IP budget for any route that
-        # opted into ``throttle:<name>`` (which is most of the API).
-        #
-        # The default global instance has ``custom_limit is None`` and
-        # ``custom_window_minutes is None`` (no constructor args).
-        # Treat that shape as opt-out: rate limiting is now strictly
-        # opt-in via ``throttle:<name>`` per route (or via parameterised
-        # global registration like ``throttle:60,1`` in
-        # ``config/middleware.py``). This eliminates the double-charge
-        # without taking protection away from any route that already
-        # declared ``throttle:<name>``.
-        if self.custom_limit is None and self.custom_window_minutes is None:
+        limit = self._resolve_limit(request)
+        if limit.unlimited:
             return await next_fn(request)
 
-        # First, check if parameter is a named limiter. This either returns a
-        # Limit or raises — there is deliberately no "no config found, let it
-        # through" branch any more; an unresolvable throttle is a refusal.
-        limit_config = self._resolve_limit_config(request)
+        decision = facades.RateLimiter.attempt(limit)
+        self._count(decision)
+        headers = self._headers(decision)
+        if not decision.allowed:
+            raise TooManyRequestsException(
+                retry_after=decision.retry_after,
+                response_headers=headers,
+            )
 
-        # Get the rate limit key
-        key = self._resolve_key(request, limit_config)
-
-        # Attempt to check/record the request
-        allowed, remaining, reset_in = self._attempt_limit(key, limit_config)
-
-        if not allowed:
-            # Build a 429 Response with the canonical error envelope.
-            # Pre-fix the body was ``{"success": False, "message": ...}``
-            # while the framework's DefaultExceptionHandler emits
-            # ``{"error", "type", ...}`` — same caller hitting an error
-            # via two different paths saw two different shapes. The
-            # client / SDK now branches on ``type`` everywhere.
-            resp = Response(self.application)
-            body = {
-                "error": "Too Many Requests",
-                "type": "rate_limit_exceeded",
-                "retry_after": int(reset_in),
-            }
-            resp.json(body, 429)
-
-            # Attach rate-limit headers
-            max_attempts = getattr(limit_config, "max_attempts", self.custom_limit or 60)
-            resp.header("X-RateLimit-Limit", str(max_attempts))
-            resp.header("X-RateLimit-Remaining", "0")
-            resp.header("X-RateLimit-Reset", str(reset_in))
-
-            # It's also common to include a Retry-After header (seconds)
-            resp.header("Retry-After", str(reset_in))
-
-            return resp
-
-        # If allowed, call the next handler to get the response
         response = await next_fn(request)
-
-        # Attach headers so clients can see their quota
-        max_attempts = getattr(limit_config, "max_attempts", self.custom_limit or 60)
-        response.header("X-RateLimit-Limit", str(max_attempts))
-        response.header("X-RateLimit-Remaining", str(remaining))
-        response.header("X-RateLimit-Reset", str(reset_in))
-
+        for name, value in headers.items():
+            response.header(name, value)
         return response
+
+    def _resolve_limit(self, request: Request) -> Limit:
+        """The ``Limit`` this route's named limiter sets for ``request``.
+
+        Refuses rather than defaulting (§9): a missing or unregistered name is
+        an unconfigured gate. The global 60/min fallback that once answered a
+        mistyped ``throttle:login`` enforced twelve times the intended ceiling
+        while every header still read "throttled".
+        """
+        name = self.limiter_name
+        if not isinstance(name, str) or not name:
+            raise RateLimitConfigurationException(
+                "throttle needs a limiter name — throttle:<name>, registered in "
+                "config/rate.py LIMITERS."
+            )
+        limit = facades.RateLimiter.resolve_limiter(name, request)
+        if limit is None:
+            raise RateLimitConfigurationException(
+                f"throttle:{name} names an unregistered rate limiter; register it "
+                "in config/rate.py LIMITERS."
+            )
+        return limit
+
+    def _headers(self, decision: RateLimitDecision) -> dict[str, str]:
+        """The IETF pair for this policy; ``t`` is seconds until the bucket is full."""
+        policy = self.limiter_name
+        return {
+            "RateLimit-Policy": f'"{policy}";q={decision.limit};w={decision.period_seconds}',
+            "RateLimit": f'"{policy}";r={decision.remaining};t={decision.reset_after}',
+        }
+
+    def _count(self, decision: RateLimitDecision) -> None:
+        """Record the decision for alerting; a metrics fault never fails the request."""
+        try:
+            counter(
+                metric_name("rate_limit_decisions_total"),
+                "Rate-limit decisions by named limiter and outcome.",
+                ("limiter", "outcome"),
+            ).labels(
+                limiter=self.limiter_name,
+                outcome="allowed" if decision.allowed else "denied",
+            ).inc()
+        except Exception:
+            _logger.debug("rate-limit decision metric failed", exc_info=True)
 
     def _is_trusted_ip(self, request: Request) -> bool:
         """Check whether the request originates from a trusted IP.
@@ -172,142 +144,3 @@ class ThrottleRequests(Middleware):
         except Exception as e:
             facades.Log.warning("ThrottleRequests internal failure: %s", e)
             return False
-
-    def _resolve_limit_config(self, request: Request):
-        """
-        Resolve the limit configuration for this request.
-
-        Checks in order:
-        1. Named limiter (if middleware parameter matches a registered limiter name)
-        2. Custom numeric parameters (throttle:60,1 format)
-
-        Returns a Limit object, or raises ``RateLimitConfigurationException``
-        when the route asked for a limit this process cannot produce.
-
-        ROOT-CAUSE (§9 fail-closed).
-        ---------------------------
-        There used to be a third step: an unresolved ``throttle:<name>``
-        fell through to ``Limit(RateLimiter.limit, RateLimiter.window / 60)``
-        — the 60/minute global default. So a route declaring
-        ``throttle:login`` whose ``RateLimiter.for_("login", ...)``
-        registration was mistyped, moved to a provider that is not booted,
-        or simply forgotten enforced 60/min instead of 5/min, and said so
-        nowhere: the router table, the middleware list and the
-        ``X-RateLimit-Limit`` header all still read "throttled". The first
-        evidence of the 12x widening would have been a successful
-        credential-stuffing run. An unknown limiter name is an unconfigured
-        gate; it must refuse, not invent a permissive SLA.
-
-        The refusal is an exception rather than a zero-budget ``Limit``
-        because ``_attempt_limit`` reads ``max_attempts == 0`` as UNLIMITED
-        — the "fail-closed" sentinel would have been maximally fail-open.
-        """
-
-        # Check if custom_limit is actually a limiter name (string)
-        if isinstance(self.custom_limit, str):
-            resolved = facades.RateLimiter.resolve_limiter(self.custom_limit, request)
-            if resolved is None:
-                raise RateLimitConfigurationException(
-                    f"throttle:{self.custom_limit} names an unregistered rate "
-                    f"limiter; register it in config/rate.py LIMITERS."
-                )
-            return resolved
-
-        if self.custom_limit is not None:
-            # Custom numeric parameters provided (throttle:60,1)
-            window_minutes = self.custom_window_minutes or 1
-            return Limit(max_attempts=self.custom_limit, decay_minutes=window_minutes)
-
-        raise RateLimitConfigurationException(
-            "ThrottleRequests reached with no resolvable limit configuration."
-        )
-
-    def _resolve_key(self, request: Request, limit_config) -> str:
-        """
-        Resolve the rate limit key for this request and limit config.
-
-        Uses the limit's _key attribute if set, otherwise constructs a default key
-        from endpoint + user_id (or IP address).
-
-        Args:
-            request: The HTTP request object
-            limit_config: The Limit object
-
-        Returns:
-            A unique rate limit key
-        """
-        # If the Limit has a custom key set, use that
-        if hasattr(limit_config, "_key") and limit_config._key:
-            return limit_config._key
-
-        # Default: method:route_template:user_id_or_ip
-        #
-        # Two correctness fixes vs. the previous version:
-        #
-        # 1. Use the route TEMPLATE (e.g. ``/users/@id``), not the
-        #    literal request path. Otherwise ``/users/1`` and
-        #    ``/users/2`` get separate buckets so a ``throttle:60,1``
-        #    rule on ``/users/@id`` is per-id, not per-route — exactly
-        #    the inverse of what every caller expects.
-        #
-        # 2. Resolve the user via the canonical ``request.user()``
-        #    method (set by ShouldAuthenticate). The previous code
-        #    looked at ``request.user_id`` which never gets populated;
-        #    every authenticated request silently fell back to the
-        #    IP-keyed bucket, defeating ``throttle:auth``-style
-        #    per-user limits.
-        method = (request.method or "GET").upper()
-
-        endpoint: str = ""
-        route = getattr(request, "route", None)
-        if route is not None:
-            endpoint = getattr(route, "url", "") or getattr(route, "uri", "") or ""
-        if not endpoint:
-            endpoint = request.path or "/"
-
-        user_id = None
-        try:
-            user = request.user() if callable(getattr(request, "user", None)) else None
-            if user is not None:
-                user_id = getattr(user, "id", None) or getattr(user, "user_id", None)
-        except Exception:
-            user_id = None
-
-        client_ip = request.ip() or "anonymous"
-        identifier = str(user_id) if user_id is not None else client_ip
-
-        return f"{method}:{endpoint}:{identifier}"
-
-    def _attempt_limit(self, key: str, limit_config) -> tuple[bool, int, int]:
-        """
-        Attempt to record a request against the rate limit.
-
-        Args:
-            key: The rate limit key
-            limit_config: The Limit object defining the limit
-
-        Returns:
-            Tuple of (allowed: bool, remaining: int, reset_in: int).
-            ``reset_in`` is the actual remaining seconds until the
-            counter resets — it queries ``Cache.ttl(...)`` after the
-            atomic increment instead of returning the full window
-            length. The previous implementation always reported the
-            full window, so a client that hit the limit at second 50
-            of a 60-second window was told "retry in 60 s" when the
-            truth was "retry in ~10 s".
-        """
-        # Handle unlimited case
-        if limit_config.max_attempts == 0:
-            return True, -1, 0
-
-        window_seconds = int(limit_config.decay_minutes * 60)
-        cache_key = f"throttle_{key}"
-
-        # Shared authoritative accounting keeps HTTP and direct callers on
-        # one fail-closed outage policy.
-        allowed, remaining, reset_in = attempt_rate_limit(
-            cache_key=cache_key,
-            window_seconds=window_seconds,
-            max_attempts=limit_config.max_attempts,
-        )
-        return allowed, remaining, reset_in

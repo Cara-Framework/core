@@ -1,13 +1,6 @@
-"""
-Rate Limit Provider for the Cara framework.
-
-This module provides the deferred service provider that configures and registers the rate limiting
-functionality, making the RateLimiter available throughout the application based on configuration.
-"""
+"""Registers the named-limiter registry under ``rate``."""
 
 from __future__ import annotations
-
-from typing import Any
 
 from cara.configuration import config
 from cara.exceptions import RateLimitConfigurationException
@@ -16,10 +9,14 @@ from cara.rates.RateLimiter import RateLimiter
 
 
 class RateLimitProvider(DeferredProvider):
-    """
-    Deferred provider for rate limiting.
+    """Deferred provider for the ``rate`` binding.
 
-    Reads config and registers the RateLimiter under 'rate'.
+    The registry has no driver and no default budget. A fixed-window driver
+    used to carry ``rate.drivers.fixed.limit`` / ``window_seconds``, which only
+    ``RateLimiter.attempt(key)`` read and no route ever reached — so
+    ``RATE_LIMIT=600`` in an operator's environment read as the API's ceiling
+    while every throttled route enforced its own named limiter. Every ceiling
+    now lives in ``rate.limiters``, where a route names it.
     """
 
     @classmethod
@@ -27,32 +24,20 @@ class RateLimitProvider(DeferredProvider):
         return ["rate"]
 
     def register(self) -> None:
-        default_driver = config("rate.default", None)
-        drivers_cfg: dict[str, Any] = config("rate.drivers", {})
-
-        if not default_driver or default_driver not in drivers_cfg:
-            raise RateLimitConfigurationException(
-                "Missing or invalid 'rate.default' or 'rate.drivers' config."
-            )
-
-        driver_opts = config(f"rate.drivers.{default_driver}")
-        # For now, we only have a "fixed" driver
-        if default_driver != RateLimiter.driver_name:
-            raise RateLimitConfigurationException(
-                f"Rate limit driver '{default_driver}' not supported."
-            )
-
-        limiter = RateLimiter(
-            application=self.application,
-            options=driver_opts,
-        )
-
-        # Register named limiters from config
         limiters = config("rate.limiters", {})
+        if not isinstance(limiters, dict):
+            raise RateLimitConfigurationException(
+                "rate.limiters must map limiter names to callbacks "
+                "(config/rate.py LIMITERS)."
+            )
+        registry = RateLimiter(self.application)
         for name, callback in limiters.items():
-            limiter.for_(name, callback)
-
-        self.application.bind("rate", limiter)
+            if not callable(callback):
+                raise RateLimitConfigurationException(
+                    f"rate.limiters[{name!r}] must be a callback returning a Limit."
+                )
+            registry.for_(name, callback)
+        self.application.bind("rate", registry)
 
     def boot(self) -> None:
         pass

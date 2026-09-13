@@ -197,6 +197,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     ),
     "TokenExpiredException": (".TokenExpiredException", "TokenExpiredException"),
     "TokenInvalidException": (".TokenInvalidException", "TokenInvalidException"),
+    "TooManyRequestsException": (
+        ".TooManyRequestsException",
+        "TooManyRequestsException",
+    ),
     "UnsupportedMediaTypeException": (
         ".UnsupportedMediaTypeException",
         "UnsupportedMediaTypeException",
@@ -287,6 +291,7 @@ __all__ = [
     "TokenBlacklistedException",
     "TokenExpiredException",
     "TokenInvalidException",
+    "TooManyRequestsException",
     "UnsupportedMediaTypeException",
     "UserNotFoundException",
     "ValidationException",

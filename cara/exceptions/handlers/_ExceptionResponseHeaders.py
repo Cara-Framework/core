@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 _HTTP_METHOD = re.compile(r"^[A-Z][A-Z0-9_-]*$")
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9-]+$")
 
 
 class _ExceptionResponseHeaders:
@@ -139,6 +140,26 @@ class _ExceptionResponseHeaders:
         if not safe:
             return []
         return [[b"allow", ", ".join(safe).encode()]]
+
+    @staticmethod
+    def declared(exception: Exception) -> list:
+        """Headers an exception declares for its own response (``response_headers``).
+
+        Only token header names and single-line values pass: an exception must
+        not be able to split the response or smuggle a second header into it.
+        """
+        raw = getattr(exception, "response_headers", None)
+        if not isinstance(raw, dict):
+            return []
+        headers: list = []
+        for name, value in raw.items():
+            if not isinstance(name, str) or not _HEADER_NAME.fullmatch(name):
+                continue
+            text = str(value)
+            if "\r" in text or "\n" in text:
+                continue
+            headers.append([name.lower().encode(), text.encode("latin-1", errors="replace")])
+        return headers
 
 
 _EXCEPTION_RESPONSE_HEADERS = _ExceptionResponseHeaders()

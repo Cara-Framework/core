@@ -13,6 +13,7 @@ import contextlib
 import glob
 import hashlib
 import logging
+import math
 import os
 import re
 import threading
@@ -365,6 +366,51 @@ class FileCacheDriver(CacheContract):
             expires_at = self._compute_expiration(effective_ttl)
             self._write_file(self._file_path(key), expires_at, new_val, strict=True)
             return new_val
+
+    def throttle(
+        self,
+        key: str,
+        *,
+        emission_interval_ms: int,
+        burst: int,
+        cost: int = 1,
+    ) -> tuple[bool, int, int, int]:
+        """GCRA cell under the process file lock — see ``CacheContract.throttle``."""
+        for name, value in (
+            ("emission_interval_ms", emission_interval_ms),
+            ("burst", burst),
+            ("cost", cost),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise CacheConfigurationException(
+                    f"Cache throttle {name} must be a positive integer"
+                )
+        with self._exclusive():
+            now = int(time.time() * 1000)
+            sentinel = object()
+            stored = self._get_unlocked(key, sentinel, strict=True)
+            if stored is not sentinel and (
+                isinstance(stored, bool) or not isinstance(stored, int)
+            ):
+                raise CacheConfigurationException(
+                    f"Cache throttle cell '{key}' contains a non-integer value"
+                )
+            tolerance = emission_interval_ms * burst
+            tat = now if stored is sentinel or stored < now else stored
+            next_tat = tat + emission_interval_ms * cost
+            allow_at = next_tat - tolerance
+            if now < allow_at:
+                remaining = max(0, (tolerance - (tat - now)) // emission_interval_ms)
+                return False, remaining, allow_at - now, tat - now
+            full_after = next_tat - now
+            self._write_file(
+                self._file_path(key),
+                self._compute_expiration(math.ceil(full_after / 1000)),
+                next_tat,
+                strict=True,
+            )
+            remaining = max(0, (tolerance - full_after) // emission_interval_ms)
+            return True, remaining, 0, full_after
 
     def forget_if(self, key: str, expected_value: Any) -> bool:
         """

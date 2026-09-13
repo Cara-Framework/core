@@ -10,6 +10,7 @@ from cara.exceptions import (
     RateLimitConfigurationException,
     ServiceUnavailableException,
 )
+from cara.rates import Limit, RateLimitDecision
 from cara.rates import RateLimitAuthority as authority
 
 
@@ -18,64 +19,127 @@ def reset_health() -> None:
     authority._reset_for_tests()
 
 
-def _install_cache(monkeypatch, *, count: object = 1, ttl: object = 60) -> None:
-    cache = SimpleNamespace(
-        increment=lambda *_args: count,
-        ttl=lambda *_args: ttl,
+def _install_cell(monkeypatch, state: object, calls: list | None = None) -> None:
+    def throttle(key, **kwargs):
+        if calls is not None:
+            calls.append((key, kwargs))
+        return state
+
+    monkeypatch.setattr(authority.facades, "Cache", SimpleNamespace(throttle=throttle))
+    monkeypatch.setattr(
+        authority.facades, "Log", SimpleNamespace(warning=lambda *_a, **_k: None)
     )
-    log = SimpleNamespace(warning=lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(authority.facades, "Cache", cache)
-    monkeypatch.setattr(authority.facades, "Log", log)
 
 
-def test_authoritative_counter_returns_exact_budget(monkeypatch) -> None:
-    _install_cache(monkeypatch, count=3, ttl=17)
+def test_the_bucket_is_spent_under_the_rate_namespace_at_the_limit_s_pace(
+    monkeypatch,
+) -> None:
+    calls: list = []
+    _install_cell(monkeypatch, (True, 4, 0, 1500), calls)
 
-    assert authority.attempt_rate_limit("rate:key", 60, 5) == (True, 2, 17)
+    authority.attempt_rate_limit(Limit.per_minute(120, burst=6).by("user:7"))
 
-
-@pytest.mark.parametrize("count", [None, True, 0, "1"])
-def test_invalid_counter_state_denies(monkeypatch, count: object) -> None:
-    _install_cache(monkeypatch, count=count)
-
-    with pytest.raises(ServiceUnavailableException):
-        authority.attempt_rate_limit("rate:key", 60, 5)
-
-
-@pytest.mark.parametrize("ttl", [None, True, -1, "60"])
-def test_missing_or_invalid_expiry_denies(monkeypatch, ttl: object) -> None:
-    _install_cache(monkeypatch, ttl=ttl)
-
-    with pytest.raises(ServiceUnavailableException):
-        authority.attempt_rate_limit("rate:key", 60, 5)
+    assert calls == [
+        ("rate:user:7", {"emission_interval_ms": 500, "burst": 6, "cost": 1})
+    ]
 
 
-def test_backend_failure_denies_without_a_process_local_counter(monkeypatch) -> None:
-    cache = SimpleNamespace(
-        increment=lambda *_args: (_ for _ in ()).throw(ConnectionError("down")),
-        ttl=lambda *_args: 60,
+def test_an_allowed_spend_reports_whole_seconds_rounded_up(monkeypatch) -> None:
+    _install_cell(monkeypatch, (True, 4, 0, 1500))
+
+    decision = authority.attempt_rate_limit(Limit.per_minute(120, burst=6).by("user:7"))
+
+    assert decision == RateLimitDecision(
+        allowed=True,
+        limit=120,
+        period_seconds=60,
+        remaining=4,
+        retry_after=0,
+        reset_after=2,
     )
-    log = SimpleNamespace(warning=lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(authority.facades, "Cache", cache)
-    monkeypatch.setattr(authority.facades, "Log", log)
 
-    with pytest.raises(ServiceUnavailableException):
-        authority.attempt_rate_limit("rate:key", 60, 5)
+
+def test_a_refusal_says_when_the_next_request_fits(monkeypatch) -> None:
+    _install_cell(monkeypatch, (False, 0, 201, 3000))
+
+    decision = authority.attempt_rate_limit(Limit.per_minute(120, burst=6).by("user:7"))
+
+    assert decision.allowed is False
+    # 201 ms rounds UP: a client told "0" and refused again was lied to.
+    assert decision.retry_after == 1
+    assert decision.reset_after == 3
 
 
 @pytest.mark.parametrize(
-    ("key", "window", "limit"),
+    "state",
     [
-        ("", 60, 5),
-        ("rate:key", True, 5),
-        ("rate:key", 0, 5),
-        ("rate:key", 60, "5"),
+        None,
+        (True, 1, 0),
+        ("yes", 1, 0, 0),
+        (True, -1, 0, 0),
+        (True, 1, True, 0),
+        (True, 1, 0, "0"),
     ],
+    ids=["none", "short", "non-bool-decision", "negative", "bool-measure", "text"],
 )
-def test_invalid_authority_input_is_configuration_error(
-    monkeypatch, key: object, window: object, limit: object
+def test_an_answer_that_is_not_one_denies(monkeypatch, state: object) -> None:
+    _install_cell(monkeypatch, state)
+
+    with pytest.raises(ServiceUnavailableException):
+        authority.attempt_rate_limit(Limit.per_minute(5).by("ip:198.51.100.1"))
+
+
+def test_backend_failure_denies_without_a_process_local_counter(monkeypatch) -> None:
+    def down(*_args, **_kwargs):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(authority.facades, "Cache", SimpleNamespace(throttle=down))
+    monkeypatch.setattr(
+        authority.facades, "Log", SimpleNamespace(warning=lambda *_a, **_k: None)
+    )
+
+    with pytest.raises(ServiceUnavailableException):
+        authority.attempt_rate_limit(Limit.per_minute(5).by("ip:198.51.100.1"))
+
+
+def test_every_backend_fault_lands_on_the_counter_alerting_reads(monkeypatch) -> None:
+    """The warning is logged once per outage; the counter must see every refusal."""
+    faults: list[int] = []
+
+    def down(*_args, **_kwargs):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(authority.facades, "Cache", SimpleNamespace(throttle=down))
+    monkeypatch.setattr(
+        authority.facades, "Log", SimpleNamespace(warning=lambda *_a, **_k: None)
+    )
+    monkeypatch.setattr(
+        authority, "counter", lambda *_a, **_k: SimpleNamespace(inc=lambda: faults.append(1))
+    )
+
+    for _ in range(3):
+        with pytest.raises(ServiceUnavailableException):
+            authority.attempt_rate_limit(Limit.per_minute(5).by("ip:198.51.100.1"))
+
+    assert len(faults) == 3
+
+
+@pytest.mark.parametrize(
+    ("limit", "cost"),
+    [
+        ("rate:key", 1),
+        (Limit.none(), 1),
+        (Limit.per_minute(5), 1),
+        (Limit.per_minute(5).by("ip:198.51.100.1"), 0),
+        (Limit.per_minute(5).by("ip:198.51.100.1"), True),
+        (Limit.per_minute(5, burst=2).by("ip:198.51.100.1"), 3),
+    ],
+    ids=["not-a-limit", "unlimited", "unkeyed", "zero-cost", "bool-cost", "over-burst"],
+)
+def test_a_spend_that_can_never_be_valid_is_a_configuration_error(
+    monkeypatch, limit: object, cost: object
 ) -> None:
-    _install_cache(monkeypatch)
+    _install_cell(monkeypatch, (True, 0, 0, 0))
 
     with pytest.raises(RateLimitConfigurationException):
-        authority.attempt_rate_limit(key, window, limit)  # type: ignore[arg-type]
+        authority.attempt_rate_limit(limit, cost=cost)  # type: ignore[arg-type]

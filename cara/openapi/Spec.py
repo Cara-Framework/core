@@ -20,6 +20,8 @@ from .ControllerResponse import ControllerResponse
 from .EnvelopeNames import EnvelopeNames
 from .FormRequestSchemaExtractor import request_query_parameters
 from .Inference import resource_ref
+from .InvalidHeaderComponent import InvalidHeaderComponent
+from .MiddlewareHeaders import MiddlewareHeaders
 from .Routes import openapi_path, path_params
 from .SpecInfo import SpecInfo
 
@@ -58,6 +60,7 @@ def build_spec(
     security_schemes: dict[str, dict[str, Any]] | None = None,
     middleware_security: dict[str, list[dict[str, list[str]]]] | None = None,
     middleware_error_statuses: dict[str, tuple[int, ...] | list[int]] | None = None,
+    middleware_headers: dict[str, MiddlewareHeaders] | None = None,
 ) -> dict[str, Any]:
     """Build the OpenAPI document from already-extracted inputs.
 
@@ -65,13 +68,19 @@ def build_spec(
     ``Controller@action -> (resource, is_list)``, ``routes`` is the flattened
     route table, and ``envelope_components`` are the application's own shared
     components (meta / error bodies), appended after the resource schemas in
-    the order the application declares them.
+    the order the application declares them. ``middleware_headers`` names the
+    response headers a middleware alias stamps (``family:*`` matches a family,
+    as in the other middleware maps); only headers a response references are
+    published under ``components.headers``.
     """
     request_schemas = request_schemas or {}
     controller_contracts = controller_contracts or {}
     middleware_security = middleware_security or {}
     middleware_error_statuses = middleware_error_statuses or {}
+    middleware_headers = middleware_headers or {}
     meta_mapping = meta_mapping or {}
+    header_components: dict[str, Any] = {}
+    referenced_headers: set[str] = set()
 
     components: dict[str, Any] = dict(sorted(schemas.items()))
     components.update(dict(sorted(request_schemas.items())))
@@ -93,6 +102,18 @@ def build_spec(
         middleware = list(route.get("middleware", []))
         if middleware:
             operation["x-middleware"] = middleware
+        stamps = [
+            stamp
+            for name in middleware
+            if (stamp := _middleware_lookup(middleware_headers, name)) is not None
+        ]
+        for stamp in stamps:
+            for header, definition in stamp.components.items():
+                if header_components.setdefault(header, definition) != definition:
+                    raise InvalidHeaderComponent(
+                        f"response header {header!r} is defined differently by two "
+                        f"middleware header declarations on {route['path']}"
+                    )
         if security := _security_requirements(middleware, middleware_security):
             operation["security"] = security
 
@@ -189,10 +210,12 @@ def build_spec(
             if contract is not None
             else (ControllerResponse(200, "envelope"),)
         )
+        passed = [header for stamp in stamps for header in stamp.passed]
         responses: dict[str, Any] = {}
         for variant in variants:
-            responses[str(variant.status)] = _controller_response(
-                variant, body_schema=body_schema
+            referenced_headers.update(passed)
+            responses[str(variant.status)] = _with_headers(
+                _controller_response(variant, body_schema=body_schema), passed
             )
         middleware_statuses = {
             status
@@ -200,8 +223,14 @@ def build_spec(
             for status in _middleware_lookup(middleware_error_statuses, name) or ()
         }
         for status in sorted(middleware_statuses):
-            responses.setdefault(
-                str(status), _error_response(status, envelope.error, "Middleware error.")
+            if str(status) in responses:
+                continue
+            refused = [
+                header for stamp in stamps for header in stamp.refused.get(status, ())
+            ]
+            referenced_headers.update(refused)
+            responses[str(status)] = _with_headers(
+                _error_response(status, envelope.error, "Middleware error."), refused
             )
         responses.setdefault(
             "422",
@@ -240,6 +269,16 @@ def build_spec(
         "paths": dict(sorted(paths.items())),
         "components": {
             "schemas": components,
+            **(
+                {
+                    "headers": {
+                        header: header_components[header]
+                        for header in sorted(referenced_headers)
+                    }
+                }
+                if referenced_headers
+                else {}
+            ),
             **({"securitySchemes": security_schemes} if security_schemes else {}),
         },
         "x-generation": generation,
@@ -300,6 +339,21 @@ def _error_response(status: int, error_component: str, description: str) -> dict
         "content": {"application/json": {"schema": resource_ref(error_component)}},
         "x-http-status": status,
     }
+
+
+def _with_headers(response: dict[str, Any], headers: list[str]) -> dict[str, Any]:
+    """Reference ``headers`` from ``response``, after any header it already documents."""
+    if not headers:
+        return response
+    documented = dict(response.get("headers", {}))
+    for header in headers:
+        documented.setdefault(header, {"$ref": f"#/components/headers/{header}"})
+    rest = {
+        key: value
+        for key, value in response.items()
+        if key not in {"description", "headers"}
+    }
+    return {"description": response["description"], "headers": documented, **rest}
 
 
 def _controller_response(

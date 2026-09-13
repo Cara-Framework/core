@@ -4,13 +4,19 @@ Real cache backends (Redis/Memcached) are slow and stateful between
 tests. This fake is a plain ``dict`` with optional TTL semantics — the
 TTL isn't time-driven (tests shouldn't rely on wall clock); it's
 purely tracked so ``forever``/``put(ttl=...)`` round-trip correctly.
+``throttle`` is the one call that reads the clock, because a rate-limit
+bucket IS a function of time.
 """
 
 from __future__ import annotations
 
 import fnmatch
+import math
+import time
 from collections.abc import Callable
 from typing import Any
+
+from cara.exceptions import CacheConfigurationException
 
 
 class CacheFake:
@@ -183,6 +189,53 @@ class CacheFake:
 
     def decrement(self, key: str, amount: int = 1, ttl: int | None = None) -> int:
         return self.increment(key, -amount, ttl)
+
+    def throttle(
+        self,
+        key: str,
+        *,
+        emission_interval_ms: int,
+        burst: int,
+        cost: int = 1,
+        driver_name: str | None = None,
+    ) -> tuple[bool, int, int, int]:
+        """The GCRA cell exactly as the Redis and file drivers evaluate it.
+
+        Without it every rate-limited path under this fake fell through to a
+        real cache. ``tests/cache/test_cache_throttle_gcra.py`` runs the same
+        frozen-clock scenarios against this and the file driver, so the two
+        cannot drift apart.
+        """
+        del driver_name
+        for name, value in (
+            ("emission_interval_ms", emission_interval_ms),
+            ("burst", burst),
+            ("cost", cost),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise CacheConfigurationException(
+                    f"Cache throttle {name} must be a positive integer"
+                )
+        stored = self._store.get(key)
+        if stored is not None and (
+            isinstance(stored, bool) or not isinstance(stored, int)
+        ):
+            raise CacheConfigurationException(
+                f"Cache throttle cell '{key}' contains a non-integer value"
+            )
+        now = int(time.time() * 1000)
+        tolerance = emission_interval_ms * burst
+        tat = now if stored is None or stored < now else stored
+        next_tat = tat + emission_interval_ms * cost
+        allow_at = next_tat - tolerance
+        if now < allow_at:
+            remaining = max(0, (tolerance - (tat - now)) // emission_interval_ms)
+            return False, remaining, allow_at - now, tat - now
+        full_after = next_tat - now
+        self._store[key] = next_tat
+        self._ttls[key] = math.ceil(full_after / 1000)
+        remaining = max(0, (tolerance - full_after) // emission_interval_ms)
+        return True, remaining, 0, full_after
 
     def forget_pattern(self, pattern: str) -> int:
         """Delete every key matching ``pattern`` (glob-style ``*`` only).
