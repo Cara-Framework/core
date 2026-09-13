@@ -19,7 +19,7 @@ from cara.testing.fakes import CacheFake
 
 _driver_module = importlib.import_module("cara.cache.drivers.FileCacheDriver")
 _fake_module = importlib.import_module("cara.testing.fakes.CacheFake")
-_KEY = "throttle-cell-signing-key-0123456789abcdef"
+_KEY = b"throttle-cell-signing-key-material-32-bytes"
 _START_MS = 1_700_000_000_000
 
 
