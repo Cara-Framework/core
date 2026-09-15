@@ -454,6 +454,9 @@ class PostgresConnection(BaseConnection):
             # Nested transaction — use savepoint
             self.savepoint(f"sp_{self.transaction_level}")
             return self
+        # The outer BEGIN may be a builder connection's first use.
+        if not self._connection or self._connection.closed:
+            self.make_connection()
         self._connection.autocommit = False
         self.transaction_level += 1
         return self

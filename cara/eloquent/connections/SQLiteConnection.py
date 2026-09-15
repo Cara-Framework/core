@@ -110,6 +110,9 @@ class SQLiteConnection(BaseConnection):
         if self.transaction_level > 0:
             self._connection.execute(f"SAVEPOINT sp_{self.transaction_level}")
         else:
+            # The outer BEGIN may be a builder connection's first use.
+            if not self.open:
+                self.make_connection()
             self._connection.execute("BEGIN DEFERRED")
         self.transaction_level += 1
         return self

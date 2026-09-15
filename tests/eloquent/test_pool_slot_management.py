@@ -43,6 +43,7 @@ These tests pin three lifecycle invariants:
 from __future__ import annotations
 
 import importlib
+import sys
 import threading
 from unittest.mock import MagicMock
 
@@ -481,3 +482,87 @@ class TestRepeatReconnectsDoNotAccumulate:
             f"10 reconnects held {held} slots; expected 1 — slots are "
             f"leaking on the closed-connection re-acquire path"
         )
+
+
+# ── A builder's connection opens where it is returned ───────────
+
+
+def _pooled_manager(monkeypatch, *, size: int):
+    """A real DatabaseManager on a fake driver and a fresh ``size``-permit pool."""
+    from cara.eloquent import DatabaseManager
+
+    sem = _fresh_pool(monkeypatch, size=size)
+    fake = install_fake_psycopg2(
+        monkeypatch, connect_factory=lambda **kw: _mock_pg_connection()
+    )
+    extras = type(sys)("psycopg2.extras")
+    extras.RealDictCursor = object
+    fake.extras = extras
+    monkeypatch.setitem(sys.modules, "psycopg2.extras", extras)
+    manager = DatabaseManager(
+        "app",
+        {
+            "app": {
+                "driver": "postgres",
+                "host": "x",
+                "database": "x",
+                "user": "x",
+                "port": 5432,
+                "password": "x",
+                "connection_pooling_enabled": True,
+                "connection_pooling_max_size": size,
+            }
+        },
+    )
+    return manager, sem
+
+
+class TestBuilderConnectionsHoldNoPermitWhileCompiling:
+    """The builder used to OPEN its connection before compiling the SQL.
+
+    ``self.new_connection().query(self.to_qmark(), ...)`` evaluates
+    ``new_connection()`` first, and that took a pool permit; ``to_qmark()``
+    then ran the scopes and the grammar. Anything raising there skipped
+    ``query()``, whose ``finally`` is the only release, so the permit leaked
+    for the life of the process. Once every permit was gone each request
+    waited out the 30s acquire timeout and answered 503 — the API's
+    integration lane stalled exactly that way (2026-09-15).
+    """
+
+    def test_a_compile_failure_leaves_every_permit_in_the_pool(self, monkeypatch):
+        from cara.eloquent.query import QueryBuilder
+
+        manager, sem = _pooled_manager(monkeypatch, size=2)
+        builder = QueryBuilder(connection="app", database_manager=manager).table("users")
+
+        def refuse():
+            raise RuntimeError("scope refused to compile")
+
+        monkeypatch.setattr(builder, "to_qmark", refuse)
+        for _ in range(3):
+            with pytest.raises(RuntimeError, match="scope refused"):
+                builder.get()
+
+        assert sem._value == 2, "a failed compile kept a pool permit"
+
+    def test_an_unopened_connection_takes_its_permit_inside_query(self, monkeypatch):
+        manager, sem = _pooled_manager(monkeypatch, size=2)
+
+        connection = manager.create_connection_instance("app", connect=False)
+        assert connection._connection is None
+        assert sem._value == 2
+
+        connection.query("SELECT 1")
+        assert sem._value == 2, "query() must return the permit it took"
+
+    def test_begin_opens_an_unopened_connection_and_close_returns_it(self, monkeypatch):
+        manager, sem = _pooled_manager(monkeypatch, size=2)
+
+        connection = manager.create_connection_instance("app", connect=False)
+        connection.begin()
+        assert connection.transaction_level == 1
+        assert sem._value == 1
+
+        connection.rollback()
+        connection.close_connection()
+        assert sem._value == 2

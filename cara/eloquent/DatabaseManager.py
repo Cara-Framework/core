@@ -377,7 +377,7 @@ class DatabaseManager:
         resolver = self._ensure_resolver()
         return resolver.connection_factory.make(driver)
 
-    def create_connection_instance(self, connection=None, schema=None):
+    def create_connection_instance(self, connection=None, schema=None, connect=True):
         """Return a connection instance — transaction-aware.
 
         If the current execution context has an open transaction on this
@@ -391,6 +391,15 @@ class DatabaseManager:
         ``with db.transaction(): ...`` block ran against a pool-checked-out
         autocommit connection — the transaction's rollback couldn't undo
         writes because the writes were never part of the transaction.
+
+        ``connect=False`` hands the wrapper back unopened. A pooled
+        connection takes its permit in ``make_connection`` and gives it
+        back in ``query()``'s ``finally``, so only a connection opened
+        inside ``query()`` is sure to return it. The query builder opened
+        here, then compiled its SQL — scopes and grammar — while holding
+        the permit, and anything that raised there leaked it for the
+        life of the process: once the pool's permits were gone, every
+        request waited out the 30s acquire timeout and answered 503.
         """
         connection_name = self._resolve_connection_name(connection)
 
@@ -420,7 +429,8 @@ class DatabaseManager:
             "full_details": connection_info.get("full_details", {}),
         }
 
-        return connection_class(**clean_info).set_schema(schema).make_connection()
+        instance = connection_class(**clean_info).set_schema(schema)
+        return instance.make_connection() if connect else instance
 
     def get_platform(self, connection=None):
         """Get platform for specific connection"""

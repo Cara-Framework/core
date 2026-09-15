@@ -486,8 +486,10 @@ def _qb_new_connection(self) -> Any:
     if self._connection:
         return self._connection
 
+    # Unopened: ``query()`` or ``begin()`` opens it inside the block that
+    # returns it, so compiling the SQL after this call holds no permit.
     self._connection = self._db_manager.create_connection_instance(
-        self.connection, self._schema
+        self.connection, self._schema, connect=False
     )
     return self._connection
 
