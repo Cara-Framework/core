@@ -7,6 +7,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "MemoryBroadcaster": (".MemoryBroadcaster", "MemoryBroadcaster"),
     "NullBroadcaster": (".NullBroadcaster", "NullBroadcaster"),
     "RedisBroadcaster": (".RedisBroadcaster", "RedisBroadcaster"),
+    "RedisPublisher": (".RedisPublisher", "RedisPublisher"),
 }
 
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "MemoryBroadcaster",
     "NullBroadcaster",
     "RedisBroadcaster",
+    "RedisPublisher",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

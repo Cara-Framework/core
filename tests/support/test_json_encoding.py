@@ -74,11 +74,12 @@ async def _broadcast_publish() -> object:
             published.append((channel, payload))
 
     node = RedisBroadcaster({"websocket": {"heartbeat_interval": 0}})
+    broker = _Broker()
 
-    async def _redis():
-        return _Broker()
+    async def _publish_redis(channel: str, payload: str) -> None:
+        await broker.publish(channel, payload)
 
-    node._redis = _redis
+    node._publish_redis = _publish_redis  # type: ignore[method-assign]
     await node.broadcast("orders", "price.changed", {"total": MONEY})
     return json.loads(published[-1][1])["data"]["total"]
 

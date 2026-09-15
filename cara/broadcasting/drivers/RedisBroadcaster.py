@@ -7,9 +7,9 @@ Topology
 Every broadcasting node (every process running the API or services
 worker that dispatches events) maintains:
 
-1. A *publisher* Redis client used for ``PUBLISH`` calls. Pooled per
-   running event loop so the connection isn't shared across loops
-   that asyncio doesn't allow to share clients.
+1. A *publisher* (``RedisPublisher``) — one process-wide synchronous
+   client for ``PUBLISH``, shared by every event loop. That module says
+   why a per-loop async client leaked a socket per queued job.
 
 2. A *subscriber* pubsub object that listens for messages on the set
    of channels this node currently has local subscribers for. The
@@ -43,6 +43,7 @@ import asyncio
 import json
 import time
 import uuid
+import weakref
 from typing import Any
 
 try:
@@ -57,6 +58,7 @@ from cara.broadcasting.ConnectionManager import (
     _is_connection_closed_error,
 )
 from cara.broadcasting.contracts.Broadcaster import Broadcaster
+from cara.broadcasting.drivers.RedisPublisher import RedisPublisher
 from cara.exceptions import BroadcastingConfigurationException
 from cara.facades import Log
 from cara.support import json_dumps
@@ -105,11 +107,15 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         # truth for resubscribe-on-reconnect.
         self._redis_subscribed: set[str] = set()
 
-        # Per-loop Redis clients. asyncio doesn't allow sharing a
-        # client across event loops, so workers that briefly create
-        # their own loop (queue runners, scripts) get their own.
+        # Per-loop async Redis clients — used ONLY by the long-lived
+        # pub/sub listener. PUBLISH goes through ``RedisPublisher``.
         self._redis_clients: dict[int, Any] = {}
         self._redis_pools: dict[int, Any] = {}
+        self._redis_loop_refs: dict[int, weakref.ref[asyncio.AbstractEventLoop]] = {}
+
+        # Process-wide PUBLISH client, shared across every ephemeral
+        # ``asyncio.run`` loop.
+        self._publisher = RedisPublisher(self._redis_url, self._connection_config)
 
         # Listener bookkeeping. ``_listener_task`` is the long-running
         # asyncio.Task that drains pubsub messages; ``_listener_pubsub``
@@ -122,6 +128,15 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
     # ------------------------------------------------------------------
     # Redis client lifecycle
     # ------------------------------------------------------------------
+    async def _publish_redis(self, channel: str, payload: str) -> None:
+        """PUBLISH via the sync client off the event loop thread.
+
+        Kept as a single seam so tests can stub the wire hop without
+        standing up a real Redis, and so the async listener's client
+        pool is never touched by the publish path.
+        """
+        await self._publisher.publish(channel, payload)
+
     @staticmethod
     def _loop_id() -> int:
         try:
@@ -129,25 +144,54 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         except RuntimeError:
             return 0
 
+    async def _reap_stale_async_pools(self) -> None:
+        """Disconnect async pools whose event loops have closed.
+
+        Belt-and-suspenders for the listener path: if anything briefly
+        creates a loop, uses ``_redis()``, then lets the loop die, we
+        must not keep its TCP connections around.
+        """
+        stale: list[int] = []
+        for loop_id, ref in list(self._redis_loop_refs.items()):
+            loop = ref()
+            if loop is None or loop.is_closed():
+                stale.append(loop_id)
+        for loop_id in stale:
+            await self._dispose_loop_redis(loop_id)
+
+    async def _dispose_loop_redis(self, loop_id: int) -> None:
+        self._redis_loop_refs.pop(loop_id, None)
+        client = self._redis_clients.pop(loop_id, None)
+        pool = self._redis_pools.pop(loop_id, None)
+        if client is not None:
+            with contextlib.suppress(
+                OSError, RuntimeError, AttributeError, ConnectionError
+            ):
+                await client.aclose()
+        if pool is not None:
+            with contextlib.suppress(
+                OSError, RuntimeError, AttributeError, ConnectionError
+            ):
+                await pool.disconnect()
+
     async def _redis(self) -> Any:
         """Return a Redis client pinned to the current event loop.
 
         Lazily creates a connection pool + client on first use per
-        loop. ``ping()`` validates the connection so callers see a
-        real failure here rather than during the next publish.
+        loop. Used by the pub/sub listener only — publish goes through
+        ``_publish_redis``. ``ping()`` validates the connection so
+        callers see a real failure here rather than during listen.
         """
-        loop_id = self._loop_id()
+        await self._reap_stale_async_pools()
+        loop = asyncio.get_running_loop()
+        loop_id = id(loop)
         if loop_id in self._redis_clients:
             return self._redis_clients[loop_id]
 
         if loop_id not in self._redis_pools:
-            # Bounded socket timeouts: without them ``publish`` / ``ping`` block
-            # on the OS TCP timeout (minutes) when Redis black-holes (dropped
-            # node, network partition) rather than refusing. The broadcast is
-            # try/except'd so it won't crash the trigger, but the request/job is
-            # AWAITED against the hang → it stalls for the full TCP timeout. The
-            # sibling Redis drivers (cache/queue) already set these; the
-            # broadcaster was the one that was missed.
+            # Bounded socket timeouts: without them ``ping`` / ``listen``
+            # block on the OS TCP timeout (minutes) when Redis black-holes
+            # (dropped node, network partition) rather than refusing.
             pool_kwargs: dict[str, Any] = {
                 "decode_responses": True,
                 "max_connections": 10,
@@ -175,8 +219,9 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
         client = self._redis_async.Redis(connection_pool=self._redis_pools[loop_id])
         await client.ping()
         self._redis_clients[loop_id] = client
+        self._redis_loop_refs[loop_id] = weakref.ref(loop)
         Log.debug(
-            "RedisBroadcaster: created client for loop %s",
+            "RedisBroadcaster: created listener client for loop %s",
             loop_id,
             category="cara.broadcasting",
         )
@@ -264,8 +309,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             },
         )
         try:
-            client = await self._redis()
-            await client.publish(self._prefixed(unprefixed), payload)
+            await self._publish_redis(self._prefixed(unprefixed), payload)
         except Exception as e:
             Log.debug(
                 "Redis publish failed for %s (local delivery succeeded): %s",
@@ -301,8 +345,7 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
             },
         )
         try:
-            client = await self._redis()
-            await client.publish(
+            await self._publish_redis(
                 self._prefixed(f"{_USER_CHANNEL_PREFIX}{user_id}"), payload
             )
         except Exception as e:
@@ -487,8 +530,8 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 break
             except self._redis_async.TimeoutError, TimeoutError:
                 # A pub/sub subscriber legitimately BLOCKS waiting for the next
-                # message. The broadcaster pool sets ``socket_timeout`` (line
-                # ~166) to keep the PUBLISH path fail-fast, so an IDLE
+                # message. The listener's pool sets ``socket_timeout`` so a
+                # black-holed Redis fails ``ping`` fast, so an IDLE
                 # ``listen()`` read raises a read-timeout every few seconds —
                 # that is EXPECTED, not a crash. Re-establish the listen quietly.
                 # DON'T log a traceback / bump ``attempt`` / back off here: on an
@@ -611,18 +654,21 @@ class RedisBroadcaster(ConnectionManager, Broadcaster):
                 await self._listener_pubsub.aclose()
             self._listener_pubsub = None
 
-        for client in self._redis_clients.values():
+        for client in list(self._redis_clients.values()):
             with contextlib.suppress(
                 OSError, RuntimeError, AttributeError, ConnectionError
             ):
                 await client.aclose()
         self._redis_clients.clear()
 
-        for pool in self._redis_pools.values():
+        for pool in list(self._redis_pools.values()):
             with contextlib.suppress(
                 OSError, RuntimeError, AttributeError, ConnectionError
             ):
                 await pool.disconnect()
         self._redis_pools.clear()
+        self._redis_loop_refs.clear()
+
+        self._publisher.close()
 
         await super().cleanup()

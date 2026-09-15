@@ -41,10 +41,10 @@ def _node() -> tuple[RedisBroadcaster, _RecordingRedis]:
     node = RedisBroadcaster(_CONFIG)
     broker = _RecordingRedis()
 
-    async def _redis():
-        return broker
+    async def _publish_redis(channel: str, payload: str) -> None:
+        await broker.publish(channel, payload)
 
-    node._redis = _redis
+    node._publish_redis = _publish_redis  # type: ignore[method-assign]
     return node, broker
 
 
