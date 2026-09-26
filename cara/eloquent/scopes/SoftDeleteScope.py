@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pendulum
 
+from ..casts.DateTimeCast import DateTimeCast
 from .BaseScope import BaseScope
 
 
@@ -134,7 +135,7 @@ class SoftDeleteScope(BaseScope):
         if hasattr(builder, "_model") and builder._model:
             timestamp = builder._model.get_new_datetime_string()
         else:
-            timestamp = pendulum.now("UTC").to_datetime_string()
+            timestamp = DateTimeCast.sql_instant(pendulum.now("UTC"))
 
         builder._updates = ()
         builder.set_updates({self.deleted_at_column: timestamp})

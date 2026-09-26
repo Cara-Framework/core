@@ -42,6 +42,25 @@ class DateTimeCast(BaseCast):
         self.format_string = self._convert_format(format_string)
         self.timezone = timezone
 
+    @staticmethod
+    def sql_instant(value: datetime) -> str:
+        """The UTC wall string an instant is WRITTEN as — to the microsecond.
+
+        Columns are ``timestamptz(6)``, and the rest of the stack writes them
+        at full precision: ``NOW()`` in SQL, and pendulum instances bound
+        straight into raw statements (psycopg adapts them losslessly). The
+        ORM wrote ``to_datetime_string()``, which DROPS the microseconds, so
+        an ORM write landed up to a second BEFORE a raw write of the very
+        same instant — and every ordering CHECK across the two broke:
+        ``sync_task`` (``confirmed_at >= sent_at``) refused essentially
+        every push confirmation, ``catalog_publish_run`` refused its own
+        completion. The fraction is appended only when there is one, so an
+        instant without microseconds renders exactly as before.
+        """
+        utc = pendulum.instance(value).in_timezone("UTC")
+        text = utc.to_datetime_string()
+        return f"{text}.{utc.microsecond:06d}" if utc.microsecond else text
+
     def _convert_format(self, format_str: str | None) -> str | None:
         """Convert PHP-style format to Pendulum format."""
         if not format_str:
@@ -106,6 +125,6 @@ class DateTimeCast(BaseCast):
                 )
                 dt = pendulum.parse(s, tz=None if has_tz else app_timezone)
 
-            return dt.in_timezone("UTC").to_datetime_string()
+            return self.sql_instant(dt)
         except ValueError, TypeError, OverflowError:
             return None

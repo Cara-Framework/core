@@ -15,6 +15,7 @@ from cara.facades import DB
 from cara.support import Collection
 
 from ..casts import cast_registry as enhanced_registry
+from ..casts.DateTimeCast import DateTimeCast
 
 _logger = logging.getLogger("cara.eloquent.models")
 Model: type
@@ -486,11 +487,13 @@ def _model_get_new_date(self, _datetime=None):
 def _model_get_new_datetime_string(self, _datetime=None):
     """
     Given an optional datetime value, constructs and returns a new datetime string. If no
-    datetime is specified, returns the current time.
+    datetime is specified, returns the current time. It is a WRITE value (a
+    soft delete's ``deleted_at``), so it keeps the microseconds — see
+    ``DateTimeCast.sql_instant``.
 
-    :rtype: list
+    :rtype: str
     """
-    return self.get_new_date(_datetime).to_datetime_string()
+    return DateTimeCast.sql_instant(self.get_new_date(_datetime))
 
 
 def _model_get_new_serialized_date(self, _datetime):

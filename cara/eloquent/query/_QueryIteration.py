@@ -11,6 +11,7 @@ from cara.exceptions import (
     QueryException,
 )
 
+from ..casts.DateTimeCast import DateTimeCast
 from ._QuerySafety import ORDER_BY_COLUMN_RE as _ORDER_BY_COLUMN_RE
 
 _logger = logging.getLogger("cara.eloquent.query")
@@ -113,7 +114,8 @@ def _qb_upsert(
     # form — no update list to extend there.
     stamp_timestamps = bool(model and getattr(model, "__timestamps__", False))
     if stamp_timestamps:
-        timestamp_value = model.get_new_date().to_datetime_string()
+        # A write value: to the microsecond, like every ORM write.
+        timestamp_value = DateTimeCast.sql_instant(model.get_new_date())
         for record in processed:
             if record.get(model.date_created_at) is None:
                 record[model.date_created_at] = timestamp_value

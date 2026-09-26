@@ -7,6 +7,7 @@ from datetime import datetime
 import pendulum
 
 from .BaseCast import BaseCast
+from .DateTimeCast import DateTimeCast
 
 
 class TimestampCast(BaseCast):
@@ -39,7 +40,7 @@ class TimestampCast(BaseCast):
 
         try:
             if isinstance(value, (int, float)):
-                return pendulum.from_timestamp(value).to_datetime_string()
+                return DateTimeCast.sql_instant(pendulum.from_timestamp(value))
             return self.get(value)
         except ValueError, TypeError, OverflowError:
             return None
