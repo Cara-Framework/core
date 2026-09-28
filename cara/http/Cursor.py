@@ -208,17 +208,7 @@ def slice_page_with_lookahead(
     )
 
 
-MAX_SEEKABLE_PAGE = 200
-"""How deep a link may name a page on a ``seekable`` cursor endpoint.
-
-An offset seek costs the database a scan of the rows it skips, so the ceiling
-is real rather than a taste. Past it the answer is 422 and says so.
-"""
-
-
-def cursor_rules(
-    *, max_limit: int = 100, min_limit: int = 1, seekable: bool = False
-) -> dict[str, str]:
+def cursor_rules(*, max_limit: int = 100, min_limit: int = 1) -> dict[str, str]:
     """Strict request rules for cursor-paginated endpoints.
 
     ``per_page`` and ``offset`` are prohibited deliberately: silently accepting
@@ -226,23 +216,23 @@ def cursor_rules(
     first-page reads. A raw row offset also has no business in an address a
     person reads and edits.
 
-    ``page`` IS PROHIBITED BY DEFAULT AND OPENED BY ``seekable``.
+    ``page`` IS NOT A PARAM OF THESE ENDPOINTS, AND NOT BECAUSE JUMPING IS
+    REFUSED.
 
-    Refusing it outright did not remove the offset — it moved it into the
-    browser. A client whose address says page three, given a 422, reproduces
-    the jump by fetching page one, taking its next cursor, fetching page two,
-    and so on: one HTTP round trip per page, each one rendering, and the same
+    Refusing the jump outright did not remove the offset — it moved it into the
+    browser. A client whose address says page three, given a 422, reproduces the
+    jump by fetching page one, taking its next cursor, fetching page two, and so
+    on: one HTTP round trip per page, each one rendering, and the same
     consistency the refusal was meant to protect (owner's report on the
     Synkronus dashboard, 2026-09-26: "why is it firing all the requests in
     between — if it's 20 is it going to make 20 requests?").
 
-    So an endpoint that can honour the jump in ONE statement — offset to the
-    page inside the same query that reads it, then mint the next cursor from
-    the last row as usual, so every turn after it is pure keyset — declares
-    ``seekable=True`` and takes a bounded ``page``. Everything else is
-    unchanged: an endpoint that does not opt in produces byte-identical rules,
-    and the rollout is per endpoint rather than a flag day across three
-    products.
+    The jump is the server's work now, and it arrives in the field that already
+    carries a position: ``cursor`` takes a signed keyset token OR a cold
+    ``page:3``, the endpoint skips those rows in the same statement that reads
+    the page, and the next cursor is minted from the last row as always — so
+    every turn after the jump is pure keyset. One position, one field, and no
+    request class has to declare that it can be arrived at.
     """
 
     if min_limit < 1 or max_limit > 100 or min_limit > max_limit:
@@ -250,9 +240,7 @@ def cursor_rules(
     return {
         "limit": f"nullable|integer|between:{min_limit},{max_limit}",
         "cursor": f"bail|sometimes|required|string|max:{_MAX_TOKEN_LENGTH}",
-        "page": (
-            f"nullable|integer|between:1,{MAX_SEEKABLE_PAGE}" if seekable else "missing"
-        ),
+        "page": "missing",
         "per_page": "missing",
         "offset": "missing",
     }
