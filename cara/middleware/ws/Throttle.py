@@ -1,4 +1,7 @@
-"""Per-IP rate limit on WebSocket handshakes.
+"""Per-principal rate limit on WebSocket handshakes.
+
+The principal is the signed-in account when ``ws.auth`` ran first, else the
+client address (see ``Throttle._principal``).
 
 Sibling of the HTTP ``ThrottleRequests`` middleware. HTTP routes have
 named throttles wired through the ``throttle:<name>`` alias; public
@@ -59,7 +62,7 @@ _DEFAULT_WINDOW_SECONDS = 60
 
 
 class Throttle(Middleware):
-    """Per-IP, per-channel rate limit on WebSocket handshakes. Mirrors the
+    """Per-principal, per-channel rate limit on WebSocket handshakes. Mirrors the
     contract of the HTTP ``ThrottleRequests`` middleware so the same ops
     dashboards / alerts can cover both transports."""
 
@@ -71,7 +74,8 @@ class Throttle(Middleware):
         count, window = self._limits()
         ip = self._client_ip(socket)
         path = self._path(socket)
-        limit = Limit(count, window).by(f"ws:{self.name}:{ip}:{path}")
+        principal = self._principal(socket, ip)
+        limit = Limit(count, window).by(f"ws:{self.name}:{principal}:{path}")
 
         try:
             decision = attempt_rate_limit(limit)
@@ -128,6 +132,26 @@ class Throttle(Middleware):
         except TypeError, ValueError:
             window = _DEFAULT_WINDOW_SECONDS
         return max(1, limit), max(1, window)
+
+    @staticmethod
+    def _principal(socket: Socket, ip: str) -> str:
+        """Who spends the handshake budget: the signed-in account, else the address.
+
+        When ``ws.auth`` runs first (``middleware=["ws.auth", "ws.throttle"]``)
+        the socket already carries its user, and an address key would make
+        everyone behind one NAT share a single reconnect budget while one
+        person on a proxy pool spread over many — the HTTP limiters' rule,
+        applied to the upgrade. An anonymous socket keeps the address key.
+        """
+        try:
+            user_fn = getattr(socket, "user", None)
+            user = user_fn() if callable(user_fn) else None
+        except Exception:
+            user = None
+        user_id = getattr(user, "id", None)
+        if isinstance(user_id, int) and not isinstance(user_id, bool) and user_id > 0:
+            return f"user:{user_id}"
+        return ip
 
     @staticmethod
     def _client_ip(socket: Socket) -> str:

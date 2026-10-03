@@ -165,3 +165,35 @@ def test_a_scope_without_a_client_shares_one_named_bucket(
     only_these_proxies_are_trusted,
 ) -> None:
     assert Throttle._client_ip(_socket(client=None)) == "unknown"
+
+
+def test_an_authenticated_handshake_spends_its_accounts_bucket(spent) -> None:
+    """``ws.auth`` ran first: the account is the key, as on every signed-in
+    HTTP route — colleagues behind one NAT no longer share a reconnect budget,
+    and one person on a proxy pool no longer spreads over many."""
+    next_fn = AsyncMock(return_value="ok")
+    colleague_a = _socket(client=("198.51.100.7", 1))
+    colleague_a.user = lambda: type("U", (), {"id": 41})()
+    colleague_b = _socket(client=("198.51.100.7", 2))
+    colleague_b.user = lambda: type("U", (), {"id": 42})()
+    roaming = _socket(client=("203.0.113.9", 3))
+    roaming.user = lambda: type("U", (), {"id": 41})()
+
+    for socket in (colleague_a, colleague_b, roaming):
+        _run(_throttle(), socket, next_fn)
+
+    assert [limit.key for limit in spent] == [
+        "ws:ws_connect:user:41:/ws/deals",
+        "ws:ws_connect:user:42:/ws/deals",
+        "ws:ws_connect:user:41:/ws/deals",
+    ]
+
+
+def test_an_anonymous_handshake_keeps_the_address_key(spent) -> None:
+    next_fn = AsyncMock(return_value="ok")
+    socket = _socket(client=("198.51.100.7", 1))
+    socket.user = lambda: None
+
+    _run(_throttle(), socket, next_fn)
+
+    assert [limit.key for limit in spent] == ["ws:ws_connect:198.51.100.7:/ws/deals"]

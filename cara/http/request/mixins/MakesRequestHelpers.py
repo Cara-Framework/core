@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from cara.support import safe_bool
+
 
 class MakesRequestHelpers:
     """
@@ -27,6 +29,18 @@ class MakesRequestHelpers:
             return int(value)
         except ValueError, TypeError:
             return default
+
+    async def boolean(self, key: str, default: bool = False) -> bool:
+        """Retrieve input as bool (Laravel ``$request->boolean()``).
+
+        The ``boolean`` validation rule accepts ``"false"`` / ``"0"`` /
+        ``"no"`` without converting them, and ``bool("false")`` is ``True`` —
+        so reading a validated flag by truthiness inverts it. This reads the
+        value through the rule's own vocabulary (``safe_bool``): absent,
+        blank or outside the vocabulary answers ``default``.
+        """
+        parsed = safe_bool(await self.input(key, None))
+        return default if parsed is None else parsed
 
     def query(self, key: str | None = None, default: Any = None) -> Any:
         """

@@ -212,3 +212,71 @@ def test_a_metrics_fault_never_fails_the_request(monkeypatch) -> None:
 
     assert reached == [True]
     assert response.headers["RateLimit"] == '"api";r=87;t=12'
+
+
+class _PerNameLimiter:
+    """One decision per limiter name — a group bucket and a route pin."""
+
+    def __init__(self, decisions: dict[str, RateLimitDecision]) -> None:
+        self._decisions = decisions
+
+    def resolve_limiter(self, name: str, request) -> Limit:
+        return Limit.per_minute(self._decisions[name].limit).by(f"{name}:user:7")
+
+    def attempt(self, limit: Limit, *, cost: int = 1) -> RateLimitDecision:
+        return self._decisions[str(limit.key).split(":", 1)[0]]
+
+
+def _stacked(outer: str, inner: str):
+    """``throttle:<outer>`` (group, runs first) around ``throttle:<inner>`` (route)."""
+    response = _Response()
+    request = SimpleNamespace(ip=lambda: "203.0.113.9")
+
+    async def route(_request):
+        return response
+
+    async def inner_then_route(req):
+        return await throttle_middleware(limiter=inner).handle(req, route)
+
+    asyncio.run(throttle_middleware(limiter=outer).handle(request, inner_then_route))
+    return response
+
+
+def test_a_stacked_group_bucket_does_not_overwrite_the_stricter_route_pin(
+    monkeypatch,
+) -> None:
+    """The group throttle returns last; it must not hide the tighter bucket.
+
+    ``throttle:api`` (600/min, 500 left) around ``throttle:mail`` (15/min, 2
+    left): a client pacing by the headers must see ``mail`` — the bucket that
+    will refuse it — not ``api``.
+    """
+    api = RateLimitDecision(
+        allowed=True, limit=600, period_seconds=60, remaining=500, retry_after=0, reset_after=1
+    )
+    mail = RateLimitDecision(
+        allowed=True, limit=15, period_seconds=60, remaining=2, retry_after=0, reset_after=40
+    )
+    _install(monkeypatch, _PerNameLimiter({"api": api, "mail": mail}))
+
+    response = _stacked("api", "mail")
+
+    assert response.headers == {
+        "RateLimit-Policy": '"mail";q=15;w=60',
+        "RateLimit": '"mail";r=2;t=40',
+    }
+
+
+def test_a_stacked_group_bucket_that_is_tighter_takes_the_headline(monkeypatch) -> None:
+    api = RateLimitDecision(
+        allowed=True, limit=600, period_seconds=60, remaining=1, retry_after=0, reset_after=59
+    )
+    mail = RateLimitDecision(
+        allowed=True, limit=15, period_seconds=60, remaining=9, retry_after=0, reset_after=20
+    )
+    _install(monkeypatch, _PerNameLimiter({"api": api, "mail": mail}))
+
+    response = _stacked("api", "mail")
+
+    assert response.headers["RateLimit"] == '"api";r=1;t=59'
+    assert response.headers["RateLimit-Policy"] == '"api";q=600;w=60'

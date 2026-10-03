@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import Any
 
 import cara.facades as facades
@@ -65,9 +66,30 @@ class ThrottleRequests(Middleware):
             )
 
         response = await next_fn(request)
-        for name, value in headers.items():
-            response.header(name, value)
+        if self._is_the_tightest_so_far(request, decision):
+            for name, value in headers.items():
+                response.header(name, value)
         return response
+
+    @staticmethod
+    def _is_the_tightest_so_far(request: Request, decision: RateLimitDecision) -> bool:
+        """Whether this bucket's headers are the ones the client should pace by.
+
+        A route can stack throttles — a group bucket plus a strict route pin
+        (``throttle:api`` then ``throttle:mail``). The group throttle runs
+        first and returns LAST, so it used to overwrite the strict pin's
+        headers with its own looser ones, and a client pacing by the headers
+        overran the bucket that actually refuses it. The headline belongs to
+        the bucket with the fewest requests left; on a tie the one already
+        written (the inner, route-specific pin) stands.
+        """
+        headline = getattr(request, "_rate_limit_headline", None)
+        if headline is not None and headline.remaining <= decision.remaining:
+            return False
+        # A request type that refuses attributes can't be stacked on.
+        with suppress(AttributeError):
+            request._rate_limit_headline = decision
+        return True
 
     def _resolve_limit(self, request: Request) -> Limit:
         """The ``Limit`` this route's named limiter sets for ``request``.

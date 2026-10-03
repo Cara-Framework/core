@@ -10,6 +10,8 @@ from cara._LazyExports import _install_lazy_exports
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AnsiColors": (".AnsiColors", "AnsiColors"),
+    "BOOLEAN_FALSE_TOKENS": (".Coercion", "BOOLEAN_FALSE_TOKENS"),
+    "BOOLEAN_TRUE_TOKENS": (".Coercion", "BOOLEAN_TRUE_TOKENS"),
     "Collection": (".Collection", "Collection"),
     "CurrencyMismatch": (".CurrencyMismatch", "CurrencyMismatch"),
     "DEFAULT_SMTP_PORT": (".MailSafety", "DEFAULT_SMTP_PORT"),
@@ -92,6 +94,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "render_stub_file": (".Filesystem", "render_stub_file"),
     "require_currency_code": (".Currency", "require_currency_code"),
     "resolve_user": (".Auth", "resolve_user"),
+    "safe_bool": (".Coercion", "safe_bool"),
     "safe_divide_decimal": (".Number", "safe_divide_decimal"),
     "safe_float": (".Coercion", "safe_float"),
     "safe_int": (".Coercion", "safe_int"),
@@ -110,6 +113,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 
 __all__ = [
     "AnsiColors",
+    "BOOLEAN_FALSE_TOKENS",
+    "BOOLEAN_TRUE_TOKENS",
     "Collection",
     "CurrencyMismatch",
     "DEFAULT_SMTP_PORT",
@@ -192,6 +197,7 @@ __all__ = [
     "render_stub_file",
     "require_currency_code",
     "resolve_user",
+    "safe_bool",
     "safe_divide_decimal",
     "safe_float",
     "safe_int",
