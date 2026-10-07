@@ -199,6 +199,21 @@ class Response(BaseResponse):
         **extra_meta: Any,
     ) -> Response:
         """Cursor-paginated collection with ``LIMIT n+1`` lookahead metadata."""
+        # ``status`` IS CHECKED BECAUSE IT IS ALSO A TEMPTING META KEY. Every
+        # other parameter here is validated and this one was not, which is how
+        # a caller splatting ``**meta`` into this method handed it a LIST of
+        # filter states and got a 200-shaped response carrying
+        # ``["pending", "processing"]`` as its status code. Nothing downstream
+        # looked until the logging middleware did ``200 <= status_code``, so
+        # the failure surfaced as an unrelated ``TypeError`` from the logger
+        # and the endpoint answered 500 (found on the schedule board,
+        # 2026-10-07). A reserved name silently absorbing a meta key is the
+        # whole trap; this makes it say so at the call.
+        if isinstance(status, bool) or not isinstance(status, int):
+            raise TypeError(
+                "status must be an HTTP status code — a meta key of that name "
+                "is absorbed by this parameter; rename it"
+            )
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("cursor pagination limit must be between 1 and 100")
         if not isinstance(has_more, bool):
