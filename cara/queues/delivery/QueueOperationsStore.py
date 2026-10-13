@@ -144,21 +144,45 @@ class QueueOperationsStore:
         )
 
     # ── delivery ledger (queue_job_delivery) ──────────────────────────
+    #
+    # "Dead-lettered" below means AWAITING REPLAY: a terminal row that has no
+    # replay child yet. ``replay_from_ledger`` inserts the child and never
+    # touches the source, so a replayed source keeps its status and its
+    # ``updated_at`` until retention prunes it. Counting or listing it again
+    # would hand every operator pass the same already-recovered work at the
+    # head of an oldest-first window, starve everything behind it, and keep a
+    # recovered incident's depth on the pager. A terminal CHILD is itself a row
+    # without a child, so a replay that failed again is listed — once, as
+    # itself.
     def list_dead_lettered_deliveries(
-        self, *, queue: str | None = None, limit: int = 100
+        self,
+        *,
+        queue: str | None = None,
+        limit: int = 100,
+        after: tuple[Any, str] | None = None,
     ) -> list[dict]:
-        """Terminal (dead-lettered/expired) ledger rows, oldest-stalled first."""
-        conditions = "status IN (%s, %s)"
+        """Terminal ledger rows awaiting replay, oldest-stalled first.
+
+        ``after`` is the ``(updated_at, job_id)`` of the last row of the
+        previous page: a caller that must see past rows it decided to leave
+        alone (a permanent failure stays terminal and unreplayed until
+        retention) keyset-pages instead of re-reading one window forever.
+        """
+        conditions = f"status IN (%s, %s) AND {self._awaiting_replay_condition()}"
         bindings: list[Any] = list(self.TERMINAL_LEDGER_STATUSES)
         if queue is not None:
             conditions += " AND queue = %s"
             bindings.append(queue)
+        if after is not None:
+            conditions += " AND (updated_at, job_id) > (%s, %s)"
+            bindings.extend([after[0], str(after[1])])
         bindings.append(int(limit))
         return list(
             DB.select(
                 "SELECT job_id, db_job_id, queue, status, terminal_reason, "
-                f"updated_at FROM {self.ledger_table} WHERE {conditions} "
-                "ORDER BY updated_at ASC LIMIT %s",
+                "replay_of, replay_requested_by, updated_at "
+                f"FROM {self.ledger_table} WHERE {conditions} "
+                "ORDER BY updated_at ASC, job_id ASC LIMIT %s",
                 bindings,
             )
             or []
@@ -174,8 +198,8 @@ class QueueOperationsStore:
         )
 
     def count_dead_lettered(self, *, queue: str | None = None) -> int:
-        """Count terminal ledger rows, optionally scoped to one queue."""
-        conditions = "status IN (%s, %s)"
+        """Count terminal ledger rows awaiting replay, optionally for one queue."""
+        conditions = f"status IN (%s, %s) AND {self._awaiting_replay_condition()}"
         bindings: list[Any] = list(self.TERMINAL_LEDGER_STATUSES)
         if queue is not None:
             conditions += " AND queue = %s"
@@ -225,8 +249,14 @@ class QueueOperationsStore:
 
     def _purgeable_ledger_conditions(self) -> str:
         return (
-            "status IN (%s, %s) AND updated_at < %s AND NOT EXISTS ("
-            f"SELECT 1 FROM {self.ledger_table} AS replay_child "
+            "status IN (%s, %s) AND updated_at < %s AND "
+            f"{self._awaiting_replay_condition()}"
+        )
+
+    def _awaiting_replay_condition(self) -> str:
+        """The row has no replay child — the one predicate every reader shares."""
+        return (
+            f"NOT EXISTS (SELECT 1 FROM {self.ledger_table} AS replay_child "
             f"WHERE replay_child.replay_of = {self.ledger_table}.job_id)"
         )
 

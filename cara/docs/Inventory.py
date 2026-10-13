@@ -397,6 +397,127 @@ def gen_permissions(manifest: DocsManifest, now: str, say: Say) -> None:
     )
 
 
+def _env_key(node: ast.expr | None) -> str | None:
+    """The env key a literal names, or ``None`` when it names none."""
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and re.fullmatch(r"[A-Z0-9_]+", node.value)
+    ):
+        return node.value
+    return None
+
+
+def _env_default(call: ast.Call) -> ast.expr | None:
+    """What an ``env()`` call passes as its default (2nd positional or ``default=``)."""
+    if len(call.args) > 1:
+        return call.args[1]
+    return next((kw.value for kw in call.keywords if kw.arg == "default"), None)
+
+
+def _passed(call: ast.Call, fn: ast.FunctionDef, name: str) -> ast.expr | None:
+    """What ``call`` binds to ``fn``'s parameter ``name`` — or that parameter's
+    own default when the call leaves it out."""
+    positional = [a.arg for a in (*fn.args.posonlyargs, *fn.args.args)]
+    keyword = next((kw.value for kw in call.keywords if kw.arg == name), None)
+    if name in positional:
+        index = positional.index(name)
+        if index < len(call.args):
+            return call.args[index]
+        if keyword is not None:
+            return keyword
+        offset = index - (len(positional) - len(fn.args.defaults))
+        return fn.args.defaults[offset] if offset >= 0 else None
+    kwonly = [a.arg for a in fn.args.kwonlyargs]
+    if name in kwonly:
+        return keyword if keyword is not None else fn.args.kw_defaults[kwonly.index(name)]
+    return None
+
+
+def _env_reads(source: str) -> list[tuple[str, str]]:
+    """Every ``(key, default source)`` one module reads through ``env()``, in
+    source order.
+
+    A literal ``env("KEY", default)`` reads KEY. So does a call to a helper
+    defined in the same module whose body hands one of its parameters to
+    ``env()`` as the key — ``_port("DB_PORT", 5432)``,
+    ``_pool(..., concurrency_env="SYNC_WORKER_CONCURRENCY", concurrency=4)``
+    — with the default its caller passes when the helper forwards a
+    parameter as the default. Without this, every key a config module reads
+    through its own validation helper was missing from the page.
+    """
+    tree = ast.parse(source)
+
+    def segment(node: ast.expr | None) -> str:
+        return (ast.get_source_segment(source, node) or "").strip() if node else ""
+
+    helpers: dict[str, list[tuple[ast.FunctionDef, ast.Call]]] = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        params = {
+            a.arg for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)
+        }
+        for node in ast.walk(fn):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "env"
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in params
+            ):
+                helpers.setdefault(fn.name, []).append((fn, node))
+
+    reads: list[tuple[int, int, str, str]] = []
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)):
+            continue
+        position = (call.lineno, call.col_offset)
+        if call.func.id == "env" and call.args and (key := _env_key(call.args[0])):
+            reads.append((*position, key, segment(_env_default(call))))
+        for fn, inner in helpers.get(call.func.id, ()):
+            key = _env_key(_passed(call, fn, inner.args[0].id))
+            if key is None:
+                continue
+            default = _env_default(inner)
+            if isinstance(default, ast.Name) and any(
+                default.id == a.arg
+                for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)
+            ):
+                default = _passed(call, fn, default.id)
+            reads.append((*position, key, segment(default)))
+    return [(key, default) for *_position, key, default in sorted(reads)]
+
+
+def _framework_config_modules(config_file: Path, source: str) -> list[Path]:
+    """The framework modules a config file imports (``from cara.x import …``).
+
+    Config-layer support that lives in the framework — the broker's
+    fail-closed vhost, credential and signing reads in
+    ``cara.queues.BrokerConfig`` — reads ``env()`` on the config file's
+    behalf, so its keys belong on the page beside the config's own.
+    """
+    framework = Path(__file__).resolve().parents[1]
+    modules: list[Path] = []
+    for node in ast.parse(source, filename=str(config_file)).body:
+        if not (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and (node.module or "").startswith("cara.")
+        ):
+            continue
+        relative = Path(*node.module.split(".")[1:])
+        for candidate in (
+            framework / relative.with_suffix(".py"),
+            framework / relative / "__init__.py",
+        ):
+            if candidate.is_file():
+                modules.append(candidate)
+                break
+    return modules
+
+
 def gen_env(manifest: DocsManifest, now: str, say: Say) -> None:
     """Write the environment-variable reference page."""
     root = manifest.root
@@ -406,61 +527,55 @@ def gen_env(manifest: DocsManifest, now: str, say: Say) -> None:
         root / "commons" / "contracts",
         root / "commons" / "shared",
     ]
-    seen: dict[str, tuple[str, str]] = {}
+
+    def where(path: Path) -> str:
+        resolved = path.resolve()
+        for base in (root, root.resolve()):
+            if resolved.is_relative_to(base):
+                return str(resolved.relative_to(base))
+        return str(path)
+
+    files: list[Path] = []
+    framework: list[Path] = []
     for directory in scan:
         if not directory.is_dir():
             continue
         for f in sorted(directory.rglob("*.py")):
-            source = read(f)
-            tree = ast.parse(source, filename=str(f))
-            calls = sorted(
-                (
-                    node
-                    for node in ast.walk(tree)
-                    if isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "env"
-                    and node.args
-                    and isinstance(node.args[0], ast.Constant)
-                    and isinstance(node.args[0].value, str)
-                    and re.fullmatch(r"[A-Z0-9_]+", node.args[0].value)
-                ),
-                key=lambda node: (node.lineno, node.col_offset),
-            )
-            for call in calls:
-                key = call.args[0].value
-                default_node = (
-                    call.args[1]
-                    if len(call.args) > 1
-                    else next(
-                        (
-                            keyword.value
-                            for keyword in call.keywords
-                            if keyword.arg == "default"
-                        ),
-                        None,
-                    )
-                )
-                default = (
-                    ast.get_source_segment(source, default_node).strip()
-                    if default_node is not None
-                    else ""
-                )
-                if key not in seen:
-                    seen[key] = (default, str(f.relative_to(root)))
+            files.append(f)
+            if directory.name != "config":
+                continue
+            for module in _framework_config_modules(f, read(f)):
+                if module not in framework and _env_reads(read(module)):
+                    framework.append(module)
+
+    # key -> [(default, file)], one entry per DISTINCT default, in scan order.
+    seen: dict[str, list[tuple[str, str]]] = {}
+    for f in [*files, *framework]:
+        for key, default in _env_reads(read(f)):
+            entries = seen.setdefault(key, [])
+            if all(default != known for known, _ in entries):
+                entries.append((default, where(f)))
     body = header(
         manifest,
         "Environment variables",
-        [str(d.relative_to(root)) for d in scan if d.is_dir()],
+        [str(d.relative_to(root)) for d in scan if d.is_dir()]
+        + [where(module) for module in framework],
         now,
     )
     body += "| Key | Default | Read in |\n|---|---|---|\n"
     for key in sorted(seen):
-        default, where = seen[key]
-        body += f"| `{key}` | `{md_escape(default) or '—'}` | `{where}` |\n"
+        entries = seen[key]
+        if len(entries) == 1:
+            default = f"`{md_escape(entries[0][0]) or '—'}`"
+        else:
+            default = " · ".join(
+                f"`{md_escape(value) or '—'}` (`{path}`)" for value, path in entries
+            )
+        body += f"| `{key}` | {default} | `{entries[0][1]}` |\n"
     body += (
         f"\n_Total: {len(seen)} env keys. (The first config file where each key "
-        "is read is listed.)_\n"
+        "is read is listed; a key read with different defaults lists each "
+        "default with the file that sets it.)_\n"
     )
     write_if_changed(manifest.reference / "env.md", body, "reference/env.md", say)
 

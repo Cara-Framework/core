@@ -138,7 +138,8 @@ class QueueMonitorCommand(CommandBase):
         dead_lettered = store.count_dead_lettered(queue=queue_name)
         if dead_lettered:
             self.line(
-                f"  <error>Dead-lettered (ledger):</error> {dead_lettered} delivery(ies)"
+                f"  <error>Dead-lettered (ledger):</error> {dead_lettered} "
+                "delivery(ies) awaiting replay"
             )
 
         self.line("")
@@ -174,7 +175,7 @@ class QueueMonitorCommand(CommandBase):
     ) -> None:
         ledger_total = store.count_dead_lettered(queue=queue)
         self.line("\n<info>Dead-Letter Ledger</info> (queue_job_delivery, audited)")
-        self.line(f"  Terminal deliveries: {ledger_total}")
+        self.line(f"  Terminal deliveries awaiting replay: {ledger_total}")
 
         depth = self._broker_dead_letter_depth()
         if depth is None:

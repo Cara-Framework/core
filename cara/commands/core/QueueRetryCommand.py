@@ -12,6 +12,9 @@ The real rail is ``AMQPDriver.replay_delivery`` ->
 recorded on the new ledger row), idempotent (a repeat for the same source
 returns the existing accepted replay child rather than erroring),
 signature-verified, and restricted to ``dead_lettered``/``expired`` sources.
+``--queue``/``--all`` select only sources that have no replay child yet, so a
+batch run never spends its ``--limit`` on work an earlier run already
+recovered; a replay that failed again is selected as itself.
 This command never touches the tracker row and never rewrites the payload —
 the signed envelope is republished verbatim, so anything the envelope carries
 (execution context included) re-enters by construction.
