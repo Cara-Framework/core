@@ -127,9 +127,7 @@ class TestCronExpressions:
 
     def test_five_fields_map_positionally(self, driver) -> None:
         """minute hour day month day_of_week — in that order."""
-        trigger = driver._build_trigger(
-            {"type": "cron", "expression": "*/5 1 2 3 mon"}
-        )
+        trigger = driver._build_trigger({"type": "cron", "expression": "*/5 1 2 3 mon"})
         assert trigger.kind == "cron"
         assert trigger.kwargs == {
             "minute": "*/5",
@@ -142,9 +140,7 @@ class TestCronExpressions:
 
     def test_irregular_whitespace_is_tolerated(self, driver) -> None:
         """Hand-written config gets padded; ``split()`` must absorb it."""
-        trigger = driver._build_trigger(
-            {"type": "cron", "expression": "  0   9 * * *  "}
-        )
+        trigger = driver._build_trigger({"type": "cron", "expression": "  0   9 * * *  "})
         assert trigger.kwargs["minute"] == "0"
         assert trigger.kwargs["hour"] == "9"
 
@@ -263,9 +259,7 @@ class TestOneShotSpecs:
     def test_at_builds_a_date_trigger(self, driver) -> None:
         """``ScheduleBuilder.at()`` emits ``type="at"``; the driver must
         accept it, or every fluent ``at()`` call raises at registration."""
-        trigger = driver._build_trigger(
-            {"type": "at", "run_date": "2030-01-01T00:00:00"}
-        )
+        trigger = driver._build_trigger({"type": "at", "run_date": "2030-01-01T00:00:00"})
         assert trigger.kind == "date"
         assert trigger.kwargs == {
             "run_date": "2030-01-01T00:00:00",
@@ -310,9 +304,7 @@ class TestTimezoneForwarding:
         """Every branch forwards a timezone — no branch may omit it."""
         assert driver._build_trigger(spec).kwargs["timezone"] == "UTC"
 
-    def test_per_entry_timezone_overrides_the_scheduler_default(
-        self, driver
-    ) -> None:
+    def test_per_entry_timezone_overrides_the_scheduler_default(self, driver) -> None:
         """A report pinned to a business timezone must win."""
         trigger = driver._build_trigger(
             {
@@ -323,9 +315,7 @@ class TestTimezoneForwarding:
         )
         assert trigger.kwargs["timezone"] == "America/New_York"
 
-    def test_without_either_setting_the_timezone_is_none(
-        self, tzless_driver
-    ) -> None:
+    def test_without_either_setting_the_timezone_is_none(self, tzless_driver) -> None:
         """Documented fall-through: no scheduler default and no per-entry
         value leaves APScheduler on the host timezone. Pinned so the
         substitution is visibly a *fallback*, not an unconditional

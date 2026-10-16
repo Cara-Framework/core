@@ -130,9 +130,7 @@ def test_a_bare_unique_index_is_adopted_not_recreated_and_not_orphaned():
         composite_uniques=[{"columns": ["id", "tenant_id"], "name": None}],
     )
 
-    operations, _, _ = plan(
-        [model], _live(indexes=("product_id_tenant_id_unique",))
-    )
+    operations, _, _ = plan([model], _live(indexes=("product_id_tenant_id_unique",)))
 
     assert [op.kind for op in operations] == ["add_unique_constraint"]
 

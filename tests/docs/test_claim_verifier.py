@@ -120,10 +120,12 @@ def test_a_citation_of_an_ABSENT_neighbour_is_unverifiable_not_broken(tmp_path):
     forget_path_index()
     # No neighbour beside it — only the atlas prose that names one.
     alpha = make_checkout(
-        tmp_path, "alpha", atlas=(
+        tmp_path,
+        "alpha",
+        atlas=(
             "`some:banned-command` is FORBIDDEN.\n"
             "Beta lives at `~/Desktop/beta.example/code`.\n"
-        )
+        ),
     )
     write(
         alpha / "docs" / "internal" / "note.md",
@@ -144,10 +146,12 @@ def test_an_undeclared_neighbour_does_not_excuse_a_bad_path(tmp_path):
     """The escape hatch is the atlas's own topology, not "mentions any name"."""
     forget_path_index()
     alpha = make_checkout(
-        tmp_path, "alpha", atlas=(
+        tmp_path,
+        "alpha",
+        atlas=(
             "`some:banned-command` is FORBIDDEN.\n"
             "Beta lives at `~/Desktop/beta.example/code`.\n"
-        )
+        ),
     )
     write(
         alpha / "docs" / "internal" / "note.md",
@@ -192,10 +196,12 @@ def test_a_workspace_pointer_is_unverifiable_not_broken(tmp_path):
     """
     forget_path_index()
     alpha = make_checkout(
-        tmp_path, "alpha", atlas=(
+        tmp_path,
+        "alpha",
+        atlas=(
             "`some:banned-command` is FORBIDDEN.\n"
             "Beta lives at `~/Desktop/beta.example/code`.\n"
-        )
+        ),
     )
     write(
         alpha / "docs" / "internal" / "note.md",
@@ -221,10 +227,12 @@ def test_a_workspace_pointer_is_unverifiable_not_broken(tmp_path):
 def test_a_home_pointer_naming_no_workspace_still_fails(tmp_path):
     forget_path_index()
     alpha = make_checkout(
-        tmp_path, "alpha", atlas=(
+        tmp_path,
+        "alpha",
+        atlas=(
             "`some:banned-command` is FORBIDDEN.\n"
             "Beta lives at `~/Desktop/beta.example/code`.\n"
-        )
+        ),
     )
     write(
         alpha / "docs" / "internal" / "note.md",

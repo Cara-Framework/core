@@ -86,7 +86,9 @@ def _validate(limit: object, cost: object) -> None:
             "A Limit names its bucket with .by(...) before it can be spent."
         )
     if isinstance(cost, bool) or not isinstance(cost, int) or cost < 1:
-        raise RateLimitConfigurationException("Rate-limit cost must be a positive integer.")
+        raise RateLimitConfigurationException(
+            "Rate-limit cost must be a positive integer."
+        )
     if cost > limit.burst:
         raise RateLimitConfigurationException(
             f"A cost of {cost} can never fit a burst of {limit.burst}."

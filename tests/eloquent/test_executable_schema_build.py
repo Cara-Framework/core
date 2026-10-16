@@ -127,9 +127,7 @@ def test_schema_build_rejects_invalid_constraint_declarations(
 
 def test_schema_build_executes_named_check_declaration() -> None:
     (definition,) = Schema.build(
-        lambda field: (
-            field.check("amount >= 0", name="invoice_amount_check"),
-        )
+        lambda field: (field.check("amount >= 0", name="invoice_amount_check"),)
     )
 
     assert definition.to_dict() == {

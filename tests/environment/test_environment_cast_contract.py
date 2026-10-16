@@ -76,9 +76,7 @@ class TestFloatCast:
         monkeypatch.setenv("CARA_CAST_FLOAT", "  2.5\n")
         assert env("CARA_CAST_FLOAT", 5.0, float) == 2.5
 
-    def test_unparseable_value_raises_and_names_the_variable(
-        self, monkeypatch
-    ) -> None:
+    def test_unparseable_value_raises_and_names_the_variable(self, monkeypatch) -> None:
         """The error must be diagnosable without a stack archaeology dig."""
         monkeypatch.setenv("CARA_CAST_FLOAT", "not-a-number")
         with pytest.raises(ValueError) as raised:
@@ -178,18 +176,14 @@ class TestBoolCast:
         assert result is False
         assert isinstance(result, bool)
 
-    def test_unknown_word_raises_rather_than_staying_truthy(
-        self, monkeypatch
-    ) -> None:
+    def test_unknown_word_raises_rather_than_staying_truthy(self, monkeypatch) -> None:
         """``"disabled"`` as a raw string is truthy — the worst outcome."""
         monkeypatch.setenv("CARA_CAST_BOOL", "disabled")
         with pytest.raises(ValueError) as raised:
             env("CARA_CAST_BOOL", True, bool)
         assert "CARA_CAST_BOOL" in str(raised.value)
 
-    def test_empty_string_falls_back_to_the_bool_default(
-        self, monkeypatch
-    ) -> None:
+    def test_empty_string_falls_back_to_the_bool_default(self, monkeypatch) -> None:
         """``X=`` means "unset" on the bool path too."""
         monkeypatch.setenv("CARA_CAST_BOOL", "")
         assert env("CARA_CAST_BOOL", True, bool) is True
@@ -223,9 +217,7 @@ class TestAutoCoercionLimits:
         monkeypatch.setenv("CARA_CAST_RAW", "5.5")
         assert env("CARA_CAST_RAW", 1.0) == "5.5"
 
-    def test_non_decimal_numeric_characters_do_not_crash(
-        self, monkeypatch
-    ) -> None:
+    def test_non_decimal_numeric_characters_do_not_crash(self, monkeypatch) -> None:
         """``str.isnumeric()`` is True for ``"²"``/``"½"`` but ``int()``
         rejects them — the explicit ``[+-]?\\d+`` match keeps boot alive
         by leaving them as the raw string."""
@@ -249,9 +241,7 @@ class TestAutoCoercionLimits:
         monkeypatch.setenv("CARA_CAST_RAW", raw)
         assert env("CARA_CAST_RAW", True) is False
 
-    def test_digit_toggles_are_ints_not_bools_without_a_type(
-        self, monkeypatch
-    ) -> None:
+    def test_digit_toggles_are_ints_not_bools_without_a_type(self, monkeypatch) -> None:
         """The integer branch runs BEFORE the boolean branch.
 
         So ``FLAG=0`` read without a type is the int ``0`` (falsy, but

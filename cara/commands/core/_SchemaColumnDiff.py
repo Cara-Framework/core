@@ -136,9 +136,7 @@ _DB_INT_RANK = {"smallint": 1, "integer": 2, "bigint": 3}
 class _SchemaColumnDiff:
     """The per-column half of the drift comparison."""
 
-    def diff_column(
-        self, table: str, name: str, declared: dict, live: dict
-    ) -> list[str]:
+    def diff_column(self, table: str, name: str, declared: dict, live: dict) -> list[str]:
         """Compare a single shared column: nullability + conservative type."""
         issues: list[str] = []
 

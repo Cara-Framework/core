@@ -37,7 +37,9 @@ def test_a_refusal_carries_retry_after_and_the_ratelimit_pair_on_the_wire() -> N
     )
     send = _Send()
 
-    asyncio.run(handler.handle(refusal, None, {"type": "http", "headers": []}, None, send))
+    asyncio.run(
+        handler.handle(refusal, None, {"type": "http", "headers": []}, None, send)
+    )
 
     start = send.start()
     headers = {name.decode(): value.decode() for name, value in start["headers"]}

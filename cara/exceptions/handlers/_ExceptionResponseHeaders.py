@@ -158,7 +158,9 @@ class _ExceptionResponseHeaders:
             text = str(value)
             if "\r" in text or "\n" in text:
                 continue
-            headers.append([name.lower().encode(), text.encode("latin-1", errors="replace")])
+            headers.append(
+                [name.lower().encode(), text.encode("latin-1", errors="replace")]
+            )
         return headers
 
 

@@ -114,7 +114,9 @@ def test_every_backend_fault_lands_on_the_counter_alerting_reads(monkeypatch) ->
         authority.facades, "Log", SimpleNamespace(warning=lambda *_a, **_k: None)
     )
     monkeypatch.setattr(
-        authority, "counter", lambda *_a, **_k: SimpleNamespace(inc=lambda: faults.append(1))
+        authority,
+        "counter",
+        lambda *_a, **_k: SimpleNamespace(inc=lambda: faults.append(1)),
     )
 
     for _ in range(3):

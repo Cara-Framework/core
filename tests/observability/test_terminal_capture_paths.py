@@ -55,9 +55,7 @@ def test_the_http_500_branch_captures_the_exception(monkeypatch):
     )
 
     seen = []
-    monkeypatch.setattr(
-        observability, "capture_exception", lambda exc: seen.append(exc)
-    )
+    monkeypatch.setattr(observability, "capture_exception", lambda exc: seen.append(exc))
 
     handler = DefaultExceptionHandler()
     error = RuntimeError("server fault")
@@ -73,9 +71,7 @@ def test_a_4xx_exception_is_not_captured(monkeypatch):
     )
 
     seen = []
-    monkeypatch.setattr(
-        observability, "capture_exception", lambda exc: seen.append(exc)
-    )
+    monkeypatch.setattr(observability, "capture_exception", lambda exc: seen.append(exc))
 
     error = RuntimeError("missing")
     error.status_code = 404
@@ -89,9 +85,7 @@ def test_helpers_report_captures_before_logging(monkeypatch):
     from cara import helpers
 
     seen = []
-    monkeypatch.setattr(
-        observability, "capture_exception", lambda exc: seen.append(exc)
-    )
+    monkeypatch.setattr(observability, "capture_exception", lambda exc: seen.append(exc))
 
     error = ValueError("best effort branch failed")
     helpers.report(error)

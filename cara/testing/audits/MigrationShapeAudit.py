@@ -50,9 +50,7 @@ class MigrationShapeAudit:
         if not self.directory.is_dir():
             return []
         return sorted(
-            path
-            for path in self.directory.glob("*.py")
-            if path.name != "__init__.py"
+            path for path in self.directory.glob("*.py") if path.name != "__init__.py"
         )
 
     def findings(self) -> list[MigrationShapeFinding]:
@@ -67,9 +65,7 @@ class MigrationShapeAudit:
             tree = ast.parse(path.read_text(), filename=str(path))
         except SyntaxError as exc:
             return [
-                MigrationShapeFinding(
-                    name, exc.lineno or 1, f"does not parse: {exc.msg}"
-                )
+                MigrationShapeFinding(name, exc.lineno or 1, f"does not parse: {exc.msg}")
             ]
 
         classes = [
@@ -79,9 +75,7 @@ class MigrationShapeAudit:
         ]
         if not classes:
             return [
-                MigrationShapeFinding(
-                    name, 1, f"declares no {MIGRATION_BASE} subclass"
-                )
+                MigrationShapeFinding(name, 1, f"declares no {MIGRATION_BASE} subclass")
             ]
         if len(classes) > 1:
             return [

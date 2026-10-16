@@ -316,7 +316,7 @@ def test_lazy_generated_theme_barrel_proves_both_consumers(tmp_path):
     write(shared / "catalog" / "Fx.py", "def convert():\n    return 1\n")
     write(
         shared / "catalog" / "__init__.py",
-        '_LAZY_EXPORTS: dict[str, tuple[str, str]] = {\n'
+        "_LAZY_EXPORTS: dict[str, tuple[str, str]] = {\n"
         '    "convert": (".Fx", "convert"),\n'
         "}\n"
         '__all__ = ["convert"]\n',
@@ -346,7 +346,7 @@ def test_lazy_generated_theme_barrel_still_reports_one_consumer(tmp_path):
     write(shared / "catalog" / "Fx.py", "def convert():\n    return 1\n")
     write(
         shared / "catalog" / "__init__.py",
-        '_LAZY_EXPORTS: dict[str, tuple[str, str]] = {\n'
+        "_LAZY_EXPORTS: dict[str, tuple[str, str]] = {\n"
         '    "convert": (".Fx", "convert"),\n'
         "}\n"
         '__all__ = ["convert"]\n',

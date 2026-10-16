@@ -252,10 +252,20 @@ def test_a_stacked_group_bucket_does_not_overwrite_the_stricter_route_pin(
     will refuse it — not ``api``.
     """
     api = RateLimitDecision(
-        allowed=True, limit=600, period_seconds=60, remaining=500, retry_after=0, reset_after=1
+        allowed=True,
+        limit=600,
+        period_seconds=60,
+        remaining=500,
+        retry_after=0,
+        reset_after=1,
     )
     mail = RateLimitDecision(
-        allowed=True, limit=15, period_seconds=60, remaining=2, retry_after=0, reset_after=40
+        allowed=True,
+        limit=15,
+        period_seconds=60,
+        remaining=2,
+        retry_after=0,
+        reset_after=40,
     )
     _install(monkeypatch, _PerNameLimiter({"api": api, "mail": mail}))
 
@@ -269,10 +279,20 @@ def test_a_stacked_group_bucket_does_not_overwrite_the_stricter_route_pin(
 
 def test_a_stacked_group_bucket_that_is_tighter_takes_the_headline(monkeypatch) -> None:
     api = RateLimitDecision(
-        allowed=True, limit=600, period_seconds=60, remaining=1, retry_after=0, reset_after=59
+        allowed=True,
+        limit=600,
+        period_seconds=60,
+        remaining=1,
+        retry_after=0,
+        reset_after=59,
     )
     mail = RateLimitDecision(
-        allowed=True, limit=15, period_seconds=60, remaining=9, retry_after=0, reset_after=20
+        allowed=True,
+        limit=15,
+        period_seconds=60,
+        remaining=9,
+        retry_after=0,
+        reset_after=20,
     )
     _install(monkeypatch, _PerNameLimiter({"api": api, "mail": mail}))
 

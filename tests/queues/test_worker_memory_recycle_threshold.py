@@ -16,7 +16,9 @@ QueueWorkCommand = qwc_module.QueueWorkCommand
 
 def test_a_configured_value_below_two_gigabytes_is_respected(monkeypatch):
     monkeypatch.setattr(
-        qwc_module, "config", lambda key, default=None: 768 if "memory" in key else default
+        qwc_module,
+        "config",
+        lambda key, default=None: 768 if "memory" in key else default,
     )
 
     assert QueueWorkCommand._resolve_memory_limit_mb() == 768

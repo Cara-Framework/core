@@ -425,8 +425,7 @@ class SchemaCheckCommand(CommandBase):
         names their own way is two chances to disagree about what is missing.
         """
         return {
-            key["name"]
-            for key in declared_foreign_keys(model, model.get("table") or "")
+            key["name"] for key in declared_foreign_keys(model, model.get("table") or "")
         }
 
     def _diff_foreign_keys(self, model: dict, live_keys: set[str]) -> list[str]:
@@ -483,7 +482,6 @@ class SchemaCheckCommand(CommandBase):
             issues.extend(self._diff_column(table, col, declared[col], live[col]))
 
         return issues
-
 
     def _diff_column(
         self, table: str, name: str, declared: dict, live: dict

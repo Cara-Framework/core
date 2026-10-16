@@ -5,9 +5,7 @@ from __future__ import annotations
 import ast
 
 
-def _extract_separate_foreign_key_definition(
-    self, call_node: ast.Call
-) -> dict | None:
+def _extract_separate_foreign_key_definition(self, call_node: ast.Call) -> dict | None:
     """Extract ``field.foreign(...).references(...).on(...)`` metadata."""
 
     field_name = None
@@ -66,10 +64,6 @@ def _extract_separate_foreign_key_definition(
         "references": references if is_composite else references or "id",
         "on": on_table,
         "on_delete": on_delete,
-        **(
-            {"on_delete_columns": on_delete_columns}
-            if on_delete_columns
-            else {}
-        ),
+        **({"on_delete_columns": on_delete_columns} if on_delete_columns else {}),
         "on_update": on_update,
     }

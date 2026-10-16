@@ -442,7 +442,9 @@ def test_throttle_counter_survives_the_signed_round_trip():
         issued_at=1_752_643_200,
     )
     envelope = SignedJsonJobSerializer.inspect_envelope(
-        body, signing_keys=_KEYS, now=1_752_643_201  # gitleaks:allow — _KEYS is a fixture name, the digits are a timestamp
+        body,
+        signing_keys=_KEYS,
+        now=1_752_643_201,  # gitleaks:allow — _KEYS is a fixture name, the digits are a timestamp
     )
     verified = SignedJsonJobSerializer.deserialize_verified(
         envelope["payload"], allowed_prefixes=_PREFIXES
@@ -468,7 +470,9 @@ def test_replay_clears_both_retry_counters():
         issued_at=1_752_643_200,
     )
     source = SignedJsonJobSerializer.inspect_envelope(
-        body, signing_keys=_KEYS, now=1_752_643_201  # gitleaks:allow — _KEYS is a fixture name, the digits are a timestamp
+        body,
+        signing_keys=_KEYS,
+        now=1_752_643_201,  # gitleaks:allow — _KEYS is a fixture name, the digits are a timestamp
     )["payload"]
 
     replay_body = SignedJsonJobSerializer.serialize_replay(

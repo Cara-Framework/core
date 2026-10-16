@@ -435,8 +435,17 @@ def test_token_matching_is_segment_bounded_not_substring(tmp_path):
     manifest = make_manifest(tmp_path, plugin_tokens=frozenset({"lowes", "on", "bose"}))
     token_re = _token_re(manifest)
 
-    for benign in ("lowest_price_30d", "lowest", "slowest", "json", "version",
-                   "connection", "comparison", "verbose", "season"):
+    for benign in (
+        "lowest_price_30d",
+        "lowest",
+        "slowest",
+        "json",
+        "version",
+        "connection",
+        "comparison",
+        "verbose",
+        "season",
+    ):
         assert not token_re.search(benign), f"false positive on {benign!r}"
 
     for leak in ("lowes", "lowes.com", "on_delete", "BOSE_SPEAKER"):
@@ -452,9 +461,16 @@ def test_token_matching_keeps_camel_case_and_fused_host_leaks(tmp_path):
     )
     token_re = _token_re(manifest)
 
-    for leak in ("AmazonListingExtractor", "PullEbayJob", "MARKETPLACE_EBAY",
-                 "amazon_id", "cdn.shopify.com", "shopify_product_id",
-                 "myshopify.com", "Amazon2"):
+    for leak in (
+        "AmazonListingExtractor",
+        "PullEbayJob",
+        "MARKETPLACE_EBAY",
+        "amazon_id",
+        "cdn.shopify.com",
+        "shopify_product_id",
+        "myshopify.com",
+        "Amazon2",
+    ):
         assert token_re.search(leak), f"missed leak in {leak!r}"
 
     assert not token_re.search("amazonian")

@@ -347,8 +347,8 @@ concrete boundary.
 Violation:
 
 ```python
-class ProductDataContract(ABC):
-    ...
+class ProductDataContract(ABC): ...
+
 
 # Only ProductDataRepository implements it.
 ```
@@ -356,14 +356,13 @@ class ProductDataContract(ABC):
 Clean:
 
 ```python
-class ScrapeDriverContract(ABC):
-    ...
+class ScrapeDriverContract(ABC): ...
 
-class DirectDriver(ScrapeDriverContract):
-    ...
 
-class ScrapeDoDriver(ScrapeDriverContract):
-    ...
+class DirectDriver(ScrapeDriverContract): ...
+
+
+class ScrapeDoDriver(ScrapeDriverContract): ...
 ```
 
 For one implementation, delete the contract and inject the concrete repository.
@@ -381,8 +380,7 @@ Violation:
 
 ```python
 class RefreshProductJob(BaseJob):
-    async def execute(self):
-        ...
+    async def execute(self): ...
 ```
 
 Clean:
@@ -391,8 +389,7 @@ Clean:
 class RefreshProductJob(BaseJob):
     idempotency_params = ("product_id",)
 
-    async def execute(self):
-        ...
+    async def execute(self): ...
 ```
 
 An empty tuple is still an explicit declaration; use it only when the base

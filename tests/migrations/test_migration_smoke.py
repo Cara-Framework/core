@@ -35,7 +35,7 @@ import pytest
 
 from cara.testing.audits import MigrationShapeAudit
 
-GOOD = '''
+GOOD = """
 from cara.migrations import Migration
 
 
@@ -45,7 +45,7 @@ class CreateWidgetTable(Migration):
 
     def down(self):
         pass
-'''
+"""
 
 
 def _write(directory: Path, name: str, body: str) -> Path:
@@ -73,7 +73,11 @@ def test_a_missing_directory_yields_no_files(tmp_path: Path) -> None:
     ("name", "body", "expected"),
     [
         ("unparseable", "class Broken(Migration:\n    pass\n", "does not parse"),
-        ("no_subclass", "class NotAMigration:\n    pass\n", "declares no Migration subclass"),
+        (
+            "no_subclass",
+            "class NotAMigration:\n    pass\n",
+            "declares no Migration subclass",
+        ),
         (
             "two_subclasses",
             "class A(Migration):\n    def up(self): pass\n    def down(self): pass\n"
@@ -92,7 +96,9 @@ def test_a_missing_directory_yields_no_files(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_each_defect_is_reported(tmp_path: Path, name: str, body: str, expected: str) -> None:
+def test_each_defect_is_reported(
+    tmp_path: Path, name: str, body: str, expected: str
+) -> None:
     _write(tmp_path, f"2026_01_01_000000_{name}.py", body)
     findings = MigrationShapeAudit(tmp_path).findings()
     assert findings, f"{name} must be reported"

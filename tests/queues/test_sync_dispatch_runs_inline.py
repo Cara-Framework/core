@@ -258,7 +258,6 @@ def test_outside_a_sync_context_the_job_is_published_not_run() -> None:
     assert _QueueingJob.ran == 0, "a queued job must run in the worker, not here"
     assert _QueueingJob.pending is not None
     assert _QueueingJob.pending.dispatched == 1, (
-        "the terminal .dispatch() is mandatory — builder destruction never "
-        "queues work"
+        "the terminal .dispatch() is mandatory — builder destruction never queues work"
     )
     assert result == "delivery-uuid"

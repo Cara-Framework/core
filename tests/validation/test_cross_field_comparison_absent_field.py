@@ -52,8 +52,7 @@ class TestAbsentReferencedFieldPasses:
     def test_absent_field_passes(self, rule_cls, key: str, _strict: bool) -> None:
         """``min_price=50`` with no ``max_price`` in the payload."""
         assert (
-            _check(rule_cls, key, "min_price", 50, {"min_price": 50}, "max_price")
-            is True
+            _check(rule_cls, key, "min_price", 50, {"min_price": 50}, "max_price") is True
         )
 
     @pytest.mark.parametrize(("rule_cls", "key", "_strict"), _ALL_RULES)
@@ -200,9 +199,7 @@ class TestNonComparableInputs:
         assert _check(rule_cls, key, "qty", None, {"qty": None}, "100") is False
 
     @pytest.mark.parametrize(("rule_cls", "key", "_strict"), _ALL_RULES)
-    def test_a_non_numeric_value_fails(
-        self, rule_cls, key: str, _strict: bool
-    ) -> None:
+    def test_a_non_numeric_value_fails(self, rule_cls, key: str, _strict: bool) -> None:
         """``"abc"`` cannot be ordered against a number."""
         assert _check(rule_cls, key, "qty", "abc", {"qty": "abc"}, "100") is False
 

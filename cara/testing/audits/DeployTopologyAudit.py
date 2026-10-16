@@ -348,7 +348,9 @@ class DeployTopologyAudit:
                 and environment.get(key, "").strip() != NO_EXPORTER
             }
             if len(set(ports.values())) > 1:
-                detail = ", ".join(f"{key}={value}" for key, value in sorted(ports.items()))
+                detail = ", ".join(
+                    f"{key}={value}" for key, value in sorted(ports.items())
+                )
                 problems.append(
                     f"{name} sets disagreeing metrics ports ({detail}) — probes "
                     f"and Prometheus follow one key while the process binds "

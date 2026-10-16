@@ -49,6 +49,7 @@ def _model_discovery_extract_field_definition(self, call_node: ast.Call) -> dict
 
     return None
 
+
 def _model_discovery_parse_lambda_fields(self, lambda_node: ast.Lambda, model_info: dict):
     """Parse lambda field: (...) body to extract field definitions."""
     if isinstance(lambda_node.body, ast.Tuple):
@@ -272,8 +273,8 @@ def _model_discovery_extract_field_definition_new_syntax(
                         )
                     for keyword in current.keywords:
                         if keyword.arg == "columns":
-                            foreign_key_info["on_delete_columns"] = (
-                                self._foreign_key_arg(keyword.value)
+                            foreign_key_info["on_delete_columns"] = self._foreign_key_arg(
+                                keyword.value
                             )
                 elif method_name == "on_update":
                     if current.args and isinstance(current.args[0], ast.Constant):
@@ -300,11 +301,7 @@ def _model_discovery_extract_field_definition_new_syntax(
                     "on": foreign_key_info.get("on"),
                     "on_delete": foreign_key_info.get("on_delete"),
                     **(
-                        {
-                            "on_delete_columns": foreign_key_info[
-                                "on_delete_columns"
-                            ]
-                        }
+                        {"on_delete_columns": foreign_key_info["on_delete_columns"]}
                         if foreign_key_info.get("on_delete_columns")
                         else {}
                     ),

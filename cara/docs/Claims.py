@@ -230,8 +230,7 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
             (
                 name
                 for name in sorted(neighbours)
-                if not siblings
-                and (name in text or name.split(".")[0] in text)
+                if not siblings and (name in text or name.split(".")[0] in text)
             ),
             None,
         )
@@ -297,11 +296,7 @@ def verify_claims(manifest: DocsManifest, say: Say) -> tuple[list, list]:
                     # graded the environment, not the sentence. Anything else
                     # (a real typo in a home path) still fails.
                     workspace = next(
-                        (
-                            name
-                            for name in sorted(workspaces)
-                            if name and name in pointer
-                        ),
+                        (name for name in sorted(workspaces) if name and name in pointer),
                         None,
                     )
                     if workspace:

@@ -309,9 +309,7 @@ class TestSyncWrapper:
             assert cache.add(key, "peer-owner", 60) is True
             return "did-work"
 
-        wrapped = _wrap_without_overlapping(
-            "job:overrun", _overrunning, lock_timeout=60
-        )
+        wrapped = _wrap_without_overlapping("job:overrun", _overrunning, lock_timeout=60)
 
         assert wrapped() == "did-work"
         assert cache.get(key) == "peer-owner"
@@ -359,9 +357,7 @@ class TestAsyncWrapper:
             return "async-ok"
 
         cache.add("scheduler:lock:job:async-held", "peer-owner", 60)
-        wrapped = _wrap_without_overlapping(
-            "job:async-held", _callback, lock_timeout=60
-        )
+        wrapped = _wrap_without_overlapping("job:async-held", _callback, lock_timeout=60)
 
         assert asyncio.run(wrapped()) is None
         assert ran == []
@@ -372,9 +368,7 @@ class TestAsyncWrapper:
         async def _boom() -> None:
             raise RuntimeError("kaboom")
 
-        wrapped = _wrap_without_overlapping(
-            "job:async-crashy", _boom, lock_timeout=60
-        )
+        wrapped = _wrap_without_overlapping("job:async-crashy", _boom, lock_timeout=60)
 
         with pytest.raises(RuntimeError):
             asyncio.run(wrapped())

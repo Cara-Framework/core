@@ -34,7 +34,9 @@ class Limit:
         _require_count("limit", limit, allow_zero=True)
         _require_count("period_seconds", period_seconds, allow_zero=True)
         if (limit == 0) != (period_seconds == 0):
-            raise ValueError("an unlimited Limit needs both limit and period_seconds at 0")
+            raise ValueError(
+                "an unlimited Limit needs both limit and period_seconds at 0"
+            )
         resolved_burst = limit if burst is None else burst
         _require_count("burst", resolved_burst, allow_zero=limit == 0)
         if limit == 0 and resolved_burst != 0:

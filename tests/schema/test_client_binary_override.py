@@ -37,7 +37,9 @@ def test_path_is_used_when_no_override_is_set(monkeypatch):
 
 def test_an_explicit_override_wins_over_path(monkeypatch):
     resolved = _resolve(
-        monkeypatch, override="/opt/pgsql-16/bin/pg_dump", on_path="/opt/pgsql-16/bin/pg_dump"
+        monkeypatch,
+        override="/opt/pgsql-16/bin/pg_dump",
+        on_path="/opt/pgsql-16/bin/pg_dump",
     )
 
     assert resolved == "/opt/pgsql-16/bin/pg_dump"

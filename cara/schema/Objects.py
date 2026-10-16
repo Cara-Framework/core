@@ -188,8 +188,7 @@ def _adopt_unique_index(
         table=table,
         key=f"{table}:{name}:constraint",
         forward_sql=(
-            f'ALTER TABLE "{table}" ADD CONSTRAINT {name} '
-            f"UNIQUE USING INDEX {name}"
+            f'ALTER TABLE "{table}" ADD CONSTRAINT {name} UNIQUE USING INDEX {name}'
         ),
         reverse_sql=f'ALTER TABLE "{table}" DROP CONSTRAINT {name}',
         safety=LOCKING,
