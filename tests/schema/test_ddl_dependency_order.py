@@ -10,7 +10,7 @@ Rehearsal caught it; this keeps it caught.
 
 from __future__ import annotations
 
-from cara.schema import LOCKING, Operation, sort_operations
+from cara.schema import ADDITIVE, LOCKING, Operation, sort_operations
 
 
 def _named_ddl(table, name, sql):
@@ -83,6 +83,29 @@ def test_extensions_precede_functions_and_plain_ddl_sits_between():
         "mmm_table",
         "aaa_guarded",
     ]
+
+
+def test_an_extension_precedes_every_safety_class():
+    """A locking extension entry (an older classification, or a DO block)
+    still installs before the additive CONCURRENTLY index that uses it."""
+    concurrent_index = Operation(
+        kind="create_index",
+        table="aaa_listing",
+        key="aaa_listing:aaa_listing_sku_trgm_idx",
+        forward_sql="CREATE INDEX CONCURRENTLY IF NOT EXISTS aaa_listing_sku_trgm_idx "
+        "ON aaa_listing USING GIN (sku gin_trgm_ops)",
+        reverse_sql=None,
+        safety=ADDITIVE,
+        reason="named DDL declared by the model, absent from the database",
+        transactional=False,
+    )
+    extension = _named_ddl(
+        "zzz_product", "ext_pg_trgm", "CREATE EXTENSION IF NOT EXISTS pg_trgm"
+    )
+
+    operations = sort_operations([concurrent_index, extension])
+
+    assert [op.table for op in operations] == ["zzz_product", "aaa_listing"]
 
 
 def test_an_entry_creating_both_function_and_trigger_ranks_as_a_trigger():

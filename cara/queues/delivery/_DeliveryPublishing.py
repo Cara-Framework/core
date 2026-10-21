@@ -124,6 +124,7 @@ def _delivery_publish_due(self) -> dict[str, int]:
         "expired": expired,
         "stale_requeued": recovery["requeued"],
         "stale_reconciled": recovery["reconciled"],
+        "unclaimed_requeued": recovery["unclaimed"],
     }
     for _ in range(self.claim_batch):
         claimed = self._claim_next_publish()
@@ -333,11 +334,19 @@ def _delivery_claim_execution(
     """Atomically validate identity and lease one delivery for execution."""
     digest = SignedJsonJobSerializer.canonical_envelope_sha256(body)
     job_id = str(payload["job_id"])
-    timeout_seconds = self._bounded_int(
-        payload.get("timeout_seconds"),
-        minimum=1,
-        maximum=self.execution_lease_seconds - self.execution_lease_grace_seconds,
-        field="timeout_seconds",
+    # The signed budget fitted the lease policy it was signed under; a later,
+    # shorter policy wins instead of failing every redelivery of trusted work.
+    # The worker runs the job for min(signed, current class timeout), which
+    # ``execution_timeout_for`` keeps inside the current lease, so the clamped
+    # lease still covers the whole execution.
+    timeout_seconds = min(
+        self._bounded_int(
+            payload.get("timeout_seconds"),
+            minimum=1,
+            maximum=86400,
+            field="timeout_seconds",
+        ),
+        self.execution_lease_seconds - self.execution_lease_grace_seconds,
     )
     lease_seconds = timeout_seconds + self.execution_lease_grace_seconds
     now = pendulum.now("UTC")

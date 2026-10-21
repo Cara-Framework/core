@@ -184,6 +184,52 @@ class ScheduleBuilder:
         self.options["lock_timeout"] = timeout
         return self
 
+    def catch_up(self) -> ScheduleBuilder:
+        """
+        Run a fire that fell due while the scheduler was down, once, on boot.
+
+        The scheduler's job store is in memory, so a restart computes every
+        next run from boot time: a daily cron whose minute fell inside a
+        deploy does not run that day, and an interval re-anchors to boot (a
+        24h interval on a scheduler restarted more often never runs). A
+        catch-up entry remembers its last fire in the cache and, on start,
+        runs a missed fire immediately (coalesced to one run) or keeps its
+        remembered cadence. Declare it only on work whose run is idempotent
+        and whose lateness is better than its absence.
+
+        Must be called BEFORE the terminal ``.interval()`` / ``.daily()`` /
+        ``.cron()`` call — those methods dispatch ``options`` immediately.
+
+        Example:
+            scheduler.command("billing:close").catch_up().daily(hour=2)
+
+        Returns:
+            self for fluent interface
+        """
+        self.options["catch_up"] = True
+        return self
+
+    def executor(self, name: str) -> ScheduleBuilder:
+        """
+        Run this task on a named executor pool instead of the default one.
+
+        A short probe sharing one bounded pool with long sweeps waits behind
+        them — and is dropped as missed once it waits past the misfire grace
+        time. The pool itself is declared in the driver settings
+        (``executors``); naming one that does not exist fails at registration.
+
+        Must be called BEFORE the terminal ``.interval()`` / ``.daily()`` /
+        ``.cron()`` call — those methods dispatch ``options`` immediately.
+
+        Example:
+            scheduler.command("outbox:probe").executor("probes").interval(minutes=1)
+
+        Returns:
+            self for fluent interface
+        """
+        self.options["executor"] = str(name)
+        return self
+
     def skip_if_maintenance(self) -> ScheduleBuilder:
         """
         Skip this scheduled task during maintenance mode (Laravel-style).

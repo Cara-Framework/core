@@ -14,13 +14,20 @@ from urllib.parse import unquote_plus
 
 from .KeyPart import KeyPart
 
-# Upper bound on a bracket array index (e.g. ``items[5]``). A larger
-# index is NOT treated as a list position — the nested-fill loops in
-# _set_nested_value pre-size the list up to the index, so an
-# unauthenticated ``?a[99999999]=x`` would allocate ~100M elements and
-# OOM the worker. Oversized indices fall through to nested-object-key
-# handling instead, capturing the value without unbounded allocation.
-_MAX_ARRAY_INDEX = 10_000
+# Upper bound on list PADDING per parse. An index past the end of its
+# list (``tags[3]`` before ``tags[0..2]``) pads the gap so the value
+# lands at its position — allocation no input byte pays for. A
+# per-segment cap alone still let one chained key
+# (``a[10000]a[10000]...``) or many keys (``k0[10000]=1&k1[10000]=1``)
+# allocate 10k slots per segment: a 15 KB query cost ~1.4 GB before
+# routing. One budget per parse bounds the total; an index whose gap
+# exceeds what is left is kept as an object key (``{'5000': x}``), so
+# the cost stays linear in the input.
+_MAX_PAD_SLOTS = 1_000
+
+# A longer digit run is an object key, never a list position: no body
+# under the request size limit holds a billion list entries.
+_MAX_INDEX_DIGITS = 9
 
 
 class QueryStringParser:
@@ -92,12 +99,15 @@ class QueryStringParser:
         """
         result: dict[str, Any] = {}
 
+        pad_budget = _MAX_PAD_SLOTS
         for key, value in flat_dict.items():
-            self._set_nested_value(result, key, value)
+            pad_budget = self._set_nested_value(result, key, value, pad_budget)
 
         return result
 
-    def _set_nested_value(self, result: dict[str, Any], key: str, value: Any) -> None:
+    def _set_nested_value(
+        self, result: dict[str, Any], key: str, value: Any, pad_budget: int
+    ) -> int:
         """
         Set a nested value in the result dictionary based on the key path.
 
@@ -105,11 +115,15 @@ class QueryStringParser:
             result: Target dictionary to set value in
             key: Key path (may contain bracket notation)
             value: Value to set
+            pad_budget: List padding slots this parse may still allocate
+
+        Returns:
+            The padding budget left after this key
         """
         # Extract path parts using regex
         parts = self._parse_key_path(key)
         if not parts:
-            return
+            return pad_budget
 
         current = result
 
@@ -120,32 +134,42 @@ class QueryStringParser:
         # any endpoint. Conflicting structure is replaced (last key
         # wins, PHP/Laravel semantics), never assigned into.
         for part in parts[:-1]:
-            if part.is_array_key:
-                # Current part is an array
-                if not isinstance(current.get(part.name), list):
-                    current[part.name] = []
+            if not part.is_array_key:
+                current = self._descend(current, part.name)
+                continue
 
-                # Ensure we have enough array elements
-                while len(current[part.name]) <= part.index:
-                    current[part.name].append({})
+            padding = self._padding_for(current.get(part.name), part.index)
+            if padding > pad_budget:
+                # Over budget: the index is an object key (_MAX_PAD_SLOTS).
+                current = self._descend(
+                    self._descend(current, part.name), str(part.index)
+                )
+                continue
 
-                node = current[part.name][part.index]
-                if not isinstance(node, dict):
-                    node = {}
-                    current[part.name][part.index] = node
-                current = node
+            pad_budget -= padding
+            if not isinstance(current.get(part.name), list):
+                current[part.name] = []
+            items = current[part.name]
+            while len(items) <= part.index:
+                items.append({})
 
-            else:
-                # Current part is an object key
-                node = current.get(part.name)
-                if not isinstance(node, dict):
-                    node = {}
-                    current[part.name] = node
-                current = node
+            node = items[part.index]
+            if not isinstance(node, dict):
+                node = {}
+                items[part.index] = node
+            current = node
 
         # Set the final value
         last_part = parts[-1]
         is_array = key.endswith("[]")
+
+        if last_part.is_array_key and not is_array:
+            padding = self._padding_for(current.get(last_part.name), last_part.index)
+            if padding > pad_budget:
+                # Over budget: the index is an object key (_MAX_PAD_SLOTS).
+                self._descend(current, last_part.name)[str(last_part.index)] = value
+                return pad_budget
+            pad_budget -= padding
 
         if last_part.is_array_key or is_array:
             # Final part is an array
@@ -173,6 +197,23 @@ class QueryStringParser:
                 current[last_part.name].update(value)
             else:
                 current[last_part.name] = value
+
+        return pad_budget
+
+    @staticmethod
+    def _padding_for(existing: Any, index: int) -> int:
+        """Return the filler slots placing ``index`` in ``existing`` costs."""
+        length = len(existing) if isinstance(existing, list) else 0
+        return max(0, index - length)
+
+    @staticmethod
+    def _descend(current: dict[str, Any], name: str) -> dict[str, Any]:
+        """Return the object node under ``name``, replacing a conflicting value."""
+        node = current.get(name)
+        if not isinstance(node, dict):
+            node = {}
+            current[name] = node
+        return node
 
     def _parse_key_path(self, key: str) -> list:
         """
@@ -206,17 +247,17 @@ class QueryStringParser:
             if index_str is None:
                 # No brackets (regular key)
                 parts.append(KeyPart(name, is_array_key=False))
-            elif index_str.isdigit() and int(index_str) <= _MAX_ARRAY_INDEX:
-                # Numeric index
+            elif (
+                index_str.isascii()
+                and index_str.isdigit()
+                and len(index_str) <= _MAX_INDEX_DIGITS
+            ):
+                # Numeric index. ASCII only and length-capped: ``isdigit``
+                # also accepts digits ``int`` rejects (``a[²]``), and
+                # ``int`` refuses 4300+ digits — both raised ValueError
+                # before routing. A large index costs nothing here;
+                # padding is budgeted where it is allocated.
                 parts.append(KeyPart(name, is_array_key=True, index=int(index_str)))
-            elif index_str.isdigit():
-                # Oversized numeric index — refuse to pre-size a huge list
-                # (_set_nested_value fills up to the index). Capture the
-                # value under a nested object key instead so a crafted
-                # ``?a[99999999]=x`` can't OOM the worker. See
-                # _MAX_ARRAY_INDEX.
-                parts.append(KeyPart(name, is_array_key=False))
-                parts.append(KeyPart(index_str, is_array_key=False))
             elif index_str == "":
                 # Empty brackets (array notation)
                 parts.append(KeyPart(name, is_array_key=True, index=0))

@@ -229,6 +229,48 @@ class PartialResource:
 
         assert schemas == {}
 
+    def test_an_attribute_only_subclass_takes_its_bases_schema(self, tmp_path: Path):
+        schemas = ResourceSchemaExtractor(
+            _resources(
+                tmp_path,
+                # The subclasses sort before their base on purpose: the chain
+                # resolves whatever order the files are read in.
+                AListRowResource="""
+class ListRowResource(TicketResource):
+    include_presence = False
+
+
+class TerseListRowResource(ListRowResource):
+    '''Only a docstring and a switch.'''
+
+    terse = True
+""",
+                OverridingResource="""
+class OverridingResource(TicketResource):
+    def presence(self):
+        return None
+""",
+                TicketResource="""
+class TicketResource:
+    include_presence = True
+
+    def to_array(self, request=None):
+        data = {"id": self.opt_str(self.resource.public_id)}
+        if self.include_presence:
+            data["online"] = self.opt_bool(self.resource.online)
+        return data
+""",
+            )
+        ).extract()
+
+        base = schemas["TicketResource"]
+        assert base["required"] == ["id"]
+        for name in ("ListRowResource", "TerseListRowResource"):
+            assert schemas[name] == {**base, "x-resource": name}
+        # A method could change what the inherited serializer emits, so a
+        # subclass that defines one is not assumed to match its base.
+        assert "OverridingResource" not in schemas
+
 
 class TestApplicationCoercionHelpers:
     def test_an_unregistered_house_helper_degrades_instead_of_guessing(

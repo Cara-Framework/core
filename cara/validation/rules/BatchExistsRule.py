@@ -25,7 +25,7 @@ from typing import Any
 from cara.validation.MessageFormatter import MessageFormatter
 from cara.validation.rules.BaseRule import BaseRule
 
-from .ExistsRule import ExistsRule
+from ._ModelResolution import _resolve_rule_model
 
 # Only allow safe SQL identifiers: letters, digits, underscores.
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -84,7 +84,7 @@ class BatchExistsRule(BaseRule):
         # we fall through using the raw table string.
         resolved_table = table
         try:
-            model_class = ExistsRule()._discover_model(table)
+            model_class = _resolve_rule_model(table)
             if model_class is not None:
                 resolved_table = getattr(model_class, "__table__", table)
         except Exception as exc:

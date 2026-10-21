@@ -152,15 +152,22 @@ class Queue:
         driver_name: str | None = None,
         **kwargs: Any,
     ):
-        """Delayed job dispatch."""
+        """Delayed job dispatch.
+
+        ``delay`` is a RELATIVE delay — seconds or a ``pendulum.Duration`` —
+        so it goes through ``later``, which turns it into a tz-aware run time.
+        Handing it to ``schedule`` as ``when`` parsed the number as an absolute
+        timestamp: 3600 became the year 3600, 1800 a past year that ran at
+        once, and 300 an unparseable date.
+        """
         if isinstance(job, type) and issubclass(job, ShouldQueue):
             if hasattr(self.application, "make") and not args and not kwargs:
                 instance = self.application.make(job)
             else:
                 instance = job(*args, **kwargs)
-            return self.schedule(instance, delay, driver_name=driver_name)
+            return self.later(delay, instance, driver_name=driver_name)
         elif not isinstance(job, type) and isinstance(job, ShouldQueue):
-            return self.schedule(job, delay, driver_name=driver_name)
+            return self.later(delay, job, driver_name=driver_name)
         else:
             raise QueueException(
                 f"dispatch_after requires a ShouldQueue job, got: {job!r}"

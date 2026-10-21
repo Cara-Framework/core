@@ -12,7 +12,9 @@ before this one runs, and ``DefaultExceptionHandler._cors_headers_for_scope``
 for raised exceptions. Each one that restated the policy drifted OPEN — the
 exception path granted ``Access-Control-Allow-Origin: *`` on routes the
 operator had deliberately excluded from ``cors.cors.paths``, turning any
-provokable error into a cross-origin read of a non-CORS endpoint.
+provokable error into a cross-origin read of a non-CORS endpoint. All three
+emit :func:`~cara.middleware.http.Cors.cors_headers`; no response builder
+hardcodes its own ``Access-Control-*`` header.
 """
 
 from __future__ import annotations
@@ -22,11 +24,11 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from cara.facades import Log
-from cara.http import Request, Response
+from cara.http import Request, Response, append_vary
 from cara.middleware.http.Cors import (
+    cors_headers,
     load_cors_policy,
     path_in_cors_scope,
-    resolve_allow_origin,
 )
 from cara.middleware.Middleware import Middleware
 
@@ -136,58 +138,20 @@ class HandleCors(Middleware):
         primitive. The previous implementation took the ``else`` branch
         — reflecting whatever the attacker's site sent — when wildcard
         was configured alongside credentials. That rule is now
-        :func:`~cara.middleware.http.Cors.resolve_allow_origin`, shared
-        with the exception handler, because a CSRF guard that exists in
-        two copies is a CSRF guard that will be fixed in one of them.
+        :func:`~cara.middleware.http.Cors.resolve_allow_origin`, and the
+        whole header set :func:`~cara.middleware.http.Cors.cors_headers`,
+        shared with the exception handler, because a CSRF guard that exists
+        in two copies is a CSRF guard that will be fixed in one of them.
+
+        ``Vary: Origin`` is merged, not set: this middleware unwinds after
+        compression and authentication have added ``Accept-Encoding`` and
+        ``Authorization``, and replacing the header dropped both.
         """
-        origin = request.header("Origin")
-        creds = bool(self.config["supports_credentials"])
-
-        # Access-Control-Allow-Origin
-        allow_origin = resolve_allow_origin(origin, self.config)
-        if allow_origin is not None:
-            response.header("Access-Control-Allow-Origin", allow_origin)
-            if allow_origin != "*":
-                # When the ACAO value depends on the Origin header, proxies and
-                # CDNs must key their cache by it — otherwise one origin's
-                # response is served to another.
-                response.header("Vary", "Origin")
-
-        # Access-Control-Allow-Methods
-        response.header(
-            "Access-Control-Allow-Methods", ", ".join(self.config["allowed_methods"])
-        )
-
-        # Access-Control-Allow-Headers
-        response.header(
-            "Access-Control-Allow-Headers", ", ".join(self.config["allowed_headers"])
-        )
-
-        # Access-Control-Expose-Headers
-        if self.config["exposed_headers"]:
-            response.header(
-                "Access-Control-Expose-Headers", ", ".join(self.config["exposed_headers"])
-            )
-
-        # Access-Control-Allow-Credentials — only when explicitly
-        # configured AND we actually emitted a non-wildcard ACAO above.
-        #
-        # The second half of that sentence was a comment, not a condition:
-        # the header went out on ``if creds`` alone. When
-        # ``resolve_allow_origin`` fails closed — credentials enabled, this
-        # origin not on the allowlist — the response then carried
-        # ``Allow-Credentials: true`` with no ``Allow-Origin`` at all. No
-        # browser grants anything on that pair, so nothing was exploitable;
-        # what it did was advertise to any origin that this endpoint takes
-        # credentials, and leave the only written statement of the rule
-        # disagreeing with the code enforcing it. A security comment that
-        # over-describes its code is the kind that gets trusted in the next
-        # review instead of re-read.
-        if creds and allow_origin is not None and allow_origin != "*":
-            response.header("Access-Control-Allow-Credentials", "true")
-
-        # Access-Control-Max-Age
-        response.header("Access-Control-Max-Age", str(self.config["max_age"]))
+        for name, value in cors_headers(request.header("Origin"), self.config):
+            if name == "Vary":
+                append_vary(response, value)
+            else:
+                response.header(name, value)
 
     def _path_matches_cors_config(self, request: Request) -> bool:
         """Whether this request's path is inside ``cors.cors.paths``.

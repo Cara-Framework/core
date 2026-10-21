@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import contextlib
 import os
 import threading
@@ -9,7 +10,9 @@ import time
 import uuid
 from collections.abc import Callable
 
-from cara.facades import Cache, Log
+from cara.cache import cache_backend_fault_types
+from cara.exceptions import MissingContainerBindingException
+from cara.facades import Log
 from cara.queues.contracts.JobThrottledException import JobThrottledException
 
 from .RateLimited import _call_next
@@ -41,17 +44,23 @@ def _sweep_overlap_locks_locked(now: float) -> None:
 class WithoutOverlapping:
     """Ensure only one instance of a job runs at a time for the given key.
 
-    Uses Redis (via the ``Cache`` facade) when available so the lock is
-    effective across worker processes and pods — the in-memory dict
+    Uses Redis (via the bound ``cache`` service) when available so the lock
+    is effective across worker processes and pods — the in-memory dict
     only protects against overlap inside a single worker process and a
     multi-pod deploy can still double-fire. Falls back to the
-    process-local dict when Cache isn't bootable (tests, CLI without
-    full container).
+    process-local dict only when there is NO cache binding (tests, CLI
+    without full container).
 
     The Redis path uses a SET-NX with TTL (atomic key creation) so two
     workers racing on the same lock_key are guaranteed to have exactly
     one acquirer; the other gets a cache hit and skips. TTL == ``expire_after``
     so a crashed worker can't pin the lock forever.
+
+    A backend FAULT is not absence (DOCTRINE §9 — fail closed): a Redis
+    outage during acquire throttles the job like a held lock, because
+    degrading to the process-local dict would let every pod run its own
+    copy. An outage during release never replaces the job's real outcome;
+    the lock TTL reclaims the key.
     """
 
     REDIS_KEY_PREFIX = "cara:overlap:"
@@ -80,7 +89,8 @@ class WithoutOverlapping:
             ttl = self._effective_ttl(job)
             if not self._try_acquire(cache, redis_key, owner, ttl):
                 self._log_skip(lock_key)
-                # A peer holds the lock, so this copy did NOT run. Returning
+                # A peer holds the lock (or the backend could not say it
+                # does not), so this copy did NOT run. Returning
                 # ``None`` made the worker settle it as ``completed`` — the
                 # overlapping copy was DISCARDED and reported as done, which
                 # is the exact double-work-prevention this class exists for
@@ -94,12 +104,16 @@ class WithoutOverlapping:
             try:
                 return await _call_next(next_fn, job)
             finally:
-                with contextlib.suppress(
-                    OSError, ConnectionError, TimeoutError, RuntimeError
-                ):
+                # A raise out of this ``finally`` would REPLACE the body's
+                # outcome: a job that finished would settle as failed and run
+                # again. The lock carries a TTL, so a lost release only delays
+                # the next copy.
+                try:
                     cache.forget_if(redis_key, owner)
+                except cache_backend_fault_types() as exc:
+                    self._log_backend_fault(redis_key, "release", exc)
 
-        # Cache facade isn't available — fall back to the process-local dict.
+        # No cache binding at all — fall back to the process-local dict.
         with _overlap_lock:
             now = time.time()
             existing = _overlap_locks.get(lock_key)
@@ -134,16 +148,22 @@ class WithoutOverlapping:
 
     @staticmethod
     def _resolve_cache():
-        """Resolve the Cache facade lazily. Returns None when the
-        application container is not yet bound (early boot, isolated
-        unit tests) so the middleware is still usable in those paths."""
+        """The bound cache service, or None when there is none to bind.
+
+        None means ABSENCE only — the application container is not yet bound
+        (early boot, isolated unit tests) — so the middleware stays usable on
+        the process-local path. It used to probe Redis here and treat a
+        failed probe as absence too, which silently dropped the cross-pod
+        lock during an outage; the acquire itself is now the only probe and
+        a fault there throttles (see ``_try_acquire``)."""
         try:
-            # Probe with a benign call — if the underlying store isn't
-            # connected (Redis down, no driver registered), fall back
-            # to the in-memory implementation rather than failing the job.
-            Cache.has("__cara_overlap_probe__")
-            return Cache
-        except ImportError, ConnectionError, TimeoutError, OSError, RuntimeError:
+            return builtins.app().make("cache")
+        except (
+            ImportError,
+            RuntimeError,
+            AttributeError,
+            MissingContainerBindingException,
+        ):
             return None
 
     # Buffer added to the job's per-attempt ``timeout`` when sizing the lock
@@ -170,13 +190,15 @@ class WithoutOverlapping:
         """Atomic owner-fenced acquire via ``add`` (SET-NX) storing OUR owner
         token so ``forget_if`` can later release only our own lock. Falls back
         to ``has`` + ``put`` only for drivers without ``add`` (a narrow TOCTOU
-        acceptable for those non-Redis fakes). A cache/Redis blip is treated as
-        'held' (skip), matching the prior best-effort behaviour."""
+        acceptable for those non-Redis fakes). A backend fault is treated as
+        'held' (throttle, not the failure budget) and logged at WARNING so an
+        outage-driven throttle loop is visible."""
         add = getattr(cache, "add", None)
         if callable(add):
             try:
                 return bool(add(redis_key, owner, ttl))
-            except OSError, ConnectionError, TimeoutError, RuntimeError:
+            except cache_backend_fault_types() as exc:
+                self._log_backend_fault(redis_key, "acquire", exc)
                 return False
 
         # Fallback path — has + put. Subject to a TOCTOU window between
@@ -187,7 +209,8 @@ class WithoutOverlapping:
                 return False
             cache.put(redis_key, owner, ttl)
             return True
-        except OSError, ConnectionError, TimeoutError, RuntimeError:
+        except cache_backend_fault_types() as exc:
+            self._log_backend_fault(redis_key, "acquire", exc)
             return False
 
     @staticmethod
@@ -195,4 +218,16 @@ class WithoutOverlapping:
         with contextlib.suppress(ImportError):
             Log.debug(
                 "Job %s skipped (overlapping)", lock_key, category="cara.queue.middleware"
+            )
+
+    @staticmethod
+    def _log_backend_fault(redis_key: str, phase: str, exc: BaseException) -> None:
+        with contextlib.suppress(ImportError):
+            Log.warning(
+                "overlap lock %s for %s failed — cache backend unavailable: %s",
+                phase,
+                redis_key,
+                exc,
+                category="cara.queue.middleware",
+                exc_info=exc,
             )

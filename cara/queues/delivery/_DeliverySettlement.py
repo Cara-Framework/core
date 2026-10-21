@@ -133,24 +133,12 @@ def _delivery_mark_retry_scheduled(
     *,
     db: Any | None = None,
 ) -> None:
-    database = db or self._db()
     self._settle(
         job_id,
         lease_token,
         self.STATUS_RETRY_SCHEDULED,
-        db=database,
+        db=db or self._db(),
     )
-    now = pendulum.now("UTC")
-    affected = database.statement(
-        f"UPDATE {self.table} SET post_hooks_completed_at = COALESCE("
-        "post_hooks_completed_at, %s), updated_at = %s "
-        "WHERE job_id = %s AND status = %s",
-        [now, now, job_id, self.STATUS_RETRY_SCHEDULED],
-    )
-    if not self._affected(affected):
-        raise QueueException(
-            f"Queue delivery {job_id} retry hook bypass was not persisted."
-        )
 
 
 def _delivery_abandon_execution(self, job_id: str, lease_token: str) -> None:

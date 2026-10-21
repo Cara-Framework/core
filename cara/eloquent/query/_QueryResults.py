@@ -1,9 +1,8 @@
-"""Result retrieval and pagination for ``QueryBuilder``."""
+"""Result retrieval for ``QueryBuilder``."""
 
 from __future__ import annotations
 
 import inspect
-import logging
 from collections.abc import Callable
 from typing import Any, Self
 
@@ -17,9 +16,6 @@ from cara.exceptions import (
 from cara.facades import Log
 from cara.support import Collection
 
-from ..pagination import LengthAwarePaginator, SimplePaginator
-
-_logger = logging.getLogger("cara.eloquent.query")
 QueryBuilder: type
 
 
@@ -510,69 +506,3 @@ def _qb_with(self, *eagers) -> Self:
         Log.error("Eager relation register failed: %s", str(e))
         raise
     return self
-
-
-def _qb_paginate(self, per_page, page=1):
-    # Sanitise inputs — coerce to int, clamp to safe bounds.
-    try:
-        per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
-    except TypeError, ValueError:
-        per_page = 15
-    try:
-        page = max(1, min(int(page), self._MAX_PAGE))
-    except TypeError, ValueError:
-        page = 1
-
-    if page == 1:
-        offset = 0
-    else:
-        offset = (page * per_page) - per_page
-
-    new_from_builder = self.new_from_builder()
-    new_from_builder._order_by = ()
-    new_from_builder._columns = ()
-
-    # Pagination without an explicit ORDER BY returns rows in
-    # plan-dependent order, so concurrent inserts can make a row
-    # appear on page 2 after also appearing on page 1, or skip a
-    # row entirely between two paginate() calls. Default to the
-    # primary key when the caller didn't pin an order — same
-    # safety net Laravel applies in `Paginator::orderBy(...)`.
-    if not self._order_by:
-        try:
-            pk = self.get_primary_key() if hasattr(self, "get_primary_key") else None
-        except Exception:
-            _logger.warning("primary key detection failed for pagination", exc_info=True)
-            pk = None
-        if pk:
-            self.order_by(pk, "ASC")
-
-    result = self.limit(per_page).offset(offset).get()
-    total = new_from_builder.count()
-
-    paginator = LengthAwarePaginator(result, per_page, page, total)
-    return paginator
-
-
-def _qb_simple_paginate(self, per_page, page=1):
-    # Sanitise inputs — coerce to int, clamp to safe bounds.
-    try:
-        per_page = max(1, min(int(per_page), self._MAX_PER_PAGE))
-    except TypeError, ValueError:
-        per_page = 15
-    try:
-        page = max(1, min(int(page), self._MAX_PAGE))
-    except TypeError, ValueError:
-        page = 1
-
-    if page == 1:
-        offset = 0
-    else:
-        offset = (page * per_page) - per_page
-
-    # Fetch one extra row to detect whether a next page exists.
-    # SimplePaginator trims the sentinel row before exposing data.
-    result = self.limit(per_page + 1).offset(offset).get()
-
-    paginator = SimplePaginator(result, per_page, page)
-    return paginator

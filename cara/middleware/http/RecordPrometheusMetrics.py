@@ -8,9 +8,14 @@ get request instrumentation by simply adding this middleware to their
 global chain. The ``/metrics`` exposition endpoint stays app-owned; this
 middleware only instruments request lifecycle.
 
-Label cardinality is kept low by :func:`cara.observability.normalize_metric_path`,
-which collapses numeric/UUID/ULID segments into placeholders so
-``/api/products/123`` and ``/api/products/456`` share a single time series.
+Label cardinality is bounded by the codebase, never by the client. The
+``route`` label is the matched route's template (``/api/products/@id``),
+read after the downstream chain has routed the request; a request that
+matched no route (404/405, or rejected before routing) counts under the
+single ``unmatched`` series. Labelling from the raw path minted one
+permanent Counter + Histogram child per distinct path, so random
+unauthenticated 404s grew every worker without limit. ``method`` is
+likewise folded to the standard verbs plus ``OTHER``.
 
 Exception semantics: downstream exceptions are already logged by
 ``LogHttpRequests`` and the framework exception handler — this middleware
@@ -28,7 +33,10 @@ from collections.abc import Callable
 from cara.facades import Log
 from cara.http import Request, Response
 from cara.middleware.Middleware import Middleware
-from cara.observability import MetricsBase, normalize_metric_path, status_class
+from cara.observability import MetricsBase, status_class
+
+_METHODS = frozenset(("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"))
+_UNMATCHED_ROUTE = "unmatched"
 
 
 class RecordPrometheusMetrics(Middleware):
@@ -41,9 +49,6 @@ class RecordPrometheusMetrics(Middleware):
     async def handle(self, request: Request, get_response: Callable) -> Response:
         if request.path in self._SKIP_PATHS:
             return await get_response(request)
-
-        route = normalize_metric_path(request.path)
-        method = request.method
 
         start = time.time()
         in_flight_incremented = False
@@ -81,6 +86,11 @@ class RecordPrometheusMetrics(Middleware):
         finally:
             duration = time.time() - start
             try:
+                # Routing ran inside ``get_response``; only now is the
+                # template known (see the module docstring).
+                matched = request.get_route()
+                route = matched.url if matched is not None else _UNMATCHED_ROUTE
+                method = request.method if request.method in _METHODS else "OTHER"
                 MetricsBase.http_requests_total.labels(
                     method=method,
                     route=route,

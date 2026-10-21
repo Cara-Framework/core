@@ -11,10 +11,11 @@ which the operations themselves have already changed.
 
 What it refuses, unless ``--force`` names the intent:
 
-* **Operations that restore shape but not contents.** Dropping a column added
-  yesterday brings back an empty column; the values written into it since are
-  gone. The ledger records this per row (``restores_data``), and refusing by
-  default is the difference between a rollback and a second data loss.
+* **Operations that restore shape but not contents.** Reversing a column or a
+  table added yesterday drops it, and every value written into it since goes
+  with it; reversing a dropped column brings back an empty one. The ledger
+  records this per row (``restores_data``), and refusing by default is the
+  difference between a rollback and a second data loss.
 * **Operations with no reverse at all.** A backfill has no undo — the previous
   values are not recorded anywhere, and inventing an UPDATE that sets them
   back to NULL would be a guess about which rows were already filled.
@@ -93,7 +94,7 @@ class SchemaRollbackCommand(CommandBase):
                 why = (
                     "no reverse statement — this operation cannot be undone"
                     if row["reverse_sql"] is None
-                    else "the reverse restores the column's SHAPE, not its contents"
+                    else "the reverse restores the object's SHAPE, not its contents"
                 )
                 self.warning(f"   {row['operation_key']}: {why}")
             self.error(
@@ -113,7 +114,7 @@ class SchemaRollbackCommand(CommandBase):
                 self.info(f"      → {row['reverse_sql']}")
                 continue
             try:
-                self._execute(row["reverse_sql"])
+                self._execute(plan_id, row)
             except Exception as exc:
                 self.error(
                     f"FAILED reversing {row['operation_key']}: {exc}\n"
@@ -122,7 +123,6 @@ class SchemaRollbackCommand(CommandBase):
                     f"remain applied and recorded."
                 )
                 return 1
-            self._mark_reversed(plan_id, row["operation_key"])
             reversed_count += 1
 
         if self.option("dry_run"):
@@ -161,10 +161,25 @@ class SchemaRollbackCommand(CommandBase):
             or []
         )
 
-    def _execute(self, statement: str) -> None:
-        if "CONCURRENTLY" not in statement.upper():
+    def _execute(self, plan_id: str, row: dict) -> None:
+        """Run one reverse statement and mark its ledger row.
+
+        ``SET LOCAL`` binds only inside a transaction block: sent on its own
+        through an autocommit connection it is a warning and nothing else, and
+        the statement after it ran with no timeout at all. So the timeout, the
+        reverse and the ledger update share one transaction. ``CONCURRENTLY``
+        cannot run inside one; it runs under the connection's configured
+        session ``lock_timeout`` and is marked once it has succeeded.
+        """
+        statement = row["reverse_sql"]
+        if "CONCURRENTLY" in statement.upper():
+            DB.statement(statement)
+            self._mark_reversed(plan_id, row["operation_key"])
+            return
+        with DB.transaction():
             DB.statement(f"SET LOCAL lock_timeout = '{_APPLY_LOCK_TIMEOUT_MS}ms'")
-        DB.statement(statement)
+            DB.statement(statement)
+            self._mark_reversed(plan_id, row["operation_key"])
 
     def _mark_reversed(self, plan_id: str, operation_key: str) -> None:
         DB.statement(

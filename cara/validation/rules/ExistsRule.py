@@ -7,13 +7,12 @@ with support for custom messages, complex conditions, and multiple validation sc
 
 from __future__ import annotations
 
-import importlib
 import re
 from typing import Any
 
 from cara.exceptions import ConfigurationException
-from cara.support import ModuleManager
 from cara.validation.MessageFormatter import MessageFormatter
+from cara.validation.rules._ModelResolution import _resolve_rule_model
 from cara.validation.rules.BaseRule import BaseRule
 
 # Only allow safe SQL identifiers: letters, digits, underscores.
@@ -68,7 +67,7 @@ class ExistsRule(BaseRule):
                     f"ExistsRule identifier '{ident}' is not a safe SQL identifier"
                 )
 
-        model_class = self._discover_model(table)
+        model_class = _resolve_rule_model(table)
         query = model_class.where(column, value)
         if condition_column and condition_value is not None:
             query = query.where(condition_column, condition_value)
@@ -103,34 +102,3 @@ class ExistsRule(BaseRule):
             return f"The selected {attribute.lower()} is invalid."
         else:
             return f"The selected {attribute.lower()} does not exist in our records."
-
-    def _discover_model(self, table_name: str):
-        """Resolve one table through the configured, generated model barrel.
-
-        The model barrel is the canonical registry: every public model is
-        exported there and each model owns an explicit ``__table__``. Missing
-        or ambiguous registrations are configuration errors. Raw SQL fallback
-        is forbidden because it would bypass model scopes such as tenancy.
-        """
-        models_module = ModuleManager.models_module()
-        if not isinstance(models_module, str) or not models_module:
-            raise ConfigurationException("Models module is not configured")
-        try:
-            model_barrel = importlib.import_module(models_module)
-        except ImportError as exc:
-            raise ConfigurationException(
-                f"Configured models module '{models_module}' is not importable"
-            ) from exc
-
-        matches = [
-            candidate
-            for candidate in vars(model_barrel).values()
-            if isinstance(candidate, type)
-            and getattr(candidate, "__table__", None) == table_name
-        ]
-        if len(matches) != 1:
-            raise ConfigurationException(
-                f"Table '{table_name}' must resolve to exactly one model in "
-                f"'{models_module}'; found {len(matches)}"
-            )
-        return matches[0]

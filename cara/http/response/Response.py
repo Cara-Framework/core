@@ -464,16 +464,6 @@ class Response(BaseResponse):
         self.headers.cache_control(cache_control)
         return self
 
-    def cors(
-        self,
-        origin: str = "*",
-        methods: str = "GET, POST, PUT, DELETE, OPTIONS",
-        headers: str = "Content-Type, Authorization",
-    ) -> Response:
-        """Set CORS headers."""
-        self.headers.cors(origin, methods, headers)
-        return self
-
     def secure(self) -> Response:
         """Set security headers."""
         self.headers.secure()
@@ -559,11 +549,12 @@ class Response(BaseResponse):
             async for event in event_generator:
                 yield self.streaming._format_sse_event(event).encode("utf-8")
 
+        # No CORS here: ``HandleCors`` stamps the configured policy. A
+        # hardcoded ``Access-Control-Allow-Origin: *`` survived for the
+        # origins that policy refuses.
         sse_headers = {
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Cache-Control",
         }
         if headers:
             sse_headers.update(headers)

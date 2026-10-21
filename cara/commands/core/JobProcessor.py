@@ -362,12 +362,14 @@ class JobProcessor:
                 delay_seconds,
                 type(exc).__name__,
             )
+            # The child commit shares ``db_job_id`` and can be claimed by
+            # another worker while these reads back off, so accept the same
+            # monotonic progress the redelivery recovery path accepts — exact
+            # equality with ``retrying`` turned a child that already moved to
+            # ``processing`` into a spurious settlement failure.
             JobProcessor._retry_settlement_step(
                 f"Tracked queue job {db_job_id} retry settlement",
-                lambda: tracker.require_job_status_strict(
-                    db_job_id,
-                    "retrying",
-                ),
+                lambda: tracker.ensure_retry_progress_strict(db_job_id),
             )
             # Retry is durably accepted in the DB outbox and source settlement
             # committed atomically — ACK the original now. Broker publication

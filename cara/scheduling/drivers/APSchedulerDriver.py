@@ -20,6 +20,7 @@ import os
 import time as _time
 import uuid as _uuid
 from collections.abc import Callable, Iterable
+from datetime import UTC, datetime
 from typing import Any
 
 from cara.exceptions import InvalidArgumentException
@@ -164,6 +165,102 @@ def _wrap_without_overlapping(
     return _sync_locked
 
 
+# ── Catch-up memory ───────────────────────────────────────────────────
+
+# Long enough to remember the previous fire of any calendar cadence a
+# schedule can express (yearly crons included); a forgotten stamp only means
+# that one boot cannot catch up.
+_CATCH_UP_MEMORY_SECONDS = 366 * 86400
+
+
+def _last_fire_key(identifier: str) -> str:
+    return f"scheduler:last_fire:{identifier}"
+
+
+def _wrap_catch_up(identifier: str, callback: Callable) -> Callable:
+    """Remember when ``callback`` last fired, outside this process.
+
+    The job store lives in memory, so a restart computes every next run from
+    boot time: a cron fire that fell inside the restart is never run, and an
+    interval re-anchors to boot. The stamp is the fire's START time, written
+    once the run returns or raises — a process killed mid-run leaves the
+    previous stamp, so the next boot runs the interrupted fire again.
+    Catch-up is opt-in because it re-runs work late; entries whose run is
+    idempotent and whose lateness beats absence declare it.
+    """
+
+    def _record(fired_at: float) -> None:
+        try:
+            _Cache.put(_last_fire_key(identifier), fired_at, _CATCH_UP_MEMORY_SECONDS)
+        except Exception:
+            _logger.warning("catch-up stamp failed for %s", identifier, exc_info=True)
+
+    if inspect.iscoroutinefunction(callback):
+
+        async def _async_remembered(*a, **kw):
+            fired_at = _time.time()
+            try:
+                result = await callback(*a, **kw)
+            except Exception:
+                _record(fired_at)
+                raise
+            _record(fired_at)
+            return result
+
+        _async_remembered.__name__ = getattr(
+            callback, "__name__", f"remembered_{identifier}"
+        )
+        return _async_remembered
+
+    def _sync_remembered(*a, **kw):
+        fired_at = _time.time()
+        try:
+            result = callback(*a, **kw)
+        except Exception:
+            _record(fired_at)
+            raise
+        _record(fired_at)
+        return result
+
+    _sync_remembered.__name__ = getattr(callback, "__name__", f"remembered_{identifier}")
+    return _sync_remembered
+
+
+def _catch_up_run_time(identifier: str, trigger: Any) -> datetime | None:
+    """The first run a restart must honour, from the remembered last fire.
+
+    ``None`` when nothing is remembered (the engine's own next run stands).
+    A fire that fell due while the scheduler was down runs NOW; otherwise
+    the remembered cadence is kept, so an interval does not re-anchor to
+    boot and a scheduler restarted more often than its interval still runs.
+    """
+    try:
+        stamp = _Cache.get(_last_fire_key(identifier))
+    except Exception:
+        _logger.warning("catch-up stamp unreadable for %s", identifier, exc_info=True)
+        return None
+    if stamp is None:
+        return None
+    try:
+        last_fire = datetime.fromtimestamp(float(stamp), tz=UTC)
+    except TypeError, ValueError, OverflowError:
+        return None
+    now = datetime.now(UTC)
+    due = trigger.get_next_fire_time(last_fire, now)
+    if due is None:
+        return None
+    if due <= now:
+        Log.warning(
+            "Scheduled job '%s' missed its %s run while the scheduler was "
+            "down; running it now.",
+            identifier,
+            due.isoformat(),
+            category="scheduler",
+        )
+        return now
+    return due
+
+
 # ── Error listener ────────────────────────────────────────────────────
 
 
@@ -191,6 +288,40 @@ def _job_error_listener(event) -> None:
         )
 
 
+def _count_dropped_fire(event, outcome: str) -> None:
+    with contextlib.suppress(AttributeError, TypeError):
+        MetricsBase.scheduled_tasks_total.labels(
+            task=event.job_id,
+            outcome=outcome,
+        ).inc()
+
+
+def _job_missed_listener(event) -> None:
+    """Report a run the engine dropped after waiting past its grace time.
+
+    A run that waits for a free executor thread longer than
+    ``misfire_grace_time`` never reaches the callback, so the
+    instrumentation wrapper never sees it — without this listener a dropped
+    daily run leaves no log line, no metric and no alert.
+    """
+    Log.warning(
+        "Scheduled job '%s' missed its %s run (waited past the misfire grace "
+        "time for an executor thread).",
+        event.job_id,
+        getattr(event, "scheduled_run_time", None),
+        category="scheduler",
+    )
+    _count_dropped_fire(event, "missed")
+
+
+def _job_max_instances_listener(event) -> None:
+    """Count a run skipped because its previous instance is still executing.
+
+    The engine already logs the skip at WARNING; this adds the metric.
+    """
+    _count_dropped_fire(event, "skipped")
+
+
 # ── Driver ────────────────────────────────────────────────────────────
 
 
@@ -207,6 +338,9 @@ class APSchedulerDriver(SchedulingContract):
         # Registry: list of (identifier, instrumented_callback, trigger, job_opts)
         # Survives scheduler restarts — jobs are re-applied on start().
         self._job_registry: list[tuple[str, Callable, Any, dict]] = []
+        # Ids whose first run after a (re)start honours the remembered last
+        # fire — see ``_wrap_catch_up``.
+        self._catch_up_ids: set[str] = set()
 
         # Opaque per-entry metadata for the published snapshot, keyed by job
         # id. Kept OUTSIDE the APScheduler job (its Job objects carry no
@@ -220,10 +354,10 @@ class APSchedulerDriver(SchedulingContract):
 
     def _configure_logging(self) -> None:
 
-        # Let warnings through so misfire notices are visible.
+        # Let the engine's own warnings (max-instances skips) through.
         logging.getLogger("apscheduler").setLevel(logging.WARNING)
-        # Executor errors are forwarded via our event listener, so keep
-        # APScheduler's own executor logger quiet.
+        # Job errors and misfires are forwarded — with a metric — by our
+        # event listeners, so keep APScheduler's own executor logger quiet.
         logging.getLogger("apscheduler.executors").setLevel(logging.ERROR)
 
     def _create_scheduler(self):
@@ -234,11 +368,22 @@ class APSchedulerDriver(SchedulingContract):
         kwargs: dict[str, Any] = {}
         for key in ("jobstores", "executors", "job_defaults", "timezone"):
             if key in self._settings:
-                kwargs[key] = self._settings[key]
+                value = self._settings[key]
+                # APScheduler pops ``type``/``class`` out of each plugin dict
+                # while configuring; hand it copies so ``start()`` can build
+                # a fresh scheduler from the same settings.
+                if isinstance(value, dict):
+                    value = {
+                        name: dict(item) if isinstance(item, dict) else item
+                        for name, item in value.items()
+                    }
+                kwargs[key] = value
 
-        # Generous misfire window: if the scheduler was down (restart,
-        # deploy) for up to 5 min, fire the job immediately on return
-        # rather than silently skipping it.
+        # A run that waited up to 5 min for a free executor thread still
+        # fires; past that it is dropped as MISSED and counted by
+        # ``_job_missed_listener``. This window does NOT cover downtime: the
+        # job store is in memory, so a restart computes next runs from boot
+        # and only ``catch_up`` entries recover a fire that fell inside it.
         kwargs.setdefault("job_defaults", {})
         kwargs["job_defaults"].setdefault("misfire_grace_time", 300)
         kwargs["job_defaults"].setdefault("coalesce", True)
@@ -250,11 +395,15 @@ class APSchedulerDriver(SchedulingContract):
             from apscheduler.events import (  # local: heavy optional dep
                 EVENT_JOB_ERROR,
                 EVENT_JOB_EXECUTED,
+                EVENT_JOB_MAX_INSTANCES,
+                EVENT_JOB_MISSED,
             )
 
             scheduler.add_listener(
                 _job_error_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR
             )
+            scheduler.add_listener(_job_missed_listener, EVENT_JOB_MISSED)
+            scheduler.add_listener(_job_max_instances_listener, EVENT_JOB_MAX_INSTANCES)
         except ImportError:
             pass
 
@@ -273,6 +422,9 @@ class APSchedulerDriver(SchedulingContract):
 
         trigger = self._build_trigger(schedule_spec)
         instrumented = _instrument_scheduled(identifier, callback)
+        catch_up = isinstance(options, dict) and bool(options.get("catch_up"))
+        if catch_up:
+            instrumented = _wrap_catch_up(identifier, instrumented)
         if isinstance(options, dict) and options.get("without_overlapping"):
             # Lock TTL falls back to one day — matches the
             # ``ScheduleBuilder.without_overlapping`` default and prevents a
@@ -291,6 +443,9 @@ class APSchedulerDriver(SchedulingContract):
         display_name = options.get("display_name") if isinstance(options, dict) else None
         if display_name:
             job_opts.setdefault("name", str(display_name))
+        executor = options.get("executor") if isinstance(options, dict) else None
+        if executor:
+            job_opts.setdefault("executor", str(executor))
 
         # Opaque snapshot metadata rides options straight through to the
         # snapshot publisher. Re-registering an id replaces its metadata
@@ -308,6 +463,10 @@ class APSchedulerDriver(SchedulingContract):
             if jid != identifier
         ]
         self._job_registry.append((identifier, instrumented, trigger, job_opts))
+        if catch_up:
+            self._catch_up_ids.add(identifier)
+        else:
+            self._catch_up_ids.discard(identifier)
 
         # If the scheduler is already running, hot-add the job.
         if self.scheduler.running:
@@ -320,7 +479,7 @@ class APSchedulerDriver(SchedulingContract):
                     func=instrumented,
                     trigger=trigger,
                     id=identifier,
-                    **job_opts,
+                    **self._engine_job_options(identifier, trigger, job_opts),
                 )
             except Exception as e:
                 if not silent:
@@ -352,7 +511,7 @@ class APSchedulerDriver(SchedulingContract):
                     func=callback,
                     trigger=trigger,
                     id=identifier,
-                    **job_opts,
+                    **self._engine_job_options(identifier, trigger, job_opts),
                 )
             except Exception as e:
                 Log.warning("Failed to add job '%s' on start: %s", identifier, e)
@@ -360,6 +519,15 @@ class APSchedulerDriver(SchedulingContract):
         job_count = len(self._job_registry)
         self.scheduler.start()
         Log.info("APScheduler started with %s jobs (background mode).", job_count)
+
+    def _engine_job_options(self, identifier: str, trigger: Any, job_opts: dict) -> dict:
+        """``job_opts`` plus the catch-up first run for an opted-in entry."""
+        if identifier not in self._catch_up_ids or "next_run_time" in job_opts:
+            return job_opts
+        first_run = _catch_up_run_time(identifier, trigger)
+        if first_run is None:
+            return job_opts
+        return {**job_opts, "next_run_time": first_run}
 
     def run_all(self) -> int:
         """Execute every registered job's callback immediately, once.
@@ -406,6 +574,7 @@ class APSchedulerDriver(SchedulingContract):
             if jid != identifier
         ]
         self._snapshot_meta.pop(identifier, None)
+        self._catch_up_ids.discard(identifier)
         try:
             self.scheduler.remove_job(job_id=identifier)
         except Exception:

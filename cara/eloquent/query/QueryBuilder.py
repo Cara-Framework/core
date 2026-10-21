@@ -274,8 +274,6 @@ class QueryBuilder(ObservesEvents):
     get_connection = _QueryResults._qb_get_connection
     without_eager = _QueryResults._qb_without_eager
     with_ = _QueryResults._qb_with
-    paginate = _QueryResults._qb_paginate
-    simple_paginate = _QueryResults._qb_simple_paginate
 
     set_action = _QueryAggregation._qb_set_action
     get_grammar = _QueryAggregation._qb_get_grammar

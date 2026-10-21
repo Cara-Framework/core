@@ -90,6 +90,10 @@ class AMQPDriver(HasColoredOutput, _QueueContract):
     DEFAULT_RETRY_BACKOFF_SECONDS = _RETRY_DEFAULT_BACKOFF_SECONDS
     DEFAULT_RETRY_JITTER_FRACTION = _RETRY_DEFAULT_JITTER_FRACTION
 
+    #: Cadence of the relay-owned ledger gauges (``refresh_delivery_metrics``):
+    #: a scrape-interval order of freshness, far inside the staleness alert.
+    DELIVERY_METRICS_REFRESH_SECONDS = 15.0
+
     def __init__(self, application, options: dict[str, Any]):
         super().__init__(module="queue.amqp")
         self.application = application
@@ -110,6 +114,10 @@ class AMQPDriver(HasColoredOutput, _QueueContract):
         self._tls = threading.local()
         self._relay_wakeup = threading.Event()
         self._runtime_health_cache: dict[tuple[str, tuple[str, ...]], float] = {}
+        # The last delivery-metrics snapshot and its monotonic stamp, served
+        # between refreshes.
+        self._delivery_metrics_refreshed_at: float | None = None
+        self._delivery_metrics_snapshot: dict[str, Any] | None = None
 
         self._delivery_store = QueueJobDeliveryStore(
             application=self.application,

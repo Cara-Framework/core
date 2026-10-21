@@ -85,6 +85,38 @@ def test_a_missing_extension_is_still_planned():
     assert [op.key for op in operations] == ["product:ext_pg_trgm"]
 
 
+def test_a_missing_extension_runs_before_the_concurrent_index_that_needs_it():
+    """Installing an extension locks no table, so it is additive with no
+    "declare it CONCURRENTLY" advice; and it applies before an additive
+    ``CREATE INDEX CONCURRENTLY ... gin_trgm_ops``, which otherwise ran first
+    and died on a missing operator class."""
+    model = _model(
+        indexes=[
+            {
+                "name": "ext_pg_trgm",
+                "up": "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+                "down": "SELECT 1",
+            },
+            {
+                "name": "product_title_trgm_idx",
+                "up": "CREATE INDEX CONCURRENTLY IF NOT EXISTS product_title_trgm_idx "
+                "ON product USING GIN (title gin_trgm_ops)",
+                "down": "DROP INDEX CONCURRENTLY IF EXISTS product_title_trgm_idx",
+            },
+        ]
+    )
+
+    operations, _, _ = plan([model], _live(extensions=()))
+
+    assert [op.key for op in operations] == [
+        "product:ext_pg_trgm",
+        "product:product_title_trgm_idx",
+    ]
+    extension = operations[0]
+    assert extension.safety == "additive"
+    assert extension.notes == ()
+
+
 def test_a_column_added_by_named_ddl_is_found_among_the_columns():
     """Cara reaches for named DDL when the model DSL has no builder for the
     type — a GENERATED ALWAYS AS tsvector — so the column exists in the

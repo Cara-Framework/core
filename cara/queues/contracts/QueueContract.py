@@ -29,3 +29,11 @@ class QueueContract(Protocol):
 
         'when' can be a datetime, pendulum.Duration, or human-readable string.
         """
+
+    def later(self, delay: Any, job: Any, options: dict[str, Any]) -> str | list[str]:
+        """Schedule a job to run after a RELATIVE delay.
+
+        'delay' is seconds or a pendulum.Duration; the driver turns it into a
+        tz-aware run time. ``Queue.later`` and ``Queue.dispatch_after`` both
+        route here.
+        """

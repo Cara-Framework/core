@@ -6,8 +6,8 @@ one of the addresses :func:`~cara.security.OutboundUrl.resolve_outbound_url`
 returned, while TLS still verifies (and SNIs) the original hostname.
 
 Every redirect is re-parsed and re-resolved through the same gate, and
-content type, advertised size and streamed size are all bounded before
-the bytes reach the caller.
+content type, advertised size, streamed size and wall-clock time are all
+bounded before the bytes reach the caller.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import http.client
 import socket
 import ssl
+import time
 from collections.abc import Iterable, Mapping
 from urllib.parse import urljoin, urlsplit
 
@@ -24,25 +25,70 @@ from cara.security.UnsafeOutboundUrl import UnsafeOutboundUrl
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
+def _time_left(deadline: float, timeout: float) -> float:
+    """``timeout`` clamped to what is left before ``deadline``, or raise."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("connection deadline exceeded")
+    return min(timeout, remaining)
+
+
+class _DeadlineSSLSocket(ssl.SSLSocket):
+    """TLS socket whose every read and write shares one wall-clock deadline.
+
+    A per-operation timeout bounds how long ONE recv may wait, not how long
+    the exchange takes: a peer that sends one byte just inside it holds a
+    header ``readline`` or a body ``read`` open indefinitely. Once TLS is
+    up, every recv, readline and body chunk funnels through ``read`` and
+    every ``sendall`` through ``send``, so clamping each to the time left
+    bounds the whole exchange.
+    """
+
+    _deadline: float
+    _operation_timeout: float
+
+    def bound(self, *, deadline: float, operation_timeout: float) -> None:
+        self._deadline = float(deadline)
+        self._operation_timeout = float(operation_timeout)
+
+    def read(self, len=1024, buffer=None):
+        self.settimeout(_time_left(self._deadline, self._operation_timeout))
+        return super().read(len, buffer)
+
+    def send(self, data, flags=0):
+        self.settimeout(_time_left(self._deadline, self._operation_timeout))
+        return super().send(data, flags)
+
+
 class PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """HTTPS connection whose TCP peer is one already-validated DNS answer."""
+    """HTTPS connection whose TCP peer is one already-validated DNS answer.
+
+    ``deadline`` is an absolute :func:`time.monotonic` instant. Connect,
+    TLS handshake and every read and write after it all end by then,
+    whatever the peer does; ``connect_timeout`` and ``read_timeout`` only
+    bound a single operation inside that budget.
+    """
 
     def __init__(
         self,
         hostname: str,
         address: str,
         *,
+        deadline: float,
         port: int = 443,
         connect_timeout: float = 10,
         read_timeout: float = 60,
     ) -> None:
+        context = ssl.create_default_context()
+        context.sslsocket_class = _DeadlineSSLSocket
         super().__init__(
             hostname,
             port=port,
             timeout=float(connect_timeout),
-            context=ssl.create_default_context(),
+            context=context,
         )
         self._pinned_address = address
+        self._deadline = float(deadline)
         self._read_timeout = float(read_timeout)
 
     def connect(self) -> None:
@@ -51,15 +97,26 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
         # original hostname.
         raw = socket.create_connection(
             (self._pinned_address, self.port),
-            timeout=self.timeout,
+            timeout=_time_left(self._deadline, self.timeout),
             source_address=self.source_address,
         )
         try:
-            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
-            self.sock.settimeout(self._read_timeout)
+            sock = self._context.wrap_socket(
+                raw, server_hostname=self.host, do_handshake_on_connect=False
+            )
         except Exception:
             raw.close()
             raise
+        try:
+            sock.bound(deadline=self._deadline, operation_timeout=self._read_timeout)
+            # The handshake is one bounded call: CPython applies the socket
+            # timeout to the whole handshake, not to each record of it.
+            sock.settimeout(_time_left(self._deadline, self.timeout))
+            sock.do_handshake()
+        except Exception:
+            sock.close()
+            raise
+        self.sock = sock
 
 
 def open_pinned_https(
@@ -67,6 +124,7 @@ def open_pinned_https(
     hostname: str,
     address: str,
     *,
+    deadline: float,
     connect_timeout: float,
     read_timeout: float,
     headers: Mapping[str, str],
@@ -79,6 +137,7 @@ def open_pinned_https(
     connection = PinnedHTTPSConnection(
         hostname,
         address,
+        deadline=deadline,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
     )
@@ -96,6 +155,7 @@ def download_public_https(
     max_bytes: int,
     allowed_content_types: Iterable[str],
     user_agent: str,
+    deadline_seconds: float,
     label: str = "outbound resource",
     max_redirects: int = 3,
     connect_timeout: float = 10,
@@ -107,10 +167,19 @@ def download_public_https(
     ``user_agent`` is required: the framework has no product identity to
     put on the wire, and an anonymous or misattributed agent string is a
     support problem for whoever receives the request.
+
+    ``deadline_seconds`` is required too: it is the wall-clock budget for
+    the whole download — every redirect, every address tried, headers and
+    body. Per-operation timeouts alone leave the total to the peer, and
+    only the caller knows how long its own caller can wait.
     """
     limit = int(max_bytes)
     if limit <= 0:
         raise ValueError("download limit must be positive")
+    budget = float(deadline_seconds)
+    if budget <= 0:
+        raise ValueError("download deadline must be positive")
+    deadline = time.monotonic() + budget
     allowed = {
         str(content_type).strip().lower()
         for content_type in allowed_content_types
@@ -132,11 +201,14 @@ def download_public_https(
         last_connect_error: Exception | None = None
         connection = response = None
         for address in addresses:
+            if time.monotonic() >= deadline:
+                break
             try:
                 connection, response = open_pinned_https(
                     safe_url,
                     hostname,
                     address,
+                    deadline=deadline,
                     connect_timeout=connect_timeout,
                     read_timeout=read_timeout,
                     headers=request_headers,
@@ -145,6 +217,8 @@ def download_public_https(
             except Exception as exc:
                 last_connect_error = exc
         if response is None or connection is None:
+            if time.monotonic() >= deadline:
+                raise UnsafeOutboundUrl(f"{label} timed out") from last_connect_error
             raise UnsafeOutboundUrl(
                 f"{label} could not be downloaded"
             ) from last_connect_error
@@ -177,7 +251,10 @@ def download_public_https(
             chunks: list[bytes] = []
             total = 0
             while True:
-                chunk = response.read(min(1024 * 1024, limit - total + 1))
+                try:
+                    chunk = response.read(min(1024 * 1024, limit - total + 1))
+                except TimeoutError as exc:
+                    raise ValueError(f"{label} timed out") from exc
                 if not chunk:
                     break
                 total += len(chunk)

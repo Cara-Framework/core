@@ -8,7 +8,9 @@ from copy import deepcopy
 from typing import Self
 
 from cara.eloquent.expressions import (
+    QueryExpression,
     SelectExpression,
+    SubGroupExpression,
 )
 from cara.exceptions import (
     InvalidArgumentException,
@@ -169,10 +171,26 @@ def _qb_run_scopes(self) -> Self:
     # scopes registered mid-iteration will apply on the next query,
     # which matches Laravel's semantics.
     scopes = list(self._global_scopes.get(self._action, {}).items())
+    if scopes and any(_joins_with_or(where) for where in self._wheres[1:]):
+        # A scope ANDs its predicate onto the caller's wheres, and AND binds
+        # tighter than OR: ``a OR b AND tenant_id = ?`` reads as
+        # ``a OR (b AND tenant_id = ?)`` — every row matching ``a``, in every
+        # tenant and trashed or not, for reads, updates and deletes alike.
+        # Group the caller's wheres first (Laravel's
+        # ``addNewWheresWithinGroup``) so every scope constrains all of them.
+        group = self.new()
+        group._wheres = self._wheres
+        self._wheres = (QueryExpression(None, "=", SubGroupExpression(group)),)
     for _name, scope in scopes:
         scope(self)
 
     return self
+
+
+def _joins_with_or(where) -> bool:
+    """Whether the grammar joins ``where`` to the one before it with OR."""
+    keyword = getattr(where, "keyword", None)
+    return isinstance(keyword, str) and keyword.lower() == "or"
 
 
 def _qb_to_qmark(self):

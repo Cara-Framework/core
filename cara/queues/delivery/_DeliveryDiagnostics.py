@@ -21,7 +21,13 @@ def _bind_store(store_type: type) -> None:
 
 
 def _delivery_delivery_metrics(self) -> dict[str, Any]:
-    """Return one bounded aggregate snapshot for relay-owned metrics."""
+    """Return one aggregate snapshot for relay-owned metrics.
+
+    The status totals span the whole retained ledger — alerting reads
+    ``dead_lettered``/``expired`` across retention — so this is a scan the
+    driver runs on a cadence (``AMQPDriver.refresh_delivery_metrics``), never
+    once per relay iteration.
+    """
     due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
     priority_columns: list[str] = []
     priority_params: list[Any] = []
@@ -125,6 +131,9 @@ def _delivery_delivery_metrics(self) -> dict[str, Any]:
             self.PUBLISH_PROCESSING,
         ],
     )
+    # Every column reads open rows or the last five minutes of completions,
+    # so the scan is held to exactly those: the active-stats and
+    # queue-terminal partial indexes serve it, not the retained history.
     lane_rows = self._db().select(
         f"SELECT queue, "
         f"COUNT(*) FILTER (WHERE {due}) AS pending, "
@@ -136,7 +145,9 @@ def _delivery_delivery_metrics(self) -> dict[str, Any]:
         "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
         f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
         "AS oldest_due_age "
-        f"FROM {self.table} WHERE queue = ANY(%s) GROUP BY queue",
+        f"FROM {self.table} WHERE queue = ANY(%s) AND ("
+        "status IN (%s, %s) OR (status = %s AND "
+        "completed_at >= NOW() - INTERVAL '5 minutes')) GROUP BY queue",
         [
             self.STATUS_PENDING,
             self.PUBLISH_PUBLISHED,
@@ -148,61 +159,9 @@ def _delivery_delivery_metrics(self) -> dict[str, Any]:
             self.STATUS_PENDING,
             self.PUBLISH_PUBLISHED,
             list(self.canonical_queues),
-        ],
-    )
-    lane_backlog = {
-        queue: {
-            "pending": 0,
-            "processing": 0,
-            "broker_outstanding": 0,
-            "oldest_due_age": 0.0,
-            "throughput_per_second": 0.0,
-        }
-        for queue in self.canonical_queues
-    }
-    for lane_row in lane_rows or ():
-        queue = str(self._row_value(lane_row, "queue") or "")
-        if queue not in lane_backlog:
-            continue
-        lane_backlog[queue] = {
-            "pending": int(self._row_value(lane_row, "pending") or 0),
-            "processing": int(self._row_value(lane_row, "processing") or 0),
-            "broker_outstanding": int(
-                self._row_value(lane_row, "broker_outstanding") or 0
-            ),
-            "oldest_due_age": max(
-                float(self._row_value(lane_row, "oldest_due_age") or 0),
-                0.0,
-            ),
-            "throughput_per_second": max(
-                float(self._row_value(lane_row, "completed_5m") or 0) / 300.0,
-                0.0,
-            ),
-        }
-
-    lane_rows = self._db().select(
-        f"SELECT queue, "
-        f"COUNT(*) FILTER (WHERE {due}) AS pending, "
-        "COUNT(*) FILTER (WHERE status = %s) AS processing, "
-        "COUNT(*) FILTER (WHERE status IN (%s, %s) AND "
-        "publish_status = %s) AS broker_outstanding, "
-        "COUNT(*) FILTER (WHERE status = %s AND "
-        "completed_at >= NOW() - INTERVAL '5 minutes') AS completed_5m, "
-        "COALESCE(EXTRACT(EPOCH FROM (NOW() - "
-        f"(MIN(available_at) FILTER (WHERE {due})))), 0) "
-        "AS oldest_due_age "
-        f"FROM {self.table} WHERE queue = ANY(%s) GROUP BY queue",
-        [
-            self.STATUS_PENDING,
-            self.PUBLISH_PUBLISHED,
-            self.STATUS_PROCESSING,
             self.STATUS_PENDING,
             self.STATUS_PROCESSING,
-            self.PUBLISH_PUBLISHED,
             self.STATUS_COMPLETED,
-            self.STATUS_PENDING,
-            self.PUBLISH_PUBLISHED,
-            list(self.canonical_queues),
         ],
     )
     lane_backlog = {

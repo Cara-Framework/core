@@ -403,7 +403,7 @@ class Socket:
             await self.send_json(
                 {
                     "event": "subscription_denied",
-                    "channel": channel,
+                    "channel": str(channel),
                     "reason": "unauthorized",
                 }
             )

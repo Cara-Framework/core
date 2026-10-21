@@ -195,10 +195,14 @@ class MakesBodyParsing:
             self._json_data = {}
             return self._json_data
 
+        # ValueError, not just JSONDecodeError: a 4300+ digit integer and
+        # non-UTF bytes raise plain ValueError / UnicodeDecodeError, and
+        # deep nesting (``[`` * 200_000) raises RecursionError — all the
+        # client's malformed body, none of them a 500 + Sentry event.
         try:
             self._json_data = json.loads(raw)
             return self._json_data
-        except json.JSONDecodeError as exc:
+        except (ValueError, RecursionError) as exc:
             raise BadRequestException(f"Invalid JSON body: {exc}") from exc
 
     async def json_dict(self) -> dict[str, Any]:
@@ -541,13 +545,12 @@ class MakesBodyParsing:
 
         Returns a flat dict with Laravel-like behavior.
         """
-        # Get query params with proper flattening
-        result: dict[str, Any] = {}
-        for key, value in self._input.all_as_values().items():
-            if isinstance(value, list) and len(value) == 1 and not key.endswith("[]"):
-                result[key] = value[0]  # Flatten single-item lists
-            else:
-                result[key] = value
+        # Query params as parsed. The parser already collapses a repeated
+        # plain key to its first value, so a top-level list here came from
+        # ``key[]`` / ``key[n]`` notation and stays a list even with one
+        # element — flattening it made ``?ids[]=5`` a string that fails an
+        # ``array`` rule while ``?ids[]=5&ids[]=6`` passed.
+        result: dict[str, Any] = dict(self._input.all_as_values())
 
         # Check content type to avoid race condition between form() and json()
         content_type = self.header("content-type", "").lower()

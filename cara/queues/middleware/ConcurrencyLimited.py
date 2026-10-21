@@ -25,6 +25,7 @@ import logging
 import time
 from collections.abc import Callable
 
+from cara.cache import cache_backend_fault_types
 from cara.exceptions import MissingContainerBindingException
 from cara.observability import counter, metric_name
 
@@ -32,28 +33,6 @@ from .ConcurrencyBackendUnavailable import ConcurrencyBackendUnavailable
 from .ConcurrencyExceeded import ConcurrencyExceeded
 
 _logger = logging.getLogger("cara.queue.middleware")
-
-
-def _redis_fault_types() -> tuple[type[BaseException], ...]:
-    """Exception classes that mean "Redis itself failed to answer".
-
-    redis-py raises its OWN ``ConnectionError`` / ``TimeoutError`` /
-    ``ResponseError``, all rooted at ``redis.exceptions.RedisError`` — they
-    are NOT the builtins of the same name. This middleware used to catch the
-    builtins, so every handler it declared was unreachable: a real Redis
-    fault escaped the middleware as an unhandled job failure while the
-    carefully written degradation paths never ran once.
-
-    Resolved at call time because redis-py is an optional dependency of the
-    framework (``RedisCacheDriver`` is the only module that requires it), and
-    an install without it must still be able to import this module.
-    """
-    try:
-        from redis.exceptions import RedisError  # local: heavy optional dep
-
-        return (RedisError, OSError)
-    except ImportError:
-        return (OSError,)
 
 
 class ConcurrencyLimited:
@@ -224,7 +203,7 @@ class ConcurrencyLimited:
                 slot_id,
                 str(int(key_ttl)),
             )
-        except _redis_fault_types() as exc:
+        except cache_backend_fault_types() as exc:
             self._log_backend_fault(concurrency_key, exc)
             self._count_backend_fault(concurrency_key)
             return False
@@ -233,7 +212,7 @@ class ConcurrencyLimited:
     def _release(self, cache, concurrency_key: str, redis_key: str, slot_id: str) -> None:
         try:
             self._connection(cache).zrem(redis_key, slot_id)
-        except _redis_fault_types() as exc:
+        except cache_backend_fault_types() as exc:
             # The slot carries an expiry score and is reclaimed by TTL, but
             # an outage during release must remain observable.
             self._log_backend_fault(concurrency_key, exc)

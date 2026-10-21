@@ -12,9 +12,9 @@ Every decorator works on both sync and async handlers. On denial it raises
 which the framework's exception handler renders as a JSON error response.
 
 The decorator resolves the user from the request argument when present
-(``request.user()``) and otherwise from the ``Auth`` facade, then evaluates the
-check against ``Gate.for_user(user)`` so the result matches the request's
-identity exactly.
+(``request.user()``) and otherwise from :func:`cara.support.current_user`, then
+evaluates the check against ``Gate.for_user(user)`` so the result matches the
+request's identity exactly.
 """
 
 from __future__ import annotations
@@ -25,7 +25,8 @@ from functools import wraps
 from typing import Any
 
 from cara.exceptions import AuthorizationFailedException
-from cara.facades import Auth, Gate
+from cara.facades import Gate
+from cara.support import current_user
 
 
 def _resolve_user(func_args: tuple) -> Any | None:
@@ -33,18 +34,20 @@ def _resolve_user(func_args: tuple) -> Any | None:
 
     Handlers are either ``(self, request, ...)`` for controller methods or
     ``(request, ...)`` for plain functions. We look for the first argument that
-    exposes a ``user()`` method; failing that we fall back to ``Auth.user()``.
+    exposes a ``user()`` method; failing that we fall back to
+    :func:`cara.support.current_user` — the root Gate's resolver, so a handler
+    without a request argument sees the same identity.
     """
     for candidate in func_args[:2]:
         user_fn = getattr(candidate, "user", None)
         if callable(user_fn):
             try:
                 return user_fn()
-            # A candidate that cannot answer falls through to the Auth facade.
+            # A candidate that cannot answer falls through to the shared resolver.
             except ImportError, RuntimeError, AttributeError:
                 break
     try:
-        return Auth.user()
+        return current_user()
     # An unresolved user is a guest, not a failure.
     except ImportError, RuntimeError, AttributeError:
         return None

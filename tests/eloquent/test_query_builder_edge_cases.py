@@ -99,6 +99,58 @@ def test_where_dict_none_uses_sql_null_semantics():
     assert "= NULL" not in sql, sql
 
 
+@pytest.mark.parametrize("operator", ["!=", "<>"])
+def test_where_not_equal_none_is_is_not_null(operator):
+    """``None`` once became ``IS NULL`` whatever the operator, so
+    ``where('archived_at', '!=', None)`` selected exactly the rows it meant
+    to exclude."""
+    sql = _qb().where("archived_at", operator, None).to_sql()
+    assert '"archived_at" IS NOT NULL' in sql, sql
+
+
+@pytest.mark.parametrize("operator", [">", ">=", "<", "<=", "like"])
+def test_where_ordering_against_none_is_refused(operator):
+    with pytest.raises(ValueError, match="only =, !=, <> compare to NULL"):
+        _qb().where("last_seen_at", operator, None)
+
+
+def test_or_where_none_uses_sql_null_semantics():
+    """``or_where`` bound ``None`` as a value — ``= NULL`` / ``!= NULL``,
+    which match no row at all."""
+    builder = _qb().where("a", 1).or_where("b", None).or_where("c", "!=", None)
+    sql = builder.to_qmark()
+    assert sql.endswith(' OR "users"."b" IS NULL OR "users"."c" IS NOT NULL'), sql
+    assert list(builder._bindings) == [1]
+    with pytest.raises(ValueError, match="only =, !=, <> compare to NULL"):
+        _qb().or_where("c", ">", None)
+
+
+def test_cursor_paginate_refuses_a_null_sort_value(monkeypatch):
+    """``col > NULL`` is never true, so a cursor built from a NULL sort value
+    could only re-serve the NULL rows; no such cursor is ever issued."""
+    rows = [{"id": 1, "seen_at": "2026-01-01"}, {"id": 2, "seen_at": None}, {"id": 3}]
+    monkeypatch.setattr(QueryBuilder, "get", lambda self: list(rows))
+    with pytest.raises(ValueError, match="cursor column must be NOT NULL"):
+        _qb().cursor_paginate(
+            2,
+            column="seen_at",
+            scope="users.index",
+            filter_fingerprint="0" * 64,
+        )
+
+
+def test_the_builder_exposes_no_offset_paginate():
+    """``paginate`` / ``simple_paginate`` lost their bounds in a mixin split
+    and raised ``AttributeError`` on first use; the ORM pages by keyset
+    (``cursor_paginate``) only."""
+    from cara.eloquent.models import Model
+
+    for name in ("paginate", "simple_paginate"):
+        assert not hasattr(QueryBuilder, name), name
+        assert name not in Model.__passthrough__, name
+    assert hasattr(QueryBuilder, "cursor_paginate")
+
+
 def test_where_in_large_list_keeps_all_bindings():
     """A 1500-element IN list must not be truncated or paginated by
     the builder. Drivers handle binding limits."""

@@ -34,39 +34,27 @@ class InputBag:
         parsed_data = self._parser.parse(query_string)
         self._data.update(parsed_data)
 
-    def get(
-        self,
-        name: str,
-        default: Any = None,
-        flatten: bool = True,
-    ) -> Any:
+    def get(self, name: str, default: Any = None) -> Any:
         """
         Get input value by name with support for dot notation.
+
+        A list is returned as stored: the parser keeps only the first value
+        of a repeated plain key, so a list here came from ``key[]`` /
+        ``key[n]`` notation and stays a list even with one element.
 
         Args:
             name: Input name (supports dot notation)
             default: Default value if not found
-            flatten: Whether to flatten single-item lists
 
         Returns:
             Input value or default
         """
         cleaned_name = name[:-2] if name.endswith("[]") else name
-        value = data_get(
+        return data_get(
             self._data,
             cleaned_name,
             [] if name.endswith("[]") else default,
         )
-
-        if (
-            flatten
-            and isinstance(value, list)
-            and len(value) == 1
-            and not name.endswith("[]")
-        ):
-            return value[0]
-
-        return value
 
     def set(self, name: str, value: Any) -> None:
         """

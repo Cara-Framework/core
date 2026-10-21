@@ -41,6 +41,19 @@ class QueueJobDeliveryStore:
             STATUS_EXPIRED,
         }
     )
+    #: Terminal statuses with no terminal callback to run: ``failed()`` fires
+    #: only for dead-lettered and expired work. Every write that settles a
+    #: row into one of them stamps ``post_hooks_completed_at`` in the same
+    #: statement, so the hooks runner — one isolated interpreter boot per
+    #: claimed row — never spends a boot on a row with nothing to run, real
+    #: ``failed()`` hooks never queue behind them, and retention prunes them
+    #: on schedule.
+    HOOKLESS_TERMINAL_STATUSES = frozenset(
+        {
+            STATUS_COMPLETED,
+            STATUS_RETRY_SCHEDULED,
+        }
+    )
 
     PUBLISH_PENDING = "pending"
     PUBLISH_PROCESSING = "processing"

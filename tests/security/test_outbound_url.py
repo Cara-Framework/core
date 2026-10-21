@@ -206,7 +206,7 @@ def test_a_mixed_answer_set_fails_closed() -> None:
     reason = outbound_url_reason(
         "https://example.com/x", resolver=_resolver("93.184.216.34", "127.0.0.1")
     )
-    assert reason is not None and "non-public" in reason
+    assert reason is not None and "does not resolve to a public address" in reason
 
 
 def test_an_empty_answer_set_is_a_rejection() -> None:
@@ -219,7 +219,23 @@ def test_a_failing_resolver_is_a_rejection() -> None:
         raise socket.gaierror("nope")
 
     reason = outbound_url_reason("https://example.com/x", resolver=_fail)
-    assert reason is not None and "dns resolution failed" in reason
+    assert reason is not None and "does not resolve to a public address" in reason
+
+
+def test_dns_sweep_rejections_never_name_what_the_resolver_answered() -> None:
+    """The reason reaches the user who typed the URL. Echoing the private
+    address, or telling a missing name apart from an internal one, would
+    make the gate an oracle for the deployment's internal DNS."""
+
+    def _fail(*_a, **_kw):
+        raise socket.gaierror("nope")
+
+    reasons = {
+        outbound_url_reason("https://db.internal/x", resolver=_resolver("172.18.0.4")),
+        outbound_url_reason("https://db.internal/x", resolver=_fail),
+        outbound_url_reason("https://db.internal/x", resolver=lambda *a, **kw: []),
+    }
+    assert reasons == {"hostname db.internal does not resolve to a public address"}
 
 
 def test_dns_can_be_skipped_for_structure_only_callers() -> None:
@@ -318,7 +334,7 @@ def test_async_gate_agrees_with_the_sync_one() -> None:
     reason = asyncio.run(
         outbound_url_reason_async("https://example.com/x", resolver=_resolver("10.0.0.1"))
     )
-    assert reason is not None and "non-public" in reason
+    assert reason is not None and "does not resolve to a public address" in reason
 
 
 def test_a_black_hole_resolver_cannot_stall_the_event_loop() -> None:

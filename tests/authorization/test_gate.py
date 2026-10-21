@@ -223,6 +223,38 @@ def test_crashed_before_hook_denies_instead_of_deferring(root):
     assert g.for_user(root).allows("anything") is False
 
 
+def test_crashed_policy_before_hook_denies_instead_of_deferring(plain, product):
+    """The policy-level ``before`` is deny-first too and fails closed the same
+    way: it used to degrade to "no opinion", so the ability method's True
+    let in exactly the principal the hook existed to refuse."""
+
+    class DenyFirstPolicy(Policy):
+        def before(self, user, ability, *args):
+            return False if user.tenant.suspended else None
+
+        def update(self, user, model=None):
+            return True
+
+    g = Gate()
+    g.policy(Product, DenyFirstPolicy)
+
+    assert g.for_user(plain).allows("update", product) is False
+
+
+def test_crashed_policy_after_hook_keeps_the_prior_verdict(admin, product):
+    class CrashingAfterPolicy(Policy):
+        def after(self, user, ability, result, *args):
+            raise RuntimeError("boom")
+
+        def update(self, user, model=None):
+            return True
+
+    g = Gate()
+    g.policy(Product, CrashingAfterPolicy)
+
+    assert g.for_user(admin).allows("update", product) is True
+
+
 def test_before_hooks_answer_in_registration_order(root):
     """The FIRST hook with an opinion wins — order is the whole contract.
 

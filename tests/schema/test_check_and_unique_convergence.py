@@ -217,3 +217,16 @@ def test_a_constraint_backed_unique_is_finished_work():
     )
 
     assert operations == []
+
+
+def test_a_check_drops_before_the_column_it_involves():
+    """``DROP COLUMN`` removes the CHECKs on that column itself, so a
+    ``DROP CONSTRAINT`` sequenced after it fails on a constraint already gone
+    and stops the apply partway."""
+    live = _live_with_column("product", "legacy_status", "text", None)
+    live.checks["product"].add("product_legacy_status_check")
+
+    operations, refusals, _ = plan([_model()], live)
+
+    assert refusals == []
+    assert [op.kind for op in operations] == ["drop_check", "drop_column"]

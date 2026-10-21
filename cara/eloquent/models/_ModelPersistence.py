@@ -210,7 +210,11 @@ def _model_save(self, **kwargs: Any) -> bool:
     Fires appropriate events: creating/updating -> saving -> created/updated -> saved
 
     Returns:
-        True if successful, False if cancelled by event or error occurred
+        True when saved, False only when an event listener cancelled it or the
+        UPDATE matched no row. Database errors propagate (Laravel parity): a
+        swallowed one lost the write behind a success response and, inside a
+        transaction, surfaced as the NEXT statement's 25P02 — hiding the real
+        SQLSTATE from ``atomic()`` retries and unique-violation guards.
     """
     # Determine if this is a new record or existing one
     is_new_record = not self.is_created()
@@ -229,72 +233,67 @@ def _model_save(self, **kwargs: Any) -> bool:
     if not self._fire_model_event("saving"):
         return False
 
-    try:
-        # Perform the actual save operation
-        if is_new_record:
-            # Create new record
-            result = self.__class__.create(self.all_attributes(), **kwargs)
+    # Perform the actual save operation
+    if is_new_record:
+        # Create new record
+        result = self.__class__.create(self.all_attributes(), **kwargs)
+        if result:
+            # Copy created record's attributes back to this instance
+            self.__attributes__.update(result.__attributes__)
+            self.__original_attributes__.update(result.__original_attributes__)
+            self.__dirty_attributes__.clear()
+    else:
+        # Update existing record
+        # Snapshot before resolving the builder. ``get_builder()`` may
+        # rebuild its cache through ``self.builder = ...`` which is
+        # tracked as a dirty attribute by the model's magic setter.
+        # Passing the live dirty dict would then leak that QueryBuilder
+        # object into the SQL payload once guarded columns are allowed.
+        updates = dict(self.get_dirty_attributes())
+        if updates:
+            # ``__setattr__`` already applied the SET cast when it
+            # populated ``__dirty_attributes__`` (via
+            # HasAttributes._set_cast_attribute). Letting update()
+            # re-cast would DOUBLE-cast and corrupt non-idempotent
+            # casts — e.g. DateTimeCast.set on a non-UTC APP_TIMEZONE
+            # re-shifts the timestamp on every save. Cast exactly once,
+            # at the __setattr__ boundary. (Direct .update({...}) /
+            # .create({...}) callers keep casting — they never went
+            # through __setattr__.)
+            kwargs.setdefault("cast", False)
+            result = (
+                self.get_builder()
+                .where(self.get_primary_key(), self.get_primary_key_value())
+                .update(
+                    updates,
+                    ignore_mass_assignment=True,
+                    **kwargs,
+                )
+            )
             if result:
-                # Copy created record's attributes back to this instance
-                self.__attributes__.update(result.__attributes__)
-                self.__original_attributes__.update(result.__original_attributes__)
+                # Merge dirty attributes into main attributes
+                self.__attributes__.update(self.__dirty_attributes__)
+                self.__original_attributes__.update(self.__dirty_attributes__)
                 self.__dirty_attributes__.clear()
         else:
-            # Update existing record
-            # Snapshot before resolving the builder. ``get_builder()`` may
-            # rebuild its cache through ``self.builder = ...`` which is
-            # tracked as a dirty attribute by the model's magic setter.
-            # Passing the live dirty dict would then leak that QueryBuilder
-            # object into the SQL payload once guarded columns are allowed.
-            updates = dict(self.get_dirty_attributes())
-            if updates:
-                # ``__setattr__`` already applied the SET cast when it
-                # populated ``__dirty_attributes__`` (via
-                # HasAttributes._set_cast_attribute). Letting update()
-                # re-cast would DOUBLE-cast and corrupt non-idempotent
-                # casts — e.g. DateTimeCast.set on a non-UTC APP_TIMEZONE
-                # re-shifts the timestamp on every save. Cast exactly once,
-                # at the __setattr__ boundary. (Direct .update({...}) /
-                # .create({...}) callers keep casting — they never went
-                # through __setattr__.)
-                kwargs.setdefault("cast", False)
-                result = (
-                    self.get_builder()
-                    .where(self.get_primary_key(), self.get_primary_key_value())
-                    .update(
-                        updates,
-                        ignore_mass_assignment=True,
-                        **kwargs,
-                    )
-                )
-                if result:
-                    # Merge dirty attributes into main attributes
-                    self.__attributes__.update(self.__dirty_attributes__)
-                    self.__original_attributes__.update(self.__dirty_attributes__)
-                    self.__dirty_attributes__.clear()
-            else:
-                result = True  # No changes to save
+            result = True  # No changes to save
 
-        if not result:
-            return False
-
-        # Fire post-save events (these cannot cancel the operation)
-        if is_new_record:
-            self._fire_model_event("created")
-        else:
-            self._fire_model_event("updated")
-
-        self._fire_model_event("saved")
-
-        # Touch parent models if configured
-        if hasattr(self, "__touches__") and self.__touches__:
-            self._touch_parents()
-
-        return True
-
-    except Exception as e:
-        Log.error("Save operation failed: %s", e, exc_info=True)
+    if not result:
         return False
+
+    # Fire post-save events (these cannot cancel the operation)
+    if is_new_record:
+        self._fire_model_event("created")
+    else:
+        self._fire_model_event("updated")
+
+    self._fire_model_event("saved")
+
+    # Touch parent models if configured
+    if hasattr(self, "__touches__") and self.__touches__:
+        self._touch_parents()
+
+    return True
 
 
 def _model_delete(self, **kwargs: Any) -> bool:
@@ -304,30 +303,25 @@ def _model_delete(self, **kwargs: Any) -> bool:
     Fires: deleting -> deleted
 
     Returns:
-        True if successful, False if cancelled by event or error occurred
+        True when deleted, False only when a ``deleting`` listener cancelled it
+        or no row matched. Database errors propagate (Laravel parity) — see
+        :func:`_model_save`.
     """
     # Fire deleting event - can cancel operation
     if not self._fire_model_event("deleting"):
         return False
 
-    try:
-        # Perform the actual delete operation
-        result = (
-            self.get_builder()
-            .where(self.get_primary_key(), self.get_primary_key_value())
-            .delete(**kwargs)
-        )
-
-        if result:
-            # Fire deleted event (cannot cancel)
-            self._fire_model_event("deleted")
-            return True
-        else:
-            return False
-
-    except Exception as e:
-        Log.error("Delete operation failed: %s", e, exc_info=True)
+    result = (
+        self.get_builder()
+        .where(self.get_primary_key(), self.get_primary_key_value())
+        .delete(**kwargs)
+    )
+    if not result:
         return False
+
+    # Fire deleted event (cannot cancel)
+    self._fire_model_event("deleted")
+    return True
 
 
 def _model_touch_parents(self):

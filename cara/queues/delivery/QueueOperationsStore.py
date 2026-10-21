@@ -167,6 +167,13 @@ class QueueOperationsStore:
         previous page: a caller that must see past rows it decided to leave
         alone (a permanent failure stays terminal and unreplayed until
         retention) keyset-pages instead of re-reading one window forever.
+
+        ``chain_replay_requested_by`` attributes a row to the replay that
+        started its execution chain. A retry is a fresh ledger row with no
+        replay columns of its own (the replay-audit CHECK and the unique
+        ``replay_of`` index reserve them for the replay row itself), but it
+        inherits the chain's ``db_job_id`` while every replay mints a new one,
+        so each ``db_job_id`` holds at most one replay row: the chain root.
         """
         conditions = f"status IN (%s, %s) AND {self._awaiting_replay_condition()}"
         bindings: list[Any] = list(self.TERMINAL_LEDGER_STATUSES)
@@ -180,7 +187,13 @@ class QueueOperationsStore:
         return list(
             DB.select(
                 "SELECT job_id, db_job_id, queue, status, terminal_reason, "
-                "replay_of, replay_requested_by, updated_at "
+                "replay_of, replay_requested_by, "
+                "(SELECT chain_root.replay_requested_by "
+                f"FROM {self.ledger_table} AS chain_root "
+                "WHERE chain_root.db_job_id = "
+                f"{self.ledger_table}.db_job_id "
+                "AND chain_root.replay_of IS NOT NULL LIMIT 1) "
+                "AS chain_replay_requested_by, updated_at "
                 f"FROM {self.ledger_table} WHERE {conditions} "
                 "ORDER BY updated_at ASC, job_id ASC LIMIT %s",
                 bindings,

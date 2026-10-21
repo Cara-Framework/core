@@ -32,6 +32,17 @@ def _amqp_broker_get_dead_letter_messages(
     """
     Peek at dead letter queue messages without consuming them.
 
+    The page is held unacknowledged until the pass ends and then returned
+    with ONE explicit multiple nack. Returning each message as it is read
+    puts it back at the head of the queue, so the next ``basic_get`` reads
+    the same message again: the page fills with duplicates of the head and
+    never reaches the messages behind it. The explicit nack is also what
+    keeps the peek free: on RabbitMQ 4.3 quorum queues a nack counts toward
+    ``acquired-count`` only, while closing a channel that still holds the
+    messages counts as a failed delivery toward ``x-delivery-limit`` — and
+    the DLQ has no dead-letter exchange of its own, so a message past the
+    limit is dropped.
+
     Args:
         queue_name: Dead letter queue name
         limit: Maximum messages to retrieve
@@ -40,15 +51,16 @@ def _amqp_broker_get_dead_letter_messages(
         List of message details (headers, body, routing_key)
     """
     messages = []
+    held_delivery_tag = None
     try:
         self._connect(self.options)
 
-        # Use basic_get to peek at messages without consuming
         for _ in range(limit):
             method, properties, body = self.channel.basic_get(queue_name, auto_ack=False)
 
             if method is None:
                 break
+            held_delivery_tag = method.delivery_tag
 
             # Verify the signed JSON envelope without importing the job
             # class. A forged/corrupt DLQ record remains visible as raw
@@ -96,13 +108,23 @@ def _amqp_broker_get_dead_letter_messages(
                 }
             )
 
-            # Don't consume - requeue the message
-            self.channel.basic_nack(method.delivery_tag, requeue=True)
-
     except Exception as e:
         Log.error("Failed to get dead letter messages: %s", e, exc_info=True)
         raise
     finally:
+        if held_delivery_tag is not None and self.channel is not None:
+            try:
+                self.channel.basic_nack(
+                    delivery_tag=held_delivery_tag,
+                    multiple=True,
+                    requeue=True,
+                )
+            except _AMQP_CONNECTION_ERRORS as exc:
+                Log.warning(
+                    "Dead letter peek could not return its page explicitly; "
+                    "closing the channel returns it as a failed delivery: %s",
+                    exc,
+                )
         try:
             if self.channel is not None:
                 self.channel.close()

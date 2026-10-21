@@ -1,19 +1,41 @@
-"""``schema:check`` constraint + index drift — parsing + diff.
+"""``schema:check`` named-object + column drift — no DB.
 
-Exercises the pure model-side parsing (``_declared_check_constraints`` /
-``_declared_indexes``) and the ``_diff_checks`` / ``_diff_indexes`` diffs
-against controlled "live" sets, with no DB. The existing column diff
-(``_diff_table`` / ``_diff_column``) is also smoke-tested to confirm it stays
-intact.
+Named objects are compared through ``cara.schema.Objects`` against a
+``cara.schema.LiveSchema`` — the planner's own functions and inputs — so a
+trigger, a function or a raw foreign key the database lacks is drift here
+exactly when ``schema:plan`` would create it. The column diff
+(``_diff_table`` / ``_diff_column``) is exercised against plain live dicts.
 """
 
 from __future__ import annotations
 
 from cara.commands.core.SchemaCheckCommand import SchemaCheckCommand
+from cara.schema import LiveSchema
 
 
 def _cmd() -> SchemaCheckCommand:
     return SchemaCheckCommand(application=None)
+
+
+def _live(
+    indexes=(),
+    checks=(),
+    constraints=(),
+    constraint_indexes=(),
+    triggers=(),
+    functions=(),
+    table="listing",
+):
+    """A deployed ``listing`` with the given named objects and no others."""
+    return LiveSchema(
+        tables={table: {"id": {"data_type": "bigint", "is_nullable": False}}},
+        checks={table: set(checks)},
+        indexes={table: set(indexes)},
+        constraint_indexes={table: set(constraint_indexes)},
+        constraints={table: set(checks) | set(constraints)},
+        triggers={table: set(triggers)},
+        functions=set(functions),
+    )
 
 
 # A model double shaped like ModelDiscoverer output, with the ``__indexes__``
@@ -43,97 +65,155 @@ _LISTING_LIKE = {
     ],
 }
 
-
-# ── declared-constraint / declared-index parsing ───────────────────────────
-
-
-def test_declared_check_constraints_extracts_name():
-    checks = SchemaCheckCommand._declared_check_constraints(_LISTING_LIKE)
-    assert checks == {"listing_current_price_non_negative"}
+_IN_SYNC = _live(
+    indexes={"listing_active_by_product", "listing_marketplace_external_unique"},
+    checks={"listing_current_price_non_negative"},
+)
 
 
-def test_declared_indexes_harvests_unique_and_plain():
-    # Both forms are the model's declaration; the plain CREATE INDEX used to be
-    # dropped on the floor, which is how dozens of a product's indexes stayed
-    # invisible.
-    assert SchemaCheckCommand._declared_indexes(_LISTING_LIKE) == {
-        "listing_active_by_product",
-        "listing_marketplace_external_unique",
-    }
+# ── declared-but-missing is drift ───────────────────────────────────────────
 
 
-def test_plain_index_is_not_a_check():
-    model = {
-        "indexes": [
-            {
-                "name": "listing_active_by_product",
-                "up": "CREATE INDEX IF NOT EXISTS listing_active_by_product "
-                "ON listing (product_id, status)",
-            }
-        ]
-    }
-    assert SchemaCheckCommand._declared_check_constraints(model) == set()
-    assert SchemaCheckCommand._declared_indexes(model) == {"listing_active_by_product"}
-
-
-def test_no_indexes_attribute_is_empty():
-    assert SchemaCheckCommand._declared_check_constraints({}) == set()
-    assert SchemaCheckCommand._declared_indexes({}) == set()
-
-
-def test_declared_indexes_include_composite_index_declarations():
-    # ``field.index(["a", "b"])`` never reaches ``__indexes__``; its live name is
-    # the ConstraintManager default unless the model named it.
-    model = {
-        "table": "listing",
-        "composite_indexes": [
-            {"columns": ["product_id", "status"], "name": None},
-            {"columns": ["sku"], "name": "listing_sku_lookup"},
-        ],
-    }
-    assert SchemaCheckCommand._declared_indexes(model) == {
-        "listing_product_id_status_index",
-        "listing_sku_lookup",
-    }
-
-
-# ── diff: declared-but-missing is drift ─────────────────────────────────────
-
-
-def test_no_drift_when_constraint_present():
-    cmd = _cmd()
-    assert cmd._diff_checks(_LISTING_LIKE, {"listing_current_price_non_negative"}) == []
+def test_no_drift_when_every_declared_object_is_present():
+    assert _cmd()._diff_objects(_LISTING_LIKE, "listing", _IN_SYNC) == []
 
 
 def test_dropped_unique_index_is_caught():
-    cmd = _cmd()
-    drift = cmd._diff_indexes(
+    drift = _cmd()._diff_objects(
         _LISTING_LIKE,
-        live_indexes={"listing_active_by_product"},  # the unique index was DROPPED
-        constraint_indexes=set(),
+        "listing",
+        _live(
+            indexes={"listing_active_by_product"},  # the unique index was DROPPED
+            checks={"listing_current_price_non_negative"},
+        ),
     )
-    assert len(drift) == 1
-    assert "listing_marketplace_external_unique" in drift[0]
-    assert "MISSING in database" in drift[0]
+    assert drift == [
+        "object 'listing_marketplace_external_unique' declared in model but "
+        "MISSING in database"
+    ]
 
 
 def test_dropped_check_constraint_is_caught():
-    cmd = _cmd()
-    drift = cmd._diff_checks(_LISTING_LIKE, set())  # the CHECK was DROPPED
+    drift = _cmd()._diff_objects(
+        _LISTING_LIKE,
+        "listing",
+        _live(
+            indexes={"listing_active_by_product", "listing_marketplace_external_unique"}
+        ),  # the CHECK was DROPPED
+    )
     assert len(drift) == 1
     assert "listing_current_price_non_negative" in drift[0]
-    assert "CHECK constraint" in drift[0] and "MISSING" in drift[0]
+    assert "MISSING" in drift[0]
 
 
 def test_extra_live_checks_are_not_drift():
     # A model is the source of truth for the CHECKs it asserts; extra live ones
     # (system NOT-NULL constraints among them) must NOT flag.
-    cmd = _cmd()
-    drift = cmd._diff_checks(
-        _LISTING_LIKE,
-        {"listing_current_price_non_negative", "some_system_check"},
+    live = _live(
+        indexes={"listing_active_by_product", "listing_marketplace_external_unique"},
+        checks={"listing_current_price_non_negative", "some_system_check"},
     )
-    assert drift == []
+    assert _cmd()._diff_objects(_LISTING_LIKE, "listing", live) == []
+
+
+def test_field_level_check_is_compared_by_its_blueprint_name():
+    model = {
+        "table": "listing",
+        "checks": [{"expression": "quantity >= 0"}],
+    }
+    drift = _cmd()._diff_objects(model, "listing", _live())
+    assert drift == [
+        "CHECK constraint 'listing_quantity_0_check' declared in model but "
+        "MISSING in database"
+    ]
+    assert (
+        _cmd()._diff_objects(model, "listing", _live(checks={"listing_quantity_0_check"}))
+        == []
+    )
+
+
+def test_a_missing_trigger_and_its_function_are_drift():
+    """The blind spot this gate had: it harvested only CREATE INDEX and CHECK
+    names, so a role-scope guard trigger the database lacked printed "No
+    drift" while ``schema:plan`` would have re-created it."""
+    model = {
+        "table": "invitation",
+        "indexes": [
+            {
+                "name": "invitation_role_scope_guard",
+                "up": (
+                    "CREATE OR REPLACE FUNCTION enforce_role_tenant_scope() "
+                    "RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql; "
+                    "CREATE TRIGGER invitation_role_scope_guard BEFORE INSERT ON "
+                    "invitation FOR EACH ROW EXECUTE FUNCTION "
+                    "enforce_role_tenant_scope()"
+                ),
+            }
+        ],
+    }
+    drift = _cmd()._diff_objects(model, "invitation", _live(table="invitation"))
+    assert drift == [
+        "object 'enforce_role_tenant_scope' declared in model but MISSING in database",
+        "object 'invitation_role_scope_guard' declared in model but MISSING in database",
+    ]
+
+    present = _live(
+        table="invitation",
+        triggers={"invitation_role_scope_guard"},
+        functions={"enforce_role_tenant_scope"},
+    )
+    assert _cmd()._diff_objects(model, "invitation", present) == []
+
+
+def test_a_raw_foreign_key_entry_is_compared_as_a_named_object():
+    model = {
+        "table": "listing",
+        "indexes": [
+            {
+                "name": "listing_channel_tenant_fk",
+                "up": (
+                    "ALTER TABLE listing ADD CONSTRAINT listing_channel_tenant_fk "
+                    "FOREIGN KEY (channel_id, tenant_id) REFERENCES channel (id, tenant_id)"
+                ),
+            }
+        ],
+    }
+    assert len(_cmd()._diff_objects(model, "listing", _live())) == 1
+    assert (
+        _cmd()._diff_objects(
+            model, "listing", _live(constraints={"listing_channel_tenant_fk"})
+        )
+        == []
+    )
+
+
+def test_an_unreadable_entry_is_reported_with_the_planners_refusal():
+    model = {
+        "table": "listing",
+        "indexes": [{"name": "listing_mystery", "up": "SELECT 1"}],
+    }
+    drift = _cmd()._diff_objects(model, "listing", _live())
+    assert len(drift) == 1
+    assert "listing_mystery" in drift[0]
+    assert "cannot tell what this SQL creates" in drift[0]
+
+
+def test_declared_foreign_key_missing_from_the_database_is_drift():
+    model = {
+        "table": "listing",
+        "fields": {
+            "channel_id": {
+                "type": "big_integer",
+                "params": {},
+                "foreign_key": {"field": "channel_id", "on": "listing"},
+            }
+        },
+    }
+    drift = _cmd()._diff_objects(model, "listing", _live())
+    assert drift == [
+        "FOREIGN KEY 'listing_channel_id_foreign' declared in model but MISSING "
+        "in database"
+    ]
 
 
 # ── existing column diff stays intact ───────────────────────────────────────
@@ -297,16 +377,15 @@ def test_matching_timezone_awareness_is_not_drift():
 def test_index_living_only_in_a_hand_written_migration_is_reported_as_extra():
     # The 37-index class: present in the DB, declared by no model, therefore
     # silently dropped by the next regenerate-from-models sweep.
-    cmd = _cmd()
-    drift = cmd._diff_indexes(
-        _LISTING_LIKE,
-        live_indexes={
+    live = _live(
+        indexes={
             "listing_active_by_product",
             "listing_marketplace_external_unique",
             "listing_hand_written_perf_idx",
         },
-        constraint_indexes=set(),
+        checks={"listing_current_price_non_negative"},
     )
+    drift = _cmd()._diff_objects(_LISTING_LIKE, "listing", live)
     assert len(drift) == 1
     assert "listing_hand_written_perf_idx" in drift[0]
     assert "NOT declared in model" in drift[0]
@@ -315,27 +394,39 @@ def test_index_living_only_in_a_hand_written_migration_is_reported_as_extra():
 def test_constraint_backed_indexes_are_not_reported_as_extra():
     # Postgres names the index behind a PK/UNIQUE constraint itself; no model
     # declares it, so counting it would make every table report phantom extras.
-    cmd = _cmd()
-    drift = cmd._diff_indexes(
-        _LISTING_LIKE,
-        live_indexes={
+    live = _live(
+        indexes={
             "listing_active_by_product",
             "listing_marketplace_external_unique",
             "listing_pkey",
             "listing_sku_unique",
         },
+        checks={"listing_current_price_non_negative"},
         constraint_indexes={"listing_pkey", "listing_sku_unique"},
     )
-    assert drift == []
+    assert _cmd()._diff_objects(_LISTING_LIKE, "listing", live) == []
+
+
+def test_composite_index_declarations_are_declared_indexes():
+    # ``field.index(["a", "b"])`` never reaches ``__indexes__``; its live name is
+    # the Blueprint default unless the model named it.
+    model = {
+        "table": "listing",
+        "composite_indexes": [
+            {"columns": ["product_id", "status"], "name": None},
+            {"columns": ["sku"], "name": "listing_sku_lookup"},
+        ],
+    }
+    live = _live(indexes={"listing_product_id_status_index", "listing_sku_lookup"})
+    assert _cmd()._diff_objects(model, "listing", live) == []
 
 
 def test_index_diff_reports_missing_and_extra_together():
-    cmd = _cmd()
-    drift = cmd._diff_indexes(
-        _LISTING_LIKE,
-        live_indexes={"listing_active_by_product", "an_undeclared_index"},
-        constraint_indexes=set(),
+    live = _live(
+        indexes={"listing_active_by_product", "an_undeclared_index"},
+        checks={"listing_current_price_non_negative"},
     )
+    drift = _cmd()._diff_objects(_LISTING_LIKE, "listing", live)
     assert len(drift) == 2
     assert any(
         "listing_marketplace_external_unique" in d and "MISSING" in d for d in drift

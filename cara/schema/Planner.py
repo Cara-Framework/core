@@ -30,6 +30,7 @@ Three rules keep the derivation honest:
 from __future__ import annotations
 
 from cara.exceptions import SchemaPlanRefused
+from cara.schema.Defaults import declared_default_sql, defaults_match, live_default_sql
 from cara.schema.LiveSchema import LiveSchema, declared_columns
 from cara.schema.Objects import (
     missing_checks,
@@ -42,6 +43,7 @@ from cara.schema.Objects import (
 from cara.schema.Operation import (
     ADDITIVE,
     DESTRUCTIVE,
+    LEDGER_TABLE,
     LOCKING,
     RUN_MIGRATION_PREFIX,
     Operation,
@@ -108,9 +110,18 @@ def plan(
                     table=table,
                     key=table,
                     forward_sql=f"{RUN_MIGRATION_PREFIX}create_{table}_table",
-                    reverse_sql=f'DROP TABLE IF EXISTS "{table}"',
+                    # The ledger cannot reverse its own creation: dropping it
+                    # takes the record of every other reverse with it.
+                    reverse_sql=(
+                        None
+                        if table == LEDGER_TABLE
+                        else f'DROP TABLE IF EXISTS "{table}"'
+                    ),
                     safety=ADDITIVE,
                     reason="table declared by a model but absent from the database",
+                    # The table goes away with every row written into it
+                    # since the create.
+                    restores_data=False,
                     notes=(
                         "runs the generated create_<table>_table migration; its "
                         "own DDL, not a re-render",
@@ -214,7 +225,9 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
             f"no PostgreSQL mapping for model type '{declared['type']}'"
         )
 
-    quoted = f'ALTER TABLE "{table}" ADD COLUMN "{name}" {type_sql}'
+    params = declared.get("params") or {}
+    default = declared_default_sql(params)
+    added = f'ALTER TABLE "{table}" ADD COLUMN "{name}" {type_sql} NULL'
     reverse = f'ALTER TABLE "{table}" DROP COLUMN "{name}"'
 
     if declared["nullable"]:
@@ -223,7 +236,10 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
                 kind="add_column",
                 table=table,
                 key=f"{table}.{name}",
-                forward_sql=f"{quoted} NULL",
+                # The declared default rides on the ADD, so existing rows get
+                # it the way a hand-written migration would give it to them —
+                # in place, without a rewrite, for a constant or now().
+                forward_sql=added if default is None else f"{added} DEFAULT {default}",
                 reverse_sql=reverse,
                 safety=ADDITIVE,
                 reason="nullable column declared by the model",
@@ -233,8 +249,6 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
             )
         ]
 
-    params = declared.get("params") or {}
-    default = params.get("default")
     backfill = params.get("backfill_from")
     if default is None and backfill is None:
         raise SchemaPlanRefused(
@@ -249,64 +263,119 @@ def _add_column(table: str, name: str, declared: dict) -> list[Operation]:
     # in place, but the three-step form is what stays safe on a large table and
     # is the same shape a reviewer already knows from expand/contract.
     #
+    # The DEFAULT lands in step 1, as a SET DEFAULT subcommand of the same
+    # statement as the ADD. Every writer — old code mid-deploy, a worker —
+    # gets it the moment the column exists; set in step 3 instead, rows
+    # inserted in between stored NULL, step 3's preflight stopped the apply,
+    # and the re-derived plan was a bare SET NOT NULL with the default gone.
+    # It must NOT be the ADD's own DEFAULT: that fills every existing row and
+    # leaves the backfill nothing to do, which is wrong exactly when
+    # ``backfill_from`` says the existing rows need something else.
+    #
     # ``backfill_from`` wins over ``default`` because it is the more specific
     # statement: a default says what a NEW row gets, a backfill says what the
     # EXISTING ones get, and when a model bothers to declare both it is
     # because those two answers differ.
-    fill = backfill if backfill is not None else _sql_default(default)
-    literal = _sql_default(default) if default is not None else "NULL"
     return [
         Operation(
             kind="add_column",
             table=table,
             key=f"{table}.{name}",
-            forward_sql=f"{quoted} NULL",
+            forward_sql=(
+                added
+                if default is None
+                else f'{added}, ALTER COLUMN "{name}" SET DEFAULT {default}'
+            ),
             reverse_sql=reverse,
             safety=ADDITIVE,
             reason="step 1/3 of a NOT NULL addition: add it nullable",
             restores_data=False,
         ),
-        Operation(
-            kind="backfill_column",
-            table=table,
-            key=f"{table}.{name}:backfill",
-            forward_sql=(
-                f'UPDATE "{table}" SET "{name}" = {fill} WHERE "{name}" IS NULL'
-            ),
-            reverse_sql=None,
-            safety=LOCKING,
+        _backfill_column(
+            table,
+            name,
+            backfill if backfill is not None else default,
             reason=(
                 "step 2/3: fill existing rows from the declared backfill"
                 if backfill is not None
                 else "step 2/3: fill existing rows with the declared default"
             ),
-            restores_data=False,
-            notes=("rewrites every existing row; batch it by hand on a large table",),
         ),
-        Operation(
-            kind="set_not_null",
-            table=table,
-            key=f"{table}.{name}:not_null",
-            forward_sql=(
-                (
-                    f'ALTER TABLE "{table}" ALTER COLUMN "{name}" '
-                    f"SET DEFAULT {literal}, "
-                    f'ALTER COLUMN "{name}" SET NOT NULL'
-                )
-                if default is not None
-                else f'ALTER TABLE "{table}" ALTER COLUMN "{name}" SET NOT NULL'
-            ),
-            reverse_sql=f'ALTER TABLE "{table}" ALTER COLUMN "{name}" DROP NOT NULL',
-            safety=LOCKING,
+        _set_not_null(
+            table,
+            name,
             reason="step 3/3: tighten to NOT NULL",
-            preflight_sql=(f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1'),
             preflight_failure=(
                 f"{table}.{name} still has NULL rows — the backfill above did "
                 f"not cover them"
             ),
-            notes=("takes an ACCESS EXCLUSIVE lock for a full scan",),
         ),
     ]
+
+
+def _backfill_column(table: str, name: str, fill: str, reason: str) -> Operation:
+    return Operation(
+        kind="backfill_column",
+        table=table,
+        key=f"{table}.{name}:backfill",
+        forward_sql=f'UPDATE "{table}" SET "{name}" = {fill} WHERE "{name}" IS NULL',
+        reverse_sql=None,
+        safety=LOCKING,
+        reason=reason,
+        restores_data=False,
+        notes=("rewrites every existing row; batch it by hand on a large table",),
+    )
+
+
+def _set_not_null(
+    table: str, name: str, reason: str, preflight_failure: str
+) -> Operation:
+    return Operation(
+        kind="set_not_null",
+        table=table,
+        key=f"{table}.{name}:not_null",
+        forward_sql=f'ALTER TABLE "{table}" ALTER COLUMN "{name}" SET NOT NULL',
+        reverse_sql=f'ALTER TABLE "{table}" ALTER COLUMN "{name}" DROP NOT NULL',
+        safety=LOCKING,
+        reason=reason,
+        preflight_sql=f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1',
+        preflight_failure=preflight_failure,
+        notes=("takes an ACCESS EXCLUSIVE lock for a full scan",),
+    )
+
+
+def _set_default(
+    table: str, name: str, declared: str | None, live: str | None
+) -> Operation:
+    """Move the live DEFAULT to the declared one (or drop it).
+
+    Metadata only: stored rows keep their values, and only rows inserted from
+    now on see the change — which is why it is additive. The reverse is the
+    server's own spelling of the previous default, so it restores it exactly.
+    """
+    column = f'ALTER TABLE "{table}" ALTER COLUMN "{name}"'
+    return Operation(
+        kind="set_default" if declared is not None else "drop_default",
+        table=table,
+        key=f"{table}.{name}:default",
+        forward_sql=(
+            f"{column} SET DEFAULT {declared}"
+            if declared is not None
+            else f"{column} DROP DEFAULT"
+        ),
+        reverse_sql=(
+            f"{column} SET DEFAULT {live}"
+            if live is not None
+            else f"{column} DROP DEFAULT"
+        ),
+        safety=ADDITIVE,
+        reason=(
+            f"model declares DEFAULT {declared}, the database has "
+            f"{live if live is not None else 'none'}"
+            if declared is not None
+            else f"model declares no DEFAULT, the database has {live}"
+        ),
+    )
 
 
 def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Operation]:
@@ -315,6 +384,15 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
         return []
 
     operations: list[Operation] = []
+    params = declared.get("params") or {}
+    default = declared_default_sql(params)
+
+    # Compared on every column, not only on new ones: a DEFAULT the database
+    # lost (an interrupted NOT NULL recipe, a hand-written ALTER) or one the
+    # model changed is invisible otherwise, and every INSERT that omits the
+    # column quietly disagrees with a from-zero database.
+    if not defaults_match(default, live_default_sql(live.get("default"))):
+        operations.append(_set_default(table, name, default, live.get("default")))
 
     if declared["nullable"] and not live["is_nullable"]:
         operations.append(
@@ -331,23 +409,39 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
             )
         )
     elif not declared["nullable"] and live["is_nullable"]:
+        # The model already says what a NULL row must become — its
+        # ``backfill_from``, else its default — so the fill is derived here
+        # exactly as the NOT NULL recipe derives it. That is also what makes
+        # the recipe resumable: interrupted after step 1, the re-derived plan
+        # is this branch, and it still carries the backfill.
+        backfill = params.get("backfill_from")
+        fill = backfill if backfill is not None else default
+        if fill is not None:
+            operations.append(
+                _backfill_column(
+                    table,
+                    name,
+                    fill,
+                    reason=(
+                        "fill the NULL rows from the declared backfill"
+                        if backfill is not None
+                        else "fill the NULL rows with the declared default"
+                    ),
+                )
+            )
         operations.append(
-            Operation(
-                kind="set_not_null",
-                table=table,
-                key=f"{table}.{name}:not_null",
-                forward_sql=f'ALTER TABLE "{table}" ALTER COLUMN "{name}" SET NOT NULL',
-                reverse_sql=(
-                    f'ALTER TABLE "{table}" ALTER COLUMN "{name}" DROP NOT NULL'
-                ),
-                safety=LOCKING,
+            _set_not_null(
+                table,
+                name,
                 reason="model tightened the column to NOT NULL",
-                preflight_sql=(f'SELECT 1 FROM "{table}" WHERE "{name}" IS NULL LIMIT 1'),
                 preflight_failure=(
-                    f"{table}.{name} still has NULL rows — SET NOT NULL will "
-                    f"fail. Backfill them first, in its own deploy"
+                    f"{table}.{name} still has NULL rows — the backfill above "
+                    f"did not cover them"
+                    if fill is not None
+                    else f"{table}.{name} still has NULL rows — SET NOT NULL "
+                    f"will fail. Declare .backfill_from(<sql>) or a default on "
+                    f"the field, or backfill them first, in its own deploy"
                 ),
-                notes=("takes an ACCESS EXCLUSIVE lock for a full scan",),
             )
         )
 
@@ -529,15 +623,6 @@ def _live_type_sql(live: dict) -> str:
     if max_length and base in {"CHARACTER VARYING", "VARCHAR", "CHARACTER", "CHAR"}:
         return f"VARCHAR({max_length})"
     return base
-
-
-def _sql_default(value) -> str:
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)):
-        return str(value)
-    escaped = str(value).replace("'", "''")
-    return f"'{escaped}'"
 
 
 __all__ = ["plan"]

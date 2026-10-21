@@ -13,10 +13,13 @@ class TimezoneRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
         if not isinstance(value, str):
             return False
+        # ZoneInfo reads the key as a file path: an unknown zone is a KeyError,
+        # a non-normalized path ("UTC/", "../x") a ValueError, and a component
+        # longer than the filesystem allows an OSError. Each is "not a zone".
         try:
             ZoneInfo(value)
             return True
-        except KeyError, ValueError, TypeError:
+        except KeyError, ValueError, TypeError, OSError:
             return False
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:

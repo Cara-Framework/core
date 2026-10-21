@@ -16,14 +16,18 @@ run.
 Three properties make it safe to run against production:
 
 * **Idempotent by ledger.** Every operation is recorded with its plan id and
-  its stable key before the next one starts. A re-run after a crash skips
-  what is already ``applied`` and continues — so the answer to "did it get
-  halfway?" is a query, not an inspection of the schema.
+  its stable key before the next one starts — for a transactional statement
+  in the same transaction as the statement itself. A re-run after a crash
+  skips what is already ``applied`` and continues — so the answer to "did it
+  get halfway?" is a query, not an inspection of the schema.
 
-* **Lock timeout.** Every statement runs under ``lock_timeout``, so an
-  operation that would queue behind a long transaction fails fast instead of
-  blocking every writer behind it. The default is deliberately short: a
-  deploy that cannot get the lock now should retry, not hold the table.
+* **Lock timeout.** Every transactional statement runs in its own
+  transaction under ``SET LOCAL lock_timeout``, so an operation that would
+  queue behind a long transaction fails fast instead of blocking every writer
+  behind it. The default is deliberately short: a deploy that cannot get the
+  lock now should retry, not hold the table. A ``CONCURRENTLY`` statement
+  cannot run in a transaction and keeps the connection's configured session
+  ``lock_timeout``.
 
 * **Preflight before each statement.** An operation that can fail on DATA
   carries a read-only query that must return no rows — a NULL in a column
@@ -101,7 +105,10 @@ DEFAULT_LOCK_TIMEOUT_MS = 5000
         },
         {
             "name": "--lock_timeout",
-            "help": "Per-statement lock timeout in milliseconds",
+            "help": (
+                "Lock timeout in milliseconds for each transactional statement "
+                "(CONCURRENTLY statements keep the connection's own)"
+            ),
             "type": int,
             "default": 5000,
             "is_flag": False,
@@ -216,7 +223,7 @@ class SchemaApplyCommand(CommandBase):
                 )
                 return 1
             try:
-                self._execute(operation, lock_timeout)
+                self._execute(identifier, operation, lock_timeout)
             except Exception as exc:
                 self._record(identifier, operation, status=STATUS_FAILED, error=str(exc))
                 self.error(
@@ -226,7 +233,6 @@ class SchemaApplyCommand(CommandBase):
                     f"recorded; re-run to continue from here once the cause is fixed."
                 )
                 return 1
-            self._record(identifier, operation, status=STATUS_APPLIED)
             done += 1
 
         self.success(f"Applied {done} operation(s). Plan {identifier} recorded.")
@@ -289,20 +295,34 @@ class SchemaApplyCommand(CommandBase):
             return None
         return operation.preflight_failure if rows else None
 
-    def _execute(self, operation, lock_timeout: int) -> None:
+    def _execute(self, plan_id: str, operation, lock_timeout: int) -> None:
+        """Run one operation and record it ``applied``.
+
+        ``SET LOCAL`` binds only inside a transaction block: sent on its own
+        through an autocommit connection it is a warning and nothing else, and
+        the DDL after it ran with no timeout at all. So a transactional
+        statement, its timeout and its ledger row share one transaction — the
+        schema change and the record of it commit together or not at all.
+        """
         slug = migration_to_run(operation.forward_sql)
         if slug is not None:
             self._run_generated_migration(slug)
+            self._record(plan_id, operation, status=STATUS_APPLIED)
             return
 
         if operation.transactional:
-            DB.statement(f"SET LOCAL lock_timeout = '{lock_timeout}ms'")
-            DB.statement(operation.forward_sql)
+            with DB.transaction():
+                DB.statement(f"SET LOCAL lock_timeout = '{lock_timeout}ms'")
+                DB.statement(operation.forward_sql)
+                self._record(plan_id, operation, status=STATUS_APPLIED)
             return
 
-        # Non-transactional (CONCURRENTLY): no SET LOCAL, no surrounding
-        # transaction — the statement manages its own locking.
+        # Non-transactional (CONCURRENTLY): Postgres refuses it inside a
+        # transaction, so it runs under the connection's configured session
+        # lock_timeout. A session-level SET here would outlive the statement
+        # and leak into the next borrower of the pooled connection.
         DB.statement(operation.forward_sql)
+        self._record(plan_id, operation, status=STATUS_APPLIED)
 
     def _run_generated_migration(self, slug: str) -> None:
         """Execute the generated creator for a table the database lacks.

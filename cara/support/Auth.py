@@ -49,6 +49,28 @@ def resolve_user(request: Any) -> Any | None:
     return getattr(request, "_user", None)
 
 
+def current_user() -> Any | None:
+    """Return the acting user for code that holds no request argument.
+
+    Inside an HTTP request that is the user the auth middleware stored on it
+    (:func:`resolve_user`) — one identity source, whichever guard or
+    credential produced it. Re-deriving it through ``Auth.user()`` read the
+    guard name the middleware stamped, so a product credential that is no
+    registered guard (an API token) raised "Guard not found" and the Gate
+    checked a guest. Outside a request (queue, CLI) it is the ``Auth``
+    facade's user.
+    """
+    from cara.http import current_request  # local: cycle with cara.http
+
+    try:
+        request = current_request.get()
+    except LookupError:
+        from cara.facades import Auth  # local: cycle with cara.facades
+
+        return Auth.user()
+    return resolve_user(request)
+
+
 def optional_user_id(request: Any) -> int | None:
     """Return the user id if present, else ``None``.
 
@@ -112,6 +134,7 @@ def gate_allows(request: Any, ability: str) -> bool:
 
 __all__ = [
     "authenticated_user",
+    "current_user",
     "gate_allows",
     "optional_user_id",
     "resolve_user",

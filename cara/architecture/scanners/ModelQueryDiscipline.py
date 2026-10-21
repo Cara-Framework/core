@@ -75,8 +75,6 @@ ORM_METHODS = frozenset(
         "save",
         "update",
         "delete",
-        "paginate",
-        "simple_paginate",
         "count",
         "sum",
         "avg",

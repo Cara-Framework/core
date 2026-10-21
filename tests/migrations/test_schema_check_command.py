@@ -1,21 +1,21 @@
 """Tests for ``SchemaCheckCommand`` — the model-vs-live-DB drift gate.
 
 These exercise the command's pure comparison logic (no live database): column
-flattening from model declarations, the declared-vs-live diff, and the
-conservative type/nullable mismatch rules. The introspection + skip-on-no-DB
-paths are mock-driven.
+flattening from model declarations (``cara.schema.declared_columns``, the
+planner's own), the declared-vs-live diff, and the conservative type/nullable
+mismatch rules.
 """
 
 from __future__ import annotations
 
 from cara.commands.core.SchemaCheckCommand import SchemaCheckCommand
+from cara.schema import declared_columns
 from tests.commands._fixtures import make_command
 
-# --- _declared_columns: model fields -> concrete columns ----------------------
+# --- declared_columns: model fields -> concrete columns -----------------------
 
 
 def test_declared_columns_expands_timestamps_and_soft_deletes():
-    cmd = make_command(SchemaCheckCommand)
     model = {
         "name": "Widget",
         "table": "widget",
@@ -28,14 +28,19 @@ def test_declared_columns_expands_timestamps_and_soft_deletes():
         },
     }
 
-    cols = cmd._declared_columns(model)
+    cols = declared_columns(model)
 
     assert set(cols) == {"id", "name", "note", "created_at", "updated_at", "deleted_at"}
-    # timestamps expand to nullable datetime columns
-    assert cols["created_at"] == {"type": "datetime", "nullable": True}
-    assert cols["updated_at"] == {"type": "datetime", "nullable": True}
-    # soft-delete column injected from uses_soft_deletes
-    assert cols["deleted_at"] == {"type": "datetime", "nullable": True}
+    # timestamps expand to nullable datetime columns stamped CURRENT_TIMESTAMP,
+    # exactly as the Blueprint's timestamps() creates them
+    for stamp in ("created_at", "updated_at"):
+        assert cols[stamp]["type"] == "datetime"
+        assert cols[stamp]["nullable"] is True
+        assert cols[stamp]["params"] == {"use_current": True}
+    # soft-delete column injected from uses_soft_deletes, with no default
+    assert cols["deleted_at"]["type"] == "datetime"
+    assert cols["deleted_at"]["nullable"] is True
+    assert cols["deleted_at"]["params"] == {}
     # declared nullability honoured
     assert cols["note"]["nullable"] is True
     assert cols["name"]["nullable"] is False
@@ -69,7 +74,7 @@ def test_declared_columns_harvests_raw_sql_added_columns():
         ],
     }
 
-    cols = cmd._declared_columns(model)
+    cols = declared_columns(model)
     assert "search_vector" in cols
     # Raw-SQL columns: type unknown (skips type check), nullable unknown.
     assert cols["search_vector"]["nullable"] is None

@@ -196,6 +196,13 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
         builder.without_overlapping(
             timeout=int(spec.get("lock_timeout", 86400)),
         )
+    # Same before-the-terminal-call rule: ``catch_up`` recovers a fire that
+    # fell inside a scheduler restart, ``executor`` moves the entry onto a
+    # named pool declared in the driver settings.
+    if spec.get("catch_up"):
+        builder.catch_up()
+    if spec.get("executor"):
+        builder.executor(spec["executor"])
 
     if trigger == "interval":
         builder.interval(

@@ -16,11 +16,16 @@ Honest limitations, by design:
   Explicit keys added on top of such a base ARE captured. Publishing a closed
   schema for a payload we cannot fully see would swap "we cannot introspect
   this" for a confident wrong answer, which is worse than saying so.
+* A subclass that defines no method at all — only class attributes, the
+  switches a base serializer branches on — serializes through its base, so it
+  takes the base's schema under its own name. A key such a switch can drop is
+  set in a branch, which the base schema already leaves optional.
 """
 
 from __future__ import annotations
 
 import ast
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +70,7 @@ class ResourceSchemaExtractor:
 
     def extract(self) -> dict[str, dict[str, Any]]:
         schemas: dict[str, dict[str, Any]] = {}
+        attribute_only: dict[str, list[str]] = {}
         for path in sorted(self._dir.rglob("*.py")):
             if path.name in _SKIPPED_MODULES:
                 continue
@@ -75,7 +81,30 @@ class ResourceSchemaExtractor:
                 schema = self._class_schema(node)
                 if schema is not None:
                     schemas[node.name] = schema
+                elif node.bases and self._defines_no_method(node):
+                    attribute_only[node.name] = [
+                        name for base in node.bases if (name := _callee_name(base))
+                    ]
+        # Resolve subclass chains in any order: each pass settles every class
+        # whose base already has a schema, until a pass settles none.
+        while attribute_only:
+            settled = {
+                name: base
+                for name, bases in attribute_only.items()
+                if (base := next((b for b in bases if b in schemas), None))
+            }
+            if not settled:
+                break
+            for name, base in settled.items():
+                schemas[name] = {**copy.deepcopy(schemas[base]), "x-resource": name}
+                del attribute_only[name]
         return schemas
+
+    @staticmethod
+    def _defines_no_method(cls: ast.ClassDef) -> bool:
+        return not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) for node in cls.body
+        )
 
     def _serializer_method(self, cls: ast.ClassDef) -> ast.AST | None:
         for fn in cls.body:

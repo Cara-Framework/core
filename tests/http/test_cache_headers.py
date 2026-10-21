@@ -17,6 +17,7 @@ tests pin the emitted header STRINGS, not just "some header was set":
 from __future__ import annotations
 
 from cara.http import (
+    append_vary,
     apply_no_cache,
     apply_private_cache,
     apply_public_swr_cache,
@@ -107,3 +108,33 @@ class TestApplyNoCache:
         apply_no_cache(response)
 
         assert response.header("Vary") is None
+
+
+class TestAppendVary:
+    """Each layer adds its own token without dropping the others'."""
+
+    class _HeadersResponse:
+        """``append_vary`` reads ``response.headers`` like the middleware do."""
+
+        def __init__(self, vary=None):
+            self.headers = {} if vary is None else {"Vary": vary}
+
+        def header(self, name, value):
+            self.headers[name] = value
+            return self
+
+    def test_merges_case_insensitively_and_keeps_order(self):
+        response = self._HeadersResponse()
+
+        append_vary(response, "Accept-Encoding")
+        append_vary(response, "Authorization")
+        append_vary(response, "accept-encoding")
+
+        assert response.headers["Vary"] == "Accept-Encoding, Authorization"
+
+    def test_keeps_tokens_another_layer_set(self):
+        response = self._HeadersResponse("Accept-Encoding, Authorization")
+
+        append_vary(response, "Origin")
+
+        assert response.headers["Vary"] == "Accept-Encoding, Authorization, Origin"

@@ -326,7 +326,7 @@ def _amqp_delivery_retry_quarantined_terminal_hooks(
         operator=operator,
         reason=reason,
     )
-    self.refresh_delivery_metrics()
+    self.refresh_delivery_metrics(force=True)
 
 
 def _amqp_delivery_refresh_delayed_job_metrics(self) -> None:
@@ -334,9 +334,34 @@ def _amqp_delivery_refresh_delayed_job_metrics(self) -> None:
     self._delayed_store.refresh_metrics()
 
 
-def _amqp_delivery_refresh_delivery_metrics(self) -> dict[str, Any]:
-    """Refresh bounded ledger snapshots owned by relay processes."""
+def _amqp_delivery_refresh_delivery_metrics(
+    self,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Refresh the relay-owned ledger gauges, at most once per cadence.
+
+    The relay and hooks loops call this after every iteration, which is
+    four times a second when idle and back to back under load, and the
+    snapshot aggregates the whole retained ledger. Run at that rate, the
+    scan dominated every relay cycle: per-queue broker windows were refilled
+    only once per scan, so publication slowed as history grew. Inside
+    :attr:`DELIVERY_METRICS_REFRESH_SECONDS` of the last snapshot this
+    returns it unchanged — far inside the staleness alert's horizon.
+    ``force`` is for a rare operator action whose effect should show at once.
+    """
+    now = time.monotonic()
+    refreshed_at = self._delivery_metrics_refreshed_at
+    if (
+        not force
+        and self._delivery_metrics_snapshot is not None
+        and refreshed_at is not None
+        and now - refreshed_at < self.DELIVERY_METRICS_REFRESH_SECONDS
+    ):
+        return self._delivery_metrics_snapshot
     snapshot = self._delivery_store.delivery_metrics()
+    self._delivery_metrics_refreshed_at = now
+    self._delivery_metrics_snapshot = snapshot
     try:
         for status, count in snapshot["statuses"].items():
             MetricsBase.queue_delivery_ledger_jobs.labels(status=status).set(count)

@@ -55,10 +55,10 @@ from pathlib import Path
 
 from cara.commands.CommandBase import CommandBase
 from cara.commands.core.MakeMigrationCommand import MakeMigrationCommand
-from cara.commands.core.SchemaCheckCommand import SchemaCheckCommand
 from cara.commands.OptionalDependencyError import missing_optional
 from cara.decorators import command
 from cara.eloquent.migrations import ModelDiscoverer
+from cara.schema import declared_index_names
 from cara.support import paths
 
 from .MigrationFile import MigrationFile
@@ -74,7 +74,7 @@ _GENERATED_NAME_RE = re.compile(
 
 # ``CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] <name> ON <table>`` —
 # both halves captured, because rule 5 is about WHICH table's index escaped its
-# model. SchemaCheckCommand's sibling regex captures only the name.
+# model. The model side's names come from ``cara.schema.declared_index_names``.
 _CREATE_INDEX_ON_RE = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
     r"(?:IF\s+NOT\s+EXISTS\s+)?\"?(?P<name>\w+)\"?\s+ON\s+"
@@ -654,5 +654,5 @@ class MigrationsCheckCommand(CommandBase):
             table = model.get("table")
             if not table or not model.get("has_fields_method"):
                 continue
-            indexes[table] = SchemaCheckCommand._declared_indexes(model)
+            indexes[table] = declared_index_names(model, table)
         return indexes

@@ -177,12 +177,21 @@ def _process_message(
             allow_expired=True,
         )
         verified_payload = envelope["payload"]
-        queue_driver = Queue.driver("amqp")
-        delivery_store = queue_driver.delivery_store
-        claim = delivery_store.claim_execution(
-            body=body,
-            payload=verified_payload,
-        )
+        try:
+            delivery_store = Queue.driver("amqp").delivery_store
+            claim = delivery_store.claim_execution(
+                body=body,
+                payload=verified_payload,
+            )
+        except DeliverySettlementError:
+            raise
+        except Exception as exc:
+            # A verified envelope is trusted work whose ledger row could not
+            # be leased: an outage, not a job failure. Routing it to the DLX
+            # would drop the only broker copy while the row stays
+            # ``published`` and holds its queue's broker window, so leave
+            # the delivery unacknowledged and reconnect.
+            raise DeliverySettlementError("Queue delivery claim is unavailable.") from exc
         if claim.outcome == "retry_scheduled":
             retry_db_job_id = verified_payload.get("db_job_id")
             if tracker is None or retry_db_job_id is None:

@@ -23,6 +23,7 @@ boot fine.
 from __future__ import annotations
 
 import importlib
+from urllib.parse import quote
 
 from cara.broadcasting.Broadcasting import Broadcasting
 from cara.broadcasting.drivers import (
@@ -116,7 +117,11 @@ class BroadcastingProvider(DeferredProvider):
             )
 
         if password:
-            redis_url = f"{scheme}://:{password}@{host}:{port}/{db}"
+            # redis-py splits the URL with ``urlparse`` and unquotes the
+            # credentials, so a raw ``/``, ``#`` or ``?`` cut the password
+            # into the host part and a ``%41`` authenticated as ``A``.
+            credential = quote(str(password), safe="")
+            redis_url = f"{scheme}://:{credential}@{host}:{port}/{db}"
         else:
             redis_url = f"{scheme}://{host}:{port}/{db}"
 

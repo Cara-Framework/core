@@ -277,61 +277,38 @@ def _qb_cursor(self, chunk_size: int = 1000):
         for receipt in Receipt.cursor(chunk_size=500):
             process_receipt(receipt)
     """
-    # Use offset-based pagination for cursor
+    # ROOT CAUSE: each chunk used to be a fresh ``QueryBuilder(model=...)``
+    # with the wheres copied over field by field. The constructor reseeds the
+    # global scopes from the model, so ``with_trashed()``, ``only_trashed()``
+    # and ``without_global_scopes()`` were undone (``only_trashed()`` compiled
+    # to ``deleted_at IS NOT NULL AND deleted_at IS NULL``: zero rows), and
+    # the caller's own limit/offset were overwritten. A clone carries the
+    # builder's exact state, and the pages run inside the caller's window.
+    base = 0 if self._offset is False else self._offset
+    cap = None if self._limit is False else self._limit
     offset = 0
 
-    while True:
-        # Create a CLEAN copy of current builder with all constraints
-        chunk_builder = QueryBuilder(
-            grammar=self.grammar,
-            connection_class=self.connection_class,
-            connection=self.connection,
-            connection_driver=self._connection_driver,
-            model=self._model,
-            database_manager=self._db_manager,
+    while cap is None or offset < cap:
+        size = chunk_size if cap is None else min(chunk_size, cap - offset)
+        chunk_builder = self.clone()
+        chunk_builder._limit = size
+        chunk_builder._offset = base + offset
+
+        chunk_result = (
+            chunk_builder.new_connection().query(
+                chunk_builder.to_qmark(), chunk_builder._bindings
+            )
+            or []
         )
-
-        # Copy table
-        chunk_builder._table = self._table
-
-        # Copy ALL query constraints (this is the key fix!)
-        chunk_builder._wheres = tuple(self._wheres) if self._wheres else ()
-        chunk_builder._columns = tuple(self._columns) if self._columns else ()
-        chunk_builder._order_by = tuple(self._order_by) if self._order_by else ()
-        chunk_builder._group_by = tuple(self._group_by) if self._group_by else ()
-        chunk_builder._having = tuple(self._having) if self._having else ()
-        chunk_builder._joins = tuple(self._joins) if self._joins else ()
-        chunk_builder._distinct = self._distinct
-        chunk_builder._aggregates = tuple(self._aggregates) if self._aggregates else ()
-
-        # Copy eager loading settings
-        chunk_builder._eager_relation = self._eager_relation
-
-        # Apply chunk-specific limit and offset
-        chunk_builder._limit = chunk_size
-        chunk_builder._offset = offset
-
-        # Generate query and execute (chunk_builder is independent)
-        query = chunk_builder.to_qmark()
-        bindings = chunk_builder._bindings.copy()
-
-        chunk_result = chunk_builder.new_connection().query(query, bindings) or []
-
-        # If no more results, break the loop
         if not chunk_result:
             break
 
-        # Process each record in the chunk
         for record in chunk_result:
-            # Use chunk_builder for model hydration to maintain eager loading
-            model_instance = chunk_builder.prepare_result(record, collection=False)
-            yield model_instance
+            # chunk_builder hydrates so its eager loads apply to each record.
+            yield chunk_builder.prepare_result(record, collection=False)
 
-        # Move to next chunk
-        offset += chunk_size
-
-        # If we got less than chunk_size, we've reached the end
-        if len(chunk_result) < chunk_size:
+        offset += size
+        if len(chunk_result) < size:
             break
 
 

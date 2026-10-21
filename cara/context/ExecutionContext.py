@@ -136,6 +136,26 @@ class ExecutionContext:
                 product_id,
                 include_counts=True,
             )
+
+        The loop's default executor is shared by every caller in the
+        process. A call whose duration an outside party decides belongs on
+        a :class:`~cara.context.ThreadLane.ThreadLane` instead.
+        """
+        return await asyncio.get_running_loop().run_in_executor(
+            None,
+            ExecutionContext.bind_to_thread(func, *args, **kwargs),
+        )
+
+    @staticmethod
+    def bind_to_thread(
+        func: Callable[..., _T], *args: Any, **kwargs: Any
+    ) -> Callable[[], _T]:
+        """``func(*args, **kwargs)`` bound to a copy of the caller's context.
+
+        The returned callable is what an executor thread runs — the
+        default executor here, or a lane's own pool: it carries the
+        caller's context vars across the boundary, but never the caller's
+        DB transaction registry.
         """
         ctx = copy_context()
 
@@ -162,10 +182,7 @@ class ExecutionContext:
             reset_registry()
             return func(*args, **kwargs)
 
-        return await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: ctx.run(_runner),
-        )
+        return lambda: ctx.run(_runner)
 
 
 class _ExecutionContextManager:

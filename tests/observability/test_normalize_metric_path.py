@@ -1,8 +1,8 @@
-"""Route-label normalization — the cardinality guard for HTTP metrics.
+"""Route normalization — the cardinality guard for HTTP server spans.
 
 ``normalize_metric_path`` collapses dynamic URL segments into placeholders so
-``{namespace}_http_requests_total{route=...}`` (emitted by
-``RecordPrometheusMetrics``) carries a BOUNDED label set. The regression that
+the ``http.route`` attribute and span name ``TraceRequests`` emits carry a
+BOUNDED value set. The regression that
 motivated the prefixed-public-id rule: ``MakesPublicId`` ids look like
 ``CHN01KX…`` — not all-digit, not a UUID, and not exactly 26 alnum chars — so
 the older heuristics left them intact and every channel/order/case id spawned

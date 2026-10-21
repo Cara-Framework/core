@@ -37,7 +37,7 @@ def _qb_cursor_paginate(
     Args:
         per_page: Page size.
         cursor: Opaque cursor string from a previous response.
-        column: Column to keyset-paginate by (must be unique + indexed).
+        column: Column to keyset-paginate by (must be NOT NULL, unique + indexed).
         direction: "asc" or "desc".
 
     Returns:
@@ -112,6 +112,10 @@ def _qb_cursor_paginate(
             if not isinstance(last, dict)
             else last.get(primary_key)
         )
+        # A NULL sort value has no keyset to seek past: ``col > NULL`` is
+        # never true, so the next page could only repeat or skip rows.
+        if value is None:
+            raise ValueError("cursor column must be NOT NULL")
         next_cursor = encode_cursor(
             value,
             row_id,

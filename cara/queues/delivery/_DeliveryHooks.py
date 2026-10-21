@@ -176,12 +176,14 @@ def _delivery_settle(
     affected = database.statement(
         f"UPDATE {self.table} SET status = %s, completed_at = %s, "
         "terminal_reason = %s, lease_token = NULL, "
-        "lease_expires_at = NULL, updated_at = %s "
+        "lease_expires_at = NULL, post_hooks_completed_at = "
+        "COALESCE(post_hooks_completed_at, %s), updated_at = %s "
         "WHERE job_id = %s AND status = %s AND lease_token = %s",
         [
             status,
             now,
             self._safe_error(reason) if reason else None,
+            now if status in self.HOOKLESS_TERMINAL_STATUSES else None,
             now,
             job_id,
             self.STATUS_PROCESSING,
@@ -256,7 +258,8 @@ def _delivery_expire_due(self, batch_size: int = 5000) -> int:
                 "publish_status = CASE WHEN published_at IS NOT NULL "
                 "THEN %s ELSE %s END, "
                 "publish_lease_token = NULL, "
-                "publish_lease_expires_at = NULL, updated_at = %s "
+                "publish_lease_expires_at = NULL, post_hooks_completed_at = "
+                "COALESCE(post_hooks_completed_at, %s), updated_at = %s "
                 "WHERE job_id = %s AND status IN (%s, %s)",
                 [
                     target,
@@ -264,6 +267,7 @@ def _delivery_expire_due(self, batch_size: int = 5000) -> int:
                     reason,
                     self.PUBLISH_PUBLISHED,
                     self.PUBLISH_FAILED,
+                    now if target in self.HOOKLESS_TERMINAL_STATUSES else None,
                     now,
                     job_id,
                     self.STATUS_PENDING,
@@ -291,7 +295,7 @@ def _delivery_recover_stale_executions(
     self,
     batch_size: int = 5000,
 ) -> dict[str, int]:
-    """Recover worker crashes through the DB-owned publication outbox.
+    """Recover worker crashes and lost broker copies through the outbox.
 
     Quorum queues count channel/session redeliveries toward their delivery
     limit. A worker crash therefore cannot rely on repeatedly reconnecting
@@ -300,6 +304,16 @@ def _delivery_recover_stale_executions(
     resets the delivery to the publication outbox and its tracker to
     ``pending``. A live-lease broker duplicate can then be ACKed safely:
     PostgreSQL will republish the immutable signed envelope.
+
+    The same transaction recovers a published copy no worker ever claimed.
+    The broker can drop it without touching PostgreSQL — the quorum
+    delivery limit dead-letters a copy whose claim kept failing, an
+    untrusted-bytes NACK routes it to the DLX, a broker loses it — and the
+    row would otherwise stay ``pending``/``published`` until envelope
+    expiry, holding a slot of its queue's broker window the whole time.
+    Once a published row has gone unclaimed for a full execution lease it
+    returns to the publication outbox; a surviving broker copy is fenced by
+    ``claim_execution`` like any other duplicate.
     """
     limit = self._bounded_int(
         batch_size,
@@ -309,7 +323,7 @@ def _delivery_recover_stale_executions(
     )
     now = pendulum.now("UTC")
     database = self._db()
-    result = {"requeued": 0, "reconciled": 0}
+    result = {"requeued": 0, "reconciled": 0, "unclaimed": 0}
     with database.transaction():
         rows = (
             database.select(
@@ -417,13 +431,15 @@ def _delivery_recover_stale_executions(
                 f"UPDATE {self.table} SET status = %s, completed_at = %s, "
                 "terminal_reason = %s, lease_token = NULL, "
                 "lease_expires_at = NULL, publish_lease_token = NULL, "
-                "publish_lease_expires_at = NULL, updated_at = %s "
+                "publish_lease_expires_at = NULL, post_hooks_completed_at = "
+                "COALESCE(post_hooks_completed_at, %s), updated_at = %s "
                 "WHERE job_id = %s AND status = %s "
                 "AND lease_token = %s AND lease_expires_at <= %s",
                 [
                     target_status,
                     now,
                     reason,
+                    now if target_status in self.HOOKLESS_TERMINAL_STATUSES else None,
                     now,
                     job_id,
                     self.STATUS_PROCESSING,
@@ -437,11 +453,43 @@ def _delivery_recover_stale_executions(
                 )
             result["reconciled"] += 1
 
+        unclaimed = database.statement(
+            f"UPDATE {self.table} AS delivery SET publish_status = %s, "
+            "publish_retry_at = %s, published_at = NULL, updated_at = %s "
+            f"FROM (SELECT job_id FROM {self.table} "
+            "WHERE status = %s AND publish_status = %s "
+            "AND published_at <= %s AND expires_at > %s "
+            "ORDER BY published_at LIMIT %s FOR UPDATE SKIP LOCKED"
+            ") AS unclaimed WHERE delivery.job_id = unclaimed.job_id",
+            [
+                self.PUBLISH_PENDING,
+                now,
+                now,
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+                now.subtract(seconds=self.execution_lease_seconds),
+                now,
+                limit,
+            ],
+        )
+        try:
+            result["unclaimed"] = int(unclaimed or 0)
+        except TypeError, ValueError:
+            result["unclaimed"] = 0
+
     if result["requeued"]:
         Log.warning(
             "%s stale queue execution lease(s) returned to the durable "
             "publication outbox after worker crashes.",
             result["requeued"],
+            category="cara.queue.delivery",
+        )
+    if result["unclaimed"]:
+        Log.warning(
+            "%s published queue deliveries went unclaimed for a full "
+            "execution lease and returned to the durable publication "
+            "outbox; their broker copies were dead-lettered or lost.",
+            result["unclaimed"],
             category="cara.queue.delivery",
         )
     return result

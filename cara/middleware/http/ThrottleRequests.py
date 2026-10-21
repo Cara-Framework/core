@@ -26,9 +26,10 @@ class ThrottleRequests(Middleware):
     only form. ``throttle:60,1`` built an unreviewed budget at the call site,
     outside the one file every other ceiling lives in, and no route used it.
 
-    The parameter is deliberately unannotated: ``MiddlewareParameterParser``
-    coerces raw route strings through ``__init__`` annotations, and an ``int``
-    annotation once turned ``throttle:api`` into a silent no-op.
+    ``MiddlewareParameterParser`` coerces the route string through the
+    ``__init__`` annotation, so ``limiter`` is a ``str``: an ``int`` annotation
+    once turned ``throttle:api`` into a silent no-op (it now refuses with a
+    ``ConfigurationException``).
 
     An allowed response carries the IETF ``RateLimit-Policy`` and ``RateLimit``
     headers (draft-ietf-httpapi-ratelimit-headers); a refusal raises
@@ -42,7 +43,7 @@ class ThrottleRequests(Middleware):
     twice; a middleware that exists to skip itself is not a feature.
     """
 
-    def __init__(self, application, limiter=None):
+    def __init__(self, application, limiter: str | None = None):
         super().__init__(application)
         self.limiter_name = limiter
 

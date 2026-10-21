@@ -65,12 +65,11 @@ class CanPerform(Middleware):
         if self.resource:
             parameters.append(self.resource)
 
-        # Add route parameters if available
-        if hasattr(request, "route_params"):
-            for key, value in request.route_params.items():
-                # Try to resolve model instances from route parameters
-                if key.endswith("_id") or key == "id":
-                    # This could be extended to auto-resolve models
-                    parameters.append(value)
+        # Add the matched route's id parameters
+        for key, value in request.params.items():
+            # Try to resolve model instances from route parameters
+            if key.endswith("_id") or key == "id":
+                # This could be extended to auto-resolve models
+                parameters.append(value)
 
         return parameters

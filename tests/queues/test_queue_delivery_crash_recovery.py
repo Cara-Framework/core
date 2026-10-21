@@ -9,6 +9,7 @@ import pendulum
 import pytest
 
 from cara.commands.core.JobProcessor import JobProcessor
+from cara.configuration import Configuration
 from cara.queues.contracts import Queueable, ShouldQueue
 from cara.queues.delivery import DeliveryClaim, QueueJobDeliveryStore
 from cara.queues.serializers import SignedJsonJobSerializer
@@ -17,6 +18,15 @@ from cara.queues.tracking import JobTracker
 _KID = "crash-recovery-current"
 _KEY = "crash-recovery-signing-key-" * 3
 _JOB_ID = "44444444-4444-4444-8444-444444444444"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_configuration(monkeypatch):
+    # ``process_message`` reads signing config before the patched envelope
+    # inspection; without an explicit authority these tests only passed
+    # after some earlier test happened to install one.
+    monkeypatch.setattr(Configuration, "_instance", None)
+    Configuration.empty()
 
 
 class CrashRecoveryJob(ShouldQueue, Queueable):
@@ -124,6 +134,19 @@ class _CrashDB:
         raise AssertionError(f"Unexpected SELECT ONE: {sql}")
 
     def statement(self, sql, params):
+        if ") AS unclaimed WHERE" in sql:
+            unclaimed = (
+                self.row["status"] == params[3]
+                and self.row["publish_status"] == params[4]
+                and self.row.get("published_at") is not None
+                and self.row["published_at"] <= params[5]
+                and self.row["expires_at"] > params[6]
+            )
+            if unclaimed:
+                self.row["publish_status"] = params[0]
+                self.row["publish_retry_at"] = params[1]
+                self.row["published_at"] = None
+            return int(unclaimed)
         if "SET status = %s, publish_status = %s" in sql:
             self.row.update(
                 {
@@ -314,6 +337,145 @@ def test_stale_worker_lease_returns_to_outbox_and_republishes_same_envelope():
 
     assert first.outcome == "claimed"
     assert duplicate.outcome == "live_lease"
+
+
+def _store(db, driver, **options):
+    return QueueJobDeliveryStore(
+        _Application(db),
+        driver,
+        {
+            "allowed_job_prefixes": (__name__,),
+            "canonical_queues": ("sync", "connector"),
+            "signing_key_id": _KID,
+            "signing_keys": {_KID: _KEY},
+            **options,
+        },
+    )
+
+
+def _published_unclaimed_row(db, *, published_seconds_ago: int) -> None:
+    db.row.update(
+        {
+            "status": "pending",
+            "publish_status": "published",
+            "published_at": pendulum.now("UTC").subtract(seconds=published_seconds_ago),
+            "lease_token": None,
+            "lease_expires_at": None,
+        }
+    )
+    db.tracker_status = "pending"
+
+
+def test_published_copy_unclaimed_for_a_lease_returns_to_the_outbox():
+    # A pre-lease claim failure, the quorum delivery limit or broker loss
+    # drops the only broker copy without touching PostgreSQL; the row must
+    # not hold its broker-window slot until envelope expiry.
+    body, payload = _envelope()
+    db = _CrashDB(body, payload)
+    driver = _PublishingDriver()
+    store = _store(db, driver)
+    _published_unclaimed_row(
+        db,
+        published_seconds_ago=store.execution_lease_seconds + 1,
+    )
+
+    recovery = store.recover_stale_executions(10)
+
+    assert recovery == {"requeued": 0, "reconciled": 0, "unclaimed": 1}
+    assert db.row["publish_status"] == "pending"
+    assert db.row["published_at"] is None
+
+    result = store.publish_due()
+
+    assert result["published"] == 1
+    assert driver.published == [(body, payload)]
+    assert db.row["publish_status"] == "published"
+    assert store.claim_execution(body=body, payload=payload).outcome == "claimed"
+
+
+def test_published_copy_within_its_lease_is_not_republished():
+    body, payload = _envelope()
+    db = _CrashDB(body, payload)
+    driver = _PublishingDriver()
+    store = _store(db, driver)
+    _published_unclaimed_row(
+        db,
+        published_seconds_ago=store.execution_lease_seconds - 60,
+    )
+
+    result = store.publish_due()
+
+    assert result["unclaimed_requeued"] == 0
+    assert result["published"] == 0
+    assert driver.published == []
+    assert db.row["publish_status"] == "published"
+
+
+def test_signed_timeout_beyond_a_shortened_lease_is_clamped_not_rejected():
+    body, payload = _envelope()
+    db = _CrashDB(body, payload)
+    db.row.update({"status": "pending", "lease_token": None, "lease_expires_at": None})
+    store = _store(
+        db,
+        _PublishingDriver(),
+        delivery_execution_lease_seconds=200,
+        delivery_execution_lease_grace_seconds=30,
+        delivery_default_job_timeout_seconds=100,
+    )
+    assert payload["timeout_seconds"] > 200 - 30
+
+    claim = store.claim_execution(body=body, payload=payload)
+
+    assert claim.outcome == "claimed"
+    assert db.row["lease_expires_at"] <= pendulum.now("UTC").add(seconds=200)
+
+
+def test_ledger_outage_at_claim_leaves_the_verified_delivery_unacked(monkeypatch):
+    from cara.commands.core.DeliverySettlementError import DeliverySettlementError
+    from cara.exceptions.types.DatabaseUnavailableException import (
+        DatabaseUnavailableException,
+    )
+
+    execution = importlib.import_module("cara.commands.core._JobExecution")
+    payload = {"job_id": _JOB_ID, "db_job_id": 91, "queue": "sync"}
+
+    def _claim_execution(**_kwargs):
+        raise DatabaseUnavailableException("connection reset by peer")
+
+    delivery_store = SimpleNamespace(claim_execution=_claim_execution)
+    monkeypatch.setattr(
+        execution.SignedJsonJobSerializer,
+        "inspect_envelope",
+        lambda *_args, **_kwargs: {"payload": payload},
+    )
+    queue_service = SimpleNamespace(
+        driver=lambda *_args, **_kwargs: SimpleNamespace(delivery_store=delivery_store)
+    )
+    application = SimpleNamespace(
+        has=lambda _key: False,
+        make=lambda key: (
+            queue_service if key == "queue" else (_ for _ in ()).throw(KeyError(key))
+        ),
+    )
+    monkeypatch.setattr(builtins, "app", lambda: application, raising=False)
+    settlements: list[tuple[str, int]] = []
+    channel = SimpleNamespace(
+        basic_ack=lambda *, delivery_tag: settlements.append(("ack", delivery_tag)),
+        basic_nack=lambda *, delivery_tag, requeue: settlements.append(
+            ("nack", delivery_tag)
+        ),
+    )
+
+    with pytest.raises(DeliverySettlementError) as raised:
+        JobProcessor.process_message(
+            channel,
+            SimpleNamespace(delivery_tag=29),
+            b"signed-envelope",
+            queue_name="sync",
+        )
+
+    assert isinstance(raised.value.__cause__, DatabaseUnavailableException)
+    assert settlements == []
 
 
 def test_worker_receipt_closes_confirm_to_ledger_cas_crash_window():

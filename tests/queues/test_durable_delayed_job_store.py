@@ -13,6 +13,7 @@ from cara.exceptions import QueueException
 from cara.queues.contracts import Queueable, ShouldQueue
 from cara.queues.delay import DurableDelayedJobStore
 from cara.queues.serializers import SignedJsonJobSerializer
+from cara.queues.tracking.JobTracker import JobTracker
 
 _KEY = "delayed-queue-signing-key-" * 3
 _KID = "delayed-current"
@@ -325,9 +326,7 @@ def test_worker_acks_only_after_atomic_retry_acceptance(monkeypatch):
         "sync",
         "lease-77",
         SimpleNamespace(
-            require_job_status_strict=lambda job_id, status: events.append(
-                ("tracker", job_id, status)
-            )
+            ensure_retry_progress_strict=lambda job_id: events.append(("tracker", job_id))
         ),
         9,
     )
@@ -337,6 +336,66 @@ def test_worker_acks_only_after_atomic_retry_acceptance(monkeypatch):
     assert options["source_delivery_job_id"] == "source-77"
     assert options["source_delivery_lease_token"] == "lease-77"
     assert options["tenant_id"] == 5
+
+
+def test_retry_settlement_accepts_a_child_that_already_started(monkeypatch):
+    """The child shares ``db_job_id``; once its row commits another worker may
+    claim it before this source's settlement read gets through. Exact equality
+    with ``retrying`` turned that monotonic progress into a spurious
+    ``DeliverySettlementError`` and a consumer reconnect."""
+
+    class _TrackerModel:
+        STATUS_RETRYING = "retrying"
+        STATUS_PROCESSING = "processing"
+        reads = 0
+
+        @classmethod
+        def find(cls, job_id):
+            cls.reads += 1
+            if cls.reads == 1:
+                raise RuntimeError("database read dropped")
+            return SimpleNamespace(id=job_id, status="processing")
+
+    class _RetryDriver:
+        @staticmethod
+        def _apply_retry_jitter(delay, instance):
+            return delay
+
+    queue_service = SimpleNamespace(
+        driver=lambda: _RetryDriver(),
+        later=lambda *_args, **_options: None,
+    )
+    monkeypatch.setattr(
+        builtins,
+        "app",
+        lambda: _FacadeApplication(queue_service),
+        raising=False,
+    )
+    monkeypatch.setattr(JobProcessor, "_SETTLEMENT_BACKOFF_SECONDS", (0.0,) * 5)
+    acks = []
+
+    JobProcessor._requeue_with_delay(
+        SimpleNamespace(basic_ack=lambda *, delivery_tag: acks.append(delivery_tag)),
+        SimpleNamespace(delivery_tag=78),
+        {
+            "attempts": 0,
+            "queue": "sync",
+            "job_id": "source-78",
+            "db_job_id": 9,
+            "_tenant": 5,
+            "_tenant_mode": "tenant",
+            "_otel": {},
+        },
+        SimpleNamespace(retry_backoff=[1]),
+        RuntimeError("retry"),
+        "sync",
+        "lease-78",
+        JobTracker(_TrackerModel),
+        9,
+    )
+
+    assert acks == [78]
+    assert _TrackerModel.reads == 2
 
 
 def test_central_retry_reenters_verified_central_scope(monkeypatch):
@@ -375,7 +434,7 @@ def test_central_retry_reenters_verified_central_scope(monkeypatch):
         RuntimeError("retry"),
         "sync",
         "central-lease",
-        SimpleNamespace(require_job_status_strict=lambda *_args: None),
+        SimpleNamespace(ensure_retry_progress_strict=lambda *_args: None),
         9,
     )
 
@@ -418,7 +477,7 @@ def test_worker_leaves_source_unacked_when_retry_acceptance_fails(monkeypatch):
             RuntimeError("retry"),
             "sync",
             "lease-88",
-            SimpleNamespace(require_job_status_strict=lambda *_args: None),
+            SimpleNamespace(ensure_retry_progress_strict=lambda *_args: None),
             9,
         )
 

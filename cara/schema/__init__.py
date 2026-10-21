@@ -11,6 +11,8 @@ Four modules, in dependency order:
 * ``Vocabulary`` — the type tables both ``schema:check`` and ``schema:plan``
   read, stated once so a category added on one side cannot go missing on the
   other.
+* ``Defaults`` — a column DEFAULT, declared and deployed, read into one
+  comparable form for the same reason.
 * ``LiveSchema`` — read-only introspection of a deployed database, plus the
   flattening of a model's declared fields into concrete columns.
 * ``Operation`` — one change as a typed, safety-classified, reversible record.
@@ -53,11 +55,16 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "connection_params": (".Scratch", "connection_params"),
     "created_objects": (".Objects", "created_objects"),
     "declared_columns": (".LiveSchema", "declared_columns"),
+    "declared_default_sql": (".Defaults", "declared_default_sql"),
     "declared_foreign_keys": (".Objects", "declared_foreign_keys"),
+    "declared_index_names": (".Objects", "declared_index_names"),
+    "default_literal": (".Defaults", "default_literal"),
+    "defaults_match": (".Defaults", "defaults_match"),
     "derive_name": (".Scratch", "derive_name"),
     "drop": (".Scratch", "drop"),
     "from_dict": (".Operation", "from_dict"),
     "introspect": (".LiveSchema", "introspect"),
+    "live_default_sql": (".Defaults", "live_default_sql"),
     "migration_to_run": (".Operation", "migration_to_run"),
     "missing_checks": (".Objects", "missing_checks"),
     "missing_foreign_keys": (".Objects", "missing_foreign_keys"),
@@ -106,11 +113,16 @@ __all__ = [
     "connection_params",
     "created_objects",
     "declared_columns",
+    "declared_default_sql",
     "declared_foreign_keys",
+    "declared_index_names",
+    "default_literal",
+    "defaults_match",
     "derive_name",
     "drop",
     "from_dict",
     "introspect",
+    "live_default_sql",
     "migration_to_run",
     "missing_checks",
     "missing_foreign_keys",

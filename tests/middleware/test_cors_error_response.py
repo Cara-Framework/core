@@ -268,3 +268,30 @@ def test_credentials_header_is_withheld_alongside_a_wildcard_origin():
 
     assert "Access-Control-Allow-Origin" not in resp.headers
     assert "Access-Control-Allow-Credentials" not in resp.headers
+
+
+# ── Vary is merged with the inner layers' tokens ─────────────────────
+
+
+def test_cors_vary_keeps_the_tokens_inner_middleware_added():
+    """HandleCors unwinds after CompressResponses (``Accept-Encoding``) and
+    AuthenticateUser (``Authorization``); setting ``Vary: Origin`` outright
+    dropped both, so a shared cache could serve gzip bytes to a client that
+    never accepted gzip."""
+    mw = _credentialed_middleware(["https://app.example.com"])
+    resp = _FakeResponse()
+    resp.headers["Vary"] = "Accept-Encoding, Authorization"
+
+    mw._add_cors_headers(_make_request(), resp)
+
+    assert resp.headers["Vary"] == "Accept-Encoding, Authorization, Origin"
+
+
+def test_cors_vary_does_not_duplicate_an_existing_origin_token():
+    mw = _credentialed_middleware(["https://app.example.com"])
+    resp = _FakeResponse()
+    resp.headers["Vary"] = "origin"
+
+    mw._add_cors_headers(_make_request(), resp)
+
+    assert resp.headers["Vary"] == "origin"

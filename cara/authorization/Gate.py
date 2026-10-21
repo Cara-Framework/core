@@ -249,10 +249,16 @@ class Gate(GateContract):
             self._log(f"policy {policy_ref!r} could not be instantiated: {exc}")
             return AuthorizationResponse(False, "Authorization check failed.")
 
-        # policy.before hook may short-circuit.
+        # policy.before hook may short-circuit. Fail closed like the gate's
+        # own before-callbacks: a DENY-FIRST hook that crashes must not
+        # defer to the ability method, whose True would then widen access.
         before = getattr(policy, "before", None)
         if callable(before):
-            pre = self._safe_hook(before, policy, "before", user, method, *args)
+            try:
+                pre = before(user, method, *args)
+            except Exception as exc:
+                self._log(f"policy before-hook on {type(policy).__name__} raised: {exc}")
+                return AuthorizationResponse(False, "Authorization check failed.")
             if pre is not None:
                 return self._normalize(pre)
 
@@ -270,22 +276,18 @@ class Gate(GateContract):
 
         response = self._normalize(result)
 
-        # policy.after hook may override.
+        # policy.after hook may override; a crashed override keeps the
+        # prior verdict (deny belongs in ``before``).
         after = getattr(policy, "after", None)
         if callable(after):
-            post = self._safe_hook(
-                after, policy, "after", user, method, response.allowed(), *args
-            )
+            try:
+                post = after(user, method, response.allowed(), *args)
+            except Exception as exc:
+                self._log(f"policy after-hook on {type(policy).__name__} raised: {exc}")
+                post = None
             if post is not None:
                 response = self._normalize(post)
         return response
-
-    def _safe_hook(self, hook: Callable, policy: Any, kind: str, *hook_args: Any) -> Any:
-        try:
-            return hook(*hook_args)
-        except Exception as exc:  # a bad hook must not crash a check
-            self._log(f"policy {kind}-hook on {type(policy).__name__} raised: {exc}")
-            return None
 
     def _instantiate_policy(self, policy_ref: Any) -> Any:
         cached = self._policy_cache.get(policy_ref)

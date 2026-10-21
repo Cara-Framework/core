@@ -298,6 +298,77 @@ def test_hook_failure_is_quarantined_at_bounded_attempt_limit():
     assert isinstance(db.row["post_hooks_quarantined_at"], pendulum.DateTime)
 
 
+class _SettlementDB:
+    def __init__(self):
+        self.row = {
+            "job_id": "settled-job-id",
+            "status": "processing",
+            "lease_token": "execution-lease",
+            "completed_at": None,
+            "post_hooks_completed_at": None,
+            "post_hooks_quarantined_at": None,
+            "post_hooks_lease_token": None,
+            "post_hooks_lease_expires_at": None,
+        }
+        self.statements = []
+
+    def statement(self, sql, params):
+        self.statements.append(sql)
+        assert sql.startswith("UPDATE queue_job_delivery SET status = %s")
+        if (
+            self.row["status"] != params[6]
+            or self.row["lease_token"] != params[7]
+            or self.row["job_id"] != params[5]
+        ):
+            return 0
+        self.row.update(
+            {
+                "status": params[0],
+                "completed_at": params[1],
+                "lease_token": None,
+                "post_hooks_completed_at": (
+                    self.row["post_hooks_completed_at"] or params[3]
+                ),
+            }
+        )
+        return 1
+
+    def select(self, sql, params):
+        assert "post_hooks_completed_at IS NULL" in sql
+        due = (
+            self.row["status"] in params[0]
+            and self.row["post_hooks_completed_at"] is None
+            and self.row["post_hooks_quarantined_at"] is None
+        )
+        return [{"job_id": self.row["job_id"]}] if due else []
+
+
+@pytest.mark.parametrize(
+    ("status", "hook_due"),
+    [
+        ("completed", False),
+        ("retry_scheduled", False),
+        ("dead_lettered", True),
+        ("expired", True),
+    ],
+)
+def test_only_statuses_with_a_failed_hook_enter_the_hook_outbox(status, hook_due):
+    # ``queue:hooks`` boots one interpreter per due row; a row with no
+    # callback to run must be settled with its hook phase already complete.
+    db = _SettlementDB()
+    store = _store(db)
+
+    if status == "retry_scheduled":
+        store.mark_retry_scheduled("settled-job-id", "execution-lease", db=db)
+    else:
+        store._settle("settled-job-id", "execution-lease", status, db=db)
+
+    assert len(db.statements) == 1, "the hook stamp rides the settlement write"
+    assert db.row["status"] == status
+    assert (db.row["post_hooks_completed_at"] is None) is hook_due
+    assert store.due_terminal_hook_ids() == (["settled-job-id"] if hook_due else [])
+
+
 class _PublishReleaseDB:
     def __init__(self, affected):
         self.affected = affected
@@ -601,6 +672,7 @@ def test_publish_outage_stops_after_one_broker_attempt():
     store.recover_stale_executions = lambda _limit: {
         "requeued": 0,
         "reconciled": 0,
+        "unclaimed": 0,
     }
     store.expire_due = lambda _limit: 0
     store._claim_next_publish = lambda: claim_calls.append(True) or (row, "publish-token")

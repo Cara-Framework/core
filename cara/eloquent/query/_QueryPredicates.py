@@ -16,7 +16,7 @@ from cara.eloquent.expressions import (
 )
 from cara.exceptions import QueryException
 
-from ._QuerySafety import _is_column_expression
+from ._QuerySafety import _comparison_expression, _is_column_expression
 
 _logger = logging.getLogger("cara.eloquent.query")
 QueryBuilder: type
@@ -279,8 +279,7 @@ def _qb_where(self, column, *args) -> Self:
         )
     elif isinstance(column, dict):
         for key, value in column.items():
-            expression_type = "NULL" if value is None else "value"
-            self._wheres += ((QueryExpression(key, "=", value, expression_type)),)
+            self._wheres += (_comparison_expression(key, "=", value),)
     elif isinstance(value, QueryBuilder):
         self._wheres += (
             (
@@ -292,8 +291,7 @@ def _qb_where(self, column, *args) -> Self:
             ),
         )
     else:
-        expression_type = "NULL" if value is None else "value"
-        self._wheres += ((QueryExpression(column, operator, value, expression_type)),)
+        self._wheres += (_comparison_expression(column, operator, value),)
     return self
 
 

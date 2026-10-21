@@ -126,8 +126,45 @@ def resolve_allow_origin(origin: str, policy: dict[str, Any]) -> str | None:
     return None
 
 
+def cors_headers(origin: str, policy: dict[str, Any]) -> list[tuple[str, str]]:
+    """The full CORS header set for a response to ``origin``, in order.
+
+    Every site emits exactly this list. The exception path used to build its
+    own and had drifted: it never sent ``Access-Control-Expose-Headers`` (so
+    a browser hid ``Retry-After`` and ``X-Request-ID`` on a 429 and the
+    client retried blind), and it sent ``Allow-Credentials: true`` beside no
+    ``Allow-Origin`` at all. ``Vary: Origin`` is in the list because ACAO
+    then depends on the request; callers MERGE it into an existing ``Vary``
+    rather than replace it.
+    """
+    headers: list[tuple[str, str]] = []
+    allow_origin = resolve_allow_origin(origin, policy)
+    if allow_origin is not None:
+        headers.append(("Access-Control-Allow-Origin", allow_origin))
+        if allow_origin != "*":
+            headers.append(("Vary", "Origin"))
+
+    for name, key in (
+        ("Access-Control-Allow-Methods", "allowed_methods"),
+        ("Access-Control-Allow-Headers", "allowed_headers"),
+        ("Access-Control-Expose-Headers", "exposed_headers"),
+    ):
+        if policy.get(key):
+            headers.append((name, ", ".join(policy[key])))
+
+    # Credentials only beside a concrete origin: ``resolve_allow_origin``
+    # fails closed for an off-allowlist origin, and this header with it.
+    if policy.get("supports_credentials") and allow_origin not in (None, "*"):
+        headers.append(("Access-Control-Allow-Credentials", "true"))
+
+    if policy.get("max_age") is not None:
+        headers.append(("Access-Control-Max-Age", str(policy["max_age"])))
+    return headers
+
+
 __all__ = [
     "CORS_DEFAULTS",
+    "cors_headers",
     "load_cors_policy",
     "origin_explicitly_allowed",
     "path_in_cors_scope",

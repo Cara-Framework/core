@@ -96,6 +96,14 @@ def _init_sentry(
         ],
         attach_stacktrace=True,
         send_default_pii=False,
+        # The SDK ships every frame's locals by default, ``__cause__`` frames
+        # included, and its scrubber matches only top-level exact key names.
+        # Tenant credentials travel nested inside differently named locals
+        # (an OAuth client's ``data`` carries the refresh token and client
+        # secret; a request handler's carries the password), so no denylist
+        # can keep them out of the event — the stack trace must carry code
+        # positions only.
+        include_local_variables=False,
         max_breadcrumbs=50,
     )
 

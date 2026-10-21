@@ -465,28 +465,15 @@ class JobTracker:
         """Persist an AMQP settlement fence or fail without ambiguity."""
         self._update_job_status(job_id, status, strict=True)
 
-    def require_job_status_strict(self, job_id: int, status: str) -> None:
-        """Verify durable workflow state without mutating it."""
-        if not self.job_model:
-            raise RuntimeError(
-                "JobTracker requires an injected job model for AMQP settlement."
-            )
-        job_record = self.job_model.find(job_id)
-        if not job_record:
-            raise RuntimeError(f"Tracked queue job {job_id} does not exist.")
-        if str(job_record.status) != str(status):
-            raise RuntimeError(
-                f"Tracked queue job {job_id} is {job_record.status!r}; "
-                f"expected {status!r}."
-            )
-
     def ensure_retry_progress_strict(self, job_id: int) -> None:
         """Accept monotonic retry progress and repair only stale ``pending``.
 
-        The retry source is terminal once its child delivery commits. A source
-        redelivery may therefore observe the shared tracker after that child
-        already moved to processing or terminal state. Exact equality with the
-        intermediate ``retrying`` value would poison-loop the broker message.
+        The retry source is terminal once its child delivery commits. Both the
+        source's own settlement check and a later source redelivery may
+        therefore observe the shared tracker after that child already moved to
+        processing or terminal state. Exact equality with the intermediate
+        ``retrying`` value would fail the settlement or poison-loop the broker
+        message.
         """
         if not self.job_model:
             raise RuntimeError(

@@ -208,8 +208,10 @@ def outbound_url_reason(
 ) -> str | None:
     """Return ``None`` when the URL is safe, else a short reason.
 
-    The reason strings are for logs and operator-facing messages;
-    callers that need a typed failure use :func:`assert_outbound_url_safe`.
+    The reason strings are safe to show the user who supplied the URL:
+    they echo only that user's own input, never what the resolver
+    answered. Callers that need a typed failure use
+    :func:`assert_outbound_url_safe`.
     ``allow_non_public`` is the local-development escape hatch — it skips
     the address checks only, never the structural ones.
     """
@@ -289,14 +291,21 @@ def outbound_url_reason(
     if not resolve_dns:
         return None
 
+    # Every DNS-sweep failure — lookup error, empty answer, a non-public
+    # answer — returns the SAME reason. The reason reaches the user who
+    # typed the URL, and naming the private address it resolved to (or
+    # telling "does not exist" apart from "exists internally") turns the
+    # gate into an oracle for the deployment's internal DNS.
+    rejected = f"hostname {host} does not resolve to a public address"
+
     # Resolved at CALL time, never bound as a default: a module-level
     # default would freeze the resolver at import and silently ignore any
     # later replacement (a test double, a green-thread monkeypatch).
     resolve = resolver if resolver is not None else socket.getaddrinfo
     try:
         answers = resolve(host, None, type=socket.SOCK_STREAM)
-    except (OSError, UnicodeError) as exc:
-        return f"dns resolution failed: {type(exc).__name__}"
+    except OSError, UnicodeError:
+        return rejected
 
     seen = False
     for answer in answers or []:
@@ -305,10 +314,8 @@ def outbound_url_reason(
             continue
         seen = True
         if is_non_public_address(str(sockaddr[0])):
-            return f"hostname {host} resolves to non-public {sockaddr[0]}"
-    if not seen:
-        return f"hostname {host} does not resolve to a public address"
-    return None
+            return rejected
+    return None if seen else rejected
 
 
 async def outbound_url_reason_async(

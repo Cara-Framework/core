@@ -573,6 +573,9 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
         if created <= present:
             continue
         concurrent = "CONCURRENTLY" in up.upper()
+        # An extension install locks no table: additive, no CONCURRENTLY advice.
+        lock_free = concurrent or all(n.startswith("extension:") for n in created)
+        lock_note = ("builds with a write lock; declare it CONCURRENTLY to avoid that",)
         preflight_sql, preflight_failure = _unique_index_preflight(up, table, name)
         operations.append(
             Operation(
@@ -581,17 +584,39 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
                 key=f"{table}:{name}",
                 forward_sql=up,
                 reverse_sql=index.get("down"),
-                safety=ADDITIVE if concurrent else LOCKING,
+                safety=ADDITIVE if lock_free else LOCKING,
                 reason="named DDL declared by the model, absent from the database",
                 transactional=not concurrent,
                 preflight_sql=preflight_sql,
                 preflight_failure=preflight_failure,
-                notes=()
-                if concurrent
-                else ("builds with a write lock; declare it CONCURRENTLY to avoid that",),
+                notes=() if lock_free else lock_note,
             )
         )
     return operations
+
+
+def declared_index_names(model: dict, table: str) -> set[str]:
+    """Every name in the index namespace the model owns, by either route.
+
+    The Blueprint's own (field flags, ``field.index([...])``, composite
+    uniques) and everything an ``__indexes__`` entry creates. This is the one
+    answer to "may this live index stay?", asked by the planner before a DROP,
+    by ``schema:check`` before reporting an EXTRA index and by
+    ``migrations:check`` before calling a migration's index undeclared.
+
+    An entry whose SQL cannot be read contributes its own LABEL, deliberately.
+    This side of the comparison decides what to DROP, so the safe direction
+    when nothing can tell what an entry creates is to over-claim ownership: at
+    worst an orphan survives one more deploy, where under-claiming would drop
+    a live index the model does own. The refusal raised on the missing side
+    (:func:`missing_indexes`) is where the operator hears about it.
+    """
+    declared = {name for name, _, _ in _declared_blueprint_indexes(model, table)}
+    for index in model.get("indexes", []) or []:
+        up = index.get("up")
+        if up:
+            declared |= created_objects(up) or {index.get("name") or ""}
+    return declared
 
 
 def orphaned_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation]:
@@ -612,19 +637,7 @@ def orphaned_indexes(model: dict, table: str, live: LiveSchema) -> list[Operatio
     ``restores_data`` stays True — the object comes back complete, unlike a
     dropped column.
     """
-    declared = {name for name, _, _ in _declared_blueprint_indexes(model, table)}
-    for index in model.get("indexes", []) or []:
-        up = index.get("up")
-        if up:
-            # An entry whose SQL cannot be read contributes the entry's own
-            # LABEL here, deliberately. This side of the comparison decides
-            # what to DROP, so the safe direction when the planner cannot tell
-            # what an entry creates is to over-claim ownership: at worst an
-            # orphan survives one more deploy, where under-claiming would drop
-            # a live index the model does own. The refusal raised on the
-            # missing-index side is where the operator hears about it.
-            declared |= created_objects(up) or {index.get("name") or ""}
-
+    declared = declared_index_names(model, table)
     backed_by_constraint = live.constraint_indexes.get(table, set())
     present = live.indexes.get(table, set())
 
@@ -677,6 +690,8 @@ def orphaned_tables(model_tables: set[str], live: LiveSchema) -> list[str]:
 
 __all__ = [
     "created_objects",
+    "declared_foreign_keys",
+    "declared_index_names",
     "missing_checks",
     "missing_indexes",
     "orphaned_checks",

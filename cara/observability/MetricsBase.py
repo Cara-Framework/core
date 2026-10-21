@@ -15,7 +15,8 @@ app environment; it defaults to ``app`` when unset. App subclasses are free
 to name their own domain metrics with any literal prefix.
 
 Cardinality budget (keep low to protect Prometheus scrape cost):
-- ``route``: controller@action form (bounded by codebase — dozens)
+- ``route``: matched route template, or ``unmatched`` (bounded by codebase —
+  dozens)
 - ``status_class``: "2xx"/"3xx"/"4xx"/"5xx"/"error" — always 5 values
 - ``queue``: literal queue name — dozens project-wide
 - ``job_class``: class name — dozens (``job`` is reserved for the Prometheus

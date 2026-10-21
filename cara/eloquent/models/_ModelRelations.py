@@ -114,10 +114,14 @@ def _model_save_quietly(self):
 
     User.save_quietly(...)
     """
+    # ``without_events`` flips a CLASS flag, and ``save`` raises on a database
+    # error: without the ``finally`` one failed quiet save would silence the
+    # model's observers for the rest of the process.
     self.without_events()
-    saved = self.save()
-    self.with_events()
-    return saved
+    try:
+        return self.save()
+    finally:
+        self.with_events()
 
 
 def _model_delete_quietly(self):
@@ -133,16 +137,19 @@ def _model_delete_quietly(self):
     Returns:
         self
     """
-    delete = (
-        self.without_events()
-        .where(
-            self.get_primary_key(),
-            self.get_primary_key_value(),
+    # The class flag must come back even when the DELETE raises — see
+    # ``_model_save_quietly``.
+    try:
+        return (
+            self.without_events()
+            .where(
+                self.get_primary_key(),
+                self.get_primary_key_value(),
+            )
+            .delete()
         )
-        .delete()
-    )
-    self.with_events()
-    return delete
+    finally:
+        self.with_events()
 
 
 def _model_attach_related(self, relation, related_record):

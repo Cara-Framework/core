@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from cara.authorization.Gate import Gate
 from cara.configuration import config
-from cara.facades import Auth
 from cara.foundation import DeferredProvider
+from cara.support import current_user
 
 
 class AuthorizationProvider(DeferredProvider):
@@ -29,7 +29,7 @@ class AuthorizationProvider(DeferredProvider):
     def _add_gate_service(self, settings: dict) -> None:
         """Register Gate service with configuration."""
         gate = Gate(
-            user_resolver=lambda: Auth.user(),
+            user_resolver=current_user,
             # Add any gate configuration here if needed
             # e.g., default_policies=settings.get("policies", {}),
         )

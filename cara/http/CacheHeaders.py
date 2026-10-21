@@ -16,6 +16,9 @@ Two tiers, depending on whether the response is user-specific or shareable:
 
 Never cache write endpoints, auth flows, or ``status: "generating"`` 202
 poll stubs — use ``apply_no_cache`` to be explicit there.
+
+``append_vary`` is how a middleware adds the request header its own
+transformation depends on, without dropping the tokens other layers added.
 """
 
 from __future__ import annotations
@@ -55,6 +58,25 @@ def apply_public_swr_cache(
         f"stale-while-revalidate={int(stale_while_revalidate)}",
     )
     response.header("Vary", _PUBLIC_VARY)
+    return response
+
+
+def append_vary(response: Response, token: str) -> Response:
+    """Add ``token`` to ``Vary``, keeping every token already there.
+
+    Each layer that makes a response depend on a request header owns one
+    token: compression ``Accept-Encoding``, authentication ``Authorization``,
+    CORS ``Origin``. Setting the header outright replaced the others —
+    ``HandleCors`` unwinds after the inner layers, and its ``Vary: Origin``
+    dropped their tokens, so a shared cache could hand gzip bytes to a
+    client that never accepted gzip.
+    """
+    headers = getattr(response, "headers", None)
+    existing = headers.get("Vary") if hasattr(headers, "get") else None
+    tokens = [part.strip() for part in (existing or "").split(",") if part.strip()]
+    if not any(part.lower() == token.lower() for part in tokens):
+        tokens.append(token)
+    response.header("Vary", ", ".join(tokens))
     return response
 
 

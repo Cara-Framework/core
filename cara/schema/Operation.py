@@ -237,15 +237,29 @@ def sort_operations(operations: list[Operation]) -> list[Operation]:
     Within one safety class, :func:`_ddl_precedence` orders named-DDL creates
     by dependency (extension → function → other → trigger) before the stable
     table/key tiebreak.
+
+    On one table a ``drop_column`` runs after every other drop: ``DROP
+    COLUMN`` takes the CHECKs and indexes involving that column with it, so a
+    ``DROP CONSTRAINT`` ordered after it would fail on an object already gone
+    and stop the apply partway. The key tiebreak alone put it first
+    (``table.col`` sorts before ``table:name``).
+
+    An extension create jumps every safety class, right after the ledger. A
+    ``CREATE INDEX CONCURRENTLY ... gin_trgm_ops`` is additive and sorted
+    ahead of anything locking, so with the extension ranked only inside its
+    own class the index ran first and the apply died on ``operator class
+    gin_trgm_ops does not exist``.
     """
     return sorted(
         operations,
         key=lambda op: (
             op.table != LEDGER_TABLE,
+            not _CREATES_EXTENSION.search(op.forward_sql),
             SAFETY_ORDER.get(op.safety, 9),
             op.kind != "create_table",
             _ddl_precedence(op),
             op.table,
+            op.kind == "drop_column",
             op.key,
         ),
     )

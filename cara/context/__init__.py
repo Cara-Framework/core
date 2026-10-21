@@ -6,6 +6,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "CENTRAL": (".Tenancy", "CENTRAL"),
     "ExecutionContext": (".ExecutionContext", "ExecutionContext"),
     "Tenancy": (".Tenancy", "Tenancy"),
+    "ThreadLane": (".ThreadLane", "ThreadLane"),
+    "ThreadLaneBusy": (".ThreadLaneBusy", "ThreadLaneBusy"),
     "UNSET": (".Tenancy", "UNSET"),
 }
 
@@ -13,6 +15,8 @@ __all__ = [
     "CENTRAL",
     "ExecutionContext",
     "Tenancy",
+    "ThreadLane",
+    "ThreadLaneBusy",
     "UNSET",
 ]
 

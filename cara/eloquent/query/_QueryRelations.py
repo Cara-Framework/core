@@ -16,7 +16,7 @@ from cara.eloquent.expressions import (
     SubSelectExpression,
 )
 
-from ._QuerySafety import _is_column_expression
+from ._QuerySafety import _comparison_expression, _is_column_expression
 
 _logger = logging.getLogger("cara.eloquent.query")
 QueryBuilder: type
@@ -77,17 +77,7 @@ def _qb_or_where(self, column, *args) -> Self:
             ),
         )
     else:
-        self._wheres += (
-            (
-                QueryExpression(
-                    column,
-                    operator,
-                    value,
-                    "value",
-                    keyword="or",
-                )
-            ),
-        )
+        self._wheres += (_comparison_expression(column, operator, value, keyword="or"),)
     return self
 
 

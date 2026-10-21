@@ -13,7 +13,7 @@ from cara.authentication import Authentication
 from cara.context import ExecutionContext
 from cara.exceptions import CaraException
 from cara.facades import Log
-from cara.http import Request, Response
+from cara.http import Request, Response, append_vary
 from cara.observability import set_request_tag, set_request_user
 
 from .ShouldAuthenticate import ShouldAuthenticate
@@ -215,15 +215,7 @@ class AuthenticateUser(ShouldAuthenticate):
                     "private, no-store, must-revalidate",
                 )
 
-            # Vary: append Authorization without dropping existing
-            # tokens (e.g. ``Accept-Encoding`` from CompressResponses
-            # which may have run earlier in the pipeline) and without
-            # duplicating an Authorization that's already there.
-            existing_vary = headers.get("Vary") if hasattr(headers, "get") else None
-            tokens = [t.strip() for t in (existing_vary or "").split(",") if t.strip()]
-            if not any(t.lower() == "authorization" for t in tokens):
-                tokens.append("Authorization")
-                response.header("Vary", ", ".join(tokens))
+            append_vary(response, "Authorization")
         except Exception as e:
             Log.debug(
                 f"AuthenticateUser: default cache header apply skipped: {e}",

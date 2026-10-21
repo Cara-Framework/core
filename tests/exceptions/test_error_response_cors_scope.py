@@ -293,7 +293,57 @@ def test_the_path_gate_and_the_origin_rule_are_the_shared_ones() -> None:
     module = _handle_cors_module()
 
     assert module.path_in_cors_scope is Cors.path_in_cors_scope
-    assert module.resolve_allow_origin is Cors.resolve_allow_origin
+    assert module.cors_headers is Cors.cors_headers
     assert module.load_cors_policy is Cors.load_cors_policy
     assert not hasattr(module.HandleCors, "_is_origin_allowed")
     assert not hasattr(module.HandleCors, "_is_origin_explicitly_allowed")
+
+
+def test_the_error_path_exposes_the_headers_the_client_must_read(
+    monkeypatch: pytest.MonkeyPatch, policy
+) -> None:
+    """A 429 leaves through this path; without Expose-Headers the browser
+    hides ``Retry-After`` and ``X-Request-ID`` and the client retries blind."""
+    policy["allowed_origins"] = ["https://app.example.com"]
+    policy["exposed_headers"] = ["X-Request-ID", "Retry-After", "RateLimit"]
+    monkeypatch.setattr(Cors, "load_cors_policy", lambda: dict(policy))
+
+    headers = DefaultExceptionHandler()._cors_headers_for_scope(
+        _scope("/api/listings", origin=b"https://app.example.com")
+    )
+
+    assert [
+        b"access-control-expose-headers",
+        b"X-Request-ID, Retry-After, RateLimit",
+    ] in headers
+
+
+def test_the_error_path_withholds_credentials_from_an_unlisted_origin(
+    monkeypatch: pytest.MonkeyPatch, policy
+) -> None:
+    """Same rule as HandleCors: credentials only beside a concrete ACAO."""
+    policy["allowed_origins"] = ["https://app.example.com"]
+    policy["supports_credentials"] = True
+    monkeypatch.setattr(Cors, "load_cors_policy", lambda: dict(policy))
+
+    unlisted = DefaultExceptionHandler()._cors_headers_for_scope(
+        _scope("/api/listings", origin=b"https://attacker.example")
+    )
+    listed = DefaultExceptionHandler()._cors_headers_for_scope(
+        _scope("/api/listings", origin=b"https://app.example.com")
+    )
+
+    assert b"access-control-allow-credentials" not in _header_names(unlisted)
+    assert [b"access-control-allow-credentials", b"true"] in listed
+
+
+def test_the_error_path_emits_the_success_path_header_set(policy) -> None:
+    """One list, two encodings: the handler's bytes ARE ``cors_headers``."""
+    policy["exposed_headers"] = ["X-Request-ID"]
+
+    headers = DefaultExceptionHandler()._cors_headers_for_scope(_scope("/api/listings"))
+
+    assert headers == [
+        [name.lower().encode(), value.encode()]
+        for name, value in Cors.cors_headers("https://evil.example", policy)
+    ]

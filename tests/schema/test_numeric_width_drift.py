@@ -92,13 +92,43 @@ def test_a_widening_that_would_lose_integer_digits_is_not_derived():
     assert operations == []
 
 
-def test_both_inspectors_read_the_numeric_width_columns():
+def test_the_one_inspector_both_gates_read_carries_the_numeric_width():
     """The gates can only compare what they SELECT — this is where the blind
-    spot actually lived."""
-    from pathlib import Path
+    spot actually lived. ``schema:check`` and ``schema:plan`` now read the same
+    introspection and the same declared columns, so the width reaches both."""
+    from cara.commands.core._SchemaColumnDiff import _SCHEMA_COLUMN_DIFF
+    from cara.schema import declared_columns, introspect
 
-    planner_side = Path("cara/schema/LiveSchema.py").read_text()
-    checker_side = Path("cara/commands/core/_LiveSchemaInspection.py").read_text()
-    for source in (planner_side, checker_side):
-        assert "numeric_precision, numeric_scale" in source
-        assert '"numeric_scale": row.get("numeric_scale")' in source
+    class _Executor:
+        def get_query_result(self, sql):
+            if "information_schema.columns" not in sql:
+                return []
+            assert "numeric_precision, numeric_scale" in sql
+            return [
+                {
+                    "table_name": "invoice",
+                    "column_name": "proration_factor",
+                    "data_type": "numeric",
+                    "is_nullable": "NO",
+                    "character_maximum_length": None,
+                    "numeric_precision": 6,
+                    "numeric_scale": 4,
+                    "column_default": None,
+                }
+            ]
+
+    class _Schema:
+        query_executor = _Executor()
+
+        def get_schema(self):
+            return "public"
+
+    live = introspect(_Schema())
+    declared = declared_columns(_model(20, 18))["proration_factor"]
+    issues = _SCHEMA_COLUMN_DIFF.diff_column(
+        "invoice",
+        "proration_factor",
+        declared,
+        live.tables["invoice"]["proration_factor"],
+    )
+    assert any("NARROWER than declared" in issue for issue in issues)

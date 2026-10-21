@@ -11,7 +11,8 @@ opens the export.
 
 This module exposes ``defuse_csv_cell(value)``: a single-call
 sanitizer that prefixes a string with an apostrophe (``'``) iff its
-first character is a formula trigger. The apostrophe is the
+first character is a formula trigger, and its inverse
+``restore_csv_cell(value)`` for the import side of a round-trip file. The apostrophe is the
 canonical Excel text-qualifier — it is NOT rendered in the cell but
 stops the cell content being parsed as a formula. Numeric and empty
 values pass through untouched so the export still imports cleanly
@@ -58,4 +59,31 @@ def defuse_csv_cell(value: Any) -> Any:
 
     if value[0] in _FORMULA_TRIGGERS + _WHITESPACE_TRIGGERS:
         return f"'{value}"
+    return value
+
+
+def restore_csv_cell(value: Any) -> Any:
+    """Undo :func:`defuse_csv_cell` on a cell read back from a CSV.
+
+    A CSV has no cell types, so the apostrophe :func:`defuse_csv_cell`
+    adds is literal text to every reader: Excel, Sheets and LibreOffice
+    show it and save it back. A file that is exported, edited and
+    re-imported therefore comes back as ``'-RED-01`` for ``-RED-01``, and
+    an importer that keeps it matches nothing and rewrites every such
+    value. This strips exactly the prefix the defuser adds — one
+    apostrophe followed by a formula or whitespace trigger — and returns
+    every other value unchanged.
+
+    The one ambiguity is inherent: an original value that itself begins
+    with an apostrophe and a trigger (``'-x``) exports unchanged and
+    imports as ``-x``.
+    """
+    if not isinstance(value, str):
+        return value
+    if (
+        len(value) > 1
+        and value[0] == "'"
+        and value[1] in _FORMULA_TRIGGERS + _WHITESPACE_TRIGGERS
+    ):
+        return value[1:]
     return value

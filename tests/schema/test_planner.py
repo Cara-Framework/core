@@ -10,6 +10,7 @@ from __future__ import annotations
 from cara.schema import (
     ADDITIVE,
     DESTRUCTIVE,
+    LEDGER_TABLE,
     LOCKING,
     LiveSchema,
     migration_to_run,
@@ -17,8 +18,13 @@ from cara.schema import (
 )
 
 
-def _col(data_type="character varying", nullable=True, max_length=255):
-    return {"data_type": data_type, "is_nullable": nullable, "max_length": max_length}
+def _col(data_type="character varying", nullable=True, max_length=255, default=None):
+    return {
+        "data_type": data_type,
+        "is_nullable": nullable,
+        "max_length": max_length,
+        "default": default,
+    }
 
 
 def _live(
@@ -92,6 +98,20 @@ def test_missing_table_runs_its_generated_creator():
     assert operation.kind == "create_table"
     assert migration_to_run(operation.forward_sql) == "create_product_table"
     assert operation.reverse_sql == 'DROP TABLE IF EXISTS "product"'
+    # The table comes back absent, and every row written into it since the
+    # create goes with it — so rollback must refuse it without --force.
+    assert operation.restores_data is False
+
+
+def test_the_ledger_never_records_a_reverse_of_its_own_creation():
+    """Reversed last (it is created first), a ``DROP TABLE schema_operation``
+    would take the record of every other reverse with it — and the very next
+    ledger update would fail on the missing relation."""
+    model = _model({"plan_id": _field("string", length=64)}, table=LEDGER_TABLE)
+    operations, _, _ = plan([model], _live(None))
+    ledger = next(op for op in operations if op.table == LEDGER_TABLE)
+    assert ledger.kind == "create_table"
+    assert ledger.reverse_sql is None
 
 
 # ── locking ─────────────────────────────────────────────────────────────────
@@ -108,12 +128,77 @@ def test_not_null_with_default_becomes_the_three_step_recipe():
         "set_not_null",
     ]
     add, backfill, tighten = operations
-    assert add.safety == ADDITIVE and "NULL" in add.forward_sql
+    assert add.safety == ADDITIVE
+    # The default lands WITH the column, as its own subcommand: every writer
+    # gets it from the moment the column exists, while the existing rows stay
+    # NULL for the backfill (an ADD COLUMN ... DEFAULT would pre-fill them).
+    assert add.forward_sql == (
+        'ALTER TABLE "product" ADD COLUMN "tier" VARCHAR(20) NULL, '
+        "ALTER COLUMN \"tier\" SET DEFAULT 'basic'"
+    )
     assert backfill.safety == LOCKING
     assert "'basic'" in backfill.forward_sql
     # A backfill has no honest undo — the previous values are not recorded.
     assert backfill.reverse_sql is None
-    assert tighten.safety == LOCKING and "SET NOT NULL" in tighten.forward_sql
+    assert tighten.safety == LOCKING
+    assert tighten.forward_sql == 'ALTER TABLE "product" ALTER COLUMN "tier" SET NOT NULL'
+
+
+def test_an_interrupted_not_null_recipe_re_derives_its_remaining_work():
+    """Stopped after step 1 — a lock timeout, a crash, a preflight that found
+    rows inserted meanwhile — the column is live, nullable, and the plan is
+    re-derived from that. It must still carry the fill and the default: a
+    bare SET NOT NULL stays blocked on the NULL rows, and once it finally
+    passes, every INSERT that omits the column fails."""
+    model = _model({"currency": _field("string", length=3, default="USD")})
+    operations, refusals, _ = plan([model], _live({"currency": _col(max_length=3)}))
+
+    assert refusals == []
+    assert [op.kind for op in operations] == [
+        "set_default",
+        "backfill_column",
+        "set_not_null",
+    ]
+    default, backfill, tighten = operations
+    assert default.forward_sql == (
+        'ALTER TABLE "product" ALTER COLUMN "currency" SET DEFAULT \'USD\''
+    )
+    assert default.reverse_sql == (
+        'ALTER TABLE "product" ALTER COLUMN "currency" DROP DEFAULT'
+    )
+    assert backfill.forward_sql == (
+        'UPDATE "product" SET "currency" = \'USD\' WHERE "currency" IS NULL'
+    )
+    assert "the backfill above did not cover them" in tighten.preflight_failure
+
+
+def test_a_resumed_recipe_keeps_the_declared_backfill():
+    model = _model({"session_version": _field("integer", backfill_from='"auth_version"')})
+    live = _live(
+        {
+            "auth_version": _col("integer", False, None),
+            "session_version": _col("integer", True, None),
+        }
+    )
+    model["fields"]["auth_version"] = _field("integer")
+    operations, refusals, _ = plan([model], live)
+
+    assert refusals == []
+    assert [op.kind for op in operations] == ["backfill_column", "set_not_null"]
+    assert '"session_version" = "auth_version"' in operations[0].forward_sql
+
+
+def test_a_new_nullable_column_carries_its_declared_default():
+    """A from-zero table has the DEFAULT; an evolved one must too, or every
+    INSERT that omits the column disagrees between the two."""
+    model = _model(
+        {"condition": _field("string", length=20, nullable=True, default="new")}
+    )
+    operations, _, _ = plan([model], _live({}))
+    assert operations[0].forward_sql == (
+        'ALTER TABLE "product" ADD COLUMN "condition" VARCHAR(20) NULL DEFAULT \'new\''
+    )
+    assert operations[0].safety == ADDITIVE
 
 
 def test_tightening_an_existing_column_carries_a_null_preflight():
@@ -548,8 +633,7 @@ def test_backfill_from_makes_a_not_null_column_derivable():
     assert '"session_version" = "auth_version"' in backfill.forward_sql
     assert "declared backfill" in backfill.reason
     # No constant default was declared, so nothing invents one.
-    tighten = next(op for op in operations if op.kind == "set_not_null")
-    assert "SET DEFAULT" not in tighten.forward_sql
+    assert not any("DEFAULT" in op.forward_sql for op in operations)
 
 
 def test_backfill_from_wins_over_a_constant_default():
@@ -561,9 +645,12 @@ def test_backfill_from_wins_over_a_constant_default():
     operations, _, _ = plan([model], _live({}))
     backfill = next(op for op in operations if op.kind == "backfill_column")
     assert "'legacy'" in backfill.forward_sql
-    # The default still becomes the column default for NEW rows.
-    tighten = next(op for op in operations if op.kind == "set_not_null")
-    assert "SET DEFAULT 'basic'" in tighten.forward_sql
+    # The default still becomes the column default for NEW rows — as a SET
+    # DEFAULT beside the ADD, never the ADD's own DEFAULT, which would fill
+    # the existing rows with 'basic' and leave the backfill matching nothing.
+    add = next(op for op in operations if op.kind == "add_column")
+    assert "SET DEFAULT 'basic'" in add.forward_sql
+    assert "NULL DEFAULT" not in add.forward_sql
 
 
 def test_neither_default_nor_backfill_is_still_refused():

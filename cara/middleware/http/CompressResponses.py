@@ -41,7 +41,7 @@ from typing import Any
 
 from cara.configuration import config
 from cara.facades import Log
-from cara.http import Request, Response
+from cara.http import Request, Response, append_vary
 from cara.middleware.Middleware import Middleware
 
 # Default compressible MIME prefixes. Match conservatively: anything
@@ -141,7 +141,7 @@ class CompressResponses(Middleware):
             # cannot accept the compression headers, the outer handler keeps
             # the original bytes intact instead of returning compressed bytes
             # without a correct cache key.
-            self._append_vary(response, "Accept-Encoding")
+            append_vary(response, "Accept-Encoding")
             response.header("Content-Encoding", "gzip")
             response.header("Content-Length", str(len(compressed)))
             response.content = compressed
@@ -232,17 +232,6 @@ class CompressResponses(Middleware):
         except AttributeError, TypeError, RuntimeError:
             return None
         return None
-
-    @staticmethod
-    def _append_vary(response: Any, value: str) -> None:
-        existing = ""
-        headers = getattr(response, "headers", None)
-        if headers is not None and hasattr(headers, "get"):
-            existing = headers.get("Vary") or ""
-        tokens = [token.strip() for token in existing.split(",") if token.strip()]
-        if not any(token.lower() == value.lower() for token in tokens):
-            tokens.append(value)
-        response.header("Vary", ", ".join(tokens))
 
     @staticmethod
     def _log_debug(msg: str) -> None:

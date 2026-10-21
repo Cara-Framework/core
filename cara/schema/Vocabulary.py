@@ -127,10 +127,15 @@ MODEL_INT_RANK = {
 DB_INT_RANK = {"smallint": 1, "integer": 2, "bigint": 3}
 
 #: Field "types" that are not real columns by themselves — they expand into
-#: one or more concrete columns at migration time.
+#: one or more concrete columns at migration time, each ``(name, type,
+#: params)`` with the params the Blueprint gives it: ``timestamps()`` stamps
+#: both columns ``DEFAULT CURRENT_TIMESTAMP``, ``soft_deletes()`` sets none.
 PSEUDO_FIELD_EXPANSIONS = {
-    "timestamps": [("created_at", "datetime"), ("updated_at", "datetime")],
-    "soft_deletes": [("deleted_at", "datetime")],
+    "timestamps": [
+        ("created_at", "datetime", {"use_current": True}),
+        ("updated_at", "datetime", {"use_current": True}),
+    ],
+    "soft_deletes": [("deleted_at", "datetime", {})],
 }
 
 #: Model field type -> the PostgreSQL type an evolve-mode ``ADD COLUMN`` emits.

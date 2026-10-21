@@ -35,30 +35,13 @@ class _ExceptionResponseHeaders:
             return []
 
         raw_headers = dict(scope.get("headers", []))
-        origin = raw_headers.get(b"origin", b"").decode()
-        allow_origin = CorsPolicy.resolve_allow_origin(origin, policy)
-        headers: list = []
-        if allow_origin is not None:
-            headers.append([b"access-control-allow-origin", allow_origin.encode()])
-            if allow_origin != "*":
-                headers.append([b"vary", b"Origin"])
-
-        allowed_methods = policy.get("allowed_methods")
-        allowed_headers = policy.get("allowed_headers")
-        max_age = policy.get("max_age")
-        if allowed_methods:
-            headers.append(
-                [b"access-control-allow-methods", ", ".join(allowed_methods).encode()]
-            )
-        if allowed_headers:
-            headers.append(
-                [b"access-control-allow-headers", ", ".join(allowed_headers).encode()]
-            )
-        if policy.get("supports_credentials"):
-            headers.append([b"access-control-allow-credentials", b"true"])
-        if max_age:
-            headers.append([b"access-control-max-age", str(max_age).encode()])
-        return headers
+        origin = raw_headers.get(b"origin", b"").decode("latin-1")
+        # The same list HandleCors stamps; a separate ``vary`` line merges
+        # with any other on the wire, so no token is lost here.
+        return [
+            [name.lower().encode(), value.encode()]
+            for name, value in CorsPolicy.cors_headers(origin, policy)
+        ]
 
     @classmethod
     def security(cls, scope: dict[str, Any]) -> list:

@@ -11,9 +11,18 @@ import json
 
 import pytest
 
+from cara.configuration import Configuration
 from cara.exceptions import BadRequestException
 from cara.exceptions.types.ValidationException import ValidationException
 from cara.http.request.Request import Request
+
+
+@pytest.fixture(autouse=True)
+def _empty_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reading the body consults ``server.max_body_size``: an empty authority
+    gives the framework default, so the file runs on its own, in any order."""
+    monkeypatch.setattr(Configuration, "_instance", None)
+    Configuration.empty()
 
 
 def _request_for_body(raw: bytes) -> Request:
@@ -97,3 +106,21 @@ async def test_json_dict_still_coerces_so_the_strict_path_is_a_real_choice() -> 
     request = _request_for_body(b"[1, 2]")
 
     assert await request.json_dict() == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [b"[" * 200_000, b'{"email": ' + b"1" * 5000 + b"}", b'{"a": "\xff"}'],
+    ids=["deep-nesting", "huge-integer", "invalid-utf8"],
+)
+async def test_hostile_json_is_the_clients_400_not_a_500(raw: bytes) -> None:
+    """``json.loads`` raises RecursionError / plain ValueError /
+    UnicodeDecodeError for these, none a JSONDecodeError; they used to
+    escape as status-less 500s with an ERROR log and a Sentry event."""
+    request = _request_for_body(raw)
+
+    with pytest.raises(BadRequestException) as caught:
+        await request.json()
+
+    assert caught.value.status_code == 400

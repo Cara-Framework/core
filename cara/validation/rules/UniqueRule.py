@@ -1,8 +1,12 @@
 """
 Unique Validation Rule.
 
-Mirrors Laravel's ``unique`` rule. Fails when a record already exists in
-the given table/column (optionally excluding a specific id).
+Laravel's ``unique`` rule, queried through the table's MODEL rather than a
+raw ``DB::table`` lookup: the model's scopes (tenancy, soft deletes) apply,
+so a value another tenant holds, or only a trashed row holds, is not
+"taken". Fails when a visible record already has the value (optionally
+excluding one row). A database error propagates — it is an outage, not an
+answer about the input.
 
 Usage:
   ``unique:users,email``
@@ -15,7 +19,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from cara.exceptions import ConfigurationException
 from cara.validation.MessageFormatter import MessageFormatter
+from cara.validation.rules._ModelResolution import _resolve_rule_model
 from cara.validation.rules.BaseRule import BaseRule
 
 # Only allow safe SQL identifiers: letters, digits, underscores.
@@ -29,48 +35,24 @@ class UniqueRule(BaseRule):
             return True
 
         parts = [p.strip() for p in raw.split(",")]
-        if not parts:
-            return True
-
         table = parts[0]
         column = parts[1] if len(parts) > 1 else field
         ignore_value = parts[2] if len(parts) > 2 else None
         ignore_column = parts[3] if len(parts) > 3 else "id"
 
-        # Defence-in-depth: reject identifiers that aren't plain
-        # alphanumeric/underscore names to prevent SQL injection
-        # through identifier interpolation in the raw SQL below.
+        # Defence-in-depth: the parameters come from developer-authored
+        # request classes, and an unsafe identifier is a misconfiguration,
+        # never a verdict on the input.
         for ident in (table, column, ignore_column):
-            if ident is not None and not _SAFE_IDENTIFIER_RE.match(ident):
-                return False
-
-        try:
-            from cara.facades import DB  # local: cycle with cara.facades
-
-            sql = f'SELECT 1 FROM "{table}" WHERE "{column}" = %s LIMIT 1'
-            sql_params = [value]
-            if ignore_value is not None and ignore_value != "NULL":
-                sql = f'SELECT 1 FROM "{table}" WHERE "{column}" = %s AND "{ignore_column}" != %s LIMIT 1'
-                sql_params.append(ignore_value)
-
-            rows = DB.select(sql, sql_params)
-            return len(rows) == 0
-        except Exception as exc:
-            try:
-                from cara.facades import Log  # local: cycle with cara.facades
-
-                Log.error(
-                    "UniqueRule: DB query failed for %s.%s: %s: %s",
-                    table,
-                    column,
-                    exc.__class__.__name__,
-                    exc,
-                    category="cara.validation.unique",
-                    exc_info=True,
+            if not _SAFE_IDENTIFIER_RE.match(ident):
+                raise ConfigurationException(
+                    f"UniqueRule identifier '{ident}' is not a safe SQL identifier"
                 )
-            except ImportError, RuntimeError:
-                pass
-            return False
+
+        query = _resolve_rule_model(table).where(column, value)
+        if ignore_value is not None and ignore_value != "NULL":
+            query = query.where(ignore_column, "!=", ignore_value)
+        return query.first() is None
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)

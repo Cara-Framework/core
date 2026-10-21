@@ -1,12 +1,12 @@
 """Column-level drift comparison for ``schema:check``.
 
-Split out of ``SchemaCheckCommand`` as a sibling (the same shape
-``_LiveSchemaInspection`` already uses): the command owns the run and the
-report, this owns the question "does this one column still match what the
-model declares?".
+Split out of ``SchemaCheckCommand`` as a sibling: the command owns the run and
+the report, this owns the question "does this one column still match what the
+model declares?". The live column is ``cara.schema.LiveSchema``'s and the
+declared one ``cara.schema.declared_columns``'s — the planner's inputs.
 
-Every rule here is ONE-WAY on purpose — a live column with MORE room than the
-model asks for loses nothing, so only the narrowing direction is drift. Three
+Every WIDTH rule here is ONE-WAY on purpose — a live column with MORE room than
+the model asks for loses nothing, so only the narrowing direction is drift. Three
 widths are compared, and each was added after the previous omission cost
 something real: text (a varchar(100) silently dropping trace rows), integer
 (a model widened to big_integer overflowing on write) and decimal (a live
@@ -17,127 +17,30 @@ prorated invoices outright).
 
 from __future__ import annotations
 
-# --- Type normalisation -----------------------------------------------------
-#
-# ``information_schema.columns.data_type`` reports Postgres's canonical type
-# names, which differ from the names we declare on models. We map BOTH sides to
-# a small set of coarse "categories" and only flag a mismatch when the two
-# categories clearly disagree. This is deliberately conservative: a false
+from cara.exceptions import SchemaPlanRefused
+from cara.schema import (
+    DATETIME_CATEGORIES,
+    DB_INT_RANK,
+    DB_TYPE_CATEGORY,
+    MODEL_INT_RANK,
+    MODEL_TYPE_CATEGORY,
+    declared_default_sql,
+    defaults_match,
+    live_default_sql,
+)
+
+# Types are compared through ``cara.schema.Vocabulary``'s coarse categories —
+# the same tables the planner reads — and a mismatch is only flagged when the
+# two categories clearly disagree. This is deliberately conservative: a false
 # "drift" on every ``string``↔``character varying`` pair would make the gate
 # noise and get it ignored. We'd rather miss a subtle type change than cry wolf.
-
-# Model-declared field type -> coarse category.
-_MODEL_TYPE_CATEGORY = {
-    "string": "text",
-    "char": "text",
-    "text": "text",
-    "tiny_text": "text",
-    "long_text": "text",
-    "enum": "text",
-    "uuid": "uuid",
-    "boolean": "boolean",
-    "integer": "integer",
-    "tiny_integer": "integer",
-    "small_integer": "integer",
-    "medium_integer": "integer",
-    "big_integer": "integer",
-    "unsigned_integer": "integer",
-    "unsigned_big_integer": "integer",
-    "integer_unsigned": "integer",
-    "big_integer_unsigned": "integer",
-    "small_integer_unsigned": "integer",
-    "medium_integer_unsigned": "integer",
-    "tiny_integer_unsigned": "integer",
-    "increments": "integer",
-    "big_increments": "integer",
-    "tiny_increments": "integer",
-    "decimal": "numeric",
-    "unsigned_decimal": "numeric",
-    "double": "numeric",
-    "float": "numeric",
-    "json": "json",
-    "jsonb": "json",
-    "binary": "binary",
-    "inet": "inet",
-    "cidr": "cidr",
-    "macaddr": "macaddr",
-    "date": "date",
-    "time": "time",
-    # Naive and aware are DELIBERATELY different categories: mixing them in one
-    # expression forces a session-timezone-dependent (non-IMMUTABLE) cast, so an
-    # index over e.g. COALESCE(aware_col, naive_col) cannot be built at all.
-    "timestamp": "datetime_naive",
-    "datetime": "datetime_aware",
-    "point": "point",
-    "geometry": "geometry",
-}
-
-# Live ``data_type`` (lower-cased) -> coarse category.
-_DB_TYPE_CATEGORY = {
-    "character varying": "text",
-    "varchar": "text",
-    "character": "text",
-    "char": "text",
-    "text": "text",
-    "uuid": "uuid",
-    "boolean": "boolean",
-    "smallint": "integer",
-    "integer": "integer",
-    "bigint": "integer",
-    "numeric": "numeric",
-    "decimal": "numeric",
-    "double precision": "numeric",
-    "real": "numeric",
-    "json": "json",
-    "jsonb": "json",
-    "bytea": "binary",
-    "inet": "inet",
-    "cidr": "cidr",
-    "macaddr": "macaddr",
-    "date": "date",
-    "time without time zone": "time",
-    "time with time zone": "time",
-    "timestamp without time zone": "datetime_naive",
-    "timestamp with time zone": "datetime_aware",
-    "point": "point",
-}
-
-# The two datetime categories, so a naive↔aware mismatch can be reported with a
-# repair statement instead of the generic "type differs" line.
-_DATETIME_CATEGORIES = {"datetime_naive", "datetime_aware"}
-
-# Integer CAPACITY rank — the coarse "integer" category above blurs
-# smallint/integer/bigint into one bucket, so a column WIDENED in the model
-# (e.g. integer → big_integer for an id that will cross 2.1B) passes the
-# category check silently while the live column stays too narrow. These
-# ranks restore the one signal that matters: is the live column big enough
-# to hold what the model now declares? Same data-loss-only direction as the
-# varchar narrower-than-declared check.
-_MODEL_INT_RANK = {
-    "tiny_integer": 1,
-    "tiny_increments": 1,
-    "tiny_integer_unsigned": 1,
-    "small_integer": 1,
-    "small_integer_unsigned": 1,
-    "integer": 2,
-    "medium_integer": 2,
-    "increments": 2,
-    "unsigned_integer": 2,
-    "integer_unsigned": 2,
-    "medium_integer_unsigned": 2,
-    "big_integer": 3,
-    "big_increments": 3,
-    "unsigned_big_integer": 3,
-    "big_integer_unsigned": 3,
-}
-_DB_INT_RANK = {"smallint": 1, "integer": 2, "bigint": 3}
 
 
 class _SchemaColumnDiff:
     """The per-column half of the drift comparison."""
 
     def diff_column(self, table: str, name: str, declared: dict, live: dict) -> list[str]:
-        """Compare a single shared column: nullability + conservative type."""
+        """Compare a single shared column: nullability, type, width, default."""
         issues: list[str] = []
 
         # Nullable mismatch — cheap and high-signal. ``nullable is None`` means
@@ -155,10 +58,10 @@ class _SchemaColumnDiff:
         # Type mismatch — only when both sides map to KNOWN, DIFFERENT
         # categories. Unknown types on either side are skipped (no false
         # positives on aliases we haven't catalogued).
-        model_cat = _MODEL_TYPE_CATEGORY.get(declared["type"])
-        db_cat = _DB_TYPE_CATEGORY.get(live["data_type"])
+        model_cat = MODEL_TYPE_CATEGORY.get(declared["type"])
+        db_cat = DB_TYPE_CATEGORY.get(live["data_type"])
         if model_cat and db_cat and model_cat != db_cat:
-            if {model_cat, db_cat} <= _DATETIME_CATEGORIES:
+            if {model_cat, db_cat} <= DATETIME_CATEGORIES:
                 issues.append(self._timezone_drift_message(table, name, model_cat))
             else:
                 issues.append(
@@ -176,9 +79,10 @@ class _SchemaColumnDiff:
         # rejected outright — a 500 that left the customer unable to cancel
         # while metering kept running. Direction matters, exactly as it does
         # for text: a live column WIDER than declared is lenient and fine.
+        params = declared.get("params") or {}
         if model_cat == "numeric" and db_cat == "numeric":
-            declared_precision = declared.get("precision")
-            declared_scale = declared.get("scale")
+            declared_precision = params.get("precision")
+            declared_scale = params.get("scale")
             live_precision = live.get("numeric_precision")
             live_scale = live.get("numeric_scale")
             if (
@@ -210,8 +114,8 @@ class _SchemaColumnDiff:
         # values past the live column's range overflow on write). One-way,
         # data-loss-only — a model narrower than live is fine (lenient).
         if model_cat == "integer" and db_cat == "integer":
-            model_rank = _MODEL_INT_RANK.get(declared["type"])
-            db_rank = _DB_INT_RANK.get(live["data_type"])
+            model_rank = MODEL_INT_RANK.get(declared["type"])
+            db_rank = DB_INT_RANK.get(live["data_type"])
             if model_rank and db_rank and model_rank > db_rank:
                 issues.append(
                     f"column '{name}' is NARROWER than declared: model="
@@ -251,7 +155,35 @@ class _SchemaColumnDiff:
                     "being rejected"
                 )
 
+        issues.extend(self._diff_default(name, declared, live))
         return issues
+
+    @staticmethod
+    def _diff_default(name: str, declared: dict, live: dict) -> list[str]:
+        """DEFAULT drift, compared as values through ``cara.schema.Defaults``.
+
+        A column created by a from-zero migration carries its declared
+        default; one evolved by hand or by an interrupted plan may not, and an
+        INSERT that omits the column then stores NULL (or fails, NOT NULL) on
+        one database and the default on the other. A raw-SQL column's shape is
+        not known, so it is skipped. A default the model keeps as a Python
+        expression has no SQL spelling to compare, and is reported with the
+        planner's own refusal: skipped here, it was a green gate over a column
+        ``schema:plan`` refuses on every run.
+        """
+        if declared["nullable"] is None:
+            return []
+        try:
+            expected = declared_default_sql(declared.get("params"))
+        except SchemaPlanRefused as refusal:
+            return [f"column '{name}': {refusal}"]
+        actual = live_default_sql(live.get("default"))
+        if defaults_match(expected, actual):
+            return []
+        return [
+            f"column '{name}' default differs: model={expected or 'none'}, "
+            f"db={actual or 'none'}"
+        ]
 
     @staticmethod
     def _timezone_drift_message(table: str, column: str, model_category: str) -> str:

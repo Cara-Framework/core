@@ -109,7 +109,8 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
     for row in (
         run(
             "SELECT table_name, column_name, data_type, is_nullable, "
-            "character_maximum_length, numeric_precision, numeric_scale "
+            "character_maximum_length, numeric_precision, numeric_scale, "
+            "column_default "
             "FROM information_schema.columns "
             f"WHERE table_schema = '{sql_literal(target)}' "
             "ORDER BY table_name, ordinal_position"
@@ -126,6 +127,10 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
             # numeric(20,18) with both gates calling it clean.
             "numeric_precision": row.get("numeric_precision"),
             "numeric_scale": row.get("numeric_scale"),
+            # The server's own spelling (``'USD'::character varying``); read
+            # it through ``cara.schema.Defaults``. Not reading it at all let
+            # a column lose its DEFAULT with every gate calling it clean.
+            "default": row.get("column_default"),
         }
 
     checks: dict[str, set[str]] = {}
@@ -244,12 +249,12 @@ def declared_columns(model: dict) -> dict[str, dict]:
         params = field_def.get("params", {}) or {}
 
         if field_type in PSEUDO_FIELD_EXPANSIONS:
-            for col_name, col_type in PSEUDO_FIELD_EXPANSIONS[field_type]:
+            for col_name, col_type, col_params in PSEUDO_FIELD_EXPANSIONS[field_type]:
                 columns[col_name] = {
                     "type": col_type,
                     "nullable": True,
                     "length": None,
-                    "params": {},
+                    "params": dict(col_params),
                 }
             continue
 

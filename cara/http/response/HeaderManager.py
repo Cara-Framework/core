@@ -186,32 +186,6 @@ class HeaderManager:
         self.set("Authorization", token)
 
     # =============================================================================
-    # CORS HEADERS (Laravel-style)
-    # =============================================================================
-
-    def cors(
-        self,
-        origin: str = "*",
-        methods: str = "GET, POST, PUT, DELETE, OPTIONS",
-        headers: str = "Content-Type, Authorization",
-    ) -> None:
-        """
-        Set CORS headers (Laravel-style).
-
-        Args:
-            origin: Allowed origin
-            methods: Allowed methods
-            headers: Allowed headers
-        """
-        self.merge(
-            {
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Methods": methods,
-                "Access-Control-Allow-Headers": headers,
-            }
-        )
-
-    # =============================================================================
     # SECURITY HEADERS (Laravel-style)
     # =============================================================================
 

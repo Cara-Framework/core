@@ -113,7 +113,7 @@ class _Recorder:
             queue_name="sync",
             delivery_store=self.delivery_store,
             delivery_lease_token="lease-1",
-            tracker=SimpleNamespace(require_job_status_strict=lambda *_args: None),
+            tracker=SimpleNamespace(ensure_retry_progress_strict=lambda *_args: None),
             db_job_id=9,
         )
         if outcome == "retry_scheduled":
