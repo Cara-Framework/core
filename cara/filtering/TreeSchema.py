@@ -22,7 +22,7 @@ from typing import Any
 
 from cara.exceptions import FilterSchemaError
 
-from .TreeField import TreeField
+from .TreeField import KIND_DATE, TreeField
 
 # Structural caps. Depth is fixed by the wire grammar itself (root →
 # group → condition, nothing deeper); these bound breadth.
@@ -58,6 +58,13 @@ class TreeSchema:
             self._fields[field.id] = field
         if not self._fields:
             raise FilterSchemaError(f"Schema {name!r} declares no fields.")
+        self._has_dates = any(field.kind == KIND_DATE for field in self._fields.values())
+
+    @property
+    def has_dates(self) -> bool:
+        """Whether any field cuts calendar days — such a schema compiles and
+        evaluates only against an explicit zone (``compile_tree(zone=)``)."""
+        return self._has_dates
 
     def field(self, field_id: str) -> TreeField | None:
         """The field declaration behind ``field_id``, or ``None``."""

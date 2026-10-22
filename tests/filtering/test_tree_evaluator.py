@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime
+import importlib
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -17,8 +19,8 @@ from cara.filtering import (
     FilterTree,
     TreeField,
     TreeSchema,
-    evaluate_tree,
 )
+from cara.filtering import evaluate_tree as _evaluate_tree
 
 SCHEMA = TreeSchema(
     "evaluator.test",
@@ -46,8 +48,21 @@ SCHEMA = TreeSchema(
 )
 
 
+_LA = ZoneInfo("America/Los_Angeles")
+_evaluator = importlib.import_module("cara.filtering.TreeEvaluator")
+
+
 def _tree(wire: str) -> FilterTree:
     return FilterTree.parse(wire, SCHEMA)
+
+
+def evaluate_tree(tree, values, **kwargs):
+    kwargs.setdefault("zone", _LA)
+    return _evaluate_tree(tree, values, **kwargs)
+
+
+def _at(*parts: int) -> datetime.datetime:
+    return datetime.datetime(*parts, tzinfo=datetime.UTC)
 
 
 def _row(**overrides):
@@ -157,3 +172,48 @@ def test_groups_and_root_connective() -> None:
         '{"any":[{"f":"status","o":"in","v":["unknown"]},{"f":"gap","o":"gte","v":["4"]}]}'
     )
     assert evaluate_tree(root_any, _row(status="violation")) is True
+
+
+def test_a_date_schema_refuses_to_evaluate_without_a_zone_even_when_empty() -> None:
+    with pytest.raises(FilterTreeCompileError, match="date fields"):
+        _evaluate_tree(_tree(None), _row())
+    plain = TreeSchema(
+        "evaluator.nodates", (TreeField("gap", KIND_NUMBER, column="gap", label="Gap"),)
+    )
+    tree = FilterTree.parse('[{"f":"gap","o":"gte","v":["4"]}]', plain)
+    assert _evaluate_tree(tree, lambda field: 5) is True
+
+
+def test_dst_days_match_the_compilers_23_and_25_hour_days() -> None:
+    spring = _tree('[{"f":"seen","o":"between","v":["2026-03-08","2026-03-08"]}]')
+    assert evaluate_tree(spring, _row(seen=_at(2026, 3, 8, 8))) is True
+    assert evaluate_tree(spring, _row(seen=_at(2026, 3, 8, 7, 59))) is False
+    assert evaluate_tree(spring, _row(seen=_at(2026, 3, 9, 6, 59))) is True
+    assert evaluate_tree(spring, _row(seen=_at(2026, 3, 9, 7))) is False
+    autumn = _tree('[{"f":"seen","o":"between","v":["2026-11-01","2026-11-01"]}]')
+    assert evaluate_tree(autumn, _row(seen=_at(2026, 11, 1, 7))) is True
+    assert evaluate_tree(autumn, _row(seen=_at(2026, 11, 2, 7, 59))) is True
+    assert evaluate_tree(autumn, _row(seen=_at(2026, 11, 2, 8))) is False
+
+
+def test_a_moment_after_utc_midnight_belongs_to_the_zones_previous_day() -> None:
+    late = _row(seen=_at(2026, 10, 21, 6, 30))  # 2026-10-20 23:30 in Los Angeles
+    between = _tree('[{"f":"seen","o":"between","v":["2026-10-20","2026-10-20"]}]')
+    after = _tree('[{"f":"seen","o":"after","v":["2026-10-20"]}]')
+    assert evaluate_tree(between, late) is True
+    assert evaluate_tree(after, late) is False
+    utc = ZoneInfo("UTC")
+    assert evaluate_tree(between, late, zone=utc) is False
+    assert evaluate_tree(after, late, zone=utc) is True
+
+
+def test_last_days_is_calendar_aligned_in_the_zone(monkeypatch) -> None:
+    # 2026-10-21T06:30Z is still 2026-10-20 in Los Angeles: "last 1 day"
+    # is that local day, opening at 2026-10-20T07:00Z.
+    monkeypatch.setattr(_evaluator, "_now", lambda: _at(2026, 10, 21, 6, 30))
+    one = _tree('[{"f":"seen","o":"last_days","v":["1"]}]')
+    assert evaluate_tree(one, _row(seen=_at(2026, 10, 20, 7))) is True
+    assert evaluate_tree(one, _row(seen=_at(2026, 10, 20, 6, 59))) is False
+    week = _tree('[{"f":"seen","o":"last_days","v":["7"]}]')
+    assert evaluate_tree(week, _row(seen=_at(2026, 10, 14, 7))) is True
+    assert evaluate_tree(week, _row(seen=_at(2026, 10, 14, 6, 59))) is False

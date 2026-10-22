@@ -2,9 +2,10 @@
 
 Every operator compiles to exactly the SQL it claims: real ``= ANY``,
 real ``OR`` groups, NULL-inclusive negatives on nullable fields only,
-escaped ILIKE containment, UTC day-boundary date math, and entity
-values bound from the app's resolved + authorized mapping (an
-unresolved id raises instead of degrading the filter).
+escaped ILIKE containment, day-boundary date math in the caller's
+zone (DST days included), and entity values bound from the app's
+resolved + authorized mapping (an unresolved id raises instead of
+degrading the filter).
 """
 
 from __future__ import annotations
@@ -12,10 +13,11 @@ from __future__ import annotations
 import datetime
 import json
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from cara.exceptions import FilterTreeCompileError
+from cara.exceptions import FilterSchemaError, FilterTreeCompileError
 from cara.filtering import (
     FilterTree,
     TreeField,
@@ -25,6 +27,7 @@ from cara.filtering import (
 
 _CHN = "CHN" + "0123456789ABCDEFGHJKMNPQRS"
 _UTC = datetime.UTC
+_LA = ZoneInfo("America/Los_Angeles")
 
 
 def _schema() -> TreeSchema:
@@ -55,11 +58,44 @@ def _schema() -> TreeSchema:
 
 def _compile(nodes, **kwargs):
     tree = FilterTree.parse(json.dumps(nodes), _schema())
+    kwargs.setdefault("zone", _LA)
     return compile_tree(tree, **kwargs)
 
 
+def _at(*parts: int) -> datetime.datetime:
+    return datetime.datetime(*parts, tzinfo=_UTC)
+
+
 def test_empty_tree_compiles_to_none():
-    assert compile_tree(FilterTree.empty(_schema())) is None
+    assert compile_tree(FilterTree.empty(_schema()), zone=_LA) is None
+
+
+def test_a_date_schema_refuses_to_compile_without_a_zone_even_when_empty():
+    with pytest.raises(FilterTreeCompileError, match="date fields"):
+        compile_tree(FilterTree.empty(_schema()))
+    with pytest.raises(FilterTreeCompileError, match="date fields"):
+        compile_tree(
+            FilterTree.parse(
+                json.dumps([{"f": "price", "o": "gt", "v": ["1"]}]), _schema()
+            )
+        )
+
+
+def test_a_date_field_never_renders_through_a_sql_hook():
+    # The hook is never handed the zone, so it could only cut its days in
+    # another calendar than the one the caller compiles with.
+    with pytest.raises(FilterSchemaError, match="renders on a column"):
+        TreeField("placed", "date", sql=lambda op, values, ctx: ("TRUE", []))
+
+
+def test_a_schema_without_dates_compiles_without_a_zone():
+    schema = TreeSchema(
+        "tests.compile.nodates", (TreeField("price", "number", column="price"),)
+    )
+    assert not schema.has_dates
+    assert _schema().has_dates
+    tree = FilterTree.parse(json.dumps([{"f": "price", "o": "gt", "v": ["1"]}]), schema)
+    assert compile_tree(tree) == ("(price > %s)", [Decimal("1")])
 
 
 def test_root_nodes_and_join_and_groups_or_join():
@@ -141,24 +177,68 @@ def test_number_bindings_preserve_decimal_precision() -> None:
     assert params == [Decimal("99999999999.999999")]
 
 
-def test_date_operators_use_utc_day_boundaries():
+def test_date_operators_bind_the_zones_day_starts_on_the_bare_column():
+    # Pacific daylight time: a day opens at 07:00Z.
     sql, params = _compile([{"f": "updated", "o": "before", "v": ["2026-08-01"]}])
     assert sql == "(updated_at < %s)"
-    assert params == [datetime.datetime(2026, 8, 1, tzinfo=_UTC)]
+    assert params == [_at(2026, 8, 1, 7)]
     sql, params = _compile([{"f": "updated", "o": "after", "v": ["2026-08-01"]}])
     assert sql == "(updated_at >= %s)"
-    assert params == [datetime.datetime(2026, 8, 2, tzinfo=_UTC)]
+    assert params == [_at(2026, 8, 2, 7)]
     sql, params = _compile(
         [{"f": "updated", "o": "between", "v": ["2026-08-03", "2026-08-01"]}]
     )
     assert sql == "((updated_at >= %s AND updated_at < %s))"
-    assert params == [
-        datetime.datetime(2026, 8, 1, tzinfo=_UTC),
-        datetime.datetime(2026, 8, 4, tzinfo=_UTC),
-    ]
+    assert params == [_at(2026, 8, 1, 7), _at(2026, 8, 4, 7)]
+    # Pacific standard time: a day opens at 08:00Z.
+    _, params = _compile(
+        [{"f": "updated", "o": "between", "v": ["2026-12-10", "2026-12-10"]}]
+    )
+    assert params == [_at(2026, 12, 10, 8), _at(2026, 12, 11, 8)]
+
+
+def test_dst_days_are_23_and_25_hours_long():
+    _, params = _compile(
+        [{"f": "updated", "o": "between", "v": ["2026-03-08", "2026-03-08"]}]
+    )
+    assert params == [_at(2026, 3, 8, 8), _at(2026, 3, 9, 7)]
+    assert params[1] - params[0] == datetime.timedelta(hours=23)
+    _, params = _compile(
+        [{"f": "updated", "o": "between", "v": ["2026-11-01", "2026-11-01"]}]
+    )
+    assert params == [_at(2026, 11, 1, 7), _at(2026, 11, 2, 8)]
+    assert params[1] - params[0] == datetime.timedelta(hours=25)
+
+
+def test_a_moment_after_utc_midnight_belongs_to_the_zones_previous_day():
+    moment = _at(2026, 10, 21, 6, 30)  # 2026-10-20 23:30 in Los Angeles
+    _, (start, stop) = _compile(
+        [{"f": "updated", "o": "between", "v": ["2026-10-20", "2026-10-20"]}]
+    )
+    assert start <= moment < stop
+    _, (after,) = _compile([{"f": "updated", "o": "after", "v": ["2026-10-20"]}])
+    assert not moment >= after
+    # The same tree cut in UTC reads the reverse.
+    utc = ZoneInfo("UTC")
+    _, (start, stop) = _compile(
+        [{"f": "updated", "o": "between", "v": ["2026-10-20", "2026-10-20"]}], zone=utc
+    )
+    assert not start <= moment < stop
+    _, (after,) = _compile(
+        [{"f": "updated", "o": "after", "v": ["2026-10-20"]}], zone=utc
+    )
+    assert moment >= after
+
+
+def test_last_days_opens_at_the_zones_local_midnight_n_minus_1_days_back():
     sql, params = _compile([{"f": "updated", "o": "last_days", "v": ["7"]}])
-    assert sql == "(updated_at >= NOW() - (%s * INTERVAL '1 day'))"
-    assert params == [7]
+    assert sql == (
+        "(updated_at >= ((date_trunc('day', NOW() AT TIME ZONE %s)"
+        " - (%s * INTERVAL '1 day')) AT TIME ZONE %s))"
+    )
+    assert params == ["America/Los_Angeles", 6, "America/Los_Angeles"]
+    _, params = _compile([{"f": "updated", "o": "last_days", "v": ["1"]}])
+    assert params == ["America/Los_Angeles", 0, "America/Los_Angeles"]
 
 
 def test_custom_sql_hook_owns_its_fragment():
@@ -174,7 +254,7 @@ def test_root_any_compiles_to_or_of_ands():
         '{"f":"linked","o":"is","v":["false"]}]}]}'
     )
     tree = FilterTree.parse(raw, _schema())
-    sql, params = compile_tree(tree, ctx={"listing": "l"})
+    sql, params = compile_tree(tree, zone=_LA, ctx={"listing": "l"})
     assert sql == (
         "(l.status = ANY(%s) OR (l.status = ANY(%s) AND (product_id IS NULL)))"
     )

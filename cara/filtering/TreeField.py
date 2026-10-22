@@ -39,7 +39,9 @@ KIND_ENTITY = "entity"  # public-id references, resolved + authorized per value
 KIND_BOOLEAN = "boolean"  # true/false
 KIND_TEXT = "text"  # free text, substring/equality
 KIND_NUMBER = "number"  # numeric comparisons and ranges
-KIND_DATE = "date"  # calendar-day comparisons over TIMESTAMPTZ columns
+# Calendar-day comparisons over TIMESTAMPTZ columns, cut in the zone the
+# caller compiles/evaluates with (``compile_tree(zone=)``).
+KIND_DATE = "date"
 
 KINDS = (KIND_SELECT, KIND_ENTITY, KIND_BOOLEAN, KIND_TEXT, KIND_NUMBER, KIND_DATE)
 
@@ -145,6 +147,14 @@ class TreeField:
             raise FilterSchemaError(f"Unknown tree field kind {kind!r} for {id!r}.")
         if column is None and sql is None:
             raise FilterSchemaError(f"Tree field {id!r} needs a column or a sql hook.")
+        if kind == KIND_DATE and sql is not None:
+            # The compiler cuts a date field's days in the caller's zone
+            # (``compile_tree(zone=)``); a hook is never handed that zone, so
+            # it could only cut them somewhere else.
+            raise FilterSchemaError(
+                f"Date field {id!r} renders on a column: its days are cut in the"
+                " caller's zone, which a sql hook never sees."
+            )
         if kind == KIND_SELECT and not options:
             raise FilterSchemaError(f"Select field {id!r} needs an options vocabulary.")
         if kind == KIND_ENTITY and (not prefix or not is_public_id_prefix(prefix)):

@@ -12,6 +12,10 @@ compiler includes NULLs on nullable columns.
 Entity values evaluate through the SAME ``resolutions`` mapping the app
 built by resolving + AUTHORIZING every public id in the tree. A missing
 resolution raises — it must never degrade into an unfiltered feed.
+
+Date operators cut calendar days in the caller's ``zone`` with the
+compiler's own rule — the same gate (a date schema needs a zone, even
+for an empty tree) and the same day starts.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import datetime as _datetime
 from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from cara.exceptions import FilterTreeCompileError
 
@@ -57,47 +62,64 @@ def evaluate_tree(
     tree: FilterTree,
     values: Callable[[str], Any],
     *,
+    zone: ZoneInfo | None = None,
     resolutions: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> bool:
     """Whether one row matches ``tree`` — ``True`` when the tree is empty.
 
     ``values`` maps a field id to the row's value for it (the caller owns
-    the projection's shape); ``resolutions`` maps
-    ``field_id -> {public_id -> bound value}`` for entity fields, exactly
-    as the SQL compiler takes them.
+    the projection's shape); ``zone`` is the calendar the date operators
+    cut days in, required whenever the schema has a date field;
+    ``resolutions`` maps ``field_id -> {public_id -> bound value}`` for
+    entity fields, exactly as the SQL compiler takes them.
     """
+    if tree.schema.has_dates and zone is None:
+        raise FilterTreeCompileError(
+            f"Schema {tree.schema.name!r} has date fields: evaluate it with the"
+            " zone its calendar days are cut in."
+        )
     if tree.is_empty:
         return True
-    verdicts = (_evaluate_node(tree, node, values, resolutions) for node in tree.nodes)
+    verdicts = (
+        _evaluate_node(tree, node, values, zone, resolutions) for node in tree.nodes
+    )
     return any(verdicts) if tree.connective == "any" else all(verdicts)
+
+
+def _now() -> _datetime.datetime:
+    """The wall clock ``last_days`` measures from — a module-level seam so
+    a test can rebind it."""
+    return _datetime.datetime.now(_UTC)
 
 
 def _evaluate_node(
     tree: FilterTree,
     node: TreeCondition | TreeGroup,
     values: Callable[[str], Any],
+    zone: ZoneInfo | None,
     resolutions: Mapping[str, Mapping[str, Any]] | None,
 ) -> bool:
     if isinstance(node, TreeGroup):
         verdicts = (
-            _evaluate_condition(tree, condition, values, resolutions)
+            _evaluate_condition(tree, condition, values, zone, resolutions)
             for condition in node.conditions
         )
         return any(verdicts) if node.connective == "any" else all(verdicts)
-    return _evaluate_condition(tree, node, values, resolutions)
+    return _evaluate_condition(tree, node, values, zone, resolutions)
 
 
 def _evaluate_condition(
     tree: FilterTree,
     condition: TreeCondition,
     values: Callable[[str], Any],
+    zone: ZoneInfo | None,
     resolutions: Mapping[str, Mapping[str, Any]] | None,
 ) -> bool:
     field = tree.schema.field(condition.field)
     if field is None:  # pragma: no cover - parse() already guarantees this
         raise FilterTreeCompileError(f"Unknown field {condition.field!r}.")
     bound = _bound_values(field, condition, resolutions)
-    return _apply_operator(field, condition.operator, bound, values(field.id))
+    return _apply_operator(field, condition.operator, bound, values(field.id), zone)
 
 
 def _bound_values(
@@ -125,10 +147,20 @@ def _bound_values(
     return condition.values
 
 
-def _day_start(value: str) -> _datetime.datetime:
-    return _datetime.datetime.combine(
-        _datetime.date.fromisoformat(value), _datetime.time.min, tzinfo=_UTC
+def _day_start(day: _datetime.date, zone: ZoneInfo) -> _datetime.datetime:
+    """The UTC instant ``day`` opens in ``zone`` — the compiler's rule: a
+    local midnight the zone skips resolves to the day's first real instant."""
+    return _datetime.datetime.combine(day, _datetime.time.min, tzinfo=zone).astimezone(
+        _UTC
     )
+
+
+def _named_day(value: Any) -> _datetime.date:
+    return _datetime.date.fromisoformat(str(value))
+
+
+def _next_day(value: Any) -> _datetime.date:
+    return _named_day(value) + _datetime.timedelta(days=1)
 
 
 def _as_moment(value: Any) -> _datetime.datetime | None:
@@ -141,7 +173,11 @@ def _as_moment(value: Any) -> _datetime.datetime | None:
 
 
 def _apply_operator(
-    field: TreeField, operator: str, bound: tuple[Any, ...], actual: Any
+    field: TreeField,
+    operator: str,
+    bound: tuple[Any, ...],
+    actual: Any,
+    zone: ZoneInfo | None,
 ) -> bool:
     # ── value-less ──────────────────────────────────────────────────
     if operator == OP_EMPTY:
@@ -149,26 +185,31 @@ def _apply_operator(
     if operator == OP_NOT_EMPTY:
         return actual is not None
 
-    # ── calendar-day comparisons (UTC whole days) ───────────────────
+    # ── calendar-day comparisons (whole days of ``zone``) ───────────
     if field.kind == KIND_DATE:
+        if zone is None:  # pragma: no cover - evaluate_tree refuses this first
+            raise FilterTreeCompileError(f"Date field {field.id!r} needs a zone.")
         moment = _as_moment(actual)
+        if moment is None:
+            return False
         if operator == OP_BEFORE:
-            return moment is not None and moment < _day_start(str(bound[0]))
+            return moment < _day_start(_named_day(bound[0]), zone)
         if operator == OP_AFTER:
-            return moment is not None and moment >= _day_start(
-                str(bound[0])
-            ) + _datetime.timedelta(days=1)
+            return moment >= _day_start(_next_day(bound[0]), zone)
         if operator == OP_BETWEEN:
-            return moment is not None and _day_start(
-                str(bound[0])
-            ) <= moment < _day_start(str(bound[1])) + _datetime.timedelta(days=1)
+            return (
+                _day_start(_named_day(bound[0]), zone)
+                <= moment
+                < _day_start(_next_day(bound[1]), zone)
+            )
         if operator == OP_LAST_DAYS:
             # Wall-clock evaluated per call, mirroring the compiler's
             # SQL-side NOW(): the canonical tree pins the N, not the moment.
-            now = _datetime.datetime.now(_UTC)
-            return moment is not None and moment >= now - _datetime.timedelta(
-                days=int(str(bound[0]))
-            )
+            # Calendar-aligned like the compiler: today in ``zone`` plus the
+            # N - 1 days before it.
+            today = _now().astimezone(zone).date()
+            first = today - _datetime.timedelta(days=int(str(bound[0])) - 1)
+            return moment >= _day_start(first, zone)
 
     if field.kind == KIND_NUMBER and actual is not None:
         try:

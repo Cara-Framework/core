@@ -18,6 +18,12 @@ Entity values are compiled from the ``resolutions`` mapping the app
 built by resolving + AUTHORIZING every public id in the tree (see
 ``FilterTree.entity_values``). A missing resolution is a programming
 error and raises — it must never degrade into an unfiltered query.
+
+Date operators cut calendar days in the ``zone`` the caller passes — the
+calendar the product reports in. A schema with a date field refuses to
+compile without one (even for an empty tree, so a call site that forgets
+it fails on its first request rather than the day someone adds a date
+filter); there is no UTC default to fall back to silently.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import datetime as _datetime
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from cara.exceptions import FilterTreeCompileError
 from cara.support import like_contains
@@ -63,15 +70,23 @@ _UTC = _datetime.UTC
 def compile_tree(
     tree: FilterTree,
     *,
+    zone: ZoneInfo | None = None,
     resolutions: Mapping[str, Mapping[str, Any]] | None = None,
     ctx: Mapping[str, str] | None = None,
 ) -> tuple[str, list[Any]] | None:
     """Render ``tree`` to ``(fragment, params)`` — ``None`` when empty.
 
-    ``resolutions`` maps ``field_id -> {public_id -> bound value}`` for
-    entity fields. ``ctx`` resolves ``{alias}`` placeholders in field
-    columns so one schema renders against any table aliasing.
+    ``zone`` is the calendar the date operators cut days in; it is
+    required whenever the schema has a date field. ``resolutions`` maps
+    ``field_id -> {public_id -> bound value}`` for entity fields. ``ctx``
+    resolves ``{alias}`` placeholders in field columns so one schema
+    renders against any table aliasing.
     """
+    if tree.schema.has_dates and zone is None:
+        raise FilterTreeCompileError(
+            f"Schema {tree.schema.name!r} has date fields: compile it with the"
+            " zone its calendar days are cut in."
+        )
     if tree.is_empty:
         return None
     root_joiner = " OR " if tree.connective == "any" else " AND "
@@ -82,12 +97,12 @@ def compile_tree(
             joiner = " OR " if node.connective == "any" else " AND "
             parts: list[str] = []
             for condition in node.conditions:
-                sql, values = _compile_condition(tree, condition, resolutions, ctx)
+                sql, values = _compile_condition(tree, condition, zone, resolutions, ctx)
                 parts.append(sql)
                 params.extend(values)
             fragments.append("(" + joiner.join(parts) + ")")
         else:
-            sql, values = _compile_condition(tree, node, resolutions, ctx)
+            sql, values = _compile_condition(tree, node, zone, resolutions, ctx)
             fragments.append(sql)
             params.extend(values)
     return "(" + root_joiner.join(fragments) + ")", params
@@ -96,6 +111,7 @@ def compile_tree(
 def _compile_condition(
     tree: FilterTree,
     condition: TreeCondition,
+    zone: ZoneInfo | None,
     resolutions: Mapping[str, Mapping[str, Any]] | None,
     ctx: Mapping[str, str] | None,
 ) -> tuple[str, list[Any]]:
@@ -107,7 +123,7 @@ def _compile_condition(
         fragment, params = field.sql(condition.operator, values, dict(ctx or {}))
         return f"({fragment})", list(params)
     column = _render_column(field, ctx)
-    return _render_operator(field, column, condition.operator, values)
+    return _render_operator(field, column, condition.operator, values, zone)
 
 
 def _bound_values(
@@ -146,18 +162,28 @@ def _render_column(field: TreeField, ctx: Mapping[str, str] | None) -> str:
         ) from None
 
 
-def _day_start(value: str) -> _datetime.datetime:
-    return _datetime.datetime.combine(
-        _datetime.date.fromisoformat(value), _datetime.time.min, tzinfo=_UTC
+def _day_start(value: Any, zone: ZoneInfo) -> _datetime.datetime:
+    """The UTC instant ``value``'s day opens in ``zone``. A local midnight
+    the zone skips (a DST jump at 00:00) resolves to the first instant
+    that day really has."""
+    day = _datetime.date.fromisoformat(str(value))
+    return _datetime.datetime.combine(day, _datetime.time.min, tzinfo=zone).astimezone(
+        _UTC
     )
 
 
-def _next_day_start(value: str) -> _datetime.datetime:
-    return _day_start(value) + _datetime.timedelta(days=1)
+def _next_day_start(value: Any, zone: ZoneInfo) -> _datetime.datetime:
+    # The NEXT day's own start, never ``+ 24h``: a DST day is 23 or 25 hours.
+    day = _datetime.date.fromisoformat(str(value)) + _datetime.timedelta(days=1)
+    return _day_start(day.isoformat(), zone)
 
 
 def _render_operator(
-    field: TreeField, column: str, operator: str, values: tuple[Any, ...]
+    field: TreeField,
+    column: str,
+    operator: str,
+    values: tuple[Any, ...],
+    zone: ZoneInfo | None,
 ) -> tuple[str, list[Any]]:
     # ── value-less ──────────────────────────────────────────────────
     if operator == OP_EMPTY:
@@ -203,23 +229,37 @@ def _render_operator(
         return f"{column} BETWEEN %s AND %s", [values[0], values[1]]
 
     # ── calendar-day comparisons over TIMESTAMPTZ ───────────────────
-    # Whole days in UTC: "before 2026-08-01" excludes that day,
-    # "after 2026-08-01" starts the NEXT day, "between" is inclusive of
-    # both named days ([start, end-exclusive) on day boundaries).
-    if operator == OP_BEFORE:
-        return f"{column} < %s", [_day_start(str(values[0]))]
-    if operator == OP_AFTER:
-        return f"{column} >= %s", [_next_day_start(str(values[0]))]
-    if operator == OP_BETWEEN and field.kind == KIND_DATE:
-        return (
-            f"({column} >= %s AND {column} < %s)",
-            [_day_start(str(values[0])), _next_day_start(str(values[1]))],
-        )
-    if operator == OP_LAST_DAYS:
-        # NOW() stays SQL-side so the window is evaluated per execution;
-        # the canonical tree (and so the cursor scope) pins the N, not
-        # the wall-clock moment.
-        return f"{column} >= NOW() - (%s * INTERVAL '1 day')", [int(str(values[0]))]
+    # Whole days of ``zone``'s calendar, bound as the UTC instants they
+    # open at so the bare column keeps its index: "before 2026-08-01"
+    # excludes that day, "after 2026-08-01" starts the NEXT day,
+    # "between" is inclusive of both named days ([start, end-exclusive)
+    # on day boundaries). A day is 23 or 25 hours across a DST change;
+    # each boundary is that day's own local midnight, never "+ 24h".
+    if field.kind == KIND_DATE:
+        if zone is None:  # pragma: no cover - compile_tree refuses this first
+            raise FilterTreeCompileError(f"Date field {field.id!r} needs a zone.")
+        if operator == OP_BEFORE:
+            return f"{column} < %s", [_day_start(values[0], zone)]
+        if operator == OP_AFTER:
+            return f"{column} >= %s", [_next_day_start(values[0], zone)]
+        if operator == OP_BETWEEN:
+            return (
+                f"({column} >= %s AND {column} < %s)",
+                [_day_start(values[0], zone), _next_day_start(values[1], zone)],
+            )
+        if operator == OP_LAST_DAYS:
+            # Calendar-aligned like every period selector: today plus the
+            # N - 1 days before it, opening at that day's local midnight.
+            # NOW() stays SQL-side so the window is evaluated per
+            # execution; the canonical tree (and so the cursor scope) pins
+            # the N, not the wall-clock moment. The subtraction runs on the
+            # zone's wall clock (a naive timestamp), so a DST change inside
+            # the window cannot shift the opening midnight by an hour.
+            return (
+                f"{column} >= ((date_trunc('day', NOW() AT TIME ZONE %s)"
+                f" - (%s * INTERVAL '1 day')) AT TIME ZONE %s)",
+                [zone.key, int(str(values[0])) - 1, zone.key],
+            )
 
     raise FilterTreeCompileError(  # pragma: no cover - parse() blocks this
         f"Operator {operator!r} is not compilable for field {field.id!r}."
