@@ -76,9 +76,9 @@ def _unique_index_preflight(
         return None, None
     columns = " ".join(match.group("columns").split())
     predicate = match.group("predicate")
-    where = ""
+    where = f" WHERE ({columns}) IS NOT NULL"  # NULLS DISTINCT: NULL keys never collide
     if predicate:
-        where = f" WHERE {' '.join(predicate.rstrip(';').split())}"
+        where += f" AND ({' '.join(predicate.rstrip(';').split())})"
     return (
         f'SELECT 1 FROM "{table}"{where} GROUP BY {columns} HAVING COUNT(*) > 1 LIMIT 1',
         f"{table} already holds duplicate keys for {index_name} — resolve them "
@@ -534,9 +534,9 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
                     f"{', '.join(columns)}"
                 ),
                 transactional=False,
-                preflight_sql=(
-                    f'SELECT 1 FROM "{table}" GROUP BY {column_list} '
-                    f"HAVING COUNT(*) > 1 LIMIT 1"
+                preflight_sql=(  # NULLS DISTINCT: NULL keys never collide
+                    f'SELECT 1 FROM "{table}" WHERE ({column_list}) IS NOT NULL '
+                    f"GROUP BY {column_list} HAVING COUNT(*) > 1 LIMIT 1"
                 )
                 if unique
                 else None,

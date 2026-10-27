@@ -286,8 +286,8 @@ def test_raw_partial_unique_index_gets_a_duplicate_preflight():
 
     index_op = next(op for op in operations if op.kind == "create_index")
     assert index_op.preflight_sql == (
-        'SELECT 1 FROM "product" WHERE sku IS NOT NULL '
-        "GROUP BY tenant_id, sku HAVING COUNT(*) > 1 LIMIT 1"
+        'SELECT 1 FROM "product" WHERE (tenant_id, sku) IS NOT NULL '
+        "AND (sku IS NOT NULL) GROUP BY tenant_id, sku HAVING COUNT(*) > 1 LIMIT 1"
     )
     assert "product_tenant_sku_unique" in index_op.preflight_failure
 
@@ -587,9 +587,33 @@ def test_unique_index_carries_a_duplicate_preflight():
     operations, _, _ = plan([model], _live({"slug": _col()}))
     operation = next(op for op in operations if op.kind == "create_index")
     assert operation.preflight_sql == (
-        'SELECT 1 FROM "product" GROUP BY "slug" HAVING COUNT(*) > 1 LIMIT 1'
+        'SELECT 1 FROM "product" WHERE ("slug") IS NOT NULL '
+        'GROUP BY "slug" HAVING COUNT(*) > 1 LIMIT 1'
     )
     assert "duplicate" in operation.preflight_failure
+
+
+def test_unique_preflight_ignores_rows_with_a_null_key():
+    """Under ``NULLS DISTINCT`` a row with any NULL key column never collides,
+    so it cannot block the build. Grouping it anyway refused a unique index
+    on a column the same plan had just added, every row still NULL. The row
+    test ``(a, b) IS NOT NULL`` holds only when every column is set."""
+    model = _model(
+        {
+            "tenant_id": _field("big_integer"),
+            "sku": _field("string", length=64, nullable=True),
+        }
+    )
+    model["composite_uniques"] = [
+        {"columns": ["tenant_id", "sku"], "name": "product_tenant_sku_unique"}
+    ]
+    live = _live({"tenant_id": _col("bigint", False, None), "sku": _col()})
+    operations, _, _ = plan([model], live)
+    operation = next(op for op in operations if op.kind == "create_index")
+    assert operation.preflight_sql == (
+        'SELECT 1 FROM "product" WHERE ("tenant_id", "sku") IS NOT NULL '
+        'GROUP BY "tenant_id", "sku" HAVING COUNT(*) > 1 LIMIT 1'
+    )
 
 
 def test_a_plain_index_needs_no_preflight():

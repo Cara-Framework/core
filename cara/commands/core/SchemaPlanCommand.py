@@ -146,6 +146,11 @@ class SchemaPlanCommand(CommandBase):
             return 0
 
         blocked: list[str] = []
+        backfilled = {
+            op.key.removesuffix(":backfill")
+            for op in operations
+            if op.kind == "backfill_column"
+        }
         by_safety: dict[str, list] = {ADDITIVE: [], LOCKING: [], DESTRUCTIVE: []}
         for operation in operations:
             by_safety.setdefault(operation.safety, []).append(operation)
@@ -161,7 +166,11 @@ class SchemaPlanCommand(CommandBase):
                 self.info(f"      {operation.reason}")
                 for note in operation.notes:
                     self.warning(f"      ! {note}")
-                if operation.preflight_sql:
+                if operation.preflight_sql and self._after_backfill(
+                    operation, backfilled
+                ):
+                    self.info("      … preflight runs at apply, after the backfill above")
+                elif operation.preflight_sql:
                     blocker = self._preflight(operation)
                     if blocker:
                         blocked.append(blocker)
@@ -311,6 +320,23 @@ class SchemaPlanCommand(CommandBase):
 
         self.success("   rehearsal clean: every operation executed on the clone.")
         return 0
+
+    @staticmethod
+    def _after_backfill(operation, backfilled: set[str]) -> bool:
+        """A NOT NULL step whose own backfill runs earlier in this plan.
+
+        Asked now, its preflight reads rows that backfill has not written yet.
+        A recipe resumed after step 1 (the column added, the apply stopped by
+        a later failure) therefore read as blocked on the very NULLs step 2
+        fills, and the command refused to write the artifact that finishes
+        it. ``schema:apply`` asks the same query in plan order — after the
+        backfill, against the rows that are really there — and stops before
+        the ``SET NOT NULL`` if any survived.
+        """
+        return (
+            operation.kind == "set_not_null"
+            and operation.key.removesuffix(":not_null") in backfilled
+        )
 
     def _preflight(self, operation) -> str | None:
         """Answer the operation's data question against the live database."""
