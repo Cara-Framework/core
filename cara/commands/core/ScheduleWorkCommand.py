@@ -10,6 +10,8 @@ import asyncio
 import contextlib
 import inspect
 import json
+import os
+import sys
 import time
 import traceback
 import uuid
@@ -80,6 +82,7 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
     def __init__(self, application=None):
         super().__init__(application)
         self.start_time = None
+        self._reload_requested = False
 
     def handle(self, driver: str | None = None):
         """Handle schedule worker execution with enhanced monitoring."""
@@ -126,6 +129,32 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                 _Metrics.scheduler_ready.set(0)
             self.cleanup_auto_reload()
             self._show_final_stats()
+        if self._reload_requested:
+            self._restart_scheduler_process()
+
+    def _trigger_auto_reload(self) -> None:
+        """Stop the scheduler, then replace the process for code reload.
+
+        The generic in-process reload (``MakesAutoReload``) purges ``app.*``
+        and re-enters the loop WITHOUT re-running the service providers:
+        every registry a provider fills at boot (automation actions,
+        connector sweep lanes, container bindings) comes back empty, so the
+        in-process jobs fail ("unknown action adjust_price", unresolvable
+        bindings) until someone restarts by hand (live test B, 2026-10-28).
+        A process replacement after the scheduler stops re-bootstraps every
+        provider, exactly like a manual restart — the ``queue:work``
+        contract.
+        """
+        if not self._auto_reload_enabled or self._reload_requested:
+            return
+        self.info("🔄 File changed — stopping the scheduler before process reload")
+        self._reload_requested = True
+        self.shutdown_requested = True
+
+    @staticmethod
+    def _restart_scheduler_process() -> None:
+        """Replace the stopped scheduler with the same interpreter/arguments."""
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
     def _run_main_loop(self, *args, **kwargs):
         """Main scheduler loop - called by MakesAutoReload on restart."""
@@ -532,7 +561,9 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
                 with contextlib.suppress(
                     OSError, RuntimeError, AttributeError, ConnectionError
                 ):
-                    driver.shutdown(wait=False)
+                    # A reload lets in-flight in-process jobs finish before
+                    # the process is replaced; Ctrl-C / --once do not wait.
+                    driver.shutdown(wait=getattr(self, "_reload_requested", False))
 
     def _publish_schedule_snapshot(self, driver) -> None:
         """Publish the live schedule to the shared cache, rate-limited.

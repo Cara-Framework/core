@@ -557,10 +557,16 @@ def _process_message(
         return "failure"
 
     except Exception as job_error:
-        Log.error("Job failed: %s", job_error, exc_info=True)
-        # Terminal catch: the worker consumes the failure ("failed
-        # gracefully"), so the explicit capture is Sentry's only path.
-        observability.capture_exception(job_error)
+        if getattr(job_error, "is_throttle", False):
+            # A throttle (``ConcurrencyExceeded``) is not a failure: the
+            # routing below requeues it without spending an attempt and logs
+            # the durable retry itself — no ERROR, traceback or Sentry event.
+            Log.info("Job throttled: %s", job_error)
+        else:
+            Log.error("Job failed: %s", job_error, exc_info=True)
+            # Terminal catch: the worker consumes the failure ("failed
+            # gracefully"), so the explicit capture is Sentry's only path.
+            observability.capture_exception(job_error)
 
         JobProcessor._route_failed_message(
             channel=channel,

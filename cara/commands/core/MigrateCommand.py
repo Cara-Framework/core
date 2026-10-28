@@ -88,6 +88,24 @@ class MigrateCommand(CommandBase):
             # Ensure migrations table exists
             migration_manager.create_table_if_not_exists()
 
+            # EVOLVE-mode gate (DOCTRINE §7). In production a database that
+            # already has applied migrations is a lasting database: the
+            # migration directory is regenerated (renumbered) history its
+            # ledger has never seen, so ``migrate`` would try to re-create
+            # every existing table. Only an EMPTY production database (a brand
+            # new environment) may be migrated from zero; every later change
+            # goes through ``schema:plan`` → review → ``schema:apply``.
+            if self._is_production() and migration_manager.get_ran_migrations():
+                self.error(
+                    "× migrate refuses to run against an existing PRODUCTION "
+                    "database (EVOLVE mode)."
+                )
+                self.error(
+                    "   Use: craft schema:plan --rehearse --out <plan.json>, review it, "
+                    "then craft schema:apply --plan <plan.json>."
+                )
+                return 1
+
             # Integrity gate — ALWAYS, before the early return below. The
             # executor only validates applied checksums on the run/rollback
             # path, so a plain ``migrate`` with nothing pending used to report

@@ -557,6 +557,12 @@ class APSchedulerDriver(SchedulingContract):
                 Log.info("APScheduler shut down.")
         except Exception as e:
             Log.warning("Error shutting down APScheduler: %s", e)
+        # A shut-down APScheduler keeps its executors, whose thread pools are
+        # closed for good: a later ``start()`` on the same instance (the
+        # schedule:work hot reload) "starts" but every fire then dies with
+        # "cannot schedule new futures after shutdown". Swap in a fresh,
+        # never-started instance so a restart really runs the jobs.
+        self.scheduler = self._create_scheduler()
 
     def snapshot_meta(self, identifier: str) -> dict | None:
         """The opaque metadata registered for ``identifier``, or ``None``.

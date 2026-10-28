@@ -10,16 +10,9 @@ from cara.validation.rules.BaseRule import BaseRule
 
 class PresentRule(BaseRule):
     def validate(self, field: str, value: Any, params: dict[str, Any]) -> bool:
-        data = params.get("_data", {})
-        # Walk dot-separated paths so nested keys like ``user.email``
-        # are resolved correctly instead of only checking top-level.
-        parts = field.split(".")
-        current = data
-        for part in parts:
-            if not isinstance(current, dict) or part not in current:
-                return False
-            current = current[part]
-        return True
+        # The shared dotted-path walk: wildcard-expanded fields arrive as
+        # ``items.0.name`` and must descend through list indexes too.
+        return self.field_present(params.get("_data", {}), field)
 
     def default_message(self, field: str, params: dict[str, Any]) -> str:
         attr = MessageFormatter.format_attribute_name(field)
