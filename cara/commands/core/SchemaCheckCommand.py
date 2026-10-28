@@ -53,13 +53,17 @@ from __future__ import annotations
 from cara.decorators import command
 from cara.exceptions import SchemaPlanRefused
 from cara.schema import (
+    changed_checks,
     created_objects,
+    declared_checks_by_table,
     declared_columns,
     introspect,
     missing_checks,
     missing_foreign_keys,
     missing_indexes,
+    normalize_declared_checks,
     orphaned_indexes,
+    orphaned_unique_constraints,
 )
 
 from ..CommandBase import CommandBase
@@ -148,6 +152,11 @@ class SchemaCheckCommand(CommandBase):
 
         try:
             live = introspect(live_schema, schema_name)
+            # The model's CHECKs in the server's spelling — what lets a CHECK
+            # whose body changed under an unchanged name read as drift.
+            live = normalize_declared_checks(
+                live_schema, live, declared_checks_by_table(checkable), schema_name
+            )
         except Exception as exc:  # DB unreachable / introspection failed
             message = f"Could not introspect the live database: {exc}."
             if self.option("allow_unavailable"):
@@ -267,6 +276,21 @@ class SchemaCheckCommand(CommandBase):
                 f"NOT declared in model — add it to __indexes__ or drop it; a "
                 f"regenerate-from-models sweep will not recreate it"
             )
+        # A unique rule no model declares enforces on every write, and the
+        # orphaned-index rule cannot see it: the index behind a constraint is
+        # exempt there. A CHECK whose body changed under its old name asserts
+        # what the model no longer does.
+        for operation in orphaned_unique_constraints(model, table, live):
+            issues.append(
+                f"unique constraint '{operation.key.split(':')[1]}' present in "
+                f"database but NOT declared in model — schema:plan drops it"
+            )
+        for operation in changed_checks(model, table, live):
+            if operation.kind == "replace_check":
+                issues.append(
+                    f"CHECK '{operation.key.split(':')[1]}' in database differs "
+                    f"from the model's declaration — schema:plan replaces it"
+                )
         return issues
 
     def _summary(self, checked_tables: int, tables_with_drift: int, total_drift: int):

@@ -30,6 +30,7 @@ Three rules keep the derivation honest:
 from __future__ import annotations
 
 from cara.exceptions import SchemaPlanRefused
+from cara.schema.ConstraintDrift import changed_checks, orphaned_unique_constraints
 from cara.schema.Defaults import declared_default_sql, defaults_match, live_default_sql
 from cara.schema.LiveSchema import LiveSchema, declared_columns
 from cara.schema.Objects import (
@@ -197,7 +198,9 @@ def plan(
         except SchemaPlanRefused as refusal:
             refusals.append(str(refusal))
         operations.extend(orphaned_indexes(model, table, live))
+        operations.extend(orphaned_unique_constraints(model, table, live))
         operations.extend(missing_checks(model, table, live))
+        operations.extend(changed_checks(model, table, live))
         operations.extend(orphaned_checks(model, table, live))
         # Foreign keys, missing direction only: an EXTRA live key is not the
         # model's business, and dropping one on a guess is how referential

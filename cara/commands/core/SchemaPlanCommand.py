@@ -69,7 +69,9 @@ from cara.schema import (
     DESTRUCTIVE,
     LOCKING,
     as_dict,
+    declared_checks_by_table,
     introspect,
+    normalize_declared_checks,
     plan,
     plan_id,
 )
@@ -368,6 +370,7 @@ class SchemaPlanCommand(CommandBase):
         connection = self.option("connection") or "default"
         schema_name = self.option("schema")
 
+        models = ModelDiscoverer().discover_models()
         try:
             live_schema = Schema(connection=None, schema=schema_name).on(connection)
             live = introspect(live_schema, schema_name)
@@ -375,6 +378,9 @@ class SchemaPlanCommand(CommandBase):
             raise RuntimeError(
                 f"Could not introspect the database ('{connection}'): {exc}"
             ) from exc
-
-        models = ModelDiscoverer().discover_models()
+        # The model's CHECKs in the server's spelling, so a CHECK whose body
+        # changed under an unchanged name is planned (``changed_checks``).
+        live = normalize_declared_checks(
+            live_schema, live, declared_checks_by_table(models), schema_name
+        )
         return plan(models, live)

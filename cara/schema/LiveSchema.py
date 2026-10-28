@@ -2,12 +2,17 @@
 
 ``schema:check`` (report) and ``schema:plan`` (act) must be looking at the
 same database in the same way, so the queries live here once. Everything is
-SELECT-only by construction — nothing in this module can change a schema.
+SELECT-only by construction — nothing in this module can change a schema. The
+one write is :func:`normalize_declared_checks`'s probe: a TEMP table in its own
+session, which no other session can see and which is dropped before the
+connection goes back.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from contextlib import suppress
+from dataclasses import dataclass, replace
 
 from cara.schema.Vocabulary import ADD_COLUMN_RE, PSEUDO_FIELD_EXPANSIONS
 
@@ -49,6 +54,25 @@ class LiveSchema:
     #: were reported as orphaned TABLES with the advice "drop it by hand",
     #: about relations the storefront reads on every request.
     relation_kinds: dict[str, str] | None = None
+    #: The server's own text of every CHECK and UNIQUE constraint
+    #: (``pg_get_constraintdef``), per table and name. A name says a CHECK
+    #: EXISTS; only its definition says whether it still asserts what the
+    #: model declares — comparing names alone let a CHECK keep a value the
+    #: model had dropped (``catalog_proposal.kind = 'quantity_review'``) on a
+    #: database every gate called clean. It is also the reverse of a drop.
+    constraint_definitions: dict[str, dict[str, str]] | None = None
+    #: UNIQUE constraint names per table (``contype='u'``). The orphaned-index
+    #: rule skips the index BEHIND a constraint, so without this a unique rule
+    #: no model declares — one left behind by a column rename — enforced on
+    #: every write while both gates read clean.
+    unique_constraints: dict[str, set[str]] | None = None
+    #: The model's CHECKs as the SERVER spells them, per table and name, for
+    #: the CHECKs the database also has (:func:`normalize_declared_checks`).
+    #: A model writes ``kind IN ('a', 'b')``; Postgres stores
+    #: ``((kind)::text = ANY ((ARRAY['a'::character varying, ...])::text[]))``,
+    #: so the only faithful comparison is the server deparsing both. Empty
+    #: when the probe could not run — then no CHECK is called changed.
+    declared_check_definitions: dict[str, dict[str, str]] | None = None
 
     def __post_init__(self):
         for name, empty in (
@@ -57,6 +81,9 @@ class LiveSchema:
             ("functions", set()),
             ("extensions", set()),
             ("relation_kinds", {}),
+            ("constraint_definitions", {}),
+            ("unique_constraints", {}),
+            ("declared_check_definitions", {}),
         ):
             if getattr(self, name) is None:
                 object.__setattr__(self, name, empty)
@@ -135,10 +162,13 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
 
     checks: dict[str, set[str]] = {}
     constraints: dict[str, set[str]] = {}
+    constraint_definitions: dict[str, dict[str, str]] = {}
+    unique_constraints: dict[str, set[str]] = {}
     for row in (
         run(
             "SELECT c.relname AS table_name, con.conname AS constraint_name, "
-            "con.contype AS constraint_type "
+            "con.contype AS constraint_type, "
+            "pg_get_constraintdef(con.oid) AS definition "
             "FROM pg_constraint con "
             "JOIN pg_class c ON c.oid = con.conrelid "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
@@ -147,9 +177,17 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         )
         or []
     ):
-        constraints.setdefault(row["table_name"], set()).add(row["constraint_name"])
-        if str(row["constraint_type"]) == "c":
-            checks.setdefault(row["table_name"], set()).add(row["constraint_name"])
+        table_name, constraint_name = row["table_name"], row["constraint_name"]
+        constraint_type = str(row["constraint_type"])
+        constraints.setdefault(table_name, set()).add(constraint_name)
+        if constraint_type == "c":
+            checks.setdefault(table_name, set()).add(constraint_name)
+        if constraint_type == "u":
+            unique_constraints.setdefault(table_name, set()).add(constraint_name)
+        if constraint_type in ("c", "u") and row.get("definition"):
+            constraint_definitions.setdefault(table_name, {})[constraint_name] = str(
+                row["definition"]
+            )
 
     indexes: dict[str, set[str]] = {}
     for row in (
@@ -229,7 +267,86 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         functions=functions,
         extensions=extensions,
         relation_kinds=relation_kinds,
+        constraint_definitions=constraint_definitions,
+        unique_constraints=unique_constraints,
     )
+
+
+#: A constraint attached NOT VALID reads back with this suffix; it says how the
+#: constraint was attached, not what it asserts.
+_NOT_VALID = re.compile(r"\s+NOT VALID\s*$")
+
+
+def constraint_body(definition: str | None) -> str:
+    """A constraint definition without its NOT VALID suffix — what it asserts."""
+    return _NOT_VALID.sub("", str(definition or "")).strip()
+
+
+def normalize_declared_checks(
+    live_schema,
+    live: LiveSchema,
+    declared: dict[str, list[tuple[str, str]]],
+    schema_name: str | None = None,
+) -> LiveSchema:
+    """Have the server spell the model's CHECKs, so they compare to the live ones.
+
+    ``declared`` is ``{table: [(name, expression), ...]}``. For each table the
+    database has, a session TEMP table copies its columns (``LIKE``) and takes
+    each declared CHECK — that the database also has — ``NOT VALID``, and
+    ``pg_get_constraintdef`` reads it back in exactly the spelling the live
+    constraint has. Nothing touches the real table: the probe is a temporary
+    relation in this one session, dropped before the connection goes back.
+
+    It runs on ONE connection, because a temp table lives in its session and
+    the query executor hands out a fresh one per query. Best effort: a role
+    without TEMP, or an expression the probe cannot attach, leaves that CHECK
+    out — and a CHECK left out is never called changed.
+    """
+    target = schema_name or live_schema.get_schema() or "public"
+    manager = live_schema.query_executor.connection_manager
+    connection = manager.create_connection_instance()
+    found: dict[str, dict[str, str]] = {}
+    try:
+        for table, checks in sorted(declared.items()):
+            present = live.checks.get(table, set())
+            wanted = [(name, expr) for name, expr in checks if name in present]
+            if not wanted or table not in live.tables:
+                continue
+            probe = f"_cara_check_probe_{abs(hash(table)) % 10**8}"
+            try:
+                connection.query(
+                    f'CREATE TEMP TABLE "{probe}" '
+                    f'(LIKE "{sql_literal(target)}"."{table}")',
+                    (),
+                )
+            except Exception:
+                continue
+            try:
+                for name, expression in wanted:
+                    try:
+                        connection.query(
+                            f'ALTER TABLE "{probe}" ADD CONSTRAINT "{name}" '
+                            f"CHECK ({expression}) NOT VALID",
+                            (),
+                        )
+                        rows = connection.query(
+                            "SELECT pg_get_constraintdef(oid) AS definition "
+                            "FROM pg_constraint WHERE conrelid = %s::regclass "
+                            "AND conname = %s",
+                            (f'pg_temp."{probe}"', name),
+                        )
+                    except Exception:
+                        continue
+                    row = rows[0] if isinstance(rows, list) and rows else rows
+                    if isinstance(row, dict) and row.get("definition"):
+                        found.setdefault(table, {})[name] = str(row["definition"])
+            finally:
+                with suppress(Exception):
+                    connection.query(f'DROP TABLE IF EXISTS "{probe}"', ())
+    finally:
+        manager.release(connection)
+    # The snapshot is frozen: the spelled CHECKs come back on a copy.
+    return replace(live, declared_check_definitions=found)
 
 
 def declared_columns(model: dict) -> dict[str, dict]:
