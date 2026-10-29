@@ -105,14 +105,16 @@ class _CrashDB:
     def select_one(self, sql, params=None):
         if sql.startswith("SELECT pg_advisory_xact_lock"):
             return {"locked": None}
-        if sql.startswith("WITH settings AS"):
+        if sql.startswith("WITH RECURSIVE settings AS"):
             if (
                 self.row["status"] == "pending"
                 and self.row["publish_status"] == "pending"
             ):
+                # [now, aging, broker window, tenant window, queues, queues,
+                #  token, lease expiry, now] — the tenant-fair claim's order.
                 self.row["publish_status"] = "processing"
-                self.row["publish_lease_token"] = params[4]
-                self.row["publish_lease_expires_at"] = params[5]
+                self.row["publish_lease_token"] = params[6]
+                self.row["publish_lease_expires_at"] = params[7]
                 return dict(self.row)
             return None
         if sql.startswith("UPDATE queue_job_delivery SET publish_status = %s"):

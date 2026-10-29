@@ -399,6 +399,7 @@ class _PriorityClaimDB:
     def __init__(self):
         self.sql = None
         self.params = None
+        self.locked = False
 
     @contextmanager
     def transaction(self):
@@ -406,6 +407,7 @@ class _PriorityClaimDB:
 
     def select_one(self, sql, params):
         if sql.startswith("SELECT pg_advisory_xact_lock"):
+            self.locked = True
             return {"locked": None}
         self.sql = sql
         self.params = params
@@ -417,8 +419,13 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     store = _store(db, delivery_priority_aging_seconds=120)
 
     assert store._claim_next_publish() is None
-    assert db.sql.startswith("WITH settings AS")
-    assert db.sql.count("FOR UPDATE OF delivery SKIP LOCKED LIMIT 1") == 1
+    # The tenant-fair claim: a recursive skip scan over the tenants with due
+    # work, serialized by the advisory lock (no row-lock SKIP LOCKED race).
+    assert db.sql.startswith("WITH RECURSIVE settings AS")
+    assert db.locked
+    assert "SKIP LOCKED" not in db.sql
+    assert "tenant_keys(queue, priority, base_rank, tenant_key) AS" in db.sql
+    assert "ORDER BY heads.held, heads.last_served_at NULLS FIRST" in db.sql
     assert "priority_lanes(priority, base_rank) AS (VALUES" in db.sql
     assert "('critical', 0)" in db.sql
     assert "('high', 1)" in db.sql
@@ -430,9 +437,10 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     assert "UPDATE queue_job_delivery AS delivery" in db.sql
     assert db.params[1] == 120
     assert db.params[2] == 2
+    assert db.params[3] == 0
     assert "eligible_queues AS" in db.sql
     assert "unnest(%s::varchar[])" in db.sql
-    assert db.params[3] == ["connector", "sync"]
+    assert db.params[4] == ["connector", "sync"]
     assert "outstanding.publish_lease_expires_at > settings.now" in db.sql
     assert "< settings.broker_window" in db.sql
     assert "WHERE EXISTS" not in db.sql

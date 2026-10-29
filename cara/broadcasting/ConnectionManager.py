@@ -32,6 +32,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
+from cara.broadcasting.helpers import bind_socket_loop
 from cara.facades import Log
 
 
@@ -136,8 +137,6 @@ class ConnectionManager:
         """
         # Sync broadcasters off this loop hand their fan-out to it
         # (``helpers._run_or_schedule``): the socket is only safe here.
-        from cara.broadcasting.helpers import bind_socket_loop
-
         bind_socket_loop(asyncio.get_running_loop())
         async with self._registry_lock:
             await self._add_connection_locked(connection_id, websocket, user_id, metadata)
