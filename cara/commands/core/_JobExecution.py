@@ -564,6 +564,15 @@ def _process_message(
             Log.info("Job throttled: %s", job_error)
         else:
             Log.error("Job failed: %s", job_error, exc_info=True)
+            if MetricsBase is not None:
+                try:
+                    MetricsBase.exceptions_total.labels(
+                        source="job",
+                        route=_mx_job,
+                        exception=type(job_error).__name__,
+                    ).inc()
+                except ImportError, RuntimeError, AttributeError, OSError:
+                    pass
             # Terminal catch: the worker consumes the failure ("failed
             # gracefully"), so the explicit capture is Sentry's only path.
             observability.capture_exception(job_error)

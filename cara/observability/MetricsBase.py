@@ -290,6 +290,16 @@ class MetricsBase:
         "HTTP requests currently being handled.",
         registry=REGISTRY,
     )
+    # Unhandled exceptions — the error-tracking signal that needs no SaaS.
+    # ``source`` = http|job; ``route`` = the matched route template (http)
+    # or the job class (job); ``exception`` = the exception class name. All
+    # three are bounded by the codebase, never by input.
+    exceptions_total = Counter(
+        metric_name("exceptions_total"),
+        "Unhandled exceptions by source, route template or job class, and class.",
+        labelnames=("source", "route", "exception"),
+        registry=REGISTRY,
+    )
 
     # ─── Queue worker ───────────────────────────────────────────────────
     queue_dispatches_total = Counter(

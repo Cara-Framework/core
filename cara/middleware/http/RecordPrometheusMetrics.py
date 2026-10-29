@@ -64,6 +64,7 @@ class RecordPrometheusMetrics(Middleware):
             )
 
         status_code: int = 500
+        crashed: str | None = None
         try:
             response: Response = await get_response(request)
             try:
@@ -82,6 +83,8 @@ class RecordPrometheusMetrics(Middleware):
             # exception with no ``status_code`` still degrades to 500, so
             # genuine crashes keep counting as 5xx.
             status_code = int(getattr(exc, "status_code", 500) or 500)
+            if status_code >= 500:
+                crashed = type(exc).__name__
             raise
         finally:
             duration = time.time() - start
@@ -100,6 +103,12 @@ class RecordPrometheusMetrics(Middleware):
                     method=method,
                     route=route,
                 ).observe(duration)
+                if crashed is not None:
+                    MetricsBase.exceptions_total.labels(
+                        source="http",
+                        route=route,
+                        exception=crashed,
+                    ).inc()
                 if in_flight_incremented:
                     MetricsBase.http_requests_in_flight.dec()
             except Exception:
