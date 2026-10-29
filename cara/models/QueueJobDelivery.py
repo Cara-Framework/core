@@ -391,6 +391,33 @@ class QueueJobDelivery(Model):
             "down": "DROP INDEX IF EXISTS queue_job_delivery_priority_head_idx",
         },
         {
+            # The relay's tenant-fair claim: a recursive skip scan finds each
+            # tenant with open rows in one (queue, priority) lane, then that
+            # tenant's oldest due row — index probes, never a walk of one
+            # tenant's backlog. Central rows share the tenant key 0.
+            "name": "queue_job_delivery_tenant_head_idx",
+            "up": (
+                "CREATE INDEX IF NOT EXISTS queue_job_delivery_tenant_head_idx "
+                "ON queue_job_delivery "
+                "(queue, priority, (COALESCE(tenant_id, 0)), available_at, created_at) "
+                "WHERE status = 'pending' "
+                "AND publish_status IN ('pending','processing')"
+            ),
+            "down": "DROP INDEX IF EXISTS queue_job_delivery_tenant_head_idx",
+        },
+        {
+            # The fair claim's round robin: when one queue last published a
+            # row of one tenant (newest ``published_at``, one backward probe).
+            "name": "queue_job_delivery_tenant_served_idx",
+            "up": (
+                "CREATE INDEX IF NOT EXISTS queue_job_delivery_tenant_served_idx "
+                "ON queue_job_delivery "
+                "(queue, (COALESCE(tenant_id, 0)), published_at) "
+                "WHERE published_at IS NOT NULL"
+            ),
+            "down": "DROP INDEX IF EXISTS queue_job_delivery_tenant_served_idx",
+        },
+        {
             "name": "queue_job_delivery_broker_window_idx",
             "up": (
                 "CREATE INDEX IF NOT EXISTS queue_job_delivery_broker_window_idx "

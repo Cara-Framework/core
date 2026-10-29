@@ -25,73 +25,146 @@ def _bind_store(store_type: type) -> None:
 
 
 def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
-    """Atomically lease the highest effective-priority due row.
+    """Atomically lease the next due row: fair across tenants, then by aged priority.
 
-    Each wait interval promotes a row by one tier. A bounded per-queue
-    broker window keeps the backlog in this aging ledger instead of
-    preloading RabbitMQ's strict-priority queue, where sustained critical
-    traffic could otherwise starve low priority indefinitely. With the
-    default five-minute interval, a low row reaches the critical lane
-    after fifteen minutes.
+    A bounded per-queue broker window keeps the backlog in this ledger
+    instead of preloading RabbitMQ, so THIS statement is the scheduler: the
+    order it picks rows in is the order work starts.
 
-    Relay replicas serialize this short reservation statement with a
-    PostgreSQL advisory transaction lock. The publication itself remains
-    outside the lock; ``publish_status=processing`` is the durable window
-    reservation, so replicas cannot overfill RabbitMQ concurrently.
+    Within one queue the pick is, in order:
+
+    1. **Tenant fair share.** Each tenant with due work offers its own head
+       row (one per priority lane); the tenant holding the FEWEST rows in
+       this queue's broker window goes first, and among those the tenant
+       this queue served LEAST RECENTLY (its newest ``published_at``; never
+       served = first) — a round robin over tenants. One tenant's
+       10,000-row backlog, or a hundred tenants' backlogs, therefore never
+       sit ahead of another tenant's single job: the newcomer holds nothing
+       and was never served, so its head is the next row published. Central
+       (tenantless) rows share one fair-share key.
+    2. **Aged priority.** Between a tenant's own rows, the highest
+       effective tier wins; each ``priority_aging_seconds`` of waiting
+       promotes a row one tier, so a tenant's low work reaches the critical
+       tier after three intervals and cannot starve behind its own urgent
+       traffic. Priority is deliberately NOT ranked above the round robin:
+       an aged backlog would otherwise outrank every other tenant's fresh
+       work again.
+    3. **Age.** Oldest ``available_at`` / ``created_at`` first.
+
+    ``tenant_window_per_queue`` (when > 0) additionally caps how many
+    window slots one tenant may hold in a queue, so a backlogged tenant
+    alone never fills the whole window and a newly arrived tenant's job
+    finds a free slot at once rather than after an in-flight job finishes.
+
+    The tenants with due work are found by a recursive skip scan over
+    ``queue_job_delivery_tenant_head_idx`` and each one's last service by
+    ``queue_job_delivery_tenant_served_idx`` — a few index probes per tenant
+    per priority lane, never a walk of a backlogged tenant's rows. Relay
+    replicas serialize this short reservation statement with a PostgreSQL
+    advisory transaction lock; ``publish_status=processing`` is the durable
+    window reservation, so replicas cannot overfill RabbitMQ concurrently.
     """
     token = uuid.uuid4().hex
     now = pendulum.now("UTC")
     database = self._db()
+    due_row = (
+        "AND delivery.status = 'pending' "
+        "AND delivery.publish_status IN ('pending','processing') "
+        "AND delivery.available_at <= settings.now "
+        "AND delivery.publish_retry_at <= settings.now "
+        "AND delivery.expires_at > settings.now "
+        "AND (delivery.publish_status = 'pending' OR "
+        "(delivery.publish_status = 'processing' AND "
+        "(delivery.publish_lease_expires_at IS NULL OR "
+        "delivery.publish_lease_expires_at <= settings.now))) "
+    )
+    open_row = (
+        "AND delivery.status = 'pending' "
+        "AND delivery.publish_status IN ('pending','processing') "
+    )
     with database.transaction():
         database.select_one(
             "SELECT pg_advisory_xact_lock(%s) AS locked",
             [self._PUBLISH_CLAIM_ADVISORY_LOCK],
         )
         row = database.select_one(
-            "WITH settings AS (SELECT %s::timestamptz AS now, "
-            "%s::numeric AS aging_seconds, %s::integer AS broker_window), "
+            "WITH RECURSIVE settings AS (SELECT %s::timestamptz AS now, "
+            "%s::numeric AS aging_seconds, %s::integer AS broker_window, "
+            "%s::integer AS tenant_window), "
             "priority_lanes(priority, base_rank) AS (VALUES "
             "('critical', 0), ('high', 1), ('default', 2), ('low', 3)), "
-            "eligible_queues AS (SELECT candidate.queue "
-            "FROM unnest(%s::varchar[]) AS candidate(queue) "
-            "CROSS JOIN settings WHERE (SELECT COUNT(*) "
-            f"FROM {self.table} AS outstanding "
-            "WHERE outstanding.queue = candidate.queue "
+            "outstanding AS (SELECT outstanding.queue, "
+            "COALESCE(outstanding.tenant_id, 0) AS tenant_key, COUNT(*) AS held "
+            f"FROM {self.table} AS outstanding CROSS JOIN settings "
+            "WHERE outstanding.queue = ANY(%s::varchar[]) "
             "AND outstanding.status IN ('pending', 'processing') "
             "AND (outstanding.publish_status = 'published' OR "
             "(outstanding.publish_status = 'processing' AND "
-            "outstanding.publish_lease_expires_at > settings.now))) "
+            "outstanding.publish_lease_expires_at > settings.now)) "
+            "GROUP BY outstanding.queue, COALESCE(outstanding.tenant_id, 0)), "
+            "eligible_queues AS (SELECT candidate.queue "
+            "FROM unnest(%s::varchar[]) AS candidate(queue) CROSS JOIN settings "
+            "WHERE COALESCE((SELECT SUM(outstanding.held) FROM outstanding "
+            "WHERE outstanding.queue = candidate.queue), 0) "
             "< settings.broker_window), "
-            "heads AS (SELECT head.job_id, head.available_at, "
-            "head.created_at, priority_lanes.base_rank "
-            "FROM eligible_queues CROSS JOIN settings "
-            "CROSS JOIN priority_lanes CROSS JOIN LATERAL ("
-            "SELECT delivery.job_id, delivery.available_at, "
-            f"delivery.created_at FROM {self.table} AS delivery "
+            "tenant_keys(queue, priority, base_rank, tenant_key) AS ("
+            "SELECT eligible_queues.queue, priority_lanes.priority, "
+            "priority_lanes.base_rank, first_key.tenant_key "
+            "FROM eligible_queues CROSS JOIN priority_lanes CROSS JOIN LATERAL ("
+            "SELECT COALESCE(delivery.tenant_id, 0) AS tenant_key "
+            f"FROM {self.table} AS delivery "
             "WHERE delivery.queue = eligible_queues.queue "
             "AND delivery.priority = priority_lanes.priority "
-            "AND delivery.status = 'pending' "
-            "AND delivery.available_at <= settings.now "
-            "AND delivery.publish_retry_at <= settings.now "
-            "AND delivery.expires_at > settings.now "
-            "AND (delivery.publish_status = 'pending' OR "
-            "(delivery.publish_status = 'processing' AND "
-            "(delivery.publish_lease_expires_at IS NULL OR "
-            "delivery.publish_lease_expires_at <= settings.now))) "
-            "ORDER BY delivery.available_at, delivery.created_at "
-            "FOR UPDATE OF delivery SKIP LOCKED LIMIT 1"
-            ") AS head), "
+            f"{open_row}"
+            "ORDER BY COALESCE(delivery.tenant_id, 0) LIMIT 1) AS first_key "
+            "UNION ALL "
+            "SELECT tenant_keys.queue, tenant_keys.priority, "
+            "tenant_keys.base_rank, next_key.tenant_key "
+            "FROM tenant_keys CROSS JOIN LATERAL ("
+            "SELECT COALESCE(delivery.tenant_id, 0) AS tenant_key "
+            f"FROM {self.table} AS delivery "
+            "WHERE delivery.queue = tenant_keys.queue "
+            "AND delivery.priority = tenant_keys.priority "
+            f"{open_row}"
+            "AND COALESCE(delivery.tenant_id, 0) > tenant_keys.tenant_key "
+            "ORDER BY COALESCE(delivery.tenant_id, 0) LIMIT 1) AS next_key), "
+            "heads AS (SELECT head.job_id, head.available_at, head.created_at, "
+            "tenant_keys.base_rank, COALESCE(outstanding.held, 0) AS held, "
+            "last_served.published_at AS last_served_at "
+            "FROM tenant_keys CROSS JOIN settings "
+            "LEFT JOIN outstanding ON outstanding.queue = tenant_keys.queue "
+            "AND outstanding.tenant_key = tenant_keys.tenant_key "
+            "LEFT JOIN LATERAL (SELECT served.published_at "
+            f"FROM {self.table} AS served "
+            "WHERE served.queue = tenant_keys.queue "
+            "AND COALESCE(served.tenant_id, 0) = tenant_keys.tenant_key "
+            "AND served.published_at IS NOT NULL "
+            "ORDER BY served.published_at DESC LIMIT 1) AS last_served ON TRUE "
+            "CROSS JOIN LATERAL ("
+            "SELECT delivery.job_id, delivery.available_at, delivery.created_at "
+            f"FROM {self.table} AS delivery "
+            "WHERE delivery.queue = tenant_keys.queue "
+            "AND delivery.priority = tenant_keys.priority "
+            "AND COALESCE(delivery.tenant_id, 0) = tenant_keys.tenant_key "
+            f"{due_row}"
+            "ORDER BY delivery.available_at, delivery.created_at LIMIT 1"
+            ") AS head "
+            "WHERE settings.tenant_window <= 0 OR tenant_keys.tenant_key = 0 "
+            "OR COALESCE(outstanding.held, 0) < settings.tenant_window), "
             "candidate AS (SELECT heads.job_id "
             "FROM heads CROSS JOIN settings "
-            "ORDER BY GREATEST(heads.base_rank - FLOOR(EXTRACT(EPOCH FROM "
+            "ORDER BY heads.held, heads.last_served_at NULLS FIRST, "
+            "GREATEST(heads.base_rank - FLOOR(EXTRACT(EPOCH FROM "
             "(settings.now - heads.available_at)) / "
             "settings.aging_seconds), 0), heads.available_at, "
             "heads.created_at LIMIT 1) "
             f"UPDATE {self.table} AS delivery "
             "SET publish_status = 'processing', "
             "publish_lease_token = %s, publish_lease_expires_at = %s, "
-            "updated_at = %s FROM candidate "
+            "updated_at = %s FROM candidate, settings "
             "WHERE delivery.job_id = candidate.job_id "
+            # Re-checked under the row lock: the head was read without one.
+            f"{due_row}"
             "RETURNING delivery.job_id, delivery.db_job_id, "
             "delivery.payload_sha256, delivery.signed_envelope, "
             "delivery.tenant_mode, delivery.tenant_id, delivery.queue, "
@@ -100,6 +173,8 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
                 now,
                 self.priority_aging_seconds,
                 self.broker_window_per_queue,
+                self.tenant_window_per_queue,
+                list(self.canonical_queues),
                 list(self.canonical_queues),
                 token,
                 now.add(seconds=self.publish_lease_seconds),

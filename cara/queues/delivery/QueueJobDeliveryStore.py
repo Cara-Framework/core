@@ -154,6 +154,17 @@ class QueueJobDeliveryStore:
             maximum=10000,
             field="delivery_broker_window_per_queue",
         )
+        # The most broker-window slots ONE tenant may hold in one queue
+        # (0 = no per-tenant cap; only the fair claim order applies). Kept
+        # below the broker window, it leaves a slot that another tenant's
+        # newly arrived job takes at once instead of waiting for a
+        # backlogged tenant's in-flight work to finish.
+        self.tenant_window_per_queue = self._bounded_int(
+            options.get("delivery_tenant_window_per_queue", 0),
+            minimum=0,
+            maximum=10000,
+            field="delivery_tenant_window_per_queue",
+        )
         self.execution_lease_seconds = self._bounded_int(
             options.get("delivery_execution_lease_seconds", 7200),
             minimum=60,
