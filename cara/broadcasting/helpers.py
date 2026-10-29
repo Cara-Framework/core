@@ -99,11 +99,64 @@ def _handle_broadcast_task_exception(task: asyncio.Task) -> None:
             )
 
 
+#: The loop this process's WebSockets live on, once one has connected
+#: (``ConnectionManager.add_connection`` binds it). A socket's transport and
+#: its send lock belong to that loop alone.
+_socket_loop: asyncio.AbstractEventLoop | None = None
+
+
+def bind_socket_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Record the loop the process's WebSocket connections run on."""
+    global _socket_loop
+    _socket_loop = loop
+
+
+def _handle_broadcast_future_exception(future: Any) -> None:
+    try:
+        future.result()
+    except Exception as e:  # noqa: BLE001 — surfaced, never swallowed
+        try:
+            facades.Log.error(
+                "Handed-off broadcast failed with exception: %s: %s",
+                e.__class__.__name__,
+                e,
+                category="cara.broadcasting",
+            )
+        except Exception:
+            print(
+                f"[cara.broadcasting] handed-off broadcast raised {e.__class__.__name__}: {e}",
+                file=sys.stderr,
+            )
+
+
+def _socket_loop_for(current: asyncio.AbstractEventLoop | None):
+    """The socket loop, when a broadcast must be handed to it from elsewhere."""
+    home = _socket_loop
+    if home is None or home is current or home.is_closed() or not home.is_running():
+        return None
+    return home
+
+
 def _run_or_schedule(coro: Awaitable[None]) -> asyncio.Task | None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        # No running loop in this thread → block-and-run.
+        loop = None
+    # A SYNC CALLER OFF THE SOCKET LOOP HANDS THE BROADCAST TO IT. The usual
+    # caller is a request's repository code inside ``run_in_thread``: running
+    # the fan-out on a fresh loop in that thread wrote to sockets whose
+    # transport and send lock belong to the server's loop — unsafe always,
+    # and under contention a hard ``Lock ... is bound to a different event
+    # loop`` that silently dropped every frame to a busy subscriber (support
+    # stress run, 2026-10-29: the operator socket lost all 4,000 customer
+    # lines). Handed off, it runs where the sockets live, in call order.
+    home = _socket_loop_for(loop)
+    if home is not None:
+        future = asyncio.run_coroutine_threadsafe(coro, home)  # type: ignore[arg-type]
+        future.add_done_callback(_handle_broadcast_future_exception)
+        return None
+    if loop is None:
+        # No running loop in this thread and no socket loop → block-and-run.
         return asyncio.run(coro)  # type: ignore[func-returns-value]
     # Loop running → schedule. Caller may await the returned task; if they
     # discard it, the strong ref + done-callback keep it alive and log any
