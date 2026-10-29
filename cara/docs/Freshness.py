@@ -85,6 +85,7 @@ def gen_nav(manifest: DocsManifest, say: Say) -> None:
         ("Architecture", "architecture"),
         ("Operations", "operations"),
         ("Strategy", "strategy"),
+        ("Security", "security"),
     ]:
         directory = docs / "internal" / sub
         items = items_in(directory) if directory.is_dir() else []
