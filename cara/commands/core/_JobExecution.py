@@ -15,7 +15,7 @@ from cara import observability
 from cara.configuration import config
 from cara.exceptions import QueueException
 from cara.facades import Log, Queue
-from cara.queues import SignedJsonJobSerializer, instantiate_job
+from cara.queues import LeaseHeartbeat, SignedJsonJobSerializer, instantiate_job
 from cara.queues.middleware import run_through_middleware_async
 
 from .ActiveJobCancellationRegistry import ActiveJobCancellationRegistry
@@ -83,6 +83,54 @@ def _stamp_dispatch_context(instance: Any, msg: dict) -> None:
     instance._tenant_mode = msg.get("_tenant_mode")
     instance._dispatched_at = msg.get("dispatched_at")
     instance._current_attempt = JobProcessor._envelope_counter(msg, "attempts") + 1
+
+
+def _hold_delivery_lease(
+    delivery_store: Any,
+    job_id: str,
+    claim: Any,
+    tracker: Any,
+    db_job_id: Any,
+) -> LeaseHeartbeat:
+    """Keep this worker's execution lease alive while it runs the delivery.
+
+    The claim takes a short heartbeat lease; this renews it every third of
+    it until the job body ends, so a live job of any length keeps its row
+    ``processing`` while a dead worker's row lapses within one lease and the
+    relay returns it to the outbox (it no longer holds its queue's broker
+    window for the job's whole timeout). Settlement then rides the lease's
+    remaining two thirds — the heartbeat is stopped BEFORE settling, so a
+    late renewal can never race a settled row.
+
+    ``release`` is the forced-exit path (``LeaseHeartbeat.release_all``): a
+    job that ignored shutdown cancellation hands its row back to ``pending``
+    exactly as the cancellation path does, and the broker redelivers its
+    unacknowledged copy once this process's connection closes.
+    """
+    lease_token = claim.lease_token
+    deadline = claim.lease_deadline
+
+    def _renew() -> bool:
+        return bool(
+            delivery_store.renew_execution(job_id, lease_token, deadline=deadline)
+        )
+
+    def _release() -> None:
+        delivery_store.abandon_execution(job_id, lease_token)
+        if tracker is not None and db_job_id is not None:
+            tracker.update_job_status_strict(db_job_id, "pending")
+
+    return LeaseHeartbeat(
+        f"queue_job_delivery:{job_id}",
+        lease_seconds=delivery_store.execution_heartbeat_seconds,
+        renew=_renew,
+        release=_release,
+    ).start()
+
+
+def _stop_heartbeat(heartbeat: LeaseHeartbeat | None) -> None:
+    if heartbeat is not None:
+        heartbeat.stop()
 
 
 def _process_message(
@@ -160,6 +208,7 @@ def _process_message(
     db_job_id = None
     delivery_store = None
     delivery_lease_token = None
+    delivery_heartbeat: LeaseHeartbeat | None = None
     terminal_outcome = None
 
     try:
@@ -227,6 +276,13 @@ def _process_message(
             return False
         elif claim.outcome == "claimed" and claim.lease_token:
             delivery_lease_token = claim.lease_token
+            delivery_heartbeat = _hold_delivery_lease(
+                delivery_store,
+                str(verified_payload["job_id"]),
+                claim,
+                tracker,
+                verified_payload.get("db_job_id"),
+            )
         elif terminal_outcome is None:
             raise QueueException(
                 f"Unsupported delivery ledger claim outcome: {claim.outcome}."
@@ -461,6 +517,10 @@ def _process_message(
                     )
                 except TimeoutError as e:
                     raise TimeoutError(f"Job exceeded timeout of {job_timeout}s") from e
+                finally:
+                    # The run is over; every settlement below rides the
+                    # lease's remaining two thirds.
+                    _stop_heartbeat(delivery_heartbeat)
             else:
                 raise QueueException(
                     f"AMQP job {instance.__class__.__name__}.handle must be async."
@@ -594,6 +654,11 @@ def _process_message(
 
         _mx_record("failed")
         return "failure"  # Still processed (failed gracefully)
+
+    finally:
+        # Every other exit (early DLQ settlement, recovered completion, a
+        # settlement outage that leaves the lease to lapse) stops it here.
+        _stop_heartbeat(delivery_heartbeat)
 
 
 def _bind_job_processor(processor_class: type[Any]) -> None:

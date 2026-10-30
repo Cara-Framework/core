@@ -28,6 +28,7 @@ from collections.abc import Callable
 from cara.cache import cache_backend_fault_types
 from cara.exceptions import MissingContainerBindingException
 from cara.observability import counter, metric_name
+from cara.queues.LeaseHeartbeat import LeaseHeartbeat
 
 from .ConcurrencyBackendUnavailable import ConcurrencyBackendUnavailable
 from .ConcurrencyExceeded import ConcurrencyExceeded
@@ -71,7 +72,8 @@ class ConcurrencyLimited:
     """
 
     REDIS_KEY_PREFIX = "cara:concurrency:"
-    DEFAULT_SLOT_TTL = 120  # seconds — auto-expire dead slots
+    #: Seconds a dead worker's slot survives; a live run renews its own.
+    DEFAULT_SLOT_TTL = 120
 
     def __init__(
         self,
@@ -119,9 +121,21 @@ class ConcurrencyLimited:
             raise ConcurrencyExceeded(
                 f"Concurrency limit ({self.max_concurrent}) reached for {concurrency_key}"
             )
+        # The slot is a heartbeat lease: ``slot_ttl`` is how long a DEAD
+        # worker's slot survives, not how long a run may take. A live run of
+        # any length renews it; sizing it to the job's timeout instead kept a
+        # restarted worker's slot (and so the tenant's one-slot share of the
+        # lane) held for the whole hour (live, 2026-10-30).
+        heartbeat = LeaseHeartbeat(
+            f"{redis_key}:{slot_id}",
+            lease_seconds=self.slot_ttl,
+            renew=lambda: self._renew(cache, redis_key, slot_id),
+            release=lambda: self._release(cache, concurrency_key, redis_key, slot_id),
+        ).start()
         try:
             return await self._call_next(job, next_fn)
         finally:
+            heartbeat.stop()
             self._release(cache, concurrency_key, redis_key, slot_id)
 
     @staticmethod
@@ -207,6 +221,34 @@ class ConcurrencyLimited:
             self._log_backend_fault(concurrency_key, exc)
             self._count_backend_fault(concurrency_key)
             return False
+        return bool(int(result if result is not None else 0))
+
+    # Renew one slot: push its expiry score forward ONLY while it is still a
+    # live member. A slot whose score already passed is never revived — an
+    # acquirer may have pruned it and taken the place, and reviving it would
+    # put the set over its ceiling.
+    #
+    # KEYS[1] = redis_key, ARGV[1] = slot_id, ARGV[2] = now,
+    # ARGV[3] = new expiry (now + slot_ttl), ARGV[4] = key_ttl
+    _RENEW_LUA = (
+        "local score = redis.call('ZSCORE', KEYS[1], ARGV[1]) "
+        "if not score or tonumber(score) <= tonumber(ARGV[2]) then return 0 end "
+        "redis.call('ZADD', KEYS[1], 'XX', ARGV[3], ARGV[1]) "
+        "redis.call('EXPIRE', KEYS[1], ARGV[4]) "
+        "return 1"
+    )
+
+    def _renew(self, cache, redis_key: str, slot_id: str) -> bool:
+        now = time.time()
+        result = self._connection(cache).eval(
+            self._RENEW_LUA,
+            1,
+            redis_key,
+            slot_id,
+            str(now),
+            str(now + self.slot_ttl),
+            str(int(self.slot_ttl + 60)),
+        )
         return bool(int(result if result is not None else 0))
 
     def _release(self, cache, concurrency_key: str, redis_key: str, slot_id: str) -> None:

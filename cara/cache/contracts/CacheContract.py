@@ -158,3 +158,19 @@ class CacheContract:
         not a cache-lock implementation.
         """
         raise NotImplementedError
+
+    def touch_if(self, key: str, expected_value: Any, ttl: int) -> bool:
+        """
+        Atomically reset ``key``'s expiry to ``ttl`` seconds from now only if
+        its current value equals ``expected_value``. Returns True iff the
+        expiry was reset.
+
+        The renewal primitive of a heartbeat lease: the owner keeps a short
+        lease alive while it runs, and a lease that lapsed — or was re-taken
+        by another owner — is never extended or recreated. A missing or
+        expired key returns False and stays absent.
+
+        Every driver MUST make the compare and the expiry reset one atomic
+        step, exactly like :meth:`forget_if`.
+        """
+        raise NotImplementedError

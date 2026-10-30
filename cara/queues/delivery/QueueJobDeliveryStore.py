@@ -177,6 +177,19 @@ class QueueJobDeliveryStore:
             maximum=3600,
             field="delivery_execution_lease_grace_seconds",
         )
+        # The execution lease a worker holds is a HEARTBEAT lease of this
+        # length, renewed every third of it while the job runs
+        # (``renew_execution``). ``timeout + grace`` is only its ceiling. A
+        # claim used to take the whole ``timeout + grace`` at once, so a
+        # worker that died mid-job left its row ``processing`` — holding a
+        # slot of its queue's broker window — for up to 65 minutes (live,
+        # 2026-10-30); now the row returns to the outbox within this lease.
+        self.execution_heartbeat_seconds = self._bounded_int(
+            options.get("delivery_execution_heartbeat_seconds", 120),
+            minimum=30,
+            maximum=3600,
+            field="delivery_execution_heartbeat_seconds",
+        )
         self.default_job_timeout_seconds = self._bounded_int(
             options.get(
                 "delivery_default_job_timeout_seconds",
@@ -248,6 +261,7 @@ class QueueJobDeliveryStore:
     _release_publish = _DeliveryPublishing._delivery_release_publish
     _quarantine_publish = _DeliveryPublishing._delivery_quarantine_publish
     claim_execution = _DeliveryPublishing._delivery_claim_execution
+    renew_execution = _DeliveryPublishing._delivery_renew_execution
     _reconcile_broker_receipt = _DeliveryPublishing._delivery_reconcile_broker_receipt
     complete = _DeliveryPublishing._delivery_complete
     complete_with_tracker = _DeliveryPublishing._delivery_complete_with_tracker

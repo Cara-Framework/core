@@ -40,6 +40,7 @@ import pendulum
 from cara.exceptions import IdempotencyOverlapException
 from cara.facades import Cache, Log
 from cara.queues.idempotency.ClaimsSourceCooldown import ClaimsSourceCooldown
+from cara.queues.LeaseHeartbeat import LeaseHeartbeat
 
 
 class MakesIdempotentBase(ClaimsSourceCooldown):
@@ -55,8 +56,10 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
           ``IDEMPOTENCY_CACHE_TTL`` for payload-bearing results,
           ``IDEMPOTENCY_NONE_TTL`` for bare-``None`` completions (a
           None is indistinguishable from a claim-miss no-op)
-        * Distributed lock (``JOB_LOCK_TTL`` seconds) — concurrent
-          duplicate dispatches converge on a single execution
+        * Distributed heartbeat lease (``JOB_LOCK_LEASE_SECONDS``, renewed
+          while the run lives) — concurrent duplicate dispatches converge on
+          a single execution, and a dead worker's lease lapses within one
+          lease instead of outliving it by the job's whole timeout
         * Hooks for app-defined lifecycle gating + per-source cooldowns
         * Optional metric emission via subclass hooks
     """
@@ -80,8 +83,14 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
     #: full window: a value proves the work happened.
     IDEMPOTENCY_NONE_TTL = 5 * 60
 
-    #: Lock TTL for active jobs (30 minutes).
-    JOB_LOCK_TTL = 30 * 60
+    #: Length of the job lease (seconds). Short ON PURPOSE: the running
+    #: worker renews it from a :class:`LeaseHeartbeat` thread every third of
+    #: it, so a run of any length keeps it while a dead worker's lease lapses
+    #: within two minutes. The lease used to be sized to outlive the job
+    #: (``timeout + 300``); a worker restart mid-pull then held an order
+    #: poll's lease for 65 minutes and every later poll of that channel
+    #: waited on it and settled having done nothing (live, 2026-10-30).
+    JOB_LOCK_LEASE_SECONDS = 120
 
     #: Sentinel that encodes a cached ``None`` return value. Without
     #: this, ``cache_result(None)`` writes ``None`` and
@@ -240,7 +249,7 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                     raise IdempotencyOverlapException(
                         f"Idempotency lease is active for {self.get_job_identifier()}"
                     )
-                return await self.wait_for_completion()
+                return await self._wait_without_spending_cooldown()
 
             self._emit_idempotency_metric("fresh")
             return await self._execute_with_lock(callback)
@@ -375,7 +384,7 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         fence = Cache.increment(
             fence_key,
             1,
-            max(self.IDEMPOTENCY_CACHE_TTL, self.JOB_LOCK_TTL) * 7,
+            max(self.IDEMPOTENCY_CACHE_TTL, self.JOB_LOCK_LEASE_SECONDS) * 7,
         )
         lock_data = {
             "owner": uuid.uuid4().hex,
@@ -384,15 +393,12 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
             "job_class": self.__class__.__name__,
             "parameters": self.get_job_parameters(),
         }
-        # The lock MUST outlive the job. With a flat 30m TTL, a job whose
-        # own ``timeout`` is also ~30m (e.g. CleanOrphansJob) could have its
-        # lock auto-expire at the moment it's still running — a second worker
-        # then starts a duplicate, and this worker's ``finally`` release
-        # deletes the SECOND worker's freshly-acquired lock, cascading into a
-        # third. Size the TTL strictly above the job's enforced timeout so the
-        # lock can never lapse mid-run.
-        ttl = max(self.JOB_LOCK_TTL, int(getattr(self, "timeout", 0) or 0) + 300)
-        acquired = Cache.add(lock_key, lock_data, ttl)
+        # A SHORT lease the run keeps alive (``_execute_with_lock`` starts its
+        # heartbeat), never one sized to outlive the job: a live run of any
+        # length holds it, a dead worker's lapses within one lease. The
+        # release stays owner-fenced (``forget_if``), so an owner whose lease
+        # lapsed can never delete the next owner's.
+        acquired = Cache.add(lock_key, lock_data, self.JOB_LOCK_LEASE_SECONDS)
         if acquired:
             self._idempotency_lock_value = lock_data
             self._idempotency_fence = int(fence)
@@ -417,9 +423,8 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
         instead of the return value.
 
         This is a best-effort release: log on failure and never bubble. The
-        lock leaks for at most
-        ``JOB_LOCK_TTL`` (30m) on the unlikely path where Cache is
-        still down when the TTL expires.
+        heartbeat has already stopped, so a lease whose release failed lapses
+        within ``JOB_LOCK_LEASE_SECONDS``.
         """
         lock_key = self._lock_key()
         expected = self._idempotency_lock_value
@@ -504,8 +509,9 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
                 raise IdempotencyOverlapException(
                     f"Idempotency lease race for {self.get_job_identifier()}"
                 )
-            return await self.wait_for_completion()
+            return await self._wait_without_spending_cooldown()
 
+        heartbeat = self._hold_job_lock()
         try:
             Log.debug(
                 "Executing job with idempotency: %s",
@@ -530,13 +536,60 @@ class MakesIdempotentBase(ClaimsSourceCooldown):
             )
             raise
         finally:
+            heartbeat.stop()
             self.release_job_lock()
+
+    def _hold_job_lock(self) -> LeaseHeartbeat:
+        """Keep this run's lease alive until ``_execute_with_lock`` ends.
+
+        The key and the owner value are captured now: the heartbeat thread
+        must renew exactly the lease this run took, never whatever the
+        instance holds later. ``Cache.touch_if`` is the compare-and-set — a
+        lease that lapsed, or that another run took, is never extended or
+        recreated. ``release`` is the forced-exit path
+        (:meth:`LeaseHeartbeat.release_all`): hand back the lease and the
+        unspent cooldown so the restarted fleet polls at once.
+        """
+        lock_key = self._lock_key()
+        lock_value = self._idempotency_lock_value
+        lease_seconds = self.JOB_LOCK_LEASE_SECONDS
+
+        def _renew() -> bool:
+            return bool(Cache.touch_if(lock_key, lock_value, lease_seconds))
+
+        def _release() -> None:
+            Cache.forget_if(lock_key, lock_value)
+            self._release_source_cooldown()
+
+        return LeaseHeartbeat(
+            lock_key,
+            lease_seconds=lease_seconds,
+            renew=_renew,
+            release=_release,
+        ).start()
+
+    async def _wait_without_spending_cooldown(self) -> Any | None:
+        """Wait on the lease owner; a run that only waited keeps no cooldown.
+
+        The gate claimed this poll's cooldown window before the lease check
+        found another owner. Waiting is not polling: keeping that claim made
+        the next ticks of the poll skip as "cooling down" although nothing
+        was asked of the source (live, 2026-10-30: an orphaned order-poll
+        lease made each waiter hold the 3-minute window, so the next four
+        queued polls skipped). The owner-fenced release hands back only this
+        run's own claim.
+        """
+        try:
+            return await self.wait_for_completion()
+        finally:
+            self._release_source_cooldown()
 
     async def wait_for_completion(self) -> Any | None:
         """Wait for another worker's run to finish; return cached result.
 
-        ``max_wait_time`` / ``check_interval`` are deliberately fixed —
-        the lock TTL caps tail latency at ``JOB_LOCK_TTL``. Returns
+        ``max_wait_time`` / ``check_interval`` are deliberately fixed. The
+        owner's lease is a heartbeat lease, so a dead owner's lapses within
+        ``JOB_LOCK_LEASE_SECONDS`` and the wait ends then. Returns
         ``None`` on timeout or when the primary finished without
         caching (graceful early-return); downstream code already
         treats ``None`` as "retry next cycle".

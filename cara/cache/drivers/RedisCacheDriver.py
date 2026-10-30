@@ -550,6 +550,27 @@ class RedisCacheDriver(CacheContract):
         result = self._client.eval(self._RELEASE_LOCK_LUA, 1, redis_key, owner_token)
         return bool(result) and int(result) > 0
 
+    # Lua: the renewal twin of ``_RELEASE_LOCK_LUA`` — compare the stored
+    # payload and reset the expiry only on equality. EXPIRE never creates a
+    # key, so a lapsed lease stays lapsed.
+    _TOUCH_LOCK_LUA = (
+        "if redis.call('get', KEYS[1]) == ARGV[1] then "
+        "  return redis.call('expire', KEYS[1], ARGV[2]) "
+        "else return 0 end"
+    )
+
+    def touch_if(self, key: str, expected_value: Any, ttl: int) -> bool:
+        if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0:
+            raise CacheConfigurationException(
+                "touch_if requires a positive integer ttl in seconds"
+            )
+        redis_key = self._value_key(key)
+        owner_token = self._codec.encode(expected_value)
+        result = self._client.eval(
+            self._TOUCH_LOCK_LUA, 1, redis_key, owner_token, str(ttl)
+        )
+        return bool(result) and int(result) > 0
+
     def ttl(self, key: str) -> int | None:
         """Remaining time-to-live for ``key`` in seconds.
 

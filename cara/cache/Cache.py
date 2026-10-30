@@ -121,6 +121,23 @@ class Cache:
         """
         return self.driver(driver_name).forget_if(key, expected_value)
 
+    def touch_if(
+        self,
+        key: str,
+        expected_value: Any,
+        ttl: int,
+        driver_name: str | None = None,
+    ) -> bool:
+        """Atomically reset ``key``'s expiry to ``ttl`` seconds only if its
+        stored value equals ``expected_value`` (compare-and-touch).
+
+        The renewal half of an owner-fenced heartbeat lease, paired with
+        :meth:`forget_if` as its release: the owner extends only its own
+        lease, and a lapsed or re-taken lease is never extended or recreated.
+        Returns True when this owner still held the key and its expiry moved.
+        """
+        return self.driver(driver_name).touch_if(key, expected_value, ttl)
+
     def flush(self, driver_name: str | None = None) -> None:
         """Flush (clear) all entries from the given driver."""
         self.driver(driver_name).flush()

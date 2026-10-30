@@ -423,7 +423,12 @@ def _delivery_claim_execution(
         ),
         self.execution_lease_seconds - self.execution_lease_grace_seconds,
     )
-    lease_seconds = timeout_seconds + self.execution_lease_grace_seconds
+    # ``timeout + grace`` is the run's whole budget and so the lease's
+    # CEILING; the lease itself is the short heartbeat lease the worker
+    # renews while the job runs (``renew_execution``), so a dead worker's
+    # row lapses within one heartbeat lease, not within the whole budget.
+    budget_seconds = timeout_seconds + self.execution_lease_grace_seconds
+    lease_seconds = min(budget_seconds, self.execution_heartbeat_seconds)
     now = pendulum.now("UTC")
     database = self._db()
     with database.transaction():
@@ -538,7 +543,49 @@ def _delivery_claim_execution(
         )
         if not self._affected(affected):
             raise QueueException("Queue delivery execution lease was lost.")
-    return DeliveryClaim("claimed", token, reclaimed=reclaimed)
+    return DeliveryClaim(
+        "claimed",
+        token,
+        reclaimed=reclaimed,
+        lease_deadline=now.add(seconds=budget_seconds),
+    )
+
+
+def _delivery_renew_execution(
+    self,
+    job_id: str,
+    lease_token: str,
+    *,
+    deadline: Any | None = None,
+) -> bool:
+    """Heartbeat: extend this worker's execution lease while its job runs.
+
+    Compare-and-set on ``lease_token`` while the row is still
+    ``processing``: a lease that lapsed and was recovered (the relay
+    returned the row to the outbox) or re-claimed by another worker is never
+    extended. ``deadline`` — the claim's ``timeout + grace`` budget — caps
+    the extension, so the heartbeat can never hold a row longer than the
+    pre-heartbeat lease did. Returns False once the lease is no longer this
+    worker's, or the budget is spent; the heartbeat then stops.
+    """
+    now = pendulum.now("UTC")
+    expiry = now.add(seconds=self.execution_heartbeat_seconds)
+    if deadline is not None:
+        if deadline <= now:
+            return False
+        expiry = min(expiry, deadline)
+    affected = self._db().statement(
+        f"UPDATE {self.table} SET lease_expires_at = %s, updated_at = %s "
+        "WHERE job_id = %s AND status = %s AND lease_token = %s",
+        [
+            expiry,
+            now,
+            job_id,
+            self.STATUS_PROCESSING,
+            lease_token,
+        ],
+    )
+    return self._affected(affected)
 
 
 def _delivery_reconcile_broker_receipt(

@@ -107,6 +107,21 @@ class CacheFake:
             return True
         return False
 
+    def touch_if(self, key: str, expected_value: Any, ttl: int) -> bool:
+        """Reset ``key``'s TTL only if it currently equals ``expected_value``.
+
+        The heartbeat-lease renewal twin of :meth:`forget_if`: never creates
+        the key, never touches another owner's value.
+        """
+        if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0:
+            raise CacheConfigurationException(
+                "touch_if requires a positive integer ttl in seconds"
+            )
+        if key in self._store and self._store[key] == expected_value:
+            self._ttls[key] = ttl
+            return True
+        return False
+
     def delete(self, key: str) -> bool:
         return self.forget(key)
 

@@ -298,6 +298,7 @@ def _queue_work_consume_queue_stream(
     in_flight: concurrent.futures.Future | None = None
     settled_futures: deque[concurrent.futures.Future] = deque()
     subscribed = False
+    consumers_cancelled = False
     try:
         for queue_name in queue_names:
 
@@ -362,6 +363,15 @@ def _queue_work_consume_queue_stream(
             or (in_flight is not None and not in_flight.done())
             or any(not future.done() for future in settled_futures)
         ):
+            if self.shutdown_requested and not consumers_cancelled:
+                # Shutdown takes no new work: cancel the subscription now,
+                # while the in-flight job drains on this still-open channel,
+                # instead of after it — the broker could otherwise hand the
+                # slot its next delivery the moment the current one acks.
+                consumers_cancelled = True
+                for consumer_tag in consumer_tags:
+                    with contextlib.suppress(Exception):
+                        channel.basic_cancel(consumer_tag)
             connection = connection_manager.connection
             if connection is None or connection.is_closed:
                 pending = [
@@ -419,7 +429,7 @@ def _queue_work_consume_queue_stream(
         if subscribed:
             self._mark_consumer_slot(-1)
         if getattr(channel, "is_open", False):
-            for consumer_tag in consumer_tags:
+            for consumer_tag in () if consumers_cancelled else consumer_tags:
                 with contextlib.suppress(Exception):
                     channel.basic_cancel(consumer_tag)
             with contextlib.suppress(Exception):

@@ -15,8 +15,13 @@ from typing import Any
 from cara.configuration import config
 from cara.facades import Log, Queue
 from cara.observability import MetricsBase as _Metrics
+from cara.queues import LeaseHeartbeat
 
 _logger = logging.getLogger("cara.queue.worker")
+
+#: Bound on handing back leases before a forced exit; an unreachable cache or
+#: database must never hold the exit hostage (the leases then just lapse).
+_RELEASE_BEFORE_EXIT_SECONDS = 5.0
 
 
 def _queue_work_drain_consumer_threads(self, threads: list[threading.Thread]) -> bool:
@@ -80,8 +85,21 @@ def _queue_work_force_terminate_for_redelivery(
     ``os._exit`` deliberately skips those callbacks; the kernel closes the
     process' sockets and open DB transactions, giving RabbitMQ/DB their
     native redelivery/rollback semantics.
+
+    The one thing handed back first is every heartbeat lease this process
+    still holds (``LeaseHeartbeat.release_all``, bounded): a job that ignored
+    cancellation would otherwise leave its delivery row ``processing``, its
+    idempotency lease and its concurrency slots held until they lapse. A
+    released delivery row cannot be re-run early: its broker copy stays
+    unacknowledged until this exit closes the connection.
     """
     Log.error("Worker forced shutdown: %s; unacked jobs will redeliver", reason)
+    released = LeaseHeartbeat.release_all(timeout_seconds=_RELEASE_BEFORE_EXIT_SECONDS)
+    if released:
+        Log.warning(
+            "Worker forced shutdown released %s lease(s) held by unfinished jobs",
+            released,
+        )
     exit_code = (
         128 + int(signal_number)
         if signal_number is not None

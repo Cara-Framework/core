@@ -433,6 +433,32 @@ class FileCacheDriver(CacheContract):
                 return False
             return self._delete_file(file_path)
 
+    def touch_if(self, key: str, expected_value: Any, ttl: int) -> bool:
+        """
+        Re-read the entry, compare against ``expected_value``, and rewrite it
+        with a fresh expiry on match under the driver CAS lock.
+        """
+        if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0:
+            raise CacheConfigurationException(
+                "touch_if requires a positive integer ttl in seconds"
+            )
+        with self._exclusive():
+            file_path = self._file_path(key)
+            if not os.path.exists(file_path):
+                return False
+            ok, expires_at, stored_value = self._read_file(file_path)
+            if not ok:
+                raise CacheConfigurationException(
+                    f"Unreadable compare-and-touch value for key '{key}'"
+                )
+            if expires_at is not None and expires_at < time.time():
+                self._delete_file(file_path)
+                return False
+            if stored_value != expected_value:
+                return False
+            self._write_file(file_path, time.time() + ttl, stored_value, strict=True)
+            return True
+
     def ttl(self, key: str) -> int | None:
         """Remaining time-to-live for ``key`` in seconds.
 
