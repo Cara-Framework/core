@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from cara.facades import Log
 from cara.http import Request, Response
+from cara.middleware.http.PathRedaction import PathRedaction
 from cara.middleware.Middleware import Middleware
 
 
@@ -29,8 +30,9 @@ class RecordRequestMetrics(Middleware):
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         if elapsed_ms > self.SLOW_REQUEST_THRESHOLD_MS:
+            path = PathRedaction.loggable_path(request.path, self.application)
             Log.warning(
-                f"Slow request: {request.method} {request.path} took {elapsed_ms}ms",
+                f"Slow request: {request.method} {path} took {elapsed_ms}ms",
                 category="app.http.requests",
             )
 

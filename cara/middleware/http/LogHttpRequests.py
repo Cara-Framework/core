@@ -3,6 +3,10 @@ HTTP Request Logging Middleware for the Cara framework.
 
 This middleware logs HTTP requests with beautiful colorful output using ANSI escape codes.
 This is the primary HTTP access log middleware and must be first in the middleware stack.
+
+No secret is logged: query parameters named in ``_SENSITIVE_QUERY_PARAMS``
+and the path segments ``PathRedaction`` names (``logging.secret_path_parameters``)
+are written redacted, on the success and the exception line alike.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from typing import Any
 
 from cara.facades import Log
 from cara.http import Request, Response
+from cara.middleware.http.PathRedaction import PathRedaction
 from cara.middleware.Middleware import Middleware
 from cara.support import mask_ip
 
@@ -147,16 +152,11 @@ class LogHttpRequests(Middleware):
         try:
             response = await next_fn(request)
         except Exception as exc:
-            method = request.method
-            path = _sanitize_log_path(request.path)
-            qs = request.scope.get("query_string", b"").decode()
-            if qs:
-                path += f"?{_sanitize_log_path(_redact_query_string(qs))}"
             Log.warning(
                 "🌐 HTTP FAIL: %s -> %s %s — %s: %s",
                 client_ip,
-                method,
-                path,
+                request.method,
+                self._logged_path(request),
                 type(exc).__name__,
                 exc,
                 category="cara.http.requests",
@@ -166,19 +166,8 @@ class LogHttpRequests(Middleware):
         # Calculate timing
         duration_ms = round((time.time() - start_time) * 1000, 2)
 
-        # Build log message using sync and async methods appropriately
         method = request.method  # sync property
-        path = _sanitize_log_path(request.path)  # sync property
-
-        # Get query string from scope if available. Redact known-secret
-        # params so tokens/keys never end up in access logs.
-        query_string = request.scope.get("query_string", b"").decode()
-        if query_string:
-            # Sanitize AFTER the redaction so a control char inside a
-            # redacted token's position can't slip past the sanitizer
-            # — and the marker text ``[REDACTED]`` itself has no
-            # control chars so the second pass is a no-op on it.
-            path += f"?{_sanitize_log_path(_redact_query_string(query_string))}"
+        path = self._logged_path(request)
 
         status_code = response.get_status_code()
         status_color, status_symbol = self._get_status_info(status_code)
@@ -206,6 +195,23 @@ class LogHttpRequests(Middleware):
             Log.debug("  Headers: %s", safe_headers, category="cara.http.requests")
 
         return response
+
+    def _logged_path(self, request: Request) -> str:
+        """The path and query string as the access log writes them.
+
+        Capability path segments and known-secret query params are redacted
+        first, then control chars are %-encoded — AFTER the redaction, so a
+        control char inside a redacted token's position can't slip past the
+        sanitizer (the redaction markers carry none, so the second pass is a
+        no-op on them).
+        """
+        path = _sanitize_log_path(
+            PathRedaction.loggable_path(request.path, self.application)
+        )
+        query_string = request.scope.get("query_string", b"").decode()
+        if query_string:
+            path += f"?{_sanitize_log_path(_redact_query_string(query_string))}"
+        return path
 
     def _get_status_info(self, status_code: int) -> tuple[str, str]:
         """Get color and symbol for HTTP status code."""

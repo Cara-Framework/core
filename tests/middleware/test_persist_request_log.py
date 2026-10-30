@@ -10,17 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import importlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from cara.middleware.http import PersistRequestLog, RequestLogStore
+from cara.middleware.http import PathRedaction, PersistRequestLog, RequestLogStore
 from cara.middleware.http import PersistRequestLog as _module_probe
+from cara.routing import Route, Router
 
 middleware_module = __import__(
     "cara.middleware.http.PersistRequestLog", fromlist=["PersistRequestLog"]
 )
+redaction_module = importlib.import_module("cara.middleware.http.PathRedaction")
 
 assert _module_probe is middleware_module.PersistRequestLog
 
@@ -46,13 +49,17 @@ def _application(store: RequestLogStore | None = None) -> MagicMock:
     return app
 
 
-def _subject(insert=None, prune=None) -> PersistRequestLog:
-    """Bare instance with only the store wired — no container involved."""
-    middleware = object.__new__(PersistRequestLog)
+def _subject(
+    insert=None, prune=None, cls=PersistRequestLog, routes=()
+) -> PersistRequestLog:
+    """Bare instance with the store and a router wired — no container involved."""
+    middleware = object.__new__(cls)
     middleware._request_logs = SimpleNamespace(
         insert=insert or (lambda _payload: None),
         prune_old=prune or (lambda _days: None),
     )
+    router = Router(None, *routes)
+    middleware.application = SimpleNamespace(make=lambda _key: router)
     return middleware
 
 
@@ -61,11 +68,12 @@ def _request(path: str = "/api/products", method: str = "GET") -> SimpleNamespac
 
 
 def _stub_config(monkeypatch, values: dict) -> None:
-    monkeypatch.setattr(
-        middleware_module,
-        "config",
-        lambda key, default=None: values.get(key, default),
-    )
+    for module in (middleware_module, redaction_module):
+        monkeypatch.setattr(
+            module,
+            "config",
+            lambda key, default=None: values.get(key, default),
+        )
 
 
 class _SettledTask:
@@ -230,14 +238,35 @@ async def test_extra_columns_hook_is_merged_onto_the_row(monkeypatch):
         def extra_columns(self, request):
             return {"workspace_id": 42}
 
-    subject = object.__new__(_Stamped)
-    subject._request_logs = SimpleNamespace(
-        insert=lambda _p: None, prune_old=lambda _d: None
-    )
+    subject = _subject(cls=_Stamped)
 
     await subject.handle(_request(), lambda _req: _respond(200))
 
     assert calls[0][1]["workspace_id"] == 42
+
+
+def _controller(_request=None, _response=None):
+    return {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_a_capability_in_the_path_is_stored_redacted(monkeypatch):
+    """The row is written through ``PathRedaction``: a secret the route binds
+    as ``@token`` never reaches the table, whatever the method."""
+    _stub_config(monkeypatch, {})
+    calls = _capture_dispatch(monkeypatch)
+    subject = _subject(
+        routes=(Route.post("/api/webhooks/shipstation/@token", _controller),)
+    )
+
+    await subject.handle(
+        _request("/api/webhooks/shipstation/ss_9Xq2-secret", method="GET"),
+        lambda _req: _respond(405),
+    )
+
+    assert calls[0][1]["path"] == (
+        f"/api/webhooks/shipstation/{PathRedaction.REDACTED_SEGMENT}"
+    )
 
 
 @pytest.mark.asyncio

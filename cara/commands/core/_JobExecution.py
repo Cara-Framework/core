@@ -565,14 +565,16 @@ def _process_message(
         else:
             Log.error("Job failed: %s", job_error, exc_info=True)
             if MetricsBase is not None:
-                try:
+                # A metrics backend that is missing or broken must not turn a
+                # job failure into a second one; the failure is logged above.
+                with contextlib.suppress(
+                    ImportError, RuntimeError, AttributeError, OSError
+                ):
                     MetricsBase.exceptions_total.labels(
                         source="job",
                         route=_mx_job,
                         exception=type(job_error).__name__,
                     ).inc()
-                except ImportError, RuntimeError, AttributeError, OSError:
-                    pass
             # Terminal catch: the worker consumes the failure ("failed
             # gracefully"), so the explicit capture is Sentry's only path.
             observability.capture_exception(job_error)

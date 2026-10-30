@@ -26,10 +26,17 @@ Row shape handed to the store::
 Anything beyond that is application schema: override :meth:`extra_columns`
 to stamp additional columns onto the row.
 
+``path`` is written through :class:`PathRedaction`: a capability carried in
+the path (a webhook secret, a shareable link) is stored redacted, never
+readable by whoever reads the table for the whole retention window.
+
 Configuration (all read at call time, never snapshotted at import):
 
 ``logging.persist_http_requests``
     Kill switch. Default ``True``.
+``logging.secret_path_parameters``
+    Route parameters whose value is a capability, stored redacted. Default
+    :attr:`PathRedaction.DEFAULT_SECRET_PARAMETERS` (``("token",)``).
 ``logging.http_request_log_skip_prefixes``
     Path prefixes that are never logged. Default :attr:`SKIP_PREFIXES`.
 ``logging.http_request_log_retention_days``
@@ -52,6 +59,7 @@ from cara.configuration import config
 from cara.context import ExecutionContext
 from cara.facades import Log
 from cara.http import Request, Response
+from cara.middleware.http.PathRedaction import PathRedaction
 from cara.middleware.http.RequestLogStore import RequestLogStore
 from cara.middleware.Middleware import Middleware
 from cara.support import optional_user_id
@@ -196,7 +204,9 @@ class PersistRequestLog(Middleware):
             payload: dict[str, Any] = {
                 "created_at": datetime.now(UTC),
                 "method": (request.method or "")[:10],
-                "path": path[: self.MAX_PATH_LEN],
+                "path": PathRedaction.loggable_path(path, self.application)[
+                    : self.MAX_PATH_LEN
+                ],
                 "route": self._resolve_route(request),
                 "status_code": status_code,
                 "duration_ms": duration_ms,
