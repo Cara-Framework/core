@@ -56,6 +56,17 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
     alone never fills the whole window and a newly arrived tenant's job
     finds a free slot at once rather than after an in-flight job finishes.
 
+    ``tenant_urgent_slots_per_queue`` (when > 0) lets a tenant's URGENT row
+    — declared ``high`` or ``critical`` — go that many slots past the
+    tenant window, so the tenant's own long default/low jobs filling its
+    window cannot hold back its urgent job until one of them ends (a sale's
+    stock push behind the same seller's 40-second pulls). Default/low rows
+    still stop at the tenant window, so bulk work alone never fills the
+    broker window; the urgent slot is taken only while the broker window
+    has room, and the fair order above still serves the tenant holding the
+    fewest slots first. The declared priority decides, not the aged tier:
+    a backlog that aged up does not earn the urgent slots.
+
     The tenants with due work are found by a recursive skip scan over
     ``queue_job_delivery_tenant_head_idx`` and each one's last service by
     ``queue_job_delivery_tenant_served_idx`` — a few index probes per tenant
@@ -90,7 +101,7 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
         row = database.select_one(
             "WITH RECURSIVE settings AS (SELECT %s::timestamptz AS now, "
             "%s::numeric AS aging_seconds, %s::integer AS broker_window, "
-            "%s::integer AS tenant_window), "
+            "%s::integer AS tenant_window, %s::integer AS urgent_slots), "
             "priority_lanes(priority, base_rank) AS (VALUES "
             "('critical', 0), ('high', 1), ('default', 2), ('low', 3)), "
             "outstanding AS (SELECT outstanding.queue, "
@@ -150,7 +161,11 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
             "ORDER BY delivery.available_at, delivery.created_at LIMIT 1"
             ") AS head "
             "WHERE settings.tenant_window <= 0 OR tenant_keys.tenant_key = 0 "
-            "OR COALESCE(outstanding.held, 0) < settings.tenant_window), "
+            "OR COALESCE(outstanding.held, 0) < settings.tenant_window "
+            # The urgent slots: by DECLARED tier (base_rank), never aged.
+            "+ CASE WHEN tenant_keys.base_rank <= "
+            f"{int(self._PRIORITY_RANKS['high'])} "
+            "THEN settings.urgent_slots ELSE 0 END), "
             "candidate AS (SELECT heads.job_id "
             "FROM heads CROSS JOIN settings "
             "ORDER BY heads.held, heads.last_served_at NULLS FIRST, "
@@ -174,6 +189,7 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
                 self.priority_aging_seconds,
                 self.broker_window_per_queue,
                 self.tenant_window_per_queue,
+                self.tenant_urgent_slots_per_queue,
                 list(self.canonical_queues),
                 list(self.canonical_queues),
                 token,

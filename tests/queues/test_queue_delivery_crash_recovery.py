@@ -110,11 +110,12 @@ class _CrashDB:
                 self.row["status"] == "pending"
                 and self.row["publish_status"] == "pending"
             ):
-                # [now, aging, broker window, tenant window, queues, queues,
-                #  token, lease expiry, now] — the tenant-fair claim's order.
+                # [now, aging, broker window, tenant window, urgent slots,
+                #  queues, queues, token, lease expiry, now] — the
+                #  tenant-fair claim's order.
                 self.row["publish_status"] = "processing"
-                self.row["publish_lease_token"] = params[6]
-                self.row["publish_lease_expires_at"] = params[7]
+                self.row["publish_lease_token"] = params[7]
+                self.row["publish_lease_expires_at"] = params[8]
                 return dict(self.row)
             return None
         if sql.startswith("UPDATE queue_job_delivery SET publish_status = %s"):

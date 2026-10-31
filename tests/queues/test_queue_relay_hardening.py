@@ -438,13 +438,56 @@ def test_priority_claim_uses_bounded_indexed_queue_lane_heads():
     assert db.params[1] == 120
     assert db.params[2] == 2
     assert db.params[3] == 0
+    # No urgent slots unless configured: the tenant window binds every row.
+    assert db.params[4] == 0
     assert "eligible_queues AS" in db.sql
     assert "unnest(%s::varchar[])" in db.sql
-    assert db.params[4] == ["connector", "sync"]
+    assert db.params[5] == ["connector", "sync"]
     assert "outstanding.publish_lease_expires_at > settings.now" in db.sql
     assert "< settings.broker_window" in db.sql
     assert "WHERE EXISTS" not in db.sql
     assert "status IN ('pending', 'processing')" in db.sql
+
+
+def test_tenant_urgent_slots_are_off_by_default_and_bounded():
+    # Off unless an application asks: an upgrade changes no claim.
+    assert _store(_PriorityClaimDB()).tenant_urgent_slots_per_queue == 0
+    store = _store(
+        _PriorityClaimDB(),
+        delivery_tenant_window_per_queue=1,
+        delivery_tenant_urgent_slots_per_queue=1,
+    )
+    assert store.tenant_urgent_slots_per_queue == 1
+    with pytest.raises(QueueException):
+        _store(_PriorityClaimDB(), delivery_tenant_urgent_slots_per_queue=-1)
+
+
+def test_urgent_slots_open_past_the_tenant_window_for_declared_urgent_rows_only():
+    """A tenant's ``high``/``critical`` head may go past its tenant window by
+    the urgent slots; its default/low heads stop at the window. The DECLARED
+    lane decides (``tenant_keys.base_rank``), never the aged tier, so a
+    backlog that aged up cannot take the urgent slots too."""
+    db = _PriorityClaimDB()
+    store = _store(
+        db,
+        delivery_broker_window_per_queue=2,
+        delivery_tenant_window_per_queue=1,
+        delivery_tenant_urgent_slots_per_queue=1,
+    )
+
+    assert store._claim_next_publish() is None
+    assert db.params[2:5] == [2, 1, 1]
+    assert "%s::integer AS urgent_slots" in db.sql
+    heads_filter = db.sql.split(") AS head ", 1)[1].split("candidate AS", 1)[0]
+    assert "COALESCE(outstanding.held, 0) < settings.tenant_window " in heads_filter
+    assert (
+        "+ CASE WHEN tenant_keys.base_rank <= 1 "
+        "THEN settings.urgent_slots ELSE 0 END" in heads_filter
+    )
+    # The aged tier only ORDERS heads; it never widens the window.
+    assert "aging_seconds" not in heads_filter
+    # The broker window still bounds the whole queue, urgent or not.
+    assert "< settings.broker_window" in db.sql
 
 
 class _DeliveryMetricsDB:

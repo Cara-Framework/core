@@ -165,6 +165,20 @@ class QueueJobDeliveryStore:
             maximum=10000,
             field="delivery_tenant_window_per_queue",
         )
+        # Slots ABOVE the tenant window that only a tenant's URGENT rows —
+        # queued ``high`` or ``critical`` — may take (0 = off). A tenant whose
+        # long default/low jobs fill its tenant window otherwise starts its
+        # own urgent job only after one of them ends: a sale's stock push
+        # waited minutes behind the same seller's scheduled pulls. The
+        # DECLARED priority decides, never the aged tier, so a backlog that
+        # aged up cannot fill these slots too. Default/low rows still stop at
+        # the tenant window, and the broker window still bounds the queue.
+        self.tenant_urgent_slots_per_queue = self._bounded_int(
+            options.get("delivery_tenant_urgent_slots_per_queue", 0),
+            minimum=0,
+            maximum=10000,
+            field="delivery_tenant_urgent_slots_per_queue",
+        )
         self.execution_lease_seconds = self._bounded_int(
             options.get("delivery_execution_lease_seconds", 7200),
             minimum=60,
