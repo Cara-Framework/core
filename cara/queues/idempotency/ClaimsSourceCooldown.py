@@ -125,8 +125,11 @@ class ClaimsSourceCooldown:
 
         time_key = self.COOLDOWN_KEY_PREFIX + ":".join([str(source), *grains])
 
-        stamp = pendulum.now("UTC").isoformat()
-        if Cache.add(time_key, stamp, cooldown_minutes * 60):
+        owner = self._cooldown_owner()
+        stamp = pendulum.now("UTC").isoformat() + (f"|{owner}" if owner else "")
+        if Cache.add(time_key, stamp, cooldown_minutes * 60) or (
+            owner and self._take_over_own_cooldown(time_key, owner, stamp, cooldown_minutes)
+        ):
             self._idempotency_cooldown_claim = (time_key, stamp)
             Log.debug(
                 "Cooldown claim taken for %s (cooldown: %sm)",
@@ -143,6 +146,53 @@ class ClaimsSourceCooldown:
             category="idempotency",
         )
         return False
+
+    def _cooldown_owner(self) -> str | None:
+        """The durable job this run executes (``_db_job_id``), or ``None``.
+
+        The worker stamps it on every delivery of one queued job — the first
+        and every redelivery after a dead worker's lease lapsed — and a sync
+        dispatch has none, so its claim stays anonymous as before.
+        """
+        owner = getattr(self, "_db_job_id", None)
+        return str(owner) if owner not in (None, "") else None
+
+    def _take_over_own_cooldown(
+        self, key: str, owner: str, stamp: str, cooldown_minutes: int
+    ) -> bool:
+        """Re-own a window an EARLIER RUN OF THIS SAME JOB claimed and never
+        settled — its worker died mid-run (SIGKILL, OOM, a deploy).
+
+        A raising run hands its claim back (``_release_source_cooldown``), but
+        a killed one cannot: its window outlived it and met the redelivery
+        that retries it, which the gate then settled as done without running
+        (live test, 2026-10-31: a listing pull killed 14 s in was "completed in
+        0.002s" at its lease lapse and the channel stayed unpulled, its run
+        orphaned RUNNING). Only the same durable job may take the window over
+        — any other dispatch still meets the live cooldown — and the swap is
+        compare-and-delete then SETNX, so two takers cannot both win.
+        """
+        try:
+            current = Cache.get(key)
+            if not (isinstance(current, str) and current.endswith(f"|{owner}")):
+                return False
+            if not Cache.forget_if(key, current):
+                return False
+            taken = bool(Cache.add(key, stamp, cooldown_minutes * 60))
+        except Exception as exc:
+            Log.warning(
+                "Cooldown take-over failed for %s: %s", key, exc, category="idempotency"
+            )
+            return False
+        if taken:
+            Log.info(
+                "Cooldown %s re-owned by a redelivery of job %s (its earlier run "
+                "never settled)",
+                key,
+                owner,
+                category="idempotency",
+            )
+        return taken
 
     def _release_source_cooldown(self) -> None:
         """Hand back a cooldown window this run claimed but did not spend.
