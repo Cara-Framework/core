@@ -185,6 +185,58 @@ def test_missed_and_skipped_fires_reach_the_task_counter(monkeypatch) -> None:
     ]
 
 
+def test_registration_exports_every_outcome_series_at_zero(monkeypatch) -> None:
+    """Live 2026-11-01: ``ScheduledTaskFailingContinuously`` fired on
+    failures from before a restart. The task's first success after it was
+    a series born at 1, which ``increase()`` reads as no increase, so the
+    rule's ``unless … success`` never cancelled it. Each registered task's
+    series now exist at 0 before any fire."""
+    counter = _Counter()
+    monkeypatch.setattr(
+        driver_module,
+        "MetricsBase",
+        SimpleNamespace(scheduled_tasks_total=counter),
+    )
+    driver = _EngineFreeDriver()
+
+    driver.schedule_job(
+        "sweep_amazon_mcf_preflight",
+        lambda: None,
+        {"type": "interval", "minutes": 30},
+        {"silent": True},
+    )
+
+    assert counter.labels_seen == [
+        {"task": "sweep_amazon_mcf_preflight", "outcome": outcome}
+        for outcome in ("success", "failure", "throttled", "missed", "skipped")
+    ]
+
+
+def test_a_zeroed_series_makes_the_first_post_restart_success_an_increase() -> None:
+    """The real client: registration exports the series at 0, so the first
+    success is a 0 → 1 step a scrape can see, not a series born at 1."""
+    from prometheus_client import CollectorRegistry, Counter
+
+    registry = CollectorRegistry()
+    counter = Counter(
+        "probe_scheduled_tasks",
+        "probe",
+        labelnames=("task", "outcome"),
+        registry=registry,
+    )
+    original = driver_module.MetricsBase
+    driver_module.MetricsBase = SimpleNamespace(scheduled_tasks_total=counter)
+    try:
+        driver_module._zero_outcome_series("close")
+    finally:
+        driver_module.MetricsBase = original
+
+    labels = {"task": "close", "outcome": "success"}
+    assert registry.get_sample_value("probe_scheduled_tasks_total", labels) == 0.0
+    counter.labels(**labels).inc()
+    assert registry.get_sample_value("probe_scheduled_tasks_total", labels) == 1.0
+
+
 # ── Executor passthrough and restart-safe settings ─────────────────────
 
 

@@ -32,7 +32,20 @@ from cara.scheduling.contracts import SchedulingContract
 
 _logger = logging.getLogger("cara.scheduling")
 
+#: Every ``outcome`` a fire records on ``scheduled_tasks_total``.
+_OUTCOMES = ("success", "failure", "throttled", "missed", "skipped")
+
 # ── Prometheus instrumentation wrapper ────────────────────────────────
+
+
+def _zero_outcome_series(identifier: str) -> None:
+    """Export ``identifier``'s outcome series at 0 from registration:
+    ``increase()`` cannot see a counter's first sample, so a series born at 1
+    after a restart hid a task's first success from ``unless … success``
+    rules (live 2026-11-01, ``ScheduledTaskFailingContinuously``)."""
+    with contextlib.suppress(AttributeError, TypeError):
+        for outcome in _OUTCOMES:
+            MetricsBase.scheduled_tasks_total.labels(task=identifier, outcome=outcome)
 
 
 def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
@@ -432,6 +445,7 @@ class APSchedulerDriver(SchedulingContract):
         silent = bool(options.get("silent", False))
 
         trigger = self._build_trigger(schedule_spec)
+        _zero_outcome_series(identifier)
         instrumented = _instrument_scheduled(identifier, callback)
         catch_up = isinstance(options, dict) and bool(options.get("catch_up"))
         if catch_up:
