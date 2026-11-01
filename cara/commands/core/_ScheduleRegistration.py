@@ -14,6 +14,8 @@ from cara.exceptions import ConfigurationException
 from cara.facades import Schedule
 from cara.queues.middleware import run_through_middleware_async
 
+from . import _ScheduledThrottle
+
 
 def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] | None:
     """Register a job defined as a dict in config/scheduling.py.
@@ -58,12 +60,22 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
     # If handle() needs DI-resolved arguments (contracts), resolve them
     # through the container; if handle() is a coroutine, run it via
     # asyncio so async jobs work transparently.
+    interval_seconds = (
+        float(spec.get("seconds", 0) or 0)
+        + float(spec.get("minutes", 0) or 0) * 60
+        + float(spec.get("hours", 0) or 0) * 3600
+        if trigger == "interval"
+        else None
+    )
+
     def _make_and_run(
         _cls=job_cls,
         _kw=job_kwargs,
         _app=self.application,
         _central=is_central_job,
         _tenant_id=scheduled_tenant_id,
+        _identifier=job_id,
+        _budget=_ScheduledThrottle._throttle_budget_seconds(interval_seconds),
     ):
 
         # Instantiate — pass kwargs to __init__ so required params
@@ -154,7 +166,14 @@ def _register_scheduled_dict_job(self, spec: dict[str, Any]) -> dict[str, Any] |
                 return await run_through_middleware_async(instance, _invoke)
 
         try:
-            asyncio.run(_run_scoped())
+            # A concurrency-gate refusal is retried within the tick: inline
+            # there is no queue runner to requeue it (live 2026-11-01, 15
+            # Amazon fires lost in an hour).
+            _ScheduledThrottle._run_with_throttle_retry(
+                _identifier,
+                lambda: asyncio.run(_run_scoped()),
+                budget_seconds=_budget,
+            )
         except BaseException:
             _finish_tick("failed")
             raise

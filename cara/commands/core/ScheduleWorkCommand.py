@@ -41,7 +41,7 @@ from cara.scheduling import (
 )
 from cara.scheduling.contracts import ShouldSchedule
 
-from . import _ScheduleRegistration
+from . import _ScheduledThrottle, _ScheduleRegistration
 
 
 @command(
@@ -431,7 +431,11 @@ class ScheduleWorkCommand(MakesAutoReload, CommandBase):
             with Tenancy.central():
                 return await run_through_middleware_async(instance, _invoke)
 
-        asyncio.run(_run())
+        # Inline, so a concurrency-gate refusal is retried here — no queue
+        # runner exists to requeue it (``_ScheduledThrottle``).
+        _ScheduledThrottle._run_with_throttle_retry(
+            job_target.__name__, lambda: asyncio.run(_run())
+        )
 
     def _queue_command(self, command_target: Any, driver_name: str | None = None):
         """Queue command for execution."""

@@ -27,6 +27,7 @@ from cara.exceptions import InvalidArgumentException
 from cara.facades import Cache as _Cache
 from cara.facades import Log
 from cara.observability import MetricsBase
+from cara.queues import ConcurrencyExceeded
 from cara.scheduling.contracts import SchedulingContract
 
 _logger = logging.getLogger("cara.scheduling")
@@ -70,6 +71,9 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
                 result = await callback(*a, **kw)
                 _observe("success", _time.time() - start)
                 return result
+            except ConcurrencyExceeded:
+                _observe("throttled", _time.time() - start)
+                raise
             except Exception:
                 _observe("failure", _time.time() - start)
                 raise
@@ -84,6 +88,13 @@ def _instrument_scheduled(identifier: str, callback: Callable) -> Callable:
             result = callback(*a, **kw)
             _observe("success", _time.time() - start)
             return result
+        except ConcurrencyExceeded:
+            # The concurrency gate refused the tick past its retry budget
+            # (``_ScheduledThrottle``): a held slot, not a code failure — its
+            # own outcome, so the throttle alert sees it and the failure-rate
+            # rules do not double-count it (live 2026-11-01).
+            _observe("throttled", _time.time() - start)
+            raise
         except Exception:
             _observe("failure", _time.time() - start)
             raise

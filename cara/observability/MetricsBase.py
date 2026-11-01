@@ -496,6 +496,15 @@ class MetricsBase:
         labelnames=("task", "outcome"),
         registry=REGISTRY,
     )
+    # A scheduled tick the concurrency gate refused (inline runs have no
+    # queue to requeue them): ``recovered`` once a retry got a slot,
+    # ``dropped`` when its retry budget ran out (``_ScheduledThrottle``).
+    scheduled_task_throttles_total = Counter(
+        metric_name("scheduled_task_throttles_total"),
+        "Scheduled task fires the concurrency gate refused, by task and result.",
+        labelnames=("task", "result"),
+        registry=REGISTRY,
+    )
     scheduled_task_duration_seconds = Histogram(
         metric_name("scheduled_task_duration_seconds"),
         "Scheduled task wall-clock duration.",
