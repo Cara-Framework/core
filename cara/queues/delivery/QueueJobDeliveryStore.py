@@ -92,6 +92,17 @@ class QueueJobDeliveryStore:
         "status = %s AND publish_status != %s AND available_at <= {now}"
     )
 
+    #: The ONE definition of "this terminal row awaits replay": no replay
+    #: child names it. ``{table}`` is the ledger table, unaliased in the outer
+    #: query. A replay inserts a child and never touches its source, so a
+    #: recovered source keeps ``dead_lettered`` until retention prunes it.
+    #: Read by the operator tools (``QueueOperationsStore``) and the ledger
+    #: gauge alerting reads (:meth:`delivery_metrics`).
+    _AWAITING_REPLAY_FILTER_TEMPLATE = (
+        "NOT EXISTS (SELECT 1 FROM {table} AS replay_child "
+        "WHERE replay_child.replay_of = {table}.job_id)"
+    )
+
     _PUBLISH_BACKOFF_SECONDS = (1, 5, 30, 60, 300)
     _HOOK_BACKOFF_SECONDS = (60, 300, 900, 3600, 21600, 86400)
     _SETTLEMENT_BACKOFF_SECONDS = (0.05, 0.25, 1.0, 2.0, 5.0)

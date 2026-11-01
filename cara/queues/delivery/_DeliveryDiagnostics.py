@@ -23,12 +23,16 @@ def _bind_store(store_type: type) -> None:
 def _delivery_delivery_metrics(self) -> dict[str, Any]:
     """Return one aggregate snapshot for relay-owned metrics.
 
-    The status totals span the whole retained ledger — alerting reads
-    ``dead_lettered``/``expired`` across retention — so this is a scan the
+    The status totals span the whole retained ledger, so this is a scan the
     driver runs on a cadence (``AMQPDriver.refresh_delivery_metrics``), never
-    once per relay iteration.
+    once per relay iteration. ``dead_lettered``/``expired`` count the rows
+    AWAITING REPLAY (``_AWAITING_REPLAY_FILTER_TEMPLATE``), as the operator
+    tools do: a replay never touches its source, so counting every terminal
+    row kept ``QueueDeliveryTerminalFailure`` firing for the whole 90-day
+    retention after one dead letter, recovered or not.
     """
     due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
+    awaiting_replay = self._AWAITING_REPLAY_FILTER_TEMPLATE.format(table=self.table)
     priority_columns: list[str] = []
     priority_params: list[Any] = []
     for priority in self._PRIORITY_RANKS:
@@ -59,8 +63,9 @@ def _delivery_delivery_metrics(self) -> dict[str, Any]:
         "COUNT(*) FILTER (WHERE status = %s) AS processing, "
         "COUNT(*) FILTER (WHERE status = %s) AS completed, "
         "COUNT(*) FILTER (WHERE status = %s) AS retry_scheduled, "
-        "COUNT(*) FILTER (WHERE status = %s) AS dead_lettered, "
-        "COUNT(*) FILTER (WHERE status = %s) AS expired, "
+        f"COUNT(*) FILTER (WHERE status = %s AND {awaiting_replay}) "
+        "AS dead_lettered, "
+        f"COUNT(*) FILTER (WHERE status = %s AND {awaiting_replay}) AS expired, "
         "COUNT(*) FILTER (WHERE status = %s AND publish_status = %s) "
         "AS publish_pending, "
         "COUNT(*) FILTER (WHERE publish_status = %s) "

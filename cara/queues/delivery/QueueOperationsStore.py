@@ -268,9 +268,8 @@ class QueueOperationsStore:
 
     def _awaiting_replay_condition(self) -> str:
         """The row has no replay child — the one predicate every reader shares."""
-        return (
-            f"NOT EXISTS (SELECT 1 FROM {self.ledger_table} AS replay_child "
-            f"WHERE replay_child.replay_of = {self.ledger_table}.job_id)"
+        return QueueJobDeliveryStore._AWAITING_REPLAY_FILTER_TEMPLATE.format(
+            table=self.ledger_table
         )
 
     @staticmethod

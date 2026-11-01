@@ -639,7 +639,7 @@ def _process_message(
             # gracefully"), so the explicit capture is Sentry's only path.
             observability.capture_exception(job_error)
 
-        JobProcessor._route_failed_message(
+        routed = JobProcessor._route_failed_message(
             channel=channel,
             method_frame=method_frame,
             msg=msg,
@@ -652,7 +652,14 @@ def _process_message(
             db_job_id=db_job_id or (msg or {}).get("db_job_id"),
         )
 
-        _mx_record("failed")
+        # A throttle redelivered without spending an attempt is contention,
+        # not a failed job. Recorded ``failed``, every fair-share refusal of a
+        # healthy, busy fleet landed in the failure-rate numerator. One that
+        # exhausted its starvation budget dead-lettered and IS a failure.
+        throttled = (
+            getattr(job_error, "is_throttle", False) and routed == "retry_scheduled"
+        )
+        _mx_record("throttled" if throttled else "failed")
         return "failure"  # Still processed (failed gracefully)
 
     finally:
