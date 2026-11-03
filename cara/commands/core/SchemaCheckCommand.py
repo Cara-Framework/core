@@ -35,7 +35,12 @@ reporting DRIFT:
     and still be reported "in sync",
   * EXTRA indexes — a live index no model declares would vanish on the next
     regenerate-from-models. Indexes Postgres creates implicitly to back a
-    PK/UNIQUE/EXCLUDE constraint are excluded — no model names those.
+    PK/UNIQUE/EXCLUDE constraint are excluded — no model names those,
+  * CHANGED indexes — present by name, not as declared (columns, their order,
+    UNIQUE, predicate, method, opclass, INCLUDE), compared as the server
+    spells both sides; and INVALID ones an interrupted CONCURRENTLY build
+    left behind. Because ``schema:verify`` is this command run against a
+    from-zero database, it catches a directory that builds an index wrong.
 
 Introspection, the model's columns and the named-object comparison are all
 ``cara.schema`` — the same functions ``schema:plan`` derives operations from.
@@ -57,11 +62,14 @@ from cara.schema import (
     created_objects,
     declared_checks_by_table,
     declared_columns,
+    declared_indexes_by_table,
+    drifted_indexes,
     introspect,
     missing_checks,
     missing_foreign_keys,
     missing_indexes,
     normalize_declared_checks,
+    normalize_declared_indexes,
     orphaned_indexes,
     orphaned_unique_constraints,
 )
@@ -156,6 +164,12 @@ class SchemaCheckCommand(CommandBase):
             # whose body changed under an unchanged name read as drift.
             live = normalize_declared_checks(
                 live_schema, live, declared_checks_by_table(checkable), schema_name
+            )
+            # And the model's indexes, so one whose definition changed under
+            # an unchanged name — columns, their order, UNIQUE, a predicate —
+            # reads as drift instead of "present".
+            live = normalize_declared_indexes(
+                live_schema, live, declared_indexes_by_table(checkable), schema_name
             )
         except Exception as exc:  # DB unreachable / introspection failed
             message = f"Could not introspect the live database: {exc}."
@@ -290,6 +304,24 @@ class SchemaCheckCommand(CommandBase):
                 issues.append(
                     f"CHECK '{operation.key.split(':')[1]}' in database differs "
                     f"from the model's declaration — schema:plan replaces it"
+                )
+        # An index present by NAME is not necessarily the declared index: its
+        # columns, their order, UNIQUE or predicate may have changed, or an
+        # interrupted CONCURRENTLY build left it INVALID.
+        for drift in drifted_indexes(model, table, live):
+            name = drift.index.name
+            if drift.changed:
+                issues.append(
+                    f"index '{name}' in database differs from the model's "
+                    f"declaration — database: {drift.live_shape}; model: "
+                    f"{drift.wanted_shape} — schema:plan builds the declared "
+                    f"one CONCURRENTLY and swaps it in"
+                )
+            else:
+                issues.append(
+                    f"index '{name}' is INVALID in the database (an interrupted "
+                    f"CONCURRENTLY build: maintained on every write, read by no "
+                    f"query) — schema:plan rebuilds it"
                 )
         return issues
 

@@ -32,6 +32,7 @@ from __future__ import annotations
 from cara.exceptions import SchemaPlanRefused
 from cara.schema.ConstraintDrift import changed_checks, orphaned_unique_constraints
 from cara.schema.Defaults import declared_default_sql, defaults_match, live_default_sql
+from cara.schema.IndexDrift import changed_indexes
 from cara.schema.LiveSchema import LiveSchema, declared_columns
 from cara.schema.Objects import (
     missing_checks,
@@ -198,6 +199,12 @@ def plan(
         except SchemaPlanRefused as refusal:
             refusals.append(str(refusal))
         operations.extend(orphaned_indexes(model, table, live))
+        # An index the database has by name but not as declared (or INVALID):
+        # a name comparison calls it done, so it is diffed by definition.
+        try:
+            operations.extend(changed_indexes(model, table, live))
+        except SchemaPlanRefused as refusal:
+            refusals.append(str(refusal))
         operations.extend(orphaned_unique_constraints(model, table, live))
         operations.extend(missing_checks(model, table, live))
         operations.extend(changed_checks(model, table, live))

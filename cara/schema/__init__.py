@@ -18,6 +18,11 @@ Four modules, in dependency order:
 * ``Operation`` — one change as a typed, safety-classified, reversible record.
 * ``Objects`` — which named objects a model owns, and whether the database
   already has them (asked of the right catalogue per kind).
+* ``DeclaredIndex`` — every index a model declares, by either route, with its
+  definition.
+* ``ConstraintDrift`` / ``IndexDrift`` — what a name comparison cannot see: a
+  CHECK or an index the database has BY NAME and not as declared, compared as
+  the server spells both sides.
 * ``Planner`` — the difference between the two, as ordered operations.
 * ``Scratch`` — a disposable database beside a real one, for proving both
   the acceptance invariant and a plan before it runs.
@@ -35,6 +40,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "DEFAULT_DECIMAL_SCALE": (".Vocabulary", "DEFAULT_DECIMAL_SCALE"),
     "DEFAULT_STRING_LENGTH": (".Vocabulary", "DEFAULT_STRING_LENGTH"),
     "DESTRUCTIVE": (".Operation", "DESTRUCTIVE"),
+    "DeclaredIndex": (".DeclaredIndex", "DeclaredIndex"),
+    "IndexDrift": (".IndexDrift", "IndexDrift"),
     "LEDGER_TABLE": (".Operation", "LEDGER_TABLE"),
     "LOCKING": (".Operation", "LOCKING"),
     "LiveSchema": (".LiveSchema", "LiveSchema"),
@@ -53,6 +60,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "as_dict": (".Operation", "as_dict"),
     "clone_structure": (".Scratch", "clone_structure"),
     "changed_checks": (".ConstraintDrift", "changed_checks"),
+    "changed_indexes": (".IndexDrift", "changed_indexes"),
     "connection_params": (".Scratch", "connection_params"),
     "constraint_body": (".LiveSchema", "constraint_body"),
     "created_objects": (".Objects", "created_objects"),
@@ -62,11 +70,16 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "declared_default_sql": (".Defaults", "declared_default_sql"),
     "declared_foreign_keys": (".Objects", "declared_foreign_keys"),
     "declared_index_names": (".Objects", "declared_index_names"),
+    "declared_indexes": (".DeclaredIndex", "declared_indexes"),
+    "declared_indexes_by_table": (".DeclaredIndex", "declared_indexes_by_table"),
     "default_literal": (".Defaults", "default_literal"),
     "defaults_match": (".Defaults", "defaults_match"),
     "derive_name": (".Scratch", "derive_name"),
+    "drifted_indexes": (".IndexDrift", "drifted_indexes"),
     "drop": (".Scratch", "drop"),
     "from_dict": (".Operation", "from_dict"),
+    "index_parts": (".DeclaredIndex", "index_parts"),
+    "index_shape": (".DeclaredIndex", "index_shape"),
     "introspect": (".LiveSchema", "introspect"),
     "live_default_sql": (".Defaults", "live_default_sql"),
     "migration_to_run": (".Operation", "migration_to_run"),
@@ -74,6 +87,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "missing_foreign_keys": (".Objects", "missing_foreign_keys"),
     "missing_indexes": (".Objects", "missing_indexes"),
     "normalize_declared_checks": (".LiveSchema", "normalize_declared_checks"),
+    "normalize_declared_indexes": (".LiveSchema", "normalize_declared_indexes"),
     "orphaned_checks": (".Objects", "orphaned_checks"),
     "orphaned_indexes": (".Objects", "orphaned_indexes"),
     "orphaned_tables": (".Objects", "orphaned_tables"),
@@ -83,6 +97,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "postgres_type": (".Vocabulary", "postgres_type"),
     "raw_sql_columns": (".LiveSchema", "raw_sql_columns"),
     "recreate": (".Scratch", "recreate"),
+    "reshape_index_name": (".IndexDrift", "reshape_index_name"),
+    "reshape_scaffolding": (".IndexDrift", "reshape_scaffolding"),
     "run_craft": (".Scratch", "run_craft"),
     "sort_operations": (".Operation", "sort_operations"),
     "sql_literal": (".LiveSchema", "sql_literal"),
@@ -99,6 +115,8 @@ __all__ = [
     "DEFAULT_DECIMAL_SCALE",
     "DEFAULT_STRING_LENGTH",
     "DESTRUCTIVE",
+    "DeclaredIndex",
+    "IndexDrift",
     "LEDGER_TABLE",
     "LOCKING",
     "LiveSchema",
@@ -116,6 +134,7 @@ __all__ = [
     "admin_sql",
     "as_dict",
     "changed_checks",
+    "changed_indexes",
     "clone_structure",
     "connection_params",
     "constraint_body",
@@ -126,11 +145,16 @@ __all__ = [
     "declared_default_sql",
     "declared_foreign_keys",
     "declared_index_names",
+    "declared_indexes",
+    "declared_indexes_by_table",
     "default_literal",
     "defaults_match",
     "derive_name",
+    "drifted_indexes",
     "drop",
     "from_dict",
+    "index_parts",
+    "index_shape",
     "introspect",
     "live_default_sql",
     "migration_to_run",
@@ -138,6 +162,7 @@ __all__ = [
     "missing_foreign_keys",
     "missing_indexes",
     "normalize_declared_checks",
+    "normalize_declared_indexes",
     "orphaned_checks",
     "orphaned_indexes",
     "orphaned_tables",
@@ -147,6 +172,8 @@ __all__ = [
     "postgres_type",
     "raw_sql_columns",
     "recreate",
+    "reshape_index_name",
+    "reshape_scaffolding",
     "run_craft",
     "sort_operations",
     "sql_literal",

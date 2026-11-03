@@ -3,9 +3,9 @@
 ``schema:check`` (report) and ``schema:plan`` (act) must be looking at the
 same database in the same way, so the queries live here once. Everything is
 SELECT-only by construction — nothing in this module can change a schema. The
-one write is :func:`normalize_declared_checks`'s probe: a TEMP table in its own
-session, which no other session can see and which is dropped before the
-connection goes back.
+one write is the probe behind :func:`normalize_declared_checks` and
+:func:`normalize_declared_indexes`: a TEMP table in its own session, which no
+other session can see and which is dropped before the connection goes back.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import re
 from contextlib import suppress
 from dataclasses import dataclass, replace
 
+from cara.schema.DeclaredIndex import index_parts
 from cara.schema.Vocabulary import ADD_COLUMN_RE, PSEUDO_FIELD_EXPANSIONS
 
 
@@ -73,6 +74,27 @@ class LiveSchema:
     #: so the only faithful comparison is the server deparsing both. Empty
     #: when the probe could not run — then no CHECK is called changed.
     declared_check_definitions: dict[str, dict[str, str]] | None = None
+    #: The server's own text of every index (``pg_indexes.indexdef``), per
+    #: table and name. A name says an index EXISTS; only its definition says
+    #: whether it still covers what the model declares — comparing names
+    #: alone let ``message_thread_assignee_idx`` sit on ``(tenant_id,
+    #: assigned_to_user_id)`` under a model declaring the reverse order, on a
+    #: database every gate called clean. It is also the reverse of a reshape.
+    index_definitions: dict[str, dict[str, str]] | None = None
+    #: Indexes with ``indisvalid = false`` — what an interrupted ``CREATE
+    #: INDEX CONCURRENTLY`` leaves behind: maintained on every write, read by
+    #: no query, and present by name, so a name comparison calls it done.
+    invalid_indexes: dict[str, set[str]] | None = None
+    #: The model's indexes as the SERVER spells them, per table and name, for
+    #: the indexes the database also has (:func:`normalize_declared_indexes`).
+    #: Empty when the probe could not run — then no index is called changed.
+    declared_index_definitions: dict[str, dict[str, str]] | None = None
+    #: The LIVE index definitions, built once more on the probe and read back.
+    #: A stored definition re-parsed is not always the same text: the cast in
+    #: ``(ARRAY['a'::varchar])::text[]`` moves into the elements, which is
+    #: exactly what an index rebuilt by ``ALTER COLUMN TYPE`` or restored from
+    #: a dump stores. Both sides are compared at that fixpoint.
+    respelled_index_definitions: dict[str, dict[str, str]] | None = None
 
     def __post_init__(self):
         for name, empty in (
@@ -84,6 +106,10 @@ class LiveSchema:
             ("constraint_definitions", {}),
             ("unique_constraints", {}),
             ("declared_check_definitions", {}),
+            ("index_definitions", {}),
+            ("invalid_indexes", {}),
+            ("declared_index_definitions", {}),
+            ("respelled_index_definitions", {}),
         ):
             if getattr(self, name) is None:
                 object.__setattr__(self, name, empty)
@@ -190,9 +216,11 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
             )
 
     indexes: dict[str, set[str]] = {}
+    index_definitions: dict[str, dict[str, str]] = {}
     for row in (
         run(
-            "SELECT tablename AS table_name, indexname AS index_name "
+            "SELECT tablename AS table_name, indexname AS index_name, "
+            "indexdef AS definition "
             "FROM pg_indexes "
             f"WHERE schemaname = '{sql_literal(target)}' "
             "ORDER BY tablename, indexname"
@@ -200,6 +228,29 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         or []
     ):
         indexes.setdefault(row["table_name"], set()).add(row["index_name"])
+        if row.get("definition"):
+            index_definitions.setdefault(row["table_name"], {})[row["index_name"]] = str(
+                row["definition"]
+            )
+
+    invalid_indexes: dict[str, set[str]] = {}
+    for row in (
+        run(
+            "SELECT c.relname AS table_name, i.relname AS index_name "
+            "FROM pg_index x "
+            "JOIN pg_class i ON i.oid = x.indexrelid "
+            "JOIN pg_class c ON c.oid = x.indrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname = '{sql_literal(target)}' "
+            # A partitioned parent's index (``I``) is legitimately invalid
+            # until every partition's index is attached; only a plain index
+            # being invalid means a build died.
+            "AND i.relkind = 'i' AND NOT x.indisvalid "
+            "ORDER BY c.relname, i.relname"
+        )
+        or []
+    ):
+        invalid_indexes.setdefault(row["table_name"], set()).add(row["index_name"])
 
     constraint_indexes: dict[str, set[str]] = {}
     for row in (
@@ -269,6 +320,8 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
         relation_kinds=relation_kinds,
         constraint_definitions=constraint_definitions,
         unique_constraints=unique_constraints,
+        index_definitions=index_definitions,
+        invalid_indexes=invalid_indexes,
     )
 
 
@@ -349,6 +402,119 @@ def normalize_declared_checks(
     return replace(live, declared_check_definitions=found)
 
 
+def normalize_declared_indexes(
+    live_schema,
+    live: LiveSchema,
+    declared: dict[str, list[tuple[str, bool, str]]],
+    schema_name: str | None = None,
+) -> LiveSchema:
+    """Have the server spell the model's indexes, so they compare to the live ones.
+
+    ``declared`` is ``{table: [(name, unique, rest), ...]}`` — ``rest`` being
+    everything after the table in the model's ``CREATE INDEX`` (``("a", "b")``,
+    ``USING gin (...) WHERE ...``). Same mechanism as
+    :func:`normalize_declared_checks`: each declaration the database also has
+    BY NAME is built on a session TEMP table copying the real one's columns,
+    and ``pg_get_indexdef`` reads it back in exactly the spelling the live
+    index has — casts, ``USING btree``, opclasses, ``INCLUDE``, the
+    parenthesised predicate. Nothing touches the real table.
+
+    The server deparsing BOTH sides is the point. Normalising the model's DDL
+    by hand would be a second SQL parser (``lower((counterparty)::text)`` is
+    what ``LOWER(counterparty)`` reads back as), and comparing structured
+    ``pg_index`` columns cannot reach a raw ``__indexes__`` statement without
+    parsing it first. Best effort, like the CHECK probe: a declaration the
+    probe cannot build is left out, and one left out is never called changed.
+
+    One server spelling is not yet a fixpoint. Re-parsing a STORED
+    definition can move a cast — ``(ARRAY['a'::varchar])::text[]`` comes
+    back as ``ARRAY[('a'::varchar)::text]`` — and an index rebuilt by
+    ``ALTER COLUMN TYPE`` or restored from a dump stores the re-parsed form.
+    So the declaration is spelled twice (built, read back, built from what
+    was read), the live definition once more, and the two compare at that
+    fixpoint: the same index never reads as changed because of its history.
+    """
+    target = schema_name or live_schema.get_schema() or "public"
+    manager = live_schema.query_executor.connection_manager
+    connection = manager.create_connection_instance()
+    found: dict[str, dict[str, str]] = {}
+    respelled: dict[str, dict[str, str]] = {}
+    try:
+        for table, indexes in sorted(declared.items()):
+            present = live.index_definitions.get(table, {})
+            wanted = [entry for entry in indexes if entry[0] in present]
+            if not wanted or table not in live.tables:
+                continue
+            probe = f"_cara_index_probe_{abs(hash(table)) % 10**8}"
+            try:
+                connection.query(
+                    f'CREATE TEMP TABLE "{probe}" '
+                    f'(LIKE "{sql_literal(target)}"."{table}")',
+                    (),
+                )
+            except Exception:
+                continue
+            try:
+                for position, (name, unique, rest) in enumerate(wanted):
+                    spelled = _spell_index(
+                        connection, probe, f"{probe}_d{position}", (unique, rest)
+                    )
+                    spelled = (
+                        _spell_index(
+                            connection,
+                            probe,
+                            f"{probe}_e{position}",
+                            index_parts(spelled),
+                        )
+                        or spelled
+                    )
+                    if spelled:
+                        found.setdefault(table, {})[name] = spelled
+                    again = _spell_index(
+                        connection,
+                        probe,
+                        f"{probe}_l{position}",
+                        index_parts(present[name]),
+                    )
+                    if again:
+                        respelled.setdefault(table, {})[name] = again
+            finally:
+                with suppress(Exception):
+                    connection.query(f'DROP TABLE IF EXISTS "{probe}"', ())
+    finally:
+        manager.release(connection)
+    return replace(
+        live,
+        declared_index_definitions=found,
+        respelled_index_definitions=respelled,
+    )
+
+
+def _spell_index(
+    connection, probe: str, label: str, parts: tuple[bool, str] | None
+) -> str | None:
+    """Build ``(unique, rest)`` as ``label`` on the probe table; the server's
+    ``pg_get_indexdef`` of it, or None when it would not build."""
+    if parts is None:
+        return None
+    unique, rest = parts
+    try:
+        connection.query(
+            f'CREATE {"UNIQUE " if unique else ""}INDEX "{label}" ON "{probe}"{rest}',
+            (),
+        )
+        rows = connection.query(
+            "SELECT pg_get_indexdef(%s::regclass) AS definition",
+            (f'pg_temp."{label}"',),
+        )
+    except Exception:
+        return None
+    row = rows[0] if isinstance(rows, list) and rows else rows
+    if isinstance(row, dict) and row.get("definition"):
+        return str(row["definition"])
+    return None
+
+
 def declared_columns(model: dict) -> dict[str, dict]:
     """Flatten a model's declared fields into concrete columns.
 
@@ -411,6 +577,8 @@ __all__ = [
     "LiveSchema",
     "declared_columns",
     "introspect",
+    "normalize_declared_checks",
+    "normalize_declared_indexes",
     "raw_sql_columns",
     "sql_literal",
 ]

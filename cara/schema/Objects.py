@@ -25,6 +25,8 @@ from __future__ import annotations
 import re
 
 from cara.exceptions import SchemaPlanRefused
+from cara.schema.DeclaredIndex import _declared_blueprint_indexes, _unique_index_preflight
+from cara.schema.IndexDrift import drifted_indexes, reshape_scaffolding
 from cara.schema.LiveSchema import LiveSchema
 from cara.schema.Operation import ADDITIVE, DESTRUCTIVE, LOCKING, Operation
 
@@ -55,35 +57,6 @@ _ADDS_COLUMN_RE = re.compile(
     r"ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?(?P<name>\w+)\"?",
     re.IGNORECASE,
 )
-
-# Simple column-list UNIQUE indexes can be checked before apply, including a
-# partial predicate. Expression indexes deliberately do not match: guessing at
-# nested SQL would turn a safety check into false confidence.
-_SIMPLE_UNIQUE_INDEX_RE = re.compile(
-    r"^\s*CREATE\s+UNIQUE\s+INDEX\s+(?:CONCURRENTLY\s+)?"
-    r"(?:IF\s+NOT\s+EXISTS\s+)?\"?\w+\"?\s+ON\s+\"?\w+\"?\s*"
-    r"\((?P<columns>[^()]+)\)"
-    r"(?:\s+WHERE\s+(?P<predicate>.+?))?\s*;?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _unique_index_preflight(
-    up_sql: str, table: str, index_name: str
-) -> tuple[str | None, str | None]:
-    match = _SIMPLE_UNIQUE_INDEX_RE.match(up_sql)
-    if match is None:
-        return None, None
-    columns = " ".join(match.group("columns").split())
-    predicate = match.group("predicate")
-    where = f" WHERE ({columns}) IS NOT NULL"  # NULLS DISTINCT: NULL keys never collide
-    if predicate:
-        where += f" AND ({' '.join(predicate.rstrip(';').split())})"
-    return (
-        f'SELECT 1 FROM "{table}"{where} GROUP BY {columns} HAVING COUNT(*) > 1 LIMIT 1',
-        f"{table} already holds duplicate keys for {index_name} — resolve them "
-        "before building the UNIQUE index",
-    )
 
 
 def created_objects(up_sql: str) -> set[str] | None:
@@ -118,62 +91,6 @@ def created_objects(up_sql: str) -> set[str] | None:
         f"column:{match.group('name')}" for match in _ADDS_COLUMN_RE.finditer(up_sql)
     }
     return found or None
-
-
-#: PostgreSQL truncates every identifier to NAMEDATALEN-1 bytes. The stored
-#: name is the truncated one, so a planner comparing the full convention name
-#: against the catalogue finds nothing and plans an index that already exists —
-#: on this schema, 23 of them, every single plan.
-_MAX_IDENTIFIER_LENGTH = 63
-
-
-def _blueprint_index_name(table: str, columns: list[str], unique: bool) -> str:
-    """The name Cara's Blueprint gives an unnamed ``index``/``unique``.
-
-    ``table.index(["a", "b"])`` becomes ``<table>_a_b_index``, truncated the
-    way Postgres truncates it. Reproducing the convention is what lets the
-    planner ask "does the database already have this one?" — without it, a
-    field-level index is invisible on the deployed side and never planned.
-    """
-    name = f"{table}_{'_'.join(columns)}_{'unique' if unique else 'index'}"
-    return name[:_MAX_IDENTIFIER_LENGTH]
-
-
-def _declared_blueprint_indexes(
-    model: dict, table: str
-) -> list[tuple[str, list[str], bool]]:
-    """``(name, columns, unique)`` for every field-level index the model declares.
-
-    Covers both spellings: the per-field ``.index()`` / ``.unique()`` flags and
-    the standalone ``field.index([...], name=...)`` declarations, which may
-    carry an explicit name.
-
-    Keyed by NAME, because the discoverer records a single-column
-    ``field.string(...).index()`` under both spellings — once as a param flag,
-    once as a standalone declaration. Emitting both would put the same
-    ``CREATE INDEX`` in one plan twice, and a plan that lists an operation
-    twice is a plan nobody trusts.
-    """
-    declared: dict[str, tuple[str, list[str], bool]] = {}
-
-    for column, definition in (model.get("fields") or {}).items():
-        params = definition.get("params") or {}
-        for flag, unique in (("index", False), ("unique", True)):
-            if params.get(flag):
-                name = _blueprint_index_name(table, [column], unique)
-                declared[name] = (name, [column], unique)
-
-    for key, unique in (("composite_indexes", False), ("composite_uniques", True)):
-        for declaration in model.get(key, []) or []:
-            columns = list(declaration.get("columns") or [])
-            if not columns:
-                continue
-            name = declaration.get("name") or _blueprint_index_name(
-                table, columns, unique
-            )
-            declared[name] = (name, columns, unique)
-
-    return list(declared.values())
 
 
 def _adopt_unique_index(
@@ -490,6 +407,9 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
     present = live.objects_on(table)
     live_indexes = live.indexes.get(table, set())
     live_constraints = live.constraints.get(table, set())
+    reshaped = {
+        drift.index.name for drift in drifted_indexes(model, table, live) if drift.changed
+    }
     operations: list[Operation] = []
 
     for name, columns, unique in _declared_blueprint_indexes(model, table):
@@ -507,6 +427,12 @@ def missing_indexes(model: dict, table: str, live: LiveSchema) -> list[Operation
             # exists (adopt it), neither exists (build CONCURRENTLY, then
             # adopt).
             if name in live_constraints:
+                continue
+            if name in reshaped:
+                # The bare index is not what the model declares. Adopting it
+                # here would make the reshape's DROP INDEX fail on an index a
+                # constraint now requires; the reshape's swap adopts the
+                # rebuilt one instead (``cara.schema.IndexDrift``).
                 continue
             if name in live_indexes:
                 operations.append(
@@ -636,8 +562,14 @@ def orphaned_indexes(model: dict, table: str, live: LiveSchema) -> list[Operatio
     explicit decision. Its reverse fully restores it, which is why
     ``restores_data`` stays True — the object comes back complete, unlike a
     dropped column.
+
+    A reshape's temporary build (``cara.schema.IndexDrift``) is not an orphan
+    while its reshape is unfinished: an apply stopped between the build and
+    the swap left it, and the re-derived plan swaps it in.
     """
-    declared = declared_index_names(model, table)
+    declared = declared_index_names(model, table) | reshape_scaffolding(
+        model, table, live
+    )
     backed_by_constraint = live.constraint_indexes.get(table, set())
     present = live.indexes.get(table, set())
 

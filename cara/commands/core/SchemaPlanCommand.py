@@ -70,8 +70,10 @@ from cara.schema import (
     LOCKING,
     as_dict,
     declared_checks_by_table,
+    declared_indexes_by_table,
     introspect,
     normalize_declared_checks,
+    normalize_declared_indexes,
     plan,
     plan_id,
 )
@@ -382,5 +384,10 @@ class SchemaPlanCommand(CommandBase):
         # changed under an unchanged name is planned (``changed_checks``).
         live = normalize_declared_checks(
             live_schema, live, declared_checks_by_table(models), schema_name
+        )
+        # Same for indexes: one whose definition changed under an unchanged
+        # name is reshaped (``cara.schema.IndexDrift``).
+        live = normalize_declared_indexes(
+            live_schema, live, declared_indexes_by_table(models), schema_name
         )
         return plan(models, live)
