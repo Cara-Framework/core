@@ -254,11 +254,19 @@ class Validation(ValidationContract):
             # whose contract is "validation errors are 422". With ``None``
             # stored, both the ``or default`` and the ``is not None`` guard
             # idioms behave.
-            if "nullable" in _chain and (
-                value is None or (isinstance(value, str) and value.strip() == "")
+            #
+            # Only a SENT blank short-circuits: ``nullable`` governs an
+            # explicitly-sent null, never absence. An absent key falls through
+            # to the presence-family rules below (shape rules skip it there),
+            # so ``present|nullable`` refuses a missing key and accepts a sent
+            # null — it had skipped ``present`` entirely, so a request whose
+            # contract is "always send it, null allowed" passed without it.
+            if (
+                "nullable" in _chain
+                and was_provided
+                and (value is None or (isinstance(value, str) and value.strip() == ""))
             ):
-                if was_provided:
-                    instance._validated[concrete_field] = None
+                instance._validated[concrete_field] = None
                 continue
 
             # Laravel ``bail`` modifier: stop running further rules for the

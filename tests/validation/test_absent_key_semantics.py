@@ -124,6 +124,10 @@ def test_absent_key_skips_shape_rules(rule_string: str) -> None:
         ("required", True),
         ("required|string", True),
         ("present", True),
+        # ``nullable`` governs a SENT null, never absence: it used to skip
+        # ``present`` for a missing key, so "always send it" passed without.
+        ("present|nullable|string", True),
+        ("nullable|string", False),
         ("accepted", True),
         ("missing", False),  # absence is what it wants
         ("prohibited", False),  # ditto
@@ -160,6 +164,12 @@ def test_nullable_and_sometimes_keep_their_distinct_meanings() -> None:
     nullable = Validation.make({"f": None}, {"f": "nullable|string"})
     assert nullable.passes()
     assert nullable.validated() == {"f": None}
+    # ... also beside ``present``: the key is there, its null is allowed.
+    sent_null = Validation.make({"f": None}, {"f": "present|nullable|string"})
+    assert sent_null.passes()
+    assert sent_null.validated() == {"f": None}
+    # An absent nullable key stays absent from ``validated()``.
+    assert Validation.make({}, {"f": "nullable|string"}).validated() == {}
 
     # sometimes: absence skips, but a sent null still runs the chain and fails.
     assert Validation.make({}, {"f": "sometimes|string"}).passes()
