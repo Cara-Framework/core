@@ -14,7 +14,7 @@ import logging
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
-from cara.support import json_dumps
+from cara.support import defuse_csv_cell, json_dumps
 
 from .BaseResponse import BaseResponse
 from .HeaderManager import HeaderManager
@@ -149,6 +149,11 @@ class StreamingResponse:
         receive body bytes before the backing data query starts.  Remaining
         rows are coalesced up to ``chunk_size`` to avoid one ASGI event per row
         while keeping memory flat for arbitrarily large exports.
+
+        Every cell is defused against spreadsheet formulas here, so an export
+        cannot forget to. It was a per-call convention, and three exports did
+        forget (CWE-1236). A number passes untouched: a source that wants a
+        numeric column yields numbers, not signed strings.
         """
 
         output = io.StringIO(newline="")
@@ -157,7 +162,7 @@ class StreamingResponse:
         processed = 0
 
         async for row in data_generator:
-            writer.writerow(row)
+            writer.writerow([defuse_csv_cell(cell) for cell in row])
             processed += 1
             if first or output.tell() >= chunk_size:
                 yield output.getvalue().encode("utf-8")

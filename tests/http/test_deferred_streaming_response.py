@@ -71,6 +71,29 @@ async def test_csv_encoder_flushes_header_then_coalesces_bounded_chunks() -> Non
 
 
 @pytest.mark.asyncio
+async def test_csv_encoder_defuses_every_formula_cell_and_leaves_numbers_alone() -> None:
+    async def rows():
+        yield ["=cmd", "+1", "-1", "@x", "\tx", "plain", -3, 2.5, None, ""]
+
+    written = b"".join(
+        [chunk async for chunk in StreamingResponse.csv_chunks(rows())]
+    ).decode()
+
+    assert next(csv.reader(io.StringIO(written))) == [
+        "'=cmd",
+        "'+1",
+        "'-1",
+        "'@x",
+        "'\tx",
+        "plain",
+        "-3",
+        "2.5",
+        "",
+        "",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_csv_encoder_cooperates_with_other_event_loop_tasks() -> None:
     state = {"scheduled": False}
 

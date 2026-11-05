@@ -19,9 +19,11 @@ values pass through untouched so the export still imports cleanly
 into Pandas / Google Sheets pipelines that expect numeric columns
 to stay numeric.
 
-Use sparingly: only wrap fields that originate from untrusted text.
-Wrapping ints / scores corrupts downstream type-inference for
-spreadsheet readers.
+``StreamingResponse.csv_chunks`` applies this to every cell of a streamed CSV,
+so only a file written by hand with ``csv.writer`` calls it directly. Applying
+it twice is safe: a defused cell starts with the apostrophe, which is no
+trigger. A count that is a signed string (``"-3"``) reads as text, so a source
+yields numbers for a numeric column.
 """
 
 from __future__ import annotations

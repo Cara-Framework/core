@@ -6,26 +6,23 @@ spot: N addresses × the per-IP ceiling against one account stays under
 every per-IP limit while still affording a credential-guessing budget.
 
 This helper closes that gap by counting failures **per identity (email)**
-in the cache. After ``MAX_FAILURES`` mis-authentications inside the rolling
-``FAILURE_WINDOW_SECONDS`` window the account is locked for
-``LOCK_DURATION_SECONDS`` regardless of source IP. A successful login
-clears the counter so a legitimate typo-then-recover doesn't escalate.
+in the cache, per source and across sources, inside the rolling
+``FAILURE_WINDOW_SECONDS`` window. A successful login clears the counters so
+a legitimate typo-then-recover doesn't escalate.
 
-Multi-IP gate (DoS hardening)
------------------------------
-A naive per-email lockout is itself a DoS vector: a handful of wrong
-passwords from one throwaway IP would lock the legitimate owner out. The
-fix layers an IP-distinctness gate on top of the email counter:
+The source is locked, not the account (DoS hardening)
+-----------------------------------------------------
+A per-email lockout is itself a DoS vector: anyone who knows an address could
+keep its owner out of sign-in, sudo and the impersonation proof. So the lock
+lands on the attempt:
 
-  * Every ``record_failure`` is keyed by (email, ip); the per-email
-    counter still bumps so a real brute-force is detected.
-  * We track the SET of distinct IPs that failed against this email in the
-    window (capped to bound cache footprint).
-  * Lockout triggers only when EITHER (a) failures come from >= 2 distinct
-    IPs past the per-email threshold (the real distributed shape), OR
-    (b) a SINGLE IP issued >= ``SINGLE_IP_LOCK_THRESHOLD`` failures
-    (extreme single-source brute force). One IP at 5-19 failures is left to
-    the per-IP throttle so a throwaway-IP attack can't lock the owner out.
+  * ``MAX_FAILURES`` misses from one source lock THAT SOURCE out of that
+    account for ``LOCK_DURATION_SECONDS``. The owner elsewhere is untouched.
+  * Only ``ACCOUNT_LOCK_FAILURES`` misses across sources lock the account.
+    With every source stopped at ``MAX_FAILURES``, that takes ten sources by
+    default: a real distributed guess, the shape this helper exists for, and
+    a bound on how many guesses any pool of addresses can buy.
+  * A password reset opens both, because proving the inbox outranks both.
 
 Storage is the ``Cache`` facade so the state survives restarts and is shared
 across workers without sticky sessions. The cache is the authority for this
@@ -52,11 +49,13 @@ from cara.support import email_mask, mask_ip
 
 from .LoginLocked import LoginLocked
 
-# Maximum entries to keep in the per-email distinct-IP set. Bounds cache
-# footprint under a wide-fanout distributed attack — once we observe this
-# many distinct IPs against one email we're well past the multi-IP
-# threshold and adding more doesn't change the lock decision.
+# Maximum entries to keep in the per-email distinct-IP set, whose only job is
+# finding the per-IP counters to clear. Bounds cache footprint under a
+# wide-fanout distributed attack; a counter past it ages out with its window.
 _IP_SET_CAP = 10
+# Maximum locked sources one account remembers for a password reset to open.
+# One past it stays locked until its own TTL ends, which is the safe direction.
+_LOCKED_SOURCES_CAP = 64
 _logger = logging.getLogger("cara.authentication.login_attempts")
 
 
@@ -94,18 +93,16 @@ class LoginAttemptTracker:
         )
 
     @staticmethod
-    def _single_ip_lock_threshold() -> int:
-        """Per-IP failure count that engages the account-wide lock even
-        without a second IP in the picture.
+    def _account_lock_failures() -> int:
+        """Failures across every source that engage the account-wide lock.
 
-        Default 20 is well above a typical per-IP throttle ceiling — a
-        single IP still landing 20+ failures against one email past that
-        throttle is either misconfigured automation or a determined
-        attacker worth stopping.
+        Default 50: each source stops at ``login_max_failures``, so reaching
+        it takes ten sources in one window. Under NIST SP 800-63B's ceiling
+        of 100 consecutive failures on one account.
         """
         return LoginAttemptTracker._positive_setting(
-            "security.login_single_ip_lock_threshold",
-            20,
+            "security.login_account_lock_failures",
+            50,
         )
 
     @staticmethod
@@ -124,6 +121,14 @@ class LoginAttemptTracker:
     @staticmethod
     def _lock_key(email: str) -> str:
         return f"login_locked:{LoginAttemptTracker._digest(email)}"
+
+    @staticmethod
+    def _source_lock_key(email: str, ip_digest: str) -> str:
+        return f"login_locked_ip:{LoginAttemptTracker._digest(email)}:{ip_digest}"
+
+    @staticmethod
+    def _locked_sources_key(email: str) -> str:
+        return f"login_locked_ips:{LoginAttemptTracker._digest(email)}"
 
     @staticmethod
     def _ip_set_key(email: str) -> str:
@@ -157,8 +162,9 @@ class LoginAttemptTracker:
         )
 
     @classmethod
-    def assert_unlocked(cls, email: str | None) -> None:
-        """Raise ``LoginLocked`` if the account is currently locked.
+    def assert_unlocked(cls, email: str | None, ip: str | None) -> None:
+        """Raise ``LoginLocked`` if the account, or this source against it, is
+        currently locked.
 
         Empty / missing email is a no-op — let validation surface the
         missing-field error from the request layer instead of masking it
@@ -168,6 +174,10 @@ class LoginAttemptTracker:
             return
         try:
             locked_until = Cache.get(cls._lock_key(email), strict=True)
+            if not locked_until and isinstance(ip, str) and ip.strip():
+                locked_until = Cache.get(
+                    cls._source_lock_key(email, cls._digest(ip.strip())), strict=True
+                )
         except Exception as exc:
             raise cls._cache_unavailable("lock read", email, exc) from exc
         if locked_until:
@@ -178,15 +188,19 @@ class LoginAttemptTracker:
 
     @classmethod
     def _read_ip_set(cls, email: str) -> list[str]:
-        """Return the JSON-encoded distinct-IP list for ``email``.
+        """Return the JSON-encoded distinct-IP list for ``email``."""
+        return cls._read_digests(cls._ip_set_key(email), email)
+
+    @classmethod
+    def _read_digests(cls, key: str, email: str) -> list[str]:
+        """Return the JSON-encoded digest list under ``key``.
 
         Stored as a JSON list under one cache key rather than a native set
-        (the ``Cache`` facade doesn't expose set ops); a list capped at
-        ``_IP_SET_CAP`` gives the same multi-IP-detection contract with a
-        much smaller surface to test/fake.
+        (the ``Cache`` facade doesn't expose set ops); a capped list gives the
+        same contract with a much smaller surface to test/fake.
         """
         try:
-            raw = Cache.get(cls._ip_set_key(email), strict=True)
+            raw = Cache.get(key, strict=True)
         except Exception as exc:
             raise cls._cache_unavailable("IP-set read", email, exc) from exc
         if not raw:
@@ -221,8 +235,8 @@ class LoginAttemptTracker:
 
     @classmethod
     def record_failure(cls, email: str | None, ip: str) -> int:
-        """Bump the per-email counter; lock the account if the multi-IP
-        threshold is crossed.
+        """Bump the per-source and per-email counters; lock the source at
+        ``login_max_failures``, the account at ``login_account_lock_failures``.
 
         Returns the post-increment per-email count (0 only when email is
         missing). A cache failure raises a retryable service-unavailable error.
@@ -243,8 +257,7 @@ class LoginAttemptTracker:
         count = int(v) if (v := count) is not None else 0
 
         # Track the per-IP failure count + add this IP to the per-email
-        # distinct-IP set so the multi-IP gate below can decide whether to
-        # engage the account-wide lockout.
+        # distinct-IP set, which is how a success finds the counters to clear.
         per_ip_count = 0
         try:
             per_ip_count = (
@@ -268,43 +281,55 @@ class LoginAttemptTracker:
             ips.append(ip_digest)
             cls._write_ip_set(email, ips)
 
-        distinct_ips = len(cls._read_ip_set(email))
-
-        # Lockout decision:
-        #   * Multi-IP path: per-email failures past threshold AND >= 2
-        #     distinct IPs in the window → real distributed brute force.
-        #   * Single-IP path: one source past the high threshold → a serious
-        #     nuisance even past the per-IP throttle.
-        #   * Otherwise (5+ failures, one IP under the high threshold): the
-        #     per-IP throttle is already slowing them; do NOT engage the
-        #     account-wide lockout so a throwaway-IP DoS can't lock the
-        #     legitimate owner out.
-        should_lock_multi_ip = count >= cls._max_failures() and distinct_ips >= 2
-        should_lock_single_ip = per_ip_count >= cls._single_ip_lock_threshold()
-        if should_lock_multi_ip or should_lock_single_ip:
-            try:
-                # Sentinel just needs to be truthy; keep it short so the cache
-                # footprint stays tiny under a large-scale stuffing attempt.
-                Cache.put(
-                    cls._lock_key(email),
-                    "1",
-                    cls._lock_duration_seconds(),
-                    strict=True,
-                )
-                if should_lock_multi_ip:
-                    reason = f"multi_ip(distinct={distinct_ips},count={count})"
-                elif should_lock_single_ip:
-                    reason = (
-                        f"single_ip(ip={mask_ip(ip or '')},per_ip_count={per_ip_count})"
-                    )
-                Log.warning(
-                    f"LoginAttemptTracker: locking account {email_mask(email)} — "
-                    f"reason={reason}, window={cls._failure_window_seconds()}s",
-                    category="security.login",
-                )
-            except Exception as exc:
-                raise cls._cache_unavailable("lock write", email, exc) from exc
+        if per_ip_count >= cls._max_failures():
+            cls._lock_source(email, ip, ip_digest)
+        if count >= cls._account_lock_failures():
+            cls._lock_account(email, count)
         return count
+
+    @classmethod
+    def _lock_source(cls, email: str, ip: str, ip_digest: str) -> None:
+        """Lock this source out of this account, and remember it for a reset:
+        the lock outlives the failure window, and the IP set with it."""
+        duration = cls._lock_duration_seconds()
+        locked = cls._read_digests(cls._locked_sources_key(email), email)
+        if ip_digest not in locked and len(locked) < _LOCKED_SOURCES_CAP:
+            locked.append(ip_digest)
+        try:
+            # Sentinel just needs to be truthy; keep it short so the cache
+            # footprint stays tiny under a large-scale stuffing attempt.
+            Cache.put(cls._source_lock_key(email, ip_digest), "1", duration, strict=True)
+            Cache.put(
+                cls._locked_sources_key(email),
+                json.dumps(locked),
+                duration,
+                strict=True,
+            )
+        except Exception as exc:
+            raise cls._cache_unavailable("source lock write", email, exc) from exc
+        Log.warning(
+            f"LoginAttemptTracker: locking source {mask_ip(ip)} out of "
+            f"{email_mask(email)}, window={cls._failure_window_seconds()}s",
+            category="security.login",
+        )
+
+    @classmethod
+    def _lock_account(cls, email: str, count: int) -> None:
+        try:
+            Cache.put(
+                cls._lock_key(email),
+                "1",
+                cls._lock_duration_seconds(),
+                strict=True,
+            )
+        except Exception as exc:
+            raise cls._cache_unavailable("lock write", email, exc) from exc
+        Log.warning(
+            f"LoginAttemptTracker: locking account {email_mask(email)} — "
+            f"reason=failures_across_sources(count={count}), "
+            f"window={cls._failure_window_seconds()}s",
+            category="security.login",
+        )
 
     @classmethod
     def record_success(cls, email: str | None) -> None:
@@ -325,8 +350,7 @@ class LoginAttemptTracker:
         except Exception as exc:
             raise cls._cache_unavailable("failure clear", email, exc) from exc
         # Wipe the per-IP counters and the IP set so a fresh login session
-        # doesn't carry stale per-IP buckets into the next window's multi-IP
-        # threshold calculation.
+        # doesn't carry stale per-IP buckets into the next window.
         for ip_digest in cls._read_ip_set(email):
             try:
                 Cache.forget(cls._per_ip_digest_key(email, ip_digest))
@@ -339,7 +363,7 @@ class LoginAttemptTracker:
 
     @classmethod
     def clear_lockout(cls, email: str | None) -> None:
-        """Clear BOTH the failure counter and the lock sentinel.
+        """Clear the failure counters and every lock, account and source.
 
         Called from a password-reset success path: proving inbox ownership
         AND knowledge of the freshly-set password is a strictly stronger
@@ -352,7 +376,7 @@ class LoginAttemptTracker:
         completes the idempotent cleanup.
 
         Also drops the per-email distinct-IP set + every per-IP counter so
-        the multi-IP gate starts cold after a legitimate reset.
+        the counters start cold after a legitimate reset.
         """
         if not email:
             return
@@ -364,6 +388,15 @@ class LoginAttemptTracker:
             Cache.forget(cls._lock_key(email))
         except Exception as exc:
             raise cls._cache_unavailable("lock clear", email, exc) from exc
+        for ip_digest in cls._read_digests(cls._locked_sources_key(email), email):
+            try:
+                Cache.forget(cls._source_lock_key(email, ip_digest))
+            except Exception as exc:
+                raise cls._cache_unavailable("source lock clear", email, exc) from exc
+        try:
+            Cache.forget(cls._locked_sources_key(email))
+        except Exception as exc:
+            raise cls._cache_unavailable("locked-sources clear", email, exc) from exc
         for ip_digest in cls._read_ip_set(email):
             try:
                 Cache.forget(cls._per_ip_digest_key(email, ip_digest))
