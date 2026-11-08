@@ -165,15 +165,21 @@ def test_hook_timeout_is_immediately_deferred_instead_of_waiting_for_stale_lease
             "hooks": {"failed": 1, "stale": 0, "quarantined": 0}
         },
     )
+    hooks_module = importlib.import_module("cara.commands.core.QueueHooksCommand")
     monkeypatch.setattr(
-        subprocess,
-        "run",
+        hooks_module,
+        "_delivery_settle_callbackless_terminal_hook",
+        lambda *_args: "isolate",
+    )
+    monkeypatch.setattr(
+        hooks_module,
+        "_run_child",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             subprocess.TimeoutExpired("queue:hook", 20)
         ),
     )
 
-    result = QueueHooksCommand._run_isolated_hooks(driver)
+    result = QueueHooksCommand._run_isolated_hooks(driver, threading.Event())
 
     assert deferred == [("hook-job-id", "isolated terminal-hook process timed out")]
     assert result["failed"] == 1
@@ -193,15 +199,19 @@ def test_hook_live_lease_child_exit_is_skipped_without_stealing_lease(
             "hooks": {"failed": 0, "stale": 0, "quarantined": 0}
         },
     )
+    hooks_module = importlib.import_module("cara.commands.core.QueueHooksCommand")
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=getattr(os, "EX_TEMPFAIL", 75)
-        ),
+        hooks_module,
+        "_delivery_settle_callbackless_terminal_hook",
+        lambda *_args: "isolate",
+    )
+    monkeypatch.setattr(
+        hooks_module,
+        "_run_child",
+        lambda *_args, **_kwargs: getattr(os, "EX_TEMPFAIL", 75),
     )
 
-    result = QueueHooksCommand._run_isolated_hooks(driver)
+    result = QueueHooksCommand._run_isolated_hooks(driver, threading.Event())
 
     assert result["skipped"] == 1
     assert result["failed"] == 0

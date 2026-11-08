@@ -53,6 +53,7 @@ def build_spec(
     envelope_components: dict[str, Any],
     meta_mapping: dict[str, str] | None = None,
     cursor_actions: set[str] | frozenset[str] = frozenset(),
+    null_actions: set[str] | frozenset[str] = frozenset(),
     envelope: EnvelopeNames = EnvelopeNames(),
     generation_extra: dict[str, Any] | None = None,
     request_schemas: dict[str, dict[str, Any]] | None = None,
@@ -177,6 +178,8 @@ def build_spec(
             data_schema: dict[str, Any] = resource_ref(resource_name)
             if is_list:
                 data_schema = {"type": "array", "items": resource_ref(resource_name)}
+            if action_key in null_actions:
+                data_schema = {**data_schema, "nullable": True}
             mapped_routes += 1
         else:
             # Honest: no resource maps to this action (raw dict / no serializer).

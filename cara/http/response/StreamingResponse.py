@@ -18,6 +18,7 @@ from cara.support import defuse_csv_cell, json_dumps
 
 from .BaseResponse import BaseResponse
 from .HeaderManager import HeaderManager
+from .StreamAborted import StreamAborted
 
 
 class StreamingResponse:
@@ -111,19 +112,13 @@ class StreamingResponse:
                 # The caller can still render a regular 500 because no ASGI
                 # response has begun yet.
                 raise
-            # Once headers are on the wire the status cannot change.  Close
-            # the body without leaking exception text into the download.
-            try:
-                await send(
-                    {
-                        "type": "http.response.body",
-                        "body": b"",
-                        "more_body": False,
-                    }
-                )
-            finally:
-                self.response._sent = True
-            return
+            # Once headers are on the wire the status cannot change, and a
+            # clean end frame would hand the reader a short file that looks
+            # whole under a 200 (a report stream that failed on page 2).
+            # Leaving with no end frame makes the server cut the connection,
+            # which every client reports as a failed download.
+            self.response._sent = True
+            raise StreamAborted("stream failed after the response started") from e
 
         # End stream
         await send(

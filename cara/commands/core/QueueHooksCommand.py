@@ -5,11 +5,55 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
+import time
+
+import pendulum
 
 from cara.decorators import command
 from cara.facades import Log
+from cara.queues.delivery._DeliverySettlement import (
+    _delivery_release_interrupted_terminal_hook,
+    _delivery_settle_callbackless_terminal_hook,
+)
 
 from .QueueRelayCommand import _RelayLoop
+
+#: How long a hook child stopped by shutdown gets between SIGTERM and SIGKILL.
+#: Deliberately far inside the compose ``stop_grace_period``.
+_CHILD_STOP_GRACE_SECONDS = 5
+
+_CHILD_POLL_SECONDS = 0.05
+
+
+def _run_child(
+    argv: list[str],
+    *,
+    env: dict[str, str],
+    timeout: int,
+    stop: threading.Event,
+) -> int | None:
+    """Wait for one hook child; ``None`` means shutdown stopped it.
+
+    ``subprocess.run`` cannot be interrupted, which is what held a SIGTERM
+    for the rest of the batch and orphaned the child when the wait expired.
+    """
+    process = subprocess.Popen(argv, env=env)
+    deadline = time.monotonic() + timeout
+    while (returncode := process.poll()) is None:
+        if stop.wait(_CHILD_POLL_SECONDS):
+            process.terminate()
+            try:
+                process.wait(timeout=_CHILD_STOP_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            return None
+        if time.monotonic() >= deadline:
+            process.kill()
+            process.wait()
+            raise subprocess.TimeoutExpired(argv, timeout)
+    return returncode
 
 
 @command(
@@ -71,7 +115,7 @@ class QueueHooksCommand(_RelayLoop):
         )
 
     @staticmethod
-    def _run_isolated_hooks(driver) -> dict[str, int]:
+    def _run_isolated_hooks(driver, stop: threading.Event) -> dict[str, int]:
         job_ids = driver.due_terminal_hook_ids()
         result = {
             "claimed": len(job_ids),
@@ -80,8 +124,10 @@ class QueueHooksCommand(_RelayLoop):
             "deferred": 0,
             "quarantined": 0,
             "skipped": 0,
+            "interrupted": 0,
         }
-        timeout = int(driver.delivery_store.hook_timeout_seconds) + 15
+        store = driver.delivery_store
+        timeout = int(store.hook_timeout_seconds) + 15
         child_env = dict(os.environ)
         child_env["METRICS_PORT"] = "0"
 
@@ -99,9 +145,24 @@ class QueueHooksCommand(_RelayLoop):
             else:
                 result["deferred"] += 1
 
+        # Rows with no callback go first: they cost milliseconds each and
+        # must not wait behind the interpreter boots of the ones that do.
+        needs_child: list[str] = []
         for job_id in job_ids:
+            if stop.is_set():
+                break
+            outcome = _delivery_settle_callbackless_terminal_hook(store, job_id)
+            if outcome == "isolate":
+                needs_child.append(job_id)
+            else:
+                result["completed" if outcome == "completed" else "skipped"] += 1
+
+        for job_id in needs_child:
+            if stop.is_set():
+                break
+            spawned_at = pendulum.now("UTC")
             try:
-                completed = subprocess.run(
+                returncode = _run_child(
                     [
                         sys.executable,
                         sys.argv[0],
@@ -109,9 +170,9 @@ class QueueHooksCommand(_RelayLoop):
                         "--job-id",
                         job_id,
                     ],
-                    check=False,
                     env=child_env,
                     timeout=timeout,
+                    stop=stop,
                 )
             except subprocess.TimeoutExpired:
                 _record_child_failure(
@@ -125,15 +186,22 @@ class QueueHooksCommand(_RelayLoop):
                     category="cara.queue.delivery",
                 )
                 continue
-            if completed.returncode == 0:
+            if returncode is None:
+                _delivery_release_interrupted_terminal_hook(
+                    store,
+                    job_id,
+                    spawned_at=spawned_at,
+                )
+                result["interrupted"] += 1
+            elif returncode == 0:
                 result["completed"] += 1
-            elif completed.returncode == getattr(os, "EX_TEMPFAIL", 75):
+            elif returncode == getattr(os, "EX_TEMPFAIL", 75):
                 result["skipped"] += 1
             else:
                 _record_child_failure(
                     job_id,
-                    "isolated terminal-hook process exited with "
-                    f"status {completed.returncode}",
+                    f"isolated terminal-hook process exited with status {returncode}",
                 )
-        driver.refresh_delivery_metrics()
+        if not stop.is_set():
+            driver.refresh_delivery_metrics()
         return result

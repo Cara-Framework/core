@@ -327,7 +327,7 @@ def _delivery_recover_stale_executions(
     with database.transaction():
         rows = (
             database.select(
-                f"SELECT delivery.job_id, delivery.db_job_id, "
+                f"SELECT delivery.job_id, delivery.db_job_id, delivery.attempts, "
                 "delivery.lease_token, tracked.status AS tracker_status "
                 f"FROM {self.table} AS delivery "
                 "JOIN job AS tracked ON tracked.id = delivery.db_job_id "
@@ -358,6 +358,23 @@ def _delivery_recover_stale_executions(
             elif tracker_status in {"failed", "cancelled"}:
                 target_status = self.STATUS_DEAD_LETTERED
                 reason = "tracker_failure_recovered_after_worker_crash"
+            elif (
+                tracker_status in {"pending", "processing", "retrying"}
+                and int(self._row_value(row, "attempts") or 0)
+                >= self.CRASH_RECLAIM_CEILING
+            ):
+                # The worker died in every execution this row has had. Going
+                # back to the outbox would re-run a body that takes its worker
+                # with it until the envelope expires, days from now.
+                target_status = self.STATUS_DEAD_LETTERED
+                reason = self.CRASH_LOOP_REASON
+                self._mark_tracker_failed(database, db_job_id, now)
+                Log.error(
+                    "Queue delivery %s dead-lettered: %s",
+                    job_id,
+                    reason,
+                    category="cara.queue.delivery",
+                )
             elif tracker_status in {"pending", "processing", "retrying"}:
                 affected = database.statement(
                     f"UPDATE {self.table} SET status = %s, "

@@ -14,8 +14,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "Logger": (".Logger", "Logger"),
     "LoggerContract": (".contracts", "LoggerContract"),
     "LoggerProvider": (".LoggerProvider", "LoggerProvider"),
+    "SiblingSafeRetention": (".SiblingSafeRetention", "SiblingSafeRetention"),
     "SlackChannel": (".channels", "SlackChannel"),
     "install_cara_loggers": (".PythonLoggerAdapter", "install_cara_loggers"),
+    "per_process_sink": (".ChannelConfigurator", "per_process_sink"),
 }
 
 __all__ = [
@@ -30,8 +32,10 @@ __all__ = [
     "Logger",
     "LoggerContract",
     "LoggerProvider",
+    "SiblingSafeRetention",
     "SlackChannel",
     "install_cara_loggers",
+    "per_process_sink",
 ]
 
 _install_lazy_exports(__name__, _LAZY_EXPORTS)

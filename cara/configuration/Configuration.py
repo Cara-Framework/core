@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import threading
 
+from dotty_dict import Dotty
+
 from cara.exceptions import (
     InvalidConfigurationLocationException,
     InvalidConfigurationSetupException,
 )
 from cara.loader import Loader
 from cara.support import data
+
+#: Dotty's own dot-notation walk, without the ``lru_cache`` in front of it.
+_READ_PATH = Dotty.__getitem__.__wrapped__
 
 
 class Configuration:
@@ -75,7 +80,15 @@ class Configuration:
         return self._config
 
     def get(self, path, default=None):
+        """A dot-notation read, O(depth of ``path``).
+
+        Never ``self._config[path]``: ``Dotty.__getitem__`` is an
+        ``lru_cache`` method and ``Dotty.__hash__`` is ``hash(str(self))``, so
+        that spelling renders the whole configuration tree on every read, hit
+        or miss. The ORM reads ``app.timezone`` per datetime attribute, and a
+        30-day sales export spent 29 s on it (187,534 reads, 156 us each).
+        """
         try:
-            return self._config[path]
+            return _READ_PATH(self._config, path)
         except KeyError:
             return default

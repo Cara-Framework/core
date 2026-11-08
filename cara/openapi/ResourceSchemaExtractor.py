@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import copy
+from functools import reduce
 from pathlib import Path
 from typing import Any
 
@@ -327,18 +328,27 @@ class ResourceSchemaExtractor:
     def _local_bindings(self, fn: ast.AST) -> dict[str, dict[str, Any]]:
         """Map ``name -> schema`` for simple single-target local assignments
         whose value is itself type-derivable (an ``opt_*`` wrapper / cast /
-        literal). Used to resolve bare ``Name`` values in the payload dict."""
-        out: dict[str, dict[str, Any]] = {}
+        literal). Used to resolve bare ``Name`` values in the payload dict.
+
+        A name assigned twice can hold either value: its schema is the union,
+        and one assignment we cannot read leaves it unknown. (``status =
+        row.status`` then ``status = "expired"`` used to document only
+        ``expired``.)"""
+        assigned: dict[str, list[dict[str, Any]]] = {}
         for sub in ast.walk(fn):
             if (
                 isinstance(sub, ast.Assign)
                 and len(sub.targets) == 1
                 and isinstance(sub.targets[0], ast.Name)
             ):
-                schema = infer_value_schema(sub.value, None, self._call_types)
-                if schema != ANY_SCHEMA:
-                    out[sub.targets[0].id] = schema
-        return out
+                assigned.setdefault(sub.targets[0].id, []).append(
+                    infer_value_schema(sub.value, None, self._call_types)
+                )
+        return {
+            name: reduce(unify, schemas)
+            for name, schemas in assigned.items()
+            if ANY_SCHEMA not in schemas
+        }
 
     def _merge_dict_keys(
         self,

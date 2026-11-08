@@ -15,6 +15,7 @@ permissive ``{}``, which honestly means "this key exists, type unknown".
 from __future__ import annotations
 
 import ast
+from functools import reduce
 from typing import Any
 
 # ``opt_*`` helper name -> JSON-schema type. Exactly the helpers
@@ -196,18 +197,43 @@ def infer_value_schema(
             infer_value_schema(node.body, locals_map, call_types),
             infer_value_schema(node.orelse, locals_map, call_types),
         )
-    # ``a or b`` / ``a and b`` — describe the operand we can.
+    # ``a or b`` / ``a and b`` — describe the operands we can.
     if isinstance(node, ast.BoolOp):
         schemas = [
             infer_value_schema(value, locals_map, call_types) for value in node.values
         ]
-        chosen = next((schema for schema in schemas if schema != ANY_SCHEMA), ANY_SCHEMA)
-        return dict(chosen)
+        known = [schema for schema in schemas if schema != ANY_SCHEMA]
+        if not known:
+            return dict(ANY_SCHEMA)
+        merged = reduce(unify, known)
+        # ``row.get("state") or "in_stock"``: the literal is the fallback, not
+        # the vocabulary, so an unknown operand keeps the type but opens the
+        # values, however deep the fallback nests them (``facts.get("state")
+        # or {"code": "unknown"}``). A ``None`` operand adds no value, only null.
+        if any(
+            schema == ANY_SCHEMA and not _is_none_literal(value)
+            for schema, value in zip(schemas, node.values, strict=True)
+        ):
+            merged = _without_enums(merged)
+        return _nullable(merged) if any(map(_is_none_literal, node.values)) else merged
     return dict(ANY_SCHEMA)
 
 
 def _is_none_literal(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and node.value is None
+
+
+def _without_enums(schema: Any) -> Any:
+    """``schema`` with every value list removed, a property named ``enum`` kept."""
+    if isinstance(schema, list):
+        return [_without_enums(item) for item in schema]
+    if isinstance(schema, dict):
+        return {
+            key: _without_enums(item)
+            for key, item in schema.items()
+            if not (key == "enum" and isinstance(item, list))
+        }
+    return schema
 
 
 def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
@@ -228,6 +254,21 @@ def unify(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
         out = dict(a)
         if a.get("nullable") or b.get("nullable"):
             out["nullable"] = True
+        # The vocabulary is the union of both branches' values, and only a
+        # branch that names its values has one: ``"x" if c else opt_str(y)``
+        # can send anything.
+        if "enum" in a and "enum" in b:
+            out["enum"] = sorted({*a["enum"], *b["enum"]})
+        else:
+            out.pop("enum", None)
+        # The same holds one level down: a key both object branches send.
+        if "properties" in a and "properties" in b:
+            out["properties"] = {
+                key: unify(schema, b["properties"][key])
+                if key in b["properties"]
+                else schema
+                for key, schema in a["properties"].items()
+            }
         return out
     return dict(ANY_SCHEMA)
 

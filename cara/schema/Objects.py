@@ -158,7 +158,9 @@ def declared_foreign_keys(model: dict, table: str) -> list[dict]:
 
     Each entry is ``{name, columns, references, on, on_delete, on_update}``.
     Raw-SQL ``__indexes__`` entries that add a foreign key are NOT included:
-    those are diffed as named objects, by whole-constraint-set membership.
+    those are diffed as named objects, by whole-constraint-set membership, and
+    one that exists is compared through
+    :func:`cara.schema.ConstraintDrift.raw_foreign_keys`.
     """
 
     def named(columns: list[str], given) -> str:
@@ -170,6 +172,12 @@ def declared_foreign_keys(model: dict, table: str) -> list[dict]:
         if isinstance(value, (list, tuple)):
             return [str(item) for item in value]
         return [str(value)]
+
+    def delete_rule(key: dict):
+        # ``SET NULL (column)`` clears only that column of a composite key;
+        # without the list a tenant-scoped key would null its ``tenant_id``.
+        action, columns = key.get("on_delete"), key.get("on_delete_columns")
+        return f"{action} ({', '.join(listed(columns))})" if columns else action
 
     keys: list[dict] = []
     for column, definition in (model.get("fields") or {}).items():
@@ -183,7 +191,7 @@ def declared_foreign_keys(model: dict, table: str) -> list[dict]:
                 "columns": columns,
                 "references": listed(key.get("references"), "id"),
                 "on": str(key["on"]),
-                "on_delete": key.get("on_delete"),
+                "on_delete": delete_rule(key),
                 "on_update": key.get("on_update"),
             }
         )
@@ -197,18 +205,18 @@ def declared_foreign_keys(model: dict, table: str) -> list[dict]:
                 "columns": columns,
                 "references": listed(key.get("references"), "id"),
                 "on": str(key["on"]),
-                "on_delete": key.get("on_delete"),
+                "on_delete": delete_rule(key),
                 "on_update": key.get("on_update"),
             }
         )
     return keys
 
 
-def _foreign_key_sql(table: str, key: dict) -> str:
+def _foreign_key_clause(key: dict) -> str:
     columns = ", ".join(f'"{column}"' for column in key["columns"])
     references = ", ".join(f'"{column}"' for column in key["references"])
     clause = (
-        f'ALTER TABLE "{table}" ADD CONSTRAINT {key["name"]} '
+        f"ADD CONSTRAINT {key['name']} "
         f'FOREIGN KEY ({columns}) REFERENCES "{key["on"]}" ({references})'
     )
     if key.get("on_delete"):
@@ -216,6 +224,29 @@ def _foreign_key_sql(table: str, key: dict) -> str:
     if key.get("on_update"):
         clause += f" ON UPDATE {str(key['on_update']).upper()}"
     return f"{clause} NOT VALID"
+
+
+def _foreign_key_sql(table: str, key: dict) -> str:
+    return f'ALTER TABLE "{table}" {_foreign_key_clause(key)}'
+
+
+def _validate_foreign_key(table: str, key: dict, undone_by: str) -> Operation:
+    name = key["name"]
+    return Operation(
+        kind="validate_foreign_key",
+        table=table,
+        key=f"{table}:{name}:validate",
+        forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
+        reverse_sql=None,
+        safety=LOCKING,
+        reason="prove the existing rows satisfy the attached FOREIGN KEY",
+        preflight_sql=_foreign_key_preflight(table, key),
+        preflight_failure=(
+            f"{table} holds rows with no {key['on']} parent for {name} — "
+            "repair the data before validating the constraint"
+        ),
+        notes=(f"no reverse recorded: validation has nothing to undo — {undone_by}",),
+    )
 
 
 def _foreign_key_preflight(table: str, key: dict) -> str:
@@ -250,13 +281,26 @@ def missing_foreign_keys(model: dict, table: str, live: LiveSchema) -> list[Oper
     Same safe two-step as :func:`missing_checks`: ``ADD CONSTRAINT ... NOT
     VALID`` takes no scan, the paired ``VALIDATE`` scans without blocking
     writes, and a preflight proves the existing rows already satisfy the key
-    before either runs.
+    before either runs. A key present by name is compared to its declaration
+    (:func:`cara.schema.ConstraintDrift.changed_foreign_key`), so this also
+    covers one that drifted.
     """
+    from cara.schema.ConstraintDrift import (  # local: cycle with ConstraintDrift
+        changed_foreign_key,
+        raw_foreign_keys,
+    )
+
     live_keys = (live.constraints or {}).get(table, set())
     operations: list[Operation] = []
+    # A named-DDL key that is absent is ``missing_indexes``' to create; only
+    # one that exists can have drifted.
+    for key in raw_foreign_keys(model):
+        if key["name"] in live_keys:
+            operations.extend(changed_foreign_key(table, key, live))
     for key in declared_foreign_keys(model, table):
         name = key["name"]
         if name in live_keys:
+            operations.extend(changed_foreign_key(table, key, live))
             continue
         if key["on"] not in live.tables:
             # Nothing to point at yet. The table this key references is itself
@@ -278,23 +322,8 @@ def missing_foreign_keys(model: dict, table: str, live: LiveSchema) -> list[Oper
             )
         )
         operations.append(
-            Operation(
-                kind="validate_foreign_key",
-                table=table,
-                key=f"{table}:{name}:validate",
-                forward_sql=f'ALTER TABLE "{table}" VALIDATE CONSTRAINT {name}',
-                reverse_sql=None,
-                safety=LOCKING,
-                reason="prove the existing rows satisfy the attached FOREIGN KEY",
-                preflight_sql=_foreign_key_preflight(table, key),
-                preflight_failure=(
-                    f"{table} holds rows with no {key['on']} parent for {name} — "
-                    "repair the data before validating the constraint"
-                ),
-                notes=(
-                    "no reverse recorded: validation has nothing to undo — the "
-                    "paired ADD CONSTRAINT's reverse removes the constraint",
-                ),
+            _validate_foreign_key(
+                table, key, "the paired ADD CONSTRAINT's reverse removes the constraint"
             )
         )
     return operations

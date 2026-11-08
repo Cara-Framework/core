@@ -157,10 +157,17 @@ class QueueOutboxHealth:
         alarms from ordinary bursts and brief worker slowness; the count
         gate exists so an operator can additionally tolerate a small
         number of chronically slow rows without muting real outages.
+
+        ``draining`` is the third, and it is not a mute: aged rows on queues
+        that moved inside the budget are a burst working through a bounded
+        broker window (live 2026-11-08: 'stalled' with the last publication
+        2s ago). It stops excusing a row at ``DRAINING_AGE_MULTIPLE`` budgets
+        (the store decides), and the backlog gauges never stop reporting it.
         """
         return (
             snapshot["oldest_due_age"] >= cls.stall_age_seconds()
             and snapshot["due_pending"] >= cls.stall_min_pending()
+            and not snapshot.get("draining")
         )
 
     @classmethod
@@ -285,8 +292,15 @@ class QueueOutboxHealth:
                 else "Last successful publication was "
                 f"{int(snapshot['last_publish_age'])}s ago."
             )
-            + " Dispatch reports success while the work never reaches "
-            "the broker. Check that `craft queue:relay` is running."
+            + (
+                f" {int(snapshot['behind_full_window'])} of them wait behind a "
+                "full broker window on a queue that has not moved within the "
+                "budget, so nothing is taking work off it. Check that the "
+                "`craft queue:work` pool for that queue is running."
+                if snapshot.get("behind_full_window")
+                else " Dispatch reports success while the work never reaches "
+                "the broker. Check that `craft queue:relay` is running."
+            )
         )
 
     @classmethod

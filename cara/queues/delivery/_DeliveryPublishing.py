@@ -31,7 +31,13 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
     instead of preloading RabbitMQ, so THIS statement is the scheduler: the
     order it picks rows in is the order work starts.
 
-    Within one queue the pick is, in order:
+    Every second claim first serves the oldest head past
+    half a ``priority_aging_seconds``, whoever owns it. Round robin alone
+    keeps a big tenant's tail behind every other tenant's newer rows (live
+    2026-11-08: 12:00 rows published at 12:08 after 12:04 rows); alternating
+    guarantees the oldest rows progress and costs a newcomer one row at most.
+
+    Within one queue the pick is otherwise, in order:
 
     1. **Tenant fair share.** Each tenant with due work offers its own head
        row (one per priority lane); the tenant holding the FEWEST rows in
@@ -78,6 +84,8 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
     token = uuid.uuid4().hex
     now = pendulum.now("UTC")
     database = self._db()
+    serve_oldest = "TRUE" if self._serve_oldest_next else "FALSE"
+    self._serve_oldest_next = not self._serve_oldest_next
     due_row = (
         "AND delivery.status = 'pending' "
         "AND delivery.publish_status IN ('pending','processing') "
@@ -166,13 +174,17 @@ def _delivery_claim_next_publish(self) -> tuple[Any, str] | None:
             "+ CASE WHEN tenant_keys.base_rank <= "
             f"{int(self._PRIORITY_RANKS['high'])} "
             "THEN settings.urgent_slots ELSE 0 END), "
-            "candidate AS (SELECT heads.job_id "
-            "FROM heads CROSS JOIN settings "
+            "candidate AS (SELECT picked.job_id FROM ((SELECT 0 AS turn, "
+            "heads.job_id FROM heads CROSS JOIN settings "
+            f"WHERE {serve_oldest} AND 2 * EXTRACT(EPOCH FROM "
+            "(settings.now - heads.available_at)) >= settings.aging_seconds "
+            "ORDER BY heads.available_at LIMIT 1) UNION ALL (SELECT 1 AS turn, "
+            "heads.job_id FROM heads CROSS JOIN settings "
             "ORDER BY heads.held, heads.last_served_at NULLS FIRST, "
             "GREATEST(heads.base_rank - FLOOR(EXTRACT(EPOCH FROM "
             "(settings.now - heads.available_at)) / "
             "settings.aging_seconds), 0), heads.available_at, "
-            "heads.created_at LIMIT 1) "
+            "heads.created_at LIMIT 1)) AS picked ORDER BY picked.turn LIMIT 1) "
             f"UPDATE {self.table} AS delivery "
             "SET publish_status = 'processing', "
             "publish_lease_token = %s, publish_lease_expires_at = %s, "
@@ -450,7 +462,7 @@ def _delivery_claim_execution(
     with database.transaction():
         row = database.select_one(
             f"SELECT job_id, db_job_id, payload_sha256, tenant_mode, "
-            f"tenant_id, status, "
+            f"tenant_id, status, attempts, "
             f"lease_token, lease_expires_at, expires_at, available_at, "
             f"terminal_reason "
             f"FROM {self.table} "
@@ -510,7 +522,20 @@ def _delivery_claim_execution(
         expires_at = self._as_datetime(self._row_value(row, "expires_at"))
         if expires_at is None:
             return DeliveryClaim("mismatch")
+        refused: tuple[str, str] | None = None
         if expires_at <= now:
+            refused = (self.STATUS_EXPIRED, "envelope_expired_before_execution")
+        elif (
+            reclaimed
+            and int(self._row_value(row, "attempts") or 0) >= self.CRASH_RECLAIM_CEILING
+            and self._tracker_is_open(database, int(payload["db_job_id"]))
+        ):
+            # A surviving broker copy reached the row before the relay's
+            # recovery did: the same ceiling, on the other way back in. A
+            # finished tracker is not refused; the worker reconciles it.
+            refused = (self.STATUS_DEAD_LETTERED, self.CRASH_LOOP_REASON)
+        if refused is not None:
+            refused_status, refused_reason = refused
             affected = database.statement(
                 f"UPDATE {self.table} SET status = %s, completed_at = %s, "
                 "terminal_reason = %s, lease_token = NULL, "
@@ -518,9 +543,9 @@ def _delivery_claim_execution(
                 "publish_lease_expires_at = NULL, updated_at = %s "
                 "WHERE job_id = %s AND status IN (%s, %s)",
                 [
-                    self.STATUS_EXPIRED,
+                    refused_status,
                     now,
-                    "envelope_expired_before_execution",
+                    refused_reason,
                     now,
                     job_id,
                     self.STATUS_PENDING,
@@ -535,12 +560,13 @@ def _delivery_claim_execution(
                 now,
             )
             Log.error(
-                "Queue delivery %s expired before execution; retained in "
+                "Queue delivery %s refused before execution (%s); retained in "
                 "the ledger for audit and operator replay.",
                 job_id,
+                refused_reason,
                 category="cara.queue.delivery",
             )
-            return DeliveryClaim(self.STATUS_EXPIRED)
+            return DeliveryClaim(refused_status, terminal_reason=refused_reason)
 
         token = uuid.uuid4().hex
         affected = database.statement(

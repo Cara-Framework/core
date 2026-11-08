@@ -58,7 +58,10 @@ class _RelayLoop(CommandBase):
         stop = threading.Event()
 
         def _request_stop(_signum: int, _frame: Any) -> None:
-            stop.set()
+            # Never ``stop.set()`` on this thread: the handler interrupts the
+            # main thread, which may be inside ``stop.wait`` holding the very
+            # lock ``set`` takes, and would then wait on itself forever.
+            threading.Thread(target=stop.set, daemon=True).start()
 
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGINT, _request_stop)
@@ -72,7 +75,7 @@ class _RelayLoop(CommandBase):
                 )
                 if callable(maintain_connection):
                     maintain_connection()
-                result = callback(driver)
+                result = callback(driver, stop)
                 healthy = self._iteration_is_healthy(driver, result)
                 metric.set(1 if healthy else 0)
             except Exception as exc:
@@ -185,5 +188,5 @@ class QueueRelayCommand(_RelayLoop):
         return self._handle_loop(
             once=once,
             poll_interval=poll_interval,
-            callback=lambda driver: driver.relay_publish_once(),
+            callback=lambda driver, _stop: driver.relay_publish_once(),
         )

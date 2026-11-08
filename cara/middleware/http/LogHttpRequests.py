@@ -41,8 +41,13 @@ _SENSITIVE_QUERY_PARAMS = (
     "code",  # OAuth authorization codes
     "auth",
 )
+# A name that merely ENDS in a listed word is the same secret (Amazon's
+# ``spapi_oauth_code``, TikTok's ``auth_code``). The look-behind starts one
+# attempt per name, so a long query cannot make this backtrack quadratically.
 _SENSITIVE_PARAM_RE = re.compile(
-    r"(?i)\b(" + "|".join(map(re.escape, _SENSITIVE_QUERY_PARAMS)) + r")=([^&]*)"
+    r"(?i)(?<![\w.\-])([\w.\-]*(?:"
+    + "|".join(map(re.escape, _SENSITIVE_QUERY_PARAMS))
+    + r"))=([^&]*)"
 )
 
 # HTTP headers that must never appear in access logs unredacted.

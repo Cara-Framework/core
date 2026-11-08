@@ -23,6 +23,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cara.http import Response
+from cara.http.response.StreamAborted import StreamAborted
 from tests._money_wire import MONEY, drain
 
 # Trailing zeros are part of a price's scale — "19.90" is not "19.9".
@@ -122,7 +123,7 @@ def test_unknown_object_is_refused_instead_of_stringified() -> None:
 async def test_streaming_nan_truncates_the_body_instead_of_emitting_it() -> None:
     """Streams cannot fail late: headers are already on the wire.
 
-    ``stream()`` closes the body rather than change a status it can no
+    ``stream()`` cuts the connection rather than change a status it can no
     longer change, so the client sees a short read — a broken download
     it can retry — instead of a chunk that ``JSON.parse`` rejects.
     """
@@ -133,8 +134,15 @@ async def test_streaming_nan_truncates_the_body_instead_of_emitting_it() -> None
 
     response = Response(MagicMock())
     response.stream_json_lines(rows())
+    chunks: list[bytes] = []
 
-    body = await drain(response)
+    async def send(event: dict) -> None:
+        chunks.append(event.get("body", b""))
+
+    with pytest.raises(StreamAborted):
+        await response({}, None, send)
+
+    body = b"".join(chunks).decode()
     assert "Infinity" not in body
     lines = [json.loads(line) for line in body.splitlines() if line]
     assert len(lines) == 1

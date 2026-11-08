@@ -210,13 +210,35 @@ class QueueOperationsStore:
             [job_id, *self.TERMINAL_LEDGER_STATUSES],
         )
 
-    def count_dead_lettered(self, *, queue: str | None = None) -> int:
-        """Count terminal ledger rows awaiting replay, optionally for one queue."""
+    def count_dead_lettered(
+        self,
+        *,
+        queue: str | None = None,
+        exclude_replayed_by: str | None = None,
+        excluded_after_seconds: int = 0,
+    ) -> int:
+        """Count terminal ledger rows awaiting replay, optionally for one queue.
+
+        ``exclude_replayed_by`` drops the rows of chains that replayer already
+        tried once (the chain root rule of ``list_dead_lettered_deliveries``)
+        once they settled ``excluded_after_seconds`` ago: automation holds
+        those for good, so an old one is history, while a fresh second
+        failure is exactly what someone must still be told about.
+        """
         conditions = f"status IN (%s, %s) AND {self._awaiting_replay_condition()}"
         bindings: list[Any] = list(self.TERMINAL_LEDGER_STATUSES)
         if queue is not None:
             conditions += " AND queue = %s"
             bindings.append(queue)
+        if exclude_replayed_by is not None:
+            conditions += (
+                " AND NOT (completed_at < NOW() - make_interval(secs => %s) "
+                f"AND EXISTS (SELECT 1 FROM {self.ledger_table} AS chain_root "
+                f"WHERE chain_root.db_job_id = {self.ledger_table}.db_job_id "
+                "AND chain_root.replay_of IS NOT NULL "
+                "AND chain_root.replay_requested_by = %s))"
+            )
+            bindings.extend([int(excluded_after_seconds), exclude_replayed_by])
         row = DB.select_one(
             f"SELECT COUNT(*) AS total FROM {self.ledger_table} WHERE {conditions}",
             bindings,

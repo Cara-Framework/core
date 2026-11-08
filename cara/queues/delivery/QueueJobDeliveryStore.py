@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cara.configuration import config
 from cara.exceptions import QueueException
 from cara.queues.serializers import SignedJsonJobSerializer
 
@@ -59,6 +60,29 @@ class QueueJobDeliveryStore:
     PUBLISH_PROCESSING = "processing"
     PUBLISH_PUBLISHED = "published"
     PUBLISH_FAILED = "failed"
+
+    #: How many executions of ONE ledger row may end with the worker dead
+    #: before the row is settled ``dead_lettered`` instead of re-run. This is
+    #: deliberately not the job's ``max_attempts``: that budget is spent by
+    #: failures the worker lives to route and rides the envelope, across
+    #: retry rows, while ``attempts`` here counts one row's executions. A
+    #: graceful shutdown hands its claim back (:meth:`abandon_execution`), so
+    #: a deploy costs nothing; only a real death counts. Past the ceiling
+    #: ``failed()`` runs, and the hourly dead-letter pass replays the row
+    #: once, which is what gives a row that merely shared a worker with the
+    #: real killer its next chance.
+    CRASH_RECLAIM_CEILING = 3
+    CRASH_LOOP_REASON = f"crash_loop: worker died in {CRASH_RECLAIM_CEILING} executions"
+
+    #: How many stall budgets an aged row may wait on a queue that is still
+    #: moving before it counts as stuck anyway: bounded excuse, not a mute.
+    DRAINING_AGE_MULTIPLE = 6
+
+    #: Alternates this relay's claims between fair order and oldest-overdue
+    #: first (``_claim_next_publish``). Process-local on purpose: each relay
+    #: replica alternating on its own still guarantees the oldest rows half
+    #: of its claims, and losing it costs nothing.
+    _serve_oldest_next = False
 
     #: The ONE definition of "this row is due for terminal-hook delivery".
     #: ``{now}`` is the caller's time expression — ``NOW()`` for pure-SQL
@@ -274,6 +298,89 @@ class QueueJobDeliveryStore:
                 "maximum age plus delivery_audit_safety_days."
             )
 
+    def outbox_health_metrics(self) -> dict[str, float]:
+        """The fleet-wide snapshot plus whether the aged rows are moving.
+
+        ``draining`` (1.0) means rows are past the stall budget but every
+        queue holding them published within it: a burst is working through a
+        bounded broker window at the speed of its workers, and the relay
+        is doing exactly what it should. Only a publication counts as motion:
+        a completion frees a slot a live relay fills within seconds, so
+        workers still finishing a window say nothing for a dead relay.
+        ``behind_full_window`` counts the rows of the queues that did NOT
+        move and whose window is full, so the alert names the workers
+        rather than the relay.
+        """
+        snapshot = _DeliveryRecovery._delivery_outbox_health_metrics(self)
+        budget = max(int(config("queue.outbox_stall_age_seconds", 300)), 1)
+        due = self._PUBLISH_BACKLOG_FILTER_TEMPLATE.format(now="NOW()")
+        row = self._db().select_one(
+            "WITH aged AS (SELECT queue, COUNT(*) AS waiting, "
+            f"MIN(available_at) AS oldest FROM {self.table} WHERE {due} "
+            "GROUP BY queue HAVING MIN(available_at) "
+            "< NOW() - make_interval(secs => %s)), "
+            "judged AS (SELECT aged.waiting, ("
+            "aged.oldest < NOW() - make_interval(secs => %s) OR NOT "
+            f"EXISTS (SELECT 1 FROM {self.table} AS moved "
+            "WHERE moved.queue = aged.queue "
+            "AND moved.published_at > NOW() - make_interval(secs => %s))"
+            ") AS stuck, ("
+            f"SELECT COUNT(*) FROM {self.table} AS held "
+            "WHERE held.queue = aged.queue "
+            "AND held.status IN ('pending', 'processing') "
+            "AND (held.publish_status = 'published' "
+            "OR (held.publish_status = 'processing' "
+            "AND held.publish_lease_expires_at > NOW()))"
+            ") >= %s AS window_full FROM aged) "
+            "SELECT COUNT(*) FILTER (WHERE stuck) AS stuck_queues, "
+            "COUNT(*) AS aged_queues, COALESCE(SUM(waiting) "
+            "FILTER (WHERE stuck AND window_full), 0) AS behind_full_window "
+            "FROM judged",
+            [
+                self.STATUS_PENDING,
+                self.PUBLISH_PUBLISHED,
+                budget,
+                budget * self.DRAINING_AGE_MULTIPLE,
+                budget,
+                self.broker_window_per_queue,
+            ],
+        )
+        aged_queues = int(self._row_value(row, "aged_queues") or 0)
+        stuck_queues = int(self._row_value(row, "stuck_queues") or 0)
+        return {
+            **snapshot,
+            "draining": 1.0 if aged_queues and not stuck_queues else 0.0,
+            "behind_full_window": float(self._row_value(row, "behind_full_window") or 0),
+        }
+
+    def abandon_execution(self, job_id: str, lease_token: str) -> None:
+        """Release an interrupted lease and hand its claim back.
+
+        Graceful release is not a crash, so it must not spend the row's
+        :attr:`CRASH_RECLAIM_CEILING`.
+        """
+        database = self._db()
+        with database.transaction():
+            # Before the release and on the lease itself: the release also
+            # answers a row already released, which has nothing to hand back.
+            database.statement(
+                f"UPDATE {self.table} SET attempts = attempts - 1 "
+                "WHERE job_id = %s AND status = %s AND lease_token = %s "
+                "AND attempts > 0",
+                [job_id, self.STATUS_PROCESSING, lease_token],
+            )
+            _DeliverySettlement._delivery_abandon_execution(self, job_id, lease_token)
+
+    @staticmethod
+    def _tracker_is_open(database: Any, db_job_id: int) -> bool:
+        """Whether a crashed row's tracker still says its body never finished."""
+        row = database.select_one("SELECT status FROM job WHERE id = %s", [db_job_id])
+        return QueueJobDeliveryStore._row_value(row, "status") in {
+            "pending",
+            "processing",
+            "retrying",
+        }
+
     register = _DeliveryConfiguration._delivery_register
     publish_after_commit = _DeliveryConfiguration._delivery_publish_after_commit
     replay_from_ledger = _DeliveryConfiguration._delivery_replay_from_ledger
@@ -298,7 +405,6 @@ class QueueJobDeliveryStore:
     )
     reconcile_terminal_tracker = _DeliverySettlement._delivery_reconcile_terminal_tracker
     mark_retry_scheduled = _DeliverySettlement._delivery_mark_retry_scheduled
-    abandon_execution = _DeliverySettlement._delivery_abandon_execution
     claim_terminal_hooks = _DeliverySettlement._delivery_claim_terminal_hooks
     process_terminal_hooks = _DeliverySettlement._delivery_process_terminal_hooks
     complete_terminal_hooks = _DeliverySettlement._delivery_complete_terminal_hooks
@@ -328,7 +434,6 @@ class QueueJobDeliveryStore:
     outbox_health_metrics_if_installed = (
         _DeliveryRecovery._delivery_outbox_health_metrics_if_installed
     )
-    outbox_health_metrics = _DeliveryRecovery._delivery_outbox_health_metrics
     delivery_stats = _DeliveryRecovery._delivery_delivery_stats
 
     delivery_metrics = _DeliveryDiagnostics._delivery_delivery_metrics

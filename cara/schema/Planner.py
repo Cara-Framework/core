@@ -492,8 +492,9 @@ def _alter_column(table: str, name: str, declared: dict, live: dict) -> list[Ope
         # block cannot: the model dropping the bound entirely (``text`` over
         # a live varchar(n)) — the shape a ``__renamed_from__`` rename leaves
         # behind when the split column widened its type. Narrowing stays the
-        # operator's decision, mirroring the integer rule: ``schema:check``
-        # reports it, and deriving a lossy statement would be worse than
+        # operator's decision, mirroring the integer rule: a live column wider
+        # than declared is deliberately not drift (``schema:check`` is silent
+        # about it), and deriving a lossy statement would be worse than
         # deriving nothing.
         widens = (
             declared["type"] in _UNBOUNDED_TEXT_TYPES

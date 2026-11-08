@@ -61,6 +61,8 @@ class LiveSchema:
     #: model declares — comparing names alone let a CHECK keep a value the
     #: model had dropped (``catalog_proposal.kind = 'quantity_review'``) on a
     #: database every gate called clean. It is also the reverse of a drop.
+    #: FOREIGN KEYs are here for the same reason: an ``on_delete`` a model
+    #: changed keeps the constraint's name.
     constraint_definitions: dict[str, dict[str, str]] | None = None
     #: UNIQUE constraint names per table (``contype='u'``). The orphaned-index
     #: rule skips the index BEHIND a constraint, so without this a unique rule
@@ -74,6 +76,11 @@ class LiveSchema:
     #: so the only faithful comparison is the server deparsing both. Empty
     #: when the probe could not run — then no CHECK is called changed.
     declared_check_definitions: dict[str, dict[str, str]] | None = None
+    #: The LIVE CHECK definitions, attached once more on the probe and read
+    #: back — the CHECK side of :attr:`respelled_index_definitions`. A database
+    #: restored from a dump stores ``= ANY (ARRAY[('a'::varchar)::text])`` where
+    #: a migrated one stores ``= ANY ((ARRAY['a'::varchar])::text[])``.
+    respelled_check_definitions: dict[str, dict[str, str]] | None = None
     #: The server's own text of every index (``pg_indexes.indexdef``), per
     #: table and name. A name says an index EXISTS; only its definition says
     #: whether it still covers what the model declares — comparing names
@@ -106,6 +113,7 @@ class LiveSchema:
             ("constraint_definitions", {}),
             ("unique_constraints", {}),
             ("declared_check_definitions", {}),
+            ("respelled_check_definitions", {}),
             ("index_definitions", {}),
             ("invalid_indexes", {}),
             ("declared_index_definitions", {}),
@@ -210,7 +218,7 @@ def introspect(live_schema, schema_name: str | None = None) -> LiveSchema:
             checks.setdefault(table_name, set()).add(constraint_name)
         if constraint_type == "u":
             unique_constraints.setdefault(table_name, set()).add(constraint_name)
-        if constraint_type in ("c", "u") and row.get("definition"):
+        if constraint_type in ("c", "u", "f") and row.get("definition"):
             constraint_definitions.setdefault(table_name, {})[constraint_name] = str(
                 row["definition"]
             )
@@ -354,15 +362,22 @@ def normalize_declared_checks(
     the query executor hands out a fresh one per query. Best effort: a role
     without TEMP, or an expression the probe cannot attach, leaves that CHECK
     out — and a CHECK left out is never called changed.
+
+    The same fixpoint as :func:`normalize_declared_indexes`, for the same
+    reason: the declaration is spelled twice and the live definition once
+    more, so a CHECK that went through ``pg_dump`` reads the same as one that
+    never did.
     """
     target = schema_name or live_schema.get_schema() or "public"
     manager = live_schema.query_executor.connection_manager
     connection = manager.create_connection_instance()
     found: dict[str, dict[str, str]] = {}
+    respelled: dict[str, dict[str, str]] = {}
     try:
         for table, checks in sorted(declared.items()):
             present = live.checks.get(table, set())
             wanted = [(name, expr) for name, expr in checks if name in present]
+            live_bodies = live.constraint_definitions.get(table, {})
             if not wanted or table not in live.tables:
                 continue
             probe = f"_cara_check_probe_{abs(hash(table)) % 10**8}"
@@ -375,31 +390,63 @@ def normalize_declared_checks(
             except Exception:
                 continue
             try:
-                for name, expression in wanted:
-                    try:
-                        connection.query(
-                            f'ALTER TABLE "{probe}" ADD CONSTRAINT "{name}" '
-                            f"CHECK ({expression}) NOT VALID",
-                            (),
+                for position, (name, expression) in enumerate(wanted):
+                    spelled = _spell_check(
+                        connection, probe, f"{probe}_d{position}", f"CHECK ({expression})"
+                    )
+                    spelled = (
+                        _spell_check(
+                            connection,
+                            probe,
+                            f"{probe}_e{position}",
+                            constraint_body(spelled),
                         )
-                        rows = connection.query(
-                            "SELECT pg_get_constraintdef(oid) AS definition "
-                            "FROM pg_constraint WHERE conrelid = %s::regclass "
-                            "AND conname = %s",
-                            (f'pg_temp."{probe}"', name),
-                        )
-                    except Exception:
-                        continue
-                    row = rows[0] if isinstance(rows, list) and rows else rows
-                    if isinstance(row, dict) and row.get("definition"):
-                        found.setdefault(table, {})[name] = str(row["definition"])
+                        or spelled
+                    )
+                    if spelled:
+                        found.setdefault(table, {})[name] = spelled
+                    again = _spell_check(
+                        connection,
+                        probe,
+                        f"{probe}_l{position}",
+                        constraint_body(live_bodies.get(name)),
+                    )
+                    if again:
+                        respelled.setdefault(table, {})[name] = again
             finally:
                 with suppress(Exception):
                     connection.query(f'DROP TABLE IF EXISTS "{probe}"', ())
     finally:
         manager.release(connection)
     # The snapshot is frozen: the spelled CHECKs come back on a copy.
-    return replace(live, declared_check_definitions=found)
+    return replace(
+        live,
+        declared_check_definitions=found,
+        respelled_check_definitions=respelled,
+    )
+
+
+def _spell_check(connection, probe: str, label: str, body: str) -> str | None:
+    """Attach ``body`` as ``label`` on the probe table; the server's
+    ``pg_get_constraintdef`` of it, or None when it would not attach."""
+    if not body:
+        return None
+    try:
+        connection.query(
+            f'ALTER TABLE "{probe}" ADD CONSTRAINT "{label}" {body} NOT VALID',
+            (),
+        )
+        rows = connection.query(
+            "SELECT pg_get_constraintdef(oid) AS definition "
+            "FROM pg_constraint WHERE conrelid = %s::regclass AND conname = %s",
+            (f'pg_temp."{probe}"', label),
+        )
+    except Exception:
+        return None
+    row = rows[0] if isinstance(rows, list) and rows else rows
+    if isinstance(row, dict) and row.get("definition"):
+        return str(row["definition"])
+    return None
 
 
 def normalize_declared_indexes(

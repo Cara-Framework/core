@@ -235,6 +235,103 @@ def _delivery_claim_terminal_hooks(self, job_id: str) -> TerminalHookClaim:
         )
 
 
+def _verified_terminal_hook_payload(self, signed_envelope: bytes) -> dict[str, Any]:
+    """Verify a row's signed envelope and resolve the job class it names."""
+    envelope = SignedJsonJobSerializer.inspect_envelope(
+        signed_envelope,
+        signing_keys=self.options.get("signing_keys", {}),
+        clock_skew_seconds=int(self.options.get("clock_skew_seconds", 30)),
+        max_age_seconds=int(
+            self.options.get(
+                "envelope_max_age_seconds",
+                SignedJsonJobSerializer.DEFAULT_MAX_AGE_SECONDS,
+            )
+        ),
+        allow_not_before=True,
+        allow_expired=True,
+    )
+    return SignedJsonJobSerializer.deserialize_verified(
+        envelope["payload"],
+        allowed_prefixes=self.options.get("allowed_job_prefixes"),
+    )
+
+
+def _has_terminal_callback(self, status: str | None, hook_owner: Any) -> bool:
+    """The ONE definition of "this row has a terminal callback to run"."""
+    return status in {
+        self.STATUS_DEAD_LETTERED,
+        self.STATUS_EXPIRED,
+    } and hasattr(hook_owner, "failed")
+
+
+def _delivery_settle_callbackless_terminal_hook(self, job_id: str) -> str:
+    """Settle one due row in the calling process when it has no callback.
+
+    The hooks runner isolates a row because a ``failed()`` body may hang or
+    take its interpreter with it. A row with no ``failed()`` runs no body, so
+    it has nothing to isolate and must not pay an interpreter boot.
+
+    Classifies before claiming: a row needing a child keeps its lease free
+    for that child, so this returns ``"isolate"`` having written nothing.
+    Otherwise ``"completed"``, or ``"skipped"`` when another runner owns it.
+    """
+    row = self._db().select_one(
+        f"SELECT status, signed_envelope FROM {self.table} WHERE job_id = %s",
+        [job_id],
+    )
+    if row is None:
+        return "skipped"
+    try:
+        payload = _verified_terminal_hook_payload(
+            self,
+            self._envelope_bytes(self._row_value(row, "signed_envelope")),
+        )
+    except Exception:
+        # Tampered, unknown-key or unimportable: the isolated path owns the
+        # deferral and quarantine that a row like this must go through.
+        return "isolate"
+    if _has_terminal_callback(self, self._row_value(row, "status"), payload.get("obj")):
+        return "isolate"
+
+    claim = self.claim_terminal_hooks(job_id)
+    if claim.outcome != "claimed":
+        return "skipped"
+    try:
+        self.complete_terminal_hooks(job_id, claim.lease_token)
+    except DeliveryLeaseLost:
+        return "skipped"
+    return "completed"
+
+
+def _delivery_release_interrupted_terminal_hook(
+    self,
+    job_id: str,
+    *,
+    spawned_at: Any,
+) -> bool:
+    """Make a hook row due again after its child was stopped for shutdown.
+
+    Shutdown is not the hook failing, so unlike
+    ``defer_terminal_hook_process_failure`` this spends no attempt and adds
+    no backoff. The parent never saw the child's lease token, so the fences
+    are what identify that lease: claiming stamps ``claim time + lease
+    seconds`` and clears the last error, which excludes a lease that predates
+    this child and a child that already recorded its own deferral.
+    """
+    now = pendulum.now("UTC")
+    affected = self._db().statement(
+        f"UPDATE {self.table} SET post_hooks_lease_token = NULL, "
+        "post_hooks_lease_expires_at = NULL, updated_at = %s "
+        "WHERE job_id = %s AND post_hooks_completed_at IS NULL "
+        "AND post_hooks_quarantined_at IS NULL "
+        "AND post_hooks_last_error IS NULL "
+        "AND post_hooks_lease_token IS NOT NULL "
+        "AND post_hooks_lease_expires_at >= %s",
+        [now, job_id, spawned_at.add(seconds=self.POST_HOOK_LEASE_SECONDS)],
+    )
+    return self._affected(affected)
+
+
 def _delivery_process_terminal_hooks(
     self,
     job_id: str,
@@ -258,39 +355,18 @@ def _delivery_process_terminal_hooks(
         payload = message
         job_instance = instance
         if payload is None:
-            envelope = SignedJsonJobSerializer.inspect_envelope(
-                claim.signed_envelope,
-                signing_keys=self.options.get("signing_keys", {}),
-                clock_skew_seconds=int(self.options.get("clock_skew_seconds", 30)),
-                max_age_seconds=int(
-                    self.options.get(
-                        "envelope_max_age_seconds",
-                        SignedJsonJobSerializer.DEFAULT_MAX_AGE_SECONDS,
-                    )
-                ),
-                allow_not_before=True,
-                allow_expired=True,
-            )
-            payload = SignedJsonJobSerializer.deserialize_verified(
-                envelope["payload"],
-                allowed_prefixes=self.options.get("allowed_job_prefixes"),
-            )
+            payload = _verified_terminal_hook_payload(self, claim.signed_envelope)
 
         if payload is None:
             raise QueueException(
                 f"Queue delivery {job_id} terminal hook payload is invalid."
             )
 
-        hook_owner = job_instance or payload.get("obj")
-        needs_failed_hook = claim.status in {
-            self.STATUS_DEAD_LETTERED,
-            self.STATUS_EXPIRED,
-        } and hasattr(hook_owner, "failed")
-
         # Most jobs do not declare a terminal callback. Their signed
         # constructor state is irrelevant here and may predate the current
         # constructor contract, so do not instantiate work that cannot run.
-        if not needs_failed_hook:
+        hook_owner = job_instance or payload.get("obj")
+        if not _has_terminal_callback(self, claim.status, hook_owner):
             self.complete_terminal_hooks(job_id, claim.lease_token)
             return True
 

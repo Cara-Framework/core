@@ -20,6 +20,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "Response": (".Response", "Response"),
     "ResponseFactory": (".ResponseFactory", "ResponseFactory"),
     "ResponseProvider": (".ResponseProvider", "ResponseProvider"),
+    "StreamAborted": (".StreamAborted", "StreamAborted"),
     "StreamingResponse": (".StreamingResponse", "StreamingResponse"),
 }
 
@@ -30,6 +31,7 @@ __all__ = [
     "Response",
     "ResponseFactory",
     "ResponseProvider",
+    "StreamAborted",
     "StreamingResponse",
 ]
 

@@ -116,6 +116,25 @@ def controller_action_functions(
     return actions
 
 
+def null_data_actions(controllers_dir: Path) -> set[str]:
+    """Return controller actions that can answer ``data: null``, the ones that
+    hand ``response.envelope`` a literal ``None`` on some path."""
+    actions: set[str] = set()
+    for controller, action, functions in controller_action_functions(controllers_dir):
+        if any(
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and sub.func.attr == "envelope"
+            and sub.args
+            and isinstance(sub.args[0], ast.Constant)
+            and sub.args[0].value is None
+            for fn in functions
+            for sub in ast.walk(fn)
+        ):
+            actions.add(f"{controller}@{action}")
+    return actions
+
+
 def cursor_paginated_actions(
     controllers_dir: Path,
     page_helpers: frozenset[str] | set[str] = frozenset(),

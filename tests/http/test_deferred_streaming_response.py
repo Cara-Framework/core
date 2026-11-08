@@ -9,6 +9,7 @@ import pytest
 
 from cara.http import Response
 from cara.http.response import StreamingResponse
+from cara.http.response.StreamAborted import StreamAborted
 
 
 @pytest.mark.asyncio
@@ -131,8 +132,12 @@ async def test_stream_failure_does_not_append_exception_text_to_body() -> None:
     async def send(event: dict) -> None:
         events.append(event)
 
-    await response({}, None, send)
+    with pytest.raises(StreamAborted):
+        await response({}, None, send)
 
     body = b"".join(event.get("body", b"") for event in events)
     assert body == b"safe"
     assert response.is_sent() is True
+    # No terminal frame: a clean end would hand the reader a short file that
+    # looks whole, under a 200.
+    assert not any(event.get("more_body") is False for event in events)

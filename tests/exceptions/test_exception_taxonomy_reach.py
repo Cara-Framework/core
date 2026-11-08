@@ -55,6 +55,8 @@ _STDLIB_EXCEPTION_BASES = {
 #: ``CurrencyMismatch`` remains — it is owned by the money lane.
 _ALLOWED_ORPHANS: dict[str, set[str]] = {
     "http/client/HttpFake.py": {"StrayHttpRequestError", "FakeExhaustedError"},
+    # Must escape every handler: it exists so the server cuts the connection.
+    "http/response/StreamAborted.py": {"StreamAborted"},
     "support/Money.py": {"CurrencyMismatch"},
     "testing/Expectation.py": {"ExpectationFailed"},
 }

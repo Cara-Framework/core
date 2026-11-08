@@ -204,9 +204,9 @@ class PersistRequestLog(Middleware):
             payload: dict[str, Any] = {
                 "created_at": datetime.now(UTC),
                 "method": (request.method or "")[:10],
-                "path": PathRedaction.loggable_path(path, self.application)[
-                    : self.MAX_PATH_LEN
-                ],
+                "path": Request.storable_text(
+                    PathRedaction.loggable_path(path, self.application)
+                )[: self.MAX_PATH_LEN],
                 "route": self._resolve_route(request),
                 "status_code": status_code,
                 "duration_ms": duration_ms,
@@ -407,7 +407,7 @@ class PersistRequestLog(Middleware):
         try:
             headers = getattr(request, "headers", {}) or {}
             agent = headers.get("User-Agent") or headers.get("user-agent")
-            return str(agent)[: self.MAX_UA_LEN] if agent else None
+            return Request.storable_text(str(agent))[: self.MAX_UA_LEN] if agent else None
         except Exception as exc:
             Log.warning(
                 f"{self.TABLE} User-Agent parse failed: {exc}",

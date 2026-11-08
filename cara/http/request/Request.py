@@ -7,10 +7,13 @@ request handling.
 
 from __future__ import annotations
 
+import re
 import uuid
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import parse_qs
 
+from cara.exceptions import BadRequestException
 from cara.http.request.Context import current_request
 from cara.http.request.HeaderBag import HeaderBag
 from cara.http.request.InputBag import InputBag
@@ -42,6 +45,35 @@ def _is_trusted_proxy(addr: str) -> bool:
     return is_trusted_proxy(addr)
 
 
+#: Text no database or wire encoding can carry: a NUL (PostgreSQL text refuses
+#: it) and a lone UTF-16 surrogate (JSON's ``\ud83d`` decodes to one, and it
+#: has no UTF-8 form, so the driver cannot even encode the parameter).
+_UNSTORABLE_TEXT = re.compile("[\\x00\\ud800-\\udfff]")
+
+_UNSTORABLE_TEXT_MESSAGE = (
+    "Text in this request contains a NUL character or a broken Unicode "
+    "sequence, which can't be stored."
+)
+
+
+def _strings_in(value: Any) -> Iterator[str]:
+    """Every string in a decoded payload, mapping keys included.
+
+    Iterative on purpose: the JSON scanner accepts nesting deeper than Python's
+    recursion limit, so a recursive walk would turn that body into a 500.
+    """
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+
+
 class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
     """
     HTTP Request object for ASGI‐based APIs.
@@ -71,6 +103,7 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
         self._form_params: dict[str, Any] | None = None
         self._json_data: dict[str, Any] | None = None
         self._files: dict[str, UploadedFile] | None = None
+        self._form_refused = False
 
         self.validated: dict[str, Any] = {}
         self._request_id = str(uuid.uuid4())
@@ -201,10 +234,68 @@ class Request(MakesBodyParsing, MakesValidationHelpers, MakesRequestHelpers):
         return self.params.get(name, default)
 
     def load_params(self, params: dict[str, Any] = None) -> Request:
-        """Load route parameters after routing was matched."""
+        """Load route parameters after routing was matched.
+
+        This is also where a path or query holding unstorable text is refused
+        with a 400, before any route middleware or handler can bind it to SQL.
+        Not in :meth:`load`: that runs ahead of the conductor's ``try``, so a
+        raise there would skip the global pipeline (no request-log row) and
+        the terminable middleware that resets per-worker auth state.
+        """
+        self._refuse_unstorable_text([self.path, self._input.all()])
         if params:
             self.params = params
         return self
+
+    @staticmethod
+    def storable_text(value: str) -> str:
+        """``value`` without the characters a database cannot hold (for logs)."""
+        return _UNSTORABLE_TEXT.sub("", value)
+
+    @staticmethod
+    def _refuse_unstorable_text(payload: Any) -> None:
+        if any(_UNSTORABLE_TEXT.search(text) for text in _strings_in(payload)):
+            raise BadRequestException(_UNSTORABLE_TEXT_MESSAGE)
+
+    async def json(self) -> dict[str, Any]:
+        """Parse and cache the JSON body, refusing unstorable text with a 400.
+
+        A refused body leaves no cached parse behind, so no later reader of
+        the request can pick up what the first one was refused.
+        """
+        if self._json_data is None:
+            data = await super().json()
+            try:
+                self._refuse_unstorable_text(data)
+            except BadRequestException:
+                self._json_data = None
+                raise
+        return self._json_data
+
+    async def _parse_multipart(self) -> None:
+        """Parse a form body, refusing unstorable text in fields and filenames."""
+        if self._files is not None:
+            return
+        await super()._parse_multipart()
+        filenames = [upload.filename for upload in self._files.values()]
+        try:
+            self._refuse_unstorable_text([self._form_params, filenames])
+        except BadRequestException:
+            self._files, self._form_params = {}, {}
+            self._form_refused = True
+            raise
+
+    async def all(self) -> dict[str, Any]:
+        """Every input merged, with a form refused for unstorable text refused here too.
+
+        The base method forgives a form it can't parse and carries on with the
+        query. Forgiving this refusal would run the handler on what's left and
+        answer 200 for a save that dropped every field.
+        """
+        data = await super().all()
+        if self._form_refused:
+            raise BadRequestException(_UNSTORABLE_TEXT_MESSAGE)
+        return data
 
     def set_input(self, name: str, value: Any) -> None:
         """Merge a value into the request input bag.

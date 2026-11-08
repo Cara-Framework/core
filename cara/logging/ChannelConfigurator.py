@@ -6,12 +6,38 @@ This module provides utilities for configuring and managing logging channels.
 
 from __future__ import annotations
 
+import os
+import socket
+import zlib
 from inspect import signature
 from pathlib import Path
 from typing import Any
 
 from cara.configuration import config
 from cara.logging.channels import ConsoleChannel, FileChannel, SlackChannel
+from cara.logging.SiblingSafeRetention import SiblingSafeRetention
+
+
+def per_process_sink(path: str) -> str:
+    """The rotating sink's path, with this process's own file name.
+
+    DECISION: every process writes its own daily file. All containers share one
+    ``storage`` volume, and a sink that rotates closes, gzips and deletes the
+    file it was writing — so on one shared ``app_{date}.log`` the first process
+    past midnight would pull the file out from under every other writer, and
+    their lines would go to a deleted inode.
+
+    The tag is a second ``{time:...}`` field holding only digits, which render
+    as themselves. Being a field is the point: loguru turns every field into a
+    ``*`` when it looks for old files, so a process still finds the files of
+    the containers before it, whose host names are gone for good, and retention
+    reaches them.
+    """
+    host = zlib.crc32(socket.gethostname().encode())
+    stem, suffix = os.path.splitext(path)
+    if "}" in suffix:
+        stem, suffix = path, ""
+    return f"{stem}{{time:.{host}-{os.getpid()}}}{suffix}"
 
 
 class ChannelConfigurator:
@@ -130,11 +156,19 @@ class ChannelConfigurator:
             elif fmt and "format" in add_sig.parameters:
                 add_kwargs["format"] = fmt
 
-            if rotation and "rotation" in add_sig.parameters:
+            # Loguru takes these three through ``**kwargs`` and hands them to
+            # the file sink, so a signature check can never see them: asking
+            # dropped all three without a word and no log ever rotated.
+            manages_its_files = bool(rotation or retention or compression)
+            if manages_its_files:
+                # Each process names its own file (``per_process_sink``), so
+                # one that logs nothing must not leave an empty one behind.
+                add_kwargs["delay"] = True
+            if rotation:
                 add_kwargs["rotation"] = rotation
-            if retention and "retention" in add_sig.parameters:
-                add_kwargs["retention"] = retention
-            if compression and "compression" in add_sig.parameters:
+            if retention:
+                add_kwargs["retention"] = SiblingSafeRetention(retention)
+            if compression:
                 add_kwargs["compression"] = compression
             if serialize and "serialize" in add_sig.parameters:
                 add_kwargs["serialize"] = True
@@ -150,7 +184,11 @@ class ChannelConfigurator:
             if sink_obj is not None:
                 if isinstance(sink_obj, FileChannel):
                     # Pass a string (the path template) rather than the object itself
-                    self._safe_add(str(sink_obj), **add_kwargs)
+                    path = str(sink_obj)
+                    self._safe_add(
+                        per_process_sink(path) if manages_its_files else path,
+                        **add_kwargs,
+                    )
                 else:
                     # ConsoleChannel or SlackChannel just pass the object
                     self._safe_add(sink_obj, **add_kwargs)

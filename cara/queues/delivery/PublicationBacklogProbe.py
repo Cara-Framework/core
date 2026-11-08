@@ -113,7 +113,8 @@ class PublicationBacklogProbe:
             f"(budget {int(age_budget_seconds)}s).\n"
             "`queue:work` only CONSUMES from RabbitMQ — it never publishes. "
             "Dispatched work reaches the broker ONLY while `craft queue:relay` "
-            "is also running, so a backlog this old means the relay is not.\n"
+            "is also running, so a backlog this old means the relay is not, "
+            "or a queue's broker window is full behind slow workers.\n"
             "This worker will keep running and will pick the jobs up the "
             "moment the relay drains the outbox."
         )
