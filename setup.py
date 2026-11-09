@@ -78,6 +78,7 @@ setup(
         ],
         "dev": [
             "bandit==1.9.4",
+            "hypothesis==6.170.15",
             "pip-audit==2.10.1",
             "pytest==9.1.1",
             "pytest-asyncio==1.4.0",
